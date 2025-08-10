@@ -6,7 +6,7 @@ add_subdirectory( spdlog )
 
 
 
-if(ACE_UNITY_BUILD)
+if(UNRAVEL_UNITY_BUILD)
     set_target_properties(spdlog PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"

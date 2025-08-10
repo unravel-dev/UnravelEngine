@@ -6,7 +6,7 @@ endif()
 
 add_subdirectory(yaml-cpp)
 
-if(ACE_UNITY_BUILD)
+if(UNRAVEL_UNITY_BUILD)
     set_target_properties(yaml-cpp PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"

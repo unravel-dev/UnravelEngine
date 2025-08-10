@@ -61,8 +61,8 @@ set_target_properties(${target_name} PROPERTIES
 
 
 if(UNRAVEL_UNITY_BUILD)
-    set_target_properties(${target_name} PROPERTIES
-        #UNITY_BUILD ON
-        #UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
-    )
+    #set_target_properties(${target_name} PROPERTIES
+    #    UNITY_BUILD ON
+    #    UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
+    #)
 endif()

@@ -5,7 +5,7 @@ set(OSPP_BACKEND_TYPE "SDL" CACHE STRING "Backend type chosen by the user at CMa
 add_subdirectory( ospp )
 
 
-if(ACE_UNITY_BUILD)
+if(UNRAVEL_UNITY_BUILD)
     set_target_properties(ospp PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
