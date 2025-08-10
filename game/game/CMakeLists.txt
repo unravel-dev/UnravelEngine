@@ -2,8 +2,8 @@ file(GLOB_RECURSE libsrc *.h *.cpp *.hpp *.c *.cc)
 
 set(target_name game)
 
-if(WIN32 AND MSVC)
-    list(APPEND libsrc "${CMAKE_CURRENT_SOURCE_DIR}/../../rc/AceEngine.rc")
+if(WIN32 AND NOT MINGW)
+    list(APPEND libsrc "${CMAKE_CURRENT_SOURCE_DIR}/../../rc/UnravelEngine.rc")
 endif()
 
 add_executable(${target_name} ${libsrc})
