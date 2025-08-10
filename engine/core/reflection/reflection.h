@@ -66,27 +66,23 @@ inline int get_reg(void (*f)())
 }
 } // namespace refl_detail
 
-#define REFLECT_INLINE(cls)                                                                                            \
-    template<typename T>                                                                                               \
-    extern void rttr_auto_register_reflection_function_t();                                                            \
-    template<>                                                                                                         \
-    void rttr_auto_register_reflection_function_t<cls>();                                                              \
-    static const int ANONYMOUS_VARIABLE(auto_register__) =                                                             \
-        refl_detail::get_reg<cls>(&rttr_auto_register_reflection_function_t<cls>);                                     \
-    template<>                                                                                                         \
-    inline void rttr_auto_register_reflection_function_t<cls>()
-
 #define REFLECT_EXTERN(cls)                                                                                            \
     template<typename T>                                                                                               \
     extern void rttr_auto_register_reflection_function_t();                                                            \
     template<>                                                                                                         \
     void rttr_auto_register_reflection_function_t<cls>();                                                              \
-    static const int ANONYMOUS_VARIABLE(auto_register__) =                                                             \
+    inline const int ANONYMOUS_VARIABLE(auto_register__) =                                                             \
         refl_detail::get_reg<cls>(&rttr_auto_register_reflection_function_t<cls>)
+
+#define REFLECT_INLINE(cls)                                                                                            \
+    REFLECT_EXTERN(cls);                                                                                               \
+    template<>                                                                                                         \
+    inline void rttr_auto_register_reflection_function_t<cls>()
 
 #define REFLECT(cls)                                                                                                   \
     template<>                                                                                                         \
     void rttr_auto_register_reflection_function_t<cls>()
+
 namespace rttr
 {
 REFLECTION_EXPORT auto get_pretty_name(type t) -> std::string;
