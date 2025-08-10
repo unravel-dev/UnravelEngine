@@ -47,6 +47,8 @@ On linux it is recommended to install the full mono-complete package if you want
 ## Editor
 You can download binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
 
+There is also a DemoProject available with the binaries.
+
 The Editor uses Visual Studio Code or any of its forks like (Cursor, etc) for code editing.
 
 You can double click on a script from the editor and it will open it with the detected vscode.
@@ -55,6 +57,7 @@ When opening a file it should prompt yout to install the necessary extensions. D
 
 
 ## Building
+The project uses CMake as a build system so it is recommended to use that workflow in your IDE.
 ```
 git clone https://github.com/unravel-dev/UnravelEngine.git
 cd UnravelEngine
