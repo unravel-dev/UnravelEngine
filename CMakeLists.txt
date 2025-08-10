@@ -168,7 +168,7 @@ if (MSVC)
 
 endif()
 
-set(ACE_UNITY_BUILD OFF)
+set(UNRAVEL_UNITY_BUILD OFF)
 
 add_subdirectory(deps)
 #add_subdirectory(version)
