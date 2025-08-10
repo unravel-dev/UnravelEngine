@@ -41,9 +41,20 @@ Unravel Engine is currently under active development and is not yet production-r
 
 
 ## Getting Started
+Download and install Mono from [Mono Project](https://www.mono-project.com/)
+On linux it is recommended to install the full mono-complete package if you want full experience with the IDE
+
+## Editor
+You can download binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
+
+The Editor uses Visual Studio Code or any of its forks like (Cursor, etc) for code editing.
+
+You can double click on a script from the editor and it will open it with the detected vscode.
+
+When opening a file it should prompt yout to install the necessary extensions. Do **NOT** skip them.
+
 
 ## Building
-Don't forget to update submodules
 ```
 git clone https://github.com/unravel-dev/UnravelEngine.git
 cd UnravelEngine
@@ -52,8 +63,9 @@ git submodule update --init --recursive
 mkdir build
 cd build
 cmake ..
-
 ```
+For Linux you can see the workflow file for the necessary packages [Linux](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml)
+
 ## LIBRARIES
 bgfx - https://github.com/bkaradzic/bgfx
 
