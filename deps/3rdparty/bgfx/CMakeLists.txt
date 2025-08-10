@@ -24,6 +24,10 @@ if(MSVC)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-deprecated-builtins)
+endif()
+
 if(MINGW)
     add_compile_definitions(ASTCENC_SSE=0)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)

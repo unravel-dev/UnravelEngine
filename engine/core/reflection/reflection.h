@@ -71,7 +71,7 @@ inline int get_reg(void (*f)())
     extern void rttr_auto_register_reflection_function_t();                                                            \
     template<>                                                                                                         \
     void rttr_auto_register_reflection_function_t<cls>();                                                              \
-    inline const int ANONYMOUS_VARIABLE(auto_register__) =                                                             \
+    static const int ANONYMOUS_VARIABLE(auto_register__) =                                                             \
         refl_detail::get_reg<cls>(&rttr_auto_register_reflection_function_t<cls>)
 
 #define REFLECT_INLINE(cls)                                                                                            \
