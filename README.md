@@ -38,8 +38,6 @@ Scripting C# documentation can be found here - [Script Api](https://unravel-dev.
 
 Unravel Engine is currently under active development and is not yet production-ready. Contributions, feature requests, and feedback are highly encouraged to shape its evolution.
 
-![Screenshot 2024-10-12 153527](https://github.com/user-attachments/assets/dacb054b-13c8-49e8-a757-dd43bdd8401a)
-![Screenshot 2024-10-12 151734](https://github.com/user-attachments/assets/7eed707b-35fb-41f8-8831-4a235bd9934f)
 
 
 ## Getting Started
