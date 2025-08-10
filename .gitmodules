@@ -1,0 +1,94 @@
+[submodule "deps/3rdparty/bgfx/bgfx"]
+	path = deps/3rdparty/bgfx/bgfx
+	url = https://github.com/unravel-dev/bgfx.cmake.git
+[submodule "deps/ospp/ospp"]
+	path = deps/ospp/ospp
+	url = https://github.com/unravel-dev/ospp.git
+[submodule "deps/3rdparty/spdlog/spdlog"]
+	path = deps/3rdparty/spdlog/spdlog
+	url = https://github.com/gabime/spdlog.git
+[submodule "deps/3rdparty/rttr/rttr"]
+	path = deps/3rdparty/rttr/rttr
+	url = https://github.com/unravel-dev/rttr.git
+[submodule "deps/3rdparty/imgui/imgui"]
+	path = deps/3rdparty/imgui/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "deps/3rdparty/glm/glm"]
+	path = deps/3rdparty/glm/glm
+	url = https://github.com/unravel-dev/glm.git
+[submodule "deps/3rdparty/assimp/assimp"]
+	path = deps/3rdparty/assimp/assimp
+	url = https://github.com/assimp/assimp.git
+[submodule "deps/3rdparty/yaml-cpp/yaml-cpp"]
+	path = deps/3rdparty/yaml-cpp/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "deps/3rdparty/bullet3/bullet3"]
+	path = deps/3rdparty/bullet3/bullet3
+	url = https://github.com/bulletphysics/bullet3.git
+[submodule "deps/audiopp/audiopp"]
+	path = deps/audiopp/audiopp
+	url = https://github.com/unravel-dev/audiopp.git
+[submodule "deps/monopp/monopp"]
+	path = deps/monopp/monopp
+	url = https://github.com/unravel-dev/monopp.git
+[submodule "deps/3rdparty/entt/entt"]
+	path = deps/3rdparty/entt/entt
+	url = https://github.com/skypjack/entt.git
+[submodule "deps/3rdparty/ser20/ser20"]
+	path = deps/3rdparty/ser20/ser20
+	url = https://github.com/unravel-dev/ser20.git
+[submodule "deps/threadpp/threadpp"]
+	path = deps/threadpp/threadpp
+	url = https://github.com/unravel-dev/threadpp.git
+[submodule "submodule.deps/3rdparty/bgfx/bgfx.path"]
+	path = deps/3rdparty/bgfx/bgfx
+	url = https://github.com/unravel-dev/bgfx.cmake.git
+	branch = master
+[submodule "submodule.deps/ospp/ospp.path"]
+	path = deps/ospp/ospp
+	url = https://github.com/unravel-dev/ospp.git
+	branch = master
+[submodule "submodule.deps/3rdparty/spdlog/spdlog.path"]
+	path = deps/3rdparty/spdlog/spdlog
+	url = https://github.com/gabime/spdlog.git
+	branch = master
+[submodule "submodule.deps/3rdparty/rttr/rttr.path"]
+	path = deps/3rdparty/rttr/rttr
+	url = https://github.com/unravel-dev/rttr.git
+	branch = master
+[submodule "submodule.deps/3rdparty/imgui/imgui.path"]
+	path = deps/3rdparty/imgui/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = master
+[submodule "submodule.deps/3rdparty/glm/glm.path"]
+	path = deps/3rdparty/glm/glm
+	url = https://github.com/unravel-dev/glm.git
+	branch = master
+[submodule "submodule.deps/3rdparty/assimp/assimp.path"]
+	path = deps/3rdparty/assimp/assimp
+	url = https://github.com/assimp/assimp.git
+	branch = master
+[submodule "submodule.deps/3rdparty/yaml-cpp/yaml-cpp.path"]
+	path = deps/3rdparty/yaml-cpp/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+	branch = master
+[submodule "submodule.deps/3rdparty/bullet3/bullet3.path"]
+	path = deps/3rdparty/bullet3/bullet3
+	url = https://github.com/bulletphysics/bullet3.git
+	branch = master
+[submodule "submodule.deps/audiopp/audiopp.path"]
+	path = deps/audiopp/audiopp
+	url = https://github.com/unravel-dev/audiopp.git
+	branch = master
+[submodule "submodule.deps/monopp/monopp.path"]
+	path = deps/monopp/monopp
+	url = https://github.com/unravel-dev/monopp.git
+	branch = master
+[submodule "submodule.deps/3rdparty/entt/entt.path"]
+	path = deps/3rdparty/entt/entt
+	url = https://github.com/skypjack/entt.git
+	branch = master
+[submodule "submodule.deps/threadpp/threadpp.path"]
+	path = deps/threadpp/threadpp
+	url = https://github.com/unravel-dev/threadpp.git
+	branch = master

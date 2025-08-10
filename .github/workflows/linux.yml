@@ -1,0 +1,53 @@
+name: linux
+
+#on: [push, pull_request]
+on:
+  workflow_dispatch:
+
+
+jobs:
+  build:
+    runs-on: ${{matrix.config.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        # https://github.com/actions/virtual-environments/tree/main/images/linux
+        # Ubuntu 20.04 entries use pipewire-0.2
+        #- { os: "ubuntu-20.04", cc: "gcc-10",   cxx: "g++-10",   pipewire: "libpipewire-0.2-dev" }
+        #- { os: "ubuntu-20.04", cc: "clang-12", cxx: "clang++-12", pipewire: "libpipewire-0.2-dev" }
+        # Ubuntu 22.04 entries use pipewire-0.3
+        - { os: "ubuntu-22.04", cc: "gcc-12",   cxx: "g++-12",    pipewire: "libpipewire-0.3-dev" }
+        - { os: "ubuntu-22.04", cc: "clang-15", cxx: "clang++-15", pipewire: "libpipewire-0.3-dev" }
+        
+        # Ubuntu 24.04 entries use pipewire-0.3
+        - { os: "ubuntu-24.04", cc: "gcc-13",   cxx: "g++-13",    pipewire: "libpipewire-0.3-dev" }
+        - { os: "ubuntu-24.04", cc: "clang-19", cxx: "clang++-19", pipewire: "libpipewire-0.3-dev" }
+
+    steps:
+    - name: Setup
+      run: |
+        sudo apt-get update -o Acquire::Retries=10
+        sudo apt-get install -y cmake
+        sudo apt-get install -y ninja-build
+        sudo apt-get install -y ${{ matrix.config.cc }}
+        sudo apt-get install -y ${{ matrix.config.cxx }}
+        sudo apt-get install -y libglew-dev
+        sudo apt-get install -y libgtk-3-dev
+        sudo apt-get install -y libasound2-dev
+        sudo apt-get install -y alsa-tools
+        sudo apt-get install -y libjack-dev
+        sudo apt-get install -y libudev-dev
+        sudo apt-get install -y ${{ matrix.config.pipewire }}
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.pat }}
+        submodules: recursive
+    - name: Build
+      run: |
+        cmake --preset linux-${{matrix.config.cc}}
+        cmake --build --preset linux-${{matrix.config.cc}}-release
+    - name: Test
+      run: |
+        ctest --preset linux-${{matrix.config.cc}}-release --rerun-failed --output-on-failure
