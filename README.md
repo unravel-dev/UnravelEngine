@@ -27,6 +27,11 @@
     - Common audio formats (e.g., WAV, MP3, OGG).
   - **Graphics API Support**: Fully supports DirectX 11, DirectX 12, Vulkan, and OpenGL for maximum flexibility and performance.
 
+## Screenshots
+<img width="2560" height="1380" alt="Screenshot 2025-08-10 234456" src="https://github.com/user-attachments/assets/1fc3ccc8-1ad1-4a8a-b335-7e478eb8f479" />
+<img width="2560" height="1380" alt="Screenshot 2025-08-10 234618" src="https://github.com/user-attachments/assets/98475418-1f0f-41be-9dac-4e2268c9feda" />
+
+
 ## Documentation
 Engine C++ documentation can be found here - [Engine Api](https://unravel-dev.github.io/unravel-engine-api/html/index.html)
 
@@ -47,6 +52,8 @@ On linux it is recommended to install the full mono-complete package if you want
 ## Editor
 You can download binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
 
+There is also a DemoProject available with the binaries.
+
 The Editor uses Visual Studio Code or any of its forks like (Cursor, etc) for code editing.
 
 You can double click on a script from the editor and it will open it with the detected vscode.
@@ -55,6 +62,7 @@ When opening a file it should prompt yout to install the necessary extensions. D
 
 
 ## Building
+The project uses CMake as a build system so it is recommended to use that workflow in your IDE.
 ```
 git clone https://github.com/unravel-dev/UnravelEngine.git
 cd UnravelEngine
