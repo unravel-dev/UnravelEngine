@@ -13,6 +13,8 @@ class property_layout
 public:
     property_layout();
     property_layout(const rttr::property& prop, bool columns = true);
+
+    // property_layout(const entt::meta_any& prop, bool columns = true);
     property_layout(const std::string& name, bool columns = true);
     property_layout(const std::string& name, const std::string& tooltip, bool columns = true);
     property_layout(const std::string& name, const std::function<void()>& callback, bool columns = true);
@@ -20,6 +22,7 @@ public:
     ~property_layout();
 
     void set_data(const rttr::property& prop, bool columns = true);
+    // void set_data(const entt::meta_any& prop, bool columns = true);
     void set_data(const std::string& name, const std::string& tooltip, bool columns = true);
 
     void push_layout(bool auto_proceed_to_next_column = true);

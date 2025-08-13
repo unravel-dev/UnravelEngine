@@ -21,24 +21,34 @@ REFLECT(material)
     // Register cull_type enum with entt
     entt::meta_factory<cull_type>{}
         .type("cull_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cull_type"},
+        })
         .data<cull_type::none>("none"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
             entt::attribute{"pretty_name", "None"},
         })
         .data<cull_type::clockwise>("clockwise"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "clockwise"},
             entt::attribute{"pretty_name", "Clockwise"},
         })
         .data<cull_type::counter_clockwise>("counter_clockwise"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "counter_clockwise"},
             entt::attribute{"pretty_name", "Counter Clockwise"},
         });
 
     // Register material with entt
     entt::meta_factory<material>{}
         .type("material"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material"},
+        })
         .data<&material::set_cull_type, &material::get_cull_type>("cull_type"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cull_type"},
             entt::attribute{"pretty_name", "Cull Type"},
         });
 }

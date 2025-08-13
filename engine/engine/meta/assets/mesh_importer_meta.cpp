@@ -56,6 +56,109 @@ REFLECT(mesh_importer_meta)
         .property("rig", &mesh_importer_meta::rig)(rttr::metadata("pretty_name", "Rig"))
         .property("animations", &mesh_importer_meta::animations)(rttr::metadata("pretty_name", "Animations"))
         .property("materials", &mesh_importer_meta::materials)(rttr::metadata("pretty_name", "Materials"));
+
+    // Register mesh_importer_meta::model_meta with entt
+    entt::meta_factory<mesh_importer_meta::model_meta>{}
+        .type("model_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "model_meta"},
+        })
+        .data<&mesh_importer_meta::model_meta::import_meshes>("import_meshes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import_meshes"},
+            entt::attribute{"pretty_name", "Import Meshes"},
+        })
+        .data<&mesh_importer_meta::model_meta::weld_vertices>("weld_vertices"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "weld_vertices"},
+            entt::attribute{"pretty_name", "Weld Vertices"},
+            entt::attribute{"tooltip", "Identifies and joins identical vertex data sets within all imported meshes.\nAfter this step is run, each mesh contains unique vertices,\nso a vertex may be used by multiple faces. You usually want\nto use this post processing step. If your application deals with\nindexed geometry, this step is compulsory or you'll just waste rendering\ntime."},
+        })
+        .data<&mesh_importer_meta::model_meta::optimize_meshes>("optimize_meshes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "optimize_meshes"},
+            entt::attribute{"pretty_name", "Optimize Meshes"},
+            entt::attribute{"tooltip", "A post-processing step to reduce the number of meshes.\nThis will, in fact, reduce the number of draw calls."},
+        })
+        .data<&mesh_importer_meta::model_meta::split_large_meshes>("split_large_meshes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "split_large_meshes"},
+            entt::attribute{"pretty_name", "Split Large Meshes"},
+        })
+        .data<&mesh_importer_meta::model_meta::find_degenerates>("find_degenerates"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "find_degenerates"},
+            entt::attribute{"pretty_name", "Find Degenerates"},
+        })
+        .data<&mesh_importer_meta::model_meta::find_invalid_data>("find_invalid_data"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "find_invalid_data"},
+            entt::attribute{"pretty_name", "Find Invalid Data"},
+            entt::attribute{"tooltip", "This step searches all meshes for invalid data, such as zeroed\nnormal vectors or invalid UV coords and removes/fixes them. This is\nintended to get rid of some common exporter errors."},
+        });
+
+    // Register mesh_importer_meta::rig_meta with entt
+    entt::meta_factory<mesh_importer_meta::rig_meta>{}
+        .type("rig_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rig_meta"},
+        });
+
+    // Register mesh_importer_meta::animations_meta with entt
+    entt::meta_factory<mesh_importer_meta::animations_meta>{}
+        .type("animations_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animations_meta"},
+        })
+        .data<&mesh_importer_meta::animations_meta::import_animations>("import_animations"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import_animations"},
+            entt::attribute{"pretty_name", "Import Animations"},
+        });
+
+    // Register mesh_importer_meta::materials_meta with entt
+    entt::meta_factory<mesh_importer_meta::materials_meta>{}
+        .type("materials_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "materials_meta"},
+        })
+        .data<&mesh_importer_meta::materials_meta::import_materials>("import_materials"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "import_materials"},
+            entt::attribute{"pretty_name", "Import Materials"},
+        })
+        .data<&mesh_importer_meta::materials_meta::remove_redundant_materials>("remove_redundant_materials"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "remove_redundant_materials"},
+            entt::attribute{"pretty_name", "Remove Redundant Materials"},
+        });
+
+    // Register mesh_importer_meta with entt
+    entt::meta_factory<mesh_importer_meta>{}
+        .type("mesh_importer_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mesh_importer_meta"},
+        })
+        .data<&mesh_importer_meta::model>("model"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "model"},
+            entt::attribute{"pretty_name", "Model"},
+        })
+        .data<&mesh_importer_meta::rig>("rig"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rig"},
+            entt::attribute{"pretty_name", "Rig"},
+        })
+        .data<&mesh_importer_meta::animations>("animations"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animations"},
+            entt::attribute{"pretty_name", "Animations"},
+        })
+        .data<&mesh_importer_meta::materials>("materials"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "materials"},
+            entt::attribute{"pretty_name", "Materials"},
+        });
 }
 
 SAVE(mesh_importer_meta::model_meta)

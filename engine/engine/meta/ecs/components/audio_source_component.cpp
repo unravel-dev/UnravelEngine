@@ -45,30 +45,36 @@ REFLECT(audio_source_component)
     entt::meta_factory<audio_source_component>{}
         .type("audio_source_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_source_component"},
             entt::attribute{"category", "AUDIO"},
             entt::attribute{"pretty_name", "Audio Source"},
         })
         .func<&component_exists<audio_source_component>>("component_exists"_hs)
         .data<&audio_source_component::set_autoplay, &audio_source_component::get_autoplay>("auto_play"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_play"},
             entt::attribute{"pretty_name", "Auto Play"},
         })
         .data<&audio_source_component::set_loop, &audio_source_component::is_looping>("loop"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "loop"},
             entt::attribute{"pretty_name", "Loop"},
         })
         .data<&audio_source_component::set_mute, &audio_source_component::is_muted>("mute"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mute"},
             entt::attribute{"pretty_name", "Mute"},
         })
         .data<&audio_source_component::set_volume, &audio_source_component::get_volume>("volume"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "volume"},
             entt::attribute{"pretty_name", "Volume"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
         .data<&audio_source_component::set_pitch, &audio_source_component::get_pitch>("pitch"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pitch"},
             entt::attribute{"pretty_name", "Pitch"},
             entt::attribute{"tooltip", "A multiplier for the frequency (sample rate) of the source's buffer."},
             entt::attribute{"min", 0.0f},
@@ -76,16 +82,19 @@ REFLECT(audio_source_component)
         })
         .data<&audio_source_component::set_volume_rolloff, &audio_source_component::get_volume_rolloff>("volume_rolloff"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "volume_rolloff"},
             entt::attribute{"pretty_name", "Volume Rolloff"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
         })
         .data<&audio_source_component::set_range, &audio_source_component::get_range>("range"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "range"},
             entt::attribute{"pretty_name", "Range"},
         })
         .data<&audio_source_component::set_clip, &audio_source_component::get_clip>("clip"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "clip"},
             entt::attribute{"pretty_name", "Clip"},
         });
 }

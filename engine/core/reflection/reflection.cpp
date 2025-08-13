@@ -1,5 +1,43 @@
 #include "reflection.h"
 
+namespace entt
+{
+
+auto get_pretty_name(meta_type t) -> std::string
+{
+    attributes attrs = t.custom();
+    if(attrs.find("pretty_name") != attrs.end())
+    {
+        return attrs["pretty_name"].cast<std::string>();
+    }
+
+    return std::string(t.info().name());
+}
+
+auto get_pretty_name(const meta_data& prop) -> std::string
+{
+    attributes attrs = prop.custom();
+    if(attrs.find("pretty_name") != attrs.end())
+    {
+        return attrs["pretty_name"].cast<std::string>();
+    }
+
+    if(attrs.find("name") != attrs.end())
+    {
+        return attrs["name"].cast<std::string>();
+    }
+
+    return "N/A";
+}
+
+auto property_predicate(std::function<bool(meta_handle&)> predicate) -> std::function<bool(meta_handle&)>
+{
+    return std::move(predicate);
+}
+
+}
+
+
 namespace rttr
 {
 auto get_pretty_name(type t) -> std::string

@@ -60,6 +60,7 @@ REFLECT(script_component)
     entt::meta_factory<script_component>{}
         .type("script_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "script_component"},
             entt::attribute{"category", "SCRIPTING"},
             entt::attribute{"pretty_name", "Script"},
         })

@@ -23,12 +23,14 @@ REFLECT(light_component)
     entt::meta_factory<light_component>{}
         .type("light_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light_component"},
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Light"},
         })
         .func<&component_exists<light_component>>("component_exists"_hs)
         .data<&light_component::set_light, &light_component::get_light>("light"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light"},
             entt::attribute{"pretty_name", "Light"},
         });
 }
@@ -88,19 +90,40 @@ REFLECT(skylight_component)
             rttr::metadata("pretty_name", "Cubemap"),
             rttr::metadata("predicate", skybox_predicate));
 
+
+            
+    auto skybox_predicate_entt = entt::property_predicate([](entt::meta_handle& obj)
+    {
+        auto data = obj->try_cast<skylight_component>();
+        return data->get_mode() == skylight_component::sky_mode::skybox;
+    });
+
+
+    auto dynamic_sky_predicate_entt = entt::property_predicate([](entt::meta_handle& obj)
+    {
+        auto data = obj->try_cast<skylight_component>();
+        return data->get_mode() != skylight_component::sky_mode::skybox;
+    });
+
     // Register skylight_component::sky_mode enum with entt
     entt::meta_factory<skylight_component::sky_mode>{}
         .type("sky_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sky_mode"},
+        })
         .data<skylight_component::sky_mode::standard>("standard"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "standard"},
             entt::attribute{"pretty_name", "Standard"},
         })
         .data<skylight_component::sky_mode::perez>("perez"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "perez"},
             entt::attribute{"pretty_name", "Perez"},
         })
         .data<skylight_component::sky_mode::skybox>("skybox"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "skybox"},
             entt::attribute{"pretty_name", "Skybox"},
         });
 
@@ -108,25 +131,29 @@ REFLECT(skylight_component)
     entt::meta_factory<skylight_component>{}
         .type("skylight_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "skylight_component"},
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Skylight"},
         })
         .data<&skylight_component::set_mode, &skylight_component::get_mode>("mode"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mode"},
             entt::attribute{"pretty_name", "Mode"},
         })
         .data<&skylight_component::set_turbidity, &skylight_component::get_turbidity>("turbidity"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "turbidity"},
             entt::attribute{"pretty_name", "Turbidity"},
             entt::attribute{"min", 1.9f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"tooltip", "Adjusts the clarity of the atmosphere. Lower values (1.9) result in a clear, blue sky, while higher values (up to 10) create a hazy, diffused appearance with more scattering of light.."},
-            entt::attribute{"predicate", dynamic_sky_predicate}, 
+            entt::attribute{"predicate", dynamic_sky_predicate_entt}, 
         })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cubemap"},
             entt::attribute{"pretty_name", "Cubemap"},
-            entt::attribute{"predicate", skybox_predicate}, 
+            entt::attribute{"predicate", skybox_predicate_entt}, 
         });
 }
 

@@ -26,6 +26,7 @@ REFLECT(action_map)
     entt::meta_factory<action_map>{}
         .type("action_map"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "action_map"},
             entt::attribute{"pretty_name", "Action Map"},
         });
 }

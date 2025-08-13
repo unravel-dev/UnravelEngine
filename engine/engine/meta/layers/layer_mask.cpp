@@ -18,10 +18,12 @@ REFLECT(layer_mask)
     entt::meta_factory<layer_mask>{}
         .type("layer_mask"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "layer_mask"},
             entt::attribute{"pretty_name", "Layer Mask"},
         })
         .data<nullptr, &layer_mask::mask>("mask"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mask"},
             entt::attribute{"pretty_name", "Mask"},
         });
 }

@@ -47,6 +47,37 @@ REFLECT(mesh::info)
                                                             rttr::metadata("tooltip", "submeshes count."))
         .property_readonly("data_groups", &mesh::info::data_groups)(rttr::metadata("pretty_name", "Material Groups"),
                                                             rttr::metadata("tooltip", "Materials count."));
+
+    // Register mesh::info with entt
+    entt::meta_factory<mesh::info>{}
+        .type("info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "info"},
+        })
+        .data<nullptr, &mesh::info::vertices>("vertices"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vertices"},
+            entt::attribute{"pretty_name", "Vertices"},
+            entt::attribute{"tooltip", "Vertices count."},
+        })
+        .data<nullptr, &mesh::info::primitives>("primitives"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "primitives"},
+            entt::attribute{"pretty_name", "Primitives"},
+            entt::attribute{"tooltip", "Primitives count."},
+        })
+        .data<nullptr, &mesh::info::submeshes>("submeshes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "submeshes"},
+            entt::attribute{"pretty_name", "Submeshes"},
+            entt::attribute{"tooltip", "submeshes count."},
+        })
+        .data<nullptr, &mesh::info::data_groups>("data_groups"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "data_groups"},
+            entt::attribute{"pretty_name", "Material Groups"},
+            entt::attribute{"tooltip", "Materials count."},
+        });
 }
 
 SAVE(mesh::submesh)

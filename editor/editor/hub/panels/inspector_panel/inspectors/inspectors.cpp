@@ -377,10 +377,12 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     view.each(
         [&](auto e, auto&& comp)
         {
-            if(comp.source == prefab)
+            if(comp.source == prefab && comp.source.version() == prefab.version())
             {
                 instance = cache_scene.create_handle(e);
             }
+
+            comp.source.update_version();
         });
     if(!instance)
     {

@@ -32,23 +32,30 @@ REFLECT(model)
     // Register model with entt
     entt::meta_factory<model>{}
         .type("model"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "model"},
+        })
         .data<&model::set_materials, &model::get_materials>("materials"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "materials"},
             entt::attribute{"pretty_name", "Materials"},
             entt::attribute{"tooltip", "Materials for this model."},
         })
         .data<&model::set_material_instances, &model::get_material_instances>("material_instances"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material_instances"},
             entt::attribute{"pretty_name", "Material Instances"},
             entt::attribute{"tooltip", "Material instances for this model."},
         })
         .data<&model::set_lods, &model::get_lods>("lods"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lods"},
             entt::attribute{"pretty_name", "LOD"},
             entt::attribute{"tooltip", "Levels of Detail."},
         })
         .data<&model::set_lod_limits, &model::get_lod_limits>("lod_limits"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_limits"},
             entt::attribute{"pretty_name", "LOD Ranges"},
             entt::attribute{"tooltip", "LOD ranges in % of screen."},
             entt::attribute{"format", "%.2f%%"},

@@ -30,36 +30,47 @@ REFLECT_INLINE(tonemapping_pass::settings)
     // Register tonemapping_method enum with entt
     entt::meta_factory<tonemapping_method>{}
         .type("tonemapping_method"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tonemapping_method"},
+        })
         .data<tonemapping_method::none>("none"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
             entt::attribute{"pretty_name", "None"},
         })
         .data<tonemapping_method::exponential>("exponential"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exponential"},
             entt::attribute{"pretty_name", "Exponential"},
         })
         .data<tonemapping_method::reinhard>("reinhard"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reinhard"},
             entt::attribute{"pretty_name", "Reinhard"},
         })
         .data<tonemapping_method::reinhard_lum>("reinhard_lum"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reinhard_lum"},
             entt::attribute{"pretty_name", "Reinhard Lum"},
         })
         .data<tonemapping_method::duiker>("duiker"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "duiker"},
             entt::attribute{"pretty_name", "Dukier"},
         })
         .data<tonemapping_method::aces>("aces"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "aces"},
             entt::attribute{"pretty_name", "Aces"},
         })
         .data<tonemapping_method::aces_lum>("aces_lum"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "aces_lum"},
             entt::attribute{"pretty_name", "Aces Lum"},
         })
         .data<tonemapping_method::filmic>("filmic"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "filmic"},
             entt::attribute{"pretty_name", "Filmic"},
         });
 
@@ -67,16 +78,19 @@ REFLECT_INLINE(tonemapping_pass::settings)
     entt::meta_factory<tonemapping_pass::settings>{}
         .type("tonemapping_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tonemapping_settings"},
             entt::attribute{"pretty_name", "Tonemapping Settings"},
         })
         .data<&tonemapping_pass::settings::exposure>("exposure"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exposure"},
             entt::attribute{"pretty_name", "Exposure"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
         })
         .data<&tonemapping_pass::settings::method>("method"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "method"},
             entt::attribute{"pretty_name", "Method"},
         });
 }
@@ -113,17 +127,20 @@ REFLECT(tonemapping_component)
     entt::meta_factory<tonemapping_component>{}
         .type("tonemapping_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tonemapping_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Tonemapping"},
         })
         .func<&component_exists<tonemapping_component>>("component_exists"_hs)
         .data<&tonemapping_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Enable/disable tonemapping"},
         })
         .data<&tonemapping_component::settings>("settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "settings"},
             entt::attribute{"pretty_name", "Settings"},
             entt::attribute{"flattable", true},
         });

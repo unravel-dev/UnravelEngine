@@ -22,6 +22,32 @@ REFLECT_INLINE(settings::app_settings)
                                                                rttr::metadata("tooltip", "Missing..."))
         .property("version", &settings::app_settings::version)(rttr::metadata("pretty_name", "Version"),
                                                                rttr::metadata("tooltip", "Missing..."));
+
+    // Register app_settings with entt
+    entt::meta_factory<settings::app_settings>{}
+        .type("app_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "app_settings"},
+            entt::attribute{"pretty_name", "Application"},
+        })
+        .data<&settings::app_settings::company>("company"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "company"},
+            entt::attribute{"pretty_name", "Company"},
+            entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&settings::app_settings::product>("product"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "product"},
+            entt::attribute{"pretty_name", "Product"},
+            entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&settings::app_settings::version>("version"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "version"},
+            entt::attribute{"pretty_name", "Version"},
+            entt::attribute{"tooltip", "Missing..."},
+        });
 }
 
 SAVE_INLINE(settings::app_settings)
@@ -52,6 +78,26 @@ REFLECT_INLINE(settings::asset_settings::texture_importer_settings)
             rttr::metadata(
                 "tooltip",
                 "The default compression for textures."));
+
+    // Register texture_importer_settings with entt
+    entt::meta_factory<settings::asset_settings::texture_importer_settings>{}
+        .type("texture_importer_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_importer_settings"},
+            entt::attribute{"pretty_name", "Texture Importer Settings"},
+        })
+        .data<&settings::asset_settings::texture_importer_settings::default_max_size>("default_max_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "default_max_size"},
+            entt::attribute{"pretty_name", "Default Max Size"},
+            entt::attribute{"tooltip", "The default maximum size for textures."},
+        })
+        .data<&settings::asset_settings::texture_importer_settings::default_compression>("default_compression"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "default_compression"},
+            entt::attribute{"pretty_name", "Default Compression"},
+            entt::attribute{"tooltip", "The default compression for textures."},
+        });
 }
 
 SAVE_INLINE(settings::asset_settings::texture_importer_settings)
@@ -82,6 +128,14 @@ REFLECT_INLINE(settings::graphics_settings)
     rttr::registration::class_<settings::graphics_settings>("graphics_settings")(
         rttr::metadata("pretty_name", "Graphics"))
         .constructor<>()();
+
+    // Register graphics_settings with entt
+    entt::meta_factory<settings::graphics_settings>{}
+        .type("graphics_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "graphics_settings"},
+            entt::attribute{"pretty_name", "Graphics"},
+        });
 }
 
 SAVE_INLINE(settings::graphics_settings)
@@ -106,6 +160,20 @@ REFLECT_INLINE(settings::standalone_settings)
         .property("startup_scene",
                   &settings::standalone_settings::startup_scene)(rttr::metadata("pretty_name", "Startup Scene"),
                                                                  rttr::metadata("tooltip", "The scene to load first."));
+
+    // Register standalone_settings with entt
+    entt::meta_factory<settings::standalone_settings>{}
+        .type("standalone_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "standalone_settings"},
+            entt::attribute{"pretty_name", "Standalone"},
+        })
+        .data<&settings::standalone_settings::startup_scene>("startup_scene"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "startup_scene"},
+            entt::attribute{"pretty_name", "Startup Scene"},
+            entt::attribute{"tooltip", "The scene to load first."},
+        });
 }
 
 SAVE_INLINE(settings::standalone_settings)
@@ -133,6 +201,27 @@ REFLECT_INLINE(settings::time_settings)
             rttr::metadata(
                 "tooltip",
                 "A cap for framerate-idependent worst case scenario. No more than this much fixed updates per frame."));
+
+    // Register time_settings with entt
+    entt::meta_factory<settings::time_settings>{}
+        .type("time_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "time_settings"},
+            entt::attribute{"pretty_name", "Time"},
+        })
+        .data<&settings::time_settings::fixed_timestep>("fixed_timestep"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fixed_timestep"},
+            entt::attribute{"pretty_name", "Fixed Timestep"},
+            entt::attribute{"step", 0.001f},
+            entt::attribute{"tooltip", "A framerate-idependent interval which dictates when physics calculations and FixedUpdate events are performed."},
+        })
+        .data<&settings::time_settings::max_fixed_steps>("max_fixed_steps"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_fixed_steps"},
+            entt::attribute{"pretty_name", "Max Fixed Steps"},
+            entt::attribute{"tooltip", "A cap for framerate-idependent worst case scenario. No more than this much fixed updates per frame."},
+        });
 }
 
 SAVE_INLINE(settings::time_settings)
@@ -154,6 +243,21 @@ REFLECT_INLINE(settings::layer_settings)
         .property("layers", &settings::layer_settings::layers)(rttr::metadata("pretty_name", "Layers"),
                                                                rttr::metadata("readonly_count", get_reserved_layers().size()),
                                                                rttr::metadata("tooltip", ""));
+
+    // Register layer_settings with entt
+    entt::meta_factory<settings::layer_settings>{}
+        .type("layer_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "layer_settings"},
+            entt::attribute{"pretty_name", "Layer"},
+        })
+        .data<&settings::layer_settings::layers>("layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "layers"},
+            entt::attribute{"pretty_name", "Layers"},
+            entt::attribute{"readonly_count", get_reserved_layers().size()},
+            entt::attribute{"tooltip", ""},
+        });
 }
 
 SAVE_INLINE(settings::layer_settings)
@@ -223,6 +327,41 @@ REFLECT_INLINE(settings::resolution_settings::resolution)
             rttr::metadata("pretty_name", "Aspect Ratio"),
             rttr::metadata("min", 0.0f),
             rttr::metadata("tooltip", "Aspect ratio (0 for free aspect)"));
+
+    // Register resolution with entt
+    entt::meta_factory<settings::resolution_settings::resolution>{}
+        .type("resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Resolution"},
+        })
+        .data<&settings::resolution_settings::resolution::name>("name"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "name"},
+            entt::attribute{"pretty_name", "Name"},
+            entt::attribute{"tooltip", "Display name for this resolution"},
+        })
+        .data<&settings::resolution_settings::resolution::width>("width"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "width"},
+            entt::attribute{"pretty_name", "Width"},
+            entt::attribute{"min", 0},
+            entt::attribute{"tooltip", "Width in pixels (0 for free aspect)"},
+        })
+        .data<&settings::resolution_settings::resolution::height>("height"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "height"},
+            entt::attribute{"pretty_name", "Height"},
+            entt::attribute{"min", 0},
+            entt::attribute{"tooltip", "Height in pixels (0 for free aspect)"},
+        })
+        .data<&settings::resolution_settings::resolution::aspect>("aspect"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "aspect"},
+            entt::attribute{"pretty_name", "Aspect Ratio"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"tooltip", "Aspect ratio (0 for free aspect)"},
+        });
 }
 
 REFLECT_INLINE(settings::resolution_settings)
@@ -233,6 +372,20 @@ REFLECT_INLINE(settings::resolution_settings)
         .property("resolutions", &settings::resolution_settings::resolutions)(
             rttr::metadata("pretty_name", "Resolutions"),
             rttr::metadata("tooltip", "List of available resolutions"));
+
+    // Register resolution_settings with entt
+    entt::meta_factory<settings::resolution_settings>{}
+        .type("resolution_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution_settings"},
+            entt::attribute{"pretty_name", "Resolution Settings"},
+        })
+        .data<&settings::resolution_settings::resolutions>("resolutions"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolutions"},
+            entt::attribute{"pretty_name", "Resolutions"},
+            entt::attribute{"tooltip", "List of available resolutions"},
+        });
 }
 
 REFLECT(settings)
@@ -247,6 +400,38 @@ REFLECT(settings)
                                                        rttr::metadata("tooltip", "Missing..."))
         .property("resolution", &settings::resolution)(rttr::metadata("pretty_name", "Resolution"),
                                                        rttr::metadata("tooltip", "Resolution settings for the project"));
+
+    // Register settings with entt
+    entt::meta_factory<settings>{}
+        .type("settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "settings"},
+            entt::attribute{"pretty_name", "Settings"},
+        })
+        .data<&settings::app>("app"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "app"},
+            entt::attribute{"pretty_name", "Application"},
+            entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&settings::graphics>("graphics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "graphics"},
+            entt::attribute{"pretty_name", "Graphics"},
+            entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&settings::standalone>("standalone"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "standalone"},
+            entt::attribute{"pretty_name", "Standalone"},
+            entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&settings::resolution>("resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Resolution"},
+            entt::attribute{"tooltip", "Resolution settings for the project"},
+        });
 }
 
 SAVE(settings)

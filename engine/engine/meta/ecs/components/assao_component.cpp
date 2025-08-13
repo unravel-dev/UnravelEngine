@@ -149,15 +149,18 @@ REFLECT_INLINE(assao_pass::settings)
     entt::meta_factory<settings>{}
         .type("assao_pass::settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "assao_pass::settings"},
             entt::attribute{"pretty_name", "SSAO Settings"},
         })
         .data<&settings::radius>("radius"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radius"},
             entt::attribute{"pretty_name", "Radius"},
             entt::attribute{"tooltip", "World (view) space size of the occlusion sphere.\nRange: [0.0, ∞)"},
         })
         .data<&settings::shadow_multiplier>("shadow_multiplier"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_multiplier"},
             entt::attribute{"pretty_name", "Shadow Multiplier"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 5.0f},
@@ -165,6 +168,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::shadow_power>("shadow_power"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_power"},
             entt::attribute{"pretty_name", "Shadow Power"},
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 5.0f},
@@ -172,6 +176,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::shadow_clamp>("shadow_clamp"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_clamp"},
             entt::attribute{"pretty_name", "Shadow Clamp"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -179,6 +184,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::horizon_angle_threshold>("horizon_angle_threshold"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "horizon_angle_threshold"},
             entt::attribute{"pretty_name", "Horizon Angle Threshold"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.2f},
@@ -186,16 +192,19 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::fade_out_from>("fade_out_from"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_out_from"},
             entt::attribute{"pretty_name", "Fade Out From"},
             entt::attribute{"tooltip", "Distance to start fading out the effect.\nRange: [0.0, ∞)"},
         })
         .data<&settings::fade_out_to>("fade_out_to"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_out_to"},
             entt::attribute{"pretty_name", "Fade Out To"},
             entt::attribute{"tooltip", "Distance at which the effect is fully faded out.\nRange: [0.0, ∞)"},
         })
         .data<&settings::quality_level>("quality_level"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "quality_level"},
             entt::attribute{"pretty_name", "Quality Level"},
             entt::attribute{"min", -1},
             entt::attribute{"max", 3},
@@ -203,6 +212,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::adaptive_quality_limit>("adaptive_quality_limit"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "adaptive_quality_limit"},
             entt::attribute{"pretty_name", "Adaptive Q Limit"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -210,6 +220,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::blur_pass_count>("blur_pass_count"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_pass_count"},
             entt::attribute{"pretty_name", "Blur Pass Count"},
             entt::attribute{"min", 0},
             entt::attribute{"max", 6},
@@ -217,6 +228,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::sharpness>("sharpness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sharpness"},
             entt::attribute{"pretty_name", "Sharpness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -224,6 +236,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::temporal_supersampling_angle_offset>("temporal_supersampling_angle_offset"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temporal_supersampling_angle_offset"},
             entt::attribute{"pretty_name", "Temporal SSAO Angle Offset"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 3.14159265358979323846f},
@@ -231,6 +244,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::temporal_supersampling_radius_offset>("temporal_supersampling_radius_offset"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temporal_supersampling_radius_offset"},
             entt::attribute{"pretty_name", "Temporal SSAO Radius Offset"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
@@ -238,6 +252,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::detail_shadow_strength>("detail_shadow_strength"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "detail_shadow_strength"},
             entt::attribute{"pretty_name", "Detail Shadow Strength"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 5.0f},
@@ -245,6 +260,7 @@ REFLECT_INLINE(assao_pass::settings)
         })
         .data<&settings::generate_normals>("generate_normals"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "generate_normals"},
             entt::attribute{"pretty_name", "Generate Normals"},
             entt::attribute{"tooltip", "If true, normals are generated from depth. Disable if precomputed normals are available."},
         });
@@ -309,17 +325,20 @@ REFLECT(assao_component)
     entt::meta_factory<assao_component>{}
         .type("assao_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "assao_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "ASSAO"},
         })
         .func<&component_exists<assao_component>>("component_exists"_hs)
         .data<&assao_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Enable/disable ASSAO ambient occlusion"},
         })
         .data<&assao_component::settings>("settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "settings"},
             entt::attribute{"pretty_name", "Settings"},
             entt::attribute{"flattable", true},
         });

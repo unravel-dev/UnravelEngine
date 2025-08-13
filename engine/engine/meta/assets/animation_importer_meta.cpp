@@ -27,28 +27,39 @@ REFLECT(animation_importer_meta)
     // Register root_motion_meta with entt
     entt::meta_factory<animation_importer_meta::root_motion_meta>{}
         .type("root_motion_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "root_motion_meta"},
+        })
         .data<&animation_importer_meta::root_motion_meta::keep_position_y>("keep_position_y"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_position_y"},
             entt::attribute{"pretty_name", "Keep Position Y"},
         })
         .data<&animation_importer_meta::root_motion_meta::keep_position_xz>("keep_position_xz"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_position_xz"},
             entt::attribute{"pretty_name", "Keep Position XZ"},
         })
         .data<&animation_importer_meta::root_motion_meta::keep_rotation>("keep_rotation"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_rotation"},
             entt::attribute{"pretty_name", "Keep Rotation"},
         })
         .data<&animation_importer_meta::root_motion_meta::keep_in_place>("keep_in_place"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_in_place"},
             entt::attribute{"pretty_name", "Keep In Place"},
         });
 
     // Register animation_importer_meta with entt
     entt::meta_factory<animation_importer_meta>{}
         .type("animation_importer_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_importer_meta"},
+        })
         .data<&animation_importer_meta::root_motion>("root_motion"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "root_motion"},
             entt::attribute{"pretty_name", "Root Motion"},
         });
 }

@@ -21,12 +21,14 @@ REFLECT(layer_component)
     entt::meta_factory<layer_component>{}
         .type("layer_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "layer_component"},
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Layer"},
         })
         .func<&component_exists<layer_component>>("component_exists"_hs)
         .data<&layer_component::layers>("layers"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "layers"},
             entt::attribute{"pretty_name", "Layers"},
             entt::attribute{"tooltip", "This is the layers of the entity."},
         });

@@ -22,12 +22,14 @@ REFLECT(fxaa_component)
     entt::meta_factory<fxaa_component>{}
         .type("fxaa_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fxaa_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "FXAA"},
         })
         .func<&component_exists<fxaa_component>>("component_exists"_hs)
         .data<&fxaa_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Enable/disable FXAA anti-aliasing"},
         });

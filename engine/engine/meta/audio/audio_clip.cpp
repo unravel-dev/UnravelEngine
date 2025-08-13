@@ -26,28 +26,36 @@ REFLECT(sound_info)
     // Register sound_info with entt
     entt::meta_factory<sound_info>{}
         .type("sound_info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sound_info"},
+        })
         .data<nullptr, &sound_info::bits_per_sample>("bytes_per_sample"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bytes_per_sample"},
             entt::attribute{"pretty_name", "Bits per sample"},
             entt::attribute{"tooltip", "Bit depth."},
         })
         .data<nullptr, &sound_info::sample_rate>("sample_rate"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sample_rate"},
             entt::attribute{"pretty_name", "Sample rate"},
             entt::attribute{"tooltip", "Sample rate."},
         })
         .data<nullptr, &sound_info::channels>("channels"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "channels"},
             entt::attribute{"pretty_name", "Channels"},
             entt::attribute{"tooltip", "Mono or Stereo."},
         })
         .data<nullptr, &sound_info::duration>("duration"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "duration"},
             entt::attribute{"pretty_name", "Duration"},
             entt::attribute{"tooltip", "Duration in seconds."},
         })
         .data<nullptr, &sound_info::frames>("frames"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "frames"},
             entt::attribute{"pretty_name", "Frames"},
             entt::attribute{"tooltip", "Fames count (samples per channel).&"},
         });
@@ -100,6 +108,7 @@ REFLECT(audio_clip)
     entt::meta_factory<audio_clip>{}
         .type("audio_clip"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_clip"},
             entt::attribute{"pretty_name", "Audio Clip"},
         });
 }

@@ -45,55 +45,114 @@ REFLECT(reflection_probe)
         .property("sphere_data", &reflection_probe::sphere_data)(rttr::metadata("pretty_name", "Sphere"),
                                                                  rttr::metadata("predicate", sphere_predicate));
 
+    auto box_predicate_entt = entt::property_predicate(
+        [](entt::meta_handle& obj)
+        {
+            auto data = obj->try_cast<reflection_probe>();
+            return data->type == probe_type::box;
+        });
+    auto sphere_predicate_entt = entt::property_predicate(
+        [](entt::meta_handle& obj)
+        {
+            auto data = obj->try_cast<reflection_probe>();
+            return data->type == probe_type::sphere;
+        });
     // EnTT meta registration mirroring RTTR
     entt::meta_factory<probe_type>{}
         .type("probe_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_type"},
+        })
         .data<probe_type::box>("box"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Box"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "box"},
+            entt::attribute{"pretty_name", "Box"} 
+        })
         .data<probe_type::sphere>("sphere"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Sphere"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "sphere"},
+            entt::attribute{"pretty_name", "Sphere"} 
+        });
 
     entt::meta_factory<reflect_method>{}
         .type("reflect_method"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflect_method"},
+        })
         .data<reflect_method::environment>("environment"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Environment"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "environment"},
+            entt::attribute{"pretty_name", "Environment"} 
+        })
         .data<reflect_method::static_only>("static_only"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Static Only"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "static_only"},
+            entt::attribute{"pretty_name", "Static Only"} 
+        });
 
     entt::meta_factory<reflection_probe::box>{}
         .type("box"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "box"},
+        })
         .data<&reflection_probe::box::extents>("extents"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Extents"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "extents"},
+            entt::attribute{"pretty_name", "Extents"} 
+        })
         .data<&reflection_probe::box::transition_distance>("transition_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "transition_distance"},
             entt::attribute{"pretty_name", "Transition Distance"},
             entt::attribute{"min", 0.0f},
         });
 
     entt::meta_factory<reflection_probe::sphere>{}
         .type("sphere"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sphere"},
+        })
         .data<&reflection_probe::sphere::range>("range"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "range"},
             entt::attribute{"pretty_name", "Range"},
             entt::attribute{"min", 0.0f},
         });
 
     entt::meta_factory<reflection_probe>{}
         .type("reflection_probe"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_probe"},
+        })
         .data<&reflection_probe::type>("type"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Type"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "type"},
+            entt::attribute{"pretty_name", "Type"} 
+        })
         .data<&reflection_probe::method>("method"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Method"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "method"},
+            entt::attribute{"pretty_name", "Method"} 
+        })
         .data<&reflection_probe::intensity>("intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "intensity"},
             entt::attribute{"pretty_name", "Intensity"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 3.0f},
         })
         .data<&reflection_probe::box_data>("box_data"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Box"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "box_data"},
+            entt::attribute{"pretty_name", "Box"},
+            entt::attribute{"predicate", box_predicate_entt},
+        })
         .data<&reflection_probe::sphere_data>("sphere_data"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Sphere"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "sphere_data"},
+            entt::attribute{"pretty_name", "Sphere"},
+            entt::attribute{"predicate", sphere_predicate_entt},
+        });
 }
 
 SAVE(reflection_probe)

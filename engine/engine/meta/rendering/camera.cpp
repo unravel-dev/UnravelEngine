@@ -16,18 +16,26 @@ REFLECT(camera)
     // Register projection_mode enum with entt
     entt::meta_factory<projection_mode>{}
         .type("projection_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "projection_mode"},
+        })
         .data<projection_mode::perspective>("perspective"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "perspective"},
             entt::attribute{"pretty_name", "Perspective"},
         })
         .data<projection_mode::orthographic>("orthographic"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "orthographic"},
             entt::attribute{"pretty_name", "Orthographic"},
         });
 
     // Register camera with entt
     entt::meta_factory<camera>{}
-        .type("camera"_hs);
+        .type("camera"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "camera"},
+        });
 }
 
 SAVE(camera)

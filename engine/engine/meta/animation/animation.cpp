@@ -35,33 +35,42 @@ REFLECT(root_motion_params)
     // Register root_motion_params with entt
     entt::meta_factory<root_motion_params>{}
         .type("root_motion_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "root_motion_params"},
+        })
         .data<&root_motion_params::keep_position_y>("keep_position_y"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_position_y"},
             entt::attribute{"pretty_name", "Keep Position Y"},
             entt::attribute{"tooltip", "Root position t components are not affected by animation."},
         })
         .data<&root_motion_params::keep_position_xz>("keep_position_xz"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_position_xz"},
             entt::attribute{"pretty_name", "Keep Position XZ"},
             entt::attribute{"tooltip", "Root position x,z components are not affected by animation."},
         })
         .data<&root_motion_params::keep_rotation>("keep_rotation"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_rotation"},
             entt::attribute{"pretty_name", "Keep Rotation"},
             entt::attribute{"tooltip", "Root rotation is not affected by animaation."},
         })
         .data<&root_motion_params::keep_in_place>("keep_in_place"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "keep_in_place"},
             entt::attribute{"pretty_name", "Keep In Place"},
             entt::attribute{"tooltip", "Keep the animation in place even if it has root motion in it."},
         })
         .data<nullptr, &root_motion_params::position_node_name>("position_node_name"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "position_node_name"},
             entt::attribute{"pretty_name", "Root Motion Position Node"},
             entt::attribute{"tooltip", "Transform node that will be used for root motion."},
         })
         .data<nullptr, &root_motion_params::rotation_node_name>("rotation_node_name"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation_node_name"},
             entt::attribute{"pretty_name", "Root Motion Rotation Node"},
             entt::attribute{"tooltip", "Rotation node that will be used for root motion."},
         });
@@ -94,20 +103,27 @@ REFLECT(animation_channel)
     // Register animation_channel with entt
     entt::meta_factory<animation_channel>{}
         .type("animation_channel"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_channel"},
+        })
         .data<nullptr, &animation_channel::node_name>("node_name"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "node_name"},
             entt::attribute{"pretty_name", "Name"},
         })
         .data<nullptr, &animation_channel::get_position_keys_count>("position_keys_count"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "position_keys_count"},
             entt::attribute{"pretty_name", "Positions"},
         })
         .data<nullptr, &animation_channel::get_rotation_keys_count>("rotation_keys_count"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation_keys_count"},
             entt::attribute{"pretty_name", "Rotations"},
         })
         .data<nullptr, &animation_channel::get_position_keys_count>("scaling_keys_count"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scaling_keys_count"},
             entt::attribute{"pretty_name", "Scalings"},
         });
 }
@@ -123,20 +139,27 @@ REFLECT(animation_clip)
     // Register animation_clip with entt
     entt::meta_factory<animation_clip>{}
         .type("animation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation"},
+        })
         .data<nullptr, &animation_clip::name>("name"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "name"},
             entt::attribute{"pretty_name", "Name"},
         })
         .data<nullptr, &animation_clip::duration>("duration"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "duration"},
             entt::attribute{"pretty_name", "Duration"},
         })
         .data<nullptr, &animation_clip::root_motion>("root_motion"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "root_motion"},
             entt::attribute{"pretty_name", "Root Motion"},
         })
         .data<nullptr, &animation_clip::channels>("channels"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "channels"},
             entt::attribute{"pretty_name", "Channels"},
         });
 }

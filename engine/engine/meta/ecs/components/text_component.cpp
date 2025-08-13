@@ -176,6 +176,271 @@ REFLECT(text_component)
         .property("style", &text_component::get_style, &text_component::set_style)(
             rttr::metadata("pretty_name", "Style"),
             rttr::metadata("tooltip", "Main style for the text"));
+
+
+                // predicates for conditional GUI
+    auto auto_size_pred_entt = entt::property_predicate(
+        [](entt::meta_handle& i)
+        {
+            return i->try_cast<text_component>()->get_auto_size();
+        });
+
+    auto font_size_read_only_entt = entt::property_predicate(
+        [](entt::meta_handle& i)
+        {
+            return i->try_cast<text_component>()->get_auto_size();
+        });
+    // Register text_style with entt
+    entt::meta_factory<text_style>{}
+        .type("text_style"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "text_style"},
+            entt::attribute{"pretty_name", "TextStyle"},
+        })
+        .data<&text_style::set_opacity, &text_style::get_opacity>("opacity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "opacity"},
+            entt::attribute{"pretty_name", "Opacity"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&text_style::set_text_color, &text_style::get_text_color>("text_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "text_color"},
+            entt::attribute{"pretty_name", "Color"},
+            entt::attribute{"tooltip", "."},
+        })
+        .data<&text_style::set_outline_color, &text_style::get_outline_color>("outline_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "outline_color"},
+            entt::attribute{"pretty_name", "Outline Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Outline"},
+        })
+        .data<&text_style::outline_width>("outline_width"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "outline_width"},
+            entt::attribute{"pretty_name", "Outline Width"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"group", "Outline"},
+        })
+        .data<&text_style::set_shadow_color, &text_style::get_shadow_color>("shadow_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_color"},
+            entt::attribute{"pretty_name", "Shadow Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Shadow"},
+        })
+        .data<&text_style::shadow_softener>("shadow_softener"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_softener"},
+            entt::attribute{"pretty_name", "Shadow Softenss"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"group", "Shadow"},
+        })
+        .data<&text_style::shadow_offsets>("shadow_offsets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_offsets"},
+            entt::attribute{"pretty_name", "Shadow Offsets"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Shadow"},
+        })
+        .data<&text_style::set_style_flags, &text_style::get_style_flags>("style_flags"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "style_flags"},
+            entt::attribute{"pretty_name", "Flags"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        })
+        .data<&text_style::set_background_color, &text_style::get_background_color>("background_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "background_color"},
+            entt::attribute{"pretty_name", "Background Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        })
+        .data<&text_style::set_foreground_color, &text_style::get_foreground_color>("foreground_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "foreground_color"},
+            entt::attribute{"pretty_name", "Foreground Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        })
+        .data<&text_style::set_overline_color, &text_style::get_overline_color>("overline_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "overline_color"},
+            entt::attribute{"pretty_name", "Overline Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        })
+        .data<&text_style::set_underline_color, &text_style::get_underline_color>("underline_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "underline_color"},
+            entt::attribute{"pretty_name", "Underline Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        })
+        .data<&text_style::set_strike_color, &text_style::get_strike_color>("strike_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "strike_color"},
+            entt::attribute{"pretty_name", "Strike Color"},
+            entt::attribute{"tooltip", "."},
+            entt::attribute{"group", "Style"},
+        });
+
+    // Register buffer_type enum with entt
+    entt::meta_factory<BT>{}
+        .type("buffer_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "buffer_type"},
+        })
+        .data<BT::static_buffer>("static_buffer"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "static_buffer"},
+            entt::attribute{"pretty_name", "Static"},
+        })
+        .data<BT::dynamic_buffer>("dynamic_buffer"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "dynamic_buffer"},
+            entt::attribute{"pretty_name", "Dynamic"},
+        })
+        .data<BT::transient_buffer>("transient_buffer"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "transient_buffer"},
+            entt::attribute{"pretty_name", "Transient"},
+        });
+
+    // Register overflow_type enum with entt
+    entt::meta_factory<OT>{}
+        .type("overflow_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "overflow_type"},
+        })
+        .data<OT::none>("none"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
+            entt::attribute{"pretty_name", "None"},
+        })
+        .data<OT::word>("word"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "word"},
+            entt::attribute{"pretty_name", "Word"},
+        })
+        .data<OT::grapheme>("grapheme"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "grapheme"},
+            entt::attribute{"pretty_name", "Grapheme"},
+        });
+
+    // Register text_component with entt
+    entt::meta_factory<text_component>{}
+        .type("text_component"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "text_component"},
+            entt::attribute{"category", "UI"},
+            entt::attribute{"pretty_name", "Text"},
+        })
+        .func<&component_exists<text_component>>("component_exists"_hs)
+        .data<&text_component::set_text, &text_component::get_text>("text"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "text"},
+            entt::attribute{"pretty_name", "Text"},
+            entt::attribute{"tooltip", "The UTF-8 string to display."},
+            entt::attribute{"multiline", true},
+            entt::attribute{"wrap", true},
+            entt::attribute{"example", R"(<color=blue>Blue text with <background-color=yellow>yellow background</background-color> and <style=underline>underlined</style> <alpha=0.4>transparent words</alpha>.</color>
+<outline-width=1><outline-color=red>This text has a red outline</outline-color> and <shadow-offset=2,2><shadow-color=gray>gray shadow</shadow-color></shadow-offset>.</outline-width>
+
+<color=green>Green text with <style=overline>overlined</style> and <style=strikethrough>strikethrough</style> styles.</color>
+<shadow-offset=3,3><shadow-color=black><shadow-softener=2>This text has a softened shadow</shadow-softener> and <foreground-color=#FFD70055><color=black>black text with gold transparent foreground</color></foreground-color>.</shadow-color></shadow-offset>
+
+<color=purple>Purple text with <style=underline|overline>both underline and overline</style> effects.</color>)"},
+        })
+        .data<&text_component::set_is_rich_text, &text_component::get_is_rich_text>("is_rich"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_rich"},
+            entt::attribute{"pretty_name", "Rich Text"},
+            entt::attribute{"tooltip", "Enable parsing of <color> / <style> tags."},
+        })
+        .data<&text_component::set_font, &text_component::get_font>("font"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "font"},
+            entt::attribute{"pretty_name", "Font"},
+            entt::attribute{"tooltip", "The font asset to use."},
+        })
+        .data<&text_component::set_font_size, &text_component::get_font_size>("font_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "font_size"},
+            entt::attribute{"pretty_name", "Font Size"},
+            entt::attribute{"tooltip", "Desired base font size."},
+            entt::attribute{"readonly_predicate", font_size_read_only_entt},
+        })
+        .data<nullptr, &text_component::get_render_font_size>("render_font_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "render_font_size"},
+            entt::attribute{"pretty_name", "Render Font Size"},
+            entt::attribute{"tooltip", "Actual size used after auto-scaling."},
+        })
+        .data<nullptr, &text_component::get_render_buffers_count>("render_buffers_count"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "render_buffers_count"},
+            entt::attribute{"pretty_name", "Render Buffers"},
+            entt::attribute{"tooltip", "How many render buffers are used for this text."},
+        })
+        .data<&text_component::set_auto_size, &text_component::get_auto_size>("auto_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_size"},
+            entt::attribute{"pretty_name", "Auto Size"},
+            entt::attribute{"tooltip", "Automatically shrink or grow font to fit area."},
+        })
+        .data<&text_component::set_auto_size_range, &text_component::get_auto_size_range>("auto_size_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_size_range"},
+            entt::attribute{"pretty_name", "Auto Size Range"},
+            entt::attribute{"tooltip", "Min/Max font sizes when Auto Size is enabled."},
+            entt::attribute{"predicate", auto_size_pred_entt},
+        })
+        .data<&text_component::set_alignment, &text_component::get_alignment>("alignment"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "alignment"},
+            entt::attribute{"pretty_name", "Alignment"},
+            entt::attribute{"tooltip", "Horizontal and vertical alignment flags."},
+        })
+        .data<&text_component::set_apply_kerning, &text_component::get_apply_kerning>("apply_kerning"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "apply_kerning"},
+            entt::attribute{"pretty_name", "Apply Kerning"},
+            entt::attribute{"tooltip", "Enable kerning."},
+        })
+        .data<&text_component::set_overflow_type, &text_component::get_overflow_type>("overflow"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "overflow"},
+            entt::attribute{"pretty_name", "Overflow"},
+            entt::attribute{"tooltip", "How text should wrap or overflow the area."},
+        })
+        .data<&text_component::set_buffer_type, &text_component::get_buffer_type>("buffer_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "buffer_type"},
+            entt::attribute{"pretty_name", "Buffer Type"},
+            entt::attribute{"tooltip", "Static, Dynamic, or Transient text buffer storage."},
+        })
+        .data<&text_component::set_area, &text_component::get_area>("area"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "area"},
+            entt::attribute{"pretty_name", "Area"},
+            entt::attribute{"tooltip", "Bounds (width × height)."},
+        })
+        .data<&text_component::set_style, &text_component::get_style>("style"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "style"},
+            entt::attribute{"pretty_name", "Style"},
+            entt::attribute{"tooltip", "Main style for the text"},
+        });
 }
 
 SERIALIZE_INLINE(text_style)

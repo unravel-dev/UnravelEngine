@@ -38,32 +38,38 @@ REFLECT(model_component)
     entt::meta_factory<model_component>{}
         .type("model_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "model_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Model"},
         })
         .func<&component_exists<model_component>>("component_exists"_hs)
         .data<&model_component::set_enabled, &model_component::is_enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Is the model visible?"},
         })
         .data<&model_component::set_static, &model_component::is_static>("static"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "static"},
             entt::attribute{"pretty_name", "Static"},
             entt::attribute{"tooltip", "Is the model static?"},
         })
         .data<&model_component::set_casts_shadow, &model_component::casts_shadow>("casts_shadow"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "casts_shadow"},
             entt::attribute{"pretty_name", "Casts Shadow"},
             entt::attribute{"tooltip", "Is the model casting shadows?"},
         })
         .data<&model_component::set_casts_reflection, &model_component::casts_reflection>("casts_reflection"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "casts_reflection"},
             entt::attribute{"pretty_name", "Casts Reflection"},
             entt::attribute{"tooltip", "Is the model participating in reflection generation?"},
         })
         .data<&model_component::set_model, &model_component::get_model>("model"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "model"},
             entt::attribute{"pretty_name", "Model"},
         });
 }
@@ -128,12 +134,14 @@ REFLECT(bone_component)
     entt::meta_factory<bone_component>{}
         .type("bone_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bone_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Bone"},
         })
         .func<&component_exists<bone_component>>("component_exists"_hs)
         .data<nullptr, &bone_component::bone_index>("bone_index"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bone_index"},
             entt::attribute{"pretty_name", "Bone Index"},
             entt::attribute{"tooltip", "The bone index this object represents."},
         });
@@ -167,12 +175,14 @@ REFLECT(submesh_component)
     entt::meta_factory<submesh_component>{}
         .type("submesh_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "submesh_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Submesh"},
         })
         .func<&component_exists<submesh_component>>("component_exists"_hs)
         .data<nullptr, &submesh_component::submeshes>("submeshes"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "submeshes"},
             entt::attribute{"pretty_name", "Submeshes"},
             entt::attribute{"tooltip", "Submeshes affected by this node."},
         });

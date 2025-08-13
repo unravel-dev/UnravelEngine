@@ -21,6 +21,12 @@ namespace entt
 {
     using attributes = std::map<std::string, meta_any>;
     using attribute = attributes::value_type;
+
+    REFLECTION_EXPORT auto get_pretty_name(meta_type t) -> std::string;
+    REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
+
+    REFLECTION_EXPORT auto property_predicate(std::function<bool(meta_handle&)> predicate) -> std::function<bool(meta_handle&)>;
+
 }
 
 #define CAT_IMPL_(a, b) a##b

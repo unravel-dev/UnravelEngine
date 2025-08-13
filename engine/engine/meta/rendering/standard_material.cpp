@@ -70,58 +70,96 @@ REFLECT(pbr_material)
     // EnTT meta registration mirroring RTTR
     entt::meta_factory<pbr_material>{}
         .type("pbr_material"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pbr_material"},
+        })
         .data<&pbr_material::set_base_color, &pbr_material::get_base_color>("base_color"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Base Color"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "base_color"},
+            entt::attribute{"pretty_name", "Base Color"} 
+        })
         .data<&pbr_material::set_subsurface_color, &pbr_material::get_subsurface_color>("subsurface_color"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Subsurface Color"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "subsurface_color"},
+            entt::attribute{"pretty_name", "Subsurface Color"} 
+        })
         .data<&pbr_material::set_emissive_color, &pbr_material::get_emissive_color>("emissive_color"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Emissive Color"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "emissive_color"},
+            entt::attribute{"pretty_name", "Emissive Color"} 
+        })
         .data<&pbr_material::set_roughness, &pbr_material::get_roughness>("roughness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "roughness"},
             entt::attribute{"pretty_name", "Roughness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
         .data<&pbr_material::set_metalness, &pbr_material::get_metalness>("metalness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "metalness"},
             entt::attribute{"pretty_name", "Metalness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
         .data<&pbr_material::set_bumpiness, &pbr_material::get_bumpiness>("bumpiness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bumpiness"},
             entt::attribute{"pretty_name", "Bumpiness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
         })
         .data<&pbr_material::set_alpha_test_value, &pbr_material::get_alpha_test_value>("alpha_test_value"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "alpha_test_value"},
             entt::attribute{"pretty_name", "Alpha Test Value"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
         .data<&pbr_material::set_tiling, &pbr_material::get_tiling>("tiling"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Tiling"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "tiling"},
+            entt::attribute{"pretty_name", "Tiling"} 
+        })
         .data<&pbr_material::set_dither_threshold, &pbr_material::get_dither_threshold>("dither_threshold"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Dither Threshold"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "dither_threshold"},
+            entt::attribute{"pretty_name", "Dither Threshold"} 
+        })
         .data<&pbr_material::set_color_map, &pbr_material::get_color_map>("color_map"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Color Map"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "color_map"},
+            entt::attribute{"pretty_name", "Color Map"} 
+        })
         .data<&pbr_material::set_normal_map, &pbr_material::get_normal_map>("normal_map"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Normal Map"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "normal_map"},
+            entt::attribute{"pretty_name", "Normal Map"} 
+        })
         .data<&pbr_material::set_roughness_map, &pbr_material::get_roughness_map>("roughness_map"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "roughness_map"},
             entt::attribute{"pretty_name", "Roughness Map"},
             entt::attribute{"tooltip", "Red Channel (R): Contains the roughness values.\nWhen Metalness and Roughness maps are the same.\nAs per glTF 2.0 specification:\nGreen Channel (G): Contains the roughness values.\nBlue Channel (B): Contains the metalness values."},
         })
         .data<&pbr_material::set_metalness_map, &pbr_material::get_metalness_map>("metalness_map"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "metalness_map"},
             entt::attribute{"pretty_name", "Metalness Map"},
             entt::attribute{"tooltip", "Red Channel (R): Contains the metalness values.\nWhen Metalness and Roughness maps are the same.\nAs per glTF 2.0 specification:\nGreen Channel (G): Contains the roughness values.\nBlue Channel (B): Contains the metalness values."},
         })
         .data<&pbr_material::set_emissive_map, &pbr_material::get_emissive_map>("emissive_map"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Emissive Map"}, entt::attribute{"tooltip", "emissive color map."} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "emissive_map"},
+            entt::attribute{"pretty_name", "Emissive Map"}, 
+            entt::attribute{"tooltip", "emissive color map."} 
+        })
         .data<&pbr_material::set_ao_map, &pbr_material::get_ao_map>("ao_map"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "AO Map"}, entt::attribute{"tooltip", "black/white texture."} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "ao_map"},
+            entt::attribute{"pretty_name", "AO Map"}, 
+            entt::attribute{"tooltip", "black/white texture."} 
+        });
 }
 
 SAVE(pbr_material)

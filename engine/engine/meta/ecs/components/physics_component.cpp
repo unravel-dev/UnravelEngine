@@ -18,6 +18,26 @@ REFLECT(physics_box_shape)
                                                         rttr::metadata("tooltip", "The center of the collider."))
         .property("extends", &physics_box_shape::extends)(rttr::metadata("pretty_name", "Extends"),
                                                           rttr::metadata("tooltip", "The extends of the collider."));
+
+    // Register physics_box_shape with entt
+    entt::meta_factory<physics_box_shape>{}
+        .type("physics_box_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_box_shape"},
+            entt::attribute{"pretty_name", "Box"},
+        })
+        .data<&physics_box_shape::center>("center"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "center"},
+            entt::attribute{"pretty_name", "Center"},
+            entt::attribute{"tooltip", "The center of the collider."},
+        })
+        .data<&physics_box_shape::extends>("extends"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "extends"},
+            entt::attribute{"pretty_name", "Extends"},
+            entt::attribute{"tooltip", "The extends of the collider."},
+        });
 }
 
 SAVE(physics_box_shape)
@@ -47,6 +67,28 @@ REFLECT(physics_sphere_shape)
                                                            rttr::metadata("tooltip", "The radius of the collider."),
                                                            rttr::metadata("min", 0.0f),
                                                            rttr::metadata("step", 0.1f));
+
+    // Register physics_sphere_shape with entt
+    entt::meta_factory<physics_sphere_shape>{}
+        .type("physics_sphere_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_sphere_shape"},
+            entt::attribute{"pretty_name", "Sphere"},
+        })
+        .data<&physics_sphere_shape::center>("center"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "center"},
+            entt::attribute{"pretty_name", "Center"},
+            entt::attribute{"tooltip", "The center of the collider."},
+        })
+        .data<&physics_sphere_shape::radius>("radius"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radius"},
+            entt::attribute{"pretty_name", "Radius"},
+            entt::attribute{"tooltip", "The radius of the collider."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        });
 }
 
 SAVE(physics_sphere_shape)
@@ -80,6 +122,36 @@ REFLECT(physics_capsule_shape)
                                                             rttr::metadata("tooltip", "The length of the collider."),
                                                             rttr::metadata("min", 0.0f),
                                                             rttr::metadata("step", 0.1f));
+
+    // Register physics_capsule_shape with entt
+    entt::meta_factory<physics_capsule_shape>{}
+        .type("physics_capsule_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_capsule_shape"},
+            entt::attribute{"pretty_name", "Capsule"},
+        })
+        .data<&physics_capsule_shape::center>("center"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "center"},
+            entt::attribute{"pretty_name", "Center"},
+            entt::attribute{"tooltip", "The center of the collider."},
+        })
+        .data<&physics_capsule_shape::radius>("radius"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radius"},
+            entt::attribute{"pretty_name", "Radius"},
+            entt::attribute{"tooltip", "The radius of the collider."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        })
+        .data<&physics_capsule_shape::length>("length"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "length"},
+            entt::attribute{"pretty_name", "Length"},
+            entt::attribute{"tooltip", "The length of the collider."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        });
 }
 
 SAVE(physics_capsule_shape)
@@ -116,6 +188,37 @@ REFLECT(physics_cylinder_shape)
                                                              rttr::metadata("tooltip", "The length of the collider."),
                                                              rttr::metadata("min", 0.0f),
                                                              rttr::metadata("step", 0.1f));
+
+    // Register physics_cylinder_shape with entt
+    entt::meta_factory<physics_cylinder_shape>{}
+        .type("physics_cylinder_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_cylinder_shape"},
+            entt::attribute{"category", "PHYSICS"},
+            entt::attribute{"pretty_name", "Cylinder"},
+        })
+        .data<&physics_cylinder_shape::center>("center"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "center"},
+            entt::attribute{"pretty_name", "Center"},
+            entt::attribute{"tooltip", "The center of the collider."},
+        })
+        .data<&physics_cylinder_shape::radius>("radius"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "radius"},
+            entt::attribute{"pretty_name", "Radius"},
+            entt::attribute{"tooltip", "The radius of the collider."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        })
+        .data<&physics_cylinder_shape::length>("length"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "length"},
+            entt::attribute{"pretty_name", "Length"},
+            entt::attribute{"tooltip", "The length of the collider."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        });
 }
 
 SAVE(physics_cylinder_shape)
@@ -151,6 +254,15 @@ REFLECT(physics_compound_shape)
         rttr::metadata("pretty_name", "Shape"),
         rttr::metadata("variant_types", variant_types))
         .constructor<>()();
+
+    // Register physics_compound_shape with entt
+    entt::meta_factory<physics_compound_shape>{}
+        .type("physics_compound_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_compound_shape"},
+            entt::attribute{"category", "PHYSICS"},
+            entt::attribute{"pretty_name", "Shape"},
+        });
 }
 
 SAVE(physics_compound_shape)
@@ -170,10 +282,6 @@ LOAD_INSTANTIATE(physics_compound_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_component)
 {
-    static const auto& ps = rttr::type::get<physics_box_shape>();
-    static const auto& ss = rttr::type::get<physics_sphere_shape>();
-
-    std::vector<const rttr::type*> variant_types{&ps, &ss};
 
     rttr::registration::class_<physics_component>("physics_component")(rttr::metadata("category", "PHYSICS"),
                                                                        rttr::metadata("pretty_name", "Physics"))
@@ -236,6 +344,99 @@ REFLECT(physics_component)
         .property("shapes", &physics_component::get_shapes, &physics_component::set_shapes)(
             rttr::metadata("pretty_name", "Shapes"),
             rttr::metadata("tooltip", "Shapes."));
+
+    // Register physics_component with entt
+    entt::meta_factory<physics_component>{}
+        .type("physics_component"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_component"},
+            entt::attribute{"category", "PHYSICS"},
+            entt::attribute{"pretty_name", "Physics"},
+        })
+        .func<&component_exists<physics_component>>("component_exists"_hs)
+        .data<&physics_component::set_is_using_gravity, &physics_component::is_using_gravity>("is_using_gravity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_using_gravity"},
+            entt::attribute{"pretty_name", "Use Gravity"},
+            entt::attribute{"tooltip", "Simulate gravity for this rigidbody."},
+        })
+        .data<&physics_component::set_is_kinematic, &physics_component::is_kinematic>("is_kinematic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_kinematic"},
+            entt::attribute{"pretty_name", "Is Kinematic"},
+            entt::attribute{"tooltip", "Is the rigidbody kinematic(A rigid body that is not affected by others and can be moved directly.)"},
+        })
+        .data<&physics_component::set_is_sensor, &physics_component::is_sensor>("is_sensor"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_sensor"},
+            entt::attribute{"pretty_name", "Is Sensor"},
+            entt::attribute{"tooltip", "The rigidbody will not respond to collisions, i.e. it becomes a _sensor_."},
+        })
+        .data<&physics_component::set_is_autoscaled, &physics_component::is_autoscaled>("is_autoscaled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_autoscaled"},
+            entt::attribute{"pretty_name", "Is Auto Scaled"},
+            entt::attribute{"tooltip", "Enables/Disables shape auto scale with transform."},
+        })
+        .data<&physics_component::set_mass, &physics_component::get_mass>("mass"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mass"},
+            entt::attribute{"pretty_name", "Mass"},
+            entt::attribute{"tooltip", "Mass for dynamic rigidbodies."},
+            entt::attribute{"min", 0.0f},
+        })
+        .data<&physics_component::set_collision_include_mask, &physics_component::get_collision_include_mask>("include_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "include_layers"},
+            entt::attribute{"pretty_name", "Include Layers"},
+            entt::attribute{"tooltip", "Layers to include when producing collisions."},
+        })
+        .data<&physics_component::set_collision_exclude_mask, &physics_component::get_collision_exclude_mask>("exclude_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exclude_layers"},
+            entt::attribute{"pretty_name", "Exclude Layers"},
+            entt::attribute{"tooltip", "Layers to exclude when producing collisions."},
+        })
+        .data<nullptr, &physics_component::get_collision_mask>("collision_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_layers"},
+            entt::attribute{"pretty_name", "Collision Layers"},
+            entt::attribute{"tooltip", "Layers (Include - Exclude) used when producing collisions."},
+        })
+        .data<nullptr, &physics_component::get_velocity>("velocity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "velocity"},
+            entt::attribute{"pretty_name", "Velocity"},
+        })
+        .data<nullptr, &physics_component::get_angular_velocity>("angular_velocity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "angular_velocity"},
+            entt::attribute{"pretty_name", "Angular Velocity"},
+        })
+        .data<&physics_component::set_freeze_position, &physics_component::get_freeze_position>("freeze_position"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "freeze_position"},
+            entt::attribute{"pretty_name", "Freeze Position"},
+            entt::attribute{"tooltip", "Freeze."},
+        })
+        .data<&physics_component::set_freeze_rotation, &physics_component::get_freeze_rotation>("freeze_rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "freeze_rotation"},
+            entt::attribute{"pretty_name", "Freeze Rotation"},
+            entt::attribute{"tooltip", "Freeze."},
+        })
+        .data<&physics_component::set_material, &physics_component::get_material>("material"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "material"},
+            entt::attribute{"pretty_name", "Material"},
+            entt::attribute{"tooltip", "Physics material for the rigidbody."},
+        })
+        .data<&physics_component::set_shapes, &physics_component::get_shapes>("shapes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shapes"},
+            entt::attribute{"pretty_name", "Shapes"},
+            entt::attribute{"tooltip", "Shapes."},
+        });
 }
 
 SAVE(physics_component)

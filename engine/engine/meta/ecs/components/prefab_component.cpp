@@ -22,16 +22,22 @@ REFLECT(prefab_property_override_data)
     // Register prefab_property_override_data class with entt
     entt::meta_factory<prefab_property_override_data>{}
         .type("prefab_property_override_data"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "prefab_property_override_data"},
+        })
         .data<&prefab_property_override_data::entity_uuid>("entity_uuid"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "entity_uuid"},
             entt::attribute{"pretty_name", "Entity UUID"},
         })
         .data<&prefab_property_override_data::component_path>("component_path"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "component_path"},
             entt::attribute{"pretty_name", "Component Path"},
         })
         .data<&prefab_property_override_data::pretty_component_path>("pretty_component_path"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pretty_component_path"},
             entt::attribute{"pretty_name", "Pretty Component Path"},
         });
 }
@@ -65,20 +71,24 @@ REFLECT(prefab_component)
     entt::meta_factory<prefab_component>{}
         .type("prefab_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "prefab_component"},
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Prefab"},
         })
         .func<&component_exists<prefab_component>>("component_exists"_hs)
         .data<&prefab_component::source>("source"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "source"},
             entt::attribute{"pretty_name", "Source"},
         })
         .data<&prefab_component::property_overrides>("property_overrides"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "property_overrides"},
             entt::attribute{"pretty_name", "Property Overrides"},
         })
         .data<&prefab_component::removed_entities>("removed_entities"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "removed_entities"},
             entt::attribute{"pretty_name", "Removed Entities"},
         });
 }
@@ -115,12 +125,14 @@ REFLECT(prefab_id_component)
     entt::meta_factory<prefab_id_component>{}
         .type("prefab_id_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "prefab_id_component"},
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Prefab Id"},
         })
         .func<&component_exists<prefab_id_component>>("component_exists"_hs)
         .data<nullptr, &prefab_id_component::id>("id"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "id"},
             entt::attribute{"pretty_name", "Id"},
             entt::attribute{"tooltip", "This is the unique id of the entity in the prefab."},
         });

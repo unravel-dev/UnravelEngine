@@ -22,17 +22,20 @@ REFLECT(tag_component)
     entt::meta_factory<tag_component>{}
         .type("tag_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tag_component"},
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Tag"},
         })
         .func<&component_exists<tag_component>>("component_exists"_hs)
         .data<&tag_component::name>("name"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "name"},
             entt::attribute{"pretty_name", "Name"},
             entt::attribute{"tooltip", "This is the name of the entity."},
         })
         .data<&tag_component::tag>("tag"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tag"},
             entt::attribute{"pretty_name", "Tag"},
             entt::attribute{"tooltip", "This is the tag(group) of the entity."},
         });

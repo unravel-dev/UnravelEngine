@@ -16,6 +16,7 @@ REFLECT(script)
     entt::meta_factory<script>{}
         .type("script"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "script"},
             entt::attribute{"pretty_name", "Script"},
         });
 }

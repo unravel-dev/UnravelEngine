@@ -90,18 +90,27 @@ REFLECT(light)
 
     // EnTT meta registration mirroring RTTR
     entt::meta_factory<light::spot::shadowmap_params>{}
-        .type("light::spot::shadowmap_params"_hs);
+        .type("light::spot::shadowmap_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::spot::shadowmap_params"},
+        });
 
     entt::meta_factory<light::spot>{}
         .type("light::spot"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::spot"},
+            entt::attribute{"pretty_name", "Spot"},
+        })
         .data<&light::spot::set_range, &light::spot::get_range>("range"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "range"},
             entt::attribute{"pretty_name", "Range"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"tooltip", "Light's range from its origin."},
         })
         .data<&light::spot::set_inner_angle, &light::spot::get_inner_angle>("inner_angle"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "inner_angle"},
             entt::attribute{"pretty_name", "Inner Angle"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 85.0f},
@@ -110,6 +119,7 @@ REFLECT(light)
         })
         .data<&light::spot::set_outer_angle, &light::spot::get_outer_angle>("outer_angle"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "outer_angle"},
             entt::attribute{"pretty_name", "Outer Angle"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 90.0f},
@@ -119,8 +129,12 @@ REFLECT(light)
 
     entt::meta_factory<light::point::shadowmap_params>{}
         .type("light::point::shadowmap_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::point::shadowmap_params"},
+        })
         .data<&light::point::shadowmap_params::fov_x_adjust>("fov_x_adjust"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fov_x_adjust"},
             entt::attribute{"pretty_name", "FovX Adjust"},
             entt::attribute{"min", -20.0f},
             entt::attribute{"max", 20.0f},
@@ -129,6 +143,7 @@ REFLECT(light)
         })
         .data<&light::point::shadowmap_params::fov_y_adjust>("fov_y_adjust"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fov_y_adjust"},
             entt::attribute{"pretty_name", "FovY Adjust"},
             entt::attribute{"min", -20.0f},
             entt::attribute{"max", 20.0f},
@@ -137,20 +152,27 @@ REFLECT(light)
         })
         .data<&light::point::shadowmap_params::stencil_pack>("stencil_pack"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "stencil_pack"},
             entt::attribute{"pretty_name", "Stencil Pack"},
             entt::attribute{"tooltip", "Shadowmap stencil packing algorithm."},
         });
 
     entt::meta_factory<light::point>{}
         .type("point"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "point"},
+            entt::attribute{"pretty_name", "Point"},
+        })
         .data<&light::point::range>("range"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "range"},
             entt::attribute{"pretty_name", "Range"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"tooltip", "Light's range from its origin."},
         })
         .data<&light::point::exponent_falloff>("exponent_falloff"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exponent_falloff"},
             entt::attribute{"pretty_name", "Exponent Falloff"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 10.0f},
@@ -159,8 +181,12 @@ REFLECT(light)
 
     entt::meta_factory<light::directional::shadowmap_params>{}
         .type("light::directional::shadowmap_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::directional::shadowmap_params"},
+        })
         .data<&light::directional::shadowmap_params::num_splits>("splits"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "splits"},
             entt::attribute{"pretty_name", "Splits"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 4},
@@ -168,6 +194,7 @@ REFLECT(light)
         })
         .data<&light::directional::shadowmap_params::split_distribution>("distribution"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "distribution"},
             entt::attribute{"pretty_name", "Distribution"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -176,72 +203,138 @@ REFLECT(light)
         })
         .data<&light::directional::shadowmap_params::stabilize>("stabilize"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "stabilize"},
             entt::attribute{"pretty_name", "Stabilize"},
             entt::attribute{"tooltip", "Stabilize the shadowmaps."},
         });
 
     entt::meta_factory<light::directional>{}
-        .type("light::directional"_hs);
+        .type("light::directional"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::directional"},
+            entt::attribute{"pretty_name", "Directional"},
+        });
 
     entt::meta_factory<light_type>{}
         .type("light_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light_type"},
+        })
         .data<light_type::spot>("spot"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Spot"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "spot"},
+            entt::attribute{"pretty_name", "Spot"} 
+        })
         .data<light_type::point>("point"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Point"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "point"},
+            entt::attribute{"pretty_name", "Point"} 
+        })
         .data<light_type::directional>("directional"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Directional"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "directional"},
+            entt::attribute{"pretty_name", "Directional"} 
+        });
 
     entt::meta_factory<sm_depth>{}
         .type("sm_depth"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sm_depth"},
+        })
         .data<sm_depth::invz>("invz"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "InvZ"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "invz"},
+            entt::attribute{"pretty_name", "InvZ"} 
+        })
         .data<sm_depth::linear>("linear"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Linear"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "linear"},
+            entt::attribute{"pretty_name", "Linear"} 
+        });
 
     entt::meta_factory<sm_impl>{}
         .type("sm_impl"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sm_impl"},
+        })
         .data<sm_impl::hard>("hard"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Hard"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "hard"},
+            entt::attribute{"pretty_name", "Hard"} 
+        })
         .data<sm_impl::pcf>("pcf"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Pcf"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "pcf"},
+            entt::attribute{"pretty_name", "Pcf"} 
+        })
         .data<sm_impl::pcss>("pcss"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Pcss"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "pcss"},
+            entt::attribute{"pretty_name", "Pcss"} 
+        })
         .data<sm_impl::vsm>("vsm"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Vsm"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "vsm"},
+            entt::attribute{"pretty_name", "Vsm"} 
+        })
         .data<sm_impl::esm>("esm"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Esm"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "esm"},
+            entt::attribute{"pretty_name", "Esm"} 
+        });
 
     entt::meta_factory<sm_resolution>{}
         .type("sm_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sm_resolution"},
+        })
         .data<sm_resolution::low>("low"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Low"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "low"},
+            entt::attribute{"pretty_name", "Low"} 
+        })
         .data<sm_resolution::medium>("medium"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Medium"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "medium"},
+            entt::attribute{"pretty_name", "Medium"} 
+        })
         .data<sm_resolution::high>("high"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "High"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "high"},
+            entt::attribute{"pretty_name", "High"} 
+        })
         .data<sm_resolution::very_high>("very_high"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Very High"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "very_high"},
+            entt::attribute{"pretty_name", "Very High"} 
+        });
 
     entt::meta_factory<light::shadowmap_params>{}
         .type("light::shadowmap_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light::shadowmap_params"},
+        })
         .data<&light::shadowmap_params::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "type"},
             entt::attribute{"pretty_name", "Type"},
             entt::attribute{"tooltip", "Shadowmap implementation type."},
         })
         .data<&light::shadowmap_params::depth>("depth"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth"},
             entt::attribute{"pretty_name", "Depth"},
             entt::attribute{"tooltip", "Shadowmap depth pack algorithm."},
         })
         .data<&light::shadowmap_params::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution"},
             entt::attribute{"pretty_name", "Resolution"},
             entt::attribute{"tooltip", "Shadowmap resolution."},
         })
         .data<&light::shadowmap_params::bias>("bias"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bias"},
             entt::attribute{"pretty_name", "Bias"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.01f},
@@ -250,6 +343,7 @@ REFLECT(light)
         })
         .data<&light::shadowmap_params::normal_bias>("normal_bias"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_bias"},
             entt::attribute{"pretty_name", "Normal Bias"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.25f},
@@ -258,6 +352,7 @@ REFLECT(light)
         })
         .data<&light::shadowmap_params::near_plane>("near_plane"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "near_plane"},
             entt::attribute{"pretty_name", "Near Plane"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 10.0f},
@@ -265,6 +360,7 @@ REFLECT(light)
         })
         .data<&light::shadowmap_params::far_plane>("far_plane"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "far_plane"},
             entt::attribute{"pretty_name", "Far Plane"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 10000.0f},
@@ -272,22 +368,41 @@ REFLECT(light)
         })
         .data<&light::shadowmap_params::show_coverage>("show_coverage"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "show_coverage"},
             entt::attribute{"pretty_name", "Show Coverage"},
             entt::attribute{"tooltip", "Show shadowmap coverage in view."},
         });
 
     entt::meta_factory<light>{}
         .type("light"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "light"},
+        })
         .data<&light::color>("color"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Color"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "color"},
+            entt::attribute{"pretty_name", "Color"} 
+        })
         .data<&light::intensity>("intensity"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Intensity"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "intensity"},
+            entt::attribute{"pretty_name", "Intensity"} 
+        })
         .data<&light::ambient_intensity>("ambient_intensity"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Ambient Intensity"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "ambient_intensity"},
+            entt::attribute{"pretty_name", "Ambient Intensity"} 
+        })
         .data<&light::type>("type"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Type"} })
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "type"},
+            entt::attribute{"pretty_name", "Type"} 
+        })
         .data<&light::casts_shadows>("casts_shadows"_hs)
-        .custom<entt::attributes>(entt::attributes{ entt::attribute{"pretty_name", "Casts Shadows"} });
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "casts_shadows"},
+            entt::attribute{"pretty_name", "Casts Shadows"} 
+        });
 
     // rttr::registration::class_<light::shadowmap_params::impl_params>("light::shadowmap_params::impl_params")
     //     .property("hardness",

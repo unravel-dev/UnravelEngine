@@ -31,6 +31,8 @@ struct asset_link
     task_future_t task{};
     /// Weak pointer to the asset.
     weak_asset_t weak_asset{};
+
+    uint32_t version = 0;
 };
 
 /**
@@ -53,9 +55,19 @@ struct asset_handle
         return uid() == rhs.uid() && id() == rhs.id() && is_valid() == rhs.is_valid();
     }
 
-    auto version() const -> uintptr_t
+    auto version() const -> uint32_t
     {
-        return uintptr_t(get_cached_asset().get());
+        return version_;
+    }
+
+    auto link_version() const -> uint32_t
+    {
+        if(link_)
+        {
+            return link_->version;
+        }
+
+        return version();
     }
     /**
      * @brief Conversion operator to bool.
@@ -166,6 +178,26 @@ struct asset_handle
     }
 
     /**
+     * @brief Checks if the asset is dirty.
+     * @return True if the asset is dirty, false otherwise.
+     */
+    auto is_dirty() const -> bool
+    {
+        return version_ != link_->version;
+    }
+
+    /**
+     * @brief Updates the version of the asset.
+     */
+    void update_version()
+    {
+        if(link_)
+        {
+            version_ = link_->version;
+        }
+    }
+
+    /**
      * @brief Gets the task ID.
      * @return The task ID.
      */
@@ -188,6 +220,8 @@ struct asset_handle
         ensure();
         link_->task = future;
         link_->weak_asset = {};
+        link_->version++;
+        version_ = link_->version;
     }
 
     /**
@@ -278,4 +312,5 @@ private:
     }
     /// Shared pointer to the asset link.
     std::shared_ptr<asset_link_t> link_;
+    uint32_t version_ = 0;
 };

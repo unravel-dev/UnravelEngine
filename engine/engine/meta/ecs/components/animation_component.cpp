@@ -39,12 +39,17 @@ REFLECT(animation_component)
     // Register animation_component::culling_mode enum with entt
     entt::meta_factory<animation_component::culling_mode>{}
         .type("culling_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "culling_mode"},
+        })
         .data<animation_component::culling_mode::always_animate>("always_animate"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "always_animate"},
             entt::attribute{"pretty_name", "Always Animate"},
         })
         .data<animation_component::culling_mode::renderer_based>("renderer_based"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "renderer_based"},
             entt::attribute{"pretty_name", "Renderer Based"},
         });
 
@@ -52,30 +57,36 @@ REFLECT(animation_component)
     entt::meta_factory<animation_component>{}
         .type("animation_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_component"},
             entt::attribute{"category", "ANIMATION"},
             entt::attribute{"pretty_name", "Animation"},
         })
         .func<&component_exists<animation_component>>("component_exists"_hs)
         .data<&animation_component::set_animation, &animation_component::get_animation>("animation"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation"},
             entt::attribute{"pretty_name", "Animation"},
         })
         .data<&animation_component::set_autoplay, &animation_component::get_autoplay>("auto_play"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_play"},
             entt::attribute{"pretty_name", "Auto Play"},
             entt::attribute{"tooltip", "Controls whether the animation should auto start."},
         })
         .data<&animation_component::set_culling_mode, &animation_component::get_culling_mode>("culling_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "culling_mode"},
             entt::attribute{"pretty_name", "Culling Mode"},
             entt::attribute{"tooltip", "Controls how the animation logic should be culled."},
         })
         .data<&animation_component::set_apply_root_motion, &animation_component::get_apply_root_motion>("apply_root_motion"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "apply_root_motion"},
             entt::attribute{"pretty_name", "Apply Root Motion"},
         })
         .data<&animation_component::set_speed, &animation_component::get_speed>("speed"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "speed"},
             entt::attribute{"pretty_name", "Speed"},
             entt::attribute{"tooltip", "Controls the playback speed of the animation. 1.0 = normal speed, 2.0 = double speed, 0.5 = half speed."},
             entt::attribute{"min", 0.0f},

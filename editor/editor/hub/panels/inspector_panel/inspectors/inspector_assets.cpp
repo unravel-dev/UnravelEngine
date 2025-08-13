@@ -302,7 +302,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
     }
 
     bool changed = false;
-    if(inspected_asset_ != data || inspected_asset_.version() != data.version())
+    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
     {
         inspected_asset_ = data;
         importer_ = nullptr;
@@ -493,7 +493,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.version())
+    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
     {
         inspected_asset_ = data;
         importer_ = nullptr;
@@ -629,7 +629,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.version())
+    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
     {
         inspected_asset_ = data;
         importer_ = nullptr;
@@ -756,7 +756,7 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.version())
+    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
     {
         inspected_scene_.unload();
         inspected_asset_ = data;

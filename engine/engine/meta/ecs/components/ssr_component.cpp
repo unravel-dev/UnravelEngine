@@ -49,14 +49,33 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             rttr::metadata("max", 5.0f),
             rttr::metadata("tooltip", "Base blur sigma for mip generation (CPU-side only)"));
 
+
+                // Predicate for cone tracing settings visibility
+    auto cone_tracing_predicate_entt = entt::property_predicate([](entt::meta_handle& obj)
+    {
+        auto data = obj->try_cast<fidelityfx_settings>();
+        return data->enable_cone_tracing;
+    });
+
+    // Predicate for temporal settings visibility
+    auto temporal_predicate_entt = entt::property_predicate([](entt::meta_handle& obj) -> bool
+    {
+        if(auto data = obj->try_cast<fidelityfx_settings>())
+        {
+            return data->enable_temporal_accumulation;
+        }
+        return false;
+    });
     // Register cone_tracing_settings with entt
     entt::meta_factory<cone_tracing_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings"},
             entt::attribute{"pretty_name", "Cone Tracing Settings"},
         })
         .data<&cone_tracing_settings::cone_angle_bias>("cone_angle_bias"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cone_angle_bias"},
             entt::attribute{"pretty_name", "Cone Angle Bias"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.1f},
@@ -64,6 +83,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&cone_tracing_settings::max_mip_level>("max_mip_level"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_mip_level"},
             entt::attribute{"pretty_name", "Max Mip Level"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 10},
@@ -71,6 +91,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&cone_tracing_settings::blur_base_sigma>("blur_base_sigma"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_base_sigma"},
             entt::attribute{"pretty_name", "Blur Base Sigma"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 5.0f},
@@ -126,10 +147,12 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     entt::meta_factory<temporal_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings::temporal_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_pass::fidelityfx_ssr_settings::temporal_settings"},
             entt::attribute{"pretty_name", "Temporal Accumulation Settings"},
         })
         .data<&temporal_settings::history_strength>("history_strength"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "history_strength"},
             entt::attribute{"pretty_name", "History Strength"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -137,6 +160,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&temporal_settings::depth_threshold>("depth_threshold"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_threshold"},
             entt::attribute{"pretty_name", "Edge Threshold"},
             entt::attribute{"min", 0.000f},
             entt::attribute{"max", 0.030f},
@@ -144,6 +168,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&temporal_settings::roughness_sensitivity>("roughness_sensitivity"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "roughness_sensitivity"},
             entt::attribute{"pretty_name", "Material Sensitivity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -151,6 +176,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&temporal_settings::motion_scale_pixels>("motion_scale_pixels"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "motion_scale_pixels"},
             entt::attribute{"pretty_name", "Motion Scale Pixels"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1000.0f},
@@ -158,6 +184,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&temporal_settings::normal_dot_threshold>("normal_dot_threshold"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_dot_threshold"},
             entt::attribute{"pretty_name", "Normal Dot Threshold"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -165,6 +192,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&temporal_settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_accum_frames"},
             entt::attribute{"pretty_name", "Max Accum Frames"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 16},
@@ -220,7 +248,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             rttr::metadata("pretty_name", "Enable Cone Tracing"),
             rttr::metadata("tooltip", "Enable cone tracing for glossy reflections"))
         .property("cone_tracing", &fidelityfx_settings::cone_tracing)(
-            rttr::metadata("predicate", cone_tracing_predicate),
+            rttr::metadata("predicate", cone_tracing_predicate_entt),
             rttr::metadata("pretty_name", "Cone Tracing"),
             rttr::metadata("tooltip", "Cone tracing specific settings"),
             rttr::metadata("flattable", true))
@@ -228,7 +256,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             rttr::metadata("pretty_name", "Enable Temporal Accumulation"),
             rttr::metadata("tooltip", "Enable temporal accumulation to reduce noise over multiple frames"))
         .property("temporal", &fidelityfx_settings::temporal)(
-            rttr::metadata("predicate", temporal_predicate),
+            rttr::metadata("predicate", temporal_predicate_entt),
             rttr::metadata("pretty_name", "Temporal Accumulation"),
             rttr::metadata("tooltip", "Temporal accumulation settings"),
             rttr::metadata("flattable", true));
@@ -237,10 +265,12 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     entt::meta_factory<fidelityfx_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_pass::fidelityfx_ssr_settings"},
             entt::attribute{"pretty_name", "FidelityFX SSR Settings"},
         })
         .data<&fidelityfx_settings::max_steps>("max_steps"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_steps"},
             entt::attribute{"pretty_name", "Max Steps"},
             entt::attribute{"min", 8},
             entt::attribute{"max", 200},
@@ -248,6 +278,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::max_rays>("max_rays"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_rays"},
             entt::attribute{"pretty_name", "Max Rays"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 64},
@@ -255,6 +286,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::depth_tolerance>("depth_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_tolerance"},
             entt::attribute{"pretty_name", "Depth Tolerance"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 2.0f},
@@ -262,6 +294,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::brightness>("brightness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "brightness"},
             entt::attribute{"pretty_name", "Brightness"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 3.0f},
@@ -269,6 +302,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::facing_reflections_fading>("facing_reflections_fading"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "facing_reflections_fading"},
             entt::attribute{"pretty_name", "Facing Reflections Fading"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -276,6 +310,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::roughness_depth_tolerance>("roughness_depth_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "roughness_depth_tolerance"},
             entt::attribute{"pretty_name", "Roughness Depth Tolerance"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
@@ -283,6 +318,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::fade_in_start>("fade_in_start"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_in_start"},
             entt::attribute{"pretty_name", "Fade In Start"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -290,6 +326,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::fade_in_end>("fade_in_end"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_in_end"},
             entt::attribute{"pretty_name", "Fade In End"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
@@ -297,29 +334,34 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         })
         .data<&fidelityfx_settings::enable_half_res>("enable_half_res"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_half_res"},
             entt::attribute{"pretty_name", "Enable Half Res"},
             entt::attribute{"tooltip", "Enable half resolution for SSR buffers"},
         })
         .data<&fidelityfx_settings::enable_cone_tracing>("enable_cone_tracing"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_cone_tracing"},
             entt::attribute{"pretty_name", "Enable Cone Tracing"},
             entt::attribute{"tooltip", "Enable cone tracing for glossy reflections"},
         })
         .data<&fidelityfx_settings::cone_tracing>("cone_tracing"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"predicate", cone_tracing_predicate},
+            entt::attribute{"name", "cone_tracing"},
+            entt::attribute{"predicate", cone_tracing_predicate_entt},
             entt::attribute{"pretty_name", "Cone Tracing"},
             entt::attribute{"tooltip", "Cone tracing specific settings"},
             entt::attribute{"flattable", true},
         })
         .data<&fidelityfx_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_temporal_accumulation"},
             entt::attribute{"pretty_name", "Enable Temporal Accumulation"},
             entt::attribute{"tooltip", "Enable temporal accumulation to reduce noise over multiple frames"},
         })
         .data<&fidelityfx_settings::temporal>("temporal"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"predicate", temporal_predicate},
+            entt::attribute{"name", "temporal"},
+            entt::attribute{"predicate", temporal_predicate_entt},
             entt::attribute{"pretty_name", "Temporal Accumulation"},
             entt::attribute{"tooltip", "Temporal accumulation settings"},
             entt::attribute{"flattable", true},
@@ -342,10 +384,12 @@ REFLECT_INLINE(ssr_pass::ssr_settings)
     entt::meta_factory<ssr_settings>{}
         .type("ssr_pass::ssr_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_pass::ssr_settings"},
             entt::attribute{"pretty_name", "SSR Settings"},
         })
         .data<&ssr_settings::fidelityfx>("fidelityfx"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fidelityfx"},
             entt::attribute{"pretty_name", "FidelityFX Settings"},
             entt::attribute{"tooltip", "Settings for AMD FidelityFX SSSR implementation"},
             entt::attribute{"flattable", true},
@@ -469,17 +513,20 @@ REFLECT(ssr_component)
     entt::meta_factory<ssr_component>{}
         .type("ssr_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "SSR"},
         })
         .func<&component_exists<ssr_component>>("component_exists"_hs)
         .data<&ssr_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Enable/disable Screen Space Reflections"},
         })
         .data<&ssr_component::settings>("settings"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "settings"},
             entt::attribute{"pretty_name", "Settings"},
             entt::attribute{"flattable", true},
         });

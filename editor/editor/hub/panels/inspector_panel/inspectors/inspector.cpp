@@ -36,6 +36,15 @@ property_layout::property_layout(const rttr::property& prop, bool columns /*= tr
     push_layout();
 }
 
+// property_layout::property_layout(const entt::meta_any& prop, bool columns /*= true*/)
+// {
+//     push_layout_to_stack(this);
+
+//     set_data(prop, columns);
+
+//     push_layout();
+// }
+
 property_layout::property_layout(const std::string& name, bool columns /*= true*/)
 {
     push_layout_to_stack(this);
@@ -71,6 +80,13 @@ property_layout::~property_layout()
 
     pop_layout_from_stack(this);
 }
+
+// void property_layout::set_data(const entt::meta_any& prop, bool columns)
+// {
+//     // name_ = prop.get_type().name();
+//     // tooltip_ = "";
+//     // columns_ = columns;
+// }
 
 void property_layout::set_data(const rttr::property& prop, bool columns)
 {

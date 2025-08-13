@@ -62,20 +62,27 @@ REFLECT(physics_material)
     // Register combine_mode enum with entt
     entt::meta_factory<combine_mode>{}
         .type("combine_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "combine_mode"},
+        })
         .data<combine_mode::average>("average"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "average"},
             entt::attribute{"pretty_name", "Average"},
         })
         .data<combine_mode::minimum>("minimum"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "minimum"},
             entt::attribute{"pretty_name", "Minimum"},
         })
         .data<combine_mode::multiply>("multiply"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "multiply"},
             entt::attribute{"pretty_name", "Multiply"},
         })
         .data<combine_mode::maximum>("maximum"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "maximum"},
             entt::attribute{"pretty_name", "Maximum"},
         });
 
@@ -83,10 +90,12 @@ REFLECT(physics_material)
     entt::meta_factory<physics_material>{}
         .type("physics_material"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_material"},
             entt::attribute{"pretty_name", "Physics Material"},
         })
         .data<&physics_material::restitution>("restitution"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "restitution"},
             entt::attribute{"pretty_name", "Restitution (Bounce)"},
             entt::attribute{"tooltip", "Restitution represents the bounciness of the material. A value of 0.0 means no bounce (perfectly inelastic collision), while 1.0 means perfect bounce (perfectly elastic collision)."},
             entt::attribute{"min", 0.0f},
@@ -94,6 +103,7 @@ REFLECT(physics_material)
         })
         .data<&physics_material::friction>("friction"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "friction"},
             entt::attribute{"pretty_name", "Friction"},
             entt::attribute{"tooltip", "Friction represents the resistance to sliding motion. A value of 0.0 means no friction (perfectly slippery), while values around 1.0 represent typical real-world friction. Values slightly above 1.0 can simulate very high friction surfaces but should be used cautiously."},
             entt::attribute{"min", 0.0f},
@@ -101,6 +111,7 @@ REFLECT(physics_material)
         })
         .data<&physics_material::stiffness>("stiffness"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "stiffness"},
             entt::attribute{"pretty_name", "Stiffness"},
             entt::attribute{"tooltip", "Stiffness represents how much force is required to deform the material. A high value means the material is very stiff (resists deformation)."},
             entt::attribute{"min", 0.0f},
@@ -108,6 +119,7 @@ REFLECT(physics_material)
         })
         .data<&physics_material::damping>("damping"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "damping"},
             entt::attribute{"pretty_name", "Damping"},
             entt::attribute{"tooltip", "Damping represents energy loss in motion (e.g., through internal friction). A value of 0.0 means no damping (energy is conserved), while 1.0 represents very high damping (rapid energy loss). Typical values range from 0.01 to 0.3 for realistic simulations."},
             entt::attribute{"min", 0.0f},
@@ -115,11 +127,13 @@ REFLECT(physics_material)
         })
         .data<&physics_material::restitution_combine>("restitution_combine"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "restitution_combine"},
             entt::attribute{"pretty_name", "Restitution Combine"},
             entt::attribute{"tooltip", "How to combine the restitution(bounce) values of both colliders in a collision pair tocalculate the total restitution(bounce) between them."},
         })
         .data<&physics_material::friction_combine>("friction_combine"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "friction_combine"},
             entt::attribute{"pretty_name", "Friction Combine"},
             entt::attribute{"tooltip", "How to combine the friction values of both colliders in a collision pair tocalculate the total friction between them."},
         });

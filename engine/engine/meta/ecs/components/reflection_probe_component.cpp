@@ -30,22 +30,26 @@ REFLECT(reflection_probe_component)
     entt::meta_factory<reflection_probe_component>{}
         .type("reflection_probe_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_probe_component"},
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Reflection Probe"},
         })
         .func<&component_exists<reflection_probe_component>>("component_exists"_hs)
         .data<&reflection_probe_component::set_probe, &reflection_probe_component::get_probe>("probe"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe"},
             entt::attribute{"pretty_name", "Probe"},
         })
         .data<&reflection_probe_component::set_faces_per_frame, &reflection_probe_component::get_faces_per_frame>("faces_per_frame"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "faces_per_frame"},
             entt::attribute{"pretty_name", "Faces Per Frame"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 6},
         })
         .data<&reflection_probe_component::set_apply_prefilter, &reflection_probe_component::get_apply_prefilter>("apply_prefilter"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "apply_prefilter"},
             entt::attribute{"pretty_name", "Apply Prefilter"},
             entt::attribute{"tooltip", "Enables prefiltering which improves quality but may impact performance"},
         });

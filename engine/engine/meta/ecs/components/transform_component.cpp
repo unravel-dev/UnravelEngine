@@ -4,6 +4,7 @@
 #include "../../core/math/vector.hpp"
 #include "../entity.hpp"
 #include "entt/meta/meta.hpp"
+#include "entt/meta/resolve.hpp"
 #include "glm/fwd.hpp"
 
 #include <serialization/associative_archive.h>
@@ -61,30 +62,40 @@ REFLECT(transform_component)
             rttr::metadata("predicate", invisible_predicate))
         ;
 
+    auto invisible_predicate_entt = entt::property_predicate(
+        [](entt::meta_handle& i)
+        {
+            return false;
+        });
     // Register math::transform class
     entt::meta_factory<math::transform>{}
         .type("transform"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "transform"},
             entt::attribute{"pretty_name", "Transform"},
         })
         .data<entt::overload<void(const math::vec3&)>(&math::transform::set_translation), 
               entt::overload<const math::vec3&() const>(&math::transform::get_translation)>("position"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "position"},
             entt::attribute{"pretty_name", "Position"},
         })
         .data<entt::overload<void(const math::quat&)>(&math::transform::set_rotation), 
               entt::overload<const math::quat&() const>(&math::transform::get_rotation)>("rotation"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
             entt::attribute{"pretty_name", "Rotation"},
         })
         .data<entt::overload<void(const math::vec3&)>(&math::transform::set_scale), 
               entt::overload<const math::vec3&() const>(&math::transform::get_scale)>("scale"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scale"},
             entt::attribute{"pretty_name", "Scale"},
         })
         .data<entt::overload<void(const math::vec3&)>(&math::transform::set_skew), 
               entt::overload<const math::vec3&() const>(&math::transform::get_skew)>("skew"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "skew"},
             entt::attribute{"pretty_name", "Skew"},
         });
 
@@ -92,28 +103,39 @@ REFLECT(transform_component)
     entt::meta_factory<transform_component>{}
         .type("transform_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "transform_component"},
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Transform"},
         })
         .func<&component_exists<transform_component>>("component_exists"_hs)
         .data<&transform_component::set_transform_local, &transform_component::get_transform_local>("local_transform"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "local_transform"},
             entt::attribute{"pretty_name", "Local"},
             entt::attribute{"tooltip", "This is the local transformation.\n"
                                                 "It is relative to the parent."},
         })
         .data<&transform_component::set_transform_global, &transform_component::get_transform_global>("global_transform"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_transform"},
             entt::attribute{"pretty_name", "Global"},
             entt::attribute{"tooltip", "This is the global transformation.\n"
                                                 "Affected by parent transformation."},
         })
         .data<&transform_component::set_active, &transform_component::is_active>("active"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "active"},
             entt::attribute{"pretty_name", "Active"},
             entt::attribute{"tooltip", "This is the active state."},
-            entt::attribute{"predicate", invisible_predicate},
+            entt::attribute{"predicate", invisible_predicate_entt},
         });
+
+    // auto type = entt::resolve<transform_component>();
+    // auto datas = type.data();
+    // for(auto data : datas)
+    // {
+    //     APPLOG_TRACE("Data: {}", data.second.arity());
+    // }
 }
 
 SAVE(transform_component)

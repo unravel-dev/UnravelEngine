@@ -17,6 +17,7 @@ REFLECT(audio_listener_component)
     entt::meta_factory<audio_listener_component>{}
         .type("audio_listener_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_listener_component"},
             entt::attribute{"category", "AUDIO"},
             entt::attribute{"pretty_name", "Audio Listener"},
         })

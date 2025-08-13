@@ -20,12 +20,14 @@ REFLECT(id_component)
     entt::meta_factory<id_component>{}
         .type("id_component"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "id_component"},
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Id"},
         })
         .func<&component_exists<id_component>>("component_exists"_hs)
         .data<nullptr, &id_component::id>("id"_hs)
         .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "id"},
             entt::attribute{"pretty_name", "Id"},
             entt::attribute{"tooltip", "This is the unique id of the entity."},
         });
