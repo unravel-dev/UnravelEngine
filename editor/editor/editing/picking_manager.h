@@ -31,13 +31,15 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
     // Original pick function - maintains backward compatibility
-    void request_pick(math::vec2 pos, const camera& cam, editing_manager::select_mode mode);
+    void request_pick(const camera& cam, editing_manager::select_mode mode, math::vec2 pos, math::vec2 area = {});
     
     // New function for querying without selection
     void query_pick(math::vec2 pos, const camera& cam, pick_callback callback, bool force = false);
     
     // Check if a pick operation is in progress
     auto is_picking() const -> bool;
+
+    void cancel_pick();
     
     constexpr static int tex_id_dim = 1;
 
@@ -49,7 +51,7 @@ public:
 
 private:
     // Common picking setup function
-    void setup_pick_camera(math::vec2 pos, const camera& cam);
+    void setup_pick_camera(const camera& cam, math::vec2 pos, math::vec2 area = {});
     
     // Process picking results and call appropriate handlers
     void process_pick_result(rtti::context& ctx, scene* target_scene, ENTT_ID_TYPE id_key);
@@ -79,6 +81,8 @@ private:
     
     // Store the original pick position for callbacks
     math::vec2 pick_position_{};
+
+    math::vec2 pick_area_{};
     
     // Optional callback for custom pick actions
     pick_callback pick_callback_{};

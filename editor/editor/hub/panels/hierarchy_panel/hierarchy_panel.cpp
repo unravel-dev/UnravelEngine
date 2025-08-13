@@ -523,7 +523,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
 
     ImGui::Separator();
 
-    if(entity.any_of<prefab_component>())
+    if(entity.any_of<prefab_component, prefab_id_component>())
     {
         if(ImGui::MenuItem("Unlink from Prefab"))
         {
@@ -531,7 +531,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
             em.add_action("Unlink from Prefab",
             [entity]() mutable
             {
-                entity.remove<prefab_component>();
+                entity.remove<prefab_component, prefab_id_component>();
             });
         }
     }

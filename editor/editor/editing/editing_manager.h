@@ -390,6 +390,11 @@ struct editing_manager
                 {
                     // make it active
                     unselect(entry);
+
+                    if(!selection_data.objects.back())
+                    {
+                        selection_data.objects.clear();
+                    }
                     selection_data.objects.emplace_back(entry);
                 }
                 break;

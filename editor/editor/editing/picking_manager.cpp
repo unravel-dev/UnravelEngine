@@ -49,6 +49,94 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         return;
     }
 
+    if(pick_area_.x > 0.0f && pick_area_.y > 0.0f && pick_camera_)
+    {
+        const auto& pick_camera = *pick_camera_;
+
+        target_scene->registry->view<transform_component, model_component, active_component>().each(
+            [&](auto e, auto&& transform_comp, auto&& model_comp, auto&& active)
+            {
+                auto& model = model_comp.get_model();
+                if(!model.is_valid())
+                {
+                    return;
+                }
+
+                const auto& world_transform = transform_comp.get_transform_global();
+
+                auto lod = model.get_lod(0);
+                if(!lod)
+                {
+                    return;
+                }
+
+                const auto& mesh = lod.get();
+                const auto& bounds = mesh->get_bounds();
+
+                // Test the bounding box of the mesh
+                if(!pick_camera.test_obb(bounds, world_transform))
+                {
+                    auto ue = target_scene->create_handle(e);
+                    em.unselect(ue);
+                    return;
+                }
+
+                // After OBB test, check if the screen bounds are in the rect area
+                // Project the bounding box corners to screen space and check if any are in the selection area
+                const auto& bbox = bounds;
+                math::vec3 corners[8] = {
+                    {bbox.min.x, bbox.min.y, bbox.min.z},
+                    {bbox.max.x, bbox.min.y, bbox.min.z},
+                    {bbox.min.x, bbox.max.y, bbox.min.z},
+                    {bbox.max.x, bbox.max.y, bbox.min.z},
+                    {bbox.min.x, bbox.min.y, bbox.max.z},
+                    {bbox.max.x, bbox.min.y, bbox.max.z},
+                    {bbox.min.x, bbox.max.y, bbox.max.z},
+                    {bbox.max.x, bbox.max.y, bbox.max.z}
+                };
+
+                bool in_selection_area = true;
+                for(int i = 0; i < 8; ++i)
+                {
+                    bool corner_in_selection_area = false;
+                    // Transform corner to world space
+                    math::vec3 world_corner = world_transform.transform_coord(corners[i]);
+                    
+                    // Project to screen space
+                    math::vec3 screen_pos = pick_camera.world_to_viewport(world_corner);
+                    
+                    // Check if this corner is within the selection rectangle
+                    if(screen_pos.x >= pick_position_.x - pick_area_.x * 0.5f &&
+                       screen_pos.x <= pick_position_.x + pick_area_.x * 0.5f &&
+                       screen_pos.y >= pick_position_.y - pick_area_.y * 0.5f &&
+                       screen_pos.y <= pick_position_.y + pick_area_.y * 0.5f)
+                    {
+                        corner_in_selection_area = true;
+                    }
+
+                    in_selection_area &= corner_in_selection_area;
+                }
+
+
+                if(!in_selection_area)
+                {
+                    auto ue = target_scene->create_handle(e);
+                    em.unselect(ue);
+                    return;
+                }
+
+                auto id = ENTT_ID_TYPE(e);
+
+                process_pick_result(ctx, target_scene, id);
+            });
+
+        pick_camera_.reset();
+        pick_position_ = {};
+        pick_area_ = {};
+        
+        return;
+    }
+
     const auto render_frame = gfx::get_render_frame();
 
     if(pick_camera_)
@@ -418,39 +506,66 @@ auto picking_manager::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void picking_manager::setup_pick_camera(math::vec2 pos, const camera& cam)
+void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math::vec2 area)
 {
-    const auto near_clip = cam.get_near_clip();
-    const auto far_clip = cam.get_far_clip();
-    const auto& frustum = cam.get_frustum();
-    math::vec3 pick_eye;
-    math::vec3 pick_at;
-    math::vec3 pick_up = cam.y_unit_axis();
-
-    if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::near_plane], pick_eye, true))
-        return;
-
-    if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::far_plane], pick_at, true))
-        return;
-
     camera pick_camera;
-    pick_camera.set_aspect_ratio(1.0f);
-    pick_camera.set_fov(1.0f);
-    pick_camera.set_near_clip(near_clip);
-    pick_camera.set_far_clip(far_clip);
-    pick_camera.look_at(pick_eye, pick_at, pick_up);
+
+    if(area.x > 0.0f && area.y > 0.0f)
+    {
+        // Area picking: copy the passed camera and adjust for the selection area
+        pick_camera = cam; // Copy the passed camera
+        
+    }
+    else
+    {
+        // Single point picking (existing logic)
+        const auto near_clip = cam.get_near_clip();
+        const auto far_clip = cam.get_far_clip();
+        const auto& frustum = cam.get_frustum();
+    
+        math::vec3 pick_eye;
+        math::vec3 pick_at;
+        math::vec3 pick_up = cam.y_unit_axis();
+    
+        if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::near_plane], pick_eye, true))
+            return;
+    
+        if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::far_plane], pick_at, true))
+            return;
+
+        pick_camera.set_aspect_ratio(1.0f);
+        pick_camera.set_fov(1.0f);
+        pick_camera.set_near_clip(near_clip);
+        pick_camera.set_far_clip(far_clip);
+        pick_camera.look_at(pick_eye, pick_at, pick_up);
+    }
 
     pick_camera_ = pick_camera;
     pick_position_ = pos;
-
+    pick_area_ = area;
     reading_ = 0;
     start_readback_ = true;
 }
 
-void picking_manager::request_pick(math::vec2 pos, const camera& cam, editing_manager::select_mode mode)
+void picking_manager::cancel_pick()
 {
-    setup_pick_camera(pos, cam);
+    pick_camera_.reset();
+    pick_position_ = {};
+    pick_area_ = {};
+    reading_ = 0;
+    start_readback_ = false;
+}
+
+void picking_manager::request_pick(const camera& cam, editing_manager::select_mode mode, math::vec2 pos, math::vec2 area)
+{
+    setup_pick_camera(cam, pos, area);
     pick_mode_ = mode;
+
+    if(area.x > 0.0f && area.y > 0.0f)
+    {
+        pick_mode_ = editing_manager::select_mode::shift;
+    }
+
     pick_callback_ = {}; // Clear any existing callback
 }
 
@@ -463,7 +578,7 @@ void picking_manager::query_pick(math::vec2 pos, const camera& cam, pick_callbac
     }
     
     // Set up the pick operation
-    setup_pick_camera(pos, cam);
+    setup_pick_camera(cam, pos);
     pick_callback_ = callback;
 }
 

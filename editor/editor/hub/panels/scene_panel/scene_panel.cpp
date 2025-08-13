@@ -1056,6 +1056,64 @@ void scene_panel::deinit(rtti::context& ctx)
 }
 
 
+// ============================================================================
+// Drag Selection Helper Functions
+// ============================================================================
+
+void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera, editing_manager& em)
+{
+    // Check if we should start drag selection
+    if(ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
+    {
+        // Only start drag selection if we're not clicking on anything and not over a gizmo
+        if(!is_drag_selecting_)
+        {
+            is_drag_selecting_ = true;
+            drag_start_pos_ = ImGui::GetMousePos();
+            drag_current_pos_ = drag_start_pos_;
+        }
+    }
+
+    // Update drag selection
+    if(is_drag_selecting_)
+    {
+        drag_current_pos_ = ImGui::GetMousePos();
+
+        // End drag selection on mouse release
+        if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+        {
+            auto& pick_manager = ctx.get_cached<picking_manager>();
+            pick_manager.cancel_pick();
+            is_drag_selecting_ = false;
+        }
+    }
+}
+
+void scene_panel::draw_drag_selection_rect(const ImVec2& start_pos, const ImVec2& current_pos)
+{
+    if(start_pos.x == current_pos.x && start_pos.y == current_pos.y)
+    {
+        return;
+    }
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    
+    // Calculate the rectangle bounds
+    ImVec2 min_pos(std::min(start_pos.x, current_pos.x), std::min(start_pos.y, current_pos.y));
+    ImVec2 max_pos(std::max(start_pos.x, current_pos.x), std::max(start_pos.y, current_pos.y));
+    
+    // Draw the selection rectangle
+    ImU32 rect_color = ImGui::GetColorU32(ImVec4(0.2f, 0.6f, 1.0f, 0.3f)); // Semi-transparent blue
+    ImU32 border_color = ImGui::GetColorU32(ImVec4(0.2f, 0.6f, 1.0f, 0.8f)); // Solid blue border
+    
+    // Fill rectangle
+    draw_list->AddRectFilled(min_pos, max_pos, rect_color);
+    
+    // Border
+    draw_list->AddRect(min_pos, max_pos, border_color, 0.0f, 0, 2.0f);
+}
+
+
 void scene_panel::handle_prefab_mode_changes(rtti::context& ctx)
 {
     auto& em = ctx.get_cached<editing_manager>();
@@ -1064,7 +1122,7 @@ void scene_panel::handle_prefab_mode_changes(rtti::context& ctx)
     // Detect when we enter prefab mode
     if(is_prefab_mode && !was_prefab_mode_)
     {
-        defaults::focus_camera_on_entities(get_camera(), {em.prefab_entity});
+        defaults::focus_camera_on_entities(get_camera(), {em.prefab_entity}, 0.4);
     }
     // Detect when we exit prefab mode (e.g., due to external factors)
     else if(!is_prefab_mode && was_prefab_mode_)
@@ -1466,7 +1524,26 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
     bool is_over = ImGuizmo::IsOver();
     bool is_entity = em.is_selected_type<entt::handle>();
 
-    if(ImGui::IsItemClicked(ImGuiMouseButton_Left) && !is_using)
+    // Handle drag selection
+    handle_drag_selection(ctx, camera, em);
+
+    if(is_drag_selection_active())
+    {
+        auto& pick_manager = ctx.get_cached<picking_manager>();
+        auto bounds = get_drag_selection_bounds();
+
+        math::vec2 area = {bounds.second.x - bounds.first.x, bounds.second.y - bounds.first.y};
+        // Calculate the center of the drag selection area
+        math::vec2 center = {
+            bounds.first.x + area.x * 0.5f,
+            bounds.first.y + area.y * 0.5f
+        };
+
+        pick_manager.request_pick(camera, em.get_select_mode(), center, area);
+    }
+
+    // Only handle single-click selection if we're not drag selecting
+    if(ImGui::IsItemClicked(ImGuiMouseButton_Left) && !is_using && !is_drag_selecting_)
     {
         bool is_over_active_gizmo = is_over && is_entity;
         if(!is_over_active_gizmo)
@@ -1475,7 +1552,7 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
             auto& pick_manager = ctx.get_cached<picking_manager>();
             auto pos = ImGui::GetMousePos();
 
-            pick_manager.request_pick({pos.x, pos.y}, camera, em.get_select_mode());
+            pick_manager.request_pick(camera, em.get_select_mode(), {pos.x, pos.y});
         }
     }
 
@@ -1566,6 +1643,12 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     manipulation_gizmos(gizmo_at_center_, get_center(), camera_entity, em);
     handle_camera_movement(camera_entity, move_dir_, acceleration_, is_dragging_);
     draw_selected_camera(ctx, camera_entity, size);
+
+    // Draw drag selection rectangle if active
+    if(is_drag_selecting_)
+    {
+        draw_drag_selection_rect(drag_start_pos_, drag_current_pos_);
+    }
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
 }

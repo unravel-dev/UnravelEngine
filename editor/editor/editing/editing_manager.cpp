@@ -19,6 +19,8 @@
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <imgui_widgets/gizmo.h>
+#include <editor/imgui/integration/imgui_notify.h>
+
 #include <filedialog/filedialog.h>
 
 namespace unravel
@@ -531,6 +533,8 @@ void editing_manager::save_prefab_changes(rtti::context& ctx)
     if (!prefab_entity.valid())
     {
         APPLOG_ERROR("Failed to save prefab: Invalid entity");
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error, 1000,"Failed to save prefab."));
+
         return;
     }
     
@@ -538,6 +542,8 @@ void editing_manager::save_prefab_changes(rtti::context& ctx)
     asset_writer::atomic_save_to_file(prefab_path.string(), prefab_entity);
 
     APPLOG_INFO("Saved changes to prefab: {}", edited_prefab.id());
+    ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000,"Prefab saved."));
+
 }
 
 

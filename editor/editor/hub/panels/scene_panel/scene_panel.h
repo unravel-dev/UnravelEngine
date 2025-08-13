@@ -28,6 +28,17 @@ public:
 
     auto get_auto_save_prefab() const -> bool;
 
+    // Drag selection methods
+    auto is_drag_selection_active() const -> bool { return is_drag_selecting_; }
+    auto get_drag_selection_rect() const -> ImRect { return ImRect(drag_start_pos_, drag_current_pos_); }
+    auto get_drag_selection_bounds() const -> std::pair<ImVec2, ImVec2> 
+    { 
+        return {
+            ImVec2(std::min(drag_start_pos_.x, drag_current_pos_.x), std::min(drag_start_pos_.y, drag_current_pos_.y)),
+            ImVec2(std::max(drag_start_pos_.x, drag_current_pos_.x), std::max(drag_start_pos_.y, drag_current_pos_.y))
+        };
+    }
+
 private:
     void draw_scene(rtti::context& ctx, delta_t dt);
 
@@ -47,6 +58,11 @@ private:
     void draw_inverse_kinematics_menu(editing_manager& em);
     void draw_camera_settings_menu(rtti::context& ctx);
     void draw_framerate_display();
+
+      
+    // Drag selection helper functions
+    void handle_drag_selection(rtti::context& ctx, const camera& camera, editing_manager& em);
+    void draw_drag_selection_rect(const ImVec2& start_pos, const ImVec2& current_pos);
 
     // UI interaction functions
     void handle_viewport_interaction(rtti::context& ctx, const camera& camera, editing_manager& em);
@@ -75,5 +91,10 @@ private:
 
     // Auto-save prefabs when exiting prefab mode
     bool auto_save_prefab_{true};
+
+    // Drag selection state
+    bool is_drag_selecting_{false};
+    ImVec2 drag_start_pos_{};
+    ImVec2 drag_current_pos_{};
 };
 } // namespace unravel

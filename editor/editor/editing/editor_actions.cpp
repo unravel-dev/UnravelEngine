@@ -758,6 +758,13 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
         return false;
     }
 
+    auto& em = ctx.get_cached<editing_manager>();
+    if(em.is_prefab_mode())
+    {
+        em.save_prefab_changes(ctx);
+        return true;
+    }
+
     auto save_path = fs::resolve_protocol("app:/data/").string();
 
     if(!default_name.empty())
@@ -927,6 +934,13 @@ auto editor_actions::save_scene(rtti::context& ctx) -> bool
 {
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
+    auto& em = ctx.get_cached<editing_manager>();
+
+    if(em.is_prefab_mode())
+    {
+        em.save_prefab_changes(ctx);
+        return true;
+    }
 
     if(!scene.source)
     {
