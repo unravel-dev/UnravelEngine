@@ -60,6 +60,7 @@ struct prefab_override_context
     entt::handle prefab_root_entity;
 
     scene prefab_scene{"prefab_diff_scene"};
+    uintptr_t prefab_version{};
 
     // Whether we're currently inspecting a prefab instance
     bool is_active = false;

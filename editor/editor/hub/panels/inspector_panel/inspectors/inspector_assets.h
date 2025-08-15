@@ -41,6 +41,7 @@ struct inspector_asset_handle_texture : public inspector_asset_handle
     asset_handle<gfx::texture> inspected_asset_;
     std::shared_ptr<texture_importer_meta> importer_;
     int inspected_mip_{};
+    uintptr_t inspected_version_{};
 
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_texture, asset_handle<gfx::texture>)
@@ -72,6 +73,7 @@ struct inspector_asset_handle_mesh : public inspector_asset_handle
 
     asset_handle<mesh> inspected_asset_;
     std::shared_ptr<mesh_importer_meta> importer_;
+    uintptr_t inspected_version_{};
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_mesh, asset_handle<mesh>)
 
@@ -84,6 +86,7 @@ struct inspector_asset_handle_animation : public inspector_asset_handle
 
     asset_handle<animation_clip> inspected_asset_;
     std::shared_ptr<animation_importer_meta> importer_;
+    uintptr_t inspected_version_{};
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_animation, asset_handle<animation_clip>)
 
@@ -99,11 +102,12 @@ struct inspector_asset_handle_prefab : public inspector_asset_handle
 private:
     void on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version);
     void reset_cache(rtti::context& ctx);
+    auto get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab) -> entt::handle;
 
-    asset_handle<prefab> inspected_asset_;
     scene inspected_scene_{"inspector_asset_handle_prefab"};
-    entt::handle inspected_prefab_;
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
+    uintptr_t inspected_version_{};
+
 
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_prefab, asset_handle<prefab>)

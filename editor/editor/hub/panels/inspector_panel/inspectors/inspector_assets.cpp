@@ -302,9 +302,10 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
     }
 
     bool changed = false;
-    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
+    if(inspected_asset_ != data || inspected_version_ != data.version())
     {
         inspected_asset_ = data;
+        inspected_version_ = data.version();
         importer_ = nullptr;
         inspected_mip_ = 0;
     }
@@ -493,9 +494,10 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
+    if(inspected_asset_ != data || inspected_version_ != data.version())
     {
         inspected_asset_ = data;
+        inspected_version_ = data.version();
         importer_ = nullptr;
     }
 
@@ -629,9 +631,10 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
+    if(inspected_asset_ != data || inspected_version_ != data.version())
     {
         inspected_asset_ = data;
+        inspected_version_ = data.version();
         importer_ = nullptr;
     }
 
@@ -722,9 +725,29 @@ void inspector_asset_handle_prefab::on_script_recompile(rtti::context& ctx, cons
 
 void inspector_asset_handle_prefab::reset_cache(rtti::context& ctx)
 {
-    inspected_asset_ = {};
     inspected_scene_.unload();
-    inspected_prefab_ = {};
+}
+
+auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab) -> entt::handle
+{
+    entt::handle instance{};
+    auto view = inspected_scene_.registry->view<prefab_component>();
+    view.each(
+        [&](auto e, auto&& comp)
+        {
+            if(comp.source == prefab && comp.source.version() == inspected_version_)
+            {
+                instance = inspected_scene_.create_handle(e);
+            }
+        });
+    if(!instance)
+    {
+        inspected_scene_.unload();
+        instance = inspected_scene_.instantiate(prefab);
+        inspected_version_ = prefab.version();
+    }
+
+    return instance;
 }
 
 auto inspector_asset_handle_prefab::inspect_as_property(rtti::context& ctx, asset_handle<prefab>& data)
@@ -756,12 +779,7 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
-    if(inspected_asset_ != data || inspected_asset_.version() != data.link_version())
-    {
-        inspected_scene_.unload();
-        inspected_asset_ = data;
-        inspected_prefab_ = inspected_scene_.instantiate(data);
-    }
+    auto prefab_entity = get_prefab_entity(ctx, data);
 
     auto& am = ctx.get_cached<asset_manager>();
     inspect_result result{};
@@ -775,18 +793,18 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
 
             if(data)
             {
-                rttr::variant var = inspected_prefab_;
+                rttr::variant var = prefab_entity;
                 result |= inspect_var(ctx, var);
 
                 if(result.changed)
                 {
-                    inspected_prefab_ = var.get_value<entt::handle>();
+                    prefab_entity = var.get_value<entt::handle>();
                 }
 
                 if(result.edit_finished)
                 {
                     fs::path absolute_key = fs::absolute(fs::resolve_protocol(data.id()));
-                    asset_writer::atomic_save_to_file(absolute_key.string(), inspected_prefab_);
+                    asset_writer::atomic_save_to_file(absolute_key.string(), prefab_entity);
                 }
             }
             ImGui::EndChild();

@@ -980,7 +980,7 @@ auto text_component::get_overflow_type() const -> const overflow_type&
 
 void text_component::set_font(const asset_handle<font>& font)
 {
-    if(font_ == font && font_version_ == font.link_version())
+    if(font_ == font && font_version_ == font.version())
     {
         return;
     }
@@ -996,7 +996,7 @@ auto text_component::get_font() const -> const asset_handle<font>&
 
 auto text_component::get_scaled_font() const -> const scaled_font&
 {
-    if(font_.link_version() != font_version_ || scaled_font_dirty_)
+    if(font_.version() != font_version_ || scaled_font_dirty_)
     {
         recreate_scaled_font();
     }
@@ -1345,7 +1345,7 @@ auto text_component::get_render_area() const -> fsize_t
 
 void text_component::recreate_scaled_font() const
 {
-    font_version_ = font_.link_version();
+    font_version_ = font_.version();
 
     if(!font_)
     {

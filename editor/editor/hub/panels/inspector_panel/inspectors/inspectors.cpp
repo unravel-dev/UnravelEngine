@@ -358,6 +358,7 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
         return false;
     }
 
+    auto etype = entt::resolve(entt::hashed_string(component_type.c_str()));
     // return true;
 
     rttr::type type = rttr::type::get_by_name(component_type);
@@ -372,22 +373,26 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
         return false;
     }
 
+    struct prefab_version_t
+    {
+        uintptr_t version{};
+    };
+
     entt::handle instance;
-    auto view = cache_scene.registry->view<prefab_component>();
+    auto view = cache_scene.registry->view<prefab_component, prefab_version_t>();
     view.each(
-        [&](auto e, auto&& comp)
+        [&](auto e, auto&& comp, auto&& version)
         {
-            if(comp.source == prefab && comp.source.version() == prefab.version())
+            if(comp.source == prefab && version.version == prefab.version())
             {
                 instance = cache_scene.create_handle(e);
             }
-
-            comp.source.update_version();
         });
     if(!instance)
     {
         cache_scene.unload();
         instance = cache_scene.instantiate(prefab);
+        instance.emplace<prefab_version_t>(prefab.version());
     }
 
     auto entity = scene::find_entity_by_prefab_uuid(instance, entity_uuid);
