@@ -9,7 +9,6 @@
 #include <reflection/registration.h>
 #include <serialization/serialization.h>
 
-#include <unordered_map>
 
 namespace unravel
 {
@@ -29,7 +28,7 @@ enum class cull_type : std::uint32_t
  * @class material
  * @brief Base class for materials used in rendering.
  */
-class material
+class material : public crtp_meta_type<material>
 {
 public:
     SERIALIZABLE(material)
@@ -41,6 +40,7 @@ public:
 
     material() = default;
     virtual ~material() = default;
+
 
     /**
      * @brief Submits the material properties to the GPU program.
@@ -97,12 +97,11 @@ protected:
  * @class pbr_material
  * @brief Class for physically-based rendering (PBR) materials.
  */
-class pbr_material : public material
+class pbr_material : public crtp_meta_type<pbr_material, material>
 {
 public:
     SERIALIZABLE(pbr_material)
     REFLECTABLEV(pbr_material, material)
-
 
     auto clone() const -> std::shared_ptr<material> override;
 

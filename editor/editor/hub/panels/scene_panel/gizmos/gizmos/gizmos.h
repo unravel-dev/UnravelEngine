@@ -4,6 +4,7 @@
 #include <context/context.hpp>
 #include <reflection/reflection.h>
 #include <reflection/registration.h>
+#include "entt/core/type_info.hpp"
 #include "gizmo.h"
 
 namespace unravel
@@ -14,6 +15,7 @@ struct gizmo_registry
     gizmo_registry();
 
     std::unordered_map<rttr::type, std::shared_ptr<gizmo>> type_map;
+    std::unordered_map<entt::id_type, std::shared_ptr<gizmo>> type_map_entt;
 };
 
 void draw_gizmo_var(rtti::context& ctx, rttr::variant& var, const camera& cam, gfx::dd_raii& dd);

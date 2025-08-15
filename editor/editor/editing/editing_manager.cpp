@@ -391,7 +391,7 @@ void editing_manager::on_frame_update(rtti::context& ctx, delta_t)
         unfocus();
     }
 }
-void editing_manager::focus(rttr::variant object)
+void editing_manager::focus(entt::meta_any object)
 {
     focused_data.object = object;
     focused_data.frames = 20;

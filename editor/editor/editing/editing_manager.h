@@ -56,7 +56,8 @@ struct editing_manager
 
     struct focused
     {
-        rttr::variant object;
+        //rttr::variant object;
+        entt::meta_any object;
         int frames{};
 
         fs::path focus_path{};
@@ -130,7 +131,7 @@ struct editing_manager
     /// </summary>
     //-----------------------------------------------------------------------------
     // void select(rttr::variant object, bool add = false);
-    void focus(rttr::variant object);
+    void focus(entt::meta_any object);
     void focus_path(const fs::path& object);
 
     //-----------------------------------------------------------------------------
@@ -160,7 +161,7 @@ struct editing_manager
     template<typename T>
     void try_unfocus()
     {
-        if(focused_data.object.is_type<T>())
+        if(focused_data.object.type() == entt::resolve<T>())
         {
             unfocus();
         }
@@ -290,12 +291,12 @@ struct editing_manager
     {
         const auto& focused = focused_data.object;
 
-        if(!focused.is_type<T>())
+        if(focused.type() != entt::resolve<T>())
         {
             return false;
         }
 
-        return focused.get_value<T>() == entry;
+        return focused.cast<T>() == entry;
     }
 
     template<typename T>
@@ -303,26 +304,26 @@ struct editing_manager
     {
         const auto& focused = focused_data.object;
 
-        if(focused.is_type<asset_handle<T>>())
+        if(focused.type() == entt::resolve<asset_handle<T>>())
         {
-            return focused.get_value<asset_handle<T>>() == entry;
+            return focused.cast<asset_handle<T>>() == entry;
         }
 
-        if(!focused.is_type<fs::path>())
+        if(focused.type() != entt::resolve<fs::path>())
         {
             return false;
         }
 
-        return focused.get_value<fs::path>() == fs::resolve_protocol(entry.id());
+        return focused.cast<fs::path>() == fs::resolve_protocol(entry.id());
     }
 
     template<typename T>
     auto try_get_active_focus_as() const -> const T*
     {
-        const auto& active = focused_data.object;
-        if(active.is_type<T>())
+        const auto& focused = focused_data.object;
+        if(focused.type() == entt::resolve<T>())
         {
-            return &active.get_value<T>();
+            return focused.try_cast<T>();
         }
 
         return nullptr;

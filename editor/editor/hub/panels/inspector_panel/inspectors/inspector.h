@@ -72,9 +72,15 @@ struct inspect_result
     }
 };
 
-struct inspector
+struct inspector : crtp_meta_type<inspector>
 {
     REFLECTABLEV(inspector)
+
+    template<typename T>
+    auto create() -> std::shared_ptr<T>
+    {
+        return std::make_shared<T>();
+    }
 
     using meta_getter = std::function<rttr::variant(const rttr::variant&)>;
 
@@ -82,11 +88,15 @@ struct inspector
 
     virtual void before_inspect(const rttr::property& prop);
     virtual void after_inspect(const rttr::property& prop);
-    virtual auto inspect(rtti::context& ctx, rttr::variant& var, const var_info& info, const meta_getter& get_metadata)
-        -> inspect_result = 0;
-        
+    virtual auto inspect(rtti::context& ctx,
+                         rttr::variant& var,
+                         const var_info& info,
+                         const meta_getter& get_metadata) -> inspect_result = 0;
+
     // Virtual method to refresh the inspector's state
-    virtual auto refresh(rtti::context& ctx) -> void {}
+    virtual auto refresh(rtti::context& ctx) -> void
+    {
+    }
 
     std::unique_ptr<property_layout> layout_{};
     bool open_{};
@@ -95,6 +105,8 @@ struct inspector
 REFLECT_INLINE(inspector)
 {
     rttr::registration::class_<inspector>("inspector");
+
+    entt::meta_factory<inspector>{}.type("inspector"_hs);
 }
 #define REFLECT_INSPECTOR_INLINE(inspector_type, inspected_type)                                                       \
     REFLECT_INLINE(inspector_type)                                                                                     \
@@ -102,6 +114,11 @@ REFLECT_INLINE(inspector)
         rttr::registration::class_<inspector_type>(#inspector_type)(                                                   \
             rttr::metadata("inspected_type", rttr::type::get<inspected_type>()))                                       \
             .constructor<>()(rttr::policy::ctor::as_std_shared_ptr);                                                   \
+        entt::meta_factory<inspector_type>{}                                                                           \
+            .type(entt::hashed_string{#inspector_type})                                                                \
+            .custom<entt::attributes>(                                                                                 \
+                entt::attributes{entt::attribute{"inspected_type", entt::resolve<inspected_type>()}})                  \
+            .func<&inspector::create<inspector_type>>("create"_hs);                                                    \
     }
 
 #define REFLECT_INSPECTOR(inspector_type, inspected_type)                                                              \
@@ -110,6 +127,11 @@ REFLECT_INLINE(inspector)
         rttr::registration::class_<inspector_type>(#inspector_type)(                                                   \
             rttr::metadata("inspected_type", rttr::type::get<inspected_type>()))                                       \
             .constructor<>()(rttr::policy::ctor::as_std_shared_ptr);                                                   \
+        entt::meta_factory<inspector_type>{}                                                                           \
+            .type(entt::hashed_string{#inspector_type})                                                                \
+            .custom<entt::attributes>(                                                                                 \
+                entt::attributes{entt::attribute{"inspected_type", entt::resolve<inspected_type>()}})                  \
+            .func<&inspector::create<inspector_type>>("create"_hs);                                                    \
     }
 
 } // namespace unravel

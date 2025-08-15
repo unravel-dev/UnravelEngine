@@ -11,6 +11,7 @@
 
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/ecs/components/prefab_component.h>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/texture.hpp>

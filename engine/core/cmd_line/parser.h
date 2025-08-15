@@ -265,6 +265,15 @@ public:
 
     explicit parser(int argc, char** argv);
 
+
+    parser(const parser&) = delete;
+
+    parser(parser&&) = delete;
+
+    parser& operator=(const parser&) = delete;
+
+    parser& operator=(parser&&) = delete;
+
     auto has_help() const -> bool;
 
     void enable_help();

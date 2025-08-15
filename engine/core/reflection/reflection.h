@@ -1,6 +1,10 @@
 #ifndef REFLECTION_H
 #define REFLECTION_H
 
+#include <entt/core/hashed_string.hpp>
+#include <entt/meta/factory.hpp>
+#include <entt/meta/meta.hpp>
+
 #include <reflection/reflection_export.h>
 #include <rttr/array_range.h>
 #include <rttr/constructor.h>
@@ -12,22 +16,28 @@
 #include <rttr/rttr_cast.h>
 #include <rttr/rttr_enable.h>
 #include <rttr/type.h>
-#include <entt/meta/meta.hpp>
-#include <entt/meta/factory.hpp>
-#include <entt/core/hashed_string.hpp>
+
 using namespace entt::literals;
 
 namespace entt
 {
-    using attributes = std::map<std::string, meta_any>;
-    using attribute = attributes::value_type;
+using attributes = std::map<std::string, meta_any>;
+using attribute = attributes::value_type;
 
-    REFLECTION_EXPORT auto get_pretty_name(meta_type t) -> std::string;
-    REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
+REFLECTION_EXPORT auto get_attribute(const meta_type& t, const char* name) -> const meta_any&;
 
-    REFLECTION_EXPORT auto property_predicate(std::function<bool(meta_handle&)> predicate) -> std::function<bool(meta_handle&)>;
+REFLECTION_EXPORT auto get_derived_types(const meta_type& t) -> std::vector<meta_type>;
 
-}
+REFLECTION_EXPORT auto get_pretty_name(const meta_type& t) -> std::string;
+REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
+
+REFLECTION_EXPORT auto property_predicate(std::function<bool(meta_handle&)> predicate)
+    -> std::function<bool(meta_handle&)>;
+
+} // namespace entt
+
+
+
 
 #define CAT_IMPL_(a, b) a##b
 #define CAT_(a, b)      CAT_IMPL_(a, b)
@@ -56,7 +66,6 @@ namespace entt
 //         return register_type_helper(#cls);                                                                             \
 //     }();                                                                                                               \
 //     inline void rttr_auto_register_reflection_function_##cls()
-
 
 namespace refl_detail
 {
@@ -89,12 +98,28 @@ inline int get_reg(void (*f)())
     template<>                                                                                                         \
     void rttr_auto_register_reflection_function_t<cls>()
 
+#define REFLECTION_REGISTRATION                                                           \
+static void reflection_auto_register_reflection_function_();                              \
+namespace                                                                           \
+{                                                                                   \
+    struct reflection__auto__register__                                                   \
+    {                                                                               \
+        reflection__auto__register__()                                                    \
+        {                                                                           \
+            reflection_auto_register_reflection_function_();                              \
+        }                                                                           \
+    };                                                                              \
+}                                                                                   \
+static const reflection__auto__register__ ANONYMOUS_VARIABLE(auto_register__);            \
+static void reflection_auto_register_reflection_function_()
+
 namespace rttr
 {
 REFLECTION_EXPORT auto get_pretty_name(type t) -> std::string;
 REFLECTION_EXPORT auto get_pretty_name(const rttr::property& prop) -> std::string;
 
-REFLECTION_EXPORT auto property_predicate(std::function<bool(rttr::instance&)> predicate) -> std::function<bool(rttr::instance&)>;
+REFLECTION_EXPORT auto property_predicate(std::function<bool(rttr::instance&)> predicate)
+    -> std::function<bool(rttr::instance&)>;
 
 } // namespace rttr
 #endif // RTTR_REFLECTION_H_

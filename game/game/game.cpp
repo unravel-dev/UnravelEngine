@@ -15,17 +15,17 @@
 
 namespace unravel
 {
-RTTR_REGISTRATION
+ 
+REFLECTION_REGISTRATION
 {
-    rttr::registration::class_<game>("game")
-        .constructor<>()
-        .method("create", &game::create)
-        .method("init", &game::init)
-        .method("deinit", &game::deinit)
-        .method("destroy", &game::destroy)
-        .method("process", &game::process)
-        .method("interrupt", &game::interrupt);
-
+    entt::meta_factory<game>{}
+        .type("game"_hs)
+        .func<&game::create>("create"_hs)
+        .func<&game::init>("init"_hs)
+        .func<&game::deinit>("deinit"_hs)
+        .func<&game::destroy>("destroy"_hs)
+        .func<&game::process>("process"_hs)
+        .func<&game::interrupt>("interrupt"_hs);
 }
 
 auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool

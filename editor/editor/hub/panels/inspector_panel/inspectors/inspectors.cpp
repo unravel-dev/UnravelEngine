@@ -356,19 +356,15 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     if(entity_uuid.is_nil())
     {
         return false;
-    }
-
+    } 
+    
     auto etype = entt::resolve(entt::hashed_string(component_type.c_str()));
-    // return true;
-
-    rttr::type type = rttr::type::get_by_name(component_type);
-    if(!type.is_valid())
+    if(!etype)
     {
         return false;
     }
-
-    auto method = type.get_method("component_exists");
-    if(!method.is_valid())
+    auto method = etype.func("component_exists"_hs);
+    if(!method)
     {
         return false;
     }
@@ -403,13 +399,13 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
 
     auto result = method.invoke({}, entity);
 
-    bool exists = result.get_value<bool>();
+    bool exists = result.cast<bool>();
     if(!exists)
     {
         return false;
-    }
+    }    
 
-    if(type == rttr::type::get<script_component>())
+    if(etype == entt::resolve<script_component>())
     {
         auto script_comp = entity.try_get<script_component>();
         if(script_comp)

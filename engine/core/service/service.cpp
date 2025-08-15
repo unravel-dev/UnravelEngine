@@ -1,7 +1,13 @@
 #include "service.h"
+#include "entt/core/fwd.hpp"
+#include "entt/meta/meta.hpp"
 #include <chrono>
 #include <csignal>
 #include <iostream>
+
+#include <entt/meta/resolve.hpp>
+#include <entt/meta/utility.hpp>
+#include <entt/core/hashed_string.hpp>
 
 using namespace std::chrono_literals;
 
@@ -11,27 +17,19 @@ service::service(int argc, char* argv[]) : parser_(argc, argv)
 
 auto service::load(const module_desc& desc) -> bool
 {
-    rttr::type::get<rtti::context>();
-
     std::cout << "service::" << __func__ << " module " << desc.lib_name << std::endl;
     module_data module;
     module.desc = desc;
-    module.plugin = std::make_unique<rttr::library>(module.desc.lib_name);
 
-    if(!module.plugin->load())
+    using namespace entt::literals;
+    
+    auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
+
+    if(!type.invoke("create"_hs, {}, entt::forward_as_meta(ctx_), entt::forward_as_meta(parser_)).cast<bool>())
     {
-        // std::cerr << module.plugin->get_error_string() << std::endl;
-        // return false;
+        return false;
     }
-
-    {
-        auto type = rttr::type::get_by_name(module.desc.type_name);
-        if(!type.invoke("create", {}, {ctx_, parser_}).to_bool())
-        {
-            return false;
-        }
-    }
-
+    
     modules_.emplace_back(std::move(module));
 
     return true;
@@ -40,23 +38,19 @@ auto service::load(const module_desc& desc) -> bool
 auto service::unload(const module_data& module) -> bool
 {
     std::cout << "service::" << __func__ << " module " << module.desc.lib_name << std::endl;
+    
+    using namespace entt::literals;
 
-    auto type = rttr::type::get_by_name(module.desc.type_name);
+    auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
 
-    if(!type.invoke("deinit", {}, {}).to_bool())
+    if(!type.invoke("deinit"_hs, {}).cast<bool>())
     {
         return false;
     }
 
-    if(!type.invoke("destroy", {}, {}).to_bool())
+    if(!type.invoke("destroy"_hs, {}).cast<bool>())
     {
         return false;
-    }
-
-    if(!module.plugin->unload())
-    {
-        // std::cerr << module.plugin->get_error_string() << std::endl;
-        // return false;
     }
 
     return true;
@@ -105,9 +99,11 @@ auto service::init() -> bool
 
     for(const auto& module : modules_)
     {
-        auto type = rttr::type::get_by_name(module.desc.type_name);
+        using namespace entt::literals;
 
-        if(!type.invoke("init", {}, {parser_}).to_bool())
+        auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
+
+        if(!type.invoke("init"_hs, {}, entt::forward_as_meta(parser_)).cast<bool>())
         {
             return false;
         }
@@ -124,9 +120,11 @@ auto service::interrupt() -> bool
     bool processed = false;
     for(const auto& module : modules_)
     {
-        auto type = rttr::type::get_by_name(module.desc.type_name);
+        using namespace entt::literals;
 
-        if(!type.invoke("interrupt", {}, {}).to_bool())
+        auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
+
+        if(!type.invoke("interrupt"_hs, {}).cast<bool>())
         {
             return false;
         }
@@ -143,9 +141,11 @@ auto service::process() -> int
     int processed = SERVICE_RESULT_EXIT;
     for(const auto& module : modules_)
     {
-        auto type = rttr::type::get_by_name(module.desc.type_name);
+        using namespace entt::literals;
 
-        auto proc_result = type.invoke("process", {}, {}).to_int();
+        auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
+
+        auto proc_result = type.invoke("process"_hs, {}).cast<int>();
 
         if(proc_result == SERVICE_RESULT_EXIT)
         {
@@ -163,7 +163,7 @@ auto service::get_cmd_line_parser() -> cmd_line::parser&
     return parser_;
 }
 
-int service_main(const char* name, int argc, char* argv[])
+auto service_main(const char* name, int argc, char* argv[]) -> int
 {
     std::vector<module_desc> modules{{name, name}};
 

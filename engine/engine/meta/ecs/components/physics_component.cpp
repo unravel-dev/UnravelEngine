@@ -255,14 +255,24 @@ REFLECT(physics_compound_shape)
         rttr::metadata("variant_types", variant_types))
         .constructor<>()();
 
-    // Register physics_compound_shape with entt
-    entt::meta_factory<physics_compound_shape>{}
-        .type("physics_compound_shape"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "physics_compound_shape"},
-            entt::attribute{"category", "PHYSICS"},
-            entt::attribute{"pretty_name", "Shape"},
-        });
+    {
+        static const auto& ps = entt::resolve<physics_box_shape>();
+        static const auto& ss = entt::resolve<physics_sphere_shape>();
+        static const auto& cs = entt::resolve<physics_capsule_shape>();
+        static const auto& cys = entt::resolve<physics_cylinder_shape>();
+
+        std::vector<entt::meta_type> variant_types{ps, ss, cs, cys};
+
+        // Register physics_compound_shape with entt
+        entt::meta_factory<physics_compound_shape>{}
+            .type("physics_compound_shape"_hs)
+            .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"name", "physics_compound_shape"},
+                entt::attribute{"category", "PHYSICS"},
+                entt::attribute{"pretty_name", "Shape"},
+                entt::attribute{"variant_types", variant_types}
+            });
+    }
 }
 
 SAVE(physics_compound_shape)

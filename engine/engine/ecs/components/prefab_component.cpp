@@ -145,13 +145,7 @@ auto prefab_component::has_serialization_override(const std::string& serializati
     bool first_segment = true;
     
     for (size_t i = 3; i < segments.size(); ++i)
-    {
-        // Skip "Script" and "script_components" segments entirely
-        if (segments[i] == "Script" || segments[i] == "script_component" || segments[i] == "script_components")
-        {
-            continue;
-        }
-        
+    {        
         if (!first_segment)
         {
             component_path += "/";

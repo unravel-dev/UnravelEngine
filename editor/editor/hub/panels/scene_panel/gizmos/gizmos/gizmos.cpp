@@ -2,6 +2,7 @@
 #include <engine/rendering/camera.h>
 #include "gizmo_entity.h"
 #include "gizmo_physics_component.h"
+#include "reflection/reflection.h"
 
 namespace unravel
 {
@@ -19,6 +20,22 @@ gizmo_registry::gizmo_registry()
             if(inspector_var)
             {
                 type_map[inspected_type] = inspector_var.get_value<std::shared_ptr<gizmo>>();
+            }
+        }
+    }
+
+    auto gizmo_types = entt::get_derived_types(entt::resolve<gizmo>());
+    for(auto& gizmo_type : gizmo_types)
+    {
+        auto inspected_type_var = entt::get_attribute(gizmo_type, "inspected_type");
+        if(inspected_type_var)
+        {
+            auto inspected_type = inspected_type_var.cast<entt::meta_type>();
+            if(inspected_type)
+            {
+                auto gizmo_instance = gizmo_type.invoke("create"_hs, {});
+                auto gizmo_ptr = gizmo_instance.cast<std::shared_ptr<gizmo>>();
+                type_map_entt[inspected_type.id()] = gizmo_ptr;
             }
         }
     }

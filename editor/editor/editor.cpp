@@ -35,16 +35,17 @@ void print_init_error(const rtti::context& ctx)
 
 }
 
-RTTR_REGISTRATION
+REFLECTION_REGISTRATION
 {
-    rttr::registration::class_<editor>("editor")
-        .constructor<>()
-        .method("create", &editor::create)
-        .method("init", &editor::init)
-        .method("deinit", &editor::deinit)
-        .method("destroy", &editor::destroy)
-        .method("process", &editor::process)
-        .method("interrupt", &editor::interrupt);
+    entt::meta_factory<editor>{}
+        .type("editor"_hs)
+        .func<&editor::create>("create"_hs)
+        .func<&editor::init>("init"_hs)
+        .func<&editor::deinit>("deinit"_hs)
+        .func<&editor::destroy>("destroy"_hs)
+        .func<&editor::process>("process"_hs)
+        .func<&editor::interrupt>("interrupt"_hs);
+
 
 }
 

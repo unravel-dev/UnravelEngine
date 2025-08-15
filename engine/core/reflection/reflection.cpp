@@ -2,8 +2,46 @@
 
 namespace entt
 {
+namespace
+{
+auto get_derived(const entt::meta_type& base) -> std::vector<entt::meta_type>
+{
+    std::vector<entt::meta_type> result;
 
-auto get_pretty_name(meta_type t) -> std::string
+    auto types = entt::resolve();
+    for (auto mt : types)
+    {
+        for (auto b : mt.second.base())
+        {
+            if (b.second == base) 
+            {
+                result.push_back(mt.second);
+            }
+        }
+    }
+    return result;
+}
+}
+
+auto get_derived_types(const meta_type& t) -> std::vector<meta_type>
+{
+    return get_derived(t);
+}
+
+auto get_attribute(const meta_type& t, const char* name) -> const meta_any&
+{
+    const attributes& attrs = t.custom();
+    auto it = attrs.find(name);
+    if(it != attrs.end())
+    {
+        return it->second;
+    }
+
+    static const meta_any any;
+    return any;
+}
+
+auto get_pretty_name(const meta_type& t) -> std::string
 {
     attributes attrs = t.custom();
     if(attrs.find("pretty_name") != attrs.end())
