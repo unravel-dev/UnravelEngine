@@ -114,6 +114,48 @@ auto entity_panel::get_entity_name(entt::handle entity) -> std::string
     return "Entity_" + std::to_string(static_cast<uint32_t>(entity.entity()));
 }
 
+auto entity_panel::get_entity_icon(entt::handle entity) -> std::string
+{
+    bool is_bone = entity.all_of<bone_component>();
+    bool has_source = entity.any_of<prefab_component>();
+
+    auto icon = has_source ? ICON_MDI_CUBE " " : ICON_MDI_CUBE_OUTLINE " ";
+    if(is_bone)
+    {
+        icon = ICON_MDI_BONE " ";
+    }
+
+    return icon;
+}
+
+auto entity_panel::get_entity_display_color(entt::handle entity) -> ImVec4
+{
+    auto& trans_comp = entity.get<transform_component>();
+    bool is_bone = entity.all_of<bone_component>();
+    bool is_submesh = entity.all_of<submesh_component>();
+    bool is_active_global = trans_comp.is_active_global();
+    bool has_source = entity.any_of<prefab_component, prefab_id_component>();
+    bool has_broken_source = false;
+
+    if(auto pfb = entity.try_get<prefab_component>())
+    {
+        if(!pfb->source)
+        {
+            has_source = false;
+            has_broken_source = true;
+        }
+    }
+
+    auto col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+
+    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(has_source) * 0.5f);
+    col = ImLerp(col, ImVec4(1.0f, 0.0f, 0.0f, 1.0f), float(has_broken_source) * 0.5f);
+    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(is_bone) * 0.5f);
+    col = ImLerp(col, ImVec4(0.8f, 0.4f, 0.4f, 1.0f), float(is_submesh) * 0.5f);
+    col = ImLerp(col, ImVec4(col.x * 0.75f, col.y * 0.75f, col.z * 0.75f, col.w * 0.75f), float(!is_active_global));
+
+    return col;
+}
 
 void entity_panel::set_entity_name(entt::handle entity, const std::string& name)
 {

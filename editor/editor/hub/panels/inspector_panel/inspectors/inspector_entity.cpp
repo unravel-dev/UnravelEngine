@@ -2,6 +2,7 @@
 #include "inspectors.h"
 
 #include <editor/editing/editing_manager.h>
+#include <editor/hub/panels/entity_panel.h>
 #include <editor/imgui/imgui_interface.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -21,6 +22,121 @@ namespace unravel
 
 namespace
 {
+template<typename T>
+auto get_component_icon() -> std::string
+{
+    // Core components
+    if constexpr(std::is_same<T, id_component>::value)
+    {
+        return ICON_MDI_IDENTIFIER;
+    }
+    else if constexpr(std::is_same<T, tag_component>::value)
+    {
+        return ICON_MDI_TAG;
+    }
+    else if constexpr(std::is_same<T, layer_component>::value)
+    {
+        return ICON_MDI_LAYERS;
+    }
+    else if constexpr(std::is_same<T, prefab_component>::value)
+    {
+        return ICON_MDI_CUBE;
+    }
+    else if constexpr(std::is_same<T, prefab_id_component>::value)
+    {
+        return ICON_MDI_CUBE_OUTLINE;
+    }
+    // Transform
+    else if constexpr(std::is_same<T, transform_component>::value)
+    {
+        return ICON_MDI_AXIS_ARROW;
+    }
+    // Test/Debug
+    else if constexpr(std::is_same<T, test_component>::value)
+    {
+        return ICON_MDI_BUG;
+    }
+    // Rendering components
+    else if constexpr(std::is_same<T, model_component>::value)
+    {
+        return ICON_MDI_SHAPE;
+    }
+    else if constexpr(std::is_same<T, submesh_component>::value)
+    {
+        return ICON_MDI_SHAPE_OUTLINE;
+    }
+    else if constexpr(std::is_same<T, camera_component>::value)
+    {
+        return ICON_MDI_CAMERA;
+    }
+    else if constexpr(std::is_same<T, text_component>::value)
+    {
+        return ICON_MDI_TEXT;
+    }
+    // Animation
+    else if constexpr(std::is_same<T, animation_component>::value)
+    {
+        return ICON_MDI_ANIMATION;
+    }
+    else if constexpr(std::is_same<T, bone_component>::value)
+    {
+        return ICON_MDI_BONE;
+    }
+    // Lighting
+    else if constexpr(std::is_same<T, light_component>::value)
+    {
+        return ICON_MDI_LIGHTBULB;
+    }
+    else if constexpr(std::is_same<T, skylight_component>::value)
+    {
+        return ICON_MDI_WEATHER_SUNNY;
+    }
+    else if constexpr(std::is_same<T, reflection_probe_component>::value)
+    {
+        return ICON_MDI_REFLECT_HORIZONTAL;
+    }
+    // Physics
+    else if constexpr(std::is_same<T, physics_component>::value)
+    {
+        return ICON_MDI_ATOM;
+    }
+    // Audio
+    else if constexpr(std::is_same<T, audio_source_component>::value)
+    {
+        return ICON_MDI_VOLUME_HIGH;
+    }
+    else if constexpr(std::is_same<T, audio_listener_component>::value)
+    {
+        return ICON_MDI_EAR_HEARING;
+    }
+    // Scripting
+    else if constexpr(std::is_same<T, script_component>::value)
+    {
+        return ICON_MDI_SCRIPT;
+    }
+    // Post-processing effects (using similar icons for consistency)
+    else if constexpr(std::is_same<T, tonemapping_component>::value)
+    {
+        return ICON_MDI_BRIGHTNESS_5;
+    }
+    else if constexpr(std::is_same<T, fxaa_component>::value)
+    {
+        return ICON_MDI_FILTER;
+    }
+    else if constexpr(std::is_same<T, assao_component>::value)
+    {
+        return ICON_MDI_FILTER_OUTLINE;
+    }
+    else if constexpr(std::is_same<T, ssr_component>::value)
+    {
+        return ICON_MDI_MIRROR;
+    }
+    else
+    {
+        // Default fallback icon
+        return ICON_MDI_CUBE_OUTLINE;
+    }
+}
 
 struct inspect_callbacks
 {
@@ -72,12 +188,12 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
         ImGui::Text("       %s", callbacks.icon.c_str());
 
         ImGui::SameLine();
-        auto settingsSize = ImGui::CalcTextSize(ICON_MDI_COG).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        auto settings_size = ImGui::CalcTextSize(ICON_MDI_COG).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
         auto avail = ImGui::GetContentRegionAvail().x + ImGui::GetStyle().FramePadding.x;
         ImGui::AlignedItem(1.0f,
                            avail,
-                           settingsSize,
+                           settings_size,
                            [&]()
                            {
                                if(ImGui::Button(ICON_MDI_COG))
@@ -169,7 +285,7 @@ auto get_entity_pretty_name(entt::handle entity) -> const std::string&
     return tag.name;
 }
 
-static auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> bool
+auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> bool
 {
     if(ImGui::IsDragDropPossibleTargetForType("entity"))
     {
@@ -206,6 +322,132 @@ static auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> b
         ImGui::EndDragDropTarget();
     }
 
+    return result;
+}
+
+auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_override_context& override_ctx) -> inspect_result
+{
+    inspect_result result{};
+    
+    if(!data)
+    {
+        return result;
+    }
+
+    auto tag_comp = data.try_get<tag_component>();
+    auto trans_comp = data.try_get<transform_component>();
+    
+    if(!tag_comp)
+    {
+        return result;
+    }
+
+    // Create a table for proper alignment
+    if(ImGui::BeginTable("EntityHeader", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoClip))
+    {
+        ImGui::TableSetupColumn("Active", ImGuiTableColumnFlags_WidthFixed, 20.0f);
+        ImGui::TableSetupColumn("Icon", ImGuiTableColumnFlags_WidthFixed, 22.0f);
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        
+        ImGui::TableNextRow();
+        
+        // Active checkbox column
+        ImGui::TableSetColumnIndex(0);
+        if(trans_comp)
+        {
+            bool is_active = trans_comp->is_active();
+            
+            // Track component type for prefab override context
+            auto type = rttr::type::get<transform_component>();
+            auto name = type.get_name().to_string();
+            auto pretty_name = rttr::get_pretty_name(type);
+            
+            // Use a copy of override context for proper path handling
+            auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
+            override_ctx_ref.set_component_type(name, pretty_name);
+            override_ctx_ref.push_segment("active", "Active");
+
+            if(ImGui::Checkbox("##active", &is_active))
+            {
+                trans_comp->set_active(is_active);
+                result.changed = true;
+                result.edit_finished = true;
+            }
+            
+            // ImGui::PopStyleColor(3);
+            override_ctx_ref.pop_segment();
+        }
+        
+        auto col = entity_panel::get_entity_display_color(data);
+        ImGui::PushStyleColor(ImGuiCol_Text, col);
+        // Icon column
+        ImGui::TableSetColumnIndex(1);
+        ImGui::AlignTextToFramePadding();
+        {
+            auto icon = entity_panel::get_entity_icon(data);
+
+            ImGui::Text("%s", icon.c_str());
+        }
+        // Name field column
+        ImGui::TableSetColumnIndex(2);
+        {
+            // Track component type for prefab override context
+            auto type = rttr::type::get<tag_component>();
+            auto type_name = type.get_name().to_string();
+            auto pretty_name = rttr::get_pretty_name(type);
+            
+            auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
+            override_ctx_ref.set_component_type(type_name, pretty_name);
+            override_ctx_ref.push_segment("name", "Name");
+                        
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+            ImGui::SetNextItemWidth(-1.0f);
+            
+            if(ImGui::InputTextWidget("##name", tag_comp->name, false))
+            {
+                result.changed = true;
+                result.edit_finished = true;
+            }
+            
+            ImGui::PopStyleVar();
+            override_ctx_ref.pop_segment();
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::EndTable();
+    }
+    
+    // Tag field using traditional property_layout approach
+    {
+        // Track component type for prefab override context
+        auto type = rttr::type::get<tag_component>();
+        auto type_name = type.get_name().to_string();
+        auto pretty_name = rttr::get_pretty_name(type);
+
+        rttr::property prop = type.get_property("tag");
+        auto prop_name = prop.get_name().to_string();
+        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        
+        auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
+        override_ctx_ref.set_component_type(type_name, pretty_name);
+        override_ctx_ref.push_segment(prop_name, prop_pretty_name);
+
+        property_layout layout(prop, true);
+        rttr::variant v = tag_comp->tag;
+
+        var_info info;
+        info.is_property = true;
+        info.read_only = false;
+
+        result |= inspect_var(ctx, v, info);
+        if(result.changed)
+        {
+            tag_comp->tag = v.get_value<std::string>();
+        }
+
+        override_ctx_ref.pop_segment();
+    }
+    
     return result;
 }
 
@@ -266,6 +508,13 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
 
+        // Render Unity-style entity header (active checkbox, icon, name, tag)
+        result |= render_entity_header(ctx, data, override_ctx);
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         if(is_debug_view())
         {
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
@@ -285,40 +534,6 @@ auto inspector_entity::inspect(rtti::context& ctx,
             ImGui::PopStyleVar();
         }
 
-        auto trans_comp = data.try_get<transform_component>();
-        if(trans_comp)
-        {
-            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
-            ImGui::TreePush("Active");
-            {
-                auto& override_ctx = ctx.get_cached<prefab_override_context>();
-
-                auto type = rttr::type::get<transform_component>();
-                auto name = type.get_name().to_string();
-                auto pretty_name = rttr::get_pretty_name(type);
-                // Track component type for prefab override context
-                override_ctx.set_component_type(name, pretty_name);
-                override_ctx.push_segment("active", "Active");
-
-                property_layout layout("Active", "", true);
-                rttr::variant v = trans_comp->is_active();
-
-                var_info info;
-                info.is_property = true;
-                info.read_only = false;
-
-                result |= inspect_var(ctx, v, info);
-                if(result.changed)
-                {
-                    trans_comp->set_active(v.get_value<bool>());
-                }
-
-                override_ctx.pop_segment();
-            }
-            ImGui::TreePop();
-            ImGui::PopStyleVar();
-        }
-
         hpp::for_each_tuple_type<all_inspectable_components>(
             [&](auto index)
             {
@@ -326,6 +541,12 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 auto component = data.try_get<ctype>();
 
                 if(!component)
+                {
+                    return;
+                }
+                
+                // Skip tag_component as it's handled in the Unity-style header
+                if constexpr(std::is_same_v<ctype, tag_component>)
                 {
                     return;
                 }
@@ -367,7 +588,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 callbacks.can_remove = []()
                 {
                     return !std::is_same<ctype, id_component>::value && !std::is_same<ctype, tag_component>::value &&
-                           !std::is_same<ctype, transform_component>::value && !std::is_same<ctype, prefab_id_component>::value;
+                           !std::is_same<ctype, transform_component>::value && !std::is_same<ctype, prefab_id_component>::value &&
+                           !std::is_same<ctype, layer_component>::value && !std::is_same<ctype, bone_component>::value &&
+                           !std::is_same<ctype, submesh_component>::value;
                 };
 
                 callbacks.can_merge = []()
@@ -375,8 +598,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return std::is_same<ctype, id_component>::value || std::is_same<ctype, tag_component>::value;
                 };
 
-                callbacks.icon = ICON_MDI_GRID;
-
+                
+                callbacks.icon = get_component_icon<ctype>();
+                
                 result |= inspect_component(pretty_name, callbacks);
             });
 

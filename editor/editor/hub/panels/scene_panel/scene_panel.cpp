@@ -1062,17 +1062,23 @@ void scene_panel::deinit(rtti::context& ctx)
 
 void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera, editing_manager& em)
 {
-    // Check if we should start drag selection
-    if(ImGui::IsMouseDragging(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
+    if(!ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
     {
-        // Only start drag selection if we're not clicking on anything and not over a gizmo
-        if(!is_drag_selecting_)
+        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
-            is_drag_selecting_ = true;
             drag_start_pos_ = ImGui::GetMousePos();
-            drag_current_pos_ = drag_start_pos_;
+        }  
+        // Check if we should start drag selection
+        if(ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+        {
+            // Only start drag selection if we're not clicking on anything and not over a gizmo
+            if(!is_drag_selecting_)
+            {
+                is_drag_selecting_ = true;
+            }
         }
     }
+    
 
     // Update drag selection
     if(is_drag_selecting_)

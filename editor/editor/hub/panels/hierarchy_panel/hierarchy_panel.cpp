@@ -630,62 +630,10 @@ auto get_entity_tree_node_flags(rtti::context& ctx, entt::handle entity, bool ha
     return flags;
 }
 
-auto get_entity_display_color(entt::handle entity) -> ImVec4
-{
-    auto& trans_comp = entity.get<transform_component>();
-    bool is_bone = entity.all_of<bone_component>();
-    bool is_submesh = entity.all_of<submesh_component>();
-    bool is_active_global = trans_comp.is_active_global();
-    bool has_source = entity.any_of<prefab_component, prefab_id_component>();
-    bool has_broken_source = false;
-
-    if(auto pfb = entity.try_get<prefab_component>())
-    {
-        if(!pfb->source)
-        {
-            has_source = false;
-            has_broken_source = true;
-        }
-    }
-
-    if(auto prefab_id = entity.try_get<prefab_id_component>())
-    {
-        auto root = prefab_override_context::find_prefab_root_entity(entity);
-        if(root)
-        {
-            if(auto pfb = root.try_get<prefab_component>())
-            {
-                if(!pfb->source)
-                {
-                    has_broken_source = true;
-                    has_source = false;
-                }
-            }
-        }
-    }
-
-    auto col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-
-    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(has_source) * 0.5f);
-    col = ImLerp(col, ImVec4(1.0f, 0.0f, 0.0f, 1.0f), float(has_broken_source) * 0.5f);
-    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(is_bone) * 0.5f);
-    col = ImLerp(col, ImVec4(0.8f, 0.4f, 0.4f, 1.0f), float(is_submesh) * 0.5f);
-    col = ImLerp(col, ImVec4(col.x * 0.75f, col.y * 0.75f, col.z * 0.75f, col.w * 0.75f), float(!is_active_global));
-
-    return col;
-}
-
 auto get_entity_display_label(entt::handle entity) -> std::string
 {
-    const auto& name = entity_panel::get_entity_name(entity);
-    bool is_bone = entity.all_of<bone_component>();
-    bool has_source = entity.any_of<prefab_component>();
-
-    auto icon = has_source ? ICON_MDI_CUBE " " : ICON_MDI_CUBE_OUTLINE " ";
-    if(is_bone)
-    {
-        icon = ICON_MDI_BONE " ";
-    }
+    auto name = entity_panel::get_entity_name(entity);
+    auto icon = entity_panel::get_entity_icon(entity);
 
     const auto ent = entity.entity();
     const auto id = entt::to_integral(ent);
@@ -810,7 +758,7 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     ImGui::AlignTextToFramePadding();
 
     auto label = get_entity_display_label(entity);
-    auto col = get_entity_display_color(entity);
+    auto col = entity_panel::get_entity_display_color(entity);
 
     ImGui::PushStyleColor(ImGuiCol_Text, col);
     bool opened = ImGui::TreeNodeEx(label.c_str(), flags);

@@ -100,9 +100,7 @@ struct prefab_override_context
     }
 
     static auto find_prefab_root_entity(entt::handle entity) -> entt::handle;
-    static auto get_entity_name(entt::handle entity) -> std::string;
     static auto get_entity_prefab_uuid(entt::handle entity) -> hpp::uuid;
-    static void set_entity_name(entt::handle entity, const std::string& name);
     static void mark_transform_as_changed(entt::handle entity, bool position, bool rotation, bool scale, bool skew);
     static void mark_active_as_changed(entt::handle entity);
     static void mark_text_area_as_changed(entt::handle entity);
