@@ -167,7 +167,7 @@ if(MSVC)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Suppress unused variable warnings for GCC/Clang
     add_compile_options(-Wno-unused-variable)
-
+    add_compile_options(-Wno-deprecated-non-prototype)
     # Adjust the optimization level for the Release mode for GCC/Clang
     string(REPLACE "-O3" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     string(REPLACE "-O3" "" CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE}")

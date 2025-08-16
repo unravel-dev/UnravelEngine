@@ -19,18 +19,20 @@ set(BGFX_BUILD_TOOLS_GEOMETRY ON CACHE BOOL "Build bgfx geometry tools." FORCE)
 set(BGFX_BUILD_TOOLS_TEXTURE ON CACHE BOOL "Build bgfx texture tools." FORCE)
 
 
+add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 if(MSVC)
     add_compile_options(/wd4244 /wd4267 /wd4291)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_compile_options(-Wno-deprecated-builtins)
+    add_compile_options(-Wno-deprecated-declarations)
+    add_compile_options(-Wno-tautological-constant-compare)
+    add_compile_options(-Wno-comment)
 endif()
 
 if(MINGW)
     add_compile_definitions(ASTCENC_SSE=0)
-    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 
     set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--export-all-symbols" )
     set (CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--export-all-symbols" )
