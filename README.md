@@ -1,98 +1,175 @@
-## [Unravel Engine](https://github.com/unravel-dev/UnravelEngine) - Cross-platform C++ Game Engine
+<div align="center">
+
+# 🎮 Unravel Engine
+### Modern Cross-Platform C++20 Game Engine with WYSIWYG Editor
 
 ![windows](https://github.com/unravel-dev/UnravelEngine/actions/workflows/windows.yml/badge.svg)
 ![linux](https://github.com/unravel-dev/UnravelEngine/actions/workflows/linux.yml/badge.svg)
 ![macos](https://github.com/unravel-dev/UnravelEngine/actions/workflows/macos.yml/badge.svg)
+[![Release](https://img.shields.io/github/v/release/unravel-dev/UnravelEngine)](https://github.com/unravel-dev/UnravelEngine/releases)
 
+[📥 Download](https://github.com/unravel-dev/UnravelEngine/releases) • [📖 Documentation](https://unravel-dev.github.io/unravel-engine-api/) • [🎯 Demo Project](#editor) • [💬 Community](#community--support)
+
+</div>
+
+---
 
 **Unravel Engine** is a cutting-edge, cross-platform game engine and WYSIWYG (What You See Is What You Get) editor, crafted in modern C++20. It empowers developers to create high-performance, immersive games with ease.
 
-## Features
+## 🚀 Quick Start
 
-- **Cross-Platform Compatibility**: Seamlessly supports multiple operating systems to maximize your game's reach.
-- **Modern C++20**: Built on the latest C++ standards for exceptional performance and maintainability.
-- **WYSIWYG Editor**: Intuitive editor enabling real-time editing and visualization of game scenes.
-- **Comprehensive Feature Set**:
-  - **Animation System**: Robust support for skeletal and keyframe animations.
-  - **Physics Integration**: Realistic physics simulations powered by [Bullet Physics](https://github.com/bulletphysics/bullet3).
-  - **Audio Support**: 3D audio capabilities using [OpenAL Soft](https://github.com/kcat/openal-soft).
-  - **C# Scripting**: Extend and customize gameplay logic using a C# scripting interface.
-  - **Action-Based Input System**: Flexible and modular input mapping for various devices.
-  - **PBR Deferred Rendering**: High-quality physically-based rendering with advanced lighting and material support.
-  - **Dynamic Shadows**: Realistic shadow casting for immersive visual fidelity.
-  - **Reflection Probes**: Support for realistic lighting and environment reflections.
-  - **Async Asset Loading**: Asynchronous loading for smooth gameplay and faster scene transitions.
-  - **Broad Format Support**:
-    - Most 3D mesh formats (e.g., OBJ, FBX, GLTF).
-    - Common audio formats (e.g., WAV, MP3, OGG).
-  - **Graphics API Support**: Fully supports DirectX 11, DirectX 12, Vulkan, and OpenGL for maximum flexibility and performance.
+### Try the Demo
+1. Download the latest release from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
+2. Extract and run `еditor.exe` (Windows) or `еditor` (Linux)
+3. Open the included DemoProject to explore features
 
-## Screenshots
+### System Requirements
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **OS** | Windows 10, Ubuntu 20.04, macOS 14 | Windows 11, Ubuntu 24.04, macOS 15+ |
+| **CPU** | Intel i5-4590 / AMD FX 8350 | Intel i7-8700K / AMD Ryzen 5 3600 |
+| **Memory** | 8 GB RAM | 16 GB RAM |
+| **Graphics** | DirectX 11 compatible | GTX 1060 / RX 580 or better |
+| **Storage** | | |
+
+## ✨ Key Features
+
+### 🎨 **Visual Development**
+- **WYSIWYG Editor** - Real-time scene editing and visualization
+- **Material Editor** - Advanced PBR material authoring
+- **Asset Browser** - Intuitive asset management and preview
+
+### 🔧 **Development Experience**
+- **C# Scripting** - Full-featured scripting with hot-reload
+- **Cross-Platform** - Windows, Linux, macOS support
+- **Modern C++20** - Latest standards for performance and maintainability
+- **Action-Based Input** - Flexible input mapping for various devices
+
+### 🎮 **Engine Capabilities**
+- **PBR Deferred Rendering** - Physically-based rendering pipeline
+- **Dynamic Shadows** - Realistic shadow casting with multiple techniques
+- **Reflection Probes** - Environment reflections and lighting
+- **Physics Integration** - Powered by Bullet Physics
+- **3D Audio** - Spatial audio with OpenAL Soft
+- **Animation System** - Skeletal and keyframe animations
+- **Async Asset Loading** - Non-blocking resource management
+
+### 📁 **Format Support**
+- **3D Models**: OBJ, FBX, GLTF, DAE, and more
+- **Audio**: WAV, MP3, OGG formats
+- **Textures**: PNG, JPG, DDS, HDR formats
+
+### 🎯 **Graphics APIs**
+DirectX 11 • DirectX 12 • Vulkan • OpenGL
+
+## 📸 Screenshots
 <img width="2560" height="1380" alt="Screenshot 2025-08-10 234456" src="https://github.com/user-attachments/assets/1fc3ccc8-1ad1-4a8a-b335-7e478eb8f479" />
 <img width="2560" height="1380" alt="Screenshot 2025-08-10 234618" src="https://github.com/user-attachments/assets/98475418-1f0f-41be-9dac-4e2268c9feda" />
 
-
-## Documentation
+## 📖 Documentation
 Engine C++ documentation can be found here - [Engine Api](https://unravel-dev.github.io/unravel-engine-api/html/index.html)
 
 Scripting C# documentation can be found here - [Script Api](https://unravel-dev.github.io/unravel-script-api/html/index.html)
 
+## 🚧 Current Status
+
+Unravel Engine is in **active development** and not yet production-ready. We welcome:
+- 🤝 **Contributions** from developers
+- 💡 **Feature requests** from the community  
+- 📝 **Feedback** to guide development priorities
 
 
-## Current Status
 
-Unravel Engine is currently under active development and is not yet production-ready. Contributions, feature requests, and feedback are highly encouraged to shape its evolution.
+## 🏁 Getting Started
+
+**Prerequisites**: Download and install [Mono](https://www.mono-project.com/) before using the engine.
+
+> **Note for Linux users**: Install the `mono-complete` package for the full IDE experience.
+
+## 🎯 Editor
+
+Download pre-built binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
+
+The release includes a **DemoProject** to help you get started quickly and explore the engine's capabilities.
+
+### Code Editing Integration
+The Editor integrates seamlessly with **Visual Studio Code** and its variants (Cursor, VSCodium, etc) for script editing:
+
+- Double-click any script in the editor to open it in your detected VS Code installation
+- Install the recommended extensions when prompted for the best development experience
+- Enjoy features like syntax highlighting, IntelliSense, and debugging support
 
 
+## 🛠 Building from Source
 
-## Getting Started
-Download and install Mono from [Mono Project](https://www.mono-project.com/)
-On linux it is recommended to install the full mono-complete package if you want full experience with the IDE
+### Prerequisites
+- **CMake** 3.20 or higher
+- **C++20** compatible compiler (MSVC 2022, GCC 12+, Clang 12+)
+- **Git** with LFS support
+- **Mono** 6.12 ([Download](https://www.mono-project.com/))
 
-## Editor
-You can download binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
-
-There is also a DemoProject available with the binaries.
-
-The Editor uses Visual Studio Code or any of its forks like (Cursor, etc) for code editing.
-
-You can double click on a script from the editor and it will open it with the detected vscode.
-
-When opening a file it should prompt yout to install the necessary extensions. Do **NOT** skip them.
-
-
-## Building
-The project uses CMake as a build system so it is recommended to use that workflow in your IDE.
-```
-git clone https://github.com/unravel-dev/UnravelEngine.git
+### Build Steps
+```bash
+# Clone with submodules
+git clone --recursive https://github.com/unravel-dev/UnravelEngine.git
 cd UnravelEngine
-git submodule update --init --recursive
 
-mkdir build
-cd build
-cmake ..
+# Configure
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build --config Release --parallel
+
+# Run editor
+./build/bin/editor
 ```
-For Linux you can see the workflow file for the necessary packages [Linux](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml)
 
-## LIBRARIES
-bgfx - https://github.com/bkaradzic/bgfx
+### Platform-Specific Notes
+- **Windows**: MSVC or Clang recommended
+- **Linux**: Install mono-complete package for full IDE experience ([workflow dependencies](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml))
+- **macOS**: Xcode command line tools required
 
-ser20 - https://github.com/unravel-dev/ser20
+### Troubleshooting
+- **Issue**: Mono not found → Ensure mono is in PATH
+- **Issue**: Submodule errors → Run `git submodule update --init --recursive`
+- **Issue**: CMake configuration fails → Check CMake version and compiler support
 
-rttr - https://github.com/rttrorg/rttr
+## 🤝 Community & Support
 
-spdlog - https://github.com/gabime/spdlog
+- 🐛 **Issues**: [Report bugs](https://github.com/unravel-dev/UnravelEngine/issues)
+- 💡 **Discussions**: [Feature requests & questions](https://github.com/unravel-dev/UnravelEngine/discussions)
+- 📚 **Documentation**: [Engine API](https://unravel-dev.github.io/unravel-engine-api/) • [Script API](https://unravel-dev.github.io/unravel-script-api/)
 
-imgui - https://github.com/ocornut/imgui
+## 🤝 Contributing
 
-assimp - https://github.com/assimp/assimp
+We welcome contributions! Here's how you can help:
 
-glm - https://github.com/g-truc/glm
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-openal-soft - https://github.com/kcat/openal-soft
+## 📋 Roadmap
 
-yaml-cpp - https://github.com/jbeder/yaml-cpp
+### Future
+- 📅 Editor Undo/Redo
+- 📅 Game UI
 
-bullet3 - https://github.com/bulletphysics/bullet3
+## 🙏 Third-Party Libraries
 
-entt - https://github.com/skypjack/entt
+Unravel Engine is built upon these excellent open-source libraries:
+
+| Library | Purpose | Repository |
+|---------|---------|------------|
+| [bgfx](https://github.com/bkaradzic/bgfx) | Cross-platform rendering | [Link](https://github.com/bkaradzic/bgfx) |
+| [EnTT](https://github.com/skypjack/entt) | Entity-Component-System | [Link](https://github.com/skypjack/entt) |
+| [Bullet3](https://github.com/bulletphysics/bullet3) | Physics simulation | [Link](https://github.com/bulletphysics/bullet3) |
+| [Dear ImGui](https://github.com/ocornut/imgui) | Immediate mode GUI | [Link](https://github.com/ocornut/imgui) |
+| [Assimp](https://github.com/assimp/assimp) | 3D model loading | [Link](https://github.com/assimp/assimp) |
+| [OpenAL Soft](https://github.com/kcat/openal-soft) | 3D audio | [Link](https://github.com/kcat/openal-soft) |
+| [GLM](https://github.com/g-truc/glm) | Mathematics library | [Link](https://github.com/g-truc/glm) |
+| [spdlog](https://github.com/gabime/spdlog) | Fast logging | [Link](https://github.com/gabime/spdlog) |
+| [yaml-cpp](https://github.com/jbeder/yaml-cpp) | YAML parsing | [Link](https://github.com/jbeder/yaml-cpp) |
+| [RTTR](https://github.com/rttrorg/rttr) | Runtime reflection | [Link](https://github.com/rttrorg/rttr) |
+| [ser20](https://github.com/unravel-dev/ser20) | Serialization | [Link](https://github.com/unravel-dev/ser20) |
