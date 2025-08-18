@@ -7,9 +7,6 @@
 [submodule "deps/3rdparty/spdlog/spdlog"]
 	path = deps/3rdparty/spdlog/spdlog
 	url = https://github.com/gabime/spdlog.git
-[submodule "deps/3rdparty/rttr/rttr"]
-	path = deps/3rdparty/rttr/rttr
-	url = https://github.com/unravel-dev/rttr.git
 [submodule "deps/3rdparty/imgui/imgui"]
 	path = deps/3rdparty/imgui/imgui
 	url = https://github.com/ocornut/imgui.git
