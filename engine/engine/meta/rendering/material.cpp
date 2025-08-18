@@ -9,20 +9,11 @@ namespace unravel
 
 REFLECT(material)
 {
-    rttr::registration::enumeration<cull_type>("cull_type")(
-        rttr::value("None", cull_type::none),
-        rttr::value("Clockwise", cull_type::clockwise),
-        rttr::value("Counter Clockwise", cull_type::counter_clockwise));
-
-    rttr::registration::class_<material>("material")
-        .property("cull_type", &material::get_cull_type, &material::set_cull_type)(
-            rttr::metadata("pretty_name", "Cull Type"));
-
-    // Register cull_type enum with entt
     entt::meta_factory<cull_type>{}
         .type("cull_type"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cull_type"},
+            entt::attribute{"pretty_name", "Cull Type"},
         })
         .data<cull_type::none>("none"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -45,12 +36,17 @@ REFLECT(material)
         .type("material"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "material"},
+            entt::attribute{"pretty_name", "Material"},
         })
         .data<&material::set_cull_type, &material::get_cull_type>("cull_type"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cull_type"},
             entt::attribute{"pretty_name", "Cull Type"},
-        });
+        })
+        .func<&material::get_meta_type>("get_meta_type"_hs)
+        .func<&material::get_static_meta_type>("get_static_meta_type"_hs)
+        .func<&material::as_derived>("as_derived"_hs)
+        ;
 }
 
 SAVE(material)

@@ -13,60 +13,21 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     using cone_tracing_settings = ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings;
     using temporal_settings = ssr_pass::fidelityfx_ssr_settings::temporal_settings;
 
-    // Predicate for cone tracing settings visibility
-    auto cone_tracing_predicate = rttr::property_predicate([](rttr::instance& obj)
+    auto cone_tracing_predicate_entt = entt::property_predicate([](const entt::meta_any& obj)
     {
-        auto data = obj.try_convert<fidelityfx_settings>();
+        auto data = obj.try_cast<fidelityfx_settings>();
         return data->enable_cone_tracing;
     });
 
-    // Predicate for temporal settings visibility
-    auto temporal_predicate = rttr::property_predicate([](rttr::instance& obj) -> bool
+    auto temporal_predicate_entt = entt::property_predicate([](const entt::meta_any& obj) -> bool
     {
-        if(auto data = obj.try_convert<fidelityfx_settings>())
+        if(auto data = obj.try_cast<fidelityfx_settings>())
         {
             return data->enable_temporal_accumulation;
         }
         return false;
     });
 
-    // First register the nested cone_tracing_settings struct
-    rttr::registration::class_<cone_tracing_settings>("ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings")
-        .constructor<>()(rttr::metadata("pretty_name", "Cone Tracing Settings"))
-        .property("cone_angle_bias", &cone_tracing_settings::cone_angle_bias)(
-            rttr::metadata("pretty_name", "Cone Angle Bias"),
-            rttr::metadata("min", 0.001f),
-            rttr::metadata("max", 0.1f),
-            rttr::metadata("tooltip", "Controls cone growth rate for glossy reflections"))
-        .property("max_mip_level", &cone_tracing_settings::max_mip_level)(
-            rttr::metadata("pretty_name", "Max Mip Level"),
-            rttr::metadata("min", 1),
-            rttr::metadata("max", 10),
-            rttr::metadata("tooltip", "Number of blur mip levels - 1"))
-        .property("blur_base_sigma", &cone_tracing_settings::blur_base_sigma)(
-            rttr::metadata("pretty_name", "Blur Base Sigma"),
-            rttr::metadata("min", 0.1f),
-            rttr::metadata("max", 5.0f),
-            rttr::metadata("tooltip", "Base blur sigma for mip generation (CPU-side only)"));
-
-
-                // Predicate for cone tracing settings visibility
-    auto cone_tracing_predicate_entt = entt::property_predicate([](entt::meta_handle& obj)
-    {
-        auto data = obj->try_cast<fidelityfx_settings>();
-        return data->enable_cone_tracing;
-    });
-
-    // Predicate for temporal settings visibility
-    auto temporal_predicate_entt = entt::property_predicate([](entt::meta_handle& obj) -> bool
-    {
-        if(auto data = obj->try_cast<fidelityfx_settings>())
-        {
-            return data->enable_temporal_accumulation;
-        }
-        return false;
-    });
-    // Register cone_tracing_settings with entt
     entt::meta_factory<cone_tracing_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -101,49 +62,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     // -------------------------------------------------------------------------
     //  Temporal Accumulation Settings  (matches ApplyTemporalAccumulation v2)
     // -------------------------------------------------------------------------
-    rttr::registration::class_<temporal_settings>(
-        "ssr_pass::fidelityfx_ssr_settings::temporal_settings")
-    .constructor<>()(
-        rttr::metadata("pretty_name", "Temporal Accumulation Settings"))
-    .property("history_strength", &temporal_settings::history_strength)(
-        rttr::metadata("pretty_name", "History Strength"),
-        rttr::metadata("min", 0.0f),          // 0 → no accumulation
-        rttr::metadata("max", 1.0f),          // 1 → very long memory
-        rttr::metadata("tooltip",
-                    "Controls how long reflections keep history.\n"
-                    "0 = real-time only   ·   1 = maximum denoise"))
-    .property("depth_threshold", &temporal_settings::depth_threshold)(
-        rttr::metadata("pretty_name", "Edge Threshold"),
-        rttr::metadata("min", 0.000f),        // clip-space: 0 … 0.03
-        rttr::metadata("max", 0.030f),
-        rttr::metadata("tooltip",
-                    "Depth difference allowed before history is discarded.\n"
-                    "Lower = crisper edges, higher = smoother but risk of bleed"))
-    .property("roughness_sensitivity",
-            &temporal_settings::roughness_sensitivity)(
-        rttr::metadata("pretty_name", "Material Sensitivity"),
-        rttr::metadata("min", 0.0f),          // 0 = ignore roughness
-        rttr::metadata("max", 1.0f),          // 1 = full influence
-        rttr::metadata("tooltip",
-                    "How strongly rough surfaces shorten history.\n"
-                    "0 = same for every material   ·   1 = glossy keeps more history"))
-    .property("motion_scale_pixels", &temporal_settings::motion_scale_pixels)(
-        rttr::metadata("pretty_name", "Motion Scale Pixels"),
-        rttr::metadata("min", 0.0f),
-        rttr::metadata("max", 1000.0f),
-        rttr::metadata("tooltip", "Motion scale in pixels"))
-    .property("normal_dot_threshold", &temporal_settings::normal_dot_threshold)(
-        rttr::metadata("pretty_name", "Normal Dot Threshold"),
-        rttr::metadata("min", 0.0f),
-        rttr::metadata("max", 1.0f),
-        rttr::metadata("tooltip", "Normal dot threshold for motion detection"))
-    .property("max_accum_frames", &temporal_settings::max_accum_frames)(
-        rttr::metadata("pretty_name", "Max Accum Frames"),
-        rttr::metadata("min", 1),
-        rttr::metadata("max", 16),
-        rttr::metadata("tooltip", "Maximum accumulation frames"));
-
-    // Register temporal_settings with entt
+    
     entt::meta_factory<temporal_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings::temporal_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -199,69 +118,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"tooltip", "Maximum accumulation frames"},
         });
 
-    rttr::registration::class_<fidelityfx_settings>("ssr_pass::fidelityfx_ssr_settings")
-        .constructor<>()(rttr::metadata("pretty_name", "FidelityFX SSR Settings"))
-        .property("max_steps", &fidelityfx_settings::max_steps)(
-            rttr::metadata("pretty_name", "Max Steps"),
-            rttr::metadata("min", 8),
-            rttr::metadata("max", 200),
-            rttr::metadata("tooltip", "Maximum ray marching steps for hierarchical traversal"))
-        .property("max_rays", &fidelityfx_settings::max_rays)(
-            rttr::metadata("pretty_name", "Max Rays"),
-            rttr::metadata("min", 1),
-            rttr::metadata("max", 64),
-            rttr::metadata("tooltip", "Maximum rays for rough surfaces (future: cone tracing)"))
-        .property("depth_tolerance", &fidelityfx_settings::depth_tolerance)(
-            rttr::metadata("pretty_name", "Depth Tolerance"),
-            rttr::metadata("min", 0.01f),
-            rttr::metadata("max", 2.0f),
-            rttr::metadata("tooltip", "Depth tolerance for hit validation"))
-        .property("brightness", &fidelityfx_settings::brightness)(
-            rttr::metadata("pretty_name", "Brightness"),
-            rttr::metadata("min", 0.1f),
-            rttr::metadata("max", 3.0f),
-            rttr::metadata("tooltip", "Reflection brightness multiplier"))
-        .property("facing_reflections_fading", &fidelityfx_settings::facing_reflections_fading)(
-            rttr::metadata("pretty_name", "Facing Reflections Fading"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f),
-            rttr::metadata("tooltip", "Fade factor for camera-facing reflections"))
-        .property("roughness_depth_tolerance", &fidelityfx_settings::roughness_depth_tolerance)(
-            rttr::metadata("pretty_name", "Roughness Depth Tolerance"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 2.0f),
-            rttr::metadata("tooltip", "Additional depth tolerance for rough surfaces"))
-        .property("fade_in_start", &fidelityfx_settings::fade_in_start)(
-            rttr::metadata("pretty_name", "Fade In Start"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f),
-            rttr::metadata("tooltip", "Screen edge fade start"))
-        .property("fade_in_end", &fidelityfx_settings::fade_in_end)(
-            rttr::metadata("pretty_name", "Fade In End"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f),
-            rttr::metadata("tooltip", "Screen edge fade end"))
-        .property("enable_half_res", &fidelityfx_settings::enable_half_res)(
-            rttr::metadata("pretty_name", "Enable Half Res"),
-            rttr::metadata("tooltip", "Enable half resolution for SSR buffers"))
-        .property("enable_cone_tracing", &fidelityfx_settings::enable_cone_tracing)(
-            rttr::metadata("pretty_name", "Enable Cone Tracing"),
-            rttr::metadata("tooltip", "Enable cone tracing for glossy reflections"))
-        .property("cone_tracing", &fidelityfx_settings::cone_tracing)(
-            rttr::metadata("predicate", cone_tracing_predicate_entt),
-            rttr::metadata("pretty_name", "Cone Tracing"),
-            rttr::metadata("tooltip", "Cone tracing specific settings"),
-            rttr::metadata("flattable", true))
-        .property("enable_temporal_accumulation", &fidelityfx_settings::enable_temporal_accumulation)(
-            rttr::metadata("pretty_name", "Enable Temporal Accumulation"),
-            rttr::metadata("tooltip", "Enable temporal accumulation to reduce noise over multiple frames"))
-        .property("temporal", &fidelityfx_settings::temporal)(
-            rttr::metadata("predicate", temporal_predicate_entt),
-            rttr::metadata("pretty_name", "Temporal Accumulation"),
-            rttr::metadata("tooltip", "Temporal accumulation settings"),
-            rttr::metadata("flattable", true));
-
-    // Register fidelityfx_ssr_settings with entt
+    
     entt::meta_factory<fidelityfx_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -373,14 +230,7 @@ REFLECT_INLINE(ssr_pass::ssr_settings)
 {
     using ssr_settings = ssr_pass::ssr_settings;
 
-    rttr::registration::class_<ssr_settings>("ssr_pass::ssr_settings")
-        .constructor<>()(rttr::metadata("pretty_name", "SSR Settings"))
-        .property("fidelityfx", &ssr_settings::fidelityfx)(
-            rttr::metadata("pretty_name", "FidelityFX Settings"),
-            rttr::metadata("tooltip", "Settings for AMD FidelityFX SSSR implementation"),
-            rttr::metadata("flattable", true));
-
-    // Register ssr_settings with entt
+    
     entt::meta_factory<ssr_settings>{}
         .type("ssr_pass::ssr_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -496,20 +346,7 @@ LOAD_INSTANTIATE(ssr_pass::ssr_settings, ser20::iarchive_binary_t);
 
 REFLECT(ssr_component)
 {
-    rttr::registration::class_<ssr_component>("ssr_component")(
-        rttr::metadata("category", "RENDERING"),
-        rttr::metadata("pretty_name", "SSR"))
-        .constructor<>()
-        .method("component_exists", &component_exists<ssr_component>)
 
-        .property("enabled", &ssr_component::enabled)(
-            rttr::metadata("pretty_name", "Enabled"),
-            rttr::metadata("tooltip", "Enable/disable Screen Space Reflections"))
-        .property("settings", &ssr_component::settings)(
-            rttr::metadata("pretty_name", "Settings"),
-            rttr::metadata("flattable", true));
-
-    // Register ssr_component with entt
     entt::meta_factory<ssr_component>{}
         .type("ssr_component"_hs)
         .custom<entt::attributes>(entt::attributes{

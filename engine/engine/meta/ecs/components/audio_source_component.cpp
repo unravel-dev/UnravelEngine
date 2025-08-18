@@ -11,37 +11,6 @@ namespace unravel
 {
 REFLECT(audio_source_component)
 {
-    rttr::registration::class_<audio_source_component>(
-        "audio_source_component")(rttr::metadata("category", "AUDIO"), rttr::metadata("pretty_name", "Audio Source"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<audio_source_component>)
-
-        .property("auto_play", &audio_source_component::get_autoplay, &audio_source_component::set_autoplay)(
-            rttr::metadata("pretty_name", "Auto Play"))
-        .property("loop", &audio_source_component::is_looping, &audio_source_component::set_loop)(
-            rttr::metadata("pretty_name", "Loop"))
-        .property("mute", &audio_source_component::is_muted, &audio_source_component::set_mute)(
-            rttr::metadata("pretty_name", "Mute"))
-        .property("volume", &audio_source_component::get_volume, &audio_source_component::set_volume)(
-            rttr::metadata("pretty_name", "Volume"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f))
-        .property("pitch", &audio_source_component::get_pitch, &audio_source_component::set_pitch)(
-            rttr::metadata("pretty_name", "Pitch"),
-            rttr::metadata("tooltip", "A multiplier for the frequency (sample rate) of the source's buffer."),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 5.0f))
-        .property("volume_rolloff",
-                  &audio_source_component::get_volume_rolloff,
-                  &audio_source_component::set_volume_rolloff)(rttr::metadata("pretty_name", "Volume Rolloff"),
-                                                               rttr::metadata("min", 0.0f),
-                                                               rttr::metadata("max", 10.0f))
-        .property("range", &audio_source_component::get_range, &audio_source_component::set_range)(
-            rttr::metadata("pretty_name", "Range"))
-        .property("clip", &audio_source_component::get_clip, &audio_source_component::set_clip)(
-            rttr::metadata("pretty_name", "Clip"));
-
-    // Register audio_source_component class with entt
     entt::meta_factory<audio_source_component>{}
         .type("audio_source_component"_hs)
         .custom<entt::attributes>(entt::attributes{

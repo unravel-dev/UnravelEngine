@@ -9,10 +9,6 @@ namespace unravel
 
 REFLECT(script)
 {
-    rttr::registration::class_<script>("script")(rttr::metadata("pretty_name", "Script"))
-    .constructor<>()();
-
-    // Register script with entt
     entt::meta_factory<script>{}
         .type("script"_hs)
         .custom<entt::attributes>(entt::attributes{

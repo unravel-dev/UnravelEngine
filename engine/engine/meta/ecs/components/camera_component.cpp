@@ -9,64 +9,19 @@ namespace unravel
 {
 REFLECT(camera_component)
 {
-    // predicates for conditional GUI
-    auto is_ortho = rttr::property_predicate(
-        [](rttr::instance& i)
-        {
-            return i.try_convert<camera_component>()->get_projection_mode() == projection_mode::orthographic;;
-        });
-
-    auto is_perspective = rttr::property_predicate(
-        [](rttr::instance& i)
-        {
-            return i.try_convert<camera_component>()->get_projection_mode() == projection_mode::perspective;;
-        });
-
-    rttr::registration::class_<camera_component>("camera_component")(rttr::metadata("category", "RENDERING"),
-                                                                     rttr::metadata("pretty_name", "Camera"))
-        .constructor<>()
-        .method("component_exists", &component_exists<camera_component>)
-
-        .property("projection_mode", &camera_component::get_projection_mode, &camera_component::set_projection_mode)(
-            rttr::metadata("pretty_name", "Projection Mode"))
-        .property("field_of_view", &camera_component::get_fov, &camera_component::set_fov)(
-            rttr::metadata("pretty_name", "Field Of View"),
-            rttr::metadata("min", 5.0f),
-            rttr::metadata("max", 150.0f),
-            rttr::metadata("predicate", is_perspective))
-        .property("orthographic_size", &camera_component::get_ortho_size, &camera_component::set_ortho_size)(
-            rttr::metadata("pretty_name", "Orthographic Size"),
-            rttr::metadata("min", 0.1f),
-            rttr::metadata("predicate", is_ortho),
-            rttr::metadata("tooltip",
-                           "This is half of the vertical size of the viewing volume.\n"
-                           "Horizontal viewing size varies depending on viewport's aspect ratio.\n"
-                           "Orthographic size is ignored when camera is not orthographic."))
-        .property_readonly("pixels_per_unit", &camera_component::get_ppu)(
-            rttr::metadata("pretty_name", "Pixels Per Unit"),
-            rttr::metadata("tooltip", "Pixels per unit only usable in orthographic mode."))
-        .property_readonly("viewport_size",
-                           &camera_component::get_viewport_size)(rttr::metadata("pretty_name", "Viewport Size"))
-        .property("near_clip_distance", &camera_component::get_near_clip, &camera_component::set_near_clip)(
-            rttr::metadata("pretty_name", "Near Clip"),
-            rttr::metadata("min", 0.1f))
-        .property("far_clip_distance", &camera_component::get_far_clip, &camera_component::set_far_clip)(
-            rttr::metadata("pretty_name", "Far Clip"));
-
-
     auto is_ortho_predicate = entt::property_predicate(
-        [](entt::meta_handle& i)    
+        [](const entt::meta_any& i)    
         {
-            return i->try_cast<camera_component>()->get_projection_mode() == projection_mode::orthographic;
+            return i.try_cast<camera_component>()->get_projection_mode() == projection_mode::orthographic;
         });
 
     auto is_perspective_predicate = entt::property_predicate(
-        [](entt::meta_handle& i)
+        [](const entt::meta_any& i)
         {
-            return i->try_cast<camera_component>()->get_projection_mode() == projection_mode::perspective;
+            return i.try_cast<camera_component>()->get_projection_mode() == projection_mode::perspective;
         });
-    // Register camera_component class with entt
-    entt::meta_factory<camera_component>{}
+
+        entt::meta_factory<camera_component>{}
         .type("camera_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "camera_component"},

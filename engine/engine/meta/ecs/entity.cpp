@@ -505,8 +505,8 @@ SAVE(entity_components<entt::const_handle>)
            
             auto component = obj.entity.try_get<ctype>();
 
-            const auto type = rttr::type::get<ctype>();
-            auto name = type.get_name().to_string();
+            const auto type = entt::resolve<ctype>();
+            auto name = entt::get_name(type);
     
             if(component)
             {
@@ -532,9 +532,9 @@ LOAD(entity_components<entt::handle>)
             }
 
 
-            auto component_type = rttr::type::get<ctype>();
-            auto name = component_type.get_name().to_string();
-            auto pretty_name = rttr::get_pretty_name(component_type);
+            auto component_type = entt::resolve<ctype>();
+            auto name = entt::get_name(component_type);
+            auto pretty_name = entt::get_pretty_name(component_type);
 
             auto has_name = "has_" + name;
             auto pretty_has_name = "Has" + pretty_name;

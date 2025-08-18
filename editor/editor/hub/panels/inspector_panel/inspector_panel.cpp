@@ -20,14 +20,14 @@ namespace unravel
 namespace
 {
 
-auto should_use_prefab_inspection(rttr::variant& selected) -> bool
+auto should_use_prefab_inspection(entt::meta_any& selected) -> bool
 {
-    if(!selected.is_type<entt::handle>())
+    if(selected.type() != entt::resolve<entt::handle>())
     {
         return false;
     }
     
-    auto entity = selected.get_value<entt::handle>();
+    auto entity = selected.cast<entt::handle>();
     if(!entity)
     {
         return false;
@@ -41,14 +41,14 @@ auto should_use_prefab_inspection(rttr::variant& selected) -> bool
  * @param ctx The runtime context
  * @param object The object to inspect
  */
-auto inspect_object_with_prefab_check(rtti::context& ctx, rttr::variant& object) -> void
+auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object) -> void
 {
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
     
     // Check if this object should use prefab inspection
     if(should_use_prefab_inspection(object))
     {
-        auto entity = object.get_value<entt::handle>();
+        auto entity = object.cast<entt::handle>();
 
         if(override_ctx.begin_prefab_inspection(entity))
         {

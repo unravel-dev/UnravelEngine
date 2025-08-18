@@ -6,11 +6,9 @@
 namespace unravel
 {
 
-struct inspector_physics_compound_shape : public inspector
+struct inspector_physics_compound_shape : public crtp_meta_type<inspector_physics_compound_shape, inspector>
 {
-    REFLECTABLEV(inspector_physics_compound_shape, inspector)
-
-    inspect_result inspect(rtti::context& ctx, rttr::variant& var, const var_info& info, const meta_getter& get_metadata);
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_physics_compound_shape, physics_compound_shape)

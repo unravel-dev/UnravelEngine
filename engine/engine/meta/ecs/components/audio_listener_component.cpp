@@ -7,13 +7,6 @@ namespace unravel
 {
 REFLECT(audio_listener_component)
 {
-    rttr::registration::class_<audio_listener_component>("audio_listener_component")(
-        rttr::metadata("category", "AUDIO"),
-        rttr::metadata("pretty_name", "Audio Listener"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<audio_listener_component>);
-
-    // Register audio_listener_component class with entt
     entt::meta_factory<audio_listener_component>{}
         .type("audio_listener_component"_hs)
         .custom<entt::attributes>(entt::attributes{

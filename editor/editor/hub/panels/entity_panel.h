@@ -7,7 +7,6 @@
 
 #include <editor/imgui/integration/imgui.h>
 #include <editor/shortcuts.h>
-#include <rttr/type.h>
 
 namespace unravel
 {

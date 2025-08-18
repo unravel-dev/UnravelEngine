@@ -6,11 +6,9 @@
 namespace unravel
 {
 
-struct inspector_layer : public inspector
+struct inspector_layer : public crtp_meta_type<inspector_layer, inspector>
 {
-    REFLECTABLEV(inspector_layer, inspector)
-
-    inspect_result inspect(rtti::context& ctx, rttr::variant& var, const var_info& info, const meta_getter& get_metadata);
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_layer, layer_mask)

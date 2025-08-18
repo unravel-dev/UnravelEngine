@@ -7,14 +7,9 @@
 namespace unravel
 {
 
-struct inspector_light_component : public inspector
+struct inspector_light_component : public crtp_meta_type<inspector_light_component, inspector>
 {
-    REFLECTABLEV(inspector_light_component, inspector)
-
-    inspect_result inspect(rtti::context& ctx,
-                           rttr::variant& var,
-                           const var_info& info,
-                           const meta_getter& get_metadata);
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_light_component, light_component)

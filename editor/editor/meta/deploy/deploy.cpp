@@ -9,17 +9,31 @@ namespace unravel
 {
 REFLECT(deploy_settings)
 {
-    rttr::registration::class_<deploy_settings>("deploy_settings")(rttr::metadata("pretty_name", "Deploy Options"))
-        .constructor<>()
-        .property("deploy_location",
-                  &deploy_settings::deploy_location)(rttr::metadata("pretty_name", "Deploy Location"),
-                                                   rttr::metadata("tooltip", "Choose the deploy location."))
-        .property("deploy_dependencies", &deploy_settings::deploy_dependencies)(
-            rttr::metadata("pretty_name", "Deploy Dependencies"),
-            rttr::metadata("tooltip", "This takes some time and if already done should't be necessary."))
-        .property("run",
-                  &deploy_settings::deploy_and_run)(rttr::metadata("pretty_name", "Deploy & Run"),
-                                                  rttr::metadata("tooltip", "Run the application after the deploy."));
+    entt::meta_factory<deploy_settings>{}
+        .type("deploy_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Deploy Options"},
+        })
+        .data<&deploy_settings::deploy_location>("deploy_location"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_location"},
+            entt::attribute{"pretty_name", "Deploy Location"},
+            entt::attribute{"tooltip", "Choose the deploy location."},
+        })
+        .data<&deploy_settings::deploy_dependencies>("deploy_dependencies"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_dependencies"},
+            entt::attribute{"pretty_name", "Deploy Dependencies"},
+            entt::attribute{"tooltip", "This takes some time and if already done should't be necessary."},
+        })
+        .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_and_run"},
+            entt::attribute{"pretty_name", "Deploy & Run"},
+            entt::attribute{"tooltip", "Run the application after the deploy."},
+        });
 }
 
 SAVE(deploy_settings)

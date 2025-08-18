@@ -4,6 +4,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 #include <filedialog/filedialog.h>
 #include <limits>
+#include <string>
 #include <string_utils/utils.h>
 
 #include <imgui/imgui_internal.h>
@@ -186,16 +187,17 @@ bool display_size_unit(const char* label,
     return false; // so the caller knows if the value changed
 }
 } // namespace
+
 template<typename T>
 auto inspect_scalar(rtti::context& ctx,
-                    rttr::variant& var,
+                    entt::meta_any& var,
                     const var_info& info,
-                    const inspector::meta_getter& get_metadata,
+                    const entt::meta_custom& custom,
                     const char* format = nullptr) -> inspect_result
 {
     inspect_result result{};
 
-    auto& data = var.get_value<T>();
+    auto& data = var.cast<T&>();
     {
         T min{std::numeric_limits<T>::min()};
         T max{std::numeric_limits<T>::max()};
@@ -203,35 +205,34 @@ auto inspect_scalar(rtti::context& ctx,
         bool has_min{};
         bool has_max{};
 
-        auto min_var = get_metadata("min");
-        if(min_var && min_var.can_convert<T>())
+        auto min_var = entt::get_attribute(custom, "min");
+        if(min_var && min_var.try_cast<T>())
         {
-            min = min_var.convert<T>();
+            min = min_var.cast<T>();
             has_min = true;
         }
 
-        auto max_var = get_metadata("max");
-        if(max_var && max_var.can_convert<T>())
+        auto max_var = entt::get_attribute(custom, "max");
+        if(max_var && max_var.try_cast<T>())
         {
-            max = max_var.convert<T>();
+            max = max_var.cast<T>();
             has_max = true;
         }
 
-        auto step_var = get_metadata("step");
-        if(step_var && step_var.can_convert<float>())
+        auto step_var = entt::get_attribute(custom, "step");
+        if(step_var && step_var.try_cast<float>())
         {
-            step = step_var.convert<float>();
+            step = step_var.cast<float>();
         }
 
-        auto format_var = get_metadata("format");
-        if(format_var && format_var.can_convert<std::string>())
+        auto fmt = entt::get_attribute_as<std::string>(custom, "format");
+        if(!fmt.empty())
         {
-            auto fmt = format_var.convert<std::string>();
             if(fmt == "size")
             {
                 auto storage_data = static_cast<float>(data);
 
-                std::string data_format = get_metadata("format").convert<std::string>();
+                std::string data_format = entt::get_attribute_as<std::string>(custom, "data_format");
                 if(data_format.empty())
                 {
                     data_format = "B";
@@ -284,15 +285,23 @@ auto inspect_scalar(rtti::context& ctx,
         }
     }
 
+
+    if(result.changed)
+    {
+        int a = 0;
+        a++;
+    }
+
     return result;
 }
 
+
 auto inspector_bool::inspect(rtti::context& ctx,
-                             rttr::variant& var,
-                             const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                                 entt::meta_any& var,
+                                 const var_info& info,
+                                 const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<bool>();
+    auto& data = var.cast<bool&>();
     inspect_result result{};
 
     {
@@ -306,94 +315,103 @@ auto inspector_bool::inspect(rtti::context& ctx,
     }
 
     return result;
-}
+}   
+
 
 auto inspector_float::inspect(rtti::context& ctx,
-                              rttr::variant& var,
-                              const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<float>(ctx, var, info, get_metadata);
+    return inspect_scalar<float>(ctx, var, info, custom);
 }
 
+
 auto inspector_double::inspect(rtti::context& ctx,
-                               rttr::variant& var,
-                               const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                                   entt::meta_any& var,
+                                   const var_info& info,
+                                   const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<double>(ctx, var, info, get_metadata);
+    return inspect_scalar<double>(ctx, var, info, custom);
 }
 
 auto inspector_int8::inspect(rtti::context& ctx,
-                             rttr::variant& var,
-                             const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                                 entt::meta_any& var,
+                                 const var_info& info,
+                                 const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<int8_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<int8_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_int16::inspect(rtti::context& ctx,
-                              rttr::variant& var,
-                              const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<int16_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<int16_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_int32::inspect(rtti::context& ctx,
-                              rttr::variant& var,
-                              const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<int32_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<int32_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_int64::inspect(rtti::context& ctx,
-                              rttr::variant& var,
-                              const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<int64_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<int64_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_uint8::inspect(rtti::context& ctx,
-                              rttr::variant& var,
-                              const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<uint8_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<uint8_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_uint16::inspect(rtti::context& ctx,
-                               rttr::variant& var,
-                               const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<uint16_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<uint16_t>(ctx, var, info, custom);
 }
+
 
 auto inspector_uint32::inspect(rtti::context& ctx,
-                               rttr::variant& var,
-                               const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<uint32_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<uint32_t>(ctx, var, info, custom);
 }
 
+
 auto inspector_uint64::inspect(rtti::context& ctx,
-                               rttr::variant& var,
-                               const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                                  entt::meta_any& var,
+                                  const var_info& info,
+                                  const entt::meta_custom& custom) -> inspect_result
 {
-    return inspect_scalar<uint64_t>(ctx, var, info, get_metadata);
+    return inspect_scalar<uint64_t>(ctx, var, info, custom);
 }
 
 auto inspector_string::inspect(rtti::context& ctx,
-                               rttr::variant& var,
+                               entt::meta_any& var,
                                const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                               const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<std::string>();
+    auto& data = var.cast<std::string&>();
 
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_AutoSelectAll;
 
@@ -402,21 +420,9 @@ auto inspector_string::inspect(rtti::context& ctx,
         flags |= ImGuiInputTextFlags_ReadOnly;
     }
 
-    bool multiline = false;
+    bool multiline = entt::get_attribute_as<bool>(custom, "multiline");
 
-    auto multiline_var = get_metadata("multiline");
-    if(multiline_var)
-    {
-        multiline = multiline_var.get_value<bool>();
-    }
-
-    bool wrap = false;
-
-    auto wrap_var = get_metadata("wrap");
-    if(wrap_var)
-    {
-        wrap = wrap_var.get_value<bool>();
-    }
+    bool wrap = entt::get_attribute_as<bool>(custom, "wrap");
 
     inspect_result result{};
 
@@ -437,12 +443,7 @@ auto inspector_string::inspect(rtti::context& ctx,
     }
     result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
-    std::string example;
-    auto example_var = get_metadata("example");
-    if(example_var)
-    {
-        example = example_var.get_value<std::string>();
-    }
+    std::string example = entt::get_attribute_as<std::string>(custom, "example");
 
     if(!example.empty())
     {
@@ -460,12 +461,13 @@ auto inspector_string::inspect(rtti::context& ctx,
     return result;
 }
 
+
 auto inspector_path::inspect(rtti::context& ctx,
-                             rttr::variant& var,
-                             const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                                 entt::meta_any& var,
+                                 const var_info& info,
+                                 const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<fs::path>();
+    auto& data = var.cast<fs::path&>();
 
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_AutoSelectAll;
 
@@ -481,10 +483,10 @@ auto inspector_path::inspect(rtti::context& ctx,
     if(!info.read_only)
     {
         std::string type = "directory";
-        auto type_var = get_metadata("type");
-        if(type_var)
+        auto type_var = entt::get_attribute_as<std::string>(custom, "type");
+        if(!type_var.empty())
         {
-            type = type_var.get_value<std::string>();
+            type = type_var;
         }
 
         if(type == "file")
@@ -532,37 +534,39 @@ auto inspector_path::inspect(rtti::context& ctx,
     return result;
 }
 
-auto inspector_duration_sec_float::inspect(rtti::context& ctx,
-                                           rttr::variant& var,
-                                           const var_info& info,
-                                           const inspector::meta_getter& get_metadata) -> inspect_result
-{
-    auto data = var.get_value<std::chrono::duration<float>>();
-    auto count = data.count();
-    rttr::variant v = count;
 
-    auto result = inspect_scalar<float>(ctx, v, info, get_metadata, "%.3fs");
+auto inspector_duration_sec_float::inspect(rtti::context& ctx,
+                                           entt::meta_any& var,
+                                           const var_info& info,
+                                           const entt::meta_custom& custom) -> inspect_result
+{
+    auto data = var.cast<std::chrono::duration<float>>();
+    auto count = data.count();
+    entt::meta_any v = count;
+
+    auto result = inspect_scalar<float>(ctx, v, info, custom, "%.3fs");
     if(result.changed)
     {
-        count = v.get_value<float>();
+        count = v.cast<float>();
         var = std::chrono::duration<float>(count);
     }
 
     return result;
 }
 
+
 auto inspector_duration_sec_double::inspect(rtti::context& ctx,
-                                            rttr::variant& var,
+                                            entt::meta_any& var,
                                             const var_info& info,
-                                            const inspector::meta_getter& get_metadata) -> inspect_result
+                                            const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<std::chrono::duration<double>>();
+    auto data = var.cast<std::chrono::duration<double>>();
     auto count = data.count();
-    rttr::variant v = count;
-    auto result = inspect_scalar<double>(ctx, v, info, get_metadata, "%.f3s");
+    entt::meta_any v = count;
+    auto result = inspect_scalar<double>(ctx, v, info, custom, "%.f3s");
     if(result.changed)
     {
-        count = v.get_value<double>();
+        count = v.cast<double>();
         var = std::chrono::duration<double>(count);
     }
 
@@ -570,11 +574,11 @@ auto inspector_duration_sec_double::inspect(rtti::context& ctx,
 }
 
 auto inspector_uuid::inspect(rtti::context& ctx,
-                             rttr::variant& var,
+                             entt::meta_any& var,
                              const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                             const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<hpp::uuid>();
+    auto& data = var.cast<hpp::uuid&>();
 
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_AutoSelectAll;
 

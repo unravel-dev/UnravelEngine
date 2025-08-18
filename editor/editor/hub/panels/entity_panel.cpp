@@ -162,7 +162,7 @@ void entity_panel::set_entity_name(entt::handle entity, const std::string& name)
     auto& comp = entity.get_or_emplace<tag_component>();
     comp.name = name;
 
-    prefab_override_context::mark_property_as_changed(entity, rttr::type::get<tag_component>(), "name");
+    prefab_override_context::mark_property_as_changed(entity, entt::resolve<tag_component>(), "name");
 }
 
 } // namespace unravel

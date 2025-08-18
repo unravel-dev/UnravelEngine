@@ -8,17 +8,6 @@ namespace unravel
 
 REFLECT(tag_component)
 {
-    rttr::registration::class_<tag_component>("tag_component")(rttr::metadata("category", "BASIC"),
-                                                               rttr::metadata("pretty_name", "Tag"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<tag_component>)
-
-        .property("name", &tag_component::name)(rttr::metadata("pretty_name", "Name"),
-                                                rttr::metadata("tooltip", "This is the name of the entity."))
-        .property("tag", &tag_component::tag)(rttr::metadata("pretty_name", "Tag"),
-                                              rttr::metadata("tooltip", "This is the tag(group) of the entity."));
-
-    // Register tag_component class with entt
     entt::meta_factory<tag_component>{}
         .type("tag_component"_hs)
         .custom<entt::attributes>(entt::attributes{

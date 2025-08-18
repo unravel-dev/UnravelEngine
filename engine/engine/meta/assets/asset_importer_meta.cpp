@@ -10,11 +10,16 @@ namespace unravel
 {
 REFLECT(asset_importer_meta)
 {
-    rttr::registration::class_<asset_importer_meta>("asset_importer_meta");
-
     // Register asset_importer_meta with entt
     entt::meta_factory<asset_importer_meta>{}
-        .type("asset_importer_meta"_hs);
+        .type("asset_importer_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "asset_importer_meta"},
+            entt::attribute{"pretty_name", "Asset Importer Meta"},
+        })
+        .func<&asset_importer_meta::get_meta_type>("get_meta_type"_hs)
+        .func<&asset_importer_meta::get_static_meta_type>("get_static_meta_type"_hs)
+        .func<&asset_importer_meta::as_derived>("as_derived"_hs);
 }
 
 SAVE(asset_importer_meta)

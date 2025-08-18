@@ -28,12 +28,13 @@ constexpr align_info valigns[] = {
     {ICON_MDI_ALIGN_VERTICAL_BOTTOM, align::baseline, "Baseline"},
 };
 } // namespace
+
 auto inspector_alignment::inspect(rtti::context& ctx,
-                                  rttr::variant& var,
-                                  const var_info& info,
-                                  const meta_getter& get_metadata) -> inspect_result
+                                      entt::meta_any& var,
+                                      const var_info& info,
+                                      const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<alignment>();
+    auto data = var.cast<alignment>();
 
     // fetch current
     uint32_t alignment = data.flags;
@@ -107,12 +108,13 @@ constexpr style_info style_flags[] = {
 };
 } // namespace
 
+
 auto inspector_text_style_flags::inspect(rtti::context& ctx,
-                                   rttr::variant& var,
-                                   const var_info& info,
-                                   const meta_getter& get_metadata) -> inspect_result
+                                              entt::meta_any& var,
+                                              const var_info& info,
+                                              const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<text_style_flags>();
+    auto data = var.cast<text_style_flags>();
 
     inspect_result result;
     for(auto [icon, flag, tooltip] : style_flags)
@@ -136,7 +138,8 @@ auto inspector_text_style_flags::inspect(rtti::context& ctx,
 
     return result;
 }
-void inspector_text_style::before_inspect(const rttr::property& prop)
+
+void inspector_text_style::before_inspect(const entt::meta_data& prop)
 {
     layout_ = std::make_unique<property_layout>();
     layout_->set_data(prop, false);
@@ -144,16 +147,16 @@ void inspector_text_style::before_inspect(const rttr::property& prop)
 }
 
 auto inspector_text_style::inspect(rtti::context& ctx,
-                                   rttr::variant& var,
-                                   const var_info& info,
-                                   const meta_getter& get_metadata) -> inspect_result
+                                       entt::meta_any& var,
+                                       const var_info& info,
+                                       const entt::meta_custom& custom) -> inspect_result
 {
     if(!open_)
     {
         return {};
     }
     // Pull out a mutable copy
-    auto result = inspect_var_properties(ctx, var, info, get_metadata);
+    auto result = inspect_var_properties(ctx, var, info, custom);
 
     return result;
 }

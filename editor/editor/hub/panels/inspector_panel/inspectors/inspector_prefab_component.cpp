@@ -23,12 +23,13 @@ namespace
 
 } // anonymous namespace
 
+
 auto inspector_prefab_component::inspect(rtti::context& ctx,
-                                        rttr::variant& var,
+                                        entt::meta_any& var,
                                         const var_info& info,
-                                        const meta_getter& get_metadata) -> inspect_result
+                                        const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = *var.get_value<prefab_component*>();
+    auto& data = var.cast<prefab_component&>();
     inspect_result result{};
 
     auto root_prefab_entity = data.get_owner();
@@ -188,7 +189,7 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
     
     ImGui::NewLine();
 
-    result |= inspect_var_properties(ctx, var, info, get_metadata);
+    result |= inspect_var_properties(ctx, var, info, custom);
 
     if(result.changed)
     {

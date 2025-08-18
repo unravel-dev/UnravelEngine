@@ -8,60 +8,24 @@ namespace unravel
 {
 REFLECT(reflection_probe)
 {
-    auto box_predicate = rttr::property_predicate(
-        [](rttr::instance& obj)
-        {
-            auto data = obj.try_convert<reflection_probe>();
-            return data->type == probe_type::box;
-        });
-    auto sphere_predicate = rttr::property_predicate(
-        [](rttr::instance& obj)
-        {
-            auto data = obj.try_convert<reflection_probe>();
-            return data->type == probe_type::sphere;
-        });
-
-    rttr::registration::enumeration<probe_type>("probe_type")(rttr::value("Box", probe_type::box),
-                                                              rttr::value("Sphere", probe_type::sphere));
-    rttr::registration::enumeration<reflect_method>("reflect_method")(
-        rttr::value("Environment", reflect_method::environment),
-        rttr::value("Static Only", reflect_method::static_only));
-    rttr::registration::class_<reflection_probe::box>("box")
-        .property("extents", &reflection_probe::box::extents)(rttr::metadata("pretty_name", "Extents"))
-        .property("transition_distance",
-                  &reflection_probe::box::transition_distance)(rttr::metadata("pretty_name", "Transition Distance"),
-                                                               rttr::metadata("min", 0.0f));
-    rttr::registration::class_<reflection_probe::sphere>("sphere").property("range", &reflection_probe::sphere::range)(
-        rttr::metadata("pretty_name", "Range"),
-        rttr::metadata("min", 0.0f));
-    rttr::registration::class_<reflection_probe>("reflection_probe")
-        .property("type", &reflection_probe::type)(rttr::metadata("pretty_name", "Type"))
-        .property("method", &reflection_probe::method)(rttr::metadata("pretty_name", "Method"))
-        .property("intensity", &reflection_probe::intensity)(rttr::metadata("pretty_name", "Intensity"),
-                                                             rttr::metadata("min", 0.1f),
-                                                             rttr::metadata("max", 3.0f))
-        .property("box_data", &reflection_probe::box_data)(rttr::metadata("pretty_name", "Box"),
-                                                           rttr::metadata("predicate", box_predicate))
-        .property("sphere_data", &reflection_probe::sphere_data)(rttr::metadata("pretty_name", "Sphere"),
-                                                                 rttr::metadata("predicate", sphere_predicate));
-
     auto box_predicate_entt = entt::property_predicate(
-        [](entt::meta_handle& obj)
+        [](const entt::meta_any& obj)
         {
-            auto data = obj->try_cast<reflection_probe>();
+            auto data = obj.try_cast<reflection_probe>();
             return data->type == probe_type::box;
         });
     auto sphere_predicate_entt = entt::property_predicate(
-        [](entt::meta_handle& obj)
+        [](const entt::meta_any& obj)
         {
-            auto data = obj->try_cast<reflection_probe>();
+            auto data = obj.try_cast<reflection_probe>();
             return data->type == probe_type::sphere;
         });
     // EnTT meta registration mirroring RTTR
     entt::meta_factory<probe_type>{}
         .type("probe_type"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "probe_type"},
+            entt::attribute{"name", "probe_type"},  
+            entt::attribute{"pretty_name", "Probe Type"},
         })
         .data<probe_type::box>("box"_hs)
         .custom<entt::attributes>(entt::attributes{ 
@@ -78,6 +42,7 @@ REFLECT(reflection_probe)
         .type("reflect_method"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reflect_method"},
+            entt::attribute{"pretty_name", "Reflect Method"},
         })
         .data<reflect_method::environment>("environment"_hs)
         .custom<entt::attributes>(entt::attributes{ 
@@ -94,6 +59,7 @@ REFLECT(reflection_probe)
         .type("box"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "box"},
+            entt::attribute{"pretty_name", "Box"},
         })
         .data<&reflection_probe::box::extents>("extents"_hs)
         .custom<entt::attributes>(entt::attributes{ 
@@ -111,6 +77,7 @@ REFLECT(reflection_probe)
         .type("sphere"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sphere"},
+            entt::attribute{"pretty_name", "Sphere"},
         })
         .data<&reflection_probe::sphere::range>("range"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -123,6 +90,7 @@ REFLECT(reflection_probe)
         .type("reflection_probe"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reflection_probe"},
+            entt::attribute{"pretty_name", "Reflection Probe"},
         })
         .data<&reflection_probe::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{ 

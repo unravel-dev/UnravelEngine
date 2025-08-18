@@ -2,11 +2,12 @@
 #include "editor/hub/panels/entity_panel.h"
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
+#include "entt/core/any.hpp"
 #include "property_path_generator.h"
-
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
+#include "reflection/reflection.h"
 #include "string_utils/utils.h"
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
@@ -21,7 +22,6 @@
 #include <unordered_map>
 #include <vector>
 
-
 namespace unravel
 {
 namespace
@@ -30,18 +30,18 @@ int debug_view{0};
 }
 inspector_registry::inspector_registry()
 {
-    auto inspector_types = rttr::type::get<inspector>().get_derived_classes();
+    auto base_inspector_type = entt::resolve<inspector>();
+    auto inspector_types = entt::get_derived_types(base_inspector_type);
     for(auto& inspector_type : inspector_types)
     {
-        auto inspected_type_var = inspector_type.get_metadata("inspected_type");
+        auto inspected_type_var = entt::get_attribute(inspector_type, "inspected_type");
         if(inspected_type_var)
         {
-            auto inspected_type = inspected_type_var.get_value<rttr::type>();
-            auto inspector_var = inspector_type.create();
-            if(inspector_var)
-            {
-                type_map[inspected_type] = inspector_var.get_value<std::shared_ptr<inspector>>();
-            }
+            // auto inspected_type = inspected_type_var.cast<entt::meta_type>();
+            inspector_type.invoke("create_and_register"_hs,
+                                  {},
+                                  inspected_type_var,
+                                  entt::forward_as_meta(type_map));
         }
     }
 }
@@ -248,39 +248,39 @@ void prefab_override_context::mark_transform_as_changed(entt::handle entity,
 {
     if(position)
     {
-        mark_property_as_changed(entity, rttr::type::get<transform_component>(), "local_transform/position");
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "local_transform/position");
     }
     if(rotation)
     {
-        mark_property_as_changed(entity, rttr::type::get<transform_component>(), "local_transform/rotation");
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "local_transform/rotation");
     }
     if(scale)
     {
-        mark_property_as_changed(entity, rttr::type::get<transform_component>(), "local_transform/scale");
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "local_transform/scale");
     }
     if(skew)
     {
-        mark_property_as_changed(entity, rttr::type::get<transform_component>(), "local_transform/skew");
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "local_transform/skew");
     }
 }
 
 void prefab_override_context::mark_active_as_changed(entt::handle entity)
 {
-    mark_property_as_changed(entity, rttr::type::get<transform_component>(), "active");
+    mark_property_as_changed(entity, entt::resolve<transform_component>(), "active");
 }
 
 void prefab_override_context::mark_text_area_as_changed(entt::handle entity)
 {
-    mark_property_as_changed(entity, rttr::type::get<text_component>(), "area");
+    mark_property_as_changed(entity, entt::resolve<text_component>(), "area");
 }
 
 void prefab_override_context::mark_material_as_changed(entt::handle entity)
 {
-    mark_property_as_changed(entity, rttr::type::get<model_component>(), "model/materials");
+    mark_property_as_changed(entity, entt::resolve<model_component>(), "model/materials");
 }
 
 void prefab_override_context::mark_property_as_changed(entt::handle entity,
-                                                       const rttr::type& component_type,
+                                                       const entt::meta_type& component_type,
                                                        const std::string& property_path)
 {
     auto prefab_root = find_prefab_root_entity(entity);
@@ -288,8 +288,8 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
     {
         auto prefab_comp = prefab_root.try_get<prefab_component>();
         auto entity_uuid = get_entity_prefab_uuid(entity);
-        auto component_type_name = component_type.get_name().to_string();
-        auto component_pretty_type_name = rttr::get_pretty_name(component_type);
+        auto component_type_name = entt::get_name(component_type);
+        auto component_pretty_type_name = entt::get_pretty_name(component_type);
 
         auto& ctx = engine::context();
         auto& prefab_override_ctx = ctx.get_cached<prefab_override_context>();
@@ -308,14 +308,13 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
 
             for(auto& token : tokens)
             {
-                auto prop = type.get_property(token);
-                auto prop_type = prop.get_type();
+                auto prop = type.data(entt::hashed_string(token.c_str()));
+                auto prop_type = prop.type();
 
                 current_path += "/" + token;
-                current_pretty_path += "/" + rttr::get_pretty_name(prop);
+                current_pretty_path += "/" + entt::get_pretty_name(prop);
 
                 type = prop_type;
-
             }
 
             prefab_comp->add_override(entity_uuid, current_path, current_pretty_path);
@@ -356,8 +355,8 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     if(entity_uuid.is_nil())
     {
         return false;
-    } 
-    
+    }
+
     auto etype = entt::resolve(entt::hashed_string(component_type.c_str()));
     if(!etype)
     {
@@ -403,7 +402,7 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     if(!exists)
     {
         return false;
-    }    
+    }
 
     if(etype == entt::resolve<script_component>())
     {
@@ -422,64 +421,57 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     return true;
 }
 
-auto get_inspector(rtti::context& ctx, const rttr::type& type) -> std::shared_ptr<inspector>
+auto get_inspector(rtti::context& ctx, const entt::meta_type& type) -> std::shared_ptr<inspector>
 {
     auto& registry = ctx.get_cached<inspector_registry>();
-    return registry.type_map[type];
-}
-
-auto are_property_values_equal(const rttr::variant& val1, const rttr::variant& val2) -> bool
-{
-    if(!val1.is_valid() || !val2.is_valid())
+    auto it = registry.type_map.find(type.info().index());
+    if(it == registry.type_map.end())
     {
-        return val1.is_valid() == val2.is_valid();
+        return nullptr;
     }
 
-    if(val1.get_type() != val2.get_type())
-    {
-        return false;
-    }
-
-    return val1 == val2;
+    return it->second;
 }
 
-auto is_property_visible(rttr::instance& object, const rttr::property& prop) -> bool
+auto is_property_visible(entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
-    auto predicate_meta = prop.get_metadata("predicate");
-    if(predicate_meta.can_convert<std::function<bool(rttr::instance&)>>())
+    auto predicate_meta = entt::get_attribute(prop, "predicate");
+    if(predicate_meta.try_cast<std::function<bool(entt::meta_handle&)>>())
     {
-        auto pred = predicate_meta.get_value<std::function<bool(rttr::instance&)>>();
-        return pred(object);
+        auto pred = predicate_meta.cast<std::function<bool(entt::meta_handle&)>>();
+        entt::meta_handle object_handle = object;
+        return pred(object_handle);
     }
 
     return true;
 }
 
-auto is_property_readonly(rttr::instance& object, const rttr::property& prop) -> bool
+auto is_property_readonly(entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
-    auto predicate_meta = prop.get_metadata("readonly_predicate");
-    if(predicate_meta.can_convert<std::function<bool(rttr::instance&)>>())
+    auto predicate_meta = entt::get_attribute(prop, "readonly_predicate");
+    if(predicate_meta.try_cast<std::function<bool(entt::meta_handle&)>>())
     {
-        auto pred = predicate_meta.get_value<std::function<bool(rttr::instance&)>>();
-        return pred(object);
+        auto pred = predicate_meta.cast<std::function<bool(entt::meta_handle&)>>();
+        entt::meta_handle object_handle = object;
+        return pred(object_handle);
     }
 
     return false;
 }
 
-auto is_property_flattable(rttr::instance& object, const rttr::property& prop) -> bool
+auto is_property_flattable(entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
-    auto predicate_meta = prop.get_metadata("flattable");
-    if(predicate_meta.can_convert<bool>())
+    auto predicate_meta = entt::get_attribute(prop, "flattable");
+    if(predicate_meta.try_cast<bool>())
     {
-        auto pred = predicate_meta.get_value<bool>();
+        auto pred = predicate_meta.cast<bool>();
         return pred;
     }
 
     return false;
 }
 
-auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::property& prop) -> inspect_result
+auto inspect_property(rtti::context& ctx, entt::meta_any& object, const entt::meta_data& prop) -> inspect_result
 {
     if(!is_property_visible(object, prop))
     {
@@ -487,16 +479,20 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
     }
 
     inspect_result result{};
-    auto prop_var = prop.get_value(object);
-    bool is_readonly = prop.is_readonly() || is_property_readonly(object, prop);
+    auto prop_var = prop.get(object);
+    entt::as_derived(prop_var);
+    bool is_readonly = prop.is_const() || is_property_readonly(object, prop);
+
+    auto prop_type = prop_var.type();
+
     bool is_flattable = is_property_flattable(object, prop);
-    bool is_array = prop_var.is_sequential_container();
-    bool is_associative_container = prop_var.is_associative_container();
-    bool is_enum = prop.is_enumeration();
-    rttr::instance prop_object = prop_var;
-    auto prop_type = prop_object.get_derived_type();
+    bool is_array = prop_type.is_sequence_container();
+    bool is_associative_container = prop_type.is_associative_container();
+    bool is_enum = prop_type.is_enum();
     auto prop_inspector = get_inspector(ctx, prop_type);
-    auto pretty_name = rttr::get_pretty_name(prop);
+
+    auto prop_name = entt::get_name(prop);
+    auto pretty_name = entt::get_pretty_name(prop);
 
     is_readonly |= ImGui::IsReadonly();
 
@@ -506,7 +502,7 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
 
     // Push property name to path context for flattable properties too
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
-    override_ctx.push_segment(prop.get_name().to_string(), pretty_name);
+    override_ctx.push_segment(prop_name, pretty_name);
 
     if(prop_inspector)
     {
@@ -516,29 +512,24 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
     ImGui::PushReadonly(is_readonly);
 
     {
-        auto get_meta = [&prop](const rttr::variant& name) -> rttr::variant
-        {
-            return prop.get_metadata(name);
-        };
         if(is_array)
         {
-            result |= inspect_array(ctx, prop_var, prop, info, get_meta);
+            result |= inspect_array(ctx, prop_var, prop, info, prop.custom());
         }
         else if(is_associative_container)
         {
-            result |= inspect_associative_container(ctx, prop_var, prop, info, get_meta);
+            result |= inspect_associative_container(ctx, prop_var, prop, info, prop.custom());
         }
         else if(is_enum)
         {
-            auto enumeration = prop.get_enumeration();
             property_layout layout(prop);
-            result |= inspect_enum(ctx, prop_var, enumeration, info);
+            result |= inspect_enum(ctx, prop_var, info);
         }
         else
         {
             if(prop_inspector)
             {
-                result |= inspect_var(ctx, prop_var, info, get_meta);
+                result |= inspect_var(ctx, prop_var, info, prop.custom());
             }
             else if(!is_flattable)
             {
@@ -551,7 +542,7 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
                 {
                     ImGui::TreePush(pretty_name.c_str());
 
-                    result |= inspect_var(ctx, prop_var, info, get_meta);
+                    result |= inspect_var(ctx, prop_var, info, prop.custom());
 
                     ImGui::TreePop();
                     ImGui::TreePop();
@@ -561,7 +552,7 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
             {
                 ImGui::PushID(pretty_name.c_str());
 
-                result |= inspect_var(ctx, prop_var, info, get_meta);
+                result |= inspect_var(ctx, prop_var, info, prop.custom());
 
                 ImGui::PopID();
             }
@@ -570,7 +561,7 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
 
     if(result.changed && !is_readonly)
     {
-        prop.set_value(object, prop_var);
+        prop.set(object, prop_var);
 
         override_ctx.record_override();
     }
@@ -589,32 +580,27 @@ auto inspect_property(rtti::context& ctx, rttr::instance& object, const rttr::pr
 }
 
 auto inspect_array(rtti::context& ctx,
-                   rttr::variant& var,
-                   const rttr::property& prop,
+                   entt::meta_any& var,
+                   const entt::meta_data& prop,
                    const var_info& info,
-                   const inspector::meta_getter& get_metadata) -> inspect_result
+                   const entt::meta_custom& custom) -> inspect_result
 {
-    auto name = rttr::get_pretty_name(prop);
+    auto name = entt::get_pretty_name(prop);
 
-    std::string tooltip{};
-    auto meta_tooltip = prop.get_metadata("tooltip");
-    if(meta_tooltip)
-    {
-        tooltip = meta_tooltip.get_value<std::string>();
-    }
+    auto tooltip = entt::get_attribute_as<std::string>(prop, "tooltip");
 
-    return inspect_array(ctx, var, name, tooltip, info, get_metadata);
+    return inspect_array(ctx, var, name, tooltip, info, custom);
 }
 
 auto inspect_array(rtti::context& ctx,
-                   rttr::variant& var,
+                   entt::meta_any& var,
                    const std::string& name,
                    const std::string& tooltip,
                    const var_info& info,
-                   const inspector::meta_getter& get_metadata) -> inspect_result
+                   const entt::meta_custom& custom) -> inspect_result
 {
-    auto view = var.create_sequential_view();
-    auto size = view.get_size();
+    auto view = var.as_sequence_container();
+    auto size = view.size();
     inspect_result result{};
     auto int_size = static_cast<int>(size);
 
@@ -624,18 +610,14 @@ auto inspect_array(rtti::context& ctx,
 
     bool open = layout.push_tree_layout();
 
-    auto readonly_count_var = get_metadata("readonly_count");
-    int readonly_count = 0;
-    if(readonly_count_var && readonly_count_var.can_convert<int>())
+    int readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
     {
-        readonly_count = readonly_count_var.convert<int>();
-    }
+        bool resizeable = view.resize(size);
 
-    {
         ImGuiInputTextFlags flags = 0;
         int step = 1;
         int step_fast = 100;
-        bool readonly = info.read_only || !view.is_dynamic();
+        bool readonly = info.read_only || !resizeable;
         if(readonly)
         {
             step = 0;
@@ -648,8 +630,12 @@ auto inspect_array(rtti::context& ctx,
         if(ImGui::InputInt("##array", &int_size, step, step_fast, flags))
         {
             int_size = std::max(readonly_count, int_size);
-            size = static_cast<std::size_t>(int_size);
-            result.changed |= view.set_size(size);
+
+            if(view.resize(static_cast<std::size_t>(int_size)))
+            {
+                size = static_cast<std::size_t>(int_size);
+                result.changed = true;
+            }
             result.edit_finished = true;
         }
         ImGui::PopReadonly();
@@ -666,7 +652,7 @@ auto inspect_array(rtti::context& ctx,
         int index_to_remove = -1;
         for(std::size_t i = 0; i < size; ++i)
         {
-            auto value = view.get_value(i).extract_wrapped_value();
+            auto value = view[i];
             std::string element = "Element ";
             element += std::to_string(i);
 
@@ -693,7 +679,7 @@ auto inspect_array(rtti::context& ctx,
                 //     override_ctx.pretty_path_context.push_segment(array_index_segment);
                 // }
 
-                result |= inspect_var(ctx, value, item_info, get_metadata);
+                result |= inspect_var(ctx, value, item_info, custom);
 
                 // Pop array index from property path
                 // if(override_ctx.is_active)
@@ -708,10 +694,10 @@ auto inspect_array(rtti::context& ctx,
 
             if(result.changed)
             {
-                view.set_value(i, value);
+                view[i] = value;
             }
 
-            if(!item_info.read_only && view.is_dynamic())
+            if(!item_info.read_only) // && view.is_dynamic())
             {
                 ImGui::SetCursorPos(pos_before);
 
@@ -730,7 +716,9 @@ auto inspect_array(rtti::context& ctx,
 
         if(index_to_remove != -1)
         {
-            view.erase(view.begin() + index_to_remove);
+            auto it = view.begin();
+            std::advance(it, index_to_remove);
+            view.erase(it);
             result.changed = true;
             result.edit_finished = true;
         }
@@ -744,13 +732,13 @@ auto inspect_array(rtti::context& ctx,
 }
 
 auto inspect_associative_container(rtti::context& ctx,
-                                   rttr::variant& var,
-                                   const rttr::property& prop,
+                                   entt::meta_any& var,
+                                   const entt::meta_data& prop,
                                    const var_info& info,
-                                   const inspector::meta_getter& get_metadata) -> inspect_result
+                                   const entt::meta_custom& custom) -> inspect_result
 {
-    auto view = var.create_associative_view();
-    auto size = view.get_size();
+    auto view = var.as_associative_container();
+    auto size = view.size();
     auto int_size = static_cast<int>(size);
 
     inspect_result result{};
@@ -838,58 +826,91 @@ auto inspect_associative_container(rtti::context& ctx,
     //         result.edit_finished = true;
     //     }
     // }
-
     return result;
 }
 
-auto inspect_enum(rtti::context& ctx,
-                  rttr::variant& var,
-                  rttr::enumeration& data,
-                  const var_info& info) -> inspect_result
+auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const var_info& info) -> inspect_result
 {
-    auto current_name = data.value_to_name(var);
-
-    auto strings = data.get_names();
-    std::vector<const char*> cstrings{};
-    cstrings.reserve(strings.size());
+    auto edited = var;
+    if(!edited.allow_cast<int64_t>())
+    {
+        return {};
+    }
+    auto current_value = edited.cast<int64_t>();
 
     int current_idx = 0;
     int i = 0;
-    for(const auto& string : strings)
-    {
-        cstrings.push_back(string.data());
 
-        if(current_name == string)
+    auto type = var.type();
+
+    struct enum_value
+    {
+        std::string name;
+        std::string pretty_name;
+        int64_t value{};
+    };
+
+    std::vector<enum_value> names;
+    for(auto kvp : type.data())
+    {
+        const auto& data = kvp.second;
+        auto name = entt::get_name(data);
+        auto pretty_name = entt::get_pretty_name(data);
+        auto value = data.get(var);
+
+        int64_t value64 = 0;
+        if(value.allow_cast<int64_t>())
+        {
+            value64 = value.cast<int64_t>();
+        }
+        else
+        {
+            continue;
+        }
+        names.emplace_back(name, pretty_name, value64);
+
+        if(value64 == current_value)
         {
             current_idx = i;
         }
-        i++;
+        ++i;
+    }
+
+    if(current_idx >= static_cast<int>(names.size()))
+    {
+        return {};
     }
 
     inspect_result result{};
 
     if(info.read_only)
     {
-        ImGui::LabelText("##enum", "%s", cstrings[current_idx]);
+        ImGui::LabelText("##enum", "%s", names[current_idx].pretty_name.c_str());
     }
     else
     {
-        int listbox_item_size = static_cast<int>(cstrings.size());
+        int listbox_item_size = static_cast<int>(names.size());
 
         ImGuiComboFlags flags = 0;
 
-        if(ImGui::BeginCombo("##enum", cstrings[current_idx], flags))
+        if(ImGui::BeginCombo("##enum", names[current_idx].pretty_name.c_str(), flags))
         {
             for(int n = 0; n < listbox_item_size; n++)
             {
                 const bool is_selected = (current_idx == n);
 
-                if(ImGui::Selectable(cstrings[n], is_selected))
+                if(ImGui::Selectable(names[n].pretty_name.c_str(), is_selected))
                 {
                     current_idx = n;
                     result.changed = true;
                     result.edit_finished |= true;
-                    var = data.name_to_value(cstrings[current_idx]);
+
+                    edited = names[n].value;
+
+                    if(edited.allow_cast(var.type()))
+                    {
+                        var = std::move(edited);
+                    }
                 }
 
                 ImGui::DrawItemActivityOutline();
@@ -906,12 +927,12 @@ auto inspect_enum(rtti::context& ctx,
     return result;
 }
 
-auto refresh_inspector(rtti::context& ctx, rttr::type type) -> void
+auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void
 {
     auto& registry = ctx.get_cached<inspector_registry>();
 
     // Find the inspector for the given type
-    auto it = registry.type_map.find(type);
+    auto it = registry.type_map.find(type.id());
     if(it != registry.type_map.end())
     {
         // Call refresh on the inspector
@@ -919,18 +940,13 @@ auto refresh_inspector(rtti::context& ctx, rttr::type type) -> void
     }
 }
 
-auto get_meta_empty(const rttr::variant& other) -> rttr::variant
-{
-    return rttr::variant();
-}
-
 auto inspect_var(rtti::context& ctx,
-                 rttr::variant& var,
+                 entt::meta_any& var,
                  const var_info& info,
-                 const inspector::meta_getter& get_metadata) -> inspect_result
+                 const entt::meta_custom& custom) -> inspect_result
 {
-    rttr::instance object = var;
-    auto type = object.get_derived_type();
+    entt::as_derived(var);
+    auto type = var.type();
 
     inspect_result result{};
 
@@ -939,11 +955,11 @@ auto inspect_var(rtti::context& ctx,
     auto inspector = get_inspector(ctx, type);
     if(inspector)
     {
-        result |= inspector->inspect(ctx, var, info, get_metadata);
+        result |= inspector->inspect(ctx, var, info, custom);
     }
     else
     {
-        result |= inspect_var_properties(ctx, var, info, get_metadata);
+        result |= inspect_var_properties(ctx, var, info, custom);
     }
 
     // Record override if this was a property change in a prefab instance
@@ -958,37 +974,35 @@ auto inspect_var(rtti::context& ctx,
     return result;
 }
 
-auto inspect_var_properties(rtti::context& ctx,
-                            rttr::variant& var,
+auto inspect_var_properties_impl(rtti::context& ctx,
+                            entt::meta_any& var,
+                            const entt::meta_type& type,
                             const var_info& info,
-                            const inspector::meta_getter& get_metadata) -> inspect_result
+                            const entt::meta_custom& custom) -> inspect_result
 {
-    rttr::instance object = var;
-    auto type = object.get_derived_type();
-    auto properties = type.get_properties();
+    auto properties = type.data();
 
     inspect_result result{};
-    if(properties.empty())
+    if(properties.begin() == properties.end())
     {
-        if(type.is_enumeration())
+        if(type.is_enum())
         {
-            auto enumeration = type.get_enumeration();
-            result |= inspect_enum(ctx, var, enumeration, info);
+            result |= inspect_enum(ctx, var, info);
         }
 
-        if(type.is_sequential_container())
+        if(type.is_sequence_container())
         {
-            result |= inspect_array(ctx, var, "", "", info, get_metadata);
+            result |= inspect_array(ctx, var, "", "", info, custom);
         }
     }
     else
     {
-        std::vector<std::pair<std::string, std::vector<rttr::property>>> grouped_props;
-        for(auto& prop : properties)
+        std::vector<std::pair<std::string, std::vector<entt::meta_data>>> grouped_props;
+        for(auto kvp : properties)
         {
+            const auto& prop = kvp.second;
             // figure out the group name ("" if none)
-            auto meta = prop.get_metadata("group");
-            std::string group = meta.can_convert<std::string>() ? meta.convert<std::string>() : "";
+            auto group = entt::get_attribute_as<std::string>(prop, "group");
 
             // try to find an existing entry for this group
             auto it = std::find_if(grouped_props.begin(),
@@ -1001,7 +1015,7 @@ auto inspect_var_properties(rtti::context& ctx,
             if(it == grouped_props.end())
             {
                 // first time we see this group: append a new pair
-                grouped_props.emplace_back(group, std::vector<rttr::property>{prop});
+                grouped_props.emplace_back(group, std::vector<entt::meta_data>{prop});
             }
             else
             {
@@ -1021,7 +1035,7 @@ auto inspect_var_properties(rtti::context& ctx,
                 for(auto& prop : props)
                 {
                     ImGui::PushID(i);
-                    result |= inspect_property(ctx, object, prop);
+                    result |= inspect_property(ctx, var, prop);
                     ImGui::PopID();
                     i++;
                 }
@@ -1037,7 +1051,7 @@ auto inspect_var_properties(rtti::context& ctx,
                     for(auto& prop : props)
                     {
                         ImGui::PushID(i);
-                        result |= inspect_property(ctx, object, prop);
+                        result |= inspect_property(ctx, var, prop);
                         ImGui::PopID();
                         i++;
                     }
@@ -1050,6 +1064,25 @@ auto inspect_var_properties(rtti::context& ctx,
     }
 
     return result;
+}
+
+
+auto inspect_var_properties(rtti::context& ctx,
+                            entt::meta_any& var,
+                            const var_info& info,
+                            const entt::meta_custom& custom) -> inspect_result
+{
+    inspect_result result{};
+    for(auto base : var.type().base())
+    {
+        result |= inspect_var_properties_impl(ctx, var, base.second, info, custom);
+    }
+
+    entt::as_derived(var);
+    result |= inspect_var_properties_impl(ctx, var, var.type(), info, custom);
+
+    return result;
+
 }
 
 } // namespace unravel

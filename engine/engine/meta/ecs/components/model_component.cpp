@@ -14,27 +14,6 @@ namespace unravel
 
 REFLECT(model_component)
 {
-    rttr::registration::class_<model_component>("model_component")(rttr::metadata("category", "RENDERING"),
-                                                                   rttr::metadata("pretty_name", "Model"))
-        .constructor<>()
-        .method("component_exists", &component_exists<model_component>)
-
-        .property("enabled", &model_component::is_enabled, &model_component::set_enabled)(
-            rttr::metadata("pretty_name", "Enabled"),
-            rttr::metadata("tooltip", "Is the model visible?"))
-        .property("static", &model_component::is_static, &model_component::set_static)(
-            rttr::metadata("pretty_name", "Static"),
-            rttr::metadata("tooltip", "Is the model static?"))
-        .property("casts_shadow", &model_component::casts_shadow, &model_component::set_casts_shadow)(
-            rttr::metadata("pretty_name", "Casts Shadow"),
-            rttr::metadata("tooltip", "Is the model casting shadows?"))
-        .property("casts_reflection", &model_component::casts_reflection, &model_component::set_casts_reflection)(
-            rttr::metadata("pretty_name", "Casts Reflection"),
-            rttr::metadata("tooltip", "Is the model participating in reflection generation?"))
-        .property("model", &model_component::get_model, &model_component::set_model)(
-            rttr::metadata("pretty_name", "Model"));
-
-    // Register model_component class with entt
     entt::meta_factory<model_component>{}
         .type("model_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -122,15 +101,6 @@ LOAD_INSTANTIATE(model_component, ser20::iarchive_binary_t);
 
 REFLECT(bone_component)
 {
-    rttr::registration::class_<bone_component>("bone_component")(rttr::metadata("category", "RENDERING"),
-                                                                 rttr::metadata("pretty_name", "Bone"))
-        .constructor<>()
-        .method("component_exists", &component_exists<bone_component>)
-        .property_readonly("bone_index", &bone_component::bone_index)(
-            rttr::metadata("pretty_name", "Bone Index"),
-            rttr::metadata("tooltip", "The bone index this object represents."));
-
-    // Register bone_component class with entt
     entt::meta_factory<bone_component>{}
         .type("bone_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -163,15 +133,6 @@ LOAD_INSTANTIATE(bone_component, ser20::iarchive_binary_t);
 
 REFLECT(submesh_component)
 {
-    rttr::registration::class_<submesh_component>("submesh_component")(rttr::metadata("category", "RENDERING"),
-                                                                       rttr::metadata("pretty_name", "Submesh"))
-        .constructor<>()
-        .method("component_exists", &component_exists<submesh_component>)
-        .property_readonly("submeshes", &submesh_component::submeshes)(
-            rttr::metadata("pretty_name", "Submeshes"),
-            rttr::metadata("tooltip", "Submeshes affected by this node."));
-
-    // Register submesh_component class with entt
     entt::meta_factory<submesh_component>{}
         .type("submesh_component"_hs)
         .custom<entt::attributes>(entt::attributes{

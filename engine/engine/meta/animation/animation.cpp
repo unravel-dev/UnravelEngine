@@ -11,32 +11,11 @@ namespace unravel
 
 REFLECT(root_motion_params)
 {
-    rttr::registration::class_<root_motion_params>("root_motion_params")
-        .constructor<>()()
-        .property("keep_position_y", &root_motion_params::keep_position_y)(
-            rttr::metadata("pretty_name", "Keep Position Y"),
-            rttr::metadata("tooltip", "Root position t components are not affected by animation."))
-        .property("keep_position_xz", &root_motion_params::keep_position_xz)(
-            rttr::metadata("pretty_name", "Keep Position XZ"),
-            rttr::metadata("tooltip", "Root position x,z components are not affected by animation."))
-        .property("keep_rotation", &root_motion_params::keep_rotation)(
-            rttr::metadata("pretty_name", "Keep Rotation"),
-            rttr::metadata("tooltip", "Root rotation is not affected by animaation."))
-        .property("keep_in_place", &root_motion_params::keep_in_place)(
-            rttr::metadata("pretty_name", "Keep In Place"),
-            rttr::metadata("tooltip", "Keep the animation in place even if it has root motion in it."))
-        .property_readonly("position_node_name", &root_motion_params::position_node_name)(
-            rttr::metadata("pretty_name", "Root Motion Position Node"),
-            rttr::metadata("tooltip", "Transform node that will be used for root motion."))
-        .property_readonly("rotation_node_name", &root_motion_params::rotation_node_name)(
-            rttr::metadata("pretty_name", "Root Motion Rotation Node"),
-            rttr::metadata("tooltip", "Rotation node that will be used for root motion."));
-
-    // Register root_motion_params with entt
     entt::meta_factory<root_motion_params>{}
         .type("root_motion_params"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "root_motion_params"},
+            entt::attribute{"pretty_name", "Root Motion Params"},
         })
         .data<&root_motion_params::keep_position_y>("keep_position_y"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -94,17 +73,12 @@ SERIALIZE_INSTANTIATE(root_motion_params, ser20::oarchive_binary_t);
 
 REFLECT(animation_channel)
 {
-    rttr::registration::class_<animation_channel>("animation_channel")
-        .property_readonly("node_name", &animation_channel::node_name)(rttr::metadata("pretty_name", "Name"))
-        .property_readonly("position_keys_count", &animation_channel::get_position_keys_count)(rttr::metadata("pretty_name", "Positions"))
-        .property_readonly("rotation_keys_count", &animation_channel::get_rotation_keys_count)(rttr::metadata("pretty_name", "Rotations"))
-        .property_readonly("scaling_keys_count", &animation_channel::get_position_keys_count)(rttr::metadata("pretty_name", "Scalings"));
-
     // Register animation_channel with entt
     entt::meta_factory<animation_channel>{}
         .type("animation_channel"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation_channel"},
+            entt::attribute{"pretty_name", "Animation Channel"},
         })
         .data<nullptr, &animation_channel::node_name>("node_name"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -130,17 +104,11 @@ REFLECT(animation_channel)
 
 REFLECT(animation_clip)
 {
-    rttr::registration::class_<animation_clip>("animation")
-        .property_readonly("name", &animation_clip::name)(rttr::metadata("pretty_name", "Name"))
-        .property_readonly("duration", &animation_clip::duration)(rttr::metadata("pretty_name", "Duration"))
-        .property_readonly("root_motion", &animation_clip::root_motion)(rttr::metadata("pretty_name", "Root Motion"))
-        .property_readonly("channels", &animation_clip::channels)(rttr::metadata("pretty_name", "Channels"));
-
-    // Register animation_clip with entt
     entt::meta_factory<animation_clip>{}
         .type("animation"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation"},
+            entt::attribute{"pretty_name", "Animation"},
         })
         .data<nullptr, &animation_clip::name>("name"_hs)
         .custom<entt::attributes>(entt::attributes{

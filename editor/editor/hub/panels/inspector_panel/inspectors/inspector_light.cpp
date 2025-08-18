@@ -3,13 +3,12 @@
 
 namespace unravel
 {
-
 auto inspector_light_component::inspect(rtti::context& ctx,
-                                        rttr::variant& var,
+                                        entt::meta_any& var,
                                         const var_info& info,
-                                        const meta_getter& get_metadata) -> inspect_result
+                                        const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = *var.get_value<light_component*>();
+    auto& data = var.cast<light_component&>();
     auto light_val = data.get_light();
     auto result = ::unravel::inspect(ctx, light_val);
 
@@ -104,5 +103,4 @@ auto inspector_light_component::inspect(rtti::context& ctx,
 
     return result;
 }
-
 } // namespace unravel

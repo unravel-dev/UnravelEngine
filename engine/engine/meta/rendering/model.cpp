@@ -13,27 +13,11 @@ namespace unravel
 {
 REFLECT(model)
 {
-    rttr::registration::class_<model>("model")
-        .property("materials", &model::get_materials, &model::set_materials)(
-            rttr::metadata("pretty_name", "Materials"),
-            rttr::metadata("tooltip", "Materials for this model."))
-        .property("material_instances", &model::get_material_instances, &model::set_material_instances)(
-            rttr::metadata("pretty_name", "Material Instances"),
-            rttr::metadata("tooltip", "Material instances for this model."))
-        .property("lods", &model::get_lods, &model::set_lods)(rttr::metadata("pretty_name", "LOD"),
-                                                              rttr::metadata("tooltip", "Levels of Detail."))
-        .property("lod_limits", &model::get_lod_limits, &model::set_lod_limits)(
-            rttr::metadata("pretty_name", "LOD Ranges"),
-            rttr::metadata("tooltip", "LOD ranges in % of screen."),
-            rttr::metadata("format", "%.2f%%"),
-            rttr::metadata("min", 0),
-            rttr::metadata("max", 100));
-
-    // Register model with entt
     entt::meta_factory<model>{}
         .type("model"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "model"},
+            entt::attribute{"pretty_name", "Model"},
         })
         .data<&model::set_materials, &model::get_materials>("materials"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -62,6 +46,31 @@ REFLECT(model)
             entt::attribute{"min", 0},
             entt::attribute{"max", 100},
         });
+
+    auto t = entt::resolve<model>();
+    auto data = t.data("materials"_hs);
+    auto type = data.type();
+    auto is_sequence_container = type.is_sequence_container();
+    auto is_associative_container = type.is_associative_container();
+
+    std::cout << "is_sequence_container: " << is_sequence_container << std::endl;
+    std::cout << "is_associative_container: " << is_associative_container << std::endl;
+
+
+    model m;
+    entt::meta_any obj = m;
+    auto md = entt::resolve<model>().data("materials"_hs);
+
+    // This gives you a meta_any referencing the vector
+    entt::meta_any vec = md.get(obj);
+
+    if(auto seq = vec.as_sequence_container()) {
+        std::cout << "size = " << seq.size() << "\n";
+        for(auto elem : seq) {
+            std::cout << elem.cast<asset_handle<material>>() << " ";  // prints 1 2 3
+        }
+        std::cout << "\n";
+    }
 }
 
 SAVE(model)

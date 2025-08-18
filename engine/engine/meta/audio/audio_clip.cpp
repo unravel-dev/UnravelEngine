@@ -10,24 +10,11 @@ namespace audio
 REFLECT_EXTERN(sound_info);
 REFLECT(sound_info)
 {
-    rttr::registration::class_<sound_info>("sound_info")
-        .property_readonly("bytes_per_sample",
-                           &sound_info::bits_per_sample)(rttr::metadata("pretty_name", "Bits per sample"),
-                                                         rttr::metadata("tooltip", "Bit depth."))
-        .property_readonly("sample_rate", &sound_info::sample_rate)(rttr::metadata("pretty_name", "Sample rate"),
-                                                                    rttr::metadata("tooltip", "Sample rate."))
-        .property_readonly("channels", &sound_info::channels)(rttr::metadata("pretty_name", "Channels"),
-                                                              rttr::metadata("tooltip", "Mono or Stereo."))
-        .property_readonly("duration", &sound_info::duration)(rttr::metadata("pretty_name", "Duration"),
-                                                              rttr::metadata("tooltip", "Duration in seconds."))
-        .property_readonly("frames", &sound_info::frames)(rttr::metadata("pretty_name", "Frames"),
-                                                              rttr::metadata("tooltip", "Fames count (samples per channel).&"));
-
-    // Register sound_info with entt
     entt::meta_factory<sound_info>{}
         .type("sound_info"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sound_info"},
+            entt::attribute{"pretty_name", "Sound Info"},
         })
         .data<nullptr, &sound_info::bits_per_sample>("bytes_per_sample"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -102,9 +89,6 @@ namespace unravel
 
 REFLECT(audio_clip)
 {
-    rttr::registration::class_<audio_clip>("audio_clip")(rttr::metadata("pretty_name", "Audio Clip")).constructor<>()();
-
-    // Register audio_clip with entt
     entt::meta_factory<audio_clip>{}
         .type("audio_clip"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -160,9 +160,9 @@ void gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera&
 
     for(auto& obj : em.get_selections())
     {
-        if(obj.is_type<entt::handle>())
+        if(obj.type() == entt::resolve<entt::handle>())
         {
-            auto& e = obj.get_value<entt::handle>();
+            auto e = obj.cast<entt::handle>();
             if(!e.valid())
             {
                 continue;
@@ -282,7 +282,7 @@ void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const cam
                 [&](auto e, auto&& comp)
                 {
                     auto entity = scn.create_handle(e);
-                    rttr::variant s = entity;
+                    entt::meta_any s = entity;
                     draw_gizmo_billboard_var(ctx, s, camera, dd);
                 });
         });

@@ -4,9 +4,10 @@
 namespace unravel
 {
 
-void gizmo_physics_component::draw(rtti::context& ctx, rttr::variant& var, const camera& cam, gfx::dd_raii& dd)
+void gizmo_physics_component::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd)
 {
-    auto& data = *var.get_value<physics_component*>();
+    entt::as_derived(var);
+    auto& data = var.cast<physics_component&>();
 
     auto owner = data.get_owner();
     const auto& transform = owner.get<transform_component>();
@@ -36,7 +37,7 @@ void gizmo_physics_component::draw(rtti::context& ctx, rttr::variant& var, const
 }
 
 void gizmo_physics_component::draw_billboard(rtti::context& ctx,
-                                             rttr::variant& var,
+                                             entt::meta_any& var,
                                              const camera& cam,
                                              gfx::dd_raii& dd)
 {

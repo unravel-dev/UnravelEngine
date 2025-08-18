@@ -38,17 +38,6 @@ namespace unravel
 {
 REFLECT(mesh::info)
 {
-    rttr::registration::class_<mesh::info>("info")
-        .property_readonly("vertices", &mesh::info::vertices)(rttr::metadata("pretty_name", "Vertices"),
-                                                              rttr::metadata("tooltip", "Vertices count."))
-        .property_readonly("primitives", &mesh::info::primitives)(rttr::metadata("pretty_name", "Primitives"),
-                                                                  rttr::metadata("tooltip", "Primitives count."))
-        .property_readonly("submeshes", &mesh::info::submeshes)(rttr::metadata("pretty_name", "Submeshes"),
-                                                            rttr::metadata("tooltip", "submeshes count."))
-        .property_readonly("data_groups", &mesh::info::data_groups)(rttr::metadata("pretty_name", "Material Groups"),
-                                                            rttr::metadata("tooltip", "Materials count."));
-
-    // Register mesh::info with entt
     entt::meta_factory<mesh::info>{}
         .type("info"_hs)
         .custom<entt::attributes>(entt::attributes{

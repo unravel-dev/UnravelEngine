@@ -18,7 +18,7 @@ public:
     void on_frame_ui_render(rtti::context& ctx, const char* name);
 
 private:
-    rttr::variant locked_object_;
+    entt::meta_any locked_object_;
     bool debug_{};
 };
 } // namespace unravel

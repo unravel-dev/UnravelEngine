@@ -12,17 +12,6 @@ namespace input
 
 REFLECT(action_map)
 {
-    rttr::registration::class_<action_map>("action_map")(rttr::metadata("pretty_name", "Action Map")).constructor<>()()
-
-        /*.property("keyboard_map", &input::action_map::keyboard_map)(rttr::metadata("pretty_name", "Keyboard Map"),
-                                                                    rttr::metadata("tooltip", "Missing..."))
-        .property("gamepad_map", &input::action_map::gamepad_map)(rttr::metadata("pretty_name", "Gamepad Map"),
-                                                                  rttr::metadata("tooltip", "Missing..."))
-        .property("mouse_map", &input::action_map::mouse_map)(rttr::metadata("pretty_name", "Mouse Map"),
-                                                              rttr::metadata("tooltip", "Missing..."))*/
-        ;
-
-    // Register action_map with entt
     entt::meta_factory<action_map>{}
         .type("action_map"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -11,49 +11,21 @@ namespace unravel
 
 REFLECT(texture_importer_meta)
 {
-    rttr::registration::enumeration<texture_importer_meta::texture_size>("texture_size")(
-        rttr::value("Project Default", texture_importer_meta::texture_size::project_default),
-        rttr::value("32", texture_importer_meta::texture_size::size_32),
-        rttr::value("64", texture_importer_meta::texture_size::size_64),
-        rttr::value("128", texture_importer_meta::texture_size::size_128),
-        rttr::value("256", texture_importer_meta::texture_size::size_256),
-        rttr::value("512", texture_importer_meta::texture_size::size_512),
-        rttr::value("1024", texture_importer_meta::texture_size::size_1024),
-        rttr::value("2048", texture_importer_meta::texture_size::size_2048),
-        rttr::value("4096", texture_importer_meta::texture_size::size_4096),
-        rttr::value("8192", texture_importer_meta::texture_size::size_8192),
-        rttr::value("16384", texture_importer_meta::texture_size::size_16384)
-        );
-
-    rttr::registration::enumeration<texture_importer_meta::texture_type>("texture_type")(
-        rttr::value("Auto", texture_importer_meta::texture_type::automatic),
-        rttr::value("Normal Map", texture_importer_meta::texture_type::normal_map),
-        rttr::value("Equirect. Proj.", texture_importer_meta::texture_type::equirect));
-
-    rttr::registration::enumeration<texture_importer_meta::compression_quality>("compression_quality")(
-        rttr::value("Project Default", texture_importer_meta::compression_quality::project_default),
-        rttr::value("None", texture_importer_meta::compression_quality::none),
-        rttr::value("Low Quality", texture_importer_meta::compression_quality::low_quality),
-        rttr::value("Normal Quality", texture_importer_meta::compression_quality::normal_quality),
-        rttr::value("High Quality", texture_importer_meta::compression_quality::high_quality)
-        );
-
-    rttr::registration::class_<texture_importer_meta::quality_meta>("quality_meta")
-        .property("max_size", &texture_importer_meta::quality_meta::max_size)(rttr::metadata("pretty_name", "Max Size"))
-        .property("compression",
-                  &texture_importer_meta::quality_meta::compression)(rttr::metadata("pretty_name", "Compression"));
-
-    rttr::registration::class_<texture_importer_meta>("texture_importer_meta")
-        .property("type", &texture_importer_meta::type)(rttr::metadata("pretty_name", "Type"))
-        .property("generate_mipmaps",
-                  &texture_importer_meta::generate_mipmaps)(rttr::metadata("pretty_name", "Generate Mipmaps"))
-        .property("quality", &texture_importer_meta::quality)(rttr::metadata("pretty_name", "Quality"));
-
+    entt::meta_factory<texture_importer_meta>{}
+        .type("texture_importer_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_importer_meta"},
+            entt::attribute{"pretty_name", "Texture Importer Meta"},
+        })
+        .func<&texture_importer_meta::get_meta_type>("get_meta_type"_hs)
+        .func<&texture_importer_meta::get_static_meta_type>("get_static_meta_type"_hs)
+        .func<&texture_importer_meta::as_derived>("as_derived"_hs);
     // Register texture_importer_meta::texture_size enum with entt
     entt::meta_factory<texture_importer_meta::texture_size>{}
         .type("texture_size"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_size"},
+            entt::attribute{"pretty_name", "Texture Size"},
         })
         .data<texture_importer_meta::texture_size::project_default>("project_default"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -116,6 +88,7 @@ REFLECT(texture_importer_meta)
         .type("texture_type"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_type"},
+            entt::attribute{"pretty_name", "Texture Type"},
         })
         .data<texture_importer_meta::texture_type::automatic>("automatic"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -138,6 +111,7 @@ REFLECT(texture_importer_meta)
         .type("compression_quality"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "compression_quality"},
+            entt::attribute{"pretty_name", "Compression Quality"},
         })
         .data<texture_importer_meta::compression_quality::project_default>("project_default"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -170,6 +144,7 @@ REFLECT(texture_importer_meta)
         .type("quality_meta"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "quality_meta"},
+            entt::attribute{"pretty_name", "Quality Meta"},
         })
         .data<&texture_importer_meta::quality_meta::max_size>("max_size"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -187,6 +162,7 @@ REFLECT(texture_importer_meta)
         .type("texture_importer_meta"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_importer_meta"},
+            entt::attribute{"pretty_name", "Texture Importer Meta"},
         })
         .data<&texture_importer_meta::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{

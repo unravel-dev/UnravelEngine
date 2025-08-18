@@ -31,10 +31,9 @@ struct camera_storage
  * updating a camera. It should not be used as a standalone class - see
  * camera_component and the entity system.
  */
-class camera
+class camera : public crtp_meta_type<camera>
 {
 public:
-    REFLECTABLE(camera)
     SERIALIZABLE(camera)
 
     /**

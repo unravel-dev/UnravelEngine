@@ -525,6 +525,25 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
 
     if(entity.any_of<prefab_component, prefab_id_component>())
     {
+        if(ImGui::MenuItem("Open Prefab"))
+        {
+            auto& em = ctx.get_cached<editing_manager>();
+            em.add_action("Open Prefab",
+            [&ctx, entity, panels]() mutable
+            {
+                auto prefab_root = prefab_override_context::find_prefab_root_entity(entity);
+                if(prefab_root)
+                {
+                    auto prefab = prefab_root.get<prefab_component>().source;
+                    if(prefab)
+                    {
+                        auto& em = ctx.get_cached<editing_manager>();
+                        em.enter_prefab_mode(ctx, prefab, true);
+                    }
+                }
+            });
+        }
+
         if(ImGui::MenuItem("Unlink from Prefab"))
         {
             auto& em = ctx.get_cached<editing_manager>();

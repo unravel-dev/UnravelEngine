@@ -7,7 +7,6 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <math/math.h>
-#include <rttr/variant.h>
 #include <uuid/uuid.h>
 
 #include <editor/imgui/integration/imgui.h>
@@ -51,12 +50,11 @@ struct editing_manager
 
     struct selection
     {
-        std::vector<rttr::variant> objects{rttr::variant{}};
+        std::vector<entt::meta_any> objects{entt::meta_any{}};
     };
 
     struct focused
     {
-        //rttr::variant object;
         entt::meta_any object;
         int frames{};
 
@@ -130,7 +128,6 @@ struct editing_manager
     /// Selects an object. Can be anything.
     /// </summary>
     //-----------------------------------------------------------------------------
-    // void select(rttr::variant object, bool add = false);
     void focus(entt::meta_any object);
     void focus_path(const fs::path& object);
 
@@ -185,25 +182,25 @@ struct editing_manager
     {
         const auto& selected = get_active_selection();
 
-        return selected && selected.is_type<T>();
+        return selected && selected.type() == entt::resolve<T>();
     }
 
-    auto get_active_selection() const -> const rttr::variant&
+    auto get_active_selection() const -> const entt::meta_any&
     {
         return selection_data.objects.back();
     }
 
-    auto get_active_selection() -> rttr::variant&
+    auto get_active_selection() -> entt::meta_any&
     {
         return selection_data.objects.back();
     }
 
-    auto get_selections() const -> hpp::span<const rttr::variant>
+    auto get_selections() const -> hpp::span<const entt::meta_any>
     {
         return selection_data.objects;
     }
 
-    auto get_selections() -> hpp::span<rttr::variant>
+    auto get_selections() -> hpp::span<entt::meta_any>
     {
         return selection_data.objects;
     }
@@ -211,16 +208,16 @@ struct editing_manager
     template<typename T>
     auto get_active_selection_as() const -> const T&
     {
-        return get_active_selection().get_value<T>();
+        return get_active_selection().cast<const T&>();
     }
 
     template<typename T>
     auto try_get_active_selection_as() -> T*
     {
         auto& active = get_active_selection();
-        if(active.is_type<T>())
+        if(active.type() == entt::resolve<T>())
         {
-            return &active.get_value<T>();
+            return &active.cast<T&>();
         }
 
         return nullptr;
@@ -230,9 +227,9 @@ struct editing_manager
     auto try_get_active_selection_as() const -> const T*
     {
         const auto& active = get_active_selection();
-        if(active.is_type<T>())
+        if(active.type() == entt::resolve<T>())
         {
-            return &active.get_value<T>();
+            return &active.cast<T&>();
         }
 
         return nullptr;
@@ -245,9 +242,9 @@ struct editing_manager
 
         for(const auto& obj : selection_data.objects)
         {
-            if(obj.is_type<T>())
+            if(obj.type() == entt::resolve<T>())
             {
-                result.emplace_back(&obj.get_value<T>());
+                result.emplace_back(&obj.cast<T&>());
             }
         }
 
@@ -261,9 +258,9 @@ struct editing_manager
 
         for(auto& obj : selection_data.objects)
         {
-            if(obj.is_type<T>())
+            if(obj.type() == entt::resolve<T>())
             {
-                result.emplace_back(&obj.get_value<T>());
+                result.emplace_back(&obj.cast<T&>());
             }
         }
 
@@ -277,9 +274,9 @@ struct editing_manager
 
         for(const auto& obj : selection_data.objects)
         {
-            if(obj.is_type<T>())
+            if(obj.type() == entt::resolve<T>())
             {
-                result.emplace_back(obj.get_value<T>());
+                result.emplace_back(obj.cast<T>());
             }
         }
 
@@ -464,14 +461,14 @@ struct editing_manager
 
     private:
     template<typename T>
-    auto is_selected_impl(const T& entry, const rttr::variant& selected) -> bool
+    auto is_selected_impl(const T& entry, const entt::meta_any& selected) -> bool
     {
-        if(!selected.is_type<T>())
+        if(selected.type() != entt::resolve<T>())
         {
             return false;
         }
 
-        return selected.get_value<T>() == entry;
+        return selected.cast<const T&>() == entry;
     }
 
     void sanity_check_selection_data()

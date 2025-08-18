@@ -11,24 +11,11 @@ namespace unravel
 
 REFLECT(animation_importer_meta)
 {
-    rttr::registration::class_<animation_importer_meta::root_motion_meta>("root_motion_meta")
-        .property("keep_position_y", &animation_importer_meta::root_motion_meta::keep_position_y)(
-            rttr::metadata("pretty_name", "Keep Position Y"))
-        .property("keep_position_xz", &animation_importer_meta::root_motion_meta::keep_position_xz)(
-            rttr::metadata("pretty_name", "Keep Position XZ"))
-        .property("keep_rotation", &animation_importer_meta::root_motion_meta::keep_rotation)(
-            rttr::metadata("pretty_name", "Keep Rotation"))
-        .property("keep_in_place", &animation_importer_meta::root_motion_meta::keep_in_place)(
-        rttr::metadata("pretty_name", "Keep In Place"));
-
-    rttr::registration::class_<animation_importer_meta>("animation_importer_meta")
-        .property("root_motion", &animation_importer_meta::root_motion)(rttr::metadata("pretty_name", "Root Motion"));
-
-    // Register root_motion_meta with entt
     entt::meta_factory<animation_importer_meta::root_motion_meta>{}
         .type("root_motion_meta"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "root_motion_meta"},
+            entt::attribute{"pretty_name", "Root Motion Meta"},
         })
         .data<&animation_importer_meta::root_motion_meta::keep_position_y>("keep_position_y"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -56,7 +43,11 @@ REFLECT(animation_importer_meta)
         .type("animation_importer_meta"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation_importer_meta"},
+            entt::attribute{"pretty_name", "Animation Importer Meta"},
         })
+        .func<&animation_importer_meta::get_meta_type>("get_meta_type"_hs)
+        .func<&animation_importer_meta::get_static_meta_type>("get_static_meta_type"_hs)
+        .func<&animation_importer_meta::as_derived>("as_derived"_hs)
         .data<&animation_importer_meta::root_motion>("root_motion"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "root_motion"},

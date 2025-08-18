@@ -16,16 +16,13 @@
 namespace unravel
 {
 
-struct asset_importer_meta
+struct asset_importer_meta : crtp_meta_type<asset_importer_meta>
 {
-    REFLECTABLE(asset_importer_meta)
     virtual ~asset_importer_meta() = default;
 };
 
-struct texture_importer_meta : asset_importer_meta
+struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_importer_meta>
 {
-    REFLECTABLEV(texture_importer_meta, asset_importer_meta)
-
     enum class texture_type
     {
         automatic,
@@ -71,10 +68,8 @@ struct texture_importer_meta : asset_importer_meta
 
 };
 
-struct mesh_importer_meta : asset_importer_meta
+struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_meta>
 {
-    REFLECTABLEV(mesh_importer_meta, asset_importer_meta)
-
     struct model_meta
     {
         bool import_meshes{true};
@@ -104,10 +99,8 @@ struct mesh_importer_meta : asset_importer_meta
     } materials;
 };
 
-struct animation_importer_meta : asset_importer_meta
+struct animation_importer_meta : crtp_meta_type<animation_importer_meta, asset_importer_meta>
 {
-    REFLECTABLEV(animation_importer_meta, asset_importer_meta)
-
 
     struct root_motion_meta
     {

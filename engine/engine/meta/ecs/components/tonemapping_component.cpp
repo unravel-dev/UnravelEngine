@@ -8,30 +8,11 @@ namespace unravel
 
 REFLECT_INLINE(tonemapping_pass::settings)
 {
-    rttr::registration::enumeration<tonemapping_method>("tonemapping_method")(
-        rttr::value("None", tonemapping_method::none),
-        rttr::value("Exponential", tonemapping_method::exponential),
-        rttr::value("Reinhard", tonemapping_method::reinhard),
-        rttr::value("Reinhard Lum", tonemapping_method::reinhard_lum),
-        rttr::value("Dukier", tonemapping_method::duiker),
-        rttr::value("Aces", tonemapping_method::aces),
-        rttr::value("Aces Lum", tonemapping_method::aces_lum),
-        rttr::value("Filmic", tonemapping_method::filmic));
-
-    rttr::registration::class_<tonemapping_pass::settings>("tonemapping_pass::settings")(
-        rttr::metadata("pretty_name", "Tonemapping Settings"))
-        .constructor<>()
-        
-        .property("exposure", &tonemapping_pass::settings::exposure)(rttr::metadata("pretty_name", "Exposure"),
-                                                                     rttr::metadata("min", 0.0f),
-                                                                     rttr::metadata("step", 0.1f))
-        .property("method", &tonemapping_pass::settings::method)(rttr::metadata("pretty_name", "Method"));
-
-    // Register tonemapping_method enum with entt
     entt::meta_factory<tonemapping_method>{}
         .type("tonemapping_method"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "tonemapping_method"},
+            entt::attribute{"pretty_name", "Tonemapping Method"},
         })
         .data<tonemapping_method::none>("none"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -113,17 +94,6 @@ LOAD_INSTANTIATE(tonemapping_pass::settings, ser20::iarchive_binary_t);
 
 REFLECT(tonemapping_component)
 {
-    rttr::registration::class_<tonemapping_component>(
-        "tonemapping_component")(rttr::metadata("category", "RENDERING"), rttr::metadata("pretty_name", "Tonemapping"))
-        .constructor<>()
-        .method("component_exists", &component_exists<tonemapping_component>)
-        .property("enabled", &tonemapping_component::enabled)(
-            rttr::metadata("pretty_name", "Enabled"),
-            rttr::metadata("tooltip", "Enable/disable tonemapping"))
-        .property("settings", &tonemapping_component::settings)(rttr::metadata("pretty_name", "Settings"),
-                                                                rttr::metadata("flattable", true));
-
-    // Register tonemapping_component class with entt
     entt::meta_factory<tonemapping_component>{}
         .type("tonemapping_component"_hs)
         .custom<entt::attributes>(entt::attributes{

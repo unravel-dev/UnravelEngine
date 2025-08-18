@@ -6,37 +6,27 @@
 namespace unravel
 {
 
-struct inspector_alignment : public inspector
+struct inspector_alignment : public crtp_meta_type<inspector_alignment, inspector>
 {
-    REFLECTABLEV(inspector_alignment, inspector)
 
-    inspect_result inspect(rtti::context& ctx, rttr::variant& var, const var_info& info, const meta_getter& get_metadata);
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_alignment, alignment)
 
-struct inspector_text_style : public inspector
+struct inspector_text_style : public crtp_meta_type<inspector_text_style, inspector>
 {
-    REFLECTABLEV(inspector_text_style, inspector)
-    void before_inspect(const rttr::property& prop) override;
-
-    inspect_result inspect(rtti::context& ctx,
-                           rttr::variant& var,
-                           const var_info& info,
-                           const meta_getter& get_metadata) override;
+    void before_inspect(const entt::meta_data& prop) override;
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_text_style, text_style)
 
 
-struct inspector_text_style_flags : public inspector
+struct inspector_text_style_flags : public crtp_meta_type<inspector_text_style_flags, inspector>
 {
-    REFLECTABLEV(inspector_text_style_flags, inspector)
 
-    inspect_result inspect(rtti::context& ctx,
-                           rttr::variant& var,
-                           const var_info& info,
-                           const meta_getter& get_metadata) override;
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_text_style_flags, text_style_flags)

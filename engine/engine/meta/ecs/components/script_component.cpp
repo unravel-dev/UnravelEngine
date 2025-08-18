@@ -51,12 +51,6 @@ namespace
 
 REFLECT(script_component)
 {
-    rttr::registration::class_<script_component>("script_component")(rttr::metadata("category", "SCRIPTING"),
-                                                                     rttr::metadata("pretty_name", "Script"))
-        .constructor<>()(rttr::policy::ctor::as_std_shared_ptr)
-        .method("component_exists", &component_exists<script_component>);
-
-    // Register script_component class with entt
     entt::meta_factory<script_component>{}
         .type("script_component"_hs)
         .custom<entt::attributes>(entt::attributes{

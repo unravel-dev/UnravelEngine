@@ -9,61 +9,12 @@ namespace unravel
 
 REFLECT(physics_material)
 {
-    rttr::registration::enumeration<combine_mode>("combine_mode")(rttr::value("Average", combine_mode::average),
-                                                                  rttr::value("Minimum", combine_mode::minimum),
-                                                                  rttr::value("Multiply", combine_mode::multiply),
-                                                                  rttr::value("Maximum", combine_mode::maximum));
-
-    rttr::registration::class_<physics_material>("physics_material")(rttr::metadata("pretty_name", "Physics Material"))
-        .constructor<>()()
-        .property("restitution", &physics_material::restitution)(
-            rttr::metadata("pretty_name", "Restitution (Bounce)"),
-            rttr::metadata(
-                "tooltip",
-                "Restitution represents the bounciness of the material. A value of 0.0 means no bounce (perfectly "
-                "inelastic collision), while 1.0 means perfect bounce (perfectly elastic collision)."),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f))
-        .property("friction", &physics_material::friction)(
-            rttr::metadata("pretty_name", "Friction"),
-            rttr::metadata(
-                "tooltip",
-                "Friction represents the resistance to sliding motion. A value of 0.0 means no friction (perfectly "
-                "slippery), while values around 1.0 represent typical real-world friction. Values slightly above 1.0 "
-                "can simulate very high friction surfaces but should be used cautiously."),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f))
-        .property("stiffness", &physics_material::stiffness)(
-            rttr::metadata("pretty_name", "Stiffness"),
-            rttr::metadata("tooltip",
-                           "Stiffness represents how much force is required to deform the material. A high value means "
-                           "the material is very stiff (resists deformation)."),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f))
-        .property("damping", &physics_material::damping)(
-            rttr::metadata("pretty_name", "Damping"),
-            rttr::metadata("tooltip",
-                           "Damping represents energy loss in motion (e.g., through internal friction). A value of 0.0 "
-                           "means no damping (energy is conserved), while 1.0 represents very high damping (rapid "
-                           "energy loss). Typical values range from 0.01 to 0.3 for realistic simulations."),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("max", 1.0f))
-        .property("restitution_combine", &physics_material::restitution_combine)(
-            rttr::metadata("pretty_name", "Restitution Combine"),
-            rttr::metadata("tooltip",
-                           "How to combine the restitution(bounce) values of both colliders in a collision pair to"
-                           "calculate the total restitution(bounce) between them."))
-        .property("friction_combine", &physics_material::friction_combine)(
-            rttr::metadata("pretty_name", "Friction Combine"),
-            rttr::metadata("tooltip",
-                           "How to combine the friction values of both colliders in a collision pair to"
-                           "calculate the total friction between them."));
-
-    // Register combine_mode enum with entt
+    
     entt::meta_factory<combine_mode>{}
         .type("combine_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "combine_mode"},
+            entt::attribute{"pretty_name", "Combine Mode"},
         })
         .data<combine_mode::average>("average"_hs)
         .custom<entt::attributes>(entt::attributes{

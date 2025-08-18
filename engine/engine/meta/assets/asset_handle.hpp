@@ -8,11 +8,6 @@
 #include <reflection/reflection.h>
 #include <serialization/serialization.h>
 
-// RTTR_REGISTRATION
-// {
-//     rttr::type::register_equal_comparator<asset_handle<>>();
-// }
-
 namespace ser20
 {
 

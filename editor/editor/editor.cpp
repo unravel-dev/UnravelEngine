@@ -5,8 +5,6 @@
 #include <engine/rendering/renderer.h>
 #include <version/version.h>
 
-#include <rttr/registration>
-
 #include "assets/asset_watcher.h"
 #include "editing/editing_manager.h"
 #include "editing/picking_manager.h"

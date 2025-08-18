@@ -1,4 +1,5 @@
 #include "test_component.hpp"
+#include "entt/meta/policy.hpp"
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <serialization/associative_archive.h>
@@ -8,43 +9,6 @@ namespace unravel
 {
 REFLECT(test_component)
 {
-    rttr::registration::class_<named_anim>("named_anim")(rttr::metadata("category", "BASIC"),
-                                                         rttr::metadata("pretty_name", "Named Anim"))
-        .constructor<>()()
-        .property("name", &named_anim::name)
-        .property("clip", &named_anim::clip);
-
-    rttr::registration::class_<test_component>("test_component")(rttr::metadata("category", "BASIC"),
-                                                                 rttr::metadata("pretty_name", "Test"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<test_component>)
-        .property("str", &test_component::str)
-        .property("u8", &test_component::u8)
-        .property("u8[restricted]", &test_component::u8)(rttr::metadata("min", 12), rttr::metadata("max", 200))
-        .property("u16", &test_component::u16)
-        .property("u32", &test_component::u32)
-        .property("u64", &test_component::u64)
-        .property("i8", &test_component::i8)
-        .property("i16", &test_component::i16)
-        .property("i32", &test_component::i32)
-        .property("i64", &test_component::i64)
-        .property("f", &test_component::f)
-        .property("d", &test_component::d)
-        .property("d[restricted]", &test_component::d)(rttr::metadata("min", 12.0), rttr::metadata("max", 200.0))
-        .property("irange", &test_component::irange)
-        .property("isize", &test_component::isize)
-        .property("ipoint", &test_component::ipoint)
-        .property("irect", &test_component::irect)
-        .property("delta", &test_component::delta)
-        .property("color", &test_component::color)
-        .property("texture", &test_component::texture)
-        .property("mat", &test_component::mat)
-        .property("anim", &test_component::anim)
-        .property("sequential", &test_component::sequential)
-        .property("associative", &test_component::associative)
-        .property("associative_mock", &test_component::associative_mock);
-
-    // Register named_anim class with entt
     entt::meta_factory<named_anim>{}
         .type("named_anim"_hs)
         .custom<entt::attributes>(entt::attributes{

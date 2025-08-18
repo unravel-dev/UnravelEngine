@@ -37,7 +37,7 @@ auto get_material_properties(const material::sptr& material) -> mono::managed_in
 
     mono::managed_interface::material_properties props;
 
-    if(rttr::type::get(*material) == rttr::type::get<pbr_material>())
+    if(material->is<pbr_material>())
     {
         const auto pbr = std::static_pointer_cast<pbr_material>(material);
         props.base_color = converter::convert<math::color, mono::managed_interface::color>(pbr->get_base_color());
@@ -57,7 +57,7 @@ void set_material_properties(const material::sptr& material, const mono::managed
 {
     using converter = mono::managed_interface::converter;
 
-    if(rttr::type::get(*material) == rttr::type::get<pbr_material>())
+    if(material->is<pbr_material>())
     {
         auto pbr = std::static_pointer_cast<pbr_material>(material);
         auto base_color = converter::convert<mono::managed_interface::color, math::color>(props.base_color);

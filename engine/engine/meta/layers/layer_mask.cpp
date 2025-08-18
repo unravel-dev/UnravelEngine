@@ -9,12 +9,6 @@ namespace unravel
 {
 REFLECT(layer_mask)
 {
-    rttr::registration::class_<layer_mask>("layer_mask")(rttr::metadata("pretty_name", "Layer Mask"))
-        .constructor<>()()
-        .property_readonly("mask",
-                           &layer_mask::mask)(rttr::metadata("pretty_name", "Mask"));
-
-    // Register layer_mask with entt
     entt::meta_factory<layer_mask>{}
         .type("layer_mask"_hs)
         .custom<entt::attributes>(entt::attributes{

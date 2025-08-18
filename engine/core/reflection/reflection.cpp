@@ -21,6 +21,7 @@ auto get_derived(const entt::meta_type& base) -> std::vector<entt::meta_type>
     }
     return result;
 }
+
 }
 
 auto get_derived_types(const meta_type& t) -> std::vector<meta_type>
@@ -28,85 +29,106 @@ auto get_derived_types(const meta_type& t) -> std::vector<meta_type>
     return get_derived(t);
 }
 
-auto get_attribute(const meta_type& t, const char* name) -> const meta_any&
+auto as_derived(meta_any& obj) -> bool
 {
-    const attributes& attrs = t.custom();
-    auto it = attrs.find(name);
-    if(it != attrs.end())
+    auto type = obj.type();
+    auto as_derived = type.func("as_derived"_hs);
+    if(as_derived)
     {
-        return it->second;
+        obj = as_derived.invoke(obj);
+        return true;
+    }
+    return false;
+}
+
+auto get_derived_type(meta_any& obj) -> meta_type
+{
+    auto type = obj.type();
+
+    auto as_derived = type.func("as_derived"_hs);
+    if(as_derived)
+    {
+        return as_derived.invoke(obj).type();
+    }
+
+    auto func = type.func("get_meta_type"_hs);
+    if(func)
+    {
+        auto result = func.invoke(obj); 
+        return result.cast<meta_type>();
+    }
+    return type;
+}
+
+auto get_attribute(const meta_custom& custom, const char* name) -> const meta_any&
+{
+    const attributes* attrs = custom;
+
+    if(attrs)
+    {
+        auto it = attrs->find(name);
+        if(it != attrs->end())
+        {
+            return it->second;
+        }
     }
 
     static const meta_any any;
     return any;
 }
 
+auto get_attribute(const meta_type& t, const char* name) -> const meta_any&
+{
+    return get_attribute(t.custom(), name);
+}
+
+auto get_attribute(const meta_data& prop, const char* name) -> const meta_any&
+{
+    return get_attribute(prop.custom(), name);
+}
+
 auto get_pretty_name(const meta_type& t) -> std::string
 {
-    attributes attrs = t.custom();
-    if(attrs.find("pretty_name") != attrs.end())
+    auto name = get_attribute_as<std::string>(t, "pretty_name");
+    if(name.empty())
     {
-        return attrs["pretty_name"].cast<std::string>();
+        return get_name(t);
     }
+    return name;
+}
 
-    return std::string(t.info().name());
+auto get_name(const meta_type& t) -> std::string
+{
+    auto name = get_attribute_as<std::string>(t, "name");
+    if(name.empty())
+    {
+        return std::string(t.info().name());
+    }
+    return name;
+}
+
+
+auto get_name(const meta_data& prop) -> std::string
+{
+    return get_attribute_as<std::string>(prop, "name");
 }
 
 auto get_pretty_name(const meta_data& prop) -> std::string
 {
-    attributes attrs = prop.custom();
-    if(attrs.find("pretty_name") != attrs.end())
+    auto name = get_attribute_as<std::string>(prop, "pretty_name");
+    if(name.empty())
     {
-        return attrs["pretty_name"].cast<std::string>();
+        return get_name(prop);
     }
-
-    if(attrs.find("name") != attrs.end())
-    {
-        return attrs["name"].cast<std::string>();
-    }
-
-    return "N/A";
+    return name;
 }
 
-auto property_predicate(std::function<bool(meta_handle&)> predicate) -> std::function<bool(meta_handle&)>
+auto property_predicate(std::function<bool(meta_any&)> predicate) -> std::function<bool(meta_any&)>
 {
     return std::move(predicate);
 }
 
 }
-
-
-namespace rttr
-{
-auto get_pretty_name(type t) -> std::string
-{
-    std::string name = t.get_name().to_string();
-    auto meta_id = t.get_metadata("pretty_name");
-    if(meta_id)
-    {
-        name = meta_id.to_string();
-    }
-    return name;
-}
-
-auto get_pretty_name(const rttr::property& prop) -> std::string
-{
-    std::string name = prop.get_name().to_string();
-    auto meta_id = prop.get_metadata("pretty_name");
-    if(meta_id)
-    {
-        name = meta_id.to_string();
-    }
-    return name;
-}
-
-auto property_predicate(std::function<bool(rttr::instance&)> predicate) -> std::function<bool(rttr::instance&)>
-{
-    return std::move(predicate);
-}
-
-
-} // namespace rttr
 
 auto register_type_helper(const char* name) -> int
 {

@@ -37,6 +37,7 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
     return {};
 }
 
+
 template<typename T>
 struct mono_inspector
 {
@@ -64,69 +65,56 @@ struct mono_inspector
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
-        inspector::meta_getter getter = [&](const rttr::variant& name) -> rttr::variant
+        entt::attributes meta_attribs;
+
+        if(min_attrib.valid())
         {
-            if(!name.is_type<std::string>())
-            {
-                return {};
-            }
-            const auto& key = name.get_value<std::string>();
-            if(key == "min")
-            {
-                if(min_attrib.valid())
-                {
-                    auto invoker = mono::make_field_invoker<float>(min_attrib.get_type(), "min");
-                    float min_value = invoker.get_value(min_attrib);
-                    return min_value;
-                }
-                if(range_attrib.valid())
-                {
-                    auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
-                    float min_value = invoker.get_value(range_attrib);
-                    return min_value;
-                }
-            }
+            auto invoker = mono::make_field_invoker<float>(min_attrib.get_type(), "min");
+            float min_value = invoker.get_value(min_attrib);
+            meta_attribs["min"] = min_value;
+        }
 
-            else if(key == "max")
-            {
-                if(max_attrib.valid())
-                {
-                    auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
-                    float max_value = invoker.get_value(max_attrib);
-                    return max_value;
-                }
-                if(range_attrib.valid())
-                {
-                    auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
-                    float max_value = invoker.get_value(range_attrib);
-                    return max_value;
-                }
-            }
+        if(range_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
+            float min_value = invoker.get_value(range_attrib);
+            meta_attribs["min"] = min_value;
+        }
 
-            else if(key == "step")
-            {
-                if(step_attrib.valid())
-                {
-                    auto invoker = mono::make_field_invoker<float>(step_attrib.get_type(), "step");
-                    float value = invoker.get_value(step_attrib);
-                    return value;
-                }
-            }
 
-            return {};
-        };
+        if(max_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
+            float max_value = invoker.get_value(max_attrib);
+            meta_attribs["max"] = max_value;
+        }
 
-        rttr::variant var = val;
+        if(range_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
+            float max_value = invoker.get_value(range_attrib);
+            meta_attribs["max"] = max_value;
+        }
+
+        if(step_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(step_attrib.get_type(), "step");
+            float step_value = invoker.get_value(step_attrib);
+            meta_attribs["step"] = step_value;
+        }
+
+        auto custom = entt::make_custom<entt::attributes>(meta_attribs);
+        
+        entt::meta_any var = entt::forward_as_meta(val);
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
 
-            result |= inspect_var(ctx, var, info, getter);
+            result |= inspect_var(ctx, var, info, custom);
         }
 
         if(result.changed)
         {
-            val = var.get_value<T>();
             mutable_field.set_value(obj, val);
         }
 
@@ -334,17 +322,17 @@ struct mono_inspector<entt::handle>
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
-        rttr::variant var = e;
+        entt::meta_any var = entt::forward_as_meta(e);
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
+
             result |= inspect_var(ctx, var, info);
         }
 
         if(result.changed)
         {
-            auto v = var.get_value<entt::handle>();
-            mutable_field.set_value(obj, v.entity());
+            mutable_field.set_value(obj, e.entity());
         }
 
         return result;
@@ -413,7 +401,7 @@ struct mono_inspector<asset_handle<T>>
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
-        rttr::variant var = asset;
+        entt::meta_any var = entt::forward_as_meta(asset);
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
@@ -422,7 +410,7 @@ struct mono_inspector<asset_handle<T>>
 
         if(result.changed)
         {
-            auto v = var.get_value<asset_handle<T>>();
+            auto v = var.cast<asset_handle<T>>();
             if(v && !val)
             {
                 val = field_type.new_instance();
@@ -483,7 +471,7 @@ struct mono_inspector<mono::mono_array<T>>
 
         for(size_t i = 0; i < array.size(); ++i)
         {
-            rttr::variant element = array.get(i);
+            entt::meta_any element = entt::forward_as_meta(array.get(i));
             result |= unravel::inspect_var(ctx, element, info);
         }
         return result;
@@ -517,11 +505,11 @@ struct mono_inspector<mono::mono_array<T>>
 };
 
 auto inspector_mono_object::inspect(rtti::context& ctx,
-                                    rttr::variant& var,
+                                    entt::meta_any& var,
                                     const var_info& info,
-                                    const meta_getter& get_metadata) -> inspect_result
+                                    const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<mono::mono_object>();
+    auto& data = var.cast<mono::mono_object&>();
 
     inspect_result result{};
 
@@ -641,7 +629,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 field_info.read_only = true;
 
                 std::string unknown = field.get_type().get_name();
-                rttr::variant var = unknown;
+                entt::meta_any var = entt::forward_as_meta(unknown);
                 {
                     property_layout layout(field.get_name());
                     result |= inspect_var(ctx, var, field_info);
@@ -767,7 +755,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 field_info.read_only = true;
 
                 std::string unknown = prop.get_type().get_name();
-                rttr::variant var = unknown;
+                entt::meta_any var = entt::forward_as_meta(unknown);
                 {
                     property_layout layout(prop.get_name());
                     result |= inspect_var(ctx, var, field_info);
@@ -780,6 +768,18 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     }
 
     return result;
+}
+
+auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
+                                                entt::meta_any& var,
+                                                const var_info& info,
+                                                const entt::meta_custom& custom) -> inspect_result
+{
+    auto& data = var.cast<mono::mono_scoped_object&>();
+
+    auto& mono_obj = static_cast<mono::mono_object&>(data.object);
+    entt::meta_any obj = entt::forward_as_meta(mono_obj);
+    return inspector_mono_object::inspect(ctx, obj, info, custom);
 }
 
 } // namespace unravel

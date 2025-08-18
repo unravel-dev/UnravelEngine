@@ -1,5 +1,7 @@
 #include "inspector_entity.h"
+#include "entt/meta/meta.hpp"
 #include "inspectors.h"
+#include "reflection/reflection.h"
 
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/panels/entity_panel.h>
@@ -358,9 +360,9 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             bool is_active = trans_comp->is_active();
             
             // Track component type for prefab override context
-            auto type = rttr::type::get<transform_component>();
-            auto name = type.get_name().to_string();
-            auto pretty_name = rttr::get_pretty_name(type);
+            auto type = entt::resolve<transform_component>();
+            auto name = entt::get_name(type);
+            auto pretty_name = entt::get_pretty_name(type);
             
             // Use a copy of override context for proper path handling
             auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
@@ -372,6 +374,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 trans_comp->set_active(is_active);
                 result.changed = true;
                 result.edit_finished = true;
+                override_ctx_ref.record_override();
             }
             
             // ImGui::PopStyleColor(3);
@@ -392,9 +395,9 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         ImGui::TableSetColumnIndex(2);
         {
             // Track component type for prefab override context
-            auto type = rttr::type::get<tag_component>();
-            auto type_name = type.get_name().to_string();
-            auto pretty_name = rttr::get_pretty_name(type);
+            auto type = entt::resolve<tag_component>();
+            auto type_name = entt::get_name(type);
+            auto pretty_name = entt::get_pretty_name(type);
             
             auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
             override_ctx_ref.set_component_type(type_name, pretty_name);
@@ -407,6 +410,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             {
                 result.changed = true;
                 result.edit_finished = true;
+                override_ctx_ref.record_override();
             }
             
             ImGui::PopStyleVar();
@@ -420,30 +424,27 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
     // Tag field using traditional property_layout approach
     {
         // Track component type for prefab override context
-        auto type = rttr::type::get<tag_component>();
-        auto type_name = type.get_name().to_string();
-        auto pretty_name = rttr::get_pretty_name(type);
+        auto type = entt::resolve<tag_component>();
+        auto type_name = entt::get_name(type);
+        auto pretty_name = entt::get_pretty_name(type);
 
-        rttr::property prop = type.get_property("tag");
-        auto prop_name = prop.get_name().to_string();
-        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        auto prop = type.data("tag"_hs);
+        auto prop_name = entt::get_name(prop);
+        auto prop_pretty_name = entt::get_pretty_name(prop);
         
         auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
         override_ctx_ref.set_component_type(type_name, pretty_name);
         override_ctx_ref.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout(prop, true);
-        rttr::variant v = tag_comp->tag;
+        entt::meta_any v = entt::forward_as_meta(tag_comp->tag);
 
         var_info info;
         info.is_property = true;
         info.read_only = false;
 
-        result |= inspect_var(ctx, v, info);
-        if(result.changed)
-        {
-            tag_comp->tag = v.get_value<std::string>();
-        }
+        result |= ::unravel::inspect_var(ctx, v, info);
+  
 
         override_ctx_ref.pop_segment();
     }
@@ -488,12 +489,12 @@ auto inspector_entity::inspect_as_property(rtti::context& ctx, entt::handle& dat
 }
 
 auto inspector_entity::inspect(rtti::context& ctx,
-                               rttr::variant& var,
+                               entt::meta_any& var,
                                const var_info& info,
-                               const meta_getter& get_metadata) -> inspect_result
+                               const entt::meta_custom& custom) -> inspect_result
 {
     inspect_result result{};
-    auto data = var.get_value<entt::handle>();
+    auto data = var.cast<entt::handle>();
 
     if(info.is_property)
     {
@@ -551,12 +552,12 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return;
                 }
 
-                auto type = rttr::type::get<ctype>();
-                auto name = type.get_name().to_string();
-                auto pretty_name = rttr::get_pretty_name(type);
+                auto type = entt::resolve<ctype>();
+                auto name = entt::get_name(type);
+                auto pretty_name = entt::get_pretty_name(type);
                 
                 // Track component type for prefab override context
-                override_ctx.set_component_type(name, pretty_name);
+                override_ctx.set_component_type(std::string(name), pretty_name);
 
 
                 inspect_callbacks callbacks;
@@ -572,7 +573,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             ImGui::Text("%u", uint32_t(component->get_owner().entity()));
                         }
                     }
-                    return ::unravel::inspect(ctx, component);
+                    return ::unravel::inspect(ctx, *component);
                 };
 
                 callbacks.on_add = [&]()
@@ -649,7 +650,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         ImGui::PopReadonly();
                     }
-                    rttr::variant obj = static_cast<mono::mono_object&>(script.scoped->object);
+                    entt::meta_any obj = entt::forward_as_meta(*script.scoped);
                     inspect_res |= ::unravel::inspect_var(ctx, obj);
                     return inspect_res;
                 };
@@ -679,11 +680,11 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 auto name = type.get_fullname();
                 const auto& pretty_name = name;
 
-                auto script_type = rttr::type::get<script_component>();
-                auto script_type_name = script_type.get_name().to_string();
-                auto script_type_pretty_name = rttr::get_pretty_name(script_type);
+                auto script_type = entt::resolve<script_component>();
+                auto script_type_name = entt::get_name(script_type);
+                auto script_type_pretty_name = entt::get_pretty_name(script_type);
                 // Track component type for prefab override context
-                override_ctx.set_component_type(script_type_name, script_type_pretty_name);
+                override_ctx.set_component_type(std::string(script_type_name), script_type_pretty_name);
 
                 override_ctx.push_segment("script_components/" + name, "Scripts/" + pretty_name);
 
@@ -784,7 +785,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 {
                     using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
 
-                    auto name = rttr::get_pretty_name(rttr::type::get<ctype>());
+                    auto name = entt::get_pretty_name(entt::resolve<ctype>());
 
                     inspect_callbacks callbacks;
 

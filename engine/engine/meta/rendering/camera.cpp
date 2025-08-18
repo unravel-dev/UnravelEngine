@@ -8,16 +8,11 @@ namespace unravel
 {
 REFLECT(camera)
 {
-    rttr::registration::enumeration<projection_mode>("projection_mode")(
-        rttr::value("Perspective", projection_mode::perspective),
-        rttr::value("Orthographic", projection_mode::orthographic));
-    rttr::registration::class_<camera>("camera");
-
-    // Register projection_mode enum with entt
     entt::meta_factory<projection_mode>{}
         .type("projection_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "projection_mode"},
+            entt::attribute{"pretty_name", "Projection Mode"},
         })
         .data<projection_mode::perspective>("perspective"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -35,6 +30,7 @@ REFLECT(camera)
         .type("camera"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "camera"},
+            entt::attribute{"pretty_name", "Camera"},
         });
 }
 

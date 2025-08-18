@@ -7,11 +7,11 @@ namespace unravel
 {
 
 auto inspector_resolution_settings::inspect(rtti::context& ctx,
-                                             rttr::variant& var,
+                                             entt::meta_any& var,
                                              const var_info& info,
-                                             const meta_getter& get_metadata) -> inspect_result
+                                             const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = *var.get_value<settings::resolution_settings*>();
+    auto& data = var.cast<settings::resolution_settings&>();
     auto& resolutions = data.resolutions;
     
     inspect_result result{};

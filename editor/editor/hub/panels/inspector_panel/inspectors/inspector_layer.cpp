@@ -8,12 +8,12 @@ namespace unravel
 {
 
 auto inspector_layer::inspect(rtti::context& ctx,
-                              rttr::variant& var,
+                              entt::meta_any& var,
                               const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                              const entt::meta_custom& custom) -> inspect_result
 {
     
-    auto& data = var.get_value<layer_mask>();
+    auto& data = var.cast<layer_mask&>();
     std::bitset<32> bits = data.mask;
 
     inspect_result result{};
@@ -103,7 +103,6 @@ auto inspector_layer::inspect(rtti::context& ctx,
         result.edit_finished |= true;//ImGui::IsItemDeactivatedAfterEdit();
 
         data.mask = int(bits.to_ulong());
-        var = data;
     }
 
     return result;

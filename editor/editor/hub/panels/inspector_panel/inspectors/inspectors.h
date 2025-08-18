@@ -1,5 +1,6 @@
 #pragma once
 
+#include "entt/core/fwd.hpp"
 #include "inspector.h"
 #include "property_path_generator.h"
 #include <context/context.hpp>
@@ -11,7 +12,7 @@ struct inspector_registry
 {
     inspector_registry();
 
-    std::unordered_map<rttr::type, std::shared_ptr<inspector>> type_map;
+    std::unordered_map<entt::id_type, std::shared_ptr<inspector>> type_map;
 };
 
 /**
@@ -106,7 +107,7 @@ struct prefab_override_context
     static void mark_text_area_as_changed(entt::handle entity);
     static void mark_material_as_changed(entt::handle entity);
     static void mark_property_as_changed(entt::handle entity,
-                                         const rttr::type& component_type,
+                                         const entt::meta_type& component_type,
                                          const std::string& property_path);
     static auto exists_in_prefab(scene& cache_scene,
                                  const asset_handle<prefab>& prefab,
@@ -121,63 +122,55 @@ void push_debug_view();
 void pop_debug_view();
 auto is_debug_view() -> bool;
 
-auto get_meta_empty(const rttr::variant& other) -> rttr::variant;
-auto are_property_values_equal(const rttr::variant& val1, const rttr::variant& val2) -> bool;
-
 auto inspect_var(rtti::context& ctx,
-                 rttr::variant& var,
+                 entt::meta_any& var,
                  const var_info& info = {},
-                 const inspector::meta_getter& get_metadata = get_meta_empty) -> inspect_result;
+                 const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_var_properties(rtti::context& ctx,
-                            rttr::variant& var,
-                            const var_info& info = {},
-                            const inspector::meta_getter& get_metadata = get_meta_empty) -> inspect_result;
+                                entt::meta_any& var,
+                                const var_info& info = {},
+                                const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_array(rtti::context& ctx,
-                   rttr::variant& var,
-                   const rttr::property& prop,
-                   const var_info& info = {},
-                   const inspector::meta_getter& get_metadata = get_meta_empty) -> inspect_result;
+                       entt::meta_any& var,
+                       const entt::meta_data& prop,
+                       const var_info& info = {},
+                       const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_array(rtti::context& ctx,
-                   rttr::variant& var,
-                   const std::string& name,
-                   const std::string& tooltip,
-                   const var_info& info = {},
-                   const inspector::meta_getter& get_metadata = get_meta_empty) -> inspect_result;
+                       entt::meta_any& var,
+                       const std::string& name,
+                       const std::string& tooltip,
+                       const var_info& info = {},
+                       const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_associative_container(rtti::context& ctx,
-                                   rttr::variant& var,
-                                   const rttr::property& prop,
+                                   entt::meta_any& var,
+                                   const entt::meta_data& prop,
                                    const var_info& info = {},
-                                   const inspector::meta_getter& get_metadata = get_meta_empty) -> inspect_result;
+                                   const entt::meta_custom& custom = {}) -> inspect_result;
+
 auto inspect_enum(rtti::context& ctx,
-                  rttr::variant& var,
-                  rttr::enumeration& data,
+                  entt::meta_any& var,
                   const var_info& info = {}) -> inspect_result;
 
 // Refresh inspector by rttr type
-auto refresh_inspector(rtti::context& ctx, rttr::type type) -> void;
+
+auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void;
 
 // Refresh inspector by template type
 template<typename T>
 auto refresh_inspector(rtti::context& ctx) -> void
 {
-    refresh_inspector(ctx, rttr::type::get<T>());
-}
-
-template<typename T>
-auto inspect(rtti::context& ctx, T* obj) -> inspect_result
-{
-    rttr::variant var = obj;
-    return inspect_var(ctx, var);
+    refresh_inspector(ctx, entt::resolve<T>());
 }
 
 template<typename T>
 auto inspect(rtti::context& ctx, T& obj) -> inspect_result
 {
-    return inspect(ctx, &obj);
+    entt::meta_any var = entt::forward_as_meta(obj);
+    return inspect_var(ctx, var);
 }
 
 } // namespace unravel

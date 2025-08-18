@@ -12,14 +12,6 @@ namespace unravel
 
 REFLECT(physics_box_shape)
 {
-    rttr::registration::class_<physics_box_shape>("physics_box_shape")(rttr::metadata("pretty_name", "Box"))
-        .constructor<>()()
-        .property("center", &physics_box_shape::center)(rttr::metadata("pretty_name", "Center"),
-                                                        rttr::metadata("tooltip", "The center of the collider."))
-        .property("extends", &physics_box_shape::extends)(rttr::metadata("pretty_name", "Extends"),
-                                                          rttr::metadata("tooltip", "The extends of the collider."));
-
-    // Register physics_box_shape with entt
     entt::meta_factory<physics_box_shape>{}
         .type("physics_box_shape"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -59,16 +51,6 @@ LOAD_INSTANTIATE(physics_box_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_sphere_shape)
 {
-    rttr::registration::class_<physics_sphere_shape>("physics_sphere_shape")(rttr::metadata("pretty_name", "Sphere"))
-        .constructor<>()()
-        .property("center", &physics_sphere_shape::center)(rttr::metadata("pretty_name", "Center"),
-                                                           rttr::metadata("tooltip", "The center of the collider."))
-        .property("radius", &physics_sphere_shape::radius)(rttr::metadata("pretty_name", "Radius"),
-                                                           rttr::metadata("tooltip", "The radius of the collider."),
-                                                           rttr::metadata("min", 0.0f),
-                                                           rttr::metadata("step", 0.1f));
-
-    // Register physics_sphere_shape with entt
     entt::meta_factory<physics_sphere_shape>{}
         .type("physics_sphere_shape"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -110,20 +92,6 @@ LOAD_INSTANTIATE(physics_sphere_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_capsule_shape)
 {
-    rttr::registration::class_<physics_capsule_shape>("physics_capsule_shape")(rttr::metadata("pretty_name", "Capsule"))
-        .constructor<>()()
-        .property("center", &physics_capsule_shape::center)(rttr::metadata("pretty_name", "Center"),
-                                                            rttr::metadata("tooltip", "The center of the collider."))
-        .property("radius", &physics_capsule_shape::radius)(rttr::metadata("pretty_name", "Radius"),
-                                                            rttr::metadata("tooltip", "The radius of the collider."),
-                                                            rttr::metadata("min", 0.0f),
-                                                            rttr::metadata("step", 0.1f))
-        .property("length", &physics_capsule_shape::length)(rttr::metadata("pretty_name", "Length"),
-                                                            rttr::metadata("tooltip", "The length of the collider."),
-                                                            rttr::metadata("min", 0.0f),
-                                                            rttr::metadata("step", 0.1f));
-
-    // Register physics_capsule_shape with entt
     entt::meta_factory<physics_capsule_shape>{}
         .type("physics_capsule_shape"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -175,26 +143,10 @@ LOAD_INSTANTIATE(physics_capsule_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_cylinder_shape)
 {
-    rttr::registration::class_<physics_cylinder_shape>(
-        "physics_cylinder_shape")(rttr::metadata("category", "PHYSICS"), rttr::metadata("pretty_name", "Cylinder"))
-        .constructor<>()()
-        .property("center", &physics_cylinder_shape::center)(rttr::metadata("pretty_name", "Center"),
-                                                             rttr::metadata("tooltip", "The center of the collider."))
-        .property("radius", &physics_cylinder_shape::radius)(rttr::metadata("pretty_name", "Radius"),
-                                                             rttr::metadata("tooltip", "The radius of the collider."),
-                                                             rttr::metadata("min", 0.0f),
-                                                             rttr::metadata("step", 0.1f))
-        .property("length", &physics_cylinder_shape::length)(rttr::metadata("pretty_name", "Length"),
-                                                             rttr::metadata("tooltip", "The length of the collider."),
-                                                             rttr::metadata("min", 0.0f),
-                                                             rttr::metadata("step", 0.1f));
-
-    // Register physics_cylinder_shape with entt
     entt::meta_factory<physics_cylinder_shape>{}
         .type("physics_cylinder_shape"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "physics_cylinder_shape"},
-            entt::attribute{"category", "PHYSICS"},
             entt::attribute{"pretty_name", "Cylinder"},
         })
         .data<&physics_cylinder_shape::center>("center"_hs)
@@ -242,37 +194,22 @@ LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_compound_shape)
 {
-    static const auto& ps = rttr::type::get<physics_box_shape>();
-    static const auto& ss = rttr::type::get<physics_sphere_shape>();
-    static const auto& cs = rttr::type::get<physics_capsule_shape>();
-    static const auto& cys = rttr::type::get<physics_cylinder_shape>();
+    static const auto& ps = entt::resolve<physics_box_shape>();
+    static const auto& ss = entt::resolve<physics_sphere_shape>();
+    static const auto& cs = entt::resolve<physics_capsule_shape>();
+    static const auto& cys = entt::resolve<physics_cylinder_shape>();
 
-    std::vector<const rttr::type*> variant_types{&ps, &ss, &cs, &cys};
+    std::vector<entt::meta_type> variant_types{ps, ss, cs, cys};
 
-    rttr::registration::class_<physics_compound_shape>("physics_compound_shape")(
-        rttr::metadata("category", "PHYSICS"),
-        rttr::metadata("pretty_name", "Shape"),
-        rttr::metadata("variant_types", variant_types))
-        .constructor<>()();
-
-    {
-        static const auto& ps = entt::resolve<physics_box_shape>();
-        static const auto& ss = entt::resolve<physics_sphere_shape>();
-        static const auto& cs = entt::resolve<physics_capsule_shape>();
-        static const auto& cys = entt::resolve<physics_cylinder_shape>();
-
-        std::vector<entt::meta_type> variant_types{ps, ss, cs, cys};
-
-        // Register physics_compound_shape with entt
-        entt::meta_factory<physics_compound_shape>{}
-            .type("physics_compound_shape"_hs)
-            .custom<entt::attributes>(entt::attributes{
-                entt::attribute{"name", "physics_compound_shape"},
-                entt::attribute{"category", "PHYSICS"},
-                entt::attribute{"pretty_name", "Shape"},
-                entt::attribute{"variant_types", variant_types}
-            });
-    }
+    // Register physics_compound_shape with entt
+    entt::meta_factory<physics_compound_shape>{}
+        .type("physics_compound_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_compound_shape"},
+            entt::attribute{"pretty_name", "Shape"},
+            entt::attribute{"variant_types", variant_types}
+        });
+    
 }
 
 SAVE(physics_compound_shape)
@@ -292,70 +229,6 @@ LOAD_INSTANTIATE(physics_compound_shape, ser20::iarchive_binary_t);
 
 REFLECT(physics_component)
 {
-
-    rttr::registration::class_<physics_component>("physics_component")(rttr::metadata("category", "PHYSICS"),
-                                                                       rttr::metadata("pretty_name", "Physics"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<physics_component>)
-
-        .property("is_using_gravity", &physics_component::is_using_gravity, &physics_component::set_is_using_gravity)(
-            rttr::metadata("pretty_name", "Use Gravity"),
-            rttr::metadata("tooltip", "Simulate gravity for this rigidbody."))
-        .property("is_kinematic", &physics_component::is_kinematic, &physics_component::set_is_kinematic)(
-            rttr::metadata("pretty_name", "Is Kinematic"),
-            rttr::metadata(
-                "tooltip",
-                "Is the rigidbody kinematic(A rigid body that is not affected by others and can be moved directly.)"))
-        .property("is_sensor", &physics_component::is_sensor, &physics_component::set_is_sensor)(
-            rttr::metadata("pretty_name", "Is Sensor"),
-            rttr::metadata("tooltip", "The rigidbody will not respond to collisions, i.e. it becomes a _sensor_."))
-        .property("is_autoscaled", &physics_component::is_autoscaled, &physics_component::set_is_autoscaled)(
-            rttr::metadata("pretty_name", "Is Auto Scaled"),
-            rttr::metadata("tooltip", "Enables/Disables shape auto scale with transform."))
-        .property("mass", &physics_component::get_mass, &physics_component::set_mass)(
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("pretty_name", "Mass"),
-            rttr::metadata("tooltip", "Mass for dynamic rigidbodies."))
-
-        .property("include_layers",
-                  &physics_component::get_collision_include_mask,
-                  &physics_component::set_collision_include_mask)(
-            rttr::metadata("pretty_name", "Include Layers"),
-            rttr::metadata("tooltip", "Layers to include when producing collisions."))
-
-        .property("exclude_layers",
-                  &physics_component::get_collision_exclude_mask,
-                  &physics_component::set_collision_exclude_mask)(
-            rttr::metadata("pretty_name", "Exclude Layers"),
-            rttr::metadata("tooltip", "Layers to exclude when producing collisions."))
-
-        .property_readonly("collision_layers", &physics_component::get_collision_mask)(
-            rttr::metadata("pretty_name", "Collision Layers"),
-            rttr::metadata("tooltip", "Layers (Include - Exclude) used when producing collisions."))
-
-        .property_readonly("velocity", &physics_component::get_velocity)(rttr::metadata("pretty_name", "Velocity"))
-
-        .property_readonly("angular_velocity",
-                           &physics_component::get_angular_velocity)(rttr::metadata("pretty_name", "Angular Velocity"))
-
-        .property("mass", &physics_component::get_mass, &physics_component::set_mass)(
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("pretty_name", "Mass"),
-            rttr::metadata("tooltip", "Mass for dynamic rigidbodies."))
-        .property("freeze_position", &physics_component::get_freeze_position, &physics_component::set_freeze_position)(
-            rttr::metadata("pretty_name", "Freeze Position"),
-            rttr::metadata("tooltip", "Freeze."))
-        .property("freeze_rotation", &physics_component::get_freeze_rotation, &physics_component::set_freeze_rotation)(
-            rttr::metadata("pretty_name", "Freeze Rotation"),
-            rttr::metadata("tooltip", "Freeze."))
-        .property("material", &physics_component::get_material, &physics_component::set_material)(
-            rttr::metadata("pretty_name", "Material"),
-            rttr::metadata("tooltip", "Physics material for the rigidbody."))
-        .property("shapes", &physics_component::get_shapes, &physics_component::set_shapes)(
-            rttr::metadata("pretty_name", "Shapes"),
-            rttr::metadata("tooltip", "Shapes."));
-
-    // Register physics_component with entt
     entt::meta_factory<physics_component>{}
         .type("physics_component"_hs)
         .custom<entt::attributes>(entt::attributes{

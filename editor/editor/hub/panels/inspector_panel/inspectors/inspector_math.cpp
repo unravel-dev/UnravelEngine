@@ -1,4 +1,5 @@
 #include "inspector_math.h"
+#include "entt/meta/resolve.hpp"
 #include "imgui/imgui.h"
 #include <imgui/imgui_internal.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
@@ -130,11 +131,11 @@ bool DragVec4(math::vec4& data, const var_info& info, const math::vec4* reset = 
 } // namespace
 
 auto inspector_bvec2::inspect(rtti::context& ctx,
-                              rttr::variant& var,
+                              entt::meta_any& var,
                               const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                              const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::bvec2>();
+    auto& data = var.cast<math::bvec2&>();
     inspect_result result{};
 
     enum bflags
@@ -158,7 +159,6 @@ auto inspector_bvec2::inspect(rtti::context& ctx,
     {
         data.x = flags & bflags::x;
         data.y = flags & bflags::y;
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -167,11 +167,11 @@ auto inspector_bvec2::inspect(rtti::context& ctx,
 }
 
 auto inspector_bvec3::inspect(rtti::context& ctx,
-                              rttr::variant& var,
+                              entt::meta_any& var,
                               const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                              const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::bvec3>();
+    auto& data = var.cast<math::bvec3&>();
     inspect_result result{};
 
     enum bflags
@@ -201,7 +201,6 @@ auto inspector_bvec3::inspect(rtti::context& ctx,
         data.x = flags & bflags::x;
         data.y = flags & bflags::y;
         data.z = flags & bflags::z;
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -210,11 +209,11 @@ auto inspector_bvec3::inspect(rtti::context& ctx,
 }
 
 auto inspector_bvec4::inspect(rtti::context& ctx,
-                              rttr::variant& var,
+                              entt::meta_any& var,
                               const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                              const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::bvec4>();
+    auto& data = var.cast<math::bvec4&>();
     inspect_result result{};
 
     enum bflags
@@ -250,7 +249,6 @@ auto inspector_bvec4::inspect(rtti::context& ctx,
         data.z = flags & bflags::z;
         data.w = flags & bflags::w;
 
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -259,16 +257,15 @@ auto inspector_bvec4::inspect(rtti::context& ctx,
 }
 
 auto inspector_vec2::inspect(rtti::context& ctx,
-                             rttr::variant& var,
+                             entt::meta_any& var,
                              const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                             const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::vec2>();
+    auto& data = var.cast<math::vec2&>();
     inspect_result result{};
 
     if(DragVec2(data, info))
     {
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -277,16 +274,15 @@ auto inspector_vec2::inspect(rtti::context& ctx,
 }
 
 auto inspector_vec3::inspect(rtti::context& ctx,
-                             rttr::variant& var,
+                             entt::meta_any& var,
                              const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                             const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::vec3>();
+    auto& data = var.cast<math::vec3&>();
     inspect_result result{};
 
     if(DragVec3(data, info))
     {
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -295,16 +291,15 @@ auto inspector_vec3::inspect(rtti::context& ctx,
 }
 
 auto inspector_vec4::inspect(rtti::context& ctx,
-                             rttr::variant& var,
+                             entt::meta_any& var,
                              const var_info& info,
-                             const meta_getter& get_metadata) -> inspect_result
+                             const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::vec4>();
+    auto& data = var.cast<math::vec4&>();
     inspect_result result{};
 
     if(DragVec4(data, info))
     {
-        var = data;
         result.changed = true;
     }
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
@@ -313,11 +308,11 @@ auto inspector_vec4::inspect(rtti::context& ctx,
 }
 
 auto inspector_color::inspect(rtti::context& ctx,
-                              rttr::variant& var,
+                              entt::meta_any& var,
                               const var_info& info,
-                              const meta_getter& get_metadata) -> inspect_result
+                              const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<math::color>();
+    auto& data = var.cast<math::color&>();
     inspect_result result{};
 
     if(ImGui::ColorEdit4("##",
@@ -335,11 +330,11 @@ auto inspector_color::inspect(rtti::context& ctx,
 }
 
 auto inspector_quaternion::inspect(rtti::context& ctx,
-                                   rttr::variant& var,
+                                   entt::meta_any& var,
                                    const var_info& info,
-                                   const meta_getter& get_metadata) -> inspect_result
+                                   const entt::meta_custom& custom) -> inspect_result
 {
-    auto data = var.get_value<math::quat>();
+    auto& data = var.cast<math::quat&>();
     inspect_result result{};
 
     auto val = quat_to_vec4(data);
@@ -355,7 +350,8 @@ auto inspector_quaternion::inspect(rtti::context& ctx,
     return result;
 }
 
-void inspector_transform::before_inspect(const rttr::property& prop)
+
+void inspector_transform::before_inspect(const entt::meta_data& prop)
 {
     layout_ = std::make_unique<property_layout>();
     layout_->set_data(prop, false);
@@ -363,9 +359,9 @@ void inspector_transform::before_inspect(const rttr::property& prop)
 }
 
 auto inspector_transform::inspect(rtti::context& ctx,
-                                  rttr::variant& var,
+                                  entt::meta_any& var,
                                   const var_info& info,
-                                  const meta_getter& get_metadata) -> inspect_result
+                                  const entt::meta_custom& custom) -> inspect_result
 {
     if(!open_)
     {
@@ -373,14 +369,14 @@ auto inspector_transform::inspect(rtti::context& ctx,
     }
     inspect_result result{};
 
-    auto data = var.get_value<math::transform>();
+    auto& data = var.cast<math::transform&>();
     auto position = data.get_translation();
     auto rotation = data.get_rotation();
     auto scale = data.get_scale();
     auto skew = data.get_skew();
     //    auto perspective = data.get_perspective();
 
-    auto type = rttr::type::get<math::transform>();
+    auto type = entt::resolve<math::transform>();
  
     static math::vec3 euler_angles(0.0f, 0.0f, 0.0f);
 
@@ -397,9 +393,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
     ImGui::PushID("Position");
     {
-        auto prop = type.get_property("position");
-        auto prop_name = prop.get_name().to_string();
-        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        auto prop = type.data("position"_hs);
+        auto prop_name = entt::get_name(prop);
+        auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
         override_ctx.push_segment(prop_name, prop_pretty_name);
@@ -448,9 +444,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
     ImGui::PushID("Rotation");
     {
-        auto prop = type.get_property("rotation");
-        auto prop_name = prop.get_name().to_string();
-        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        auto prop = type.data("rotation"_hs);
+        auto prop_name = entt::get_name(prop);
+        auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
         override_ctx.push_segment(prop_name, prop_pretty_name);
@@ -502,9 +498,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
     ImGui::PushID("Scale");
     {
-        auto prop = type.get_property("scale");
-        auto prop_name = prop.get_name().to_string();
-        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        auto prop = type.data("scale"_hs);
+        auto prop_name = entt::get_name(prop);
+        auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
         override_ctx.push_segment(prop_name, prop_pretty_name);
@@ -577,9 +573,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
     ImGui::PushID("Skew");
     {
-        auto prop = type.get_property("skew");
-        auto prop_name = prop.get_name().to_string();
-        auto prop_pretty_name = rttr::get_pretty_name(prop);
+        auto prop = type.data("skew"_hs);
+        auto prop_name = entt::get_name(prop);
+        auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
         override_ctx.push_segment(prop_name, prop_pretty_name);
@@ -625,11 +621,6 @@ auto inspector_transform::inspect(rtti::context& ctx,
         override_ctx.pop_segment();
     }
     ImGui::PopID();
-
-    if(result.changed)
-    {
-        var = data;
-    }
 
     return result;
 }

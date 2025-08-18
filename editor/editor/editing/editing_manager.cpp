@@ -347,7 +347,7 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
             serialization::set_path_context(old_ctx);
         }
 
-        refresh_inspector<asset_handle<prefab>>(ctx);
+        refresh_inspector(ctx, entt::resolve<asset_handle<prefab>>());
     });
 }
 

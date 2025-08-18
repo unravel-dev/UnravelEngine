@@ -14,21 +14,11 @@ namespace unravel
 
 REFLECT_INLINE(settings::app_settings)
 {
-    rttr::registration::class_<settings::app_settings>("app_settings")(rttr::metadata("pretty_name", "Application"))
-        .constructor<>()()
-        .property("company", &settings::app_settings::company)(rttr::metadata("pretty_name", "Company"),
-                                                               rttr::metadata("tooltip", "Missing..."))
-        .property("product", &settings::app_settings::product)(rttr::metadata("pretty_name", "Product"),
-                                                               rttr::metadata("tooltip", "Missing..."))
-        .property("version", &settings::app_settings::version)(rttr::metadata("pretty_name", "Version"),
-                                                               rttr::metadata("tooltip", "Missing..."));
-
-    // Register app_settings with entt
     entt::meta_factory<settings::app_settings>{}
         .type("app_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "app_settings"},
-            entt::attribute{"pretty_name", "Application"},
+            entt::attribute{"pretty_name", "Application Settings"},
         })
         .data<&settings::app_settings::company>("company"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -67,19 +57,6 @@ LOAD_INLINE(settings::app_settings)
 
 REFLECT_INLINE(settings::asset_settings::texture_importer_settings)
 {
-    rttr::registration::class_<settings::asset_settings::texture_importer_settings>("texture_importer_settings")(rttr::metadata("pretty_name", "Texture Importer Settings"))
-        .constructor<>()()
-        .property("default_max_size", &settings::asset_settings::texture_importer_settings::default_max_size)(
-            rttr::metadata("pretty_name", "Default Max Size"),
-            rttr::metadata("tooltip",
-                           "The default maximum size for textures."))
-        .property("default_compression", &settings::asset_settings::texture_importer_settings::default_compression)(
-            rttr::metadata("pretty_name", "Default Compression"),
-            rttr::metadata(
-                "tooltip",
-                "The default compression for textures."));
-
-    // Register texture_importer_settings with entt
     entt::meta_factory<settings::asset_settings::texture_importer_settings>{}
         .type("texture_importer_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -125,16 +102,11 @@ LOAD_INLINE(settings::asset_settings)
 
 REFLECT_INLINE(settings::graphics_settings)
 {
-    rttr::registration::class_<settings::graphics_settings>("graphics_settings")(
-        rttr::metadata("pretty_name", "Graphics"))
-        .constructor<>()();
-
-    // Register graphics_settings with entt
     entt::meta_factory<settings::graphics_settings>{}
         .type("graphics_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "graphics_settings"},
-            entt::attribute{"pretty_name", "Graphics"},
+            entt::attribute{"pretty_name", "Graphics Settings"},
         });
 }
 
@@ -154,19 +126,12 @@ LOAD_INLINE(settings::graphics_settings)
 
 REFLECT_INLINE(settings::standalone_settings)
 {
-    rttr::registration::class_<settings::standalone_settings>("standalone_settings")(
-        rttr::metadata("pretty_name", "Standalone"))
-        .constructor<>()()
-        .property("startup_scene",
-                  &settings::standalone_settings::startup_scene)(rttr::metadata("pretty_name", "Startup Scene"),
-                                                                 rttr::metadata("tooltip", "The scene to load first."));
 
-    // Register standalone_settings with entt
     entt::meta_factory<settings::standalone_settings>{}
         .type("standalone_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "standalone_settings"},
-            entt::attribute{"pretty_name", "Standalone"},
+            entt::attribute{"pretty_name", "Standalone Settings"},
         })
         .data<&settings::standalone_settings::startup_scene>("startup_scene"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -188,26 +153,11 @@ LOAD_INLINE(settings::standalone_settings)
 
 REFLECT_INLINE(settings::time_settings)
 {
-    rttr::registration::class_<settings::time_settings>("time_settings")(rttr::metadata("pretty_name", "Time"))
-        .constructor<>()()
-        .property("fixed_timestep", &settings::time_settings::fixed_timestep)(
-            rttr::metadata("pretty_name", "Fixed Timestep"),
-            rttr::metadata("step", 0.001f),
-            rttr::metadata("tooltip",
-                           "A framerate-idependent interval which dictates when physics calculations and FixedUpdate "
-                           "events are performed."))
-        .property("max_fixed_steps", &settings::time_settings::max_fixed_steps)(
-            rttr::metadata("pretty_name", "Max Fixed Steps"),
-            rttr::metadata(
-                "tooltip",
-                "A cap for framerate-idependent worst case scenario. No more than this much fixed updates per frame."));
-
-    // Register time_settings with entt
     entt::meta_factory<settings::time_settings>{}
         .type("time_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "time_settings"},
-            entt::attribute{"pretty_name", "Time"},
+            entt::attribute{"pretty_name", "Time Settings"},
         })
         .data<&settings::time_settings::fixed_timestep>("fixed_timestep"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -238,18 +188,11 @@ LOAD_INLINE(settings::time_settings)
 
 REFLECT_INLINE(settings::layer_settings)
 {
-    rttr::registration::class_<settings::layer_settings>("layer_settings")(rttr::metadata("pretty_name", "Layer"))
-        .constructor<>()()
-        .property("layers", &settings::layer_settings::layers)(rttr::metadata("pretty_name", "Layers"),
-                                                               rttr::metadata("readonly_count", get_reserved_layers().size()),
-                                                               rttr::metadata("tooltip", ""));
-
-    // Register layer_settings with entt
     entt::meta_factory<settings::layer_settings>{}
         .type("layer_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "layer_settings"},
-            entt::attribute{"pretty_name", "Layer"},
+            entt::attribute{"pretty_name", "Layer Settings"},
         })
         .data<&settings::layer_settings::layers>("layers"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -309,26 +252,6 @@ LOAD_INLINE(settings::resolution_settings)
 
 REFLECT_INLINE(settings::resolution_settings::resolution)
 {
-    rttr::registration::class_<settings::resolution_settings::resolution>("resolution")(
-        rttr::metadata("pretty_name", "Resolution"))
-        .constructor<>()()
-        .property("name", &settings::resolution_settings::resolution::name)(
-            rttr::metadata("pretty_name", "Name"),
-            rttr::metadata("tooltip", "Display name for this resolution"))
-        .property("width", &settings::resolution_settings::resolution::width)(
-            rttr::metadata("pretty_name", "Width"),
-            rttr::metadata("min", 0),
-            rttr::metadata("tooltip", "Width in pixels (0 for free aspect)"))
-        .property("height", &settings::resolution_settings::resolution::height)(
-            rttr::metadata("pretty_name", "Height"),
-            rttr::metadata("min", 0),
-            rttr::metadata("tooltip", "Height in pixels (0 for free aspect)"))
-        .property("aspect", &settings::resolution_settings::resolution::aspect)(
-            rttr::metadata("pretty_name", "Aspect Ratio"),
-            rttr::metadata("min", 0.0f),
-            rttr::metadata("tooltip", "Aspect ratio (0 for free aspect)"));
-
-    // Register resolution with entt
     entt::meta_factory<settings::resolution_settings::resolution>{}
         .type("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -366,14 +289,6 @@ REFLECT_INLINE(settings::resolution_settings::resolution)
 
 REFLECT_INLINE(settings::resolution_settings)
 {
-    rttr::registration::class_<settings::resolution_settings>("resolution_settings")(
-        rttr::metadata("pretty_name", "Resolution Settings"))
-        .constructor<>()()
-        .property("resolutions", &settings::resolution_settings::resolutions)(
-            rttr::metadata("pretty_name", "Resolutions"),
-            rttr::metadata("tooltip", "List of available resolutions"));
-
-    // Register resolution_settings with entt
     entt::meta_factory<settings::resolution_settings>{}
         .type("resolution_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -390,18 +305,7 @@ REFLECT_INLINE(settings::resolution_settings)
 
 REFLECT(settings)
 {
-    rttr::registration::class_<settings>("settings")(rttr::metadata("pretty_name", "Settings"))
-        .constructor<>()()
-        .property("app", &settings::app)(rttr::metadata("pretty_name", "Application"),
-                                         rttr::metadata("tooltip", "Missing..."))
-        .property("graphics", &settings::graphics)(rttr::metadata("pretty_name", "Graphics"),
-                                                   rttr::metadata("tooltip", "Missing..."))
-        .property("standalone", &settings::standalone)(rttr::metadata("pretty_name", "Standalone"),
-                                                       rttr::metadata("tooltip", "Missing..."))
-        .property("resolution", &settings::resolution)(rttr::metadata("pretty_name", "Resolution"),
-                                                       rttr::metadata("tooltip", "Resolution settings for the project"));
 
-    // Register settings with entt
     entt::meta_factory<settings>{}
         .type("settings"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -32,7 +32,6 @@ class material : public crtp_meta_type<material>
 {
 public:
     SERIALIZABLE(material)
-    REFLECTABLE(material)
 
     using sptr = std::shared_ptr<material>;
     using wptr = std::weak_ptr<material>;
@@ -101,7 +100,6 @@ class pbr_material : public crtp_meta_type<pbr_material, material>
 {
 public:
     SERIALIZABLE(pbr_material)
-    REFLECTABLEV(pbr_material, material)
 
     auto clone() const -> std::shared_ptr<material> override;
 

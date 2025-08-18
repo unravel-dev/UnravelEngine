@@ -2,7 +2,6 @@
 
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
-#include <rttr/type>
 #include <entt/meta/meta.hpp>
 
 struct module_desc
@@ -14,7 +13,6 @@ struct module_desc
 struct module_data
 {
     module_desc desc;
-    // std::unique_ptr<rttr::library> plugin;
 };
 
 #define SERVICE_RESULT_EXIT 0

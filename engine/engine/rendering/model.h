@@ -38,10 +38,9 @@ struct pose_transform
  * @class model
  * @brief Structure describing a LOD group (set of meshes), LOD transitions, and their materials.
  */
-class model
+class model : public crtp_meta_type<model>
 {
 public:
-    REFLECTABLE(model)
     SERIALIZABLE(model)
 
     /**

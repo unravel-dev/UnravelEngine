@@ -678,7 +678,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
             bool submitted = mat.submit(prog.program.get());
             if(!submitted)
             {
-                if(mat.type_id() == pbr_material::static_type_id())
+                if(mat.is<pbr_material>())
                 {
                     const auto& pbr = static_cast<const pbr_material&>(mat);
                     submit_pbr_material(prog, pbr);

@@ -8,15 +8,6 @@ namespace unravel
 {
 REFLECT(id_component)
 {
-    rttr::registration::class_<id_component>("id_component")(rttr::metadata("category", "BASIC"),
-                                                             rttr::metadata("pretty_name", "Id"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<id_component>)
-
-        .property_readonly("id", &id_component::id)(rttr::metadata("pretty_name", "Id"),
-                                                    rttr::metadata("tooltip", "This is the unique id of the entity."));
-
-    // Register id_component class with entt
     entt::meta_factory<id_component>{}
         .type("id_component"_hs)
         .custom<entt::attributes>(entt::attributes{

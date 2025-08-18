@@ -11,7 +11,7 @@
 
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
-#include <rttr/registration>
+#include <reflection/registration.h>
 
 namespace unravel
 {

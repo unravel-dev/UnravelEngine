@@ -8,7 +8,7 @@ add_library(${target_name} ${libsrc})
 include(GenerateExportHeader)
 generate_export_header(${target_name})
 
-target_link_libraries(${target_name} PUBLIC RTTR::RTTR EnTT::EnTT)
+target_link_libraries(${target_name} PUBLIC EnTT::EnTT)
 
 target_include_directories(${target_name}
     PUBLIC

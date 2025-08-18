@@ -10,20 +10,11 @@ namespace unravel
 
 REFLECT(prefab_property_override_data)
 {
-    rttr::registration::class_<prefab_property_override_data>("prefab_property_override_data")
-        .constructor<>()()
-        .constructor<const hpp::uuid&, const std::string&>()()
-        .constructor<const hpp::uuid&, const std::string&, const std::string&>()()
-        .property("entity_uuid", &prefab_property_override_data::entity_uuid)(rttr::metadata("pretty_name", "Entity UUID"))
-        .property("component_path", &prefab_property_override_data::component_path)(rttr::metadata("pretty_name", "Component Path"))
-        .property("pretty_component_path", &prefab_property_override_data::pretty_component_path)(rttr::metadata("pretty_name", "Pretty Component Path"))
-        ;
-
-    // Register prefab_property_override_data class with entt
     entt::meta_factory<prefab_property_override_data>{}
         .type("prefab_property_override_data"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "prefab_property_override_data"},
+            entt::attribute{"pretty_name", "Prefab Property Override Data"},
         })
         .data<&prefab_property_override_data::entity_uuid>("entity_uuid"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -57,17 +48,6 @@ LOAD_INLINE(prefab_property_override_data)
 
 REFLECT(prefab_component)
 {
-    rttr::registration::class_<prefab_component>("prefab_component")(rttr::metadata("category", "BASIC"),
-                                                                     rttr::metadata("pretty_name", "Prefab"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<prefab_component>)
-
-        .property("source", &prefab_component::source)(rttr::metadata("pretty_name", "Source"))
-        .property("property_overrides", &prefab_component::property_overrides)(rttr::metadata("pretty_name", "Property Overrides"))
-        .property("removed_entities", &prefab_component::removed_entities)(rttr::metadata("pretty_name", "Removed Entities"))
-        ;
-
-    // Register prefab_component class with entt
     entt::meta_factory<prefab_component>{}
         .type("prefab_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -113,15 +93,6 @@ LOAD_INSTANTIATE(prefab_component, ser20::iarchive_binary_t);
 
 REFLECT(prefab_id_component)
 {
-    rttr::registration::class_<prefab_id_component>("prefab_id_component")(rttr::metadata("category", "BASIC"),
-                                                             rttr::metadata("pretty_name", "Prefab Id"))
-        .constructor<>()()
-        .method("component_exists", &component_exists<prefab_id_component>)
-
-        .property_readonly("id", &prefab_id_component::id)(rttr::metadata("pretty_name", "Id"),
-                                                    rttr::metadata("tooltip", "This is the unique id of the entity in the prefab."));
-
-    // Register prefab_id_component class with entt
     entt::meta_factory<prefab_id_component>{}
         .type("prefab_id_component"_hs)
         .custom<entt::attributes>(entt::attributes{

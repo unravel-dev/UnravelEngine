@@ -8,17 +8,6 @@ namespace unravel
 {
 REFLECT(fxaa_component)
 {
-    rttr::registration::class_<fxaa_component>("fxaa_component")(rttr::metadata("category", "RENDERING"),
-                                                                   rttr::metadata("pretty_name", "FXAA"))
-        .constructor<>()
-        .method("component_exists", &component_exists<fxaa_component>)
-
-        .property("enabled", &fxaa_component::enabled)(
-            rttr::metadata("pretty_name", "Enabled"),
-            rttr::metadata("tooltip", "Enable/disable FXAA anti-aliasing"))
-        ;
-
-    // Register fxaa_component class with entt
     entt::meta_factory<fxaa_component>{}
         .type("fxaa_component"_hs)
         .custom<entt::attributes>(entt::attributes{

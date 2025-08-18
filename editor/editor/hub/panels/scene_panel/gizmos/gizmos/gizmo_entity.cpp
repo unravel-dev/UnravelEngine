@@ -31,9 +31,9 @@ auto from_bx(const bx::Vec3& data) -> math::vec3
 
 } // namespace
 
-void gizmo_entity::draw(rtti::context& ctx, rttr::variant& var, const camera& cam, gfx::dd_raii& dd1)
+void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd1)
 {
-    auto e = var.get_value<entt::handle>();
+    auto e = var.cast<entt::handle>();
 
     if(!e || !e.all_of<transform_component>())
         return;
@@ -280,15 +280,16 @@ void gizmo_entity::draw(rtti::context& ctx, rttr::variant& var, const camera& ca
                 return;
             }
 
-            ::unravel::draw_gizmo(ctx, component, cam, dd);
+            auto var_comp = entt::forward_as_meta(*component);
+            ::unravel::draw_gizmo_var(ctx, var_comp, cam, dd);
         });
 }
 
 
 
-void gizmo_entity::draw_billboard(rtti::context& ctx, rttr::variant& var, const camera& cam, gfx::dd_raii& dd)
+void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd)
 {
-    auto e = var.get_value<entt::handle>();
+    auto e = var.cast<entt::handle>();
 
     if(!e || !e.all_of<transform_component>())
         return;

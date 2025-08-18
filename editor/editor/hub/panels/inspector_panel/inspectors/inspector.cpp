@@ -27,7 +27,7 @@ property_layout::property_layout()
     push_layout_to_stack(this);
 }
 
-property_layout::property_layout(const rttr::property& prop, bool columns /*= true*/)
+property_layout::property_layout(const entt::meta_data& prop, bool columns /*= true*/)
 {
     push_layout_to_stack(this);
 
@@ -35,15 +35,6 @@ property_layout::property_layout(const rttr::property& prop, bool columns /*= tr
 
     push_layout();
 }
-
-// property_layout::property_layout(const entt::meta_any& prop, bool columns /*= true*/)
-// {
-//     push_layout_to_stack(this);
-
-//     set_data(prop, columns);
-
-//     push_layout();
-// }
 
 property_layout::property_layout(const std::string& name, bool columns /*= true*/)
 {
@@ -81,25 +72,14 @@ property_layout::~property_layout()
     pop_layout_from_stack(this);
 }
 
-// void property_layout::set_data(const entt::meta_any& prop, bool columns)
-// {
-//     // name_ = prop.get_type().name();
-//     // tooltip_ = "";
-//     // columns_ = columns;
-// }
-
-void property_layout::set_data(const rttr::property& prop, bool columns)
+void property_layout::set_data(const entt::meta_data& prop, bool columns)
 {
-    auto name = rttr::get_pretty_name(prop);
+    auto name = entt::get_pretty_name(prop);
 
-    std::string tooltip{};
-    auto meta_tooltip = prop.get_metadata("tooltip");
-    if(meta_tooltip)
-    {
-        tooltip = meta_tooltip.get_value<std::string>();
-    }
+    auto tooltip = entt::get_attribute_as<std::string>(prop, "tooltip");
 
     set_data(name, tooltip, columns);
+
 }
 
 void property_layout::set_data(const std::string& name, const std::string& tooltip, bool columns)
@@ -256,14 +236,15 @@ void property_layout::pop_layout()
     pushed_ = false;
 }
 
-void inspector::before_inspect(const rttr::property& prop)
+void inspector::before_inspect(const entt::meta_data& prop)
 {
     layout_ = std::make_unique<property_layout>(prop);
 }
 
-void inspector::after_inspect(const rttr::property& prop)
+void inspector::after_inspect(const entt::meta_data& prop)
 {
     layout_.reset();
 }
+
 
 } // namespace unravel

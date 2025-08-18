@@ -5,26 +5,22 @@
 namespace unravel
 {
 
-inspect_result inspector_physics_compound_shape::inspect(rtti::context& ctx,
-                                               rttr::variant& var,
+auto inspector_physics_compound_shape::inspect(rtti::context& ctx,
+                                               entt::meta_any& var,
                                                const var_info& info,
-                                               const meta_getter& get_metadata)
+                                               const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.get_value<physics_compound_shape>();
+    auto& data = var.cast<physics_compound_shape&>();
 
     inspect_result result{};
 
-    std::vector<const rttr::type*> variant_types;
-    auto variant_types_var = var.get_type().get_metadata("variant_types");
-    if(variant_types_var)
-    {
-        variant_types = variant_types_var.get_value<std::vector<const rttr::type*>>();
-    }
+    auto variant_types = entt::get_attribute_as<std::vector<entt::meta_type>>(var.type().custom(), "variant_types");
+
     size_t item_current_idx = data.shape.index();
 
     const auto& combo_preview_value = variant_types[item_current_idx];
 
-    auto name = rttr::get_pretty_name(*combo_preview_value);
+    auto name = entt::get_pretty_name(combo_preview_value);
 
     if(ImGui::BeginCombo("##Type", name.c_str()))
     {
@@ -32,7 +28,7 @@ inspect_result inspector_physics_compound_shape::inspect(rtti::context& ctx,
         {
             const bool is_selected = (item_current_idx == n);
 
-            auto name = rttr::get_pretty_name(*variant_types[n]);
+            auto name = entt::get_pretty_name(variant_types[n]);
 
             if(ImGui::Selectable(name.c_str(), is_selected))
             {
@@ -60,19 +56,19 @@ inspect_result inspector_physics_compound_shape::inspect(rtti::context& ctx,
     if(result.changed)
     {
         const auto type = variant_types[item_current_idx];
-        if(*type == rttr::type::get<physics_box_shape>())
+        if(type == entt::resolve<physics_box_shape>())
         {
             data.shape = physics_box_shape{};
         }
-        else if(*type == rttr::type::get<physics_sphere_shape>())
+        else if(type == entt::resolve<physics_sphere_shape>())
         {
             data.shape = physics_sphere_shape{};
         }
-        else if(*type == rttr::type::get<physics_capsule_shape>())
+        else if(type == entt::resolve<physics_capsule_shape>())
         {
             data.shape = physics_capsule_shape{};
         }
-        else if(*type == rttr::type::get<physics_cylinder_shape>())
+        else if(type == entt::resolve<physics_cylinder_shape>())
         {
             data.shape = physics_cylinder_shape{};
         }
