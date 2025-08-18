@@ -123,7 +123,7 @@ auto get_pretty_name(const meta_data& prop) -> std::string
     return name;
 }
 
-auto property_predicate(std::function<bool(meta_any&)> predicate) -> std::function<bool(meta_any&)>
+auto property_predicate(property_predicate_t predicate) -> property_predicate_t
 {
     return std::move(predicate);
 }

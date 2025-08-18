@@ -71,8 +71,9 @@ REFLECTION_EXPORT auto get_name(const meta_type& t) -> std::string;
 REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_data& prop) -> std::string;
 
-REFLECTION_EXPORT auto property_predicate(std::function<bool(meta_any&)> predicate)
-    -> std::function<bool(meta_any&)>;
+using property_predicate_t = std::function<bool(const meta_any&)>;
+REFLECTION_EXPORT auto property_predicate(property_predicate_t predicate)
+    -> property_predicate_t;
 
     
 template<typename Value, typename... Args>

@@ -166,6 +166,7 @@ void prefab_override_context::push_segment(const std::string& segment, const std
     {
         ImGui::PushFont(ImGui::Font::Bold);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
 }
 
@@ -178,7 +179,7 @@ void prefab_override_context::pop_segment()
 
     if(is_path_overridden())
     {
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(2);
         ImGui::PopFont();
     }
 
@@ -433,33 +434,31 @@ auto get_inspector(rtti::context& ctx, const entt::meta_type& type) -> std::shar
     return it->second;
 }
 
-auto is_property_visible(entt::meta_any& object, const entt::meta_data& prop) -> bool
+auto is_property_visible(const entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
     auto predicate_meta = entt::get_attribute(prop, "predicate");
-    if(predicate_meta.try_cast<std::function<bool(entt::meta_handle&)>>())
+    if(predicate_meta.try_cast<entt::property_predicate_t>())
     {
-        auto pred = predicate_meta.cast<std::function<bool(entt::meta_handle&)>>();
-        entt::meta_handle object_handle = object;
-        return pred(object_handle);
+        auto pred = predicate_meta.cast<entt::property_predicate_t>();
+        return pred(object);
     }
 
     return true;
 }
 
-auto is_property_readonly(entt::meta_any& object, const entt::meta_data& prop) -> bool
+auto is_property_readonly(const entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
     auto predicate_meta = entt::get_attribute(prop, "readonly_predicate");
-    if(predicate_meta.try_cast<std::function<bool(entt::meta_handle&)>>())
+    if(predicate_meta.try_cast<entt::property_predicate_t>())
     {
-        auto pred = predicate_meta.cast<std::function<bool(entt::meta_handle&)>>();
-        entt::meta_handle object_handle = object;
-        return pred(object_handle);
+        auto pred = predicate_meta.cast<entt::property_predicate_t>();
+        return pred(object);
     }
 
     return false;
 }
 
-auto is_property_flattable(entt::meta_any& object, const entt::meta_data& prop) -> bool
+auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
     auto predicate_meta = entt::get_attribute(prop, "flattable");
     if(predicate_meta.try_cast<bool>())
