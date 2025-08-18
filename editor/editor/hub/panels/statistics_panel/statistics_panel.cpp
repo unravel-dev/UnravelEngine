@@ -150,7 +150,7 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
                 // Full memory info with percentage when max is available
                 const float gpu_usage_percentage = (static_cast<float>(stats->gpuMemoryUsed) / static_cast<float>(stats->gpuMemoryMax)) * 100.0f;
                 
-                // Color code based on GPU memory usage
+                // Color code based on GPU memory usage (only for percentage)
                 ImVec4 gpu_memory_color = cpu_color; // Green for low usage
                 if(gpu_usage_percentage > 80.0f) 
                 {
@@ -164,14 +164,14 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
                 std::array<char, 64> gpu_max_str;
                 bx::prettify(gpu_max_str.data(), gpu_max_str.size(), stats->gpuMemoryMax);
                 
-                ImGui::TextColored(gpu_memory_color, "%s / %s", gpu_used_str.data(), gpu_max_str.data());
+                ImGui::Text("%s / %s", gpu_used_str.data(), gpu_max_str.data());
                 ImGui::SameLine();
                 ImGui::TextColored(gpu_memory_color, "(%.1f%%)", gpu_usage_percentage);
             }
             else
             {
                 // Only current usage when max is not available
-                ImGui::TextColored(cpu_color, "%s used", gpu_used_str.data());
+                ImGui::Text("%s used", gpu_used_str.data());
                 ImGui::SameLine();
                 ImGui::TextColored(warning_color, "(max unknown)");
             }
@@ -263,7 +263,13 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
     
     ImGui::PushFont(ImGui::Font::Mono);
     
-    // Profiler controls
+    // CPU Profiler - always shown
+    ImGui::Text("CPU Profiler:");
+    draw_app_profiler_data();
+    
+    ImGui::Separator();
+    
+    // GPU Profiler controls
     ImGui::AlignTextToFramePadding();
     ImGui::Text("GPU Profiler:");
     ImGui::SameLine();
@@ -280,34 +286,27 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
         }
     }
     
-    if(!enable_profiler)
+    // GPU Profiler data - conditionally shown
+    if(enable_profiler)
     {
-        ImGui::Separator();
-        ImGui::TextColored(warning_color, "GPU profiler is disabled.");
-        ImGui::Text("Enable to see detailed GPU timing information.");
-        ImGui::PopFont();
-        return;
-    }
-    
-    auto stats = gfx::get_stats();
-    
-    ImGui::Separator();
-    
-    if(stats->numViews == 0)
-    {
-        ImGui::TextColored(warning_color, "No profiling data available.");
-        ImGui::Text("Profiler may be initializing...");
+        auto stats = gfx::get_stats();
+        
+        if(stats->numViews == 0)
+        {
+            ImGui::TextColored(warning_color, "No GPU profiling data available.");
+            ImGui::Text("Profiler may be initializing...");
+        }
+        else
+        {
+            ImGui::Text("GPU Timing (per view/encoder):");
+            draw_profiler_bars(stats);
+        }
     }
     else
     {
-        ImGui::Text("GPU Timing (per view/encoder):");
-        draw_profiler_bars(stats);
+        ImGui::TextColored(warning_color, "GPU profiler is disabled.");
+        ImGui::Text("Enable to see detailed GPU timing information.");
     }
-    
-    // Application profiler data
-    ImGui::Separator();
-    ImGui::Text("CPU Profiler:");
-    draw_app_profiler_data();
     
     ImGui::PopFont();
 }
