@@ -1,12 +1,12 @@
 #include "statistics_panel.h"
 #include "statistics_utils.h"
-#include "../panels_defs.h"
 
 #include <engine/profiler/profiler.h>
 #include <graphics/graphics.h>
 #include <math/math.h>
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 
 namespace unravel
@@ -15,17 +15,19 @@ namespace unravel
 // Constants
 namespace
 {
-    constexpr float PLOT_HEIGHT = 50.0f;
-    constexpr float MAX_FRAME_TIME_MS = 200.0f;
-    constexpr float MAX_PASSES = 200.0f;
-    constexpr float PROFILER_SCALE = 3.0f;
-    constexpr float PROFILER_MAX_WIDTH = 30.0f;
-    constexpr float RESOURCE_BAR_WIDTH = 90.0f;
-    constexpr float MEGABYTE_DIVISOR = 1024.0f * 1024.0f;
+    constexpr float plot_height = 50.0f;
+    constexpr float max_frame_time_ms = 200.0f;
+    constexpr float max_passes = 200.0f;
+    constexpr float profiler_scale = 3.0f;
+    constexpr float profiler_max_width = 30.0f;
+    constexpr float resource_bar_width = 90.0f;
+    constexpr float megabyte_divisor = 1024.0f * 1024.0f;
     
     // Colors for profiler bars
-    constexpr ImVec4 CPU_COLOR{0.5f, 1.0f, 0.5f, 1.0f};
-    constexpr ImVec4 GPU_COLOR{0.5f, 0.5f, 1.0f, 1.0f};
+    constexpr ImVec4 cpu_color{0.2f, 0.8f, 0.2f, 1.0f};  // More professional green
+    constexpr ImVec4 gpu_color{0.2f, 0.6f, 1.0f, 1.0f};  // More professional blue
+    constexpr ImVec4 warning_color{1.0f, 0.7f, 0.0f, 1.0f};  // Warning orange
+    constexpr ImVec4 error_color{1.0f, 0.3f, 0.3f, 1.0f};    // Error red
     
     // Static sample data instances
     statistics_utils::sample_data frame_time_samples;
@@ -98,44 +100,158 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
     const double to_cpu_ms = 1000.0 / static_cast<double>(stats->cpuTimerFreq);
     const double to_gpu_ms = 1000.0 / static_cast<double>(stats->gpuTimerFreq);
     
-    // Create overlay text for frame time plot
-    char frame_text_overlay[256];
-    bx::snprintf(frame_text_overlay,
-                 BX_COUNTOF(frame_text_overlay),
-                 "Min: %.3fms, Max: %.3fms\nAvg: %.3fms, %.1f FPS",
-                 frame_time_samples.get_min(),
-                 frame_time_samples.get_max(),
-                 frame_time_samples.get_average(),
-                 1000.0f / frame_time_samples.get_average());
+    // Performance Overview Section
+    if(ImGui::CollapsingHeader(ICON_MDI_CHART_LINE "\tPerformance Overview", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::PushFont(ImGui::Font::Mono);
+        
+        // Frame time statistics with color coding
+        const float avg_frame_time = frame_time_samples.get_average();
+        const float fps = 1000.0f / avg_frame_time;
+        
+        // Color code based on performance
+        ImVec4 fps_color = cpu_color; // Green for good performance
+        if(fps < 30.0f) 
+        {
+            fps_color = error_color;     // Red for poor
+        }
+        else if(fps < 55.0f) 
+        {
+            fps_color = warning_color; // Orange for moderate
+        }
+        
+        // Performance summary with better layout
+        ImGui::BeginColumns("PerformanceColumns", 2, ImGuiOldColumnFlags_NoResize);
+        ImGui::SetColumnWidth(0, overlay_width * 0.5f);
+        
+        ImGui::Text("Frame Time:");
+        ImGui::Text("  Average: %.3f ms", avg_frame_time);
+        ImGui::Text("  Min/Max: %.3f / %.3f ms", frame_time_samples.get_min(), frame_time_samples.get_max());
+        
+        ImGui::NextColumn();
+        
+        ImGui::TextColored(fps_color, "FPS: %.1f", fps);
+        if(fps < 55.0f)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(warning_color, fps < 30.0f ? " (Poor)" : " (Low)");
+        }
+        
+        // GPU Memory usage with color coding
+        if(stats->gpuMemoryUsed > 0)
+        {
+            std::array<char, 64> gpu_used_str;
+            bx::prettify(gpu_used_str.data(), gpu_used_str.size(), stats->gpuMemoryUsed);
+            
+            ImGui::Text("GPU Memory:");
+            
+            if(stats->gpuMemoryMax > 0)
+            {
+                // Full memory info with percentage when max is available
+                const float gpu_usage_percentage = (static_cast<float>(stats->gpuMemoryUsed) / static_cast<float>(stats->gpuMemoryMax)) * 100.0f;
+                
+                // Color code based on GPU memory usage
+                ImVec4 gpu_memory_color = cpu_color; // Green for low usage
+                if(gpu_usage_percentage > 80.0f) 
+                {
+                    gpu_memory_color = error_color;      // Red for high
+                }
+                else if(gpu_usage_percentage > 60.0f) 
+                {
+                    gpu_memory_color = warning_color;    // Orange for medium
+                }
+                
+                std::array<char, 64> gpu_max_str;
+                bx::prettify(gpu_max_str.data(), gpu_max_str.size(), stats->gpuMemoryMax);
+                
+                ImGui::TextColored(gpu_memory_color, "%s / %s", gpu_used_str.data(), gpu_max_str.data());
+                ImGui::SameLine();
+                ImGui::TextColored(gpu_memory_color, "(%.1f%%)", gpu_usage_percentage);
+            }
+            else
+            {
+                // Only current usage when max is not available
+                ImGui::TextColored(cpu_color, "%s used", gpu_used_str.data());
+                ImGui::SameLine();
+                ImGui::TextColored(warning_color, "(max unknown)");
+            }
+        }
+        else
+        {
+            ImGui::Text("GPU Memory:");
+            ImGui::TextColored(warning_color, "No data available");
+        }
+        
+        ImGui::EndColumns();
+        
+        // Frame time plot with improved overlay
+        std::array<char, 256> frame_text_overlay;
+        bx::snprintf(frame_text_overlay.data(),
+                     frame_text_overlay.size(),
+                     "Performance: %.1f FPS (%.3f ms avg)\nRange: %.3f - %.3f ms",
+                     fps, avg_frame_time,
+                     frame_time_samples.get_min(),
+                     frame_time_samples.get_max());
+        
+        ImGui::PlotLines("##FrameTime",
+                         frame_time_samples.get_values(),
+                         statistics_utils::sample_data::NUM_SAMPLES,
+                         frame_time_samples.get_offset(),
+                         frame_text_overlay.data(),
+                         0.0f,
+                         max_frame_time_ms,
+                         ImVec2(overlay_width, plot_height));
+        
+        ImGui::Separator();
+        
+        // CPU/GPU timing with better formatting
+        const auto submit_cpu_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * to_cpu_ms;
+        const auto submit_gpu_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * to_gpu_ms;
+        
+        ImGui::BeginColumns("TimingColumns", 4, ImGuiOldColumnFlags_NoResize);
+        ImGui::SetColumnWidth(0, overlay_width * 0.25f);
+        ImGui::SetColumnWidth(1, overlay_width * 0.25f);
+        ImGui::SetColumnWidth(2, overlay_width * 0.25f);
+        
+        ImGui::TextColored(cpu_color, "CPU Submit");
+        ImGui::Text("%.3f ms", submit_cpu_ms);
+        
+        ImGui::NextColumn();
+        ImGui::TextColored(gpu_color, "GPU Submit");
+        ImGui::Text("%.3f ms", submit_gpu_ms);
+        
+        ImGui::NextColumn();
+        ImGui::Text("GPU Latency");
+        ImGui::Text("%d frames", stats->maxGpuLatency);
+        
+        ImGui::NextColumn();
+        ImGui::Text("Draw Calls");
+        ImGui::Text("%u total", stats->numDraw);
+        
+        ImGui::EndColumns();
+        
+        ImGui::PopFont();
+    }
     
-    ImGui::PushFont(ImGui::Font::Mono);
-    
-    // Frame time plot
-    ImGui::PlotLines("##Frame",
-                     frame_time_samples.get_values(),
-                     statistics_utils::sample_data::NUM_SAMPLES,
-                     frame_time_samples.get_offset(),
-                     frame_text_overlay,
-                     0.0f,
-                     MAX_FRAME_TIME_MS,
-                     ImVec2(overlay_width, PLOT_HEIGHT));
-    
-    // CPU/GPU timing information
-    auto submit_cpu_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * to_cpu_ms;
-    auto submit_gpu_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * to_gpu_ms;
-    ImGui::Text("Submit CPU %0.3f, GPU %0.3f (L: %d)",
-                submit_cpu_ms,
-                submit_gpu_ms,
-                stats->maxGpuLatency);
-    ImGui::Text("Render Passes: %u", gfx::render_pass::get_last_frame_max_pass_id());
-    
-    // Primitive counts
-    draw_primitive_counts(stats, io);
-    
-    // Draw call counts
-    draw_call_counts(stats, io);
-    
-    ImGui::PopFont();
+    // Rendering Statistics Section
+    if(ImGui::CollapsingHeader(ICON_MDI_CUBE_OUTLINE "\tRendering Statistics", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        ImGui::PushFont(ImGui::Font::Mono);
+        
+        // Render passes at the top
+        ImGui::Text("Render Passes: %u", gfx::render_pass::get_last_frame_max_pass_id());
+        ImGui::Separator();
+        
+        // Primitive counts
+        draw_primitive_counts(stats, io);
+        
+        ImGui::Separator();
+        
+        // Draw call counts
+        draw_call_counts(stats, io);
+        
+        ImGui::PopFont();
+    }
 }
 
 auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
@@ -145,7 +261,14 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
         return;
     }
     
-    if(ImGui::Checkbox("Enable GPU profiler", &enable_profiler))
+    ImGui::PushFont(ImGui::Font::Mono);
+    
+    // Profiler controls
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("GPU Profiler:");
+    ImGui::SameLine();
+    
+    if(ImGui::Checkbox("Enable##GPUProfiler", &enable_profiler))
     {
         if(enable_profiler)
         {
@@ -157,18 +280,33 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
         }
     }
     
-    ImGui::PushFont(ImGui::Font::Mono);
+    if(!enable_profiler)
+    {
+        ImGui::Separator();
+        ImGui::TextColored(warning_color, "GPU profiler is disabled.");
+        ImGui::Text("Enable to see detailed GPU timing information.");
+        ImGui::PopFont();
+        return;
+    }
     
     auto stats = gfx::get_stats();
     
+    ImGui::Separator();
+    
     if(stats->numViews == 0)
     {
-        ImGui::Text("Profiler is not enabled.");
+        ImGui::TextColored(warning_color, "No profiling data available.");
+        ImGui::Text("Profiler may be initializing...");
     }
     else
     {
+        ImGui::Text("GPU Timing (per view/encoder):");
         draw_profiler_bars(stats);
     }
+    
+    // Application profiler data
+    ImGui::Separator();
+    ImGui::Text("CPU Profiler:");
     draw_app_profiler_data();
     
     ImGui::PopFont();
@@ -176,7 +314,7 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
 
 auto statistics_panel::draw_memory_info_section(float overlay_width) -> void
 {
-    if(!ImGui::CollapsingHeader(ICON_MDI_INFORMATION "\tMemory Info"))
+    if(!ImGui::CollapsingHeader(ICON_MDI_INFORMATION "\tMemory Usage"))
     {
         return;
     }
@@ -191,6 +329,10 @@ auto statistics_panel::draw_memory_info_section(float overlay_width) -> void
     {
         draw_gpu_memory_section(stats, gpu_memory_max, overlay_width);
     }
+    else
+    {
+        ImGui::TextColored(warning_color, "No GPU memory usage data available");
+    }
     
     // Render target memory section
     draw_render_target_memory_section(stats, gpu_memory_max, overlay_width);
@@ -198,12 +340,13 @@ auto statistics_panel::draw_memory_info_section(float overlay_width) -> void
     // Texture memory section  
     draw_texture_memory_section(stats, gpu_memory_max, overlay_width);
     
+    ImGui::Unindent();
     ImGui::PopFont();
 }
 
 auto statistics_panel::draw_resources_section() -> void
 {
-    if(!ImGui::CollapsingHeader(ICON_MDI_PUZZLE "\tResources"))
+    if(!ImGui::CollapsingHeader(ICON_MDI_PUZZLE "\tGPU Resources"))
     {
         return;
     }
@@ -213,56 +356,73 @@ auto statistics_panel::draw_resources_section() -> void
     const float item_height = ImGui::GetTextLineHeightWithSpacing();
     
     ImGui::PushFont(ImGui::Font::Mono);
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Res: Num  / Max");
     
-    // Draw resource usage bars
+    ImGui::Text("Resource Usage (Current / Maximum):");
+    ImGui::Separator();
+    
+    // Group resources by category for better organization
+    ImGui::Text("Buffers:");
+    ImGui::Indent();
+    
     using namespace statistics_utils;
     
-    draw_resource_bar("DIB", "Dynamic index buffers",
+    draw_resource_bar("DIB", "Dynamic Index Buffers",
                      stats->numDynamicIndexBuffers, caps->limits.maxDynamicIndexBuffers,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
-    draw_resource_bar("DVB", "Dynamic vertex buffers",
+    draw_resource_bar("DVB", "Dynamic Vertex Buffers",
                      stats->numDynamicVertexBuffers, caps->limits.maxDynamicVertexBuffers,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
-    draw_resource_bar(" FB", "Frame buffers",
-                     stats->numFrameBuffers, caps->limits.maxFrameBuffers,
-                     RESOURCE_BAR_WIDTH, item_height);
-    
-    draw_resource_bar(" IB", "Index buffers",
+    draw_resource_bar(" IB", "Index Buffers",
                      stats->numIndexBuffers, caps->limits.maxIndexBuffers,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
-    draw_resource_bar(" OQ", "Occlusion queries",
-                     stats->numOcclusionQueries, caps->limits.maxOcclusionQueries,
-                     RESOURCE_BAR_WIDTH, item_height);
+    draw_resource_bar(" VB", "Vertex Buffers",
+                     stats->numVertexBuffers, caps->limits.maxVertexBuffers,
+                     resource_bar_width, item_height);
     
-    draw_resource_bar("  P", "Programs",
+    ImGui::Unindent();
+    ImGui::Separator();
+    
+    ImGui::Text("Shading:");
+    ImGui::Indent();
+    
+    draw_resource_bar("  P", "Shader Programs",
                      stats->numPrograms, caps->limits.maxPrograms,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
     draw_resource_bar("  S", "Shaders",
                      stats->numShaders, caps->limits.maxShaders,
-                     RESOURCE_BAR_WIDTH, item_height);
-    
-    draw_resource_bar("  T", "Textures",
-                     stats->numTextures, caps->limits.maxTextures,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
     draw_resource_bar("  U", "Uniforms",
                      stats->numUniforms, caps->limits.maxUniforms,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
-    draw_resource_bar(" VB", "Vertex buffers",
-                     stats->numVertexBuffers, caps->limits.maxVertexBuffers,
-                     RESOURCE_BAR_WIDTH, item_height);
+    ImGui::Unindent();
+    ImGui::Separator();
     
-    draw_resource_bar(" VD", "Vertex layouts",
+    ImGui::Text("Rendering:");
+    ImGui::Indent();
+    
+    draw_resource_bar("  T", "Textures",
+                     stats->numTextures, caps->limits.maxTextures,
+                     resource_bar_width, item_height);
+    
+    draw_resource_bar(" FB", "Frame Buffers",
+                     stats->numFrameBuffers, caps->limits.maxFrameBuffers,
+                     resource_bar_width, item_height);
+    
+    draw_resource_bar(" VD", "Vertex Layouts",
                      stats->numVertexLayouts, caps->limits.maxVertexLayouts,
-                     RESOURCE_BAR_WIDTH, item_height);
+                     resource_bar_width, item_height);
     
+    draw_resource_bar(" OQ", "Occlusion Queries",
+                     stats->numOcclusionQueries, caps->limits.maxOcclusionQueries,
+                     resource_bar_width, item_height);
+    
+    ImGui::Unindent();
     ImGui::PopFont();
 }
 
@@ -276,9 +436,9 @@ auto statistics_panel::update_sample_data() -> void
     
     frame_time_samples.push_sample(static_cast<float>(frame_ms));
     graphics_passes_samples.push_sample(static_cast<float>(gfx::render_pass::get_last_frame_max_pass_id()));
-    gpu_memory_samples.push_sample(static_cast<float>(stats->gpuMemoryUsed) / MEGABYTE_DIVISOR);
-    render_target_memory_samples.push_sample(static_cast<float>(stats->rtMemoryUsed) / MEGABYTE_DIVISOR);
-    texture_memory_samples.push_sample(static_cast<float>(stats->textureMemoryUsed) / MEGABYTE_DIVISOR);
+    gpu_memory_samples.push_sample(static_cast<float>(stats->gpuMemoryUsed) / megabyte_divisor);
+    render_target_memory_samples.push_sample(static_cast<float>(stats->rtMemoryUsed) / megabyte_divisor);
+    texture_memory_samples.push_sample(static_cast<float>(stats->textureMemoryUsed) / megabyte_divisor);
 }
 
 auto statistics_panel::draw_primitive_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void
@@ -288,9 +448,29 @@ auto statistics_panel::draw_primitive_counts(const bgfx::Stats* stats, const ImG
     ui_primitives = std::min(ui_primitives, total_primitives);
     const auto scene_primitives = total_primitives - ui_primitives;
     
-    ImGui::Text("Scene Primitives: %u", scene_primitives);
-    ImGui::Text("UI    Primitives: %u", ui_primitives);
-    ImGui::Text("Total Primitives: %u", total_primitives);
+    ImGui::Text("Triangle Counts:");
+    ImGui::Indent();
+    
+    // Use columns for better alignment
+    ImGui::BeginColumns("PrimitiveColumns", 2, ImGuiOldColumnFlags_NoResize);
+    ImGui::SetColumnWidth(0, 120.0f);
+    
+    ImGui::Text("Scene:");
+    ImGui::NextColumn();
+    ImGui::TextColored(cpu_color, "%u triangles", scene_primitives);
+    ImGui::NextColumn();
+    
+    ImGui::Text("Editor:");
+    ImGui::NextColumn();
+    ImGui::TextColored(gpu_color, "%u triangles", ui_primitives);
+    ImGui::NextColumn();
+    
+    ImGui::Text("Total:");
+    ImGui::NextColumn();
+    ImGui::Text("%u triangles", total_primitives);
+    
+    ImGui::EndColumns();
+    ImGui::Unindent();
 }
 
 auto statistics_panel::draw_call_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void
@@ -299,11 +479,41 @@ auto statistics_panel::draw_call_counts(const bgfx::Stats* stats, const ImGuiIO&
     ui_draw_calls = std::min(ui_draw_calls, stats->numDraw);
     const auto scene_draw_calls = stats->numDraw - ui_draw_calls;
     
-    ImGui::Text("Scene Draw Calls: %u", scene_draw_calls);
-    ImGui::Text("UI    Draw Calls: %u", ui_draw_calls);
-    ImGui::Text("Total Draw Calls: %u", stats->numDraw);
-    ImGui::Text("Total Comp Calls: %u", stats->numCompute);
-    ImGui::Text("Total Blit Calls: %u", stats->numBlit);
+    ImGui::Text("GPU Commands:");
+    ImGui::Indent();
+    
+    // Use columns for better alignment
+    ImGui::BeginColumns("CallCountColumns", 2, ImGuiOldColumnFlags_NoResize);
+    ImGui::SetColumnWidth(0, 120.0f);
+    
+    // Draw calls section
+    ImGui::Text("Draw Calls:");
+    ImGui::NextColumn();
+    ImGui::Text("%u total", stats->numDraw);
+    ImGui::NextColumn();
+    
+    ImGui::Text("  Scene:");
+    ImGui::NextColumn();
+    ImGui::TextColored(cpu_color, "%u calls", scene_draw_calls);
+    ImGui::NextColumn();
+    
+    ImGui::Text("  Editor:");
+    ImGui::NextColumn();
+    ImGui::TextColored(gpu_color, "%u calls", ui_draw_calls);
+    ImGui::NextColumn();
+    
+    // Other command types
+    ImGui::Text("Compute:");
+    ImGui::NextColumn();
+    ImGui::Text("%u calls", stats->numCompute);
+    ImGui::NextColumn();
+    
+    ImGui::Text("Blit:");
+    ImGui::NextColumn();
+    ImGui::Text("%u calls", stats->numBlit);
+    
+    ImGui::EndColumns();
+    ImGui::Unindent();
 }
 
 auto statistics_panel::draw_profiler_bars(const bgfx::Stats* stats) -> void
@@ -338,11 +548,11 @@ auto statistics_panel::draw_encoder_stats(const bgfx::Stats* stats, float item_h
                 ImGui::Text("%3d", pos);
                 ImGui::SameLine(64.0f);
                 
-                const float max_width = PROFILER_MAX_WIDTH * PROFILER_SCALE;
+                const float max_width = profiler_max_width * profiler_scale;
                 const float cpu_ms = static_cast<float>((encoder_stats.cpuTimeEnd - encoder_stats.cpuTimeBegin) * to_cpu_ms);
-                const float cpu_width = bx::clamp(cpu_ms * PROFILER_SCALE, 1.0f, max_width);
+                const float cpu_width = bx::clamp(cpu_ms * profiler_scale, 1.0f, max_width);
                 
-                if(statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, CPU_COLOR))
+                if(statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, cpu_color))
                 {
                     ImGui::SetItemTooltipEx("Encoder %d, CPU: %f [ms]", pos, cpu_ms);
                 }
@@ -369,16 +579,16 @@ auto statistics_panel::draw_view_stats(const bgfx::Stats* stats, float item_heig
                 ImGui::PushID(view_stats.view);
                 ImGui::Text("%3d %3d %s", pos, view_stats.view, view_stats.name);
                 
-                const float max_width = PROFILER_MAX_WIDTH * PROFILER_SCALE;
+                const float max_width = profiler_max_width * profiler_scale;
                 const float cpu_time_elapsed = static_cast<float>((view_stats.cpuTimeEnd - view_stats.cpuTimeBegin) * to_cpu_ms);
                 const float gpu_time_elapsed = static_cast<float>((view_stats.gpuTimeEnd - view_stats.gpuTimeBegin) * to_gpu_ms);
-                const float cpu_width = bx::clamp(cpu_time_elapsed * PROFILER_SCALE, 1.0f, max_width);
-                const float gpu_width = bx::clamp(gpu_time_elapsed * PROFILER_SCALE, 1.0f, max_width);
+                const float cpu_width = bx::clamp(cpu_time_elapsed * profiler_scale, 1.0f, max_width);
+                const float gpu_width = bx::clamp(gpu_time_elapsed * profiler_scale, 1.0f, max_width);
                 
                 ImGui::SameLine(64.0f);
                 
                 ImGui::PushID("cpu");
-                if(statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, CPU_COLOR))
+                if(statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, cpu_color))
                 {
                     ImGui::SetItemTooltipEx("View %d \"%s\", CPU: %f [ms]", pos, view_stats.name, cpu_time_elapsed);
                 }
@@ -387,7 +597,7 @@ auto statistics_panel::draw_view_stats(const bgfx::Stats* stats, float item_heig
                 ImGui::SameLine();
                 
                 ImGui::PushID("gpu");
-                if(statistics_utils::draw_progress_bar(gpu_width, max_width, item_height, GPU_COLOR))
+                if(statistics_utils::draw_progress_bar(gpu_width, max_width, item_height, gpu_color))
                 {
                     ImGui::SetItemTooltipEx("View: %d \"%s\", GPU: %f [ms]", pos, view_stats.name, gpu_time_elapsed);
                 }
@@ -419,66 +629,126 @@ auto statistics_panel::draw_gpu_memory_section(const bgfx::Stats* stats, int64_t
 {
     gpu_memory_max = std::max(stats->gpuMemoryUsed, stats->gpuMemoryMax);
     
-    char str_max[64];
-    bx::prettify(str_max, 64, static_cast<uint64_t>(gpu_memory_max));
+    std::array<char, 64> str_max;
+    bx::prettify(str_max.data(), str_max.size(), static_cast<uint64_t>(gpu_memory_max));
     
-    char str_used[64];
-    bx::prettify(str_used, BX_COUNTOF(str_used), stats->gpuMemoryUsed);
+    std::array<char, 64> str_used;
+    bx::prettify(str_used.data(), str_used.size(), stats->gpuMemoryUsed);
+    
+    const float usage_percentage = gpu_memory_max > 0 ? 
+        (static_cast<float>(stats->gpuMemoryUsed) / static_cast<float>(gpu_memory_max)) * 100.0f : 0.0f;
+    
+    // Color code based on usage
+    ImVec4 usage_color = cpu_color; // Green for low usage
+    if(usage_percentage > 80.0f) 
+    {
+        usage_color = error_color;      // Red for high
+    }
+    else if(usage_percentage > 60.0f) 
+    {
+        usage_color = warning_color; // Orange for medium
+    }
     
     ImGui::Separator();
-    ImGui::Text("GPU mem: %s / %s", str_used, str_max);
-    ImGui::PlotLines("##GPU mem",
+    ImGui::Text("General GPU Memory:");
+    ImGui::Indent();
+    ImGui::Text("Usage: %s / %s", str_used.data(), str_max.data());
+    ImGui::SameLine();
+    ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
+    
+    ImGui::PlotLines("##GPUMemory",
                      gpu_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,
                      gpu_memory_samples.get_offset(),
-                     nullptr,
+                     "GPU Memory Usage Over Time",
                      0.0f,
                      static_cast<float>(gpu_memory_max),
-                     ImVec2(overlay_width, PLOT_HEIGHT));
+                     ImVec2(overlay_width, plot_height));
+    ImGui::Unindent();
 }
 
 auto statistics_panel::draw_render_target_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->rtMemoryUsed, gpu_memory_max);
     
-    char str_max[64];
-    bx::prettify(str_max, 64, static_cast<uint64_t>(gpu_memory_max));
+    std::array<char, 64> str_max;
+    bx::prettify(str_max.data(), str_max.size(), static_cast<uint64_t>(gpu_memory_max));
     
-    char str_used[64];
-    bx::prettify(str_used, BX_COUNTOF(str_used), stats->rtMemoryUsed);
+    std::array<char, 64> str_used;
+    bx::prettify(str_used.data(), str_used.size(), stats->rtMemoryUsed);
+    
+    const float usage_percentage = gpu_memory_max > 0 ? 
+        (static_cast<float>(stats->rtMemoryUsed) / static_cast<float>(gpu_memory_max)) * 100.0f : 0.0f;
+    
+    // Color code based on usage
+    ImVec4 usage_color = cpu_color; // Green for low usage
+    if(usage_percentage > 80.0f) 
+    {
+        usage_color = error_color;      // Red for high
+    }
+    else if(usage_percentage > 60.0f) 
+    {
+        usage_color = warning_color; // Orange for medium
+    }
     
     ImGui::Separator();
-    ImGui::Text("Render Target mem: %s / %s", str_used, str_max);
-    ImGui::PlotLines("##Render Target mem",
+    ImGui::Text("Render Target Memory:");
+    ImGui::Indent();
+    ImGui::Text("Usage: %s / %s", str_used.data(), str_max.data());
+    ImGui::SameLine();
+    ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
+    
+    ImGui::PlotLines("##RenderTargetMemory",
                      render_target_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,
                      render_target_memory_samples.get_offset(),
-                     nullptr,
+                     "Render Target Memory Usage Over Time",
                      0.0f,
                      static_cast<float>(gpu_memory_max),
-                     ImVec2(overlay_width, PLOT_HEIGHT));
+                     ImVec2(overlay_width, plot_height));
+    ImGui::Unindent();
 }
 
 auto statistics_panel::draw_texture_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->textureMemoryUsed, gpu_memory_max);
     
-    char str_max[64];
-    bx::prettify(str_max, 64, static_cast<uint64_t>(gpu_memory_max));
+    std::array<char, 64> str_max;
+    bx::prettify(str_max.data(), str_max.size(), static_cast<uint64_t>(gpu_memory_max));
     
-    char str_used[64];
-    bx::prettify(str_used, BX_COUNTOF(str_used), stats->textureMemoryUsed);
+    std::array<char, 64> str_used;
+    bx::prettify(str_used.data(), str_used.size(), stats->textureMemoryUsed);
+    
+    const float usage_percentage = gpu_memory_max > 0 ? 
+        (static_cast<float>(stats->textureMemoryUsed) / static_cast<float>(gpu_memory_max)) * 100.0f : 0.0f;
+    
+    // Color code based on usage
+    ImVec4 usage_color = cpu_color; // Green for low usage
+    if(usage_percentage > 80.0f) 
+    {
+        usage_color = error_color;      // Red for high
+    }
+    else if(usage_percentage > 60.0f) 
+    {
+        usage_color = warning_color; // Orange for medium
+    }
     
     ImGui::Separator();
-    ImGui::Text("Texture mem: %s / %s", str_used, str_max);
-    ImGui::PlotLines("##Texture Mem",
+    ImGui::Text("Texture Memory:");
+    ImGui::Indent();
+    ImGui::Text("Usage: %s / %s", str_used.data(), str_max.data());
+    ImGui::SameLine();
+    ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
+    
+    ImGui::PlotLines("##TextureMemory",
                      texture_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,
                      texture_memory_samples.get_offset(),
-                     nullptr,
+                     "Texture Memory Usage Over Time",
                      0.0f,
                      static_cast<float>(gpu_memory_max),
-                     ImVec2(overlay_width, PLOT_HEIGHT));
+                     ImVec2(overlay_width, plot_height));
+    ImGui::Unindent();
 }
 
 } // namespace unravel
