@@ -155,8 +155,6 @@ auto inspect_enum(rtti::context& ctx,
                   entt::meta_any& var,
                   const var_info& info = {}) -> inspect_result;
 
-// Refresh inspector by rttr type
-
 auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void;
 
 // Refresh inspector by template type
