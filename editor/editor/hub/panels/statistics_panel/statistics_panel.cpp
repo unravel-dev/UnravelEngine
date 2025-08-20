@@ -62,7 +62,7 @@ auto statistics_panel::on_frame_ui_render(rtti::context& ctx, const char* name) 
     if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar))
     {
         draw_menubar(ctx);
-        draw_statistics_content(enable_profiler_);
+        draw_statistics_content();
     }
     ImGui::End();
 }
@@ -71,12 +71,20 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
 {
     if(ImGui::BeginMenuBar())
     {
-        // Currently no menu items, but structure is ready for future additions
+        if(ImGui::BeginMenu("View " ICON_MDI_ARROW_DOWN_BOLD))
+        {
+            ImGui::Checkbox("Show Editor Stats", &show_editor_stats_);
+            if(ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndMenuBar();
     }
 }
 
-auto statistics_panel::draw_statistics_content(bool& enable_profiler) -> void
+auto statistics_panel::draw_statistics_content() -> void
 {
     const auto& io = ImGui::GetIO();
     const auto area = ImGui::GetContentRegionAvail();
@@ -87,7 +95,7 @@ auto statistics_panel::draw_statistics_content(bool& enable_profiler) -> void
     
     // Draw main statistics sections
     draw_frame_statistics(overlay_width);
-    draw_profiler_section(enable_profiler);
+    draw_profiler_section();
     draw_memory_info_section(overlay_width);
     draw_resources_section();
 }
@@ -226,7 +234,18 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
         
         ImGui::NextColumn();
         ImGui::Text("Draw Calls");
-        ImGui::Text("%u total", stats->numDraw);
+        
+        std::uint32_t scene_calls = 0, editor_calls = 0, total_calls = 0;
+        get_draw_call_breakdown(stats, scene_calls, editor_calls, total_calls);
+        
+        if(show_editor_stats_)
+        {
+            ImGui::Text("%u total", total_calls);
+        }
+        else
+        {
+            ImGui::Text("%u scene", scene_calls);
+        }
         
         ImGui::EndColumns();
         
@@ -242,19 +261,20 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
         ImGui::Text("Render Passes: %u", gfx::render_pass::get_last_frame_max_pass_id());
         ImGui::Separator();
         
+        // Draw call counts
+        draw_call_counts(stats, io);
+     
+        ImGui::Separator();
+           
         // Primitive counts
         draw_primitive_counts(stats, io);
         
-        ImGui::Separator();
-        
-        // Draw call counts
-        draw_call_counts(stats, io);
-        
+      
         ImGui::PopFont();
     }
 }
 
-auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
+auto statistics_panel::draw_profiler_section() -> void
 {
     if(!ImGui::CollapsingHeader(ICON_MDI_CLOCK_OUTLINE "\tProfiler"))
     {
@@ -274,9 +294,9 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
     ImGui::Text("GPU Profiler:");
     ImGui::SameLine();
     
-    if(ImGui::Checkbox("Enable##GPUProfiler", &enable_profiler))
+    if(ImGui::Checkbox("Enable##GPUProfiler", &enable_gpu_profiler_))
     {
-        if(enable_profiler)
+        if(enable_gpu_profiler_)
         {
             gfx::set_debug(BGFX_DEBUG_PROFILER);
         }
@@ -287,7 +307,7 @@ auto statistics_panel::draw_profiler_section(bool& enable_profiler) -> void
     }
     
     // GPU Profiler data - conditionally shown
-    if(enable_profiler)
+    if(enable_gpu_profiler_)
     {
         auto stats = gfx::get_stats();
         
@@ -440,7 +460,16 @@ auto statistics_panel::update_sample_data() -> void
     texture_memory_samples.push_sample(static_cast<float>(stats->textureMemoryUsed) / megabyte_divisor);
 }
 
-auto statistics_panel::draw_primitive_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void
+auto statistics_panel::get_draw_call_breakdown(const gfx::stats* stats, std::uint32_t& scene_calls, std::uint32_t& editor_calls, std::uint32_t& total_calls) -> void
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    total_calls = stats->numDraw;
+    editor_calls = ImGui::GetDrawCalls();
+    editor_calls = std::min(editor_calls, total_calls);
+    scene_calls = total_calls - editor_calls;
+}
+
+auto statistics_panel::draw_primitive_counts(const gfx::stats* stats, const ImGuiIO& io) -> void
 {
     const std::uint32_t total_primitives = std::accumulate(std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
     std::uint32_t ui_primitives = io.MetricsRenderIndices / 3;
@@ -450,72 +479,114 @@ auto statistics_panel::draw_primitive_counts(const bgfx::Stats* stats, const ImG
     ImGui::Text("Triangle Counts:");
     ImGui::Indent();
     
-    // Use columns for better alignment
-    ImGui::BeginColumns("PrimitiveColumns", 2, ImGuiOldColumnFlags_NoResize);
-    ImGui::SetColumnWidth(0, 120.0f);
+    if(show_editor_stats_)
+    {
+        // Show detailed breakdown with editor stats
+        ImGui::BeginColumns("PrimitiveColumns", 2, ImGuiOldColumnFlags_NoResize);
+        ImGui::SetColumnWidth(0, 120.0f);
+        
+        ImGui::Text("Scene:");
+        ImGui::NextColumn();
+        ImGui::TextColored(cpu_color, "%u triangles", scene_primitives);
+        ImGui::NextColumn();
+        
+        ImGui::Text("Editor:");
+        ImGui::NextColumn();
+        ImGui::TextColored(gpu_color, "%u triangles", ui_primitives);
+        ImGui::NextColumn();
+        
+        ImGui::Text("Total:");
+        ImGui::NextColumn();
+        ImGui::Text("%u triangles", total_primitives);
+        
+        ImGui::EndColumns();
+    }
+    else
+    {
+        // Show only scene stats (main focus)
+        ImGui::TextColored(cpu_color, "Scene: %u triangles", scene_primitives);
+    }
     
-    ImGui::Text("Scene:");
-    ImGui::NextColumn();
-    ImGui::TextColored(cpu_color, "%u triangles", scene_primitives);
-    ImGui::NextColumn();
-    
-    ImGui::Text("Editor:");
-    ImGui::NextColumn();
-    ImGui::TextColored(gpu_color, "%u triangles", ui_primitives);
-    ImGui::NextColumn();
-    
-    ImGui::Text("Total:");
-    ImGui::NextColumn();
-    ImGui::Text("%u triangles", total_primitives);
-    
-    ImGui::EndColumns();
     ImGui::Unindent();
 }
 
-auto statistics_panel::draw_call_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void
+auto statistics_panel::draw_call_counts(const gfx::stats* stats, const ImGuiIO& io) -> void
 {
-    std::uint32_t ui_draw_calls = ImGui::GetDrawCalls();
-    ui_draw_calls = std::min(ui_draw_calls, stats->numDraw);
-    const auto scene_draw_calls = stats->numDraw - ui_draw_calls;
+    std::uint32_t scene_calls = 0, editor_calls = 0, total_calls = 0;
+    get_draw_call_breakdown(stats, scene_calls, editor_calls, total_calls);
     
     ImGui::Text("GPU Commands:");
     ImGui::Indent();
     
-    // Use columns for better alignment
-    ImGui::BeginColumns("CallCountColumns", 2, ImGuiOldColumnFlags_NoResize);
-    ImGui::SetColumnWidth(0, 120.0f);
+    if(show_editor_stats_)
+    {
+        // Show detailed breakdown with editor stats
+        ImGui::BeginColumns("CallCountColumns", 2, ImGuiOldColumnFlags_NoResize);
+        ImGui::SetColumnWidth(0, 120.0f);
+        
+        // Draw calls section
+        ImGui::Text("Draw Calls:");
+        ImGui::NextColumn();
+        ImGui::Text("%u total", total_calls);
+        ImGui::NextColumn();
+        
+        ImGui::Text("  Scene:");
+        ImGui::NextColumn();
+        ImGui::TextColored(cpu_color, "%u calls", scene_calls);
+        ImGui::NextColumn();
+        
+        ImGui::Text("  Editor:");
+        ImGui::NextColumn();
+        ImGui::TextColored(gpu_color, "%u calls", editor_calls);
+        ImGui::NextColumn();
+        
+        // Other command types
+        ImGui::Text("Compute:");
+        ImGui::NextColumn();
+        ImGui::Text("%u calls", stats->numCompute);
+        ImGui::NextColumn();
+        
+        ImGui::Text("Blit:");
+        ImGui::NextColumn();
+        ImGui::Text("%u calls", stats->numBlit);
+        
+        ImGui::EndColumns();
+    }
+    else
+    {
+        // Show only scene-focused stats
+        ImGui::TextColored(cpu_color, "Scene Draw Calls: %u", scene_calls);
+        
+        // Still show compute and blit as they're typically scene-related
+        if(stats->numCompute > 0 || stats->numBlit > 0)
+        {
+            ImGui::BeginColumns("SceneCallColumns", 2, ImGuiOldColumnFlags_NoResize);
+            ImGui::SetColumnWidth(0, 120.0f);
+            
+            if(stats->numCompute > 0)
+            {
+                ImGui::Text("Compute:");
+                ImGui::NextColumn();
+                ImGui::Text("%u calls", stats->numCompute);
+                ImGui::NextColumn();
+            }
+            
+            if(stats->numBlit > 0)
+            {
+                ImGui::Text("Blit:");
+                ImGui::NextColumn();
+                ImGui::Text("%u calls", stats->numBlit);
+                ImGui::NextColumn();
+            }
+            
+            ImGui::EndColumns();
+        }
+    }
     
-    // Draw calls section
-    ImGui::Text("Draw Calls:");
-    ImGui::NextColumn();
-    ImGui::Text("%u total", stats->numDraw);
-    ImGui::NextColumn();
-    
-    ImGui::Text("  Scene:");
-    ImGui::NextColumn();
-    ImGui::TextColored(cpu_color, "%u calls", scene_draw_calls);
-    ImGui::NextColumn();
-    
-    ImGui::Text("  Editor:");
-    ImGui::NextColumn();
-    ImGui::TextColored(gpu_color, "%u calls", ui_draw_calls);
-    ImGui::NextColumn();
-    
-    // Other command types
-    ImGui::Text("Compute:");
-    ImGui::NextColumn();
-    ImGui::Text("%u calls", stats->numCompute);
-    ImGui::NextColumn();
-    
-    ImGui::Text("Blit:");
-    ImGui::NextColumn();
-    ImGui::Text("%u calls", stats->numBlit);
-    
-    ImGui::EndColumns();
     ImGui::Unindent();
 }
 
-auto statistics_panel::draw_profiler_bars(const bgfx::Stats* stats) -> void
+auto statistics_panel::draw_profiler_bars(const gfx::stats* stats) -> void
 {
     const float item_height = ImGui::GetTextLineHeightWithSpacing();
     const float item_height_with_spacing = ImGui::GetFrameHeightWithSpacing();
@@ -531,7 +602,7 @@ auto statistics_panel::draw_profiler_bars(const bgfx::Stats* stats) -> void
     draw_view_stats(stats, item_height, item_height_with_spacing, to_cpu_ms, to_gpu_ms);
 }
 
-auto statistics_panel::draw_encoder_stats(const bgfx::Stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms) -> void
+auto statistics_panel::draw_encoder_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms) -> void
 {
     if(ImGui::BeginListBox("Encoders", ImVec2(ImGui::GetWindowWidth(), stats->numEncoders * item_height_with_spacing)))
     {
@@ -563,7 +634,7 @@ auto statistics_panel::draw_encoder_stats(const bgfx::Stats* stats, float item_h
     }
 }
 
-auto statistics_panel::draw_view_stats(const bgfx::Stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void
+auto statistics_panel::draw_view_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void
 {
     if(ImGui::BeginListBox("Views", ImVec2(ImGui::GetWindowWidth(), stats->numViews * item_height_with_spacing)))
     {
@@ -624,7 +695,7 @@ auto statistics_panel::draw_app_profiler_data() -> void
     }
 }
 
-auto statistics_panel::draw_gpu_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
+auto statistics_panel::draw_gpu_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->gpuMemoryUsed, stats->gpuMemoryMax);
     
@@ -666,7 +737,7 @@ auto statistics_panel::draw_gpu_memory_section(const bgfx::Stats* stats, int64_t
     ImGui::Unindent();
 }
 
-auto statistics_panel::draw_render_target_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
+auto statistics_panel::draw_render_target_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->rtMemoryUsed, gpu_memory_max);
     
@@ -708,7 +779,7 @@ auto statistics_panel::draw_render_target_memory_section(const bgfx::Stats* stat
     ImGui::Unindent();
 }
 
-auto statistics_panel::draw_texture_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
+auto statistics_panel::draw_texture_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->textureMemoryUsed, gpu_memory_max);
     

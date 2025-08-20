@@ -136,13 +136,16 @@ void gizmos_renderer::draw_selection_outlines(rtti::context& ctx, uint32_t pass_
     
     // Pass 1: Selection mask
     resize_selection_mask_rt(size.width, size.height);
-    draw_selection_mask_pass(ctx, camera, selection_mask_);
+   if(draw_selection_mask_pass(ctx, camera, selection_mask_))
+   {
+        // Pass 2: Outline
+       draw_outline_pass(pass_id, selection_mask_, obuffer);
+   }
     
-    // Pass 2: Outline
-    draw_outline_pass(pass_id, selection_mask_, obuffer);
+    
 }
 
-void gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask)
+auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool
 {
     auto& em = ctx.get_cached<editing_manager>();
     const auto& view = camera.get_view();
@@ -158,6 +161,7 @@ void gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera&
                         1.0f,
                         0);
 
+    bool any_drawn = false;
     for(auto& obj : em.get_selections())
     {
         if(obj.type() == entt::resolve<entt::handle>())
@@ -232,9 +236,13 @@ void gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera&
                              skinning_transforms,
                              0,
                              callbacks);
+
+                any_drawn = true;
             }
         }
     }
+
+    return any_drawn;
 }
 
 void gizmos_renderer::draw_outline_pass(uint32_t pass_id, const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer)

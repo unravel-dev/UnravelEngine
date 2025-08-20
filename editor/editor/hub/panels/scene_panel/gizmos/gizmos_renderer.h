@@ -24,7 +24,7 @@ private:
     void draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd);
     void draw_selection_outlines(rtti::context& ctx, uint32_t pass_id, const camera& camera, const gfx::frame_buffer::ptr& obuffer);
     void draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd);
-    void draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask);
+    auto draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool;
     void draw_outline_pass(uint32_t pass_id, const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer);
     ///
     std::unique_ptr<gpu_program> wireframe_program_;

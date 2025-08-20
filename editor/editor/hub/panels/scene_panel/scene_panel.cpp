@@ -49,6 +49,7 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
                           entt::handle& last_preview_entity, std::vector<asset_handle<material>>& original_materials,
                           bool& is_previewing);
 void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handle editor_camera, editing_manager& em);
+auto process_camera_input(entt::handle camera, math::vec3& move_dir, float& acceleration, const math::vec3& movement_input, bool any_input, float max_hold, float movement_speed, float hold_speed, float fixed_dt) -> void;
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging);
 
 // Material preview state
@@ -291,8 +292,13 @@ auto collect_movement_input(float& max_hold) -> math::vec3
     return movement_input;
 }
 
-auto handle_mouse_rotation(entt::handle camera, float rotation_speed)-> bool
+auto handle_mouse_rotation(entt::handle camera, float rotation_speed, bool is_dragging)-> bool
 {
+    if(!is_dragging)
+    {
+        return false;
+    }
+
     auto delta_move = ImGui::GetIO().MouseDelta;
     auto& transform = camera.get<transform_component>();
 
@@ -360,6 +366,23 @@ void apply_movement(entt::handle camera,
 
 }
 
+auto process_camera_input(entt::handle camera, 
+                          math::vec3& move_dir, 
+                          float& acceleration, 
+                          const math::vec3& movement_input, 
+                          bool any_input, 
+                          float max_hold, 
+                          float movement_speed, 
+                          float hold_speed, 
+                          float fixed_dt) -> void
+{
+    // Update movement acceleration and direction
+    update_movement_acceleration(move_dir, acceleration, movement_input, any_input);
+
+    // Apply movement
+    apply_movement(camera, move_dir, movement_speed, acceleration, max_hold, hold_speed, fixed_dt);
+}
+
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging)
 {
     if(!ImGui::IsWindowFocused())
@@ -385,6 +408,7 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
     // Handle middle mouse panning
     handle_middle_mouse_panning(camera, movement_speed, fixed_dt);
 
+
     // Handle right mouse dragging
     is_dragging = ImGui::IsMouseDown(ImGuiMouseButton_Right);
 
@@ -395,26 +419,22 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
         {
             ImGui::SetMouseCursor(ImGuiMouseCursor_Cross);
         }
+    }
 
-        // Collect movement input
-        float max_hold = 0.0f;
-        math::vec3 movement_input = collect_movement_input(max_hold);
-        bool any_input = math::any(math::epsilonNotEqual(movement_input, math::vec3(0.0f), math::epsilon<float>()));
+    // Collect movement input (works for both dragging and non-dragging)
+    float max_hold = 0.0f;
+    math::vec3 movement_input = collect_movement_input(max_hold);
+    bool any_input = math::any(math::epsilonNotEqual(movement_input, math::vec3(0.0f), math::epsilon<float>()));
 
-        // Handle mouse rotation
-        bool any_rotation = handle_mouse_rotation(camera, rotation_speed);
+    // Handle mouse rotation (only when dragging)
+    bool any_rotation = handle_mouse_rotation(camera, rotation_speed, is_dragging);
 
-        // Update movement acceleration and direction
-        update_movement_acceleration(move_dir, acceleration, movement_input, any_input);
+    // Process camera input with acceleration
+    process_camera_input(camera, move_dir, acceleration, movement_input, any_input, max_hold, movement_speed, hold_speed, fixed_dt);
 
-        // Apply movement
-        apply_movement(camera, move_dir, movement_speed, acceleration, max_hold, hold_speed, fixed_dt);
-
-        
-        if(any_input || any_rotation)
-        {
-            seq::scope::stop_all("camera_focus");
-        }
+    if(any_input || any_rotation)
+    {
+        seq::scope::stop_all("camera_focus");
     }
     else if(acceleration > 0.0001f)
     {

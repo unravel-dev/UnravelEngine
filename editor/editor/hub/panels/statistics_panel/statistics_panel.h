@@ -100,7 +100,7 @@ private:
     /// </summary>
     /// <param name="enable_profiler">Reference to profiler enable flag</param>
     //-----------------------------------------------------------------------------
-    auto draw_statistics_content(bool& enable_profiler) -> void;
+    auto draw_statistics_content() -> void;
 
     //-----------------------------------------------------------------------------
     /// <summary>
@@ -116,7 +116,7 @@ private:
     /// </summary>
     /// <param name="enable_profiler">Reference to profiler enable flag</param>
     //-----------------------------------------------------------------------------
-    auto draw_profiler_section(bool& enable_profiler) -> void;
+    auto draw_profiler_section() -> void;
 
     //-----------------------------------------------------------------------------
     /// <summary>
@@ -135,18 +135,20 @@ private:
 
     // Helper methods for updating and drawing specific components
     auto update_sample_data() -> void;
-    auto draw_primitive_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void;
-    auto draw_call_counts(const bgfx::Stats* stats, const ImGuiIO& io) -> void;
-    auto draw_profiler_bars(const bgfx::Stats* stats) -> void;
+    auto get_draw_call_breakdown(const gfx::stats* stats, std::uint32_t& scene_calls, std::uint32_t& editor_calls, std::uint32_t& total_calls) -> void;
+    auto draw_primitive_counts(const gfx::stats* stats, const ImGuiIO& io) -> void;
+    auto draw_call_counts(const gfx::stats* stats, const ImGuiIO& io) -> void;
+    auto draw_profiler_bars(const gfx::stats* stats) -> void;
     auto draw_app_profiler_data() -> void;
-    auto draw_encoder_stats(const bgfx::Stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms) -> void;
-    auto draw_view_stats(const bgfx::Stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void;
-    auto draw_gpu_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
-    auto draw_render_target_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
-    auto draw_texture_memory_section(const bgfx::Stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
+    auto draw_encoder_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms) -> void;
+    auto draw_view_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void;
+    auto draw_gpu_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
+    auto draw_render_target_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
+    auto draw_texture_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
 
     bool is_visible_{false};
-    bool enable_profiler_{false};
+    bool enable_gpu_profiler_{false};
+    bool show_editor_stats_{false}; // Disabled by default to focus on scene stats
 };
 
 } // namespace unravel

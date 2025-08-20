@@ -710,12 +710,7 @@ void handle_entity_mouse_interactions(rtti::context& ctx, imgui_panels* panels, 
 
     if(is_item_double_clicked_left)
     {
-        auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Start Editing Label",
-            [&ctx, panels, entity]() mutable
-            {
-                start_editing_label(ctx, panels, entity);
-            });
+        panels->get_scene_panel().focus_entities(panels->get_scene_panel().get_camera(), {entity});
     }
 }
 
