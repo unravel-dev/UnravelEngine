@@ -89,9 +89,18 @@ void console_log_panel::sink_it_(const details::log_msg& msg)
         entry.formatted.resize(formatted.size());
         std::memcpy(entry.formatted.data(), formatted.data(), formatted.size() * sizeof(char));
 
-        entry.source.filename = msg.source.filename;
-        entry.source.funcname = msg.source.funcname;
-        entry.source.line = msg.source.line;
+        if(msg.source.filename)
+        {
+            entry.source.filename = msg.source.filename;
+        }
+        if(msg.source.funcname)
+        {
+            entry.source.funcname = msg.source.funcname;
+        }
+        if(msg.source.line)
+        {
+            entry.source.line = msg.source.line;
+        }
 
         entry.level = msg.level;
 
