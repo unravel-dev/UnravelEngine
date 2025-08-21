@@ -37,3 +37,6 @@
 [submodule "deps/threadpp/threadpp"]
 	path = deps/threadpp/threadpp
 	url = https://github.com/unravel-dev/threadpp.git
+[submodule "deps/3rdparty/cpptrace/cpptrace"]
+	path = deps/3rdparty/cpptrace/cpptrace
+	url = https://github.com/jeremy-rifkin/cpptrace.git

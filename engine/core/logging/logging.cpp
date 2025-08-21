@@ -49,6 +49,9 @@ logging::logging(const std::string& output_file)
     logger->flush_on(spdlog::level::err);
     spdlog::initialize_logger(logger);
     spdlog::set_level(spdlog::level::trace);
+    
+    
+    // Install crash handlers after logger is configured
     crash::install_handlers();
 }
 
