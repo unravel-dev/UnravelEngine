@@ -118,7 +118,7 @@ inline bool capture_backtrace(crash_context& context) noexcept {
     size_t pos = std::snprintf(context.message.data(), context.message.size(), 
                               "Backtrace (%d frames):\n", frame_count);
     
-    char** symbols = ::backtrace_symbols(stack_frames, frame_count);
+    char** symbols = backtrace_symbols(stack_frames, frame_count);
     if (symbols) {
         for (int i = 0; i < frame_count && pos < context.message.size() - 1; ++i) {
             size_t remaining = context.message.size() - pos;
