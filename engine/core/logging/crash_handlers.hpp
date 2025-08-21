@@ -108,7 +108,7 @@ inline bool capture_backtrace(crash_context& context) noexcept {
     UNRAVEL_PLATFORM_BSD
     
     void* stack_frames[MAX_BACKTRACE_FRAMES];
-    int frame_count = ::backtrace(stack_frames, MAX_BACKTRACE_FRAMES);
+    int frame_count = backtrace(stack_frames, MAX_BACKTRACE_FRAMES);
     
     if (frame_count <= 0) {
         return false;
