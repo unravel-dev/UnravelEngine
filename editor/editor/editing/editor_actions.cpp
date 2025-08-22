@@ -973,6 +973,12 @@ auto editor_actions::save_scene_as(rtti::context& ctx) -> bool
 
 auto editor_actions::prompt_save_scene(rtti::context& ctx) -> bool
 {
+    auto& ev = ctx.get_cached<events>();
+    if(ev.is_playing)
+    {
+        return false;
+    }
+    
     auto& em = ctx.get_cached<editing_manager>();
     if(!em.has_unsaved_changes())
     {

@@ -90,7 +90,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
         {
             auto& cache = caches_[scn->tag];
             cache.scn = scn;
-            load_checkpoint(ctx, cache, true, scn->tag == "game");
+            load_checkpoint(ctx, cache, true);
         }
     }
 
@@ -200,7 +200,7 @@ void editing_manager::save_checkpoint(rtti::context& ctx, scene_cache& cache)
     save_to_stream(cache.cache, *cache.scn);
 }
 
-void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bool recover_selection, bool flatten_prefabs)
+void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bool recover_selection)
 {
     if(!cache.scn)
     {
@@ -242,11 +242,7 @@ void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bo
             }
         }
     }
-   
-    if(flatten_prefabs)
-    {
-        cache.scn->registry->clear<prefab_component>();
-    }
+ 
 
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_checkpoint_update");

@@ -20,7 +20,11 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <ospp/event.h>
 
+#include <crash/crash_handlers.hpp>
+#include <exception>
 #include <logging/logging.h>
+
+
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 
@@ -35,6 +39,7 @@ auto context_ptr() -> rtti::context*&
     static rtti::context* ctx{};
     return ctx;
 }
+std::atomic<bool> is_shutting_down{false};
 
 void update_input_zone(const renderer& rend, input_system& input)
 {
@@ -54,7 +59,6 @@ void update_input_zone(const renderer& rend, input_system& input)
     }
 }
 
-
 void print_init_error(const rtti::context& ctx)
 {
     if(ctx.has<init_error>())
@@ -64,8 +68,46 @@ void print_init_error(const rtti::context& ctx)
     }
 }
 
+// Engine crash handlers
+void engine_interrupt_handler(const crash::signal_info& info)
+{
+    APPLOG_INFO("User interrupt ({}) -> {}", info.signal_number, info.signal_name);
 
+    engine::interrupt();
 
+    APPLOG_FLUSH();
+}
+
+void engine_termination_handler(const crash::signal_info& info)
+{
+    APPLOG_INFO("Termination signal ({}) -> {}", info.signal_number, info.signal_name);
+
+    // Try to gracefully shutdown the engine
+    engine::interrupt();
+
+    APPLOG_FLUSH();
+}
+
+void engine_crash_handler(const crash::signal_info& info, const crash::trace_info& trace)
+{
+    // Log the crash with full details
+    APPLOG_CRITICAL("Crash signal ({}) -> {}\n{}", info.signal_number, info.signal_name, trace.formatted_trace);
+
+    // Try emergency cleanup
+    engine::interrupt();
+
+    APPLOG_FLUSH();
+}
+
+void engine_exception_handler(const crash::exception_info& info, const crash::trace_info& trace)
+{
+    APPLOG_CRITICAL("{}\n{}", info.exception_message, trace.formatted_trace);
+
+    // Same emergency cleanup as crash handler
+    engine::interrupt();
+
+    APPLOG_FLUSH();
+}
 
 } // namespace
 
@@ -91,6 +133,17 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
         });
 
     ctx.add<logging>();
+
+    // Install engine crash handlers immediately after logging is available
+    crash::install_handlers(crash::crash_handlers{
+        .interrupt_handler = engine_interrupt_handler,
+        .termination_handler = engine_termination_handler,
+        .crash_handler = engine_crash_handler,
+        .exception_handler = engine_exception_handler,
+    });
+
+    APPLOG_INFO("Engine crash handlers installed");
+
     ctx.add<simulation>();
     ctx.add<events>();
     ctx.add<threader>();
@@ -358,7 +411,6 @@ auto engine::process() -> int
         ev.frames_playing++;
     }
 
-
     if(ev.is_paused)
     {
         dt = {};
@@ -377,7 +429,7 @@ auto engine::process() -> int
 
         input.manager.on_os_event(e);
 
-        should_quit = rend.get_main_window() == nullptr;
+        should_quit = rend.get_main_window() == nullptr || is_shutting_down;
         if(should_quit)
         {
             break;
@@ -388,9 +440,9 @@ auto engine::process() -> int
     if(should_quit)
     {
         ev.set_play_mode(ctx, false);
+        is_shutting_down = false;
         return 0;
     }
-
 
     ev.on_frame_begin(ctx, dt);
 
@@ -410,9 +462,7 @@ auto engine::process() -> int
 }
 auto engine::interrupt() -> bool
 {
-    auto& ctx = engine::context();
-    auto& rend = ctx.get_cached<renderer>();
-    rend.close_main_window();
+    is_shutting_down = true;
     return true;
 }
 

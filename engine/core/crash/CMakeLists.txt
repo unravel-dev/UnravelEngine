@@ -1,6 +1,6 @@
 file(GLOB_RECURSE libsrc *.h *.cpp *.hpp *.c *.cc)
 
-set(target_name logging)
+set(target_name crash)
 
 add_library(${target_name} ${libsrc})
 
@@ -9,7 +9,7 @@ target_include_directories(${target_name}
 		${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
-target_link_libraries(${target_name} PUBLIC spdlog::spdlog base hpp)
+target_link_libraries(${target_name} PUBLIC cpptrace::cpptrace base hpp)
 
 
 set_target_properties(${target_name} PROPERTIES

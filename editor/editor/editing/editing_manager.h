@@ -494,7 +494,7 @@ struct editing_manager
     selection_cache selection_cache_;
     void save_selection(rtti::context& ctx);
     void save_checkpoint(rtti::context& ctx, scene_cache& cache);
-    void load_checkpoint(rtti::context& ctx, scene_cache& cache, bool recover_selection = false, bool flatten_prefabs = false);
+    void load_checkpoint(rtti::context& ctx, scene_cache& cache, bool recover_selection = false);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 

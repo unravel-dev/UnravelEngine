@@ -40,6 +40,9 @@ SPDLOG_LOGGER_CALL_LOC(spdlog::get(APPLOG), FILE_LOC, LINE_LOC, FUNC_LOC, spdlog
 #define APPLOG_CRITICAL_LOC(FILE_LOC, LINE_LOC, FUNC_LOC, ...)                                                         \
     SPDLOG_LOGGER_CALL_LOC(spdlog::get(APPLOG), FILE_LOC, LINE_LOC, FUNC_LOC, spdlog::level::critical, __VA_ARGS__)
 
+#define APPLOG_FLUSH() spdlog::apply_all([](std::shared_ptr<spdlog::logger> const& lg){ lg->flush(); })
+
+
 auto get_mutable_logging_container() -> std::shared_ptr<spdlog::sinks::dist_sink_mt>;
 
 struct logging

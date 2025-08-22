@@ -49,6 +49,7 @@ REFLECT_INLINE(editor_settings::external_tools_settings)
             entt::attribute{"name", "vscode_executable"},
             entt::attribute{"pretty_name", "Visual Studio Code"},
             entt::attribute{"tooltip", "Full path to executable."},
+            entt::attribute{"type", "file"},
         });
 }
 

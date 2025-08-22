@@ -1,5 +1,4 @@
 #include "logging.h"
-#include "crash_handlers.hpp"
 
 #include <base/platform/config.hpp>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -37,7 +36,7 @@ auto get_mutable_logging_container() -> std::shared_ptr<spdlog::sinks::dist_sink
 
 logging::logging(const std::string& output_file)
 {
-    spdlog::set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] [%n] %v"); // no %s/%#/%!
+    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%n] %v"); // no %s/%#/%!
 
     auto logging_container = get_mutable_logging_container();
     auto console_sink = std::make_shared<spdlog::sinks::platform_sink_mt>();
@@ -49,10 +48,6 @@ logging::logging(const std::string& output_file)
     logger->flush_on(spdlog::level::err);
     spdlog::initialize_logger(logger);
     spdlog::set_level(spdlog::level::trace);
-    
-    
-    // Install crash handlers after logger is configured
-    crash::install_handlers();
 }
 
 logging::~logging()

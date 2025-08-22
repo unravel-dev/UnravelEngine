@@ -43,6 +43,7 @@ target_link_libraries (${target_name}
     seq
     libunibreak
     engine_version
+    crash
 )
 
 target_precompile_headers(${target_name}

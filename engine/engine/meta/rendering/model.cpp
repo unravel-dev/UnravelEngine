@@ -46,31 +46,6 @@ REFLECT(model)
             entt::attribute{"min", 0},
             entt::attribute{"max", 100},
         });
-
-    auto t = entt::resolve<model>();
-    auto data = t.data("materials"_hs);
-    auto type = data.type();
-    auto is_sequence_container = type.is_sequence_container();
-    auto is_associative_container = type.is_associative_container();
-
-    std::cout << "is_sequence_container: " << is_sequence_container << std::endl;
-    std::cout << "is_associative_container: " << is_associative_container << std::endl;
-
-
-    model m;
-    entt::meta_any obj = m;
-    auto md = entt::resolve<model>().data("materials"_hs);
-
-    // This gives you a meta_any referencing the vector
-    entt::meta_any vec = md.get(obj);
-
-    if(auto seq = vec.as_sequence_container()) {
-        std::cout << "size = " << seq.size() << "\n";
-        for(auto elem : seq) {
-            std::cout << elem.cast<asset_handle<material>>() << " ";  // prints 1 2 3
-        }
-        std::cout << "\n";
-    }
 }
 
 SAVE(model)
