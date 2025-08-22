@@ -112,6 +112,10 @@ auto get_signal_name(int sig) noexcept -> std::string_view
         case SIGQUIT:
             return "SIGQUIT (User quit)";
 #endif
+#ifdef SIGKILL
+        case SIGKILL:
+            return "SIGKILL (User kill process)";
+#endif
 #ifdef SIGHUP
         case SIGHUP:
             return "SIGHUP (Terminal hangup)";
@@ -146,6 +150,9 @@ auto get_signal_type(int sig) noexcept -> signal_type
         case SIGTERM:   // Termination request
 #ifdef SIGQUIT
         case SIGQUIT:   // Quit request
+#endif
+#ifdef SIGKILL
+        case SIGKILL:   // Kill request
 #endif
 #ifdef SIGHUP
         case SIGHUP:    // Terminal hangup
@@ -353,6 +360,9 @@ auto install_handlers(const crash_handlers& handlers) -> void
 #endif
 #ifdef SIGABRT_COMPAT
     std::signal(SIGABRT_COMPAT, signal_handler);  // Process abort compat
+#endif
+#ifdef SIGKILL
+    std::signal(SIGKILL, signal_handler);   // Kill request (POSIX)
 #endif
 
     // Ignored signals
