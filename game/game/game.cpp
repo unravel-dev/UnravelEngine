@@ -187,7 +187,7 @@ auto game::destroy() -> bool
     return engine::destroy();
 }
 
-auto game::process() -> bool
+auto game::process() -> int
 {
     return engine::process();
 }
