@@ -171,5 +171,4 @@ Unravel Engine is built upon these excellent open-source libraries:
 | [GLM](https://github.com/g-truc/glm) | Mathematics library | [Link](https://github.com/g-truc/glm) |
 | [spdlog](https://github.com/gabime/spdlog) | Fast logging | [Link](https://github.com/gabime/spdlog) |
 | [yaml-cpp](https://github.com/jbeder/yaml-cpp) | YAML parsing | [Link](https://github.com/jbeder/yaml-cpp) |
-| [RTTR](https://github.com/rttrorg/rttr) | Runtime reflection | [Link](https://github.com/rttrorg/rttr) |
 | [ser20](https://github.com/unravel-dev/ser20) | Serialization | [Link](https://github.com/unravel-dev/ser20) |
