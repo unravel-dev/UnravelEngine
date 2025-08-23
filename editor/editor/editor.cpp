@@ -15,6 +15,7 @@
 #include "system/project_manager.h"
 #include <filedialog/filedialog.h>
 
+
 namespace unravel
 {
 namespace

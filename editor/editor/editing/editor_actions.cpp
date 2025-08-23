@@ -1057,6 +1057,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     fs::error_code ec;
 
     auto& am = ctx.get_cached<asset_manager>();
+
+    auto& pm = ctx.get_cached<project_manager>();
+    auto project_name = pm.get_name();
+
+
     // am.get_database("engine:/")
 
     if(params.deploy_dependencies)
@@ -1068,7 +1073,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         auto job =
             th.pool
                 ->schedule("Deploying Dependencies",
-                    [params]()
+                    [params, project_name]()
                     {
                         APPLOG_INFO("Deploying Dependencies...");
 
@@ -1081,9 +1086,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Copying {} -> {}", fs::path(dep).generic_string(), params.deploy_location.generic_string());
                             fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
                         }
+                
+                        auto executable_path = params.deploy_location / project_name;
 
                         APPLOG_TRACE("Copying {} -> {}", app_executable.generic_string(), params.deploy_location.generic_string());
-                        fs::copy(app_executable, params.deploy_location, fs::copy_options::overwrite_existing, ec);
+                        fs::copy(app_executable, executable_path, fs::copy_options::overwrite_existing, ec);
 
                         APPLOG_INFO("Deploying Dependencies - Done");
                     })

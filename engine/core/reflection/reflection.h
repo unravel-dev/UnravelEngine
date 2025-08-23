@@ -6,7 +6,10 @@
 #include <entt/meta/factory.hpp>
 #include <entt/meta/meta.hpp>
 #include <reflection/reflection_export.h>
-
+#include <string>
+#include <vector>
+#include <functional>
+#include <map>
 
 using namespace entt::literals;
 

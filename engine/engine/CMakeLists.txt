@@ -60,10 +60,14 @@ set_target_properties(${target_name} PROPERTIES
     INTERPROCEDURAL_OPTIMIZATION FALSE
 )
 
-
-if(UNRAVEL_UNITY_BUILD)
-    #set_target_properties(${target_name} PROPERTIES
-    #    UNITY_BUILD ON
-    #    UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
-    #)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    if(UNRAVEL_UNITY_BUILD)
+        set_target_properties(${target_name} PROPERTIES
+        UNITY_BUILD ON
+        UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
+        )
+    endif()
 endif()
+
+
+
