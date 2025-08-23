@@ -866,7 +866,7 @@ auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const var_info& info)
         {
             continue;
         }
-        names.emplace_back(name, pretty_name, value64);
+        names.emplace_back(enum_value{name, pretty_name, value64});
 
         if(value64 == current_value)
         {
