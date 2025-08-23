@@ -20,7 +20,7 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <ospp/event.h>
 
-#include <crash/crash_handlers.hpp>
+#include <crash/crash.hpp>
 #include <exception>
 #include <logging/logging.h>
 

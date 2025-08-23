@@ -3,7 +3,7 @@
  * @brief Implementation of crash handler functionality
  */
 
-#include "crash_handlers.hpp"
+#include "crash.hpp"
 
 #include <base/platform/config.hpp>
 
@@ -12,7 +12,6 @@
 #include <cpptrace/formatting.hpp>
 #include <csignal>
 #include <string_view>
-#include <format>
 #include <exception>
 #include <typeinfo>
 
@@ -279,8 +278,7 @@ auto signal_handler(int sig) -> void
     {
         // Standard exception - generate our own trace
         exc_info.exception_type = demangle_exception_type(e);
-        exc_info.exception_message = std::format("Terminate called after throwing {}: {}", 
-                                                exc_info.exception_type, e.what());
+        exc_info.exception_message = "Terminate called after throwing " + exc_info.exception_type + " : " + e.what();
         
         // Generate stack trace
         trace = generate_stack_trace();

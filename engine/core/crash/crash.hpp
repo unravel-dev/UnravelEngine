@@ -20,7 +20,6 @@
 
 #pragma once
 
-#include <cpptrace/cpptrace.hpp>
 #include <string>
 
 namespace unravel::crash
@@ -49,40 +48,19 @@ using termination_handler_t = void(*)(const signal_info& info);
 using crash_handler_t = void(*)(const signal_info& info, const trace_info& trace);
 using exception_handler_t = void(*)(const exception_info& info, const trace_info& trace);
 
-/**
- * @brief Set custom interrupt handler (SIGINT, Ctrl+C)
- * 
- * @param handler Callback function for interrupt signals, or nullptr for default behavior
- */
-auto set_interrupt_handler(interrupt_handler_t handler) -> void;
-
-/**
- * @brief Set custom termination handler (SIGTERM, SIGQUIT, SIGHUP)
- * 
- * @param handler Callback function for termination signals, or nullptr for default behavior  
- */
-auto set_termination_handler(termination_handler_t handler) -> void;
-
-/**
- * @brief Set custom crash handler (SIGSEGV, SIGABRT, SIGILL, SIGFPE, SIGBUS)
- * 
- * @param handler Callback function for crash signals, or nullptr for default behavior
- */
-auto set_crash_handler(crash_handler_t handler) -> void;
-
-/**
- * @brief Set custom exception handler (C++ exceptions)
- * 
- * @param handler Callback function for C++ exceptions, or nullptr for default behavior
- */
-auto set_exception_handler(exception_handler_t handler) -> void;
-
 
 struct crash_handlers
 {
+    // Callback function for interrupt signals, or nullptr for default behavior
     interrupt_handler_t interrupt_handler;
+
+    // Callback function for termination signals, or nullptr for default behavior
     termination_handler_t termination_handler;
+
+    // Callback function for crash signals, or nullptr for default behavior
     crash_handler_t crash_handler;
+
+    // Callback function for C++ exceptions, or nullptr for default behavior
     exception_handler_t exception_handler;
 };
 
