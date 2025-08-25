@@ -251,7 +251,7 @@ void handle_middle_mouse_panning(entt::handle camera, float movement_speed, floa
     }
 }
 
-auto collect_movement_input(float& max_hold) -> math::vec3
+auto collect_movement_input(float& max_hold, bool& is_dragging) -> math::vec3
 {
     math::vec3 movement_input{0.0f, 0.0f, 0.0f};
 
@@ -266,23 +266,28 @@ auto collect_movement_input(float& max_hold) -> math::vec3
         return down;
     };
 
-    if(is_key_down(shortcuts::camera_forward))
+    if(is_dragging)
     {
-        movement_input.z += 1.0f;
-    }
-    if(is_key_down(shortcuts::camera_backward))
-    {
-        movement_input.z -= 1.0f;
-    }
-    if(is_key_down(shortcuts::camera_right))
-    {
-        movement_input.x += 1.0f;
-    }
-    if(is_key_down(shortcuts::camera_left))
-    {
-        movement_input.x -= 1.0f;
+        if(is_key_down(shortcuts::camera_forward))
+        {
+            movement_input.z += 1.0f;
+        }
+        if(is_key_down(shortcuts::camera_backward))
+        {
+            movement_input.z -= 1.0f;
+        }
+        if(is_key_down(shortcuts::camera_right))
+        {
+            movement_input.x += 1.0f;
+        }
+        if(is_key_down(shortcuts::camera_left))
+        {
+            movement_input.x -= 1.0f;
+        }
+    
     }
 
+   
     auto delta_wheel = ImGui::GetIO().MouseWheel;
     if(delta_wheel != 0)
     {
@@ -423,7 +428,7 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
 
     // Collect movement input (works for both dragging and non-dragging)
     float max_hold = 0.0f;
-    math::vec3 movement_input = collect_movement_input(max_hold);
+    math::vec3 movement_input = collect_movement_input(max_hold, is_dragging);
     bool any_input = math::any(math::epsilonNotEqual(movement_input, math::vec3(0.0f), math::epsilon<float>()));
 
     // Handle mouse rotation (only when dragging)

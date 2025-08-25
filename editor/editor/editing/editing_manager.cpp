@@ -634,7 +634,11 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
 
 
     action->merge_key = session.current_merge_key();
-    action->name = name;
+
+    if(!name.empty())
+    {
+        action->name = name;
+    }
 
     if(undo_stack_enabled.empty())
     {

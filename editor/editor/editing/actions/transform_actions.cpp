@@ -180,7 +180,7 @@ void transform_skew_action_t::merge_with(const editing_action_t& previous)
 property_action_t::property_action_t(entt::meta_any& inst, entt::meta_data dat, const entt::meta_any& old_val, const entt::meta_any& new_val)
     : instance(inst.as_ref()), data(dat), old_value(old_val), new_value(new_val)
 {
-    name = "Property Action";
+    name = "Property Action " + entt::get_pretty_name(data);
 }
 
 void property_action_t::do_action()
