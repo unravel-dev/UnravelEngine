@@ -26,6 +26,39 @@
 namespace unravel
 {
 
+namespace
+{
+    struct merge_session
+    {
+        uint64_t epoch = 1;       // increments on boundaries (press/release/focus loss)
+        bool     down_prev = false;
+    
+        void tick()
+        {
+            const bool down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    
+            // Bump the epoch on any boundary so new actions won't merge with the previous batch.
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+                ImGui::GetIO().AppFocusLost)
+            {
+                ++epoch;
+            }
+    
+            down_prev = down;
+        }
+    
+        // Current merge key to stamp onto actions created this frame.
+        // 0 means "not mergeable".
+        auto current_merge_key() const -> uint64_t
+        {
+            return ImGui::IsMouseDown(ImGuiMouseButton_Left) ? epoch : 0;
+        }
+    };
+
+    static merge_session session;
+}
+
 auto editing_manager::init(rtti::context& ctx) -> bool
 {
     auto& ev = ctx.get_cached<events>();
@@ -561,6 +594,10 @@ void editing_manager::clear()
     unselect();
     unfocus();
 
+    // Clear pending actions and undo/redo stack
+    pending_actions.clear();
+    undo_stack.clear();
+
     // If in prefab mode, exit it
     if (is_prefab_mode())
     {
@@ -576,23 +613,95 @@ void editing_manager::clear()
 }
 
 
-void editing_manager::add_action(const std::string& name, const untracked_action_t::action_t& action)
+void editing_manager::add_action(const std::string& name, const std::function<void()>& action)
 {
+    add_action<untracked_action_t>(name, action);
+}
+
+void editing_manager::add_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action)
+{
+    add_action<tracked_lambda_action_t>(name, do_action, undo_action);
+}
+
+void editing_manager::add_action(const std::string& name, std::shared_ptr<editing_action_t> action)
+{
+    if (!action)
+    {
+        return;
+    }
+    
     has_unsaved_changes_ = true;
-    auto action_ptr = std::make_unique<untracked_action_t>();
-    action_ptr->name = name;
-    action_ptr->action = action;
-    actions_.emplace_back(std::move(action_ptr));
+
+
+    action->merge_key = session.current_merge_key();
+    action->name = name;
+
+    if(undo_stack_enabled.empty())
+    {
+        action->undoable = false;
+    }
+    else
+    {
+        action->undoable = undo_stack_enabled.top();
+    }
+    
+    // Queue the action for execution (don't execute immediately)
+    pending_actions.push_back(std::move(action));
+}
+
+
+void editing_manager::push_undo_stack_enabled(bool enabled)
+{
+    undo_stack_enabled.push(enabled);
+}
+void editing_manager::pop_undo_stack_enabled()
+{
+    undo_stack_enabled.pop();
 }
 
 void editing_manager::execute_actions()
 {
-    auto actions = std::move(actions_);
-    for(const auto& action : actions)
+    session.tick();
+
+
+    // Process all pending actions
+    for (auto& action : pending_actions)
     {
-        action->do_action();
+        if (action)
+        {
+            // Execute the action
+            action->do_action();
+            
+            // Add to undo stack if the action is undoable
+            // Note: We need to handle merging here since the action is now executed
+            if (action->is_undoable())
+            {
+                // Move the action to the undo stack
+                undo_stack.push_if_undoable(std::move(action));
+            }
+        }
     }
-    actions_.clear();
+    
+    // Clear the pending actions queue
+    pending_actions.clear();
+}
+
+void editing_manager::undo()
+{
+    if (undo_stack.can_undo())
+    {
+        has_unsaved_changes_ = true;
+        undo_stack.undo();
+    }
+}
+
+void editing_manager::redo()
+{
+    if (undo_stack.can_redo())
+    {
+        has_unsaved_changes_ = true;
+        undo_stack.redo();
+    }
 }
 
 } // namespace unravel

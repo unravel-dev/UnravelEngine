@@ -10,43 +10,18 @@
 #include <uuid/uuid.h>
 
 #include <editor/imgui/integration/imgui.h>
+#include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include "actions/undo_redo_stack.h"
+#include "actions/actions.h"
 
 namespace unravel
 {
 
-struct editing_action_t
-{
-    virtual ~editing_action_t() = default;
-    std::string name{};
-
-    virtual void do_action() = 0;
-    virtual void undo_action() = 0;
-};
-
-struct untracked_action_t : editing_action_t
-{
-    using action_t = std::function<void()>;
-    action_t action{};
-
-    void do_action() override { action(); }
-    void undo_action() override {  }
-};
-
-struct transform_move_action_t : editing_action_t
-{
-    void do_action() override
-    {
-        // TODO: Implement
-    }
-    void undo_action() override
-    {
-        // TODO: Implement
-    }
-};
-
 struct editing_manager
 {
-    using editing_actions_t = std::vector<std::unique_ptr<editing_action_t>>;
+    undo_redo_stack undo_stack;
+    std::vector<std::shared_ptr<editing_action_t>> pending_actions; // Actions waiting to be executed
+    std::stack<bool> undo_stack_enabled;
 
     struct selection
     {
@@ -408,8 +383,49 @@ struct editing_manager
         // ui_ev.on_selection_changed();
     }
 
-    void add_action(const std::string& name, const untracked_action_t::action_t& action);
+    // Unified action system - all actions go through this interface
+    // Whether an action is undoable depends on the action's is_undoable() method
+    //
+    // Usage examples:
+    // 1. Non-undoable action: add_action("Quick Fix", []() { /* do something */ });
+    // 2. Undoable action: add_action("Move", []() { move(); }, []() { restore(); });
+    // 3. Custom action: add_action<transform_move_action_t>("Move Entity", entity, old_pos, new_pos);
+    // 4. Manual undo/redo: undo(), redo(), can_undo(), can_redo()
+    
+    // Add an action with a lambda/function (non-undoable)
+    void add_action(const std::string& name, const std::function<void()>& action);
+    
+    // Add an action with both do and undo lambdas (undoable)
+    void add_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action);
+    
+    // Add any action object (undoable or non-undoable determined by action itself)
+    void add_action(const std::string& name, std::shared_ptr<editing_action_t> action);
+    
+    // Helper template method to create and add any action type
+    template<typename ActionType, typename... Args>
+    void add_action(const std::string& name, Args&&... args)
+    {
+        auto action = std::make_shared<ActionType>(std::forward<Args>(args)...);
+        add_action(name, std::move(action));
+    }
+
+    void push_undo_stack_enabled(bool enabled);
+    void pop_undo_stack_enabled();
+    
+    // Execute all pending actions (called automatically each frame)
     void execute_actions();
+    
+    // Undo/Redo operations
+    void undo();
+    void redo();
+    auto can_undo() const -> bool { return undo_stack.can_undo(); }
+    auto can_redo() const -> bool { return undo_stack.can_redo(); }
+    
+
+    // Pending actions management
+    auto has_pending_actions() const -> bool { return !pending_actions.empty(); }
+    auto get_pending_actions_count() const -> size_t { return pending_actions.size(); }
+    
     auto has_unsaved_changes() const -> bool { return has_unsaved_changes_; }
     void clear_unsaved_changes() { has_unsaved_changes_ = false; }
 
@@ -445,6 +461,11 @@ struct editing_manager
     billboard_gizmos billboard_data;
 
     inverse_kinematics ik_data;
+    
+    /// enable undo for scene operations
+    bool undo_scene_enabled = false;
+    /// enable undo for inspector operations
+    bool undo_inspector_enabled = false;
     
     // Current editing mode
     editing_mode current_mode = editing_mode::scene;
@@ -499,10 +520,11 @@ struct editing_manager
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     bool waiting_for_compilation_before_play_{};
-    editing_actions_t actions_;
-    bool has_unsaved_changes_{};
+    bool has_unsaved_changes_;
+    
 
     // Prompts the user to save changes and returns true if changes should be saved
     auto prompt_save_changes(rtti::context& ctx) -> bool;
 };
 } // namespace unravel
+

@@ -48,7 +48,7 @@ void restore_original_materials(entt::handle entity, const std::vector<asset_han
 void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::string& material_path, 
                           entt::handle& last_preview_entity, std::vector<asset_handle<material>>& original_materials,
                           bool& is_previewing);
-void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handle editor_camera, editing_manager& em);
+void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::handle center, entt::handle editor_camera, editing_manager& em);
 auto process_camera_input(entt::handle camera, math::vec3& move_dir, float& acceleration, const math::vec3& movement_input, bool any_input, float max_hold, float movement_speed, float hold_speed, float fixed_dt) -> void;
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging);
 
@@ -762,7 +762,7 @@ auto handle_standard_gizmo_manipulation(entt::handle active_selection,
     return movetype;
 }
 
-void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handle editor_camera, editing_manager& em)
+void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::handle center, entt::handle editor_camera, editing_manager& em)
 {
     auto& camera_trans = editor_camera.get<transform_component>();
     auto& camera_comp = editor_camera.get<camera_component>();
@@ -804,13 +804,18 @@ void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handl
     auto top_level_selections = transform_component::get_top_level_entities(selection_values);
 
     std::vector<entt::handle> original_parents;
+    std::vector<math::transform> original_transforms;
     original_parents.reserve(top_level_selections.size());
+    original_transforms.reserve(top_level_selections.size());
+    
+    // Store initial state before any manipulation
     for(const auto& sel : top_level_selections)
     {
         if(sel)
         {
             auto& sel_transform_comp = sel.get<transform_component>();
             original_parents.emplace_back(sel_transform_comp.get_parent());
+            original_transforms.emplace_back(sel_transform_comp.get_transform_local());
         }
     }
 
@@ -838,25 +843,14 @@ void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handl
     math::mat4 center_final_global = center_transform_comp.get_transform_global();
     math::mat4 center_delta = center_final_global * glm::inverse(center_initial_global);
 
-    // Apply inverse kinematics if needed
+
+    auto batch_action = std::make_shared<composite_action_t>();
+    // Apply transforms and create undoable actions
     for(size_t i = 0; i < top_level_selections.size(); ++i)
     {
         auto& sel = top_level_selections[i];
         if(sel)
         {
-            if(movetype != ImGuizmo::MT_NONE)
-            {
-                bool position = ImGuizmo::IsTranslateType(movetype);
-                bool rotation = ImGuizmo::IsRotateType(movetype);
-                bool scale = ImGuizmo::IsScaleType(movetype);
-                bool skew = false;
-                em.add_action("Transform Manipulation",
-                    [sel, position, rotation, scale, skew]()
-                {
-                    prefab_override_context::mark_transform_as_changed(sel, position, rotation, scale, skew);
-                });
-            }
-
             handle_inverse_kinematics(sel, center, em);
             if(ImGui::IsKeyDown(shortcuts::ik_ccd) || ImGui::IsKeyDown(shortcuts::ik_fabrik))
             {
@@ -871,20 +865,91 @@ void manipulation_gizmos(bool& gizmo_at_center, entt::handle center, entt::handl
             
             // Convert to local space based on parent
             entt::handle original_parent = original_parents[i];
+            math::transform new_local_transform;
+            
             if(original_parent)
             {
                 const auto& parent_transform = original_parent.get<transform_component>();
                 math::mat4 parent_global = parent_transform.get_transform_global();
                 math::mat4 parent_global_inv = glm::inverse(parent_global);
                 math::mat4 new_local = parent_global_inv * new_global;
-                sel_transform_comp.set_transform_local(math::transform(new_local));
+                new_local_transform = math::transform(new_local);
             }
             else
             {
                 // If no valid parent, the new local == new global
-                sel_transform_comp.set_transform_local(math::transform(new_global));
+                new_local_transform = math::transform(new_global);
+            }
+            
+            // Apply the new transform
+            sel_transform_comp.set_transform_local(new_local_transform);
+            
+            // Create undoable action if there was a manipulation
+            if(movetype != ImGuizmo::MT_NONE)
+            {
+                // if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                {
+                    bool position = ImGuizmo::IsTranslateType(movetype);
+                    bool rotation = ImGuizmo::IsRotateType(movetype);
+                    bool scale = ImGuizmo::IsScaleType(movetype);
+                    bool skew = false;
+
+                    if(top_level_selections.size() > 1)
+                    {
+                        position = true;
+                    }
+
+                    // batch_action->add_sub_action(std::make_shared<transform_manipulation_action_t>(
+                    //     sel, 
+                    //     original_transforms[i], 
+                    //     new_local_transform,
+                    //     position, rotation, scale, skew));
+
+                    auto composite_action = std::make_shared<composite_action_t>();
+
+
+                    if(position)
+                    {
+                        composite_action->add_sub_action(std::make_shared<transform_move_action_t>(
+                            sel, 
+                            original_transforms[i].get_position(), 
+                            new_local_transform.get_position()));
+                    }
+                    if(rotation)
+                    {
+                        composite_action->add_sub_action(std::make_shared<transform_rotate_action_t>(
+                            sel, 
+                            original_transforms[i].get_rotation(), 
+                            new_local_transform.get_rotation()));
+                    }
+                    if(scale)
+                    {
+                        composite_action->add_sub_action(std::make_shared<transform_scale_action_t>(
+                            sel, 
+                            original_transforms[i].get_scale(), 
+                            new_local_transform.get_scale()));
+                    }
+                    if(skew)
+                    {
+                        composite_action->add_sub_action(std::make_shared<transform_skew_action_t>(
+                            sel, 
+                            original_transforms[i].get_skew(), 
+                            new_local_transform.get_skew()));
+                    }
+
+
+                    batch_action->add_sub_action(composite_action);
+                }
+
             }
         }
+    }
+
+    if(batch_action->sub_actions.size() > 0)
+    {
+        em.push_undo_stack_enabled(em.undo_scene_enabled);
+        em.add_action("Transform Manipulation", batch_action);
+        em.pop_undo_stack_enabled();
     }
 }
 
@@ -1666,7 +1731,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     handle_viewport_interaction(ctx, camera, em);
     handle_keyboard_shortcuts(em);
 
-    manipulation_gizmos(gizmo_at_center_, get_center(), camera_entity, em);
+    manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em);
     handle_camera_movement(camera_entity, move_dir_, acceleration_, is_dragging_);
     draw_selected_camera(ctx, camera_entity, size);
 

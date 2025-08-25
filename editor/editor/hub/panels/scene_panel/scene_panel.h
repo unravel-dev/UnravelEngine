@@ -96,5 +96,6 @@ private:
     bool is_drag_selecting_{false};
     ImVec2 drag_start_pos_{};
     ImVec2 drag_current_pos_{};
+    bool was_using_gizmo_{false};
 };
 } // namespace unravel

@@ -22,8 +22,10 @@ private:
     void draw_menubar_child(rtti::context& ctx);
     void draw_play_toolbar(rtti::context& ctx, float header_size);
     void draw_about_window(rtti::context& ctx);
+    void draw_undo_stack_window(rtti::context& ctx);
 
     imgui_panels* parent_{};
     bool show_about_window_ = false;
+    bool show_undo_stack_window_ = false;
 };
 } // namespace unravel

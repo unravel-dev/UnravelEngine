@@ -363,18 +363,34 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             auto type = entt::resolve<transform_component>();
             auto name = entt::get_name(type);
             auto pretty_name = entt::get_pretty_name(type);
-            
+            auto prop = type.data("active"_hs);
+            auto prop_name = entt::get_name(prop);
+            auto prop_pretty_name = entt::get_pretty_name(prop);
+
             // Use a copy of override context for proper path handling
             auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
             override_ctx_ref.set_component_type(name, pretty_name);
-            override_ctx_ref.push_segment("active", "Active");
+            override_ctx_ref.push_segment(prop_name, prop_pretty_name);
 
+            bool old_active = is_active;
             if(ImGui::Checkbox("##active", &is_active))
             {
                 trans_comp->set_active(is_active);
                 result.changed = true;
                 result.edit_finished = true;
                 override_ctx_ref.record_override();
+
+                auto& em = ctx.get_cached<editing_manager>();
+                em.push_undo_stack_enabled(em.undo_inspector_enabled);
+                auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
+
+                entt::meta_any instance = entt::forward_as_meta(*trans_comp);
+                em.add_action<property_action_t>(pretty_path,
+                                                 instance,
+                                                 prop,
+                                                 entt::meta_any(old_active),
+                                                 entt::meta_any(is_active));
+                em.pop_undo_stack_enabled();
             }
             
             // ImGui::PopStyleColor(3);
@@ -398,19 +414,34 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             auto type = entt::resolve<tag_component>();
             auto type_name = entt::get_name(type);
             auto pretty_name = entt::get_pretty_name(type);
+            auto prop = type.data("name"_hs);
+            auto prop_name = entt::get_name(prop);
+            auto prop_pretty_name = entt::get_pretty_name(prop);
             
             auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
             override_ctx_ref.set_component_type(type_name, pretty_name);
-            override_ctx_ref.push_segment("name", "Name");
+            override_ctx_ref.push_segment(prop_name, prop_pretty_name);
                         
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
             ImGui::SetNextItemWidth(-1.0f);
             
+            auto old_name = tag_comp->name;
             if(ImGui::InputTextWidget("##name", tag_comp->name, false))
             {
                 result.changed = true;
                 result.edit_finished = true;
                 override_ctx_ref.record_override();
+
+                auto& em = ctx.get_cached<editing_manager>();
+                em.push_undo_stack_enabled(em.undo_inspector_enabled);
+                auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
+                entt::meta_any instance = entt::forward_as_meta(*tag_comp);
+                em.add_action<property_action_t>(pretty_path,
+                                                 instance,
+                                                 prop,
+                                                 entt::meta_any(old_name),
+                                                 entt::meta_any(tag_comp->name));
+                em.pop_undo_stack_enabled();
             }
             
             ImGui::PopStyleVar();
@@ -443,8 +474,24 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         info.is_property = true;
         info.read_only = false;
 
-        result |= ::unravel::inspect_var(ctx, v, info);
-  
+        auto old_tag = tag_comp->tag;
+        auto var_result = ::unravel::inspect_var(ctx, v, info);
+
+        if(var_result.changed)
+        {
+            auto& em = ctx.get_cached<editing_manager>();
+            em.push_undo_stack_enabled(em.undo_inspector_enabled);
+            auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
+            entt::meta_any instance = entt::forward_as_meta(*tag_comp);
+            em.add_action<property_action_t>(pretty_path,
+                                             instance,
+                                             prop,
+                                             entt::meta_any(old_tag),
+                                             entt::meta_any(tag_comp->tag));
+            em.pop_undo_stack_enabled();
+        }
+
+        result |= var_result;
 
         override_ctx_ref.pop_segment();
     }

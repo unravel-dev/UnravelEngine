@@ -1,9 +1,11 @@
 #include "inspectors.h"
+#include "editor/editing/editing_manager.h"
 #include "editor/hub/panels/entity_panel.h"
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
 #include "entt/core/any.hpp"
 #include "property_path_generator.h"
+
 
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
@@ -38,10 +40,7 @@ inspector_registry::inspector_registry()
         if(inspected_type_var)
         {
             // auto inspected_type = inspected_type_var.cast<entt::meta_type>();
-            inspector_type.invoke("create_and_register"_hs,
-                                  {},
-                                  inspected_type_var,
-                                  entt::forward_as_meta(type_map));
+            inspector_type.invoke("create_and_register"_hs, {}, inspected_type_var, entt::forward_as_meta(type_map));
         }
     }
 }
@@ -480,6 +479,8 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const entt::me
     inspect_result result{};
     auto prop_var = prop.get(object);
     entt::as_derived(prop_var);
+
+    auto prop_old_var = prop.get(object);
     bool is_readonly = prop.is_const() || is_property_readonly(object, prop);
 
     auto prop_type = prop_var.type();
@@ -487,6 +488,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const entt::me
     bool is_flattable = is_property_flattable(object, prop);
     bool is_array = prop_type.is_sequence_container();
     bool is_associative_container = prop_type.is_associative_container();
+    bool is_container = is_array || is_associative_container;
     bool is_enum = prop_type.is_enum();
     auto prop_inspector = get_inspector(ctx, prop_type);
 
@@ -563,6 +565,19 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const entt::me
         prop.set(object, prop_var);
 
         override_ctx.record_override();
+
+        if(!is_container)
+        {
+            auto& em = ctx.get_cached<editing_manager>();
+            em.push_undo_stack_enabled(em.undo_inspector_enabled);
+            auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
+            em.add_action<property_action_t>(pretty_path,
+                                             object,
+                                             prop,
+                                             prop_old_var,
+                                             prop_var);
+            em.pop_undo_stack_enabled();
+        }
     }
 
     // ImGui::PopEnabled();
@@ -974,10 +989,10 @@ auto inspect_var(rtti::context& ctx,
 }
 
 auto inspect_var_properties_impl(rtti::context& ctx,
-                            entt::meta_any& var,
-                            const entt::meta_type& type,
-                            const var_info& info,
-                            const entt::meta_custom& custom) -> inspect_result
+                                 entt::meta_any& var,
+                                 const entt::meta_type& type,
+                                 const var_info& info,
+                                 const entt::meta_custom& custom) -> inspect_result
 {
     auto properties = type.data();
 
@@ -1065,7 +1080,6 @@ auto inspect_var_properties_impl(rtti::context& ctx,
     return result;
 }
 
-
 auto inspect_var_properties(rtti::context& ctx,
                             entt::meta_any& var,
                             const var_info& info,
@@ -1081,7 +1095,6 @@ auto inspect_var_properties(rtti::context& ctx,
     result |= inspect_var_properties_impl(ctx, var, var.type(), info, custom);
 
     return result;
-
 }
 
 } // namespace unravel
