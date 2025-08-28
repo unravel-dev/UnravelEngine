@@ -122,28 +122,29 @@ void push_debug_view();
 void pop_debug_view();
 auto is_debug_view() -> bool;
 
+
 auto inspect_var(rtti::context& ctx,
                  entt::meta_any& var,
-                 const meta_any_getter& var_getter,
+                 const meta_any_proxy& var_proxy,
                  const var_info& info = {},
                  const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_var_properties(rtti::context& ctx,
                                 entt::meta_any& var,
-                                const meta_any_getter& var_getter,
+                                const meta_any_proxy& var_proxy,
                                 const var_info& info = {},
                                 const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_array(rtti::context& ctx,
                        entt::meta_any& var,
-                       const meta_any_getter& var_getter,
+                       const meta_any_proxy& var_proxy,
                        const entt::meta_data& prop,
                        const var_info& info = {},
                        const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_array(rtti::context& ctx,
                        entt::meta_any& var,
-                       const meta_any_getter& var_getter,
+                       const meta_any_proxy& var_proxy,
                        const std::string& name,
                        const std::string& tooltip,
                        const var_info& info = {},
@@ -151,14 +152,14 @@ auto inspect_array(rtti::context& ctx,
 
 auto inspect_associative_container(rtti::context& ctx,
                                    entt::meta_any& var,
-                                   const meta_any_getter& var_getter,
+                                   const meta_any_proxy& var_proxy,
                                    const entt::meta_data& prop,
                                    const var_info& info = {},
                                    const entt::meta_custom& custom = {}) -> inspect_result;
 
 auto inspect_enum(rtti::context& ctx,
                   entt::meta_any& var,
-                  const meta_any_getter& var_getter,
+                  const meta_any_proxy& var_proxy,
                   const var_info& info = {}) -> inspect_result;
 
 auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void;
@@ -174,7 +175,7 @@ template<typename T>
 auto inspect(rtti::context& ctx, T& obj) -> inspect_result
 {
     entt::meta_any var = entt::forward_as_meta(obj);
-    return inspect_var(ctx, var, wrap_var(var));
+    return inspect_var(ctx, var, make_proxy(var));
 }
 
 } // namespace unravel

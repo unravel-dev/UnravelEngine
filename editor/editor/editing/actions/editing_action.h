@@ -11,10 +11,11 @@ namespace unravel
 struct editing_action_t : crtp_meta_type<editing_action_t>
 {
     virtual ~editing_action_t() = default;
-    std::string name{};
     uint64_t merge_key{0};
     bool undoable{false};
+    std::string name{};
 
+    virtual auto get_name() const -> const std::string& { return name; }
     virtual void do_action() = 0;
     virtual void undo_action() = 0;
     virtual auto is_undoable() const -> bool { return undoable; } // Default: actions are undoable

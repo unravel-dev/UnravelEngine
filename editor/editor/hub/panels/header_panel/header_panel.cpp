@@ -613,11 +613,15 @@ void header_panel::draw_undo_stack_window(rtti::context& ctx)
                 bool is_executed = i < undo_stack.current_index;
                 bool is_current = (i == undo_stack.current_index - 1) && undo_stack.current_index > 0;
                 
+                // Only check validity for actions adjacent to current position
+                bool is_adjacent_to_current = (i == undo_stack.current_index - 1) || (i == undo_stack.current_index);
+                bool is_invalid = is_adjacent_to_current && !action->is_valid();
+                
                 // Choose colors based on status
                 ImVec4 text_color;
                 const char* status_icon;
 
-                if(!action->is_valid())
+                if(is_invalid)
                 {
                     text_color = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red for invalid
                     status_icon = ICON_MDI_ALERT " ";
@@ -646,7 +650,7 @@ void header_panel::draw_undo_stack_window(rtti::context& ctx)
                 // Use Selectable to make it clickable with hover effects
                 bool is_selected = is_current;
                 char selectable_label[256];
-                snprintf(selectable_label, sizeof(selectable_label), "%s[%zu] %s", status_icon, i, action->name.c_str());
+                snprintf(selectable_label, sizeof(selectable_label), "%s[%zu] %s", status_icon, i, action->get_name().c_str());
                 
                 if (ImGui::Selectable(selectable_label, is_selected))
                 {
@@ -690,13 +694,13 @@ void header_panel::draw_undo_stack_window(rtti::context& ctx)
                 {
                     ImGui::SetNextWindowViewportToCurrent();
                     ImGui::BeginTooltip();
-                    if(!action->is_valid())
+                    if(is_invalid)
                     {
                         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Invalid Action due to missing dependencies.");
                     }
                     else
                     {
-                        ImGui::Text("Action: %s", action->name.c_str());
+                        ImGui::Text("Action: %s", action->get_name().c_str());
                         ImGui::Text("Status: %s", is_executed ? "Executed" : "Not Executed");
                         ImGui::Text("Undoable: %s", action->is_undoable() ? "Yes" : "No");
                     }

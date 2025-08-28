@@ -246,18 +246,21 @@ void inspector::after_inspect(const entt::meta_data& prop)
     layout_.reset();
 }
 
-auto wrap_var(entt::meta_any& var) -> meta_any_getter
+auto make_proxy(entt::meta_any& var) -> meta_any_proxy
 {
-    // return [var](entt::meta_any& v)
-    // {
-    //     v = var;
-    // };
-    return {};
-}
+    meta_any_proxy proxy;
+    proxy.getter = [var](entt::meta_any& result)
+    {
+        result = var;
+    };
+    proxy.setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
+    {
+        entt::meta_any v;
+        proxy.getter(v);
 
-void call_var_getter(entt::meta_any& var, const meta_any_getter& var_getter)
-{
-    var_getter(var);
+        v.assign(value);
+    };
+    return proxy;
 }
 
 } // namespace unravel

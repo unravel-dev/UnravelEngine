@@ -1,4 +1,5 @@
 #include "undo_redo_stack.h"
+#include "editor/imgui/integration/imgui_notify.h"
 
 namespace unravel
 {
@@ -61,7 +62,17 @@ void undo_redo_stack::undo()
         current_index--;
         if (current_index < actions.size() && actions[current_index])
         {
-            actions[current_index]->undo_action();
+            auto& action = actions[current_index];
+
+            if(action->is_valid())
+            {
+                action->undo_action();
+            }
+            else
+            {
+                ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, 1000,"Unable to undo.\nMissing references."));
+            }
+            
         }
     }
 }
@@ -72,7 +83,15 @@ void undo_redo_stack::redo()
     {
         if (current_index < actions.size() && actions[current_index])
         {
-            actions[current_index]->do_action();
+            auto& action = actions[current_index];
+            if(action->is_valid())
+            {
+                action->do_action();
+            }
+            else
+            {
+                ImGui::PushNotification(ImGuiToast(	ImGuiToastType_Warning, 1000,"Unable to redo.\nMissing references."));
+            }
         }
         current_index++;
     }

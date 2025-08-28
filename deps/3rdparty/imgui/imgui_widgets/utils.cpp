@@ -324,23 +324,48 @@ std::string GetKeyCombinationName(const ImGuiKeyCombination& keys)
     return result;
 }
 
-bool IsCombinationKeyPressed(const ImGuiKeyCombination& keys)
+bool IsCombinationKeyPressed(const ImGuiKeyCombination& keys, bool repeat)
 {
+    bool has_non_modifier_key = false;
+
     for(size_t i = 0; i < keys.size(); ++i)
     {
         if(!IsKeyDown(keys[i]))
         {
             return false;
         }
+
+        if(keys[i] < ImGuiKey_LeftCtrl || keys[i] > ImGuiKey_RightSuper)
+        {
+            has_non_modifier_key = true;
+        }
     }
+
+    auto& io = ImGui::GetIO();
+    auto repeat_delay = io.KeyRepeatDelay;
+
+    io.KeyRepeatDelay = 1.0f;
+
 
     for(size_t i = 0; i < keys.size(); ++i)
     {
-        if(IsKeyPressed(keys[i], false))
+        //bool is_repeat = repeat && !(keys[i] >= ImGuiKey_LeftCtrl && keys[i] <= ImGuiKey_RightSuper);
+
+        bool modifier_key = keys[i] >= ImGuiKey_LeftCtrl && keys[i] <= ImGuiKey_RightSuper;
+
+        bool skip_modifier_key = has_non_modifier_key && modifier_key;
+        if(skip_modifier_key)
+        {
+            continue;
+        }
+
+        if(IsKeyPressed(keys[i], repeat))
         {
             return true;
         }
     }
+
+    io.KeyRepeatDelay = repeat_delay;
 
     return false;
 }

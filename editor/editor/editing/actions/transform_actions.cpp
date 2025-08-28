@@ -198,116 +198,49 @@ auto transform_skew_action_t::is_valid() const -> bool
 }
 
 // Property Action Implementation
-property_action_t::property_action_t(instance_getter inst, entt::meta_data prop, const entt::meta_any& old_val, const entt::meta_any& new_val)
-    : instance(inst), property(prop), old_value(old_val), new_value(new_val)
+property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val)
+    : instance(inst), old_value(old_val), new_value(new_val)
 {
-    name = "Property Action " + entt::get_pretty_name(property);
+    name = "Property Edit";
+    
+    if(inst.get_name)
+    {
+        name += " " +inst.get_name();
+    }
 }
 
 void property_action_t::do_action()
 {
-    entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return;
-    }
-    property.set(inst, new_value);
+    instance.setter(instance, new_value);
 }
 
 void property_action_t::undo_action()
 {
-    entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return;
-    }
-    property.set(inst, old_value);
+    instance.setter(instance, old_value);
 }
 
 auto property_action_t::is_mergeable(const editing_action_t& previous) const -> bool
 {
     const auto& prev = static_cast<const property_action_t&>(previous);
     entt::meta_any inst;
-    instance(inst);
+    instance.getter(inst);
     entt::meta_any prev_inst;
-    prev.instance(prev_inst);
-    return inst == prev_inst && property == prev.property;
+    prev.instance.getter(prev_inst);
+    return inst == prev_inst;
 }
 
 void property_action_t::merge_with(const editing_action_t& previous)
 {
     const auto& prev = static_cast<const property_action_t&>(previous);
-    old_value = prev.old_value;
+    old_value.assign(prev.old_value);
 }
 
 auto property_action_t::is_valid() const -> bool
 {
     entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return false;
-    }
-    return true;
+    instance.getter(inst);
+
+    return !!inst;
 }
-
-var_action_t::var_action_t(instance_getter inst, const entt::meta_any& old_val, const entt::meta_any& new_val)
-    : instance(inst), old_value(old_val), new_value(new_val)
-{
-    name = "Var Action";
-}
-
-void var_action_t::do_action()
-{
-    entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return;
-    }
-    inst.assign(new_value);
-}
-
-void var_action_t::undo_action()
-{
-    entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return;
-    }
-
-    inst.assign(old_value);
-}
-
-auto var_action_t::is_mergeable(const editing_action_t& previous) const -> bool
-{
-    const auto& prev = static_cast<const var_action_t&>(previous);
-    entt::meta_any inst;
-    instance(inst);
-    entt::meta_any prev_inst;
-    prev.instance(prev_inst);
-    return inst == prev_inst;
-}
-
-void var_action_t::merge_with(const editing_action_t& previous)
-{
-    const auto& prev = static_cast<const var_action_t&>(previous);
-    old_value.assign(prev.old_value);
-}
-
-auto var_action_t::is_valid() const -> bool
-{
-    entt::meta_any inst;
-    instance(inst);
-    if(!inst)
-    {
-        return false;
-    }
-    return true;
-}
-
 
 } // namespace unravel

@@ -292,7 +292,7 @@ auto inspector_asset_handle_texture::inspect_as_property(rtti::context& ctx, ass
 
 auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                                              entt::meta_any& var,
-                                             const meta_any_getter& var_getter,
+                                             const meta_any_proxy& var_proxy,
                                              const var_info& info,
                                              const entt::meta_custom& custom) -> inspect_result
 {
@@ -332,11 +332,11 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                 var_info tex_var_info;
                 tex_var_info.read_only = true;
 
-                auto tex_var_getter = [var_getter](entt::meta_any& result)
+                meta_any_proxy tex_var_proxy;
+                tex_var_proxy.getter = [var_proxy](entt::meta_any& result)
                 {
-
                     entt::meta_any var;
-                    call_var_getter(var, var_getter);
+                    var_proxy.getter(var);
                     if(var)
                     {
                         auto& data = var.cast<asset_handle<gfx::texture>&>();
@@ -347,11 +347,21 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                         }
                     }
                 };
-
+                tex_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    entt::meta_any var;
+                    proxy.getter(var);
+                    if(var)
+                    {
+                        var.assign(value);
+                        parent_proxy.setter(parent_proxy, var);
+                    }
+                };
+                
                 entt::meta_any tex_var;
-                call_var_getter(tex_var, tex_var_getter);
+                tex_var_proxy.getter(tex_var);
 
-                result |= ::unravel::inspect_var(ctx, tex_var, tex_var_getter, tex_var_info);
+                result |= ::unravel::inspect_var(ctx, tex_var, tex_var_proxy, tex_var_info);
                 
             }
             ImGui::EndChild();
@@ -415,7 +425,7 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
 
 auto inspector_asset_handle_material::inspect(rtti::context& ctx,
                                               entt::meta_any& var,
-                                              const meta_any_getter& var_getter,
+                                              const meta_any_proxy& var_proxy,
                                               const var_info& info,
                                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -430,10 +440,11 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
     if(data.is_ready())
     {
-        auto data_var_getter = [var_getter](entt::meta_any& result)
+        meta_any_proxy data_var_proxy;
+        data_var_proxy.getter = [var_proxy](entt::meta_any& result)
         {
             entt::meta_any var;
-            call_var_getter(var, var_getter);
+            var_proxy.getter(var);
             if(var)
             {
                 auto& data = var.cast<asset_handle<material>&>();
@@ -444,10 +455,20 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
                 }
             }
         };
+        data_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+        {
+            entt::meta_any var;
+            proxy.getter(var);
+            if(var)
+            {
+                var.assign(value);
+                parent_proxy.setter(parent_proxy, var);
+            }
+        };
 
         entt::meta_any data_var;
-        call_var_getter(data_var, data_var_getter);
-        result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+        data_var_proxy.getter(data_var);
+        result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
     
 
         if(result.changed)
@@ -466,7 +487,7 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
 auto inspector_shared_material::inspect(rtti::context& ctx,
                                         entt::meta_any& var,
-                                        const meta_any_getter& var_getter,
+                                        const meta_any_proxy& var_proxy,
                                         const var_info& info,
                                         const entt::meta_custom& custom) -> inspect_result
 {
@@ -486,20 +507,31 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
             ImGui::SameLine();
             if(ImGui::TreeNodeEx("Material Instance", ImGuiTreeNodeFlags_AllowOverlap))
             {
-                auto data_var_getter = [var_getter](entt::meta_any& result)
+                meta_any_proxy data_var_proxy;
+                data_var_proxy.getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    call_var_getter(var, var_getter);
+                    var_proxy.getter(var);
                     if(var)
                     {
                         auto data = var.cast<std::shared_ptr<material>>();
                         result = entt::forward_as_meta(*data);
                     }
                 };
+                data_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    entt::meta_any var;
+                    proxy.getter(var);
+                    if(var)
+                    {
+                        var.assign(value);
+                        parent_proxy.setter(parent_proxy, var);
+                    }
+                };
 
-                entt::meta_any data_var;
-                call_var_getter(data_var, data_var_getter);
-                result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+
+                auto data_var = entt::forward_as_meta(*data);
+                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
 
                 ImGui::TreePop();
             }
@@ -533,7 +565,7 @@ auto inspector_asset_handle_mesh::inspect_as_property(rtti::context& ctx, asset_
 
 auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                                           entt::meta_any& var,
-                                          const meta_any_getter& var_getter,
+                                          const meta_any_proxy& var_proxy,
                                           const var_info& info,
                                           const entt::meta_custom& custom) -> inspect_result
 {
@@ -567,10 +599,11 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                 var_info mesh_var_info;
                 mesh_var_info.read_only = true;
 
-                auto mesh_var_getter = [var_getter](entt::meta_any& result)
+                meta_any_proxy mesh_var_proxy;
+                mesh_var_proxy.getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    call_var_getter(var, var_getter);
+                    var_proxy.getter(var);
                     if(var)
                     {
                         auto& data = var.cast<asset_handle<mesh>&>();
@@ -587,11 +620,21 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                         }
                     }
                 };
+                mesh_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    entt::meta_any var;
+                    proxy.getter(var);
+                    if(var)
+                    {
+                        var.assign(value);
+                        parent_proxy.setter(parent_proxy, var);
+                    }
+                };
 
                 entt::meta_any mesh_var;
-                call_var_getter(mesh_var, mesh_var_getter);
+                mesh_var_proxy.getter(mesh_var);
 
-                result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_getter, mesh_var_info);
+                result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_proxy, mesh_var_info);
             }
         
             ImGui::EndChild();
@@ -687,7 +730,7 @@ auto inspector_asset_handle_animation::inspect_as_property(rtti::context& ctx, a
 
 auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                                                entt::meta_any& var,
-                                               const meta_any_getter& var_getter,
+                                               const meta_any_proxy& var_proxy,
                                                const var_info& info,
                                                const entt::meta_custom& custom) -> inspect_result
 {
@@ -718,10 +761,11 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 var_info clip_var_info;
                 clip_var_info.read_only = true;
 
-                auto clip_var_getter = [var_getter](entt::meta_any& result)
+                meta_any_proxy clip_var_proxy;
+                clip_var_proxy.getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    call_var_getter(var, var_getter);
+                    var_proxy.getter(var);
                     if(var)
                     {
                         auto& data = var.cast<asset_handle<animation_clip>&>();
@@ -734,8 +778,8 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 };
 
                 entt::meta_any clip_var;
-                call_var_getter(clip_var, clip_var_getter);
-                result |= ::unravel::inspect_var(ctx, clip_var, clip_var_getter, clip_var_info);
+                clip_var_proxy.getter(clip_var);
+                result |= ::unravel::inspect_var(ctx, clip_var, clip_var_proxy, clip_var_info);
             }
             ImGui::EndTabItem();
         }
@@ -851,7 +895,7 @@ void inspector_asset_handle_prefab::refresh(rtti::context& ctx)
 }
 auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
                                             entt::meta_any& var,
-                                            const meta_any_getter& var_getter,
+                                            const meta_any_proxy& var_proxy,
                                             const var_info& info,
                                             const entt::meta_custom& custom) -> inspect_result
 {
@@ -919,7 +963,7 @@ auto inspector_asset_handle_scene_prefab::inspect_as_property(rtti::context& ctx
 
 auto inspector_asset_handle_scene_prefab::inspect(rtti::context& ctx,
                                                   entt::meta_any& var,
-                                                  const meta_any_getter& var_getter,
+                                                  const meta_any_proxy& var_proxy,
                                                   const var_info& info,
                                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -976,7 +1020,7 @@ auto inspector_asset_handle_physics_material::inspect_as_property(rtti::context&
 
 auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
                                                       entt::meta_any& var,
-                                                      const meta_any_getter& var_getter,
+                                                      const meta_any_proxy& var_proxy,
                                                       const var_info& info,
                                                       const entt::meta_custom& custom) -> inspect_result
 {
@@ -990,10 +1034,11 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        auto data_var_getter = [var_getter](entt::meta_any& result)
+        meta_any_proxy data_var_proxy;
+        data_var_proxy.getter = [var_proxy](entt::meta_any& result)
         {
             entt::meta_any var;
-            call_var_getter(var, var_getter);
+            var_proxy.getter(var);
             if(var)
             {
                 auto& data = var.cast<asset_handle<physics_material>&>();
@@ -1006,8 +1051,8 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
         };
 
         entt::meta_any data_var;
-        call_var_getter(data_var, data_var_getter);
-        result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+        data_var_proxy.getter(data_var);
+        result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
     }
     if(result.edit_finished)
     {
@@ -1082,7 +1127,7 @@ void inspector_asset_handle_audio_clip::inspect_clip(const std::shared_ptr<audio
 
 auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
                                                 entt::meta_any& var,
-                                                const meta_any_getter& var_getter,
+                                                const meta_any_proxy& var_proxy,
                                                 const var_info& info,
                                                 const entt::meta_custom& custom) -> inspect_result
 {
@@ -1100,10 +1145,11 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
-            auto data_var_getter = [var_getter](entt::meta_any& result)
+            meta_any_proxy data_var_proxy;
+            data_var_proxy.getter = [var_proxy](entt::meta_any& result)
             {
                 entt::meta_any var;
-                call_var_getter(var, var_getter);
+                var_proxy.getter(var);
                 if(var)
                 {
                     auto& data = var.cast<asset_handle<audio_clip>&>();
@@ -1116,8 +1162,8 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
             };
 
             entt::meta_any data_var;
-            call_var_getter(data_var, data_var_getter);
-            result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+            data_var_proxy.getter(data_var);
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
 
             auto clip = data.get(false);
 
@@ -1148,7 +1194,7 @@ auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx,
 
 auto inspector_asset_handle_font::inspect(rtti::context& ctx,
                                                       entt::meta_any& var,
-                                                      const meta_any_getter& var_getter,
+                                                      const meta_any_proxy& var_proxy,
                                                       const var_info& info,
                                                       const entt::meta_custom& custom) -> inspect_result
 {
@@ -1165,10 +1211,11 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
-            auto data_var_getter = [var_getter](entt::meta_any& result)
+            meta_any_proxy data_var_proxy;
+            data_var_proxy.getter = [var_proxy](entt::meta_any& result)
             {
                 entt::meta_any var;
-                call_var_getter(var, var_getter);
+                var_proxy.getter(var);
                 if(var)
                 {
                     auto& data = var.cast<asset_handle<font>&>();
@@ -1181,8 +1228,8 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
             };
 
             entt::meta_any data_var;
-            call_var_getter(data_var, data_var_getter);
-            result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+            data_var_proxy.getter(data_var);
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
         }
     }
 

@@ -4,6 +4,7 @@
 #include "composite_action.h"
 #include "entt/meta/meta.hpp"
 #include <engine/ecs/components/transform_component.h>
+#include <editor/hub/panels/inspector_panel/inspectors/inspector.h>
 #include <math/math.h>
 
 namespace unravel
@@ -74,13 +75,11 @@ struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing
 
 struct property_action_t : crtp_meta_type<property_action_t, editing_action_t>
 {
-    using instance_getter = std::function<void(entt::meta_any&)>;
-    instance_getter instance;
-    entt::meta_data property;
+    meta_any_proxy instance;
     entt::meta_any old_value;
     entt::meta_any new_value;
     
-    property_action_t(instance_getter inst, entt::meta_data property, const entt::meta_any& old_val, const entt::meta_any& new_val);
+    property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val);
 
     void do_action() override;
     void undo_action() override;
@@ -89,21 +88,6 @@ struct property_action_t : crtp_meta_type<property_action_t, editing_action_t>
     auto is_valid() const -> bool override;
 };
 
-struct var_action_t : crtp_meta_type<var_action_t, editing_action_t>
-{
-    using instance_getter = std::function<void(entt::meta_any&)>;
-    instance_getter instance;
-    entt::meta_any old_value;
-    entt::meta_any new_value;
-    
-    var_action_t(instance_getter inst, const entt::meta_any& old_val, const entt::meta_any& new_val);
-
-    void do_action() override;
-    void undo_action() override;
-    auto is_mergeable(const editing_action_t& previous) const -> bool override;
-    void merge_with(const editing_action_t& previous) override;
-    auto is_valid() const -> bool override;
-};
 
 // struct select_action_t : crtp_meta_type<select_action_t, editing_action_t>
 // {

@@ -1195,7 +1195,7 @@ auto shadowmap_generator::get_depth_type() const -> PackDepth::Enum
 
 auto shadowmap_generator::get_rt_texture(uint8_t split) const -> bgfx::TextureHandle
 {
-    if(!bgfx::isValid(shadow_map_[split]))
+    if(!bgfx::isValid(rt_shadow_map_[split]))
     {
         return {bgfx::kInvalidHandle};
     }

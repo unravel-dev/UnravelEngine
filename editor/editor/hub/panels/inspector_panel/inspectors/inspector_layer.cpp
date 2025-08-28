@@ -9,7 +9,7 @@ namespace unravel
 
 auto inspector_layer::inspect(rtti::context& ctx,
                               entt::meta_any& var,
-                              const meta_any_getter& var_getter,
+                              const meta_any_proxy& var_proxy,
                               const var_info& info,
                               const entt::meta_custom& custom) -> inspect_result
 {

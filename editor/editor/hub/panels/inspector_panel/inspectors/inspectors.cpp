@@ -4,6 +4,7 @@
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
 #include "entt/core/any.hpp"
+#include "inspector.h"
 #include "property_path_generator.h"
 
 
@@ -19,6 +20,7 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
+#include <engine/rendering/ecs/components/light_component.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <functional>
 #include <unordered_map>
@@ -29,6 +31,7 @@ namespace unravel
 namespace
 {
 int debug_view{0};
+
 }
 inspector_registry::inspector_registry()
 {
@@ -469,7 +472,7 @@ auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& 
     return false;
 }
 
-auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_getter& var_getter, const entt::meta_data& prop) -> inspect_result
+auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> inspect_result
 {
     if(!is_property_visible(object, prop))
     {
@@ -513,35 +516,52 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     ImGui::PushReadonly(is_readonly);
 
 
-    auto prop_getter = [var_getter, prop](entt::meta_any& result)
+    meta_any_proxy prop_proxy;
+    prop_proxy.get_name = [pretty_name]()
+    {
+        return pretty_name;
+    };
+    prop_proxy.getter = [var_proxy, prop](entt::meta_any& result)
     {
         entt::meta_any var;
-        call_var_getter(var, var_getter);
+        var_proxy.getter(var);
         if(var)
         {
             result = prop.get(var);
         }
     };
+    prop_proxy.setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    {
+        entt::meta_any var;
+        parent_proxy.getter(var);
+        if(var)
+        {
+            prop.set(var, value);
+            parent_proxy.setter(parent_proxy, var);
+        }
+
+    };
+
 
     {
         if(is_array)
         {
-            result |= inspect_array(ctx, prop_var, prop_getter, prop, info, prop.custom());
+            result |= inspect_array(ctx, prop_var, prop_proxy, prop, info, prop.custom());
         }
         else if(is_associative_container)
         {
-            result |= inspect_associative_container(ctx, prop_var, prop_getter, prop, info, prop.custom());
+            result |= inspect_associative_container(ctx, prop_var, prop_proxy, prop, info, prop.custom());
         }
         else if(is_enum)
         {
             property_layout layout(prop);
-            result |= inspect_enum(ctx, prop_var, prop_getter, info);
+            result |= inspect_enum(ctx, prop_var, prop_proxy, info);
         }
         else
         {
             if(prop_inspector)
             {
-                result |= inspect_var(ctx, prop_var, prop_getter, info, prop.custom());
+                result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
             }
             else if(!is_flattable)
             {
@@ -554,7 +574,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
                 {
                     ImGui::TreePush(pretty_name.c_str());
 
-                    result |= inspect_var(ctx, prop_var, prop_getter, info, prop.custom());
+                    result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
 
                     ImGui::TreePop();
                     ImGui::TreePop();
@@ -564,7 +584,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
             {
                 ImGui::PushID(pretty_name.c_str());
 
-                result |= inspect_var(ctx, prop_var, prop_getter, info, prop.custom());
+                result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
 
                 ImGui::PopID();
             }
@@ -577,14 +597,13 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
         override_ctx.record_override();
 
-        if(!result.change_recorded && !is_container)
+        if(!result.change_recorded)
         {
             auto& em = ctx.get_cached<editing_manager>();
             em.push_undo_stack_enabled(em.undo_inspector_enabled);
             auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
             em.add_action<property_action_t>(pretty_path,
-                                             var_getter,
-                                             prop,
+                                             prop_proxy,
                                              prop_old_var,
                                              prop_var);
             em.pop_undo_stack_enabled();
@@ -608,7 +627,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
 auto inspect_array(rtti::context& ctx,
                    entt::meta_any& var,
-                   const meta_any_getter& var_getter,
+                   const meta_any_proxy& var_proxy,
                    const entt::meta_data& prop,
                    const var_info& info,
                    const entt::meta_custom& custom) -> inspect_result
@@ -617,12 +636,12 @@ auto inspect_array(rtti::context& ctx,
 
     auto tooltip = entt::get_attribute_as<std::string>(prop, "tooltip");
 
-    return inspect_array(ctx, var, var_getter, name, tooltip, info, custom);
+    return inspect_array(ctx, var, var_proxy, name, tooltip, info, custom);
 }
 
 auto inspect_array(rtti::context& ctx,
                    entt::meta_any& var,
-                   const meta_any_getter& var_getter,
+                   const meta_any_proxy& var_proxy,
                    const std::string& name,
                    const std::string& tooltip,
                    const var_info& info,
@@ -640,8 +659,8 @@ auto inspect_array(rtti::context& ctx,
     bool open = layout.push_tree_layout();
 
     int readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
+    bool resizeable = view.resize(size);
     {
-        bool resizeable = view.resize(size);
 
         ImGuiInputTextFlags flags = 0;
         int step = 1;
@@ -708,10 +727,15 @@ auto inspect_array(rtti::context& ctx,
                 //     override_ctx.pretty_path_context.push_segment(array_index_segment);
                 // }
 
-                auto value_getter = [var_getter, i](entt::meta_any& result)
+                meta_any_proxy value_proxy;
+                value_proxy.get_name = [element]()
+                {
+                    return element;
+                };
+                value_proxy.getter = [var_proxy, i](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    call_var_getter(var, var_getter);
+                    var_proxy.getter(var);
                     if(var)
                     {
                         auto view = var.as_sequence_container();
@@ -722,7 +746,23 @@ auto inspect_array(rtti::context& ctx,
                         }
                     }
                 };
-                result |= inspect_var(ctx, value, value_getter, item_info, custom);
+                value_proxy.setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    entt::meta_any var;
+                    parent_proxy.getter(var);
+                    if(var)
+                    {
+                        auto view = var.as_sequence_container();
+                        if(view.size() > static_cast<std::size_t>(i))
+                        {
+                            view[i] = value;
+                        }
+                    }
+
+                    parent_proxy.setter(parent_proxy, var);
+                };
+
+                result |= inspect_var(ctx, value, value_proxy, item_info, custom);
 
                 // Pop array index from property path
                 // if(override_ctx.is_active)
@@ -740,7 +780,7 @@ auto inspect_array(rtti::context& ctx,
             //     view[i] = value;
             // }
 
-            if(!item_info.read_only) // && view.is_dynamic())
+            if(!item_info.read_only && !resizeable)
             {
                 ImGui::SetCursorPos(pos_before);
 
@@ -776,7 +816,7 @@ auto inspect_array(rtti::context& ctx,
 
 auto inspect_associative_container(rtti::context& ctx,
                                    entt::meta_any& var,
-                                   const meta_any_getter& var_getter,
+                                   const meta_any_proxy& var_proxy,
                                    const entt::meta_data& prop,
                                    const var_info& info,
                                    const entt::meta_custom& custom) -> inspect_result
@@ -873,7 +913,7 @@ auto inspect_associative_container(rtti::context& ctx,
     return result;
 }
 
-auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const meta_any_getter& var_getter, const var_info& info) -> inspect_result
+auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info) -> inspect_result
 {
     auto edited = var;
     if(!edited.allow_cast<int64_t>())
@@ -986,20 +1026,34 @@ auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void
 
 auto inspect_var(rtti::context& ctx,
                  entt::meta_any& var,
-                 const meta_any_getter& var_getter,
+                 const meta_any_proxy& var_proxy,
                  const var_info& info,
                  const entt::meta_custom& custom) -> inspect_result
 {
     entt::as_derived(var);
     auto type = var.type();
 
-    auto derived_var_getter = [var_getter](entt::meta_any& result)
+    meta_any_proxy derived_var_proxy;
+    derived_var_proxy.get_name = [var_proxy]()
     {
-        call_var_getter(result, var_getter);
+        return var_proxy.get_name();
+    };
+    derived_var_proxy.getter = [var_proxy](entt::meta_any& result)
+    {
+        var_proxy.getter(result);
         if(result)
         {
             entt::as_derived(result);
-            // result = var;
+        }
+    };
+    derived_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    {
+        entt::meta_any var;
+        proxy.getter(var);
+        if(var)
+        {
+            var.assign(value);
+            parent_proxy.setter(parent_proxy, var);
         }
     };
 
@@ -1007,16 +1061,19 @@ auto inspect_var(rtti::context& ctx,
 
     ImGui::PushReadonly(info.read_only);
 
-    auto old_var = var;
+
+    entt::meta_any old_var;
+    old_var.assign(var);
+    // auto old_var = var;
 
     auto inspector = get_inspector(ctx, type);
     if(inspector)
     {
-        result |= inspector->inspect(ctx, var, derived_var_getter, info, custom);
+        result |= inspector->inspect(ctx, var, derived_var_proxy, info, custom);
     }
     else
     {
-        result |= inspect_var_properties(ctx, var, derived_var_getter, info, custom);
+        result |= inspect_var_properties(ctx, var, derived_var_proxy, info, custom);
     }
 
     // Record override if this was a property change in a prefab instance
@@ -1031,8 +1088,8 @@ auto inspect_var(rtti::context& ctx,
         //     auto& em = ctx.get_cached<editing_manager>();
         //     em.push_undo_stack_enabled(em.undo_inspector_enabled);
         //     auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-        //     em.add_action<var_action_t>(pretty_path,
-        //                                      derived_var_getter,
+        //     em.add_action<property_action_t>(pretty_path,
+        //                                      derived_var_proxy,
         //                                      old_var,
         //                                      var);
         //     em.pop_undo_stack_enabled();
@@ -1048,7 +1105,7 @@ auto inspect_var(rtti::context& ctx,
 
 auto inspect_var_properties_impl(rtti::context& ctx,
                                  entt::meta_any& var,
-                                 const meta_any_getter& var_getter,
+                                 const meta_any_proxy& var_proxy,
                                  const entt::meta_type& type,
                                  const var_info& info,
                                  const entt::meta_custom& custom) -> inspect_result
@@ -1060,80 +1117,81 @@ auto inspect_var_properties_impl(rtti::context& ctx,
     {
         if(type.is_enum())
         {
-            result |= inspect_enum(ctx, var, var_getter, info);
+            result |= inspect_enum(ctx, var, var_proxy, info);
         }
 
         if(type.is_sequence_container())
         {
-            result |= inspect_array(ctx, var, var_getter, "", "", info, custom);
+            result |= inspect_array(ctx, var, var_proxy, "", "", info, custom);
         }
     }
     else
     {
-        std::vector<std::pair<std::string, std::vector<entt::meta_data>>> grouped_props;
-        for(auto kvp : properties)
-        {
-            const auto& prop = kvp.second;
-            // figure out the group name ("" if none)
-            auto group = entt::get_attribute_as<std::string>(prop, "group");
+        // std::vector<std::pair<std::string, std::vector<entt::meta_data>>> grouped_props;
+        // for(auto kvp : properties)
+        // {
+        //     const auto& prop = kvp.second;
+        //     // figure out the group name ("" if none)
+        //     auto group = entt::get_attribute_as<std::string>(prop, "group");
 
-            // try to find an existing entry for this group
-            auto it = std::find_if(grouped_props.begin(),
-                                   grouped_props.end(),
-                                   [&](auto& kv)
-                                   {
-                                       return kv.first == group;
-                                   });
+        //     // try to find an existing entry for this group
+        //     auto it = std::find_if(grouped_props.begin(),
+        //                            grouped_props.end(),
+        //                            [&](auto& kv)
+        //                            {
+        //                                return kv.first == group;
+        //                            });
 
-            if(it == grouped_props.end())
-            {
-                // first time we see this group: append a new pair
-                grouped_props.emplace_back(group, std::vector<entt::meta_data>{prop});
-            }
-            else
-            {
-                // already have this group: just push into its vector
-                it->second.emplace_back(prop);
-            }
-        }
+        //     if(it == grouped_props.end())
+        //     {
+        //         // first time we see this group: append a new pair
+        //         grouped_props.emplace_back(group, std::vector<entt::meta_data>{prop});
+        //     }
+        //     else
+        //     {
+        //         // already have this group: just push into its vector
+        //         it->second.emplace_back(prop);
+        //     }
+        // }
         size_t i = 0;
-        for(auto& kvp : grouped_props)
-        {
-            auto& props = kvp.second;
+        // for(auto& kvp : properties)
+        // {
+        //     auto& props = kvp.second;
 
-            const auto& group_name = kvp.first;
+        //     const auto& group_name = kvp.first;
 
-            if(group_name.empty())
-            {
-                for(auto& prop : props)
+        //     if(group_name.empty())
+        //     {
+                for(auto&& kvp : properties)
                 {
+                    const auto& prop = kvp.second;
                     ImGui::PushID(i);
-                    result |= inspect_property(ctx, var, var_getter, prop);
+                    result |= inspect_property(ctx, var, var_proxy, prop);
                     ImGui::PopID();
                     i++;
                 }
-            }
-            else
-            {
-                ImGui::AlignTextToFramePadding();
-                ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
-                if(ImGui::TreeNode(kvp.first.c_str()))
-                {
-                    ImGui::TreePush(kvp.first.c_str());
+            // }
+            // else
+            // {
+            //     ImGui::AlignTextToFramePadding();
+            //     ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
+            //     if(ImGui::TreeNode(kvp.first.c_str()))
+            //     {
+            //         ImGui::TreePush(kvp.first.c_str());
 
-                    for(auto& prop : props)
-                    {
-                        ImGui::PushID(i);
-                        result |= inspect_property(ctx, var, var_getter, prop);
-                        ImGui::PopID();
-                        i++;
-                    }
-                    ImGui::TreePop();
+            //         for(auto& prop : props)
+            //         {
+            //             ImGui::PushID(i);
+            //             result |= inspect_property(ctx, var, var_proxy, prop);
+            //             ImGui::PopID();
+            //             i++;
+            //         }
+            //         ImGui::TreePop();
 
-                    ImGui::TreePop();
-                }
-            }
-        }
+            //         ImGui::TreePop();
+            //     }
+            // }
+        // }
     }
 
     return result;
@@ -1141,18 +1199,18 @@ auto inspect_var_properties_impl(rtti::context& ctx,
 
 auto inspect_var_properties(rtti::context& ctx,
                             entt::meta_any& var,
-                            const meta_any_getter& var_getter,
+                            const meta_any_proxy& var_proxy,
                             const var_info& info,
                             const entt::meta_custom& custom) -> inspect_result
 {
     inspect_result result{};
     for(auto base : var.type().base())
     {
-        result |= inspect_var_properties_impl(ctx, var, var_getter, base.second, info, custom);
+        result |= inspect_var_properties_impl(ctx, var, var_proxy, base.second, info, custom);
     }
 
     entt::as_derived(var);
-    result |= inspect_var_properties_impl(ctx, var, var_getter, var.type(), info, custom);
+    result |= inspect_var_properties_impl(ctx, var, var_proxy, var.type(), info, custom);
 
     return result;
 }

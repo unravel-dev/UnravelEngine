@@ -9,6 +9,38 @@ namespace unravel
 REFLECT(light)
 {
     
+    
+    auto directional_predicate_entt = entt::property_predicate(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == light_type::directional;
+        });   
+    auto point_predicate_entt = entt::property_predicate(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == light_type::point;
+        });
+    auto spot_predicate_entt = entt::property_predicate(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == light_type::spot;
+        });
+
     entt::meta_factory<light::spot::shadowmap_params>{}
         .type("light::spot::shadowmap_params"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -46,6 +78,12 @@ REFLECT(light)
             entt::attribute{"max", 90.0f},
             entt::attribute{"step", 0.1f},
             entt::attribute{"tooltip", "Spot light outer cone angle."},
+        })
+        .data<&light::spot::shadow_params>("shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_params"},
+            entt::attribute{"pretty_name", "Shadow Params"},
+            entt::attribute{"tooltip", "Spot light shadow map parameters."},
         });
 
     entt::meta_factory<light::point::shadowmap_params>{}
@@ -99,6 +137,12 @@ REFLECT(light)
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"tooltip", "The falloff factor nearing the range edge."},
+        })
+        .data<&light::point::shadow_params>("shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_params"},
+            entt::attribute{"pretty_name", "Shadow Params"},
+            entt::attribute{"tooltip", "Point light shadow map parameters."},
         });
 
     entt::meta_factory<light::directional::shadowmap_params>{}
@@ -136,6 +180,12 @@ REFLECT(light)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "directional"},
             entt::attribute{"pretty_name", "Directional"},
+        })
+        .data<&light::directional::shadow_params>("shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_params"},
+            entt::attribute{"pretty_name", "Shadow Params"},
+            entt::attribute{"tooltip", "Directional light shadow map parameters."},
         });
 
     entt::meta_factory<light_type>{}
@@ -301,6 +351,7 @@ REFLECT(light)
             entt::attribute{"tooltip", "Show shadowmap coverage in view."},
         });
 
+
     entt::meta_factory<light>{}
         .type("light"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -320,12 +371,36 @@ REFLECT(light)
         .data<&light::ambient_intensity>("ambient_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "ambient_intensity"},
-            entt::attribute{"pretty_name", "Ambient Intensity"} 
+            entt::attribute{"pretty_name", "Ambient Intensity"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 0.5f},
+            entt::attribute{"step", 0.01f},
         })
         .data<&light::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "type"},
             entt::attribute{"pretty_name", "Type"} 
+        })
+        .data<&light::directional_data>("directional_data"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "directional_data"},
+            entt::attribute{"pretty_name", "Directional"},
+            entt::attribute{"flattable", true},
+            entt::attribute{"predicate", directional_predicate_entt}
+        })
+        .data<&light::point_data>("point_data"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "point_data"},
+            entt::attribute{"pretty_name", "Point"},
+            entt::attribute{"flattable", true},
+            entt::attribute{"predicate", point_predicate_entt}
+        })
+        .data<&light::spot_data>("spot_data"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "spot_data"},
+            entt::attribute{"pretty_name", "Spot"},
+            entt::attribute{"flattable", true},
+            entt::attribute{"predicate", spot_predicate_entt}
         })
         .data<&light::casts_shadows>("casts_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{ 

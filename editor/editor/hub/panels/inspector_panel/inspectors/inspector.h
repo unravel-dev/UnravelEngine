@@ -73,9 +73,14 @@ struct inspect_result
 
 
 
-using meta_any_getter = std::function<void(entt::meta_any&)>;
-auto wrap_var(entt::meta_any& var) -> meta_any_getter;
-void call_var_getter(entt::meta_any& var, const meta_any_getter& var_getter);
+struct meta_any_proxy
+{
+    std::function<void(entt::meta_any&)> getter;
+    std::function<void(meta_any_proxy& proxy, const entt::meta_any&)> setter;
+    std::function<std::string()> get_name;
+};
+
+auto make_proxy(entt::meta_any& var) -> meta_any_proxy;
 
 
 struct inspector : crtp_meta_type<inspector>
@@ -95,7 +100,7 @@ struct inspector : crtp_meta_type<inspector>
     virtual void after_inspect(const entt::meta_data& prop);
     virtual auto inspect(rtti::context& ctx,
                              entt::meta_any& var,
-                             const meta_any_getter& var_getter,
+                             const meta_any_proxy& var_proxy,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result = 0;
 

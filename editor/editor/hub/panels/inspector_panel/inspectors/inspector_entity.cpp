@@ -384,7 +384,12 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 em.push_undo_stack_enabled(em.undo_inspector_enabled);
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
 
-                auto instance_getter = [data](entt::meta_any& result)
+                meta_any_proxy instance_proxy;
+                instance_proxy.get_name = [prop_pretty_name]()
+                {
+                    return prop_pretty_name;
+                };
+                instance_proxy.getter = [data](entt::meta_any& result)
                 {
                     if(data)
                     {
@@ -395,9 +400,20 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                         }
                     }
                 };
+                instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    if(data)
+                    {
+                        auto trans_comp = data.try_get<transform_component>();
+                        if(trans_comp)
+                        {
+                            trans_comp->set_active(value.cast<bool>());
+                        }
+                    }
+                };
+                
                 em.add_action<property_action_t>(pretty_path,
-                                                 instance_getter,
-                                                 prop,
+                                                 instance_proxy,
                                                  entt::meta_any(old_active),
                                                  entt::meta_any(is_active));
                 em.pop_undo_stack_enabled();
@@ -445,7 +461,13 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 auto& em = ctx.get_cached<editing_manager>();
                 em.push_undo_stack_enabled(em.undo_inspector_enabled);
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-                auto instance_getter = [data](entt::meta_any& result)
+
+                meta_any_proxy instance_proxy;
+                instance_proxy.get_name = [prop_pretty_name]()
+                {
+                    return prop_pretty_name;
+                };
+                instance_proxy.getter = [data](entt::meta_any& result)
                 {
                     if(data)
                     {
@@ -456,11 +478,22 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                         }
                     }
                 };
+                instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                {
+                    if(data)
+                    {
+                        auto tag_comp = data.try_get<tag_component>();
+                        if(tag_comp)
+                        {
+                            tag_comp->name = value.cast<std::string>();
+                        }
+                    }
+                };
                 em.add_action<property_action_t>(pretty_path,
-                                                 instance_getter,
-                                                 prop,
+                                                 instance_proxy,
                                                  entt::meta_any(old_name),
                                                  entt::meta_any(tag_comp->name));
+
                 em.pop_undo_stack_enabled();
             }
             
@@ -489,7 +522,12 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
 
         property_layout layout(prop, true);
 
-        auto v_getter = [data](entt::meta_any& result)
+        meta_any_proxy instance_proxy;
+        instance_proxy.get_name = [prop_pretty_name]()
+        {
+            return prop_pretty_name;
+        };
+        instance_proxy.getter = [data](entt::meta_any& result)
         {
             if(data)
             {
@@ -497,6 +535,17 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 if(tag_comp)
                 {
                     result = entt::forward_as_meta(tag_comp->tag);
+                }
+            }
+        };
+        instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+        {
+            if(data)
+            {
+                auto tag_comp = data.try_get<tag_component>();
+                if(tag_comp)
+                {
+                    tag_comp->tag = value.cast<std::string>();
                 }
             }
         };
@@ -510,29 +559,18 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         // entt::meta_any v_var;
         // v_getter(v_var);
         auto v_var = entt::forward_as_meta(tag_comp->tag);
-        auto var_result = ::unravel::inspect_var(ctx, v_var, v_getter, info);
+        auto var_result = ::unravel::inspect_var(ctx, v_var, instance_proxy, info);
 
         if(var_result.changed)
         {
             auto& em = ctx.get_cached<editing_manager>();
             em.push_undo_stack_enabled(em.undo_inspector_enabled);
             auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-            auto instance_getter = [data](entt::meta_any& result)
-            {
-                if(data)
-                {
-                    auto tag_comp = data.try_get<tag_component>();
-                    if(tag_comp)
-                    {
-                        result = entt::forward_as_meta(*tag_comp);
-                    }
-                }
-            };
             em.add_action<property_action_t>(pretty_path,
-                                             instance_getter,
-                                             prop,
+                                             instance_proxy,
                                              entt::meta_any(old_tag),
                                              entt::meta_any(tag_comp->tag));
+
             em.pop_undo_stack_enabled();
         }
 
@@ -582,7 +620,7 @@ auto inspector_entity::inspect_as_property(rtti::context& ctx, entt::handle& dat
 
 auto inspector_entity::inspect(rtti::context& ctx,
                                entt::meta_any& var,
-                               const meta_any_getter& var_getter,
+                               const meta_any_proxy& var_proxy,
                                const var_info& info,
                                const entt::meta_custom& custom) -> inspect_result
 {
@@ -667,10 +705,15 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                     }
 
-                    auto comp_var_getter = [var_getter](entt::meta_any& result)
+                    meta_any_proxy comp_var_proxy;
+                    comp_var_proxy.get_name = [pretty_name]()
+                    {
+                        return pretty_name;
+                    };
+                    comp_var_proxy.getter = [var_proxy](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        call_var_getter(var, var_getter);
+                        var_proxy.getter(var);
                         if(var)
                         {
                             auto data = var.cast<entt::handle>();
@@ -684,10 +727,14 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             }
                         }
                     };
+                    comp_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    {
+
+                    };
                     // entt::meta_any comp_var;
                     // call_var_getter(comp_var, comp_var_getter);
                     auto comp_var = entt::forward_as_meta(*component);
-                    return ::unravel::inspect_var(ctx, comp_var, comp_var_getter);
+                    return ::unravel::inspect_var(ctx, comp_var, comp_var_proxy);
                     
                 };
 
@@ -734,6 +781,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 const auto& type = script.scoped->object.get_type();
                 fs::path source_loc = script_comp->get_script_source_location(script);
 
+                auto name = type.get_fullname();
+                const auto& pretty_name = name;
+
                 inspect_callbacks callbacks;
                 callbacks.on_inspect = [&]() -> inspect_result
                 {
@@ -766,10 +816,15 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         ImGui::PopReadonly();
                     }
 
-                    auto obj_getter = [var_getter, i](entt::meta_any& result)
+                    meta_any_proxy obj_proxy;
+                    obj_proxy.get_name = [pretty_name]()
+                    {
+                        return pretty_name;
+                    };
+                    obj_proxy.getter = [var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        call_var_getter(var, var_getter);
+                        var_proxy.getter(var);
                         if(var)
                         {
                             auto data = var.cast<entt::handle>();
@@ -788,10 +843,13 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             }
                         }
                     };
+                    obj_proxy.setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    {
+                    };
                     // entt::meta_any obj_var;
                     // call_var_getter(obj_var, obj_getter);
                     auto obj_var = entt::forward_as_meta(*script.scoped);
-                    inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_getter);
+                    inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_proxy);
                     return inspect_res;
                 };
 
@@ -817,8 +875,6 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 callbacks.icon = ICON_MDI_SCRIPT;
 
-                auto name = type.get_fullname();
-                const auto& pretty_name = name;
 
                 auto script_type = entt::resolve<script_component>();
                 auto script_type_name = entt::get_name(script_type);

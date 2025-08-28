@@ -132,7 +132,7 @@ bool DragVec4(math::vec4& data, const var_info& info, const math::vec4* reset = 
 
 auto inspector_bvec2::inspect(rtti::context& ctx,
                               entt::meta_any& var,
-                              const meta_any_getter& var_getter,
+                              const meta_any_proxy& var_proxy,
                               const var_info& info,
                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -169,7 +169,7 @@ auto inspector_bvec2::inspect(rtti::context& ctx,
 
 auto inspector_bvec3::inspect(rtti::context& ctx,
                               entt::meta_any& var,
-                              const meta_any_getter& var_getter,
+                              const meta_any_proxy& var_proxy,
                               const var_info& info,
                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -212,7 +212,7 @@ auto inspector_bvec3::inspect(rtti::context& ctx,
 
 auto inspector_bvec4::inspect(rtti::context& ctx,
                               entt::meta_any& var,
-                              const meta_any_getter& var_getter,
+                              const meta_any_proxy& var_proxy,
                               const var_info& info,
                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -261,7 +261,7 @@ auto inspector_bvec4::inspect(rtti::context& ctx,
 
 auto inspector_vec2::inspect(rtti::context& ctx,
                              entt::meta_any& var,
-                             const meta_any_getter& var_getter,
+                             const meta_any_proxy& var_proxy,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result
 {
@@ -279,7 +279,7 @@ auto inspector_vec2::inspect(rtti::context& ctx,
 
 auto inspector_vec3::inspect(rtti::context& ctx,
                              entt::meta_any& var,
-                             const meta_any_getter& var_getter,
+                             const meta_any_proxy& var_proxy,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result
 {
@@ -297,7 +297,7 @@ auto inspector_vec3::inspect(rtti::context& ctx,
 
 auto inspector_vec4::inspect(rtti::context& ctx,
                              entt::meta_any& var,
-                             const meta_any_getter& var_getter,
+                             const meta_any_proxy& var_proxy,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result
 {
@@ -315,7 +315,7 @@ auto inspector_vec4::inspect(rtti::context& ctx,
 
 auto inspector_color::inspect(rtti::context& ctx,
                               entt::meta_any& var,
-                              const meta_any_getter& var_getter,
+                              const meta_any_proxy& var_proxy,
                               const var_info& info,
                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -338,7 +338,7 @@ auto inspector_color::inspect(rtti::context& ctx,
 
 auto inspector_quaternion::inspect(rtti::context& ctx,
                                    entt::meta_any& var,
-                                   const meta_any_getter& var_getter,
+                                   const meta_any_proxy& var_proxy,
                                    const var_info& info,
                                    const entt::meta_custom& custom) -> inspect_result
 {
@@ -368,7 +368,7 @@ void inspector_transform::before_inspect(const entt::meta_data& prop)
 
 auto inspector_transform::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
-                                  const meta_any_getter& var_getter,
+                                  const meta_any_proxy& var_proxy,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {

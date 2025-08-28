@@ -52,8 +52,8 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
 
         if(override_ctx.begin_prefab_inspection(entity))
         {
-            auto var_getter = wrap_var(object);
-            auto result = inspect_var(ctx, object, var_getter);
+            auto proxy = make_proxy(object);
+            auto result = inspect_var(ctx, object, proxy);
 
             if(result.edit_finished)
             {
@@ -66,8 +66,8 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
         }
     }
     // Fall back to normal inspection (empty reference) 
-    auto var_getter = wrap_var(object);
-    auto result = inspect_var(ctx, object, var_getter);
+    auto proxy = make_proxy(object);
+    auto result = inspect_var(ctx, object, proxy);
     
     if(result.edit_finished)
     {
