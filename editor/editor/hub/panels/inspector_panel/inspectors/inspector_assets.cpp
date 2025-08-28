@@ -292,6 +292,7 @@ auto inspector_asset_handle_texture::inspect_as_property(rtti::context& ctx, ass
 
 auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                                              entt::meta_any& var,
+                                             const meta_any_getter& var_getter,
                                              const var_info& info,
                                              const entt::meta_custom& custom) -> inspect_result
 {
@@ -327,15 +328,31 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
             if(data.is_ready())
             {
-                const auto tex = data.get(false);
-                if(tex)
-                {
-                    entt::meta_any tex_var = tex->info;
-                    var_info tex_var_info;
-                    tex_var_info.read_only = true;
 
-                    result |= ::unravel::inspect_var(ctx, tex_var, tex_var_info);
-                }
+                var_info tex_var_info;
+                tex_var_info.read_only = true;
+
+                auto tex_var_getter = [var_getter](entt::meta_any& result)
+                {
+
+                    entt::meta_any var;
+                    call_var_getter(var, var_getter);
+                    if(var)
+                    {
+                        auto& data = var.cast<asset_handle<gfx::texture>&>();
+                        auto tex = data.get(false);
+                        if(tex)
+                        {
+                            result = entt::forward_as_meta(tex->info);
+                        }
+                    }
+                };
+
+                entt::meta_any tex_var;
+                call_var_getter(tex_var, tex_var_getter);
+
+                result |= ::unravel::inspect_var(ctx, tex_var, tex_var_getter, tex_var_info);
+                
             }
             ImGui::EndChild();
             ImGui::EndTabItem();
@@ -347,7 +364,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
             auto base_importer = meta.meta.importer;
 
             auto importer = std::static_pointer_cast<texture_importer_meta>(base_importer);
-            ;
+            
 
             if(importer)
             {
@@ -398,6 +415,7 @@ auto inspector_asset_handle_material::inspect_as_property(rtti::context& ctx, as
 
 auto inspector_asset_handle_material::inspect(rtti::context& ctx,
                                               entt::meta_any& var,
+                                              const meta_any_getter& var_getter,
                                               const var_info& info,
                                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -409,12 +427,28 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
     }
 
     inspect_result result{};
+
+    if(data.is_ready())
     {
-        auto data_var = data.get(false);
-        if(data_var)
+        auto data_var_getter = [var_getter](entt::meta_any& result)
         {
-            result |= ::unravel::inspect(ctx, *data_var);
-        }
+            entt::meta_any var;
+            call_var_getter(var, var_getter);
+            if(var)
+            {
+                auto& data = var.cast<asset_handle<material>&>();
+                auto mat = data.get(false);
+                if(mat)
+                {
+                    result = entt::forward_as_meta(*mat);
+                }
+            }
+        };
+
+        entt::meta_any data_var;
+        call_var_getter(data_var, data_var_getter);
+        result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+    
 
         if(result.changed)
         {
@@ -432,6 +466,7 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
 auto inspector_shared_material::inspect(rtti::context& ctx,
                                         entt::meta_any& var,
+                                        const meta_any_getter& var_getter,
                                         const var_info& info,
                                         const entt::meta_custom& custom) -> inspect_result
 {
@@ -451,7 +486,20 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
             ImGui::SameLine();
             if(ImGui::TreeNodeEx("Material Instance", ImGuiTreeNodeFlags_AllowOverlap))
             {
-                result |= ::unravel::inspect(ctx, *data);
+                auto data_var_getter = [var_getter](entt::meta_any& result)
+                {
+                    entt::meta_any var;
+                    call_var_getter(var, var_getter);
+                    if(var)
+                    {
+                        auto data = var.cast<std::shared_ptr<material>>();
+                        result = entt::forward_as_meta(*data);
+                    }
+                };
+
+                entt::meta_any data_var;
+                call_var_getter(data_var, data_var_getter);
+                result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
 
                 ImGui::TreePop();
             }
@@ -485,6 +533,7 @@ auto inspector_asset_handle_mesh::inspect_as_property(rtti::context& ctx, asset_
 
 auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                                           entt::meta_any& var,
+                                          const meta_any_getter& var_getter,
                                           const var_info& info,
                                           const entt::meta_custom& custom) -> inspect_result
 {
@@ -514,21 +563,37 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
 
             if(data)
             {
-                const auto& mesh = data.get(false);
-                if(mesh)
-                {
-                    mesh::info mesh_info;
-                    mesh_info.vertices = mesh->get_vertex_count();
-                    mesh_info.primitives = mesh->get_face_count();
-                    mesh_info.submeshes = static_cast<std::uint32_t>(mesh->get_submeshes_count());
-                    mesh_info.data_groups = static_cast<std::uint32_t>(mesh->get_data_groups_count());
 
-                    entt::meta_any var = mesh_info;
-                    var_info mesh_var_info;
-                    mesh_var_info.read_only = true;
-                    result |= ::unravel::inspect_var(ctx, var, mesh_var_info);
-                }
+                var_info mesh_var_info;
+                mesh_var_info.read_only = true;
+
+                auto mesh_var_getter = [var_getter](entt::meta_any& result)
+                {
+                    entt::meta_any var;
+                    call_var_getter(var, var_getter);
+                    if(var)
+                    {
+                        auto& data = var.cast<asset_handle<mesh>&>();
+                        auto m = data.get(false);
+                        if(m)
+                        {
+                            mesh::info mesh_info;
+                            mesh_info.vertices = m->get_vertex_count();
+                            mesh_info.primitives = m->get_face_count();
+                            mesh_info.submeshes = static_cast<std::uint32_t>(m->get_submeshes_count());
+                            mesh_info.data_groups = static_cast<std::uint32_t>(m->get_data_groups_count());
+        
+                            result = entt::meta_any(mesh_info);
+                        }
+                    }
+                };
+
+                entt::meta_any mesh_var;
+                call_var_getter(mesh_var, mesh_var_getter);
+
+                result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_getter, mesh_var_info);
             }
+        
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
@@ -622,6 +687,7 @@ auto inspector_asset_handle_animation::inspect_as_property(rtti::context& ctx, a
 
 auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                                                entt::meta_any& var,
+                                               const meta_any_getter& var_getter,
                                                const var_info& info,
                                                const entt::meta_custom& custom) -> inspect_result
 {
@@ -649,19 +715,34 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
         {
             if(data)
             {
-                auto clip = data.get();
-                entt::meta_any clip_var = entt::forward_as_meta(*clip);
                 var_info clip_var_info;
                 clip_var_info.read_only = true;
 
-                result |= ::unravel::inspect_var(ctx, clip_var, clip_var_info);
+                auto clip_var_getter = [var_getter](entt::meta_any& result)
+                {
+                    entt::meta_any var;
+                    call_var_getter(var, var_getter);
+                    if(var)
+                    {
+                        auto& data = var.cast<asset_handle<animation_clip>&>();
+                        auto clip = data.get(false);
+                        if(clip)
+                        {
+                            result = entt::forward_as_meta(*clip);
+                        }
+                    }
+                };
+
+                entt::meta_any clip_var;
+                call_var_getter(clip_var, clip_var_getter);
+                result |= ::unravel::inspect_var(ctx, clip_var, clip_var_getter, clip_var_info);
             }
             ImGui::EndTabItem();
         }
         if(ImGui::BeginTabItem("Import"))
         {
             auto meta = am.get_metadata(data.uid());
- auto base_importer = meta.meta.importer;
+            auto base_importer = meta.meta.importer;
 
             auto importer = std::static_pointer_cast<animation_importer_meta>(base_importer);
 
@@ -770,6 +851,7 @@ void inspector_asset_handle_prefab::refresh(rtti::context& ctx)
 }
 auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
                                             entt::meta_any& var,
+                                            const meta_any_getter& var_getter,
                                             const var_info& info,
                                             const entt::meta_custom& custom) -> inspect_result
 {
@@ -794,13 +876,7 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
 
             if(data)
             {
-                entt::meta_any var = prefab_entity;
-                result |= ::unravel::inspect_var(ctx, var);
-
-                if(result.changed)
-                {
-                    prefab_entity = var.cast<entt::handle>();
-                }
+                result |= ::unravel::inspect(ctx, prefab_entity);
 
                 if(result.edit_finished)
                 {
@@ -843,6 +919,7 @@ auto inspector_asset_handle_scene_prefab::inspect_as_property(rtti::context& ctx
 
 auto inspector_asset_handle_scene_prefab::inspect(rtti::context& ctx,
                                                   entt::meta_any& var,
+                                                  const meta_any_getter& var_getter,
                                                   const var_info& info,
                                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -899,6 +976,7 @@ auto inspector_asset_handle_physics_material::inspect_as_property(rtti::context&
 
 auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
                                                       entt::meta_any& var,
+                                                      const meta_any_getter& var_getter,
                                                       const var_info& info,
                                                       const entt::meta_custom& custom) -> inspect_result
 {
@@ -912,11 +990,24 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        auto var = data.get(false);
-        if(var)
+        auto data_var_getter = [var_getter](entt::meta_any& result)
         {
-            result |= ::unravel::inspect(ctx, *var);
-        }
+            entt::meta_any var;
+            call_var_getter(var, var_getter);
+            if(var)
+            {
+                auto& data = var.cast<asset_handle<physics_material>&>();
+                auto data_var = data.get(false);
+                if(data_var)
+                {
+                    result = entt::forward_as_meta(*data_var);
+                }
+            }
+        };
+
+        entt::meta_any data_var;
+        call_var_getter(data_var, data_var_getter);
+        result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
     }
     if(result.edit_finished)
     {
@@ -991,6 +1082,7 @@ void inspector_asset_handle_audio_clip::inspect_clip(const std::shared_ptr<audio
 
 auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
                                                 entt::meta_any& var,
+                                                const meta_any_getter& var_getter,
                                                 const var_info& info,
                                                 const entt::meta_custom& custom) -> inspect_result
 {
@@ -1005,13 +1097,34 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        auto var = data.get(false);
-        if(var)
+        auto data_var = data.get(false);
+        if(data_var)
         {
-            entt::meta_any info_var = entt::forward_as_meta(var->get_info());
-            result |= ::unravel::inspect_var(ctx, info_var);
+            auto data_var_getter = [var_getter](entt::meta_any& result)
+            {
+                entt::meta_any var;
+                call_var_getter(var, var_getter);
+                if(var)
+                {
+                    auto& data = var.cast<asset_handle<audio_clip>&>();
+                    auto data_var = data.get(false);
+                    if(data_var)
+                    {
+                        result = entt::forward_as_meta(*data_var);
+                    }
+                }
+            };
 
-            inspect_clip(var);
+            entt::meta_any data_var;
+            call_var_getter(data_var, data_var_getter);
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
+
+            auto clip = data.get(false);
+
+            if(clip)
+            {
+                inspect_clip(clip);
+            }
         }
     }
 
@@ -1035,6 +1148,7 @@ auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx,
 
 auto inspector_asset_handle_font::inspect(rtti::context& ctx,
                                                       entt::meta_any& var,
+                                                      const meta_any_getter& var_getter,
                                                       const var_info& info,
                                                       const entt::meta_custom& custom) -> inspect_result
 {
@@ -1048,11 +1162,27 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        auto var = data.get(false);
-        if(var)
+        auto data_var = data.get(false);
+        if(data_var)
         {
-            entt::meta_any data_var = entt::forward_as_meta(*var);
-            result |= ::unravel::inspect_var(ctx, data_var);
+            auto data_var_getter = [var_getter](entt::meta_any& result)
+            {
+                entt::meta_any var;
+                call_var_getter(var, var_getter);
+                if(var)
+                {
+                    auto& data = var.cast<asset_handle<font>&>();
+                    auto data_var = data.get(false);
+                    if(data_var)
+                    {
+                        result = entt::forward_as_meta(*data_var);
+                    }
+                }
+            };
+
+            entt::meta_any data_var;
+            call_var_getter(data_var, data_var_getter);
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_getter);
         }
     }
 

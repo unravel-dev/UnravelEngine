@@ -8,9 +8,10 @@
 #include <graphics/texture.h>
 
 #include <engine/layers/layer_mask.h>
+#include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
-#include <engine/rendering/font.h>
+
 
 #include <engine/animation/animation.h>
 #include <engine/audio/audio_clip.h>
@@ -37,13 +38,13 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
     return {};
 }
 
-
 template<typename T>
 struct mono_inspector
 {
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
+                                const meta_any_getter& obj_getter,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
     {
@@ -81,7 +82,6 @@ struct mono_inspector
             meta_attribs["min"] = min_value;
         }
 
-
         if(max_attrib.valid())
         {
             auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
@@ -104,13 +104,14 @@ struct mono_inspector
         }
 
         auto custom = entt::make_custom<entt::attributes>(meta_attribs);
-        
+
         entt::meta_any var = entt::forward_as_meta(val);
+        auto var_getter = wrap_var(var);
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
 
-            result |= inspect_var(ctx, var, info, custom);
+            result |= inspect_var(ctx, var, var_getter, info, custom);
         }
 
         if(result.changed)
@@ -121,8 +122,11 @@ struct mono_inspector
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx, mono::mono_object& obj, mono::mono_field& field, const var_info& info)
-        -> inspect_result
+    static auto inspect_field(rtti::context& ctx,
+                              mono::mono_object& obj,
+                              const meta_any_getter& obj_getter,
+                              mono::mono_field& field,
+                              const var_info& info) -> inspect_result
     {
         auto invoker = mono::make_field_invoker<T>(field);
 
@@ -130,11 +134,12 @@ struct mono_inspector
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
+                                 const meta_any_getter& obj_getter,
                                  mono::mono_property& field,
                                  const var_info& info) -> inspect_result
     {
@@ -144,7 +149,7 @@ struct mono_inspector
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 };
 
@@ -181,6 +186,7 @@ struct mono_inspector_enum
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
+                                const meta_any_getter& obj_getter,
                                 const Invoker& mutable_field,
                                 const std::vector<std::pair<T, std::string>>& mapping,
                                 const var_info& info) -> inspect_result
@@ -262,23 +268,27 @@ struct mono_inspector_enum
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx, mono::mono_object& obj, mono::mono_field& field, const var_info& info)
-        -> inspect_result
+    static auto inspect_field(rtti::context& ctx,
+                              mono::mono_object& obj,
+                              const meta_any_getter& obj_getter,
+                              mono::mono_field& field,
+                              const var_info& info) -> inspect_result
     {
         var_info field_info;
         field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() ||  info.read_only || field.is_readonly() || field.is_const();
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
 
         const auto& field_type = field.get_type();
 
         auto invoker = mono::make_field_invoker<T>(field);
         auto mapping = field_type.get_enum_values<T>();
 
-        return inspect_invoker(ctx, obj, invoker, mapping, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, mapping, field_info);
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
+                                 const meta_any_getter& obj_getter,
                                  mono::mono_property& field,
                                  const var_info& info) -> inspect_result
     {
@@ -291,7 +301,7 @@ struct mono_inspector_enum
         auto invoker = mono::make_property_invoker<T>(field);
         auto mapping = field_type.get_enum_values<T>();
 
-        return inspect_invoker(ctx, obj, invoker, mapping, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, mapping, field_info);
     }
 };
 
@@ -301,6 +311,7 @@ struct mono_inspector<entt::handle>
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
+                                const meta_any_getter& obj_getter,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
     {
@@ -323,11 +334,11 @@ struct mono_inspector<entt::handle>
         }
 
         entt::meta_any var = entt::forward_as_meta(e);
+        auto var_getter = wrap_var(var);
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
-
-            result |= inspect_var(ctx, var, info);
+            result |= inspect_var(ctx, var, var_getter, info);
         }
 
         if(result.changed)
@@ -338,8 +349,11 @@ struct mono_inspector<entt::handle>
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx, mono::mono_object& obj, mono::mono_field& field, const var_info& info)
-        -> inspect_result
+    static auto inspect_field(rtti::context& ctx,
+                              mono::mono_object& obj,
+                              const meta_any_getter& obj_getter,
+                              mono::mono_field& field,
+                              const var_info& info) -> inspect_result
     {
         auto invoker = mono::make_field_invoker<entt::entity>(field);
 
@@ -347,11 +361,12 @@ struct mono_inspector<entt::handle>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
+                                 const meta_any_getter& obj_getter,
                                  mono::mono_property& field,
                                  const var_info& info) -> inspect_result
     {
@@ -361,7 +376,7 @@ struct mono_inspector<entt::handle>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 };
 
@@ -371,6 +386,7 @@ struct mono_inspector<asset_handle<T>>
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
+                                const meta_any_getter& obj_getter,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
     {
@@ -402,10 +418,10 @@ struct mono_inspector<asset_handle<T>>
         }
 
         entt::meta_any var = entt::forward_as_meta(asset);
-
+        auto var_getter = wrap_var(var);
         {
             property_layout layout(mutable_field.get_name(), tooltip);
-            result |= inspect_var(ctx, var, info);
+            result |= inspect_var(ctx, var, var_getter, info);
         }
 
         if(result.changed)
@@ -426,8 +442,11 @@ struct mono_inspector<asset_handle<T>>
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx, mono::mono_object& obj, mono::mono_field& field, const var_info& info)
-        -> inspect_result
+    static auto inspect_field(rtti::context& ctx,
+                              mono::mono_object& obj,
+                              const meta_any_getter& obj_getter,
+                              mono::mono_field& field,
+                              const var_info& info) -> inspect_result
     {
         auto invoker = mono::make_field_invoker<mono::mono_object>(field);
 
@@ -435,11 +454,12 @@ struct mono_inspector<asset_handle<T>>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
+                                 const meta_any_getter& obj_getter,
                                  mono::mono_property& field,
                                  const var_info& info) -> inspect_result
     {
@@ -449,7 +469,7 @@ struct mono_inspector<asset_handle<T>>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 };
 
@@ -459,6 +479,7 @@ struct mono_inspector<mono::mono_array<T>>
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
+                                const meta_any_getter& obj_getter,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
     {
@@ -472,13 +493,17 @@ struct mono_inspector<mono::mono_array<T>>
         for(size_t i = 0; i < array.size(); ++i)
         {
             entt::meta_any element = entt::forward_as_meta(array.get(i));
-            result |= unravel::inspect_var(ctx, element, info);
+            auto var_getter = wrap_var(element);
+            result |= unravel::inspect_var(ctx, element, var_getter, info);
         }
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx, mono::mono_object& obj, mono::mono_field& field, const var_info& info)
-        -> inspect_result
+    static auto inspect_field(rtti::context& ctx,
+                              mono::mono_object& obj,
+                              const meta_any_getter& obj_getter,
+                              mono::mono_field& field,
+                              const var_info& info) -> inspect_result
     {
         auto invoker = mono::make_field_invoker<mono::mono_object>(field);
 
@@ -486,11 +511,12 @@ struct mono_inspector<mono::mono_array<T>>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
+                                 const meta_any_getter& obj_getter,
                                  mono::mono_property& field,
                                  const var_info& info) -> inspect_result
     {
@@ -500,12 +526,13 @@ struct mono_inspector<mono::mono_array<T>>
         field_info.is_property = true;
         field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
 
-        return inspect_invoker(ctx, obj, invoker, field_info);
+        return inspect_invoker(ctx, obj, obj_getter, invoker, field_info);
     }
 };
 
 auto inspector_mono_object::inspect(rtti::context& ctx,
                                     entt::meta_any& var,
+                                    const meta_any_getter& var_getter,
                                     const var_info& info,
                                     const entt::meta_custom& custom) -> inspect_result
 {
@@ -515,8 +542,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
     const auto& type = data.get_type();
 
-    using mono_field_inspector =
-        std::function<inspect_result(rtti::context&, mono::mono_object&, mono::mono_field&, const var_info&)>;
+    using mono_field_inspector = std::function<inspect_result(rtti::context&,
+                                                              mono::mono_object&,
+                                                              const meta_any_getter& obj_getter,
+                                                              mono::mono_field&,
+                                                              const var_info&)>;
 
     auto get_field_inspector = [](const std::string& type_name) -> const mono_field_inspector&
     {
@@ -611,7 +641,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
             if(field_inspector)
             {
-                result |= field_inspector(ctx, data, field, info);
+                result |= field_inspector(ctx, data, var_getter, field, info);
             }
             else if(field_type.is_enum())
             {
@@ -619,7 +649,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 auto enum_inspector = get_enum_field_inspector(enum_type.get_name());
                 if(enum_inspector)
                 {
-                    result |= enum_inspector(ctx, data, field, info);
+                    result |= enum_inspector(ctx, data, var_getter, field, info);
                 }
             }
             else
@@ -629,10 +659,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 field_info.read_only = true;
 
                 std::string unknown = field.get_type().get_name();
-                entt::meta_any var = entt::forward_as_meta(unknown);
+                entt::meta_any unknown_var = entt::forward_as_meta(unknown);
+
+                auto unknown_var_getter = wrap_var(unknown_var);
                 {
                     property_layout layout(field.get_name());
-                    result |= inspect_var(ctx, var, field_info);
+                    result |= inspect_var(ctx, unknown_var, unknown_var_getter, field_info);
                 }
             }
 
@@ -641,8 +673,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         ImGui::PopReadonly();
     }
 
-    using mono_property_inspector =
-        std::function<inspect_result(rtti::context&, mono::mono_object&, mono::mono_property&, const var_info&)>;
+    using mono_property_inspector = std::function<inspect_result(rtti::context&,
+                                                                 mono::mono_object&,
+                                                                 const meta_any_getter& obj_getter,
+                                                                 mono::mono_property&,
+                                                                 const var_info&)>;
 
     auto get_property_inspector = [](const std::string& type_name) -> const mono_property_inspector&
     {
@@ -733,11 +768,10 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
             auto& override_ctx = ctx.get_cached<prefab_override_context>();
             override_ctx.push_segment(prop.get_name(), prop.get_name());
-            
 
             if(property_inspector)
             {
-                result |= property_inspector(ctx, data, prop, info);
+                result |= property_inspector(ctx, data, var_getter, prop, info);
             }
             else if(prop_type.is_enum())
             {
@@ -745,7 +779,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 auto enum_inspector = get_enum_property_inspector(enum_type.get_name());
                 if(enum_inspector)
                 {
-                    result |= enum_inspector(ctx, data, prop, info);
+                    result |= enum_inspector(ctx, data, var_getter, prop, info);
                 }
             }
             else
@@ -755,10 +789,13 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 field_info.read_only = true;
 
                 std::string unknown = prop.get_type().get_name();
-                entt::meta_any var = entt::forward_as_meta(unknown);
+                entt::meta_any unknown_var = entt::forward_as_meta(unknown);
+
+                auto unknown_var_getter = wrap_var(unknown_var);
+
                 {
                     property_layout layout(prop.get_name());
-                    result |= inspect_var(ctx, var, field_info);
+                    result |= inspect_var(ctx, unknown_var, unknown_var_getter, field_info);
                 }
             }
 
@@ -771,15 +808,31 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 }
 
 auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
-                                                entt::meta_any& var,
-                                                const var_info& info,
-                                                const entt::meta_custom& custom) -> inspect_result
+                                           entt::meta_any& var,
+                                           const meta_any_getter& var_getter,
+                                           const var_info& info,
+                                           const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.cast<mono::mono_scoped_object&>();
+    auto obj_getter = [var_getter](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        call_var_getter(var, var_getter);
+        if(var)
+        {
+            auto& data = var.cast<mono::mono_scoped_object&>();
+            auto& mono_obj = static_cast<mono::mono_object&>(data.object);
+            result = entt::forward_as_meta(mono_obj);
+        }
+    };
 
+    // entt::meta_any obj_var;
+    // call_var_getter(obj_var, obj_getter);
+
+    auto& data = var.cast<mono::mono_scoped_object&>();
     auto& mono_obj = static_cast<mono::mono_object&>(data.object);
-    entt::meta_any obj = entt::forward_as_meta(mono_obj);
-    return inspector_mono_object::inspect(ctx, obj, info, custom);
+    auto obj_var = entt::forward_as_meta(mono_obj);
+
+    return inspector_mono_object::inspect(ctx, obj_var, obj_getter, info, custom);
 }
 
 } // namespace unravel

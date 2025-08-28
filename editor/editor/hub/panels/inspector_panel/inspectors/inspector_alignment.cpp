@@ -31,6 +31,7 @@ constexpr align_info valigns[] = {
 
 auto inspector_alignment::inspect(rtti::context& ctx,
                                       entt::meta_any& var,
+                                      const meta_any_getter& var_getter,
                                       const var_info& info,
                                       const entt::meta_custom& custom) -> inspect_result
 {
@@ -111,6 +112,7 @@ constexpr style_info style_flags[] = {
 
 auto inspector_text_style_flags::inspect(rtti::context& ctx,
                                               entt::meta_any& var,
+                                              const meta_any_getter& var_getter,
                                               const var_info& info,
                                               const entt::meta_custom& custom) -> inspect_result
 {
@@ -148,6 +150,7 @@ void inspector_text_style::before_inspect(const entt::meta_data& prop)
 
 auto inspector_text_style::inspect(rtti::context& ctx,
                                        entt::meta_any& var,
+                                       const meta_any_getter& var_getter,
                                        const var_info& info,
                                        const entt::meta_custom& custom) -> inspect_result
 {
@@ -156,7 +159,7 @@ auto inspector_text_style::inspect(rtti::context& ctx,
         return {};
     }
     // Pull out a mutable copy
-    auto result = inspect_var_properties(ctx, var, info, custom);
+    auto result = inspect_var_properties(ctx, var, var_getter, info, custom);
 
     return result;
 }

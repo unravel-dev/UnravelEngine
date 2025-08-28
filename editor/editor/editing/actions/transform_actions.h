@@ -22,6 +22,7 @@ struct transform_move_action_t : crtp_meta_type<transform_move_action_t, editing
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
 };
 
 struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, editing_action_t>
@@ -36,6 +37,7 @@ struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, edi
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
 };
 
 struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editing_action_t>
@@ -50,6 +52,7 @@ struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editi
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
 };
 
 struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing_action_t>
@@ -64,24 +67,54 @@ struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
 };
 
 
 
 struct property_action_t : crtp_meta_type<property_action_t, editing_action_t>
 {
-    entt::meta_any instance;
-    entt::meta_data data;
+    using instance_getter = std::function<void(entt::meta_any&)>;
+    instance_getter instance;
+    entt::meta_data property;
     entt::meta_any old_value;
     entt::meta_any new_value;
     
-    property_action_t(entt::meta_any& inst, entt::meta_data dat, const entt::meta_any& old_val, const entt::meta_any& new_val);
+    property_action_t(instance_getter inst, entt::meta_data property, const entt::meta_any& old_val, const entt::meta_any& new_val);
 
     void do_action() override;
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
 };
 
+struct var_action_t : crtp_meta_type<var_action_t, editing_action_t>
+{
+    using instance_getter = std::function<void(entt::meta_any&)>;
+    instance_getter instance;
+    entt::meta_any old_value;
+    entt::meta_any new_value;
+    
+    var_action_t(instance_getter inst, const entt::meta_any& old_val, const entt::meta_any& new_val);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+};
+
+// struct select_action_t : crtp_meta_type<select_action_t, editing_action_t>
+// {
+//     entt::meta_any instance;
+
+//     select_action_t(const entt::meta_any& inst);
+
+//     void do_action() override;
+//     void undo_action() override;
+//     auto is_mergeable(const editing_action_t& previous) const -> bool override;
+//     void merge_with(const editing_action_t& previous) override;
+// };
 
 } // namespace unravel

@@ -26,6 +26,7 @@ namespace
 
 auto inspector_prefab_component::inspect(rtti::context& ctx,
                                         entt::meta_any& var,
+                                        const meta_any_getter& var_getter,
                                         const var_info& info,
                                         const entt::meta_custom& custom) -> inspect_result
 {
@@ -189,7 +190,7 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
     
     ImGui::NewLine();
 
-    result |= inspect_var_properties(ctx, var, info, custom);
+    result |= inspect_var_properties(ctx, var, var_getter, info, custom);
 
     if(result.changed)
     {

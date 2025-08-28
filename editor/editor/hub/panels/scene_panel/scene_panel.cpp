@@ -1607,7 +1607,7 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
         ImGui::TextUnformatted("Scene Camera");
 
         entt::meta_any cam = get_camera();
-        inspect_var(ctx, cam);
+        inspect_var(ctx, cam, wrap_var(cam));
 
         ImGui::EndMenu();
     }

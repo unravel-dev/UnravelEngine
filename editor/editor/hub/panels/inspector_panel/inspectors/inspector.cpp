@@ -246,5 +246,18 @@ void inspector::after_inspect(const entt::meta_data& prop)
     layout_.reset();
 }
 
+auto wrap_var(entt::meta_any& var) -> meta_any_getter
+{
+    // return [var](entt::meta_any& v)
+    // {
+    //     v = var;
+    // };
+    return {};
+}
+
+void call_var_getter(entt::meta_any& var, const meta_any_getter& var_getter)
+{
+    var_getter(var);
+}
 
 } // namespace unravel

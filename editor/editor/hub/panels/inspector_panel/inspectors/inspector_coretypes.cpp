@@ -298,6 +298,7 @@ auto inspect_scalar(rtti::context& ctx,
 
 auto inspector_bool::inspect(rtti::context& ctx,
                                  entt::meta_any& var,
+                                 const meta_any_getter& var_getter,
                                  const var_info& info,
                                  const entt::meta_custom& custom) -> inspect_result
 {
@@ -320,6 +321,7 @@ auto inspector_bool::inspect(rtti::context& ctx,
 
 auto inspector_float::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -329,6 +331,7 @@ auto inspector_float::inspect(rtti::context& ctx,
 
 auto inspector_double::inspect(rtti::context& ctx,
                                    entt::meta_any& var,
+                                   const meta_any_getter& var_getter,
                                    const var_info& info,
                                    const entt::meta_custom& custom) -> inspect_result
 {
@@ -337,6 +340,7 @@ auto inspector_double::inspect(rtti::context& ctx,
 
 auto inspector_int8::inspect(rtti::context& ctx,
                                  entt::meta_any& var,
+                                 const meta_any_getter& var_getter,
                                  const var_info& info,
                                  const entt::meta_custom& custom) -> inspect_result
 {
@@ -346,6 +350,7 @@ auto inspector_int8::inspect(rtti::context& ctx,
 
 auto inspector_int16::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -355,6 +360,7 @@ auto inspector_int16::inspect(rtti::context& ctx,
 
 auto inspector_int32::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -364,6 +370,7 @@ auto inspector_int32::inspect(rtti::context& ctx,
 
 auto inspector_int64::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -373,6 +380,7 @@ auto inspector_int64::inspect(rtti::context& ctx,
 
 auto inspector_uint8::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -382,6 +390,7 @@ auto inspector_uint8::inspect(rtti::context& ctx,
 
 auto inspector_uint16::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -391,6 +400,7 @@ auto inspector_uint16::inspect(rtti::context& ctx,
 
 auto inspector_uint32::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -400,6 +410,7 @@ auto inspector_uint32::inspect(rtti::context& ctx,
 
 auto inspector_uint64::inspect(rtti::context& ctx,
                                   entt::meta_any& var,
+                                  const meta_any_getter& var_getter,
                                   const var_info& info,
                                   const entt::meta_custom& custom) -> inspect_result
 {
@@ -408,6 +419,7 @@ auto inspector_uint64::inspect(rtti::context& ctx,
 
 auto inspector_string::inspect(rtti::context& ctx,
                                entt::meta_any& var,
+                               const meta_any_getter& var_getter,
                                const var_info& info,
                                const entt::meta_custom& custom) -> inspect_result
 {
@@ -464,6 +476,7 @@ auto inspector_string::inspect(rtti::context& ctx,
 
 auto inspector_path::inspect(rtti::context& ctx,
                                  entt::meta_any& var,
+                                 const meta_any_getter& var_getter,
                                  const var_info& info,
                                  const entt::meta_custom& custom) -> inspect_result
 {
@@ -537,6 +550,7 @@ auto inspector_path::inspect(rtti::context& ctx,
 
 auto inspector_duration_sec_float::inspect(rtti::context& ctx,
                                            entt::meta_any& var,
+                                           const meta_any_getter& var_getter,
                                            const var_info& info,
                                            const entt::meta_custom& custom) -> inspect_result
 {
@@ -557,6 +571,7 @@ auto inspector_duration_sec_float::inspect(rtti::context& ctx,
 
 auto inspector_duration_sec_double::inspect(rtti::context& ctx,
                                             entt::meta_any& var,
+                                            const meta_any_getter& var_getter,
                                             const var_info& info,
                                             const entt::meta_custom& custom) -> inspect_result
 {
@@ -575,6 +590,7 @@ auto inspector_duration_sec_double::inspect(rtti::context& ctx,
 
 auto inspector_uuid::inspect(rtti::context& ctx,
                              entt::meta_any& var,
+                             const meta_any_getter& var_getter,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result
 {

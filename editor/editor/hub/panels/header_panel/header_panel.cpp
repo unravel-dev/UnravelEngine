@@ -248,15 +248,15 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             editor_actions::save_scene(ctx);
         }
 
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo))
+        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo, true))
         {
             ctx.get_cached<editing_manager>().redo();
         }
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo_alt))
+        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo_alt, true))
         {
             ctx.get_cached<editing_manager>().redo();
         }
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::undo))
+        else if(ImGui::IsCombinationKeyPressed(shortcuts::undo, true))
         {
             ctx.get_cached<editing_manager>().undo();
         }
@@ -616,23 +616,30 @@ void header_panel::draw_undo_stack_window(rtti::context& ctx)
                 // Choose colors based on status
                 ImVec4 text_color;
                 const char* status_icon;
-                
-                if (is_current)
+
+                if(!action->is_valid())
                 {
-                    text_color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); // Green for current
-                    status_icon = ICON_MDI_ARROW_RIGHT " ";
-                }
-                else if (is_executed)
-                {
-                    text_color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f); // White for executed
-                    status_icon = ICON_MDI_CHECK " ";
+                    text_color = ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red for invalid
+                    status_icon = ICON_MDI_ALERT " ";
                 }
                 else
                 {
-                    text_color = ImVec4(0.5f, 0.5f, 0.5f, 1.0f); // Gray for future
-                    status_icon = ICON_MDI_CLOCK_OUTLINE " ";
+                    if (is_current)
+                    {
+                        text_color = ImVec4(0.0f, 1.0f, 0.0f, 1.0f); // Green for current
+                        status_icon = ICON_MDI_ARROW_RIGHT " ";
+                    }
+                    else if (is_executed)
+                    {
+                        text_color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f); // White for executed
+                        status_icon = ICON_MDI_CHECK " ";
+                    }
+                    else
+                    {
+                        text_color = ImVec4(0.5f, 0.5f, 0.5f, 1.0f); // Gray for future
+                        status_icon = ICON_MDI_CLOCK_OUTLINE " ";
+                    }
                 }
-                
                 // Make the action clickable/selectable
                 ImGui::PushStyleColor(ImGuiCol_Text, text_color);
                 
@@ -681,11 +688,18 @@ void header_panel::draw_undo_stack_window(rtti::context& ctx)
                 // Add tooltip with additional info and click instructions
                 if (ImGui::IsItemHovered())
                 {
+                    ImGui::SetNextWindowViewportToCurrent();
                     ImGui::BeginTooltip();
-                    ImGui::Text("Action: %s", action->name.c_str());
-                    ImGui::Text("Index: %zu", i);
-                    ImGui::Text("Status: %s", is_executed ? "Executed" : "Not Executed");
-                    ImGui::Text("Undoable: %s", action->is_undoable() ? "Yes" : "No");
+                    if(!action->is_valid())
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Invalid Action due to missing dependencies.");
+                    }
+                    else
+                    {
+                        ImGui::Text("Action: %s", action->name.c_str());
+                        ImGui::Text("Status: %s", is_executed ? "Executed" : "Not Executed");
+                        ImGui::Text("Undoable: %s", action->is_undoable() ? "Yes" : "No");
+                    }
                     
                     // Add click instruction based on current state
                     size_t target_index = i + 1;

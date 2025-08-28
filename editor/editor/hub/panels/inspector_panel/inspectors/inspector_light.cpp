@@ -5,6 +5,7 @@ namespace unravel
 {
 auto inspector_light_component::inspect(rtti::context& ctx,
                                         entt::meta_any& var,
+                                        const meta_any_getter& var_getter,
                                         const var_info& info,
                                         const entt::meta_custom& custom) -> inspect_result
 {

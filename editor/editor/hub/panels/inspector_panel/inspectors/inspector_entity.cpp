@@ -384,9 +384,19 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 em.push_undo_stack_enabled(em.undo_inspector_enabled);
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
 
-                entt::meta_any instance = entt::forward_as_meta(*trans_comp);
+                auto instance_getter = [data](entt::meta_any& result)
+                {
+                    if(data)
+                    {
+                        auto trans_comp = data.try_get<transform_component>();
+                        if(trans_comp)
+                        {
+                            result = entt::forward_as_meta(*trans_comp);
+                        }
+                    }
+                };
                 em.add_action<property_action_t>(pretty_path,
-                                                 instance,
+                                                 instance_getter,
                                                  prop,
                                                  entt::meta_any(old_active),
                                                  entt::meta_any(is_active));
@@ -435,9 +445,19 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 auto& em = ctx.get_cached<editing_manager>();
                 em.push_undo_stack_enabled(em.undo_inspector_enabled);
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-                entt::meta_any instance = entt::forward_as_meta(*tag_comp);
+                auto instance_getter = [data](entt::meta_any& result)
+                {
+                    if(data)
+                    {
+                        auto tag_comp = data.try_get<tag_component>();
+                        if(tag_comp)
+                        {
+                            result = entt::forward_as_meta(*tag_comp);
+                        }
+                    }
+                };
                 em.add_action<property_action_t>(pretty_path,
-                                                 instance,
+                                                 instance_getter,
                                                  prop,
                                                  entt::meta_any(old_name),
                                                  entt::meta_any(tag_comp->name));
@@ -468,23 +488,48 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         override_ctx_ref.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout(prop, true);
-        entt::meta_any v = entt::forward_as_meta(tag_comp->tag);
+
+        auto v_getter = [data](entt::meta_any& result)
+        {
+            if(data)
+            {
+                auto tag_comp = data.try_get<tag_component>();
+                if(tag_comp)
+                {
+                    result = entt::forward_as_meta(tag_comp->tag);
+                }
+            }
+        };
 
         var_info info;
         info.is_property = true;
         info.read_only = false;
 
         auto old_tag = tag_comp->tag;
-        auto var_result = ::unravel::inspect_var(ctx, v, info);
+
+        // entt::meta_any v_var;
+        // v_getter(v_var);
+        auto v_var = entt::forward_as_meta(tag_comp->tag);
+        auto var_result = ::unravel::inspect_var(ctx, v_var, v_getter, info);
 
         if(var_result.changed)
         {
             auto& em = ctx.get_cached<editing_manager>();
             em.push_undo_stack_enabled(em.undo_inspector_enabled);
             auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-            entt::meta_any instance = entt::forward_as_meta(*tag_comp);
+            auto instance_getter = [data](entt::meta_any& result)
+            {
+                if(data)
+                {
+                    auto tag_comp = data.try_get<tag_component>();
+                    if(tag_comp)
+                    {
+                        result = entt::forward_as_meta(*tag_comp);
+                    }
+                }
+            };
             em.add_action<property_action_t>(pretty_path,
-                                             instance,
+                                             instance_getter,
                                              prop,
                                              entt::meta_any(old_tag),
                                              entt::meta_any(tag_comp->tag));
@@ -537,6 +582,7 @@ auto inspector_entity::inspect_as_property(rtti::context& ctx, entt::handle& dat
 
 auto inspector_entity::inspect(rtti::context& ctx,
                                entt::meta_any& var,
+                               const meta_any_getter& var_getter,
                                const var_info& info,
                                const entt::meta_custom& custom) -> inspect_result
 {
@@ -620,7 +666,29 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             ImGui::Text("%u", uint32_t(component->get_owner().entity()));
                         }
                     }
-                    return ::unravel::inspect(ctx, *component);
+
+                    auto comp_var_getter = [var_getter](entt::meta_any& result)
+                    {
+                        entt::meta_any var;
+                        call_var_getter(var, var_getter);
+                        if(var)
+                        {
+                            auto data = var.cast<entt::handle>();
+                            if(data)
+                            {
+                                auto component = data.try_get<ctype>();
+                                if(component)
+                                {
+                                    result = entt::forward_as_meta(*component);
+                                }
+                            }
+                        }
+                    };
+                    // entt::meta_any comp_var;
+                    // call_var_getter(comp_var, comp_var_getter);
+                    auto comp_var = entt::forward_as_meta(*component);
+                    return ::unravel::inspect_var(ctx, comp_var, comp_var_getter);
+                    
                 };
 
                 callbacks.on_add = [&]()
@@ -697,8 +765,33 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         ImGui::PopReadonly();
                     }
-                    entt::meta_any obj = entt::forward_as_meta(*script.scoped);
-                    inspect_res |= ::unravel::inspect_var(ctx, obj);
+
+                    auto obj_getter = [var_getter, i](entt::meta_any& result)
+                    {
+                        entt::meta_any var;
+                        call_var_getter(var, var_getter);
+                        if(var)
+                        {
+                            auto data = var.cast<entt::handle>();
+                            if(data)
+                            {
+                                auto script_comp = data.try_get<script_component>();
+                                if(script_comp)
+                                {
+                                    const auto& comps = script_comp->get_script_components();
+                                    if(i < comps.size())
+                                    {
+                                        auto& script = comps[i];
+                                        result = entt::forward_as_meta(*script.scoped);
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    // entt::meta_any obj_var;
+                    // call_var_getter(obj_var, obj_getter);
+                    auto obj_var = entt::forward_as_meta(*script.scoped);
+                    inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_getter);
                     return inspect_res;
                 };
 

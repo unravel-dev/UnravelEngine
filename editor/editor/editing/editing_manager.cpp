@@ -1,5 +1,6 @@
 #include "editing_manager.h"
 #include "engine/profiler/profiler.h"
+#include "imgui/imgui.h"
 #include "logging/logging.h"
 #include <chrono>
 #include <engine/ecs/components/id_component.h>
@@ -32,10 +33,15 @@ namespace
     {
         uint64_t epoch = 1;       // increments on boundaries (press/release/focus loss)
         bool     down_prev = false;
+
+        auto is_active() const -> bool
+        {
+            return ImGui::IsMouseDown(ImGuiMouseButton_Left) || ImGui::IsAnyItemActive();
+        }
     
         void tick()
         {
-            const bool down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            const bool down = is_active();
     
             // Bump the epoch on any boundary so new actions won't merge with the previous batch.
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
@@ -52,7 +58,7 @@ namespace
         // 0 means "not mergeable".
         auto current_merge_key() const -> uint64_t
         {
-            return ImGui::IsMouseDown(ImGuiMouseButton_Left) ? epoch : 0;
+            return is_active() ? epoch : 0;
         }
     };
 

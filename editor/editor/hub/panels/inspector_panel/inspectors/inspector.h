@@ -51,12 +51,13 @@ struct inspect_result
 {
     bool changed{};
     bool edit_finished{};
+    bool change_recorded{};
 
     auto operator|=(const inspect_result& rhs) -> inspect_result&
     {
         changed |= rhs.changed;
         edit_finished |= rhs.edit_finished;
-
+        change_recorded |= rhs.change_recorded;
         return *this;
     }
 
@@ -65,10 +66,17 @@ struct inspect_result
         inspect_result result{};
         result.changed |= rhs.changed;
         result.edit_finished |= rhs.edit_finished;
-
+        result.change_recorded |= rhs.change_recorded;
         return result;
     }
 };
+
+
+
+using meta_any_getter = std::function<void(entt::meta_any&)>;
+auto wrap_var(entt::meta_any& var) -> meta_any_getter;
+void call_var_getter(entt::meta_any& var, const meta_any_getter& var_getter);
+
 
 struct inspector : crtp_meta_type<inspector>
 {
@@ -87,6 +95,7 @@ struct inspector : crtp_meta_type<inspector>
     virtual void after_inspect(const entt::meta_data& prop);
     virtual auto inspect(rtti::context& ctx,
                              entt::meta_any& var,
+                             const meta_any_getter& var_getter,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result = 0;
 
