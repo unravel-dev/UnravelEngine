@@ -249,14 +249,18 @@ void inspector::after_inspect(const entt::meta_data& prop)
 auto make_proxy(entt::meta_any& var) -> meta_any_proxy
 {
     meta_any_proxy proxy;
-    proxy.getter = [var](entt::meta_any& result)
+    proxy.impl->get_name = []()
+    {
+        return std::string{};
+    };
+    proxy.impl->getter = [var](entt::meta_any& result)
     {
         result = var;
     };
-    proxy.setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
+    proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
     {
         entt::meta_any v;
-        proxy.getter(v);
+        proxy.impl->getter(v);
 
         v.assign(value);
     };

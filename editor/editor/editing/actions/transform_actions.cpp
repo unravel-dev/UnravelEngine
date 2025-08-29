@@ -203,29 +203,29 @@ property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& 
 {
     name = "Property Edit";
     
-    if(inst.get_name)
+    if(inst.impl->get_name)
     {
-        name += " " +inst.get_name();
+        name += " " + inst.impl->get_name();
     }
 }
 
 void property_action_t::do_action()
 {
-    instance.setter(instance, new_value);
+    instance.impl->setter(instance, new_value);
 }
 
 void property_action_t::undo_action()
 {
-    instance.setter(instance, old_value);
+    instance.impl->setter(instance, old_value);
 }
 
 auto property_action_t::is_mergeable(const editing_action_t& previous) const -> bool
 {
     const auto& prev = static_cast<const property_action_t&>(previous);
     entt::meta_any inst;
-    instance.getter(inst);
+    instance.impl->getter(inst);
     entt::meta_any prev_inst;
-    prev.instance.getter(prev_inst);
+    prev.instance.impl->getter(prev_inst);
     return inst == prev_inst;
 }
 
@@ -238,7 +238,7 @@ void property_action_t::merge_with(const editing_action_t& previous)
 auto property_action_t::is_valid() const -> bool
 {
     entt::meta_any inst;
-    instance.getter(inst);
+    instance.impl->getter(inst);
 
     return !!inst;
 }

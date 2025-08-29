@@ -517,27 +517,32 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
 
     meta_any_proxy prop_proxy;
-    prop_proxy.get_name = [pretty_name]()
+    prop_proxy.impl->get_name = [var_proxy, pretty_name]()
     {
-        return pretty_name;
+        auto name = var_proxy.impl->get_name();
+        if(name.empty())
+        {
+            return pretty_name;
+        }
+        return fmt::format("{}/{}", name, pretty_name);
     };
-    prop_proxy.getter = [var_proxy, prop](entt::meta_any& result)
+    prop_proxy.impl->getter = [var_proxy, prop](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.getter(var);
+        var_proxy.impl->getter(var);
         if(var)
         {
             result = prop.get(var);
         }
     };
-    prop_proxy.setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    prop_proxy.impl->setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        parent_proxy.getter(var);
+        parent_proxy.impl->getter(var);
         if(var)
         {
             prop.set(var, value);
-            parent_proxy.setter(parent_proxy, var);
+            parent_proxy.impl->setter(parent_proxy, var);
         }
 
     };
@@ -728,14 +733,19 @@ auto inspect_array(rtti::context& ctx,
                 // }
 
                 meta_any_proxy value_proxy;
-                value_proxy.get_name = [element]()
+                value_proxy.impl->get_name = [var_proxy, element]()
                 {
-                    return element;
+                    auto name = var_proxy.impl->get_name();
+                    if(name.empty())
+                    {
+                        return element;
+                    }
+                    return fmt::format("{}/{}", name, element);
                 };
-                value_proxy.getter = [var_proxy, i](entt::meta_any& result)
+                value_proxy.impl->getter = [var_proxy, i](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    var_proxy.getter(var);
+                    var_proxy.impl->getter(var);
                     if(var)
                     {
                         auto view = var.as_sequence_container();
@@ -746,10 +756,10 @@ auto inspect_array(rtti::context& ctx,
                         }
                     }
                 };
-                value_proxy.setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                 {
                     entt::meta_any var;
-                    parent_proxy.getter(var);
+                    parent_proxy.impl->getter(var);
                     if(var)
                     {
                         auto view = var.as_sequence_container();
@@ -759,7 +769,7 @@ auto inspect_array(rtti::context& ctx,
                         }
                     }
 
-                    parent_proxy.setter(parent_proxy, var);
+                    parent_proxy.impl->setter(parent_proxy, var);
                 };
 
                 result |= inspect_var(ctx, value, value_proxy, item_info, custom);
@@ -1034,26 +1044,26 @@ auto inspect_var(rtti::context& ctx,
     auto type = var.type();
 
     meta_any_proxy derived_var_proxy;
-    derived_var_proxy.get_name = [var_proxy]()
+    derived_var_proxy.impl->get_name = [var_proxy]()
     {
-        return var_proxy.get_name();
+        return var_proxy.impl->get_name();
     };
-    derived_var_proxy.getter = [var_proxy](entt::meta_any& result)
+    derived_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
     {
-        var_proxy.getter(result);
+        var_proxy.impl->getter(result);
         if(result)
         {
             entt::as_derived(result);
         }
     };
-    derived_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    derived_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.getter(var);
+        proxy.impl->getter(var);
         if(var)
         {
             var.assign(value);
-            parent_proxy.setter(parent_proxy, var);
+            parent_proxy.impl->setter(parent_proxy, var);
         }
     };
 
@@ -1062,8 +1072,11 @@ auto inspect_var(rtti::context& ctx,
     ImGui::PushReadonly(info.read_only);
 
 
-    entt::meta_any old_var;
-    old_var.assign(var);
+    // entt::meta_any old_var;
+    // var.allow_cast(old_var.type());
+    // {
+    //     old_var.assign(var);
+    // }
     // auto old_var = var;
 
     auto inspector = get_inspector(ctx, type);
@@ -1127,71 +1140,70 @@ auto inspect_var_properties_impl(rtti::context& ctx,
     }
     else
     {
-        // std::vector<std::pair<std::string, std::vector<entt::meta_data>>> grouped_props;
-        // for(auto kvp : properties)
-        // {
-        //     const auto& prop = kvp.second;
-        //     // figure out the group name ("" if none)
-        //     auto group = entt::get_attribute_as<std::string>(prop, "group");
+        std::vector<std::pair<std::string, std::vector<entt::meta_data>>> grouped_props;
+        for(auto kvp : properties)
+        {
+            const auto& prop = kvp.second;
+            // figure out the group name ("" if none)
+            auto group = entt::get_attribute_as<std::string>(prop, "group");
 
-        //     // try to find an existing entry for this group
-        //     auto it = std::find_if(grouped_props.begin(),
-        //                            grouped_props.end(),
-        //                            [&](auto& kv)
-        //                            {
-        //                                return kv.first == group;
-        //                            });
+            // try to find an existing entry for this group
+            auto it = std::find_if(grouped_props.begin(),
+                                   grouped_props.end(),
+                                   [&](auto& kv)
+                                   {
+                                       return kv.first == group;
+                                   });
 
-        //     if(it == grouped_props.end())
-        //     {
-        //         // first time we see this group: append a new pair
-        //         grouped_props.emplace_back(group, std::vector<entt::meta_data>{prop});
-        //     }
-        //     else
-        //     {
-        //         // already have this group: just push into its vector
-        //         it->second.emplace_back(prop);
-        //     }
-        // }
+            if(it == grouped_props.end())
+            {
+                // first time we see this group: append a new pair
+                grouped_props.emplace_back(group, std::vector<entt::meta_data>{prop});
+            }
+            else
+            {
+                // already have this group: just push into its vector
+                it->second.emplace_back(prop);
+            }
+        }
         size_t i = 0;
-        // for(auto& kvp : properties)
-        // {
-        //     auto& props = kvp.second;
+        for(auto& kvp : grouped_props)
+        {
+            auto& props = kvp.second;
 
-        //     const auto& group_name = kvp.first;
+            const auto& group_name = kvp.first;
 
-        //     if(group_name.empty())
-        //     {
-                for(auto&& kvp : properties)
+            if(group_name.empty())
+            {
+                for(auto&& prop : props)
                 {
-                    const auto& prop = kvp.second;
                     ImGui::PushID(i);
                     result |= inspect_property(ctx, var, var_proxy, prop);
                     ImGui::PopID();
                     i++;
                 }
-            // }
-            // else
-            // {
-            //     ImGui::AlignTextToFramePadding();
-            //     ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
-            //     if(ImGui::TreeNode(kvp.first.c_str()))
-            //     {
-            //         ImGui::TreePush(kvp.first.c_str());
+            }
+            else
+            {
+                ImGui::AlignTextToFramePadding();
+                ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
+                if(ImGui::TreeNode(kvp.first.c_str()))
+                {
+                    ImGui::TreePush(kvp.first.c_str());
 
-            //         for(auto& prop : props)
-            //         {
-            //             ImGui::PushID(i);
-            //             result |= inspect_property(ctx, var, var_proxy, prop);
-            //             ImGui::PopID();
-            //             i++;
-            //         }
-            //         ImGui::TreePop();
+                    for(auto& prop : props)
+                    {
+                        ImGui::PushID(i);
+                        result |= inspect_property(ctx, var, var_proxy, prop);
+                        ImGui::PopID();
+                        i++;
+                    }
+                    ImGui::TreePop();
 
-            //         ImGui::TreePop();
-            //     }
-            // }
-        // }
+                    ImGui::TreePop();
+                }
+            }
+        }
     }
 
     return result;

@@ -385,11 +385,11 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
 
                 meta_any_proxy instance_proxy;
-                instance_proxy.get_name = [prop_pretty_name]()
+                instance_proxy.impl->get_name = [prop_pretty_name]()
                 {
                     return prop_pretty_name;
                 };
-                instance_proxy.getter = [data](entt::meta_any& result)
+                instance_proxy.impl->getter = [data](entt::meta_any& result)
                 {
                     if(data)
                     {
@@ -400,7 +400,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                         }
                     }
                 };
-                instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                instance_proxy.impl->setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                 {
                     if(data)
                     {
@@ -463,11 +463,11 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
 
                 meta_any_proxy instance_proxy;
-                instance_proxy.get_name = [prop_pretty_name]()
+                instance_proxy.impl->get_name = [prop_pretty_name]()
                 {
                     return prop_pretty_name;
                 };
-                instance_proxy.getter = [data](entt::meta_any& result)
+                instance_proxy.impl->getter = [data](entt::meta_any& result)
                 {
                     if(data)
                     {
@@ -478,7 +478,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                         }
                     }
                 };
-                instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                instance_proxy.impl->setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                 {
                     if(data)
                     {
@@ -523,11 +523,11 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         property_layout layout(prop, true);
 
         meta_any_proxy instance_proxy;
-        instance_proxy.get_name = [prop_pretty_name]()
+        instance_proxy.impl->get_name = [prop_pretty_name]()
         {
             return prop_pretty_name;
         };
-        instance_proxy.getter = [data](entt::meta_any& result)
+        instance_proxy.impl->getter = [data](entt::meta_any& result)
         {
             if(data)
             {
@@ -538,7 +538,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                 }
             }
         };
-        instance_proxy.setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+        instance_proxy.impl->setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
         {
             if(data)
             {
@@ -706,14 +706,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy comp_var_proxy;
-                    comp_var_proxy.get_name = [pretty_name]()
+                    comp_var_proxy.impl->get_name = [var_proxy, pretty_name]()
                     {
-                        return pretty_name;
+                        auto name = var_proxy.impl->get_name();
+                        if(name.empty())
+                        {
+                            return pretty_name;
+                        }
+                        return fmt::format("{}/{}", name, pretty_name);
                     };
-                    comp_var_proxy.getter = [var_proxy](entt::meta_any& result)
+                    comp_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        var_proxy.getter(var);
+                        var_proxy.impl->getter(var);
                         if(var)
                         {
                             auto data = var.cast<entt::handle>();
@@ -727,7 +732,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             }
                         }
                     };
-                    comp_var_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    comp_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                     {
 
                     };
@@ -817,14 +822,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy obj_proxy;
-                    obj_proxy.get_name = [pretty_name]()
+                    obj_proxy.impl->get_name = [var_proxy, pretty_name]()
                     {
-                        return pretty_name;
+                        auto name = var_proxy.impl->get_name();
+                        if(name.empty())
+                        {
+                            return pretty_name;
+                        }
+                        return fmt::format("{}/{}", name, pretty_name);
                     };
-                    obj_proxy.getter = [var_proxy, i](entt::meta_any& result)
+                    obj_proxy.impl->getter = [var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        var_proxy.getter(var);
+                        var_proxy.impl->getter(var);
                         if(var)
                         {
                             auto data = var.cast<entt::handle>();
@@ -843,7 +853,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                             }
                         }
                     };
-                    obj_proxy.setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    obj_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                     {
                     };
                     // entt::meta_any obj_var;

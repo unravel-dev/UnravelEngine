@@ -71,13 +71,17 @@ struct inspect_result
     }
 };
 
-
-
-struct meta_any_proxy
+struct meta_any_proxy;
+struct meta_any_proxy_impl
 {
     std::function<void(entt::meta_any&)> getter;
     std::function<void(meta_any_proxy& proxy, const entt::meta_any&)> setter;
     std::function<std::string()> get_name;
+};
+
+struct meta_any_proxy
+{
+    std::shared_ptr<meta_any_proxy_impl> impl = std::make_shared<meta_any_proxy_impl>();
 };
 
 auto make_proxy(entt::meta_any& var) -> meta_any_proxy;

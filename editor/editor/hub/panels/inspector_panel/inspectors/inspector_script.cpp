@@ -814,10 +814,10 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
                                            const entt::meta_custom& custom) -> inspect_result
 {
     meta_any_proxy obj_proxy;
-    obj_proxy.getter = [var_proxy](entt::meta_any& result)
+    obj_proxy.impl->getter = [var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.getter(var);
+        var_proxy.impl->getter(var);
         if(var)
         {
             auto& data = var.cast<mono::mono_scoped_object&>();
@@ -825,14 +825,14 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
             result = entt::forward_as_meta(mono_obj);
         }
     };
-    obj_proxy.setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.getter(var);
+        proxy.impl->getter(var);
         if(var)
         {
             var.assign(value);
-            parent_proxy.setter(parent_proxy, var);
+            parent_proxy.impl->setter(parent_proxy, var);
         }
         // APPLOG_WARNING("Not implemented {}", value.type().info().name());
     };
