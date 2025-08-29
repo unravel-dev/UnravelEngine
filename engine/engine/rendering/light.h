@@ -148,9 +148,9 @@ struct light
         /**
          * @brief Struct representing shadow map parameters for spot lights.
          */
-        struct shadowmap_params
-        {
-        } shadow_params{};
+        // struct shadowmap_params
+        // {
+        // } shadow_params{};
     };
 
     /**
@@ -166,16 +166,16 @@ struct light
         /**
          * @brief Struct representing shadow map parameters for point lights.
          */
-        struct shadowmap_params
-        {
-            /// Field of view x-axis adjustment.
-            float fov_x_adjust = 0.0f;
-            /// Field of view y-axis adjustment.
-            float fov_y_adjust = 0.0f;
-            /// Whether to use stencil packing.
-            bool stencil_pack = false;
+        // struct shadowmap_params
+        // {
+        //     /// Field of view x-axis adjustment.
+        //     float fov_x_adjust = 0.0f;
+        //     /// Field of view y-axis adjustment.
+        //     float fov_y_adjust = 0.0f;
+        //     /// Whether to use stencil packing.
+        //     bool stencil_pack = false;
 
-        } shadow_params{};
+        // } shadow_params{};
     };
 
     /**
@@ -186,15 +186,15 @@ struct light
         /**
          * @brief Struct representing shadow map parameters for directional lights.
          */
-        struct shadowmap_params
-        {
-            /// Split distribution for cascade shadow maps.
-            float split_distribution = 0.8f;
-            /// Number of splits for cascade shadow maps.
-            uint8_t num_splits = 4;
-            /// Whether to stabilize the shadow map.
-            bool stabilize = true;
-        } shadow_params{};
+        // struct shadowmap_params
+        // {
+        //     /// Split distribution for cascade shadow maps.
+        //     float split_distribution = 0.8f;
+        //     /// Number of splits for cascade shadow maps.
+        //     uint8_t num_splits = 4;
+        //     /// Whether to stabilize the shadow map.
+        //     bool stabilize = true;
+        // } shadow_params{};
     };
 
     /// Data specific to spot lights.
@@ -253,10 +253,37 @@ struct light
         //     bool do_blur{true};
         // } impl;
 
+
         /// Whether to show shadow map coverage.
         bool show_coverage{false};
 
     } shadow_params;
+
+    
+    struct directional_shadowmap_params
+    {
+        /// Split distribution for cascade shadow maps.
+        float split_distribution = 0.8f;
+        /// Number of splits for cascade shadow maps.
+        uint8_t num_splits = 4;
+        /// Whether to stabilize the shadow map.
+        bool stabilize = true;
+    } directional_shadow_params{};
+
+    struct point_shadowmap_params
+    {
+        /// Field of view x-axis adjustment.
+        float fov_x_adjust = 0.0f;
+        /// Field of view y-axis adjustment.
+        float fov_y_adjust = 0.0f;
+        /// Whether to use stencil packing.
+        bool stencil_pack = false;
+
+    } point_shadow_params{};
+    
+    struct spot_shadowmap_params
+    {
+    } spot_shadow_params{};
 };
 
 } // namespace unravel

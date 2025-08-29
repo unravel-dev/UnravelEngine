@@ -1278,15 +1278,15 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             settings_.m_coverageSpotL = settings_.m_spotOuterAngle;
             break;
         case light_type::point:
-            settings_.m_stencilPack = l.point_data.shadow_params.stencil_pack;
-            settings_.m_fovXAdjust = l.point_data.shadow_params.fov_x_adjust;
-            settings_.m_fovYAdjust = l.point_data.shadow_params.fov_y_adjust;
+            settings_.m_stencilPack = l.point_shadow_params.stencil_pack;
+            settings_.m_fovXAdjust = l.point_shadow_params.fov_x_adjust;
+            settings_.m_fovYAdjust = l.point_shadow_params.fov_y_adjust;
 
             break;
         default:
-            settings_.m_splitDistribution = l.directional_data.shadow_params.split_distribution;
-            settings_.m_numSplits = l.directional_data.shadow_params.num_splits;
-            settings_.m_stabilize = l.directional_data.shadow_params.stabilize;
+            settings_.m_splitDistribution = l.directional_shadow_params.split_distribution;
+            settings_.m_numSplits = l.directional_shadow_params.num_splits;
+            settings_.m_stabilize = l.directional_shadow_params.stabilize;
 
             break;
     }

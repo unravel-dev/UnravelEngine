@@ -41,10 +41,53 @@ REFLECT(light)
             return data->type == light_type::spot;
         });
 
-    entt::meta_factory<light::spot::shadowmap_params>{}
-        .type("light::spot::shadowmap_params"_hs)
+    auto casts_shadows_predicate_entt = entt::property_predicate(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->casts_shadows;
+        });
+    auto casts_shadows_and_is_directional_predicate_entt = entt::property_predicate(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->casts_shadows && data->type == light_type::directional;
+        });
+
+        auto casts_shadows_and_is_point_predicate_entt = entt::property_predicate(
+            [](const entt::meta_any& obj)
+            {
+                auto data = obj.try_cast<light>();
+                if(!data)
+                {
+                    return false;
+                }
+                return data->casts_shadows && data->type == light_type::point;
+            });
+
+        auto casts_shadows_and_is_spot_predicate_entt = entt::property_predicate(
+            [](const entt::meta_any& obj)
+            {
+                auto data = obj.try_cast<light>();
+                if(!data)
+                {
+                    return false;
+                }
+                return data->casts_shadows && data->type == light_type::spot;
+            });
+
+    entt::meta_factory<light::spot_shadowmap_params>{}
+        .type("light::spot_shadowmap_params"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadowmap_params"},
+            entt::attribute{"name", "light::spot_shadowmap_params"},
             entt::attribute{"pretty_name", "Spot Shadowmap Params"},
         });
 
@@ -78,21 +121,15 @@ REFLECT(light)
             entt::attribute{"max", 90.0f},
             entt::attribute{"step", 0.1f},
             entt::attribute{"tooltip", "Spot light outer cone angle."},
-        })
-        .data<&light::spot::shadow_params>("shadow_params"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadow_params"},
-            entt::attribute{"pretty_name", "Shadow Params"},
-            entt::attribute{"tooltip", "Spot light shadow map parameters."},
         });
 
-    entt::meta_factory<light::point::shadowmap_params>{}
-        .type("light::point::shadowmap_params"_hs)
+    entt::meta_factory<light::point_shadowmap_params>{}
+        .type("light::point_shadowmap_params"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadowmap_params"},
+            entt::attribute{"name", "light::point_shadowmap_params"},
             entt::attribute{"pretty_name", "Point Shadowmap Params"},
         })
-        .data<&light::point::shadowmap_params::fov_x_adjust>("fov_x_adjust"_hs)
+        .data<&light::point_shadowmap_params::fov_x_adjust>("fov_x_adjust"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "fov_x_adjust"},
             entt::attribute{"pretty_name", "FovX Adjust"},
@@ -101,7 +138,7 @@ REFLECT(light)
             entt::attribute{"step", 0.0001f},
             entt::attribute{"tooltip", "Shadowmap field of view adjust."},
         })
-        .data<&light::point::shadowmap_params::fov_y_adjust>("fov_y_adjust"_hs)
+        .data<&light::point_shadowmap_params::fov_y_adjust>("fov_y_adjust"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "fov_y_adjust"},
             entt::attribute{"pretty_name", "FovY Adjust"},
@@ -110,7 +147,7 @@ REFLECT(light)
             entt::attribute{"step", 0.0001f},
             entt::attribute{"tooltip", "Shadowmap field of view adjust."},
         })
-        .data<&light::point::shadowmap_params::stencil_pack>("stencil_pack"_hs)
+        .data<&light::point_shadowmap_params::stencil_pack>("stencil_pack"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "stencil_pack"},
             entt::attribute{"pretty_name", "Stencil Pack"},
@@ -137,21 +174,15 @@ REFLECT(light)
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"tooltip", "The falloff factor nearing the range edge."},
-        })
-        .data<&light::point::shadow_params>("shadow_params"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadow_params"},
-            entt::attribute{"pretty_name", "Shadow Params"},
-            entt::attribute{"tooltip", "Point light shadow map parameters."},
         });
 
-    entt::meta_factory<light::directional::shadowmap_params>{}
-        .type("light::directional::shadowmap_params"_hs)
+    entt::meta_factory<light::directional_shadowmap_params>{}
+        .type("light::directional_shadowmap_params"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadowmap_params"},
+            entt::attribute{"name", "light::directional_shadowmap_params"},
             entt::attribute{"pretty_name", "Directional Shadowmap Params"},
         })
-        .data<&light::directional::shadowmap_params::num_splits>("splits"_hs)
+        .data<&light::directional_shadowmap_params::num_splits>("splits"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "splits"},
             entt::attribute{"pretty_name", "Splits"},
@@ -159,7 +190,7 @@ REFLECT(light)
             entt::attribute{"max", 4},
             entt::attribute{"tooltip", "Number of cascades."},
         })
-        .data<&light::directional::shadowmap_params::split_distribution>("distribution"_hs)
+        .data<&light::directional_shadowmap_params::split_distribution>("distribution"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "distribution"},
             entt::attribute{"pretty_name", "Distribution"},
@@ -168,7 +199,7 @@ REFLECT(light)
             entt::attribute{"step", 0.001f},
             entt::attribute{"tooltip", "?"},
         })
-        .data<&light::directional::shadowmap_params::stabilize>("stabilize"_hs)
+        .data<&light::directional_shadowmap_params::stabilize>("stabilize"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "stabilize"},
             entt::attribute{"pretty_name", "Stabilize"},
@@ -180,12 +211,6 @@ REFLECT(light)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "directional"},
             entt::attribute{"pretty_name", "Directional"},
-        })
-        .data<&light::directional::shadow_params>("shadow_params"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shadow_params"},
-            entt::attribute{"pretty_name", "Shadow Params"},
-            entt::attribute{"tooltip", "Directional light shadow map parameters."},
         });
 
     entt::meta_factory<light_type>{}
@@ -406,55 +431,83 @@ REFLECT(light)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "casts_shadows"},
             entt::attribute{"pretty_name", "Casts Shadows"} 
+        })
+        .data<&light::shadow_params>("shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "shadow_params"},
+            entt::attribute{"pretty_name", "Common Shadow Params"},
+            entt::attribute{"tooltip", "Shadow map parameters."},
+            entt::attribute{"predicate", casts_shadows_predicate_entt}
+        })
+        .data<&light::directional_shadow_params>("directional_shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "directional_shadow_params"},
+            entt::attribute{"pretty_name", "Directional Shadow Params"},
+            entt::attribute{"tooltip", "Directional light shadow map parameters."},
+            entt::attribute{"predicate", casts_shadows_and_is_directional_predicate_entt}
+
+        })
+        .data<&light::point_shadow_params>("point_shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "point_shadow_params"},
+            entt::attribute{"pretty_name", "Point Shadow Params"},
+            entt::attribute{"tooltip", "Point light shadow map parameters."},
+            entt::attribute{"predicate", casts_shadows_and_is_point_predicate_entt}
+
+        })
+        .data<&light::spot_shadow_params>("spot_shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spot_shadow_params"},
+            entt::attribute{"pretty_name", "Spot Shadow Params"},
+            entt::attribute{"tooltip", "Spot light shadow map parameters."},
+            entt::attribute{"predicate", casts_shadows_and_is_spot_predicate_entt}
+
         });
 }
 
-SAVE(light::spot::shadowmap_params)
+SAVE(light::spot_shadowmap_params)
 {
 }
-SAVE_INSTANTIATE(light::spot::shadowmap_params, ser20::oarchive_associative_t);
-SAVE_INSTANTIATE(light::spot::shadowmap_params, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(light::spot_shadowmap_params, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(light::spot_shadowmap_params, ser20::oarchive_binary_t);
 
 SAVE(light::spot)
 {
     try_save(ar, ser20::make_nvp("range", obj.range));
     try_save(ar, ser20::make_nvp("inner_angle", obj.inner_angle));
     try_save(ar, ser20::make_nvp("outer_angle", obj.outer_angle));
-    try_save(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 SAVE_INSTANTIATE(light::spot, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::spot, ser20::oarchive_binary_t);
 
-SAVE(light::point::shadowmap_params)
+SAVE(light::point_shadowmap_params)
 {
     try_save(ar, ser20::make_nvp("fov_x_adjust", obj.fov_x_adjust));
     try_save(ar, ser20::make_nvp("fov_y_adjust", obj.fov_y_adjust));
     try_save(ar, ser20::make_nvp("stencil_pack", obj.stencil_pack));
 }
-SAVE_INSTANTIATE(light::point::shadowmap_params, ser20::oarchive_associative_t);
-SAVE_INSTANTIATE(light::point::shadowmap_params, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_binary_t);
 
 SAVE(light::point)
 {
     try_save(ar, ser20::make_nvp("range", obj.range));
     try_save(ar, ser20::make_nvp("exponent_falloff", obj.exponent_falloff));
-    try_save(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 SAVE_INSTANTIATE(light::point, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::point, ser20::oarchive_binary_t);
 
-SAVE(light::directional::shadowmap_params)
+SAVE(light::directional_shadowmap_params)
 {
     try_save(ar, ser20::make_nvp("num_splits", obj.num_splits));
     try_save(ar, ser20::make_nvp("split_distribution", obj.split_distribution));
     try_save(ar, ser20::make_nvp("stabilize", obj.stabilize));
 }
-SAVE_INSTANTIATE(light::directional::shadowmap_params, ser20::oarchive_associative_t);
-SAVE_INSTANTIATE(light::directional::shadowmap_params, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_binary_t);
 
 SAVE(light::directional)
 {
-    try_save(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 SAVE_INSTANTIATE(light::directional, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::directional, ser20::oarchive_binary_t);
@@ -487,65 +540,65 @@ SAVE(light)
     if(obj.type == light_type::spot)
     {
         try_save(ar, ser20::make_nvp("spot_data", obj.spot_data));
+        try_save(ar, ser20::make_nvp("spot_shadow_params", obj.spot_shadow_params));
     }
     else if(obj.type == light_type::point)
     {
         try_save(ar, ser20::make_nvp("point_data", obj.point_data));
+        try_save(ar, ser20::make_nvp("point_shadow_params", obj.point_shadow_params));
     }
     else if(obj.type == light_type::directional)
     {
         try_save(ar, ser20::make_nvp("directional_data", obj.directional_data));
+        try_save(ar, ser20::make_nvp("directional_shadow_params", obj.directional_shadow_params));
     }
 }
 SAVE_INSTANTIATE(light, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light, ser20::oarchive_binary_t);
 
-LOAD(light::spot::shadowmap_params)
+LOAD(light::spot_shadowmap_params)
 {
 }
-LOAD_INSTANTIATE(light::spot::shadowmap_params, ser20::oarchive_associative_t);
-LOAD_INSTANTIATE(light::spot::shadowmap_params, ser20::oarchive_binary_t);
+LOAD_INSTANTIATE(light::spot_shadowmap_params, ser20::oarchive_associative_t);
+LOAD_INSTANTIATE(light::spot_shadowmap_params, ser20::oarchive_binary_t);
 
 LOAD(light::spot)
 {
     try_load(ar, ser20::make_nvp("range", obj.range));
     try_load(ar, ser20::make_nvp("inner_angle", obj.inner_angle));
     try_load(ar, ser20::make_nvp("outer_angle", obj.outer_angle));
-    try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 LOAD_INSTANTIATE(light::spot, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::spot, ser20::oarchive_binary_t);
 
-LOAD(light::point::shadowmap_params)
+LOAD(light::point_shadowmap_params)
 {
     try_load(ar, ser20::make_nvp("fov_x_adjust", obj.fov_x_adjust));
     try_load(ar, ser20::make_nvp("fov_y_adjust", obj.fov_y_adjust));
     try_load(ar, ser20::make_nvp("stencil_pack", obj.stencil_pack));
 }
-LOAD_INSTANTIATE(light::point::shadowmap_params, ser20::oarchive_associative_t);
-LOAD_INSTANTIATE(light::point::shadowmap_params, ser20::oarchive_binary_t);
+LOAD_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_associative_t);
+LOAD_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_binary_t);
 
 LOAD(light::point)
 {
     try_load(ar, ser20::make_nvp("range", obj.range));
     try_load(ar, ser20::make_nvp("exponent_falloff", obj.exponent_falloff));
-    try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 LOAD_INSTANTIATE(light::point, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::point, ser20::oarchive_binary_t);
 
-LOAD(light::directional::shadowmap_params)
+LOAD(light::directional_shadowmap_params)
 {
     try_load(ar, ser20::make_nvp("num_splits", obj.num_splits));
     try_load(ar, ser20::make_nvp("split_distribution", obj.split_distribution));
     try_load(ar, ser20::make_nvp("stabilize", obj.stabilize));
 }
-LOAD_INSTANTIATE(light::directional::shadowmap_params, ser20::oarchive_associative_t);
-LOAD_INSTANTIATE(light::directional::shadowmap_params, ser20::oarchive_binary_t);
+LOAD_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_associative_t);
+LOAD_INSTANTIATE(light::directional_shadowmap_params, ser20::oarchive_binary_t);
 
 LOAD(light::directional)
 {
-    try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 }
 LOAD_INSTANTIATE(light::directional, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::directional, ser20::oarchive_binary_t);
@@ -570,19 +623,21 @@ LOAD(light)
     try_load(ar, ser20::make_nvp("ambient_intensity", obj.ambient_intensity));
     try_load(ar, ser20::make_nvp("color", obj.color));
     try_load(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
-    try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 
     if(obj.type == light_type::spot)
     {
         try_load(ar, ser20::make_nvp("spot_data", obj.spot_data));
+        try_load(ar, ser20::make_nvp("spot_shadow_params", obj.spot_shadow_params));
     }
     else if(obj.type == light_type::point)
     {
         try_load(ar, ser20::make_nvp("point_data", obj.point_data));
+        try_load(ar, ser20::make_nvp("point_shadow_params", obj.point_shadow_params));
     }
     else if(obj.type == light_type::directional)
     {
         try_load(ar, ser20::make_nvp("directional_data", obj.directional_data));
+        try_load(ar, ser20::make_nvp("directional_shadow_params", obj.directional_shadow_params));
     }
 }
 LOAD_INSTANTIATE(light, ser20::iarchive_associative_t);

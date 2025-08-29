@@ -333,6 +333,10 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                 tex_var_info.read_only = true;
 
                 meta_any_proxy tex_var_proxy;
+                tex_var_proxy.impl->get_name = [var_proxy]()
+                {
+                    return var_proxy.impl->get_name();
+                };
                 tex_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
@@ -441,6 +445,10 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
     if(data.is_ready())
     {
         meta_any_proxy data_var_proxy;
+        data_var_proxy.impl->get_name = [var_proxy]()
+        {
+            return var_proxy.impl->get_name();
+        };
         data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
         {
             entt::meta_any var;
@@ -508,6 +516,10 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
             if(ImGui::TreeNodeEx("Material Instance", ImGuiTreeNodeFlags_AllowOverlap))
             {
                 meta_any_proxy data_var_proxy;
+                data_var_proxy.impl->get_name = [var_proxy]()
+                {
+                    return var_proxy.impl->get_name();
+                };
                 data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
@@ -600,6 +612,10 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                 mesh_var_info.read_only = true;
 
                 meta_any_proxy mesh_var_proxy;
+                mesh_var_proxy.impl->get_name = [var_proxy]()
+                {
+                    return var_proxy.impl->get_name();
+                };
                 mesh_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
@@ -762,6 +778,10 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 clip_var_info.read_only = true;
 
                 meta_any_proxy clip_var_proxy;
+                clip_var_proxy.impl->get_name = [var_proxy]()
+                {
+                    return var_proxy.impl->get_name();
+                };
                 clip_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
                 {
                     entt::meta_any var;
@@ -1035,6 +1055,10 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
 
     {
         meta_any_proxy data_var_proxy;
+        data_var_proxy.impl->get_name = [var_proxy]()
+        {
+            return var_proxy.impl->get_name();
+        };
         data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
         {
             entt::meta_any var;
@@ -1146,6 +1170,10 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
         if(data_var)
         {
             meta_any_proxy data_var_proxy;
+            data_var_proxy.impl->get_name = [var_proxy]()
+            {
+                return var_proxy.impl->get_name();
+            };
             data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
             {
                 entt::meta_any var;
@@ -1212,6 +1240,10 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
         if(data_var)
         {
             meta_any_proxy data_var_proxy;
+            data_var_proxy.impl->get_name = [var_proxy]()
+            {
+                return var_proxy.impl->get_name();
+            };
             data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
             {
                 entt::meta_any var;
