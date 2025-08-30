@@ -49,7 +49,6 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
                           entt::handle& last_preview_entity, std::vector<asset_handle<material>>& original_materials,
                           bool& is_previewing);
 void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::handle center, entt::handle editor_camera, editing_manager& em);
-auto process_camera_input(entt::handle camera, math::vec3& move_dir, float& acceleration, const math::vec3& movement_input, bool any_input, float max_hold, float movement_speed, float hold_speed, float fixed_dt) -> void;
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging);
 
 // Material preview state
@@ -268,21 +267,22 @@ auto collect_movement_input(float& max_hold, bool& is_dragging) -> math::vec3
 
     if(is_dragging)
     {
+        float move_speed = 4.0f;
         if(is_key_down(shortcuts::camera_forward))
         {
-            movement_input.z += 1.0f;
+            movement_input.z += move_speed;
         }
         if(is_key_down(shortcuts::camera_backward))
         {
-            movement_input.z -= 1.0f;
+            movement_input.z -= move_speed;
         }
         if(is_key_down(shortcuts::camera_right))
         {
-            movement_input.x += 1.0f;
+            movement_input.x += move_speed;
         }
         if(is_key_down(shortcuts::camera_left))
         {
-            movement_input.x -= 1.0f;
+            movement_input.x -= move_speed;
         }
     
     }
@@ -334,7 +334,7 @@ void update_movement_acceleration(math::vec3& move_dir, float& acceleration, con
     }
     else if(acceleration > 0.0001f)
     {
-        acceleration *= 0.75f;
+        acceleration *= 0.85f;
     }
 }
 
@@ -371,22 +371,6 @@ void apply_movement(entt::handle camera,
 
 }
 
-auto process_camera_input(entt::handle camera, 
-                          math::vec3& move_dir, 
-                          float& acceleration, 
-                          const math::vec3& movement_input, 
-                          bool any_input, 
-                          float max_hold, 
-                          float movement_speed, 
-                          float hold_speed, 
-                          float fixed_dt) -> void
-{
-    // Update movement acceleration and direction
-    update_movement_acceleration(move_dir, acceleration, movement_input, any_input);
-
-    // Apply movement
-    apply_movement(camera, move_dir, movement_speed, acceleration, max_hold, hold_speed, fixed_dt);
-}
 
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging)
 {
@@ -435,17 +419,17 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
     bool any_rotation = handle_mouse_rotation(camera, rotation_speed, is_dragging);
 
     // Process camera input with acceleration
-    process_camera_input(camera, move_dir, acceleration, movement_input, any_input, max_hold, movement_speed, hold_speed, fixed_dt);
+    update_movement_acceleration(move_dir, acceleration, movement_input, any_input);
 
     if(any_input || any_rotation)
     {
         seq::scope::stop_all("camera_focus");
     }
-    else if(acceleration > 0.0001f)
+
+    if(acceleration > 0.0001f)
     {
         // Continue movement with deceleration when not actively inputting
         apply_movement(camera, move_dir, movement_speed, acceleration, 0.0f, hold_speed, fixed_dt);
-        acceleration *= 0.75f;
     }
 }
 
