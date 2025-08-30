@@ -1107,7 +1107,10 @@ auto deferred::run_ssr_pass(const camera& camera,
 
         ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
     }
+    
 
+    //BUG Cone tracing is not working properly, so we disable it for now.
+    ssr_params.settings.fidelityfx.enable_cone_tracing = false;
 
     return ssr_pass_.run(rview, ssr_params);
 }
