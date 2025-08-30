@@ -44,7 +44,7 @@ REFLECT(sound_info)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "frames"},
             entt::attribute{"pretty_name", "Frames"},
-            entt::attribute{"tooltip", "Fames count (samples per channel).&"},
+            entt::attribute{"tooltip", "Fames count (samples per channel)."},
         });
 }
 
@@ -94,6 +94,11 @@ REFLECT(audio_clip)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "audio_clip"},
             entt::attribute{"pretty_name", "Audio Clip"},
+        })
+        .data<nullptr, &audio_clip::get_info>("info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "info"},
+            entt::attribute{"pretty_name", "Info"},
         });
 }
 

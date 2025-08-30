@@ -109,11 +109,6 @@ struct inspector : crtp_meta_type<inspector>
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result = 0;
 
-    // Virtual method to refresh the inspector's state
-    virtual auto refresh(rtti::context& ctx) -> void
-    {
-    }
-
     std::unique_ptr<property_layout> layout_{};
     bool open_{};
 };

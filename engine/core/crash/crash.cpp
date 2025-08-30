@@ -234,9 +234,6 @@ auto signal_handler(int sig) -> void
         }
     }
 
-    // Restore default handler and re-raise for proper termination
-    signal(sig, SIG_DFL);
-    raise(sig);
 }
 
 

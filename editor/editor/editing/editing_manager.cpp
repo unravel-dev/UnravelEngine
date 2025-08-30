@@ -390,7 +390,6 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
             serialization::set_path_context(old_ctx);
         }
 
-        refresh_inspector(ctx, entt::resolve<asset_handle<prefab>>());
     });
 }
 
@@ -647,7 +646,6 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
     has_unsaved_changes_ = true;
 
 
-    APPLOG_TRACE("add_action: {} - {}", name, session.current_merge_key());
     action->merge_key = session.current_merge_key();
 
     if(!name.empty())

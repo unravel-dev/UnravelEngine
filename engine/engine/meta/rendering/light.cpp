@@ -623,6 +623,7 @@ LOAD(light)
     try_load(ar, ser20::make_nvp("ambient_intensity", obj.ambient_intensity));
     try_load(ar, ser20::make_nvp("color", obj.color));
     try_load(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
+    try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
 
     if(obj.type == light_type::spot)
     {

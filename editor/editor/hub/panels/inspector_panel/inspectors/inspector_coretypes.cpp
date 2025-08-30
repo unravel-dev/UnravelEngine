@@ -578,7 +578,7 @@ auto inspector_duration_sec_double::inspect(rtti::context& ctx,
     auto data = var.cast<std::chrono::duration<double>>();
     auto count = data.count();
     entt::meta_any v = count;
-    auto result = inspect_scalar<double>(ctx, v, info, custom, "%.f3s");
+    auto result = inspect_scalar<double>(ctx, v, info, custom, "%.3fs");
     if(result.changed)
     {
         count = v.cast<double>();

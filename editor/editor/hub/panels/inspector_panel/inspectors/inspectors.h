@@ -169,14 +169,6 @@ auto inspect_enum(rtti::context& ctx,
                   const meta_any_proxy& var_proxy,
                   const var_info& info = {}) -> inspect_result;
 
-auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void;
-
-// Refresh inspector by template type
-template<typename T>
-auto refresh_inspector(rtti::context& ctx) -> void
-{
-    refresh_inspector(ctx, entt::resolve<T>());
-}
 
 template<typename T>
 auto inspect(rtti::context& ctx, T& obj) -> inspect_result

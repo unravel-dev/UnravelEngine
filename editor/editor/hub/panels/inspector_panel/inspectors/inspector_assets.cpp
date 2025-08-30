@@ -870,25 +870,6 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
     return result;
 }
 
-inspector_asset_handle_prefab::inspector_asset_handle_prefab()
-{
-    auto& ctx = engine::context();
-    auto& ev = ctx.get_cached<events>();
-
-    ev.on_script_recompile.connect(sentinel_, 1000, this, &inspector_asset_handle_prefab::on_script_recompile);
-    ev.on_play_before_begin.connect(sentinel_, 1000, this, &inspector_asset_handle_prefab::reset_cache);
-    ev.on_play_after_end.connect(sentinel_, 1000, this, &inspector_asset_handle_prefab::reset_cache);
-}
-void inspector_asset_handle_prefab::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
-{
-    reset_cache(ctx);
-}
-
-void inspector_asset_handle_prefab::reset_cache(rtti::context& ctx)
-{
-    inspected_scene_.unload();
-}
-
 auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab) -> entt::handle
 {
     entt::handle instance{};
@@ -924,10 +905,6 @@ auto inspector_asset_handle_prefab::inspect_as_property(rtti::context& ctx, asse
     return result;
 }
 
-void inspector_asset_handle_prefab::refresh(rtti::context& ctx)
-{
-    reset_cache(ctx);
-}
 auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
                                             entt::meta_any& var,
                                             const meta_any_proxy& var_proxy,

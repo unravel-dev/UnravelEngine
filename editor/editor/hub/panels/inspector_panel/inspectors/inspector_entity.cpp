@@ -1,5 +1,6 @@
 #include "inspector_entity.h"
 #include "entt/meta/meta.hpp"
+#include "inspector.h"
 #include "inspectors.h"
 #include "reflection/reflection.h"
 
@@ -327,7 +328,7 @@ auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> bool
     return result;
 }
 
-auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_override_context& override_ctx) -> inspect_result
+auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override_context& override_ctx) -> inspect_result
 {
     inspect_result result{};
     
@@ -360,26 +361,21 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             bool is_active = trans_comp->is_active();
             
             // Track component type for prefab override context
-            // auto type = entt::resolve<transform_component>();
-            // auto name = entt::get_name(type);
-            // auto pretty_name = entt::get_pretty_name(type);
-            // auto prop = type.data("active"_hs);
-            // auto prop_name = entt::get_name(prop);
-            // auto prop_pretty_name = entt::get_pretty_name(prop);
+            auto type = entt::resolve<transform_component>();
+            auto name = entt::get_name(type);
+            auto pretty_name = entt::get_pretty_name(type);
+            auto prop = type.data("active"_hs);
+            auto prop_name = entt::get_name(prop);
+            auto prop_pretty_name = entt::get_pretty_name(prop);
 
-            // // Use a copy of override context for proper path handling
-            // auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
-            // override_ctx_ref.set_component_type(name, pretty_name);
-            // override_ctx_ref.push_segment(prop_name, prop_pretty_name);
+            override_ctx.set_component_type(name, pretty_name);
+            override_ctx.push_segment(prop_name, prop_pretty_name);
 
             bool old_active = is_active;
             if(ImGui::Checkbox("##active", &is_active))
             {
-                // trans_comp->set_active(is_active);
                 result.changed = true;
                 result.edit_finished = true;
-
-                // override_ctx_ref.record_override();
 
                 auto& em = ctx.get_cached<editing_manager>();
                 em.add_action<entity_set_active_action_t>("Set Active",
@@ -388,8 +384,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
                     is_active);
             }
             
-            // ImGui::PopStyleColor(3);
-            // override_ctx_ref.pop_segment();
+            override_ctx.pop_segment();
         }
         
         auto col = entity_panel::get_entity_display_color(data);
@@ -405,17 +400,15 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         // Name field column
         ImGui::TableSetColumnIndex(2);
         {
-            // Track component type for prefab override context
-            // auto type = entt::resolve<tag_component>();
-            // auto type_name = entt::get_name(type);
-            // auto pretty_name = entt::get_pretty_name(type);
-            // auto prop = type.data("name"_hs);
-            // auto prop_name = entt::get_name(prop);
-            // auto prop_pretty_name = entt::get_pretty_name(prop);
+            auto type = entt::resolve<tag_component>();
+            auto type_name = entt::get_name(type);
+            auto pretty_name = entt::get_pretty_name(type);
+            auto prop = type.data("name"_hs);
+            auto prop_name = entt::get_name(prop);
+            auto prop_pretty_name = entt::get_pretty_name(prop);
             
-            // auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
-            // override_ctx_ref.set_component_type(type_name, pretty_name);
-            // override_ctx_ref.push_segment(prop_name, prop_pretty_name);
+            override_ctx.set_component_type(type_name, pretty_name);
+            override_ctx.push_segment(prop_name, prop_pretty_name);
                         
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
             ImGui::SetNextItemWidth(-1.0f);
@@ -425,7 +418,6 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             {
                 result.changed = true;
                 result.edit_finished = true;
-                // override_ctx_ref.record_override();
 
                 auto& em = ctx.get_cached<editing_manager>();      
 
@@ -436,7 +428,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
             }
             
             ImGui::PopStyleVar();
-            // override_ctx_ref.pop_segment();
+            override_ctx.pop_segment();
         }
         ImGui::PopStyleColor();
 
@@ -445,7 +437,6 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
     
     // Tag field using traditional property_layout approach
     {
-        // Track component type for prefab override context
         auto type = entt::resolve<tag_component>();
         auto type_name = entt::get_name(type);
         auto pretty_name = entt::get_pretty_name(type);
@@ -454,43 +445,10 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
         auto prop_name = entt::get_name(prop);
         auto prop_pretty_name = entt::get_pretty_name(prop);
         
-        auto& override_ctx_ref = const_cast<prefab_override_context&>(override_ctx);
-        override_ctx_ref.set_component_type(type_name, pretty_name);
-        override_ctx_ref.push_segment(prop_name, prop_pretty_name);
+        override_ctx.set_component_type(type_name, pretty_name);
+        override_ctx.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout(prop, true);
-
-        meta_any_proxy instance_proxy;  
-        instance_proxy.impl->get_name = [prop_pretty_name]()
-        {
-            return prop_pretty_name;
-        };
-        instance_proxy.impl->getter = [data](entt::meta_any& result)
-        {
-            if(data)
-            {
-                auto tag_comp = data.try_get<tag_component>();
-                if(tag_comp)
-                {
-                    result = entt::forward_as_meta(tag_comp->tag);
-                    return true;
-                }
-            }
-            return false;
-        };
-        instance_proxy.impl->setter = [data](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-        {
-            if(data)
-            {
-                auto tag_comp = data.try_get<tag_component>();
-                if(tag_comp)
-                {
-                    tag_comp->tag = value.cast<std::string>();
-                    return true;
-                }
-            }
-            return false;
-        };
 
         var_info info;
         info.is_property = true;
@@ -498,36 +456,23 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, const prefab_ov
 
         auto old_tag = tag_comp->tag;
 
-        // entt::meta_any v_var;
-        // v_getter(v_var);
         auto v_var = entt::forward_as_meta(tag_comp->tag);
-        auto var_result = ::unravel::inspect_var(ctx, v_var, instance_proxy, info);
+        auto var_result = ::unravel::inspect_var(ctx, v_var, make_proxy(v_var), info);
 
         if(var_result.changed)
         {
-            auto component_type_name = override_ctx.path_context.get_component_type_name();
-            auto component_type_pretty_name = override_ctx.pretty_path_context.get_component_type_name();
-            auto prop_path = override_ctx.path_context.get_current_path();
-            auto prop_pretty_path = override_ctx.pretty_path_context.get_current_path();
-            auto on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path]()
-            {
-                prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path);
-            };
+            auto& em = ctx.get_cached<editing_manager>();      
 
-            auto& em = ctx.get_cached<editing_manager>();
-            auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-            em.add_action<property_action_t>(pretty_path,
-                                             instance_proxy,
-                                             entt::meta_any(old_tag),
-                                             entt::meta_any(tag_comp->tag),
-                                             prop.custom(),
-                                             on_success);
+            em.add_action<entity_set_tag_action_t>("Set Tag",
+                data,
+                old_tag,
+                tag_comp->tag);
 
         }
 
         result |= var_result;
 
-        override_ctx_ref.pop_segment();
+        override_ctx.pop_segment();
     }
     
     return result;

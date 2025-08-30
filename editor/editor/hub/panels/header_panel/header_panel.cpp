@@ -14,6 +14,7 @@
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
+#include <exception>
 #include <simulation/simulation.h>
 #include <version/version.h>
 
@@ -179,9 +180,19 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Developer"))
         {
-            if(ImGui::MenuItem("Crash"))
+
+            
+            if(ImGui::MenuItem("Crash(Abort)"))
             {
                 std::abort();
+            }
+            if(ImGui::MenuItem("Crash(Terminate)"))
+            {
+                std::terminate();
+            }
+            if(ImGui::MenuItem("Crash(SIGSEGV)"))
+            {
+                *(volatile int*)0 = 0;
             }
 
             if(ImGui::MenuItem("Recompile Shaders"))

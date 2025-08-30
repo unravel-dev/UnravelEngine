@@ -1054,19 +1054,6 @@ auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy&
     return result;
 }
 
-auto refresh_inspector(rtti::context& ctx, entt::meta_type type) -> void
-{
-    auto& registry = ctx.get_cached<inspector_registry>();
-
-    // Find the inspector for the given type
-    auto it = registry.type_map.find(type.id());
-    if(it != registry.type_map.end())
-    {
-        // Call refresh on the inspector
-        it->second->refresh(ctx);
-    }
-}
-
 auto inspect_var(rtti::context& ctx,
                  entt::meta_any& var,
                  const meta_any_proxy& var_proxy,

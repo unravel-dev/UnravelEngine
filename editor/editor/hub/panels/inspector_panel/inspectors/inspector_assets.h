@@ -79,18 +79,13 @@ REFLECT_INSPECTOR_INLINE(inspector_asset_handle_animation, asset_handle<animatio
 
 struct inspector_asset_handle_prefab : public crtp_meta_type<inspector_asset_handle_prefab, inspector_asset_handle>
 {
-    inspector_asset_handle_prefab();
     auto inspect_as_property(rtti::context& ctx, asset_handle<prefab>& data) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 
-    void refresh(rtti::context& ctx) override;
 private:
-    void on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version);
-    void reset_cache(rtti::context& ctx);
     auto get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab) -> entt::handle;
 
     scene inspected_scene_{"inspector_asset_handle_prefab"};
-    std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     uintptr_t inspected_version_{};
 
 
