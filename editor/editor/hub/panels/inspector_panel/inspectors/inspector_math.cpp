@@ -345,10 +345,12 @@ auto inspector_quaternion::inspect(rtti::context& ctx,
     auto& data = var.cast<math::quat&>();
     inspect_result result{};
 
-    auto val = quat_to_vec4(data);
-    if(DragVec4(val, info))
+    auto val = math::degrees(math::eulerAngles(data));
+    // auto val = quat_to_vec4(data);
+    if(DragVec3(val, info))
     {
-        data = vec4_to_quat(val);
+        // data = vec4_to_quat(val);
+        data = math::quat(math::radians(val));
         result.changed = true;
     }
     result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
