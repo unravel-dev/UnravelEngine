@@ -539,11 +539,10 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
         }
         return fmt::format("{}/{}", name, pretty_name);
     };
-    prop_proxy.impl->getter = [var_proxy, prop](entt::meta_any& result)
+    prop_proxy.impl->getter = [parent_proxy = var_proxy, prop](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             result = prop.get(var);
             return true;
@@ -553,8 +552,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     prop_proxy.impl->setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        parent_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             prop.set(var, value);
             parent_proxy.impl->setter(parent_proxy, var);
@@ -772,11 +770,10 @@ auto inspect_array(rtti::context& ctx,
                     }
                     return fmt::format("{}/{}", name, element);
                 };
-                value_proxy.impl->getter = [var_proxy, i](entt::meta_any& result)
+                value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                 {
                     entt::meta_any var;
-                    var_proxy.impl->getter(var);
-                    if(var)
+                    if(parent_proxy.impl->getter(var) && var)
                     {
                         auto view = var.as_sequence_container();
                         if(view.size() > static_cast<std::size_t>(i))
@@ -791,8 +788,7 @@ auto inspect_array(rtti::context& ctx,
                 value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                 {
                     entt::meta_any var;
-                    parent_proxy.impl->getter(var);
-                    if(var)
+                    if(parent_proxy.impl->getter(var) && var)
                     {
                         auto view = var.as_sequence_container();
                         if(view.size() > static_cast<std::size_t>(i))
@@ -1064,14 +1060,13 @@ auto inspect_var(rtti::context& ctx,
     auto type = var.type();
 
     meta_any_proxy derived_var_proxy;
-    derived_var_proxy.impl->get_name = [var_proxy]()
+    derived_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
-        return var_proxy.impl->get_name();
+        return parent_proxy.impl->get_name();
     };
-    derived_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-    {
-        var_proxy.impl->getter(result);
-        if(result)
+    derived_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
+    {      
+        if(parent_proxy.impl->getter(result) && result)
         {
             entt::as_derived(result);
             return true;
@@ -1081,12 +1076,10 @@ auto inspect_var(rtti::context& ctx,
     derived_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.impl->getter(var);
-        if(var)
+        if(proxy.impl->getter(var) && var)
         {
-            var.assign(value);
-            parent_proxy.impl->setter(parent_proxy, var);
-            return true;
+            var = value;
+            return parent_proxy.impl->setter(parent_proxy, var);
         }
         return false;
     };

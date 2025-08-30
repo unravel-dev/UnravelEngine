@@ -21,7 +21,7 @@ void editing_action_t::draw_in_inspector_impl(rtti::context& ctx, const entt::me
     ImGui::EndChild();
     ImGui::SameLine();
 
-    ImGui::Text("%s", ICON_MDI_ARROW_RIGHT);
+    ImGui::Text(" %s ", ICON_MDI_ARROW_RIGHT);
     ImGui::SameLine();
     ImGui::SetNextWindowSizeConstraints({}, {400.0f, ImGui::GetContentRegionAvail().y});
     ImGui::BeginChild("##tooltip_child2", {}, ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY);

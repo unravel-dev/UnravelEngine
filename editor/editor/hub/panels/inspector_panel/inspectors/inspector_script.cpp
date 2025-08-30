@@ -814,15 +814,14 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
                                            const entt::meta_custom& custom) -> inspect_result
 {
     meta_any_proxy obj_proxy;
-    obj_proxy.impl->get_name = [var_proxy]()
+    obj_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
-        return var_proxy.impl->get_name();
+        return parent_proxy.impl->get_name();
     };
-    obj_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             auto& data = var.cast<mono::mono_scoped_object&>();
             auto& mono_obj = static_cast<mono::mono_object&>(data.object);
@@ -834,10 +833,9 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
     obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.impl->getter(var);
-        if(var)
+        if(proxy.impl->getter(var) && var)
         {
-            var.assign(value);
+            var = value;
             parent_proxy.impl->setter(parent_proxy, var);
             return true;
         }

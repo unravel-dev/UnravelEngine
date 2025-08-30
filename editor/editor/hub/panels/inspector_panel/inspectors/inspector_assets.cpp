@@ -257,15 +257,14 @@ template<typename T>
 auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> meta_any_proxy
 {
     meta_any_proxy data_var_proxy;
-    data_var_proxy.impl->get_name = [var_proxy]()
+    data_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
-        return var_proxy.impl->get_name();
+        return parent_proxy.impl->get_name();
     };
-    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             auto data = var.cast<std::shared_ptr<T>>();
             result = entt::forward_as_meta(*data);
@@ -276,10 +275,9 @@ auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_pr
     data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.impl->getter(var);
-        if(var)
+        if(proxy.impl->getter(var) && var)
         {
-            var.assign(value);
+            var = value;
             return parent_proxy.impl->setter(parent_proxy, var);
         }
         return false;
@@ -292,15 +290,14 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
 {
     auto& data = var.cast<asset_handle<T>&>();
     meta_any_proxy data_var_proxy;
-    data_var_proxy.impl->get_name = [var_proxy]()
+    data_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
-        return var_proxy.impl->get_name();
+        return parent_proxy.impl->get_name();
     };
-    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             auto& data = var.cast<asset_handle<T>&>();
             auto mat = data.get(false);
@@ -317,7 +314,7 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
         // proxy.impl->getter(var);
         // if(var)
         // {
-        //     var.assign(value);
+        //     var = value;
         //     parent_proxy.impl->setter(parent_proxy, var);
         // }
         return false;
@@ -330,15 +327,14 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
 {
     auto& data = var.cast<asset_handle<T>&>();
     meta_any_proxy data_var_proxy;
-    data_var_proxy.impl->get_name = [var_proxy]()
+    data_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
-        return var_proxy.impl->get_name();
+        return parent_proxy.impl->get_name();
     };
-    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
-        var_proxy.impl->getter(var);
-        if(var)
+        if(parent_proxy.impl->getter(var) && var)
         {
             auto& data = var.cast<asset_handle<T>&>();
             auto mat = data.get(false);
@@ -354,10 +350,9 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
     data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
     {
         entt::meta_any var;
-        proxy.impl->getter(var);
-        if(var)
+        if(proxy.impl->getter(var) && var)
         {
-            var.assign(value);
+            var = value;
             parent_proxy.impl->setter(parent_proxy, var);
 
             // Get the asset and mutate it
@@ -464,9 +459,10 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                 auto tex_var_proxy = make_asset_proxy<gfx::texture>(var, var_proxy);
 
                 entt::meta_any tex_var;
-                tex_var_proxy.impl->getter(tex_var);
-
-                result |= ::unravel::inspect_var(ctx, tex_var, tex_var_proxy, tex_var_info);
+                if(tex_var_proxy.impl->getter(tex_var))
+                {
+                    result |= ::unravel::inspect_var(ctx, tex_var, tex_var_proxy, tex_var_info);
+                }
                 
             }
             ImGui::EndChild();
@@ -548,8 +544,10 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
         auto data_var_proxy = make_mutable_asset_proxy<material>(var, var_proxy);
       
         entt::meta_any data_var;
-        data_var_proxy.impl->getter(data_var);
-        result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+        if(data_var_proxy.impl->getter(data_var))
+        {
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+        }
     
 
         if(result.changed)
@@ -660,9 +658,11 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                 auto mesh_var_proxy = make_asset_proxy<mesh>(var, var_proxy);
 
                 entt::meta_any mesh_var;
-                mesh_var_proxy.impl->getter(mesh_var);
+                if(mesh_var_proxy.impl->getter(mesh_var))
+                {
+                    result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_proxy, mesh_var_info);
+                }
 
-                result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_proxy, mesh_var_info);
             }
         
             ImGui::EndChild();
@@ -789,32 +789,15 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 var_info clip_var_info;
                 clip_var_info.read_only = true;
 
-                // meta_any_proxy clip_var_proxy;
-                // clip_var_proxy.impl->get_name = [var_proxy]()
-                // {
-                //     return var_proxy.impl->get_name();
-                // };
-                // clip_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-                // {
-                //     entt::meta_any var;
-                //     var_proxy.impl->getter(var);
-                //     if(var)
-                //     {
-                //         auto& data = var.cast<asset_handle<animation_clip>&>();
-                //         auto clip = data.get(false);
-                //         if(clip)
-                //         {
-                //             result = entt::forward_as_meta(*clip);
-                //         }
-                //     }
-                // };
-
                 auto clip_var_proxy = make_asset_proxy<animation_clip>(var, var_proxy);
 
 
                 entt::meta_any clip_var;
-                clip_var_proxy.impl->getter(clip_var);
-                result |= ::unravel::inspect_var(ctx, clip_var, clip_var_proxy, clip_var_info);
+                if(clip_var_proxy.impl->getter(clip_var))
+                {
+                    result |= ::unravel::inspect_var(ctx, clip_var, clip_var_proxy, clip_var_info);
+                }
+
             }
             ImGui::EndTabItem();
         }
@@ -1049,8 +1032,10 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
         auto data_var_proxy = make_mutable_asset_proxy<physics_material>(var, var_proxy);
 
         entt::meta_any data_var;
-        data_var_proxy.impl->getter(data_var);
-        result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+        if(data_var_proxy.impl->getter(data_var))
+        {
+            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+        }
     }
     if(result.edit_finished)
     {
@@ -1146,8 +1131,10 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
             auto data_var_proxy = make_asset_proxy<audio_clip>(var, var_proxy);
 
             entt::meta_any data_var;
-            data_var_proxy.impl->getter(data_var);
-            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+            if(data_var_proxy.impl->getter(data_var))
+            {
+                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+            }
 
             auto clip = data.get(false);
 

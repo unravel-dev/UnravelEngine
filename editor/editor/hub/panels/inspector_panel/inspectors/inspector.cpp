@@ -246,6 +246,7 @@ void inspector::after_inspect(const entt::meta_data& prop)
     layout_.reset();
 }
 
+
 auto make_proxy(entt::meta_any& var) -> meta_any_proxy
 {
     meta_any_proxy proxy;
@@ -261,11 +262,9 @@ auto make_proxy(entt::meta_any& var) -> meta_any_proxy
     proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
     {
         entt::meta_any v;
-        proxy.impl->getter(v);
-
-        if(v)
+        if(proxy.impl->getter(v) && v)
         {
-            v.assign(value);
+            v = value;
             return true;
         }
         return false;

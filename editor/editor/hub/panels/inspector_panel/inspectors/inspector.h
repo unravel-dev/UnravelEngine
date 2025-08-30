@@ -8,51 +8,152 @@
 
 namespace unravel
 {
+/**
+ * @brief Manages ImGui layout for property inspection in the editor
+ * 
+ * Handles the visual layout of properties in the inspector panel, including
+ * column-based layouts, tree nodes, tooltips, and context menus. Uses RAII
+ * to automatically manage ImGui state.
+ */
 class property_layout
 {
 public:
+    /// Disable copy operations due to RAII nature and global stack management
+    property_layout(const property_layout&) = delete;
+    auto operator=(const property_layout&) -> property_layout& = delete;
+    
+    /// Disable move operations to prevent stack corruption
+    property_layout(property_layout&&) = delete;
+    auto operator=(property_layout&&) -> property_layout& = delete;
+    /**
+     * @brief Default constructor that registers this layout in the global stack
+     */
     property_layout();
 
+    /**
+     * @brief Constructs layout from meta property data
+     * @param prop Meta property containing name and tooltip information
+     * @param columns Whether to use column-based layout (default: true)
+     */
     property_layout(const entt::meta_data& prop, bool columns = true);
+    
+    /**
+     * @brief Constructs layout with property name only
+     * @param name Display name for the property
+     * @param columns Whether to use column-based layout (default: true)
+     */
     property_layout(const std::string& name, bool columns = true);
+    
+    /**
+     * @brief Constructs layout with name and tooltip
+     * @param name Display name for the property
+     * @param tooltip Help text shown on hover
+     * @param columns Whether to use column-based layout (default: true)
+     */
     property_layout(const std::string& name, const std::string& tooltip, bool columns = true);
+    
+    /**
+     * @brief Constructs layout with custom rendering callback
+     * @param name Display name for the property
+     * @param callback Custom function to render the property label
+     * @param columns Whether to use column-based layout (default: true)
+     */
     property_layout(const std::string& name, const std::function<void()>& callback, bool columns = true);
 
+    /**
+     * @brief Destructor that cleans up ImGui state and removes from stack
+     */
     ~property_layout();
 
+    /**
+     * @brief Updates layout data from meta property
+     * @param prop Meta property containing name and tooltip
+     * @param columns Whether to use column-based layout
+     */
     void set_data(const entt::meta_data& prop, bool columns = true);
+    
+    /**
+     * @brief Updates layout data with name and tooltip
+     * @param name Display name for the property
+     * @param tooltip Help text shown on hover
+     * @param columns Whether to use column-based layout
+     */
     void set_data(const std::string& name, const std::string& tooltip, bool columns = true);
 
+    /**
+     * @brief Initializes ImGui layout with tables and property label
+     * @param auto_proceed_to_next_column Whether to automatically move to next column
+     */
     void push_layout(bool auto_proceed_to_next_column = true);
+    
+    /**
+     * @brief Creates a collapsible tree node layout for nested properties
+     * @param flags ImGui tree node flags for customization
+     * @return true if tree node is open and children should be rendered
+     */
     auto push_tree_layout(ImGuiTreeNodeFlags flags = 0) -> bool;
+    
+    /**
+     * @brief Cleans up ImGui state (IDs, tables, tree nodes)
+     */
     void pop_layout();
 
+    /**
+     * @brief Prepares ImGui for rendering the property value widget
+     */
     void prepare_for_item();
 
+    /**
+     * @brief Gets the currently active property layout from the global stack
+     * @return Pointer to current layout, or nullptr if stack is empty
+     */
     static auto get_current() -> property_layout*;
 
 private:
+    /// Whether ImGui state has been pushed and needs cleanup
     bool pushed_{};
+    /// Display name for the property
     std::string name_;
+    /// Help text shown on hover
     std::string tooltip_;
+    /// Custom callback for rendering property label
     std::function<void()> callback_;
+    /// Whether to use column-based layout
     bool columns_{};
+    /// Whether tree node is currently open
     bool open_{};
+    /// Whether ImGui table is currently active
     bool columns_open_{};
 };
 
+/**
+ * @brief Metadata about a variable being inspected
+ */
 struct var_info
 {
+    /// Whether the variable should be displayed as read-only
     bool read_only{};
+    /// Whether this is a property that can be overridden in prefabs
     bool is_property{};
 };
 
+/**
+ * @brief Result of an inspection operation indicating what changes occurred
+ */
 struct inspect_result
 {
+    /// Whether the value was modified during inspection
     bool changed{};
+    /// Whether user finished editing (e.g., released mouse or pressed enter)
     bool edit_finished{};
+    /// Whether the change was recorded for undo/redo system
     bool change_recorded{};
 
+    /**
+     * @brief Combines this result with another using logical OR
+     * @param rhs Other result to combine with
+     * @return Reference to this result after combination
+     */
     auto operator|=(const inspect_result& rhs) -> inspect_result&
     {
         changed |= rhs.changed;
@@ -61,6 +162,11 @@ struct inspect_result
         return *this;
     }
 
+    /**
+     * @brief Creates new result by combining two results with logical OR
+     * @param rhs Other result to combine with
+     * @return New combined result
+     */
     auto operator|(const inspect_result& rhs) const -> inspect_result
     {
         inspect_result result{};
@@ -71,25 +177,54 @@ struct inspect_result
     }
 };
 
-struct meta_any_proxy;
-struct meta_any_proxy_impl
-{
-    std::function<bool(entt::meta_any&)> getter;
-    std::function<bool(meta_any_proxy& proxy, const entt::meta_any&)> setter;
-    
-    std::function<std::string()> get_name;
-};
-
+/**
+ * @brief Proxy pattern for accessing and modifying meta_any variables
+ * 
+ * Provides indirect access to variables through getter/setter functions,
+ * enabling inspection of nested properties and complex data structures.
+ */
 struct meta_any_proxy
 {
+    /**
+     * @brief Implementation details for the proxy pattern
+     */
+    struct meta_any_proxy_impl
+    {
+        /// Function to retrieve the current value
+        std::function<bool(entt::meta_any&)> getter;
+        /// Function to set a new value
+        std::function<bool(meta_any_proxy& proxy, const entt::meta_any&)> setter;
+        /// Function to get the property name for debugging
+        std::function<std::string()> get_name;
+    };
+
+    /// Shared implementation to allow copying proxies
     std::shared_ptr<meta_any_proxy_impl> impl = std::make_shared<meta_any_proxy_impl>();
 };
 
+/**
+ * @brief Creates a simple proxy for direct variable access
+ * @param var Variable to create proxy for
+ * @return Proxy that provides direct access to the variable
+ */
 auto make_proxy(entt::meta_any& var) -> meta_any_proxy;
 
 
+/**
+ * @brief Base class for type-specific property inspectors in the editor
+ * 
+ * Inspectors provide custom UI for editing different data types in the
+ * inspector panel. Each inspector handles rendering and interaction for
+ * a specific type (e.g., floats, vectors, textures).
+ */
 struct inspector : crtp_meta_type<inspector>
 {
+    /**
+     * @brief Factory method to create and register inspector instances
+     * @tparam T Inspector type to create
+     * @param inspected_type Type that this inspector handles
+     * @param type_map Registry map to store the inspector instance
+     */
     template<typename T>
     static void create_and_register(const entt::meta_type& inspected_type,
                                     std::unordered_map<entt::id_type, std::shared_ptr<inspector>>& type_map)
@@ -97,26 +232,61 @@ struct inspector : crtp_meta_type<inspector>
         type_map[inspected_type.info().index()] = std::make_shared<T>();
     }
 
+    /// Function type for retrieving meta attributes by name
     using attribute_getter = std::function<entt::meta_any(const char*)>;
 
+    /**
+     * @brief Virtual destructor for proper cleanup
+     */
     virtual ~inspector() = default;
 
+    /**
+     * @brief Called before inspecting a property to set up layout
+     * @param prop Meta property being inspected
+     */
     virtual void before_inspect(const entt::meta_data& prop);
+    
+    /**
+     * @brief Called after inspecting a property to clean up layout
+     * @param prop Meta property that was inspected
+     */
     virtual void after_inspect(const entt::meta_data& prop);
+    
+    /**
+     * @brief Pure virtual method to render and handle interaction for a variable
+     * @param ctx Runtime type information context
+     * @param var Variable being inspected
+     * @param var_proxy Proxy for accessing the variable
+     * @param info Metadata about the variable
+     * @param custom Custom attributes for the variable
+     * @return Result indicating what changes occurred
+     */
     virtual auto inspect(rtti::context& ctx,
                              entt::meta_any& var,
                              const meta_any_proxy& var_proxy,
                              const var_info& info,
                              const entt::meta_custom& custom) -> inspect_result = 0;
 
-    std::unique_ptr<property_layout> layout_{};
+protected:
+    /// Layout manager for this inspector's UI
+    std::unique_ptr<property_layout> layout_;
+    /// Whether this inspector's UI section is expanded
     bool open_{};
 };
 
+/**
+ * @brief Reflection registration for the base inspector class
+ */
 REFLECT_INLINE(inspector)
 {
     entt::meta_factory<inspector>{}.type("inspector"_hs);
 }
+
+/**
+ * @brief Macro to register an inspector inline with its inspected type
+ * @param inspector_type The inspector class to registerb
+ * @param inspected_type The type this inspector handles
+ */
 #define REFLECT_INSPECTOR_INLINE(inspector_type, inspected_type)                                                       \
     REFLECT_INLINE(inspector_type)                                                                                     \
     {                                                                                                                  \
@@ -128,6 +298,11 @@ REFLECT_INLINE(inspector)
             .func<&inspector::create_and_register<inspector_type>>("create_and_register"_hs);                          \
     }
 
+/**
+ * @brief Macro to register an inspector with its inspected type
+ * @param inspector_type The inspector class to register
+ * @param inspected_type The type this inspector handles
+ */
 #define REFLECT_INSPECTOR(inspector_type, inspected_type)                                                              \
     REFLECT(inspector_type)                                                                                            \
     {                                                                                                                  \

@@ -602,20 +602,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy comp_var_proxy;
-                    comp_var_proxy.impl->get_name = [var_proxy, pretty_name]()
+                    comp_var_proxy.impl->get_name = [parent_proxy = var_proxy, pretty_name]()
                     {
-                        auto name = var_proxy.impl->get_name();
+                        auto name = parent_proxy.impl->get_name();
                         if(name.empty())
                         {
                             return pretty_name;
                         }
                         return fmt::format("{}/{}", name, pretty_name);
                     };
-                    comp_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+                    comp_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        var_proxy.impl->getter(var);
-                        if(var)
+                        if(parent_proxy.impl->getter(var) && var)
                         {
                             auto data = var.cast<entt::handle>();
                             if(data)
@@ -720,20 +719,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy obj_proxy;
-                    obj_proxy.impl->get_name = [var_proxy, pretty_name]()
+                    obj_proxy.impl->get_name = [parent_proxy = var_proxy, pretty_name]()
                     {
-                        auto name = var_proxy.impl->get_name();
+                        auto name = parent_proxy.impl->get_name();
                         if(name.empty())
                         {
                             return pretty_name;
                         }
                         return fmt::format("{}/{}", name, pretty_name);
                     };
-                    obj_proxy.impl->getter = [var_proxy, i](entt::meta_any& result)
+                    obj_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;
-                        var_proxy.impl->getter(var);
-                        if(var)
+                        if(parent_proxy.impl->getter(var) && var)
                         {
                             auto data = var.cast<entt::handle>();
                             if(data)
@@ -753,7 +751,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         return false;
                     };
-                    obj_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
                     {
                         return true;
                     };
