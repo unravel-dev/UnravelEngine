@@ -34,6 +34,18 @@ void composite_action_t::undo_action()
     }
 }
 
+auto composite_action_t::is_valid() const -> bool
+{
+    for (auto& action : sub_actions)
+    {
+        if (!action->is_valid())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 auto composite_action_t::is_mergeable(const editing_action_t& previous) const -> bool
 {
     // Default: composite actions with same type can try to merge their sub-actions
@@ -75,6 +87,14 @@ void composite_action_t::merge_with(const editing_action_t& previous)
         {
             sub_actions[i]->merge_with(*prev_composite_action.sub_actions[i]);
         }
+    }
+}
+
+void composite_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    for (auto& action : sub_actions)
+    {
+        action->draw_in_inspector(ctx);
     }
 }
 

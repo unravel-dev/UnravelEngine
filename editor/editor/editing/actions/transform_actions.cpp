@@ -53,6 +53,13 @@ auto transform_move_action_t::is_valid() const -> bool
     return entity.valid() && entity.try_get<transform_component>();
 }   
 
+
+void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    draw_in_inspector_impl(ctx, old_position, new_position, {});
+}
+
+
 // Transform Rotate Action Implementation
 transform_rotate_action_t::transform_rotate_action_t(entt::handle ent, const math::quat& old_rot, const math::quat& new_rot)
     : entity(ent), old_rotation(old_rot), new_rotation(new_rot)
@@ -100,6 +107,12 @@ auto transform_rotate_action_t::is_valid() const -> bool
 {
     return entity.valid() && entity.try_get<transform_component>();
 }
+
+void transform_rotate_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    draw_in_inspector_impl(ctx, old_rotation, new_rotation, {});
+}
+
 
 // Transform Scale Action Implementation
 transform_scale_action_t::transform_scale_action_t(entt::handle ent, const math::vec3& old_sc, const math::vec3& new_sc)
@@ -149,6 +162,12 @@ auto transform_scale_action_t::is_valid() const -> bool
     return entity.valid() && entity.try_get<transform_component>();
 }
 
+void transform_scale_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    draw_in_inspector_impl(ctx, old_scale, new_scale, {});
+}
+
+
 // Transform Skew Action Implementation
 transform_skew_action_t::transform_skew_action_t(entt::handle ent, const math::vec3& old_sk, const math::vec3& new_sk)
     : entity(ent), old_skew(old_sk), new_skew(new_sk)
@@ -197,50 +216,10 @@ auto transform_skew_action_t::is_valid() const -> bool
     return entity.valid() && entity.try_get<transform_component>();
 }
 
-// Property Action Implementation
-property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val)
-    : instance(inst), old_value(old_val), new_value(new_val)
+void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
 {
-    name = "Property Edit";
-    
-    if(inst.impl->get_name)
-    {
-        name += " " + inst.impl->get_name();
-    }
+    draw_in_inspector_impl(ctx, old_skew, new_skew, {});
 }
 
-void property_action_t::do_action()
-{
-    instance.impl->setter(instance, new_value);
-}
-
-void property_action_t::undo_action()
-{
-    instance.impl->setter(instance, old_value);
-}
-
-auto property_action_t::is_mergeable(const editing_action_t& previous) const -> bool
-{
-    const auto& prev = static_cast<const property_action_t&>(previous);
-    entt::meta_any inst;
-    instance.impl->getter(inst);
-    entt::meta_any prev_inst;
-    prev.instance.impl->getter(prev_inst);
-    return inst == prev_inst;
-}
-
-void property_action_t::merge_with(const editing_action_t& previous)
-{
-    const auto& prev = static_cast<const property_action_t&>(previous);
-    old_value.assign(prev.old_value);
-}
-
-auto property_action_t::is_valid() const -> bool
-{
-    entt::meta_any inst;
-    instance.impl->getter(inst);
-
-    return !!inst;
-}
 
 } // namespace unravel

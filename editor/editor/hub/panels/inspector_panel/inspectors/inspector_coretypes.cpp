@@ -206,14 +206,14 @@ auto inspect_scalar(rtti::context& ctx,
         bool has_max{};
 
         auto min_var = entt::get_attribute(custom, "min");
-        if(min_var && min_var.try_cast<T>())
+        if(min_var && min_var.allow_cast<T>())
         {
             min = min_var.cast<T>();
             has_min = true;
         }
 
         auto max_var = entt::get_attribute(custom, "max");
-        if(max_var && max_var.try_cast<T>())
+        if(max_var && max_var.allow_cast<T>())
         {
             max = max_var.cast<T>();
             has_max = true;

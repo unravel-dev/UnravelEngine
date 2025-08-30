@@ -603,11 +603,16 @@ void draw_activity(rtti::context& ctx, transform_component& trans_comp)
 
         auto entity = trans_comp.get_owner();
         auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Toggle Active",
-            [entity]() mutable
-        {
-            prefab_override_context::mark_active_as_changed(entity);
-        });
+
+        em.push_undo_stack_enabled(true);
+
+        em.add_action<entity_set_active_action_t>("Set Active",
+            entity,
+            is_active_local,
+            !is_active_local);
+
+        em.pop_undo_stack_enabled();
+        
     }
 
     if(!is_active_local)
@@ -731,11 +736,19 @@ void draw_entity_name_editor(rtti::context& ctx, imgui_panels* panels, entt::han
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
     auto edit_name = entity_panel::get_entity_name(entity);
+    auto old_name = edit_name;
     ImGui::InputTextWidget("##rename", edit_name, false, ImGuiInputTextFlags_AutoSelectAll);
     
     if(ImGui::IsItemDeactivatedAfterEdit())
     {
-        entity_panel::set_entity_name(entity, edit_name);
+        
+        auto& em = ctx.get_cached<editing_manager>();
+        em.push_undo_stack_enabled(true);
+        em.add_action<entity_set_name_action_t>("Set Name",
+            entity,
+            old_name,
+            edit_name);
+        em.pop_undo_stack_enabled();
         stop_editing_label(ctx, panels, entity);
     }
 

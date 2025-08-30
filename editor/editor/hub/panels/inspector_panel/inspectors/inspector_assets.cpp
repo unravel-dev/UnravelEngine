@@ -253,6 +253,135 @@ auto pick_asset(ImGuiTextFilter& filter,
     return result;
 }
 
+template<typename T>
+auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> meta_any_proxy
+{
+    meta_any_proxy data_var_proxy;
+    data_var_proxy.impl->get_name = [var_proxy]()
+    {
+        return var_proxy.impl->get_name();
+    };
+    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        var_proxy.impl->getter(var);
+        if(var)
+        {
+            auto data = var.cast<std::shared_ptr<T>>();
+            result = entt::forward_as_meta(*data);
+            return true;
+        }
+        return false;
+    };
+    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    {
+        entt::meta_any var;
+        proxy.impl->getter(var);
+        if(var)
+        {
+            var.assign(value);
+            return parent_proxy.impl->setter(parent_proxy, var);
+        }
+        return false;
+    };
+    return data_var_proxy;
+}
+
+template<typename T>
+auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> meta_any_proxy
+{
+    auto& data = var.cast<asset_handle<T>&>();
+    meta_any_proxy data_var_proxy;
+    data_var_proxy.impl->get_name = [var_proxy]()
+    {
+        return var_proxy.impl->get_name();
+    };
+    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        var_proxy.impl->getter(var);
+        if(var)
+        {
+            auto& data = var.cast<asset_handle<T>&>();
+            auto mat = data.get(false);
+            if(mat)
+            {
+                result = entt::forward_as_meta(*mat);
+            }
+        }
+        return false;
+    };
+    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    {
+        // entt::meta_any var;
+        // proxy.impl->getter(var);
+        // if(var)
+        // {
+        //     var.assign(value);
+        //     parent_proxy.impl->setter(parent_proxy, var);
+        // }
+        return false;
+    };
+    return data_var_proxy;
+}
+
+template<typename T>
+auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> meta_any_proxy
+{
+    auto& data = var.cast<asset_handle<T>&>();
+    meta_any_proxy data_var_proxy;
+    data_var_proxy.impl->get_name = [var_proxy]()
+    {
+        return var_proxy.impl->get_name();
+    };
+    data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        var_proxy.impl->getter(var);
+        if(var)
+        {
+            auto& data = var.cast<asset_handle<T>&>();
+            auto mat = data.get(false);
+            if(mat)
+            {
+                result = entt::forward_as_meta(*mat);
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    {
+        entt::meta_any var;
+        proxy.impl->getter(var);
+        if(var)
+        {
+            var.assign(value);
+            parent_proxy.impl->setter(parent_proxy, var);
+
+            // Get the asset and mutate it
+            auto data_asset = data.get(true);
+            if(data_asset)
+            {
+                *data_asset = var.cast<T&>();
+            }
+
+            // Do this after the setter is called to ensure the asset is mutable
+            auto& ctx = engine::context();
+            auto& tm = ctx.get_cached<thumbnail_manager>();
+            tm.regenerate_thumbnail(data.uid());
+            asset_writer::atomic_save_to_file(data.id(), data);
+
+            return true;
+        }
+        return false;
+    };
+
+    return data_var_proxy;
+}
+
+
 } // namespace
 
 void inspector_asset_handle_texture::draw_image(const asset_handle<gfx::texture>& data, ImVec2 size)
@@ -332,36 +461,8 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                 var_info tex_var_info;
                 tex_var_info.read_only = true;
 
-                meta_any_proxy tex_var_proxy;
-                tex_var_proxy.impl->get_name = [var_proxy]()
-                {
-                    return var_proxy.impl->get_name();
-                };
-                tex_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-                {
-                    entt::meta_any var;
-                    var_proxy.impl->getter(var);
-                    if(var)
-                    {
-                        auto& data = var.cast<asset_handle<gfx::texture>&>();
-                        auto tex = data.get(false);
-                        if(tex)
-                        {
-                            result = entt::forward_as_meta(tex->info);
-                        }
-                    }
-                };
-                tex_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-                {
-                    entt::meta_any var;
-                    proxy.impl->getter(var);
-                    if(var)
-                    {
-                        var.assign(value);
-                        parent_proxy.impl->setter(parent_proxy, var);
-                    }
-                };
-                
+                auto tex_var_proxy = make_asset_proxy<gfx::texture>(var, var_proxy);
+
                 entt::meta_any tex_var;
                 tex_var_proxy.impl->getter(tex_var);
 
@@ -444,36 +545,8 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
     if(data.is_ready())
     {
-        meta_any_proxy data_var_proxy;
-        data_var_proxy.impl->get_name = [var_proxy]()
-        {
-            return var_proxy.impl->get_name();
-        };
-        data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-        {
-            entt::meta_any var;
-            var_proxy.impl->getter(var);
-            if(var)
-            {
-                auto& data = var.cast<asset_handle<material>&>();
-                auto mat = data.get(false);
-                if(mat)
-                {
-                    result = entt::forward_as_meta(*mat);
-                }
-            }
-        };
-        data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-        {
-            entt::meta_any var;
-            proxy.impl->getter(var);
-            if(var)
-            {
-                var.assign(value);
-                parent_proxy.impl->setter(parent_proxy, var);
-            }
-        };
-
+        auto data_var_proxy = make_mutable_asset_proxy<material>(var, var_proxy);
+      
         entt::meta_any data_var;
         data_var_proxy.impl->getter(data_var);
         result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
@@ -515,33 +588,7 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
             ImGui::SameLine();
             if(ImGui::TreeNodeEx("Material Instance", ImGuiTreeNodeFlags_AllowOverlap))
             {
-                meta_any_proxy data_var_proxy;
-                data_var_proxy.impl->get_name = [var_proxy]()
-                {
-                    return var_proxy.impl->get_name();
-                };
-                data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-                {
-                    entt::meta_any var;
-                    var_proxy.impl->getter(var);
-                    if(var)
-                    {
-                        auto data = var.cast<std::shared_ptr<material>>();
-                        result = entt::forward_as_meta(*data);
-                    }
-                };
-                data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-                {
-                    entt::meta_any var;
-                    proxy.impl->getter(var);
-                    if(var)
-                    {
-                        var.assign(value);
-                        parent_proxy.impl->setter(parent_proxy, var);
-                    }
-                };
-
-
+                auto data_var_proxy = make_asset_instance_proxy<material>(var, var_proxy);
                 auto data_var = entt::forward_as_meta(*data);
                 result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
 
@@ -607,45 +654,10 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
 
             if(data)
             {
-
                 var_info mesh_var_info;
                 mesh_var_info.read_only = true;
 
-                meta_any_proxy mesh_var_proxy;
-                mesh_var_proxy.impl->get_name = [var_proxy]()
-                {
-                    return var_proxy.impl->get_name();
-                };
-                mesh_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-                {
-                    entt::meta_any var;
-                    var_proxy.impl->getter(var);
-                    if(var)
-                    {
-                        auto& data = var.cast<asset_handle<mesh>&>();
-                        auto m = data.get(false);
-                        if(m)
-                        {
-                            mesh::info mesh_info;
-                            mesh_info.vertices = m->get_vertex_count();
-                            mesh_info.primitives = m->get_face_count();
-                            mesh_info.submeshes = static_cast<std::uint32_t>(m->get_submeshes_count());
-                            mesh_info.data_groups = static_cast<std::uint32_t>(m->get_data_groups_count());
-        
-                            result = entt::meta_any(mesh_info);
-                        }
-                    }
-                };
-                mesh_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-                {
-                    entt::meta_any var;
-                    proxy.impl->getter(var);
-                    if(var)
-                    {
-                        var.assign(value);
-                        parent_proxy.impl->setter(parent_proxy, var);
-                    }
-                };
+                auto mesh_var_proxy = make_asset_proxy<mesh>(var, var_proxy);
 
                 entt::meta_any mesh_var;
                 mesh_var_proxy.impl->getter(mesh_var);
@@ -777,25 +789,28 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 var_info clip_var_info;
                 clip_var_info.read_only = true;
 
-                meta_any_proxy clip_var_proxy;
-                clip_var_proxy.impl->get_name = [var_proxy]()
-                {
-                    return var_proxy.impl->get_name();
-                };
-                clip_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-                {
-                    entt::meta_any var;
-                    var_proxy.impl->getter(var);
-                    if(var)
-                    {
-                        auto& data = var.cast<asset_handle<animation_clip>&>();
-                        auto clip = data.get(false);
-                        if(clip)
-                        {
-                            result = entt::forward_as_meta(*clip);
-                        }
-                    }
-                };
+                // meta_any_proxy clip_var_proxy;
+                // clip_var_proxy.impl->get_name = [var_proxy]()
+                // {
+                //     return var_proxy.impl->get_name();
+                // };
+                // clip_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
+                // {
+                //     entt::meta_any var;
+                //     var_proxy.impl->getter(var);
+                //     if(var)
+                //     {
+                //         auto& data = var.cast<asset_handle<animation_clip>&>();
+                //         auto clip = data.get(false);
+                //         if(clip)
+                //         {
+                //             result = entt::forward_as_meta(*clip);
+                //         }
+                //     }
+                // };
+
+                auto clip_var_proxy = make_asset_proxy<animation_clip>(var, var_proxy);
+
 
                 entt::meta_any clip_var;
                 clip_var_proxy.impl->getter(clip_var);
@@ -1054,25 +1069,7 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        meta_any_proxy data_var_proxy;
-        data_var_proxy.impl->get_name = [var_proxy]()
-        {
-            return var_proxy.impl->get_name();
-        };
-        data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-        {
-            entt::meta_any var;
-            var_proxy.impl->getter(var);
-            if(var)
-            {
-                auto& data = var.cast<asset_handle<physics_material>&>();
-                auto data_var = data.get(false);
-                if(data_var)
-                {
-                    result = entt::forward_as_meta(*data_var);
-                }
-            }
-        };
+        auto data_var_proxy = make_mutable_asset_proxy<physics_material>(var, var_proxy);
 
         entt::meta_any data_var;
         data_var_proxy.impl->getter(data_var);
@@ -1169,25 +1166,7 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
-            meta_any_proxy data_var_proxy;
-            data_var_proxy.impl->get_name = [var_proxy]()
-            {
-                return var_proxy.impl->get_name();
-            };
-            data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-            {
-                entt::meta_any var;
-                var_proxy.impl->getter(var);
-                if(var)
-                {
-                    auto& data = var.cast<asset_handle<audio_clip>&>();
-                    auto data_var = data.get(false);
-                    if(data_var)
-                    {
-                        result = entt::forward_as_meta(*data_var);
-                    }
-                }
-            };
+            auto data_var_proxy = make_asset_proxy<audio_clip>(var, var_proxy);
 
             entt::meta_any data_var;
             data_var_proxy.impl->getter(data_var);
@@ -1239,26 +1218,7 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
-            meta_any_proxy data_var_proxy;
-            data_var_proxy.impl->get_name = [var_proxy]()
-            {
-                return var_proxy.impl->get_name();
-            };
-            data_var_proxy.impl->getter = [var_proxy](entt::meta_any& result)
-            {
-                entt::meta_any var;
-                var_proxy.impl->getter(var);
-                if(var)
-                {
-                    auto& data = var.cast<asset_handle<font>&>();
-                    auto data_var = data.get(false);
-                    if(data_var)
-                    {
-                        result = entt::forward_as_meta(*data_var);
-                    }
-                }
-            };
-
+            auto data_var_proxy = make_asset_proxy<font>(var, var_proxy);
             entt::meta_any data_var;
             data_var_proxy.impl->getter(data_var);
             result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);

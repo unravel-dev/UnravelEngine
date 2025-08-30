@@ -185,6 +185,8 @@ add_custom_target(engine_data
                   COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/engine_data ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/data/engine
 
                   SOURCES ${SOURCES}
+                  COMMENT "Copying engine data..."
+                  VERBATIM
 )
 
 
@@ -196,6 +198,8 @@ add_custom_target(editor_data
 
                   SOURCES
                   ${SOURCES}
+                  COMMENT "Copying editor data..."
+                  VERBATIM
 )
 
 
@@ -203,7 +207,9 @@ add_custom_target(editor_data
 if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
     add_custom_target(copy_system_runtime_libs ALL
         COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-        )
+        COMMENT "Copying system runtime libs..."
+        VERBATIM
+    )
 endif()
 
 

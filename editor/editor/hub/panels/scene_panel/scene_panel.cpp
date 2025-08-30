@@ -952,7 +952,7 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
 
     if(batch_action->sub_actions.size() > 0)
     {
-        em.push_undo_stack_enabled(em.undo_scene_enabled);
+        em.push_undo_stack_enabled(true);
         em.add_action("Transform Manipulation", batch_action);
         em.pop_undo_stack_enabled();
     }

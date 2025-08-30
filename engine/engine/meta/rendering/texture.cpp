@@ -1,5 +1,6 @@
 #include "texture.hpp"
 #include "entt/core/fwd.hpp"
+#include "graphics/texture.h"
 #include "reflection/reflection.h"
 
 namespace gfx
@@ -547,6 +548,20 @@ REFLECT(texture_info)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "cubeMap"},
             entt::attribute{"pretty_name", "Cubemap"} 
+        });
+
+
+        entt::meta_factory<texture>{}
+        .type("texture"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture"},
+            entt::attribute{"pretty_name", "Texture"},
+        })
+        .data<nullptr, &texture::info>("info"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "info"},
+            entt::attribute{"pretty_name", "Info"},
+            entt::attribute{"flattable", true}
         });
 }
 } // namespace gfx

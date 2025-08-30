@@ -462,11 +462,6 @@ struct editing_manager
 
     inverse_kinematics ik_data;
     
-    /// enable undo for scene operations
-    bool undo_scene_enabled = false;
-    /// enable undo for inspector operations
-    bool undo_inspector_enabled = false;
-    
     // Current editing mode
     editing_mode current_mode = editing_mode::scene;
     

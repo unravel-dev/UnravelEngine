@@ -22,9 +22,13 @@ struct editing_action_t : crtp_meta_type<editing_action_t>
     virtual auto is_mergeable(const editing_action_t& previous) const -> bool { return false; } // Default: actions are not mergeable
     virtual void merge_with(const editing_action_t& previous) {} // Default: no merge implementation
     virtual auto is_valid() const -> bool { return true; } // Default: actions are valid
+    virtual void draw_in_inspector(rtti::context& ctx) {} // Default: no inspector drawing
     
     // Note: Common merge checks (type equality, operation_id validation) are handled by undo_redo_stack.
     // Individual is_mergeable() implementations only need to check action-specific criteria.
+
+protected:
+    void draw_in_inspector_impl(rtti::context& ctx, const entt::meta_any& old_value, const entt::meta_any& new_value, const entt::meta_custom& custom);
 };
 
 } // namespace unravel

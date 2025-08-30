@@ -19,6 +19,7 @@
 #include "scene_panel/scene_panel.h"
 #include "statistics_panel/statistics_panel.h"
 #include "style_panel/style_panel.h"
+#include "undo_redo_panel/undo_redo_panel.h"
 
 namespace unravel
 {
@@ -44,6 +45,7 @@ public:
     auto get_game_panel() -> game_panel&;
     auto get_console_log_panel() -> console_log_panel&;
     auto get_style_panel() -> style_panel&;
+    auto get_undo_redo_panel() -> undo_redo_panel&;
 
     void set_external_drop_in_progress(bool in_progress);
 
@@ -73,6 +75,7 @@ private:
     std::unique_ptr<project_settings_panel> project_settings_panel_;
     std::unique_ptr<editor_settings_panel> editor_settings_panel_;
     std::unique_ptr<style_panel> style_panel_;
+    std::unique_ptr<undo_redo_panel> undo_redo_panel_;
 
     std::unique_ptr<animation_panel> animation_panel_;
 

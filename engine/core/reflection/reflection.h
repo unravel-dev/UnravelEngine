@@ -63,6 +63,12 @@ auto get_attribute_as(const meta_data& prop, const char* name) -> T
     return get_attribute_as<T>(prop.custom(), name);
 }
 
+
+// Deep-copy src into a brand new, owned meta_any (type-erased).
+
+REFLECTION_EXPORT auto copy_meta_any(const entt::meta_any& src) -> entt::meta_any;
+
+
 REFLECTION_EXPORT auto get_derived_types(const meta_type& t) -> std::vector<meta_type>;
 
 REFLECTION_EXPORT auto as_derived(meta_any& obj) -> bool;
@@ -73,6 +79,8 @@ REFLECTION_EXPORT auto get_pretty_name(const meta_type& t) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_type& t) -> std::string;
 REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_data& prop) -> std::string;
+REFLECTION_EXPORT auto get_pretty_name(const meta_custom& prop) -> std::string;
+REFLECTION_EXPORT auto get_name(const meta_custom& prop) -> std::string;
 
 using property_predicate_t = std::function<bool(const meta_any&)>;
 REFLECTION_EXPORT auto property_predicate(property_predicate_t predicate)

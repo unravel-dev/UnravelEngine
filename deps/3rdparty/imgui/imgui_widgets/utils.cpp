@@ -344,7 +344,7 @@ bool IsCombinationKeyPressed(const ImGuiKeyCombination& keys, bool repeat)
     auto& io = ImGui::GetIO();
     auto repeat_delay = io.KeyRepeatDelay;
 
-    io.KeyRepeatDelay = 1.0f;
+    io.KeyRepeatDelay = 0.8f;
 
 
     for(size_t i = 0; i < keys.size(); ++i)

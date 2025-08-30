@@ -59,6 +59,7 @@ struct prefab_override_context
 
     // The prefab root entity that contains the prefab_component
     entt::handle prefab_root_entity;
+    entt::handle entity;
 
     scene prefab_scene{"prefab_diff_scene"};
     uintptr_t prefab_version{};
@@ -90,7 +91,7 @@ struct prefab_override_context
      * Uses the current property path context to determine what was changed
      * Automatically removes any parent or child overrides to keep only the most specific path
      */
-    void record_override();
+    auto record_override() -> bool;
 
     auto is_path_overridden() const -> bool
     {
@@ -109,6 +110,11 @@ struct prefab_override_context
     static void mark_property_as_changed(entt::handle entity,
                                          const entt::meta_type& component_type,
                                          const std::string& property_path);
+
+    static void mark_property_as_changed(entt::handle entity,
+                                        const std::string& component_type_name,
+                                        const std::string& component_pretty_type_name,
+                                        const std::string& property_path);
     static auto exists_in_prefab(scene& cache_scene,
                                  const asset_handle<prefab>& prefab,
                                  hpp::uuid entity_uuid,
@@ -134,6 +140,7 @@ auto inspect_var_properties(rtti::context& ctx,
                                 const meta_any_proxy& var_proxy,
                                 const var_info& info = {},
                                 const entt::meta_custom& custom = {}) -> inspect_result;
+
 
 auto inspect_array(rtti::context& ctx,
                        entt::meta_any& var,

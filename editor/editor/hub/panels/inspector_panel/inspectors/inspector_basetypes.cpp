@@ -20,20 +20,20 @@ auto inspect_range_scalar(rtti::context& ctx,
     T* min_ptr{};
     T* max_ptr{};
     auto min_var = entt::get_attribute(custom, "min");
-    if(min_var && min_var.try_cast<T>())
+    if(min_var && min_var.allow_cast<T>())
     {
         min = min_var.cast<T>();
         min_ptr = &min;
     }
 
     auto max_var = entt::get_attribute(custom, "max");
-    if(max_var && max_var.try_cast<T>())
+    if(max_var && max_var.allow_cast<T>())
     {
         max = max_var.cast<T>();
         max_ptr = &max;
     }
     const auto formatted0 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
-    const auto formatted1 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
+    const auto formatted1 = fmt::format("{}{}", fmt1, ImGui::GetDataPrintFormat<T>());
 
     std::array<const char*, 2> formats = {{formatted0.c_str(), formatted1.c_str()}};
 
@@ -71,20 +71,20 @@ auto inspect_size_scalar(rtti::context& ctx,
     T* min_ptr{};
     T* max_ptr{};
     auto min_var = entt::get_attribute(custom, "min");
-    if(min_var && min_var.try_cast<T>())
+    if(min_var && min_var.allow_cast<T>())
     {
         min = min_var.cast<T>();
         min_ptr = &min;
     }
 
     auto max_var = entt::get_attribute(custom, "max");
-    if(max_var && max_var.try_cast<T>())
+    if(max_var && max_var.allow_cast<T>())
     {
         max = max_var.cast<T>();
         max_ptr = &max;
     }
     const auto formatted0 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
-    const auto formatted1 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
+    const auto formatted1 = fmt::format("{}{}", fmt1, ImGui::GetDataPrintFormat<T>());
 
     std::array<const char*, 2> formats = {{formatted0.c_str(), formatted1.c_str()}};
 

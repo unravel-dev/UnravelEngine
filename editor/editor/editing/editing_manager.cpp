@@ -44,11 +44,16 @@ namespace
             const bool down = is_active();
     
             // Bump the epoch on any boundary so new actions won't merge with the previous batch.
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
                 ImGui::GetIO().AppFocusLost)
             {
                 ++epoch;
+            }
+
+            if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            {
+                ++epoch;
+
             }
     
             down_prev = down;
@@ -58,7 +63,7 @@ namespace
         // 0 means "not mergeable".
         auto current_merge_key() const -> uint64_t
         {
-            return is_active() ? epoch : 0;
+            return epoch;
         }
     };
 
@@ -170,6 +175,9 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     }
 
     caches_.clear();
+
+    undo_stack.clear();
+    pending_actions.clear();
 }
 
 void editing_manager::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
@@ -639,6 +647,7 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
     has_unsaved_changes_ = true;
 
 
+    APPLOG_TRACE("add_action: {} - {}", name, session.current_merge_key());
     action->merge_key = session.current_merge_key();
 
     if(!name.empty())

@@ -74,8 +74,9 @@ struct inspect_result
 struct meta_any_proxy;
 struct meta_any_proxy_impl
 {
-    std::function<void(entt::meta_any&)> getter;
-    std::function<void(meta_any_proxy& proxy, const entt::meta_any&)> setter;
+    std::function<bool(entt::meta_any&)> getter;
+    std::function<bool(meta_any_proxy& proxy, const entt::meta_any&)> setter;
+    
     std::function<std::string()> get_name;
 };
 

@@ -24,6 +24,27 @@ auto get_derived(const entt::meta_type& base) -> std::vector<entt::meta_type>
 
 }
 
+auto copy_meta_any(const entt::meta_any& src) -> entt::meta_any
+{
+    if (!src)
+    {
+        return {};
+    }
+
+    const entt::meta_type mt = src.type();
+
+    // 2) T() + operator=
+    if (auto owned = mt.construct(); owned)        // default-construct
+    {
+        if (owned.assign(src))                       // in-place copy
+        {
+            return owned;                            // still owned
+        }
+    }
+
+    return {};
+}
+
 auto get_derived_types(const meta_type& t) -> std::vector<meta_type>
 {
     return get_derived(t);
@@ -107,6 +128,26 @@ auto get_name(const meta_type& t) -> std::string
     return name;
 }
 
+
+auto get_pretty_name(const meta_custom& t) -> std::string
+{
+    auto name = get_attribute_as<std::string>(t, "pretty_name");
+    if(name.empty())
+    {
+        return get_name(t);
+    }
+    return name;
+}
+
+auto get_name(const meta_custom& t) -> std::string
+{
+    auto name = get_attribute_as<std::string>(t, "name");
+    if(name.empty())
+    {
+        return std::string();
+    }
+    return name;
+}
 
 auto get_name(const meta_data& prop) -> std::string
 {

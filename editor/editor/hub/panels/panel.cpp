@@ -32,6 +32,7 @@ imgui_panels::imgui_panels()
     project_settings_panel_ = std::make_unique<project_settings_panel>(this);
     editor_settings_panel_ = std::make_unique<editor_settings_panel>(this);
     style_panel_ = std::make_unique<style_panel>(this);
+    undo_redo_panel_ = std::make_unique<undo_redo_panel>(this);
 }
 
 imgui_panels::~imgui_panels()
@@ -121,6 +122,9 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 
     // Draw the style picker window if visible
     style_panel_->on_frame_ui_render();
+    
+    // Draw the undo/redo panel if visible
+    undo_redo_panel_->on_frame_ui_render(ctx);
 
 
     // Render toasts on top of everything, at the end of your code!
@@ -165,6 +169,11 @@ auto imgui_panels::get_console_log_panel() -> console_log_panel&
 auto imgui_panels::get_style_panel() -> style_panel&
 {
     return *style_panel_;
+}
+
+auto imgui_panels::get_undo_redo_panel() -> undo_redo_panel&
+{
+    return *undo_redo_panel_;
 }
 
 void imgui_panels::set_external_drop_in_progress(bool in_progress)

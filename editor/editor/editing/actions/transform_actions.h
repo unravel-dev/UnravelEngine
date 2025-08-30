@@ -24,6 +24,7 @@ struct transform_move_action_t : crtp_meta_type<transform_move_action_t, editing
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
 };
 
 struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, editing_action_t>
@@ -39,6 +40,7 @@ struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, edi
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
 };
 
 struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editing_action_t>
@@ -54,6 +56,7 @@ struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editi
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
 };
 
 struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing_action_t>
@@ -69,36 +72,8 @@ struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
 };
 
-
-
-struct property_action_t : crtp_meta_type<property_action_t, editing_action_t>
-{
-    meta_any_proxy instance;
-    entt::meta_any old_value;
-    entt::meta_any new_value;
-    
-    property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val);
-
-    void do_action() override;
-    void undo_action() override;
-    auto is_mergeable(const editing_action_t& previous) const -> bool override;
-    void merge_with(const editing_action_t& previous) override;
-    auto is_valid() const -> bool override;
-};
-
-
-// struct select_action_t : crtp_meta_type<select_action_t, editing_action_t>
-// {
-//     entt::meta_any instance;
-
-//     select_action_t(const entt::meta_any& inst);
-
-//     void do_action() override;
-//     void undo_action() override;
-//     auto is_mergeable(const editing_action_t& previous) const -> bool override;
-//     void merge_with(const editing_action_t& previous) override;
-// };
 
 } // namespace unravel

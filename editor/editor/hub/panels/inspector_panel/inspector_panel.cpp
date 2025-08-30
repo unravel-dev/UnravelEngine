@@ -140,6 +140,8 @@ void inspector_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
             push_debug_view();
         }
 
+        em.push_undo_stack_enabled(true);
+
         auto selections_count = int(em.get_selections().size());
 
         if(locked_object_)
@@ -159,6 +161,8 @@ void inspector_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
         {
             pop_debug_view();
         }
+
+        em.pop_undo_stack_enabled();
     }
     ImGui::End();
 }

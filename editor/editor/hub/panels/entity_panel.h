@@ -29,7 +29,6 @@ public:
     void delete_entities(const std::vector<entt::handle>& entities);
     
     static auto get_entity_name(entt::handle entity) -> std::string;
-    static void set_entity_name(entt::handle entity, const std::string& name);
 
     static auto get_entity_icon(entt::handle entity) -> std::string;
     static auto get_entity_display_color(entt::handle entity) -> ImVec4;
