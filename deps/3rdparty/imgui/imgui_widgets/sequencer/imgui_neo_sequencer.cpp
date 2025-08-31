@@ -133,14 +133,15 @@ namespace ImGui
     // Dont pull frame from context, its used for dragging
     static ImRect getCurrentFrameBB(FrameIndexType frame, ImGuiNeoSequencerInternalData& context)
     {
+        float scale = 1.0f;//GetIO().FontGlobalScale;
         const auto& imStyle = GetStyle();
-        const auto width = style.CurrentFramePointerSize * GetIO().FontGlobalScale;
+        const auto width = style.CurrentFramePointerSize * scale;
         const auto cursor =
                 context.TopBarStartCursor + ImVec2{context.ValuesWidth + imStyle.FramePadding.x - width / 2.0f, 0};
         const auto currentFrameCursor = cursor + ImVec2{getKeyframePositionX(frame, context), 0};
 
         float pointerHeight = style.CurrentFramePointerSize * 2.5f;
-        ImRect rect{currentFrameCursor, currentFrameCursor + ImVec2{width, pointerHeight * GetIO().FontGlobalScale}};
+        ImRect rect{currentFrameCursor, currentFrameCursor + ImVec2{width, pointerHeight * scale}};
 
         return rect;
     }

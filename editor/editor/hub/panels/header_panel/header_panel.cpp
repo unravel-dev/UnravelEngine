@@ -465,10 +465,8 @@ void header_panel::draw_about_window(rtti::context& ctx)
     {
         // Logo and title
         const float title_scale = 1.5f;
-        ImGui::PushFont(ImGui::Font::Bold); // Use default font
-        ImGui::SetWindowFontScale(title_scale);
+        ImGui::PushFont(GetFont(ImGui::Font::Bold), GetFont(ImGui::Font::Bold)->LegacySize * title_scale); // Use default font
         ImGui::TextColored(ImVec4(0.4f, 0.6f, 1.0f, 1.0f), "Unravel Engine");
-        ImGui::SetWindowFontScale(1.0f);
         ImGui::PopFont();
 
         // Version information
@@ -486,9 +484,9 @@ void header_panel::draw_about_window(rtti::context& ctx)
 
         // Features
         const float section_scale = 1.2f;
-        ImGui::SetWindowFontScale(section_scale);
+        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
         ImGui::Text("Key Features");
-        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
         
         ImGui::Columns(2);
         ImGui::BulletText("Entity-Component-System");
@@ -506,9 +504,9 @@ void header_panel::draw_about_window(rtti::context& ctx)
         ImGui::Spacing();
 
         // Build information
-        ImGui::SetWindowFontScale(section_scale);
+        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
         ImGui::Text("Build Information");
-        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
         
         ImGui::Text("Build Date: %s", __DATE__);
         ImGui::Text("Build Time: %s", __TIME__);

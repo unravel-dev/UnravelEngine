@@ -348,7 +348,7 @@ auto draw_item(const content_browser_item& item)
 
     if(!file_type.empty())
     {
-        ImGui::PushFont(file_type_font);
+        ImGui::PushFont(file_type_font, file_type_font->LegacySize);
         ImGui::AddItemTooltipEx("%s", file_type.c_str());
         ImGui::PopFont();
     }

@@ -146,7 +146,7 @@ struct TextRegion
     {
         const float scale = 1.0f;
         float widthLeft = GetContentRegionAvail().x;
-        const char* endPrevLine = pFont->CalcWordWrapPositionA(scale, text, text_end, widthLeft);
+        const char* endPrevLine = pFont->CalcWordWrapPosition(pFont->LegacySize, text, text_end, widthLeft);
         ImGui::TextUnformatted(text, endPrevLine);
         if(bIndentToHere)
         {
@@ -165,7 +165,7 @@ struct TextRegion
             {
                 ++text;
             } // skip a space at start of line
-            endPrevLine = pFont->CalcWordWrapPositionA(scale, text, text_end, widthLeft);
+            endPrevLine = pFont->CalcWordWrapPosition(pFont->LegacySize, text, text_end, widthLeft);
             if(text == endPrevLine)
             {
                 endPrevLine++;
@@ -276,7 +276,7 @@ inline void RenderLine(const char* markdown_, Line& line_, TextRegion& textRegio
         bool popFontRequired = false;
         if(fmt.font && fmt.font != ImGui::GetFont())
         {
-            ImGui::PushFont(fmt.font);
+            ImGui::PushFont(fmt.font, fmt.font->LegacySize);
             popFontRequired = true;
         }
         const char* text = markdown_ + textStart + 1;

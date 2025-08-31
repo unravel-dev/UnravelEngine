@@ -662,6 +662,8 @@ auto ImGui_ImplOSPP_Init(unravel::render_window* window,
     // We can honor GetMouseCursor() values (optional)
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
+
+
     // We can honor io.WantSetMousePos requests (optional, rarely used)
     io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
     io.ConfigDebugHighlightIdConflicts = true;
@@ -691,6 +693,7 @@ auto ImGui_ImplOSPP_Init(unravel::render_window* window,
     platform_io.Platform_OpenInShellFn = ImOsOpenInShell;
     platform_io.Platform_ClipboardUserData = nullptr;
     platform_io.Platform_SetImeDataFn = ImGui_ImplOSPP_SetPlatformImeData;
+    
 
     // Set platform dependent data in viewport
     // Our mouse update function expect PlatformHandle to be filled for the main viewport

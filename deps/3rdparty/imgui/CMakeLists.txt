@@ -39,6 +39,8 @@ target_compile_definitions(${target_name} PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 target_compile_definitions(${target_name} PUBLIC IMGUI_USE_WCHAR32)
 target_compile_definitions(${target_name} PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 
+target_compile_definitions(${target_name} PUBLIC ImTextureID_Invalid=65535)
+
 if(MSVC)
 	target_compile_definitions(${target_name} PRIVATE _SCL_SECURE_NO_WARNINGS)
 	target_compile_definitions(${target_name} PRIVATE _CRT_SECURE_NO_WARNINGS)

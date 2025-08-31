@@ -15,6 +15,7 @@
 #include <set>
 #include <cstdint>
 
+#include "graphics/graphics.h"
 #include "shaders/fs_imgui_image.bin.h"
 #include "shaders/fs_ocornut_imgui.bin.h"
 #include "shaders/vs_imgui_image.bin.h"
@@ -50,22 +51,100 @@ static const gfx::embedded_shader s_embeddedShaders[] = {BGFX_EMBEDDED_SHADER(vs
 
 struct FontRangeMerge
 {
+    const char* name;
     const void* data;
     size_t size;
     ImWchar ranges[3];
 };
 
 static FontRangeMerge s_fontRangeMerge[] = {
-    {s_iconsMaterialDesignIconsTtf, sizeof(s_iconsMaterialDesignIconsTtf), {ICON_MIN_MDI, ICON_MAX_MDI, 0}},
+    {"MaterialDesignIcons", s_iconsMaterialDesignIconsTtf, sizeof(s_iconsMaterialDesignIconsTtf), {ICON_MIN_MDI, ICON_MAX_MDI, 0}},
 };
 
 static void* memAlloc(size_t _size, void* _userData);
 static void memFree(void* _ptr, void* _userData);
 
+
+static void ImGui_ImplGFX_DestroyTexture(ImTextureData* tex)
+{
+    auto backendtexture = (gfx::texture_handle)tex->TexID;
+    if (backendtexture.idx == gfx::invalid_handle)
+        return;
+    gfx::destroy(backendtexture);
+
+    // Clear identifiers and mark as destroyed (in order to allow e.g. calling InvalidateDeviceObjects while running)
+    tex->SetTexID(ImTextureID_Invalid);
+    tex->SetStatus(ImTextureStatus_Destroyed);
+}
+
+void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
+{
+    // ImGui_ImplOSPP_Data* bd = ImGui_ImplOSPP_GetBackendData();
+
+    if (tex->Status == ImTextureStatus_WantCreate)
+    {
+        // Create and upload new texture to graphics system
+        //IMGUI_DEBUG_LOG("UpdateTexture #%03d: WantCreate %dx%d\n", tex->UniqueID, tex->Width, tex->Height);
+        IM_ASSERT(tex->TexID == ImTextureID_Invalid && tex->BackendUserData == nullptr);
+        IM_ASSERT(tex->Format == ImTextureFormat_RGBA32);
+
+        auto bpp = tex->BytesPerPixel;
+
+        // Create texture
+        // !Important. Do not provide a memory view, so the texture is not immutable.
+        auto backend_texture = gfx::create_texture_2d((uint16_t)tex->Width,
+                                           (uint16_t)tex->Height,
+                                           false,
+                                           1,
+                                           gfx::texture_format::BGRA8,
+                                           0,
+                                           nullptr);
+
+        ImGui::ImTexture texture = ImGui::ToTex(backend_texture, 0, {gfx::invalid_handle}, 0, IMGUI_FLAGS_ALPHA_BLEND);
+
+        gfx::update_texture_2d(backend_texture, 0, 0, 0, 0, tex->Width, tex->Height, gfx::make_ref(tex->GetPixels(), tex->Width * tex->Height * bpp), tex->GetPitch());
+
+        // Store identifiers
+        tex->SetTexID(texture.id);
+        tex->SetStatus(ImTextureStatus_OK);
+    }
+    else if (tex->Status == ImTextureStatus_WantUpdates)
+    {
+        // Update selected blocks. We only ever write to textures regions which have never been used before!
+        // This backend choose to use tex->Updates[] but you can use tex->UpdateRect to upload a single region.
+
+        {
+            auto r = tex->UpdateRect;
+            ImGui::ImTexture texture;
+            texture.id = tex->TexID;
+            auto data = tex->GetPixelsAt(r.x, r.y);
+            auto bpp = tex->BytesPerPixel;
+            gfx::update_texture_2d(texture.s.handle, 0, 0, r.x, r.y, r.w, r.h, gfx::make_ref(data, r.w * r.h * bpp), tex->GetPitch());
+        }
+
+
+        tex->SetStatus(ImTextureStatus_OK);
+    }
+    else if (tex->Status == ImTextureStatus_WantDestroy)
+    {
+        ImGui_ImplGFX_DestroyTexture(tex);
+    }
+}
+
 struct OcornutImguiContext
 {
     void renderData(gfx::view_id id, ImDrawData* _drawData)
     {
+            // Catch up with texture updates. Most of the times, the list will have 1 element with an OK status, aka nothing to do.
+        // (This almost always points to ImGui::GetPlatformIO().Textures[] but is part of ImDrawData to allow overriding or disabling texture updates).
+        if (_drawData->Textures != nullptr)
+        {
+            for (ImTextureData* tex : *_drawData->Textures)
+            if (tex->Status != ImTextureStatus_OK)
+                ImGui_ImplGFX_UpdateTexture(tex);
+        }
+        
+
         // Avoid rendering when minimized, scale coordinates for retina displays (screen coordinates !=
         // framebuffer coordinates)
         int fb_width = (int)(_drawData->DisplaySize.x * _drawData->FramebufferScale.x);
@@ -136,15 +215,15 @@ struct OcornutImguiContext
                     uint64_t state = 0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
 
                     uint8_t tex_index = 0;
-                    gfx::texture_handle th = m_texture;
+                    // gfx::texture_handle th = m_texture;
                     gfx::program_handle program = m_program;
 
 
+                    ImGui::ImTexture texture;
 
-                    if(0 != cmd->TextureId)
+                    if(ImTextureID_Invalid != cmd->GetTexID())
                     {
-                        ImGui::ImTexture texture;
-                        texture.id = cmd->TextureId;
+                        texture.id = cmd->GetTexID();
 
 
                         if(0 != (IMGUI_FLAGS_FLIP_UV & texture.s.flags))
@@ -163,7 +242,7 @@ struct OcornutImguiContext
                         state |= 0 != (IMGUI_FLAGS_ALPHA_BLEND & texture.s.flags)
                                      ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA)
                                      : BGFX_STATE_NONE;
-                        th = texture.s.handle;
+                        //th = texture.s.handle;
                         tex_index = texture.s.index;
                         if(0 != texture.s.mip)
                         {
@@ -207,7 +286,7 @@ struct OcornutImguiContext
                                             uint16_t(bx::min(clipRect.w, 65535.0f) - yy));
 
                         encoder->setState(state);
-                        encoder->setTexture(tex_index, s_tex, th);
+                        encoder->setTexture(tex_index, s_tex, texture.s.handle);
                         encoder->setVertexBuffer(0, &tvb, cmd->VtxOffset, numVertices);
                         encoder->setIndexBuffer(&tib, cmd->IdxOffset, cmd->ElemCount);
                         encoder->submit(id, program);
@@ -265,15 +344,24 @@ struct OcornutImguiContext
         io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports; // We can create multi-viewports on the
                                                                    // Renderer side (optional)
 
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        
+        const gfx::caps* caps = gfx::get_caps();
+        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+        platform_io.Renderer_TextureMaxWidth = platform_io.Renderer_TextureMaxHeight = (int)caps->limits.maxTextureSize;
+    
 
 
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
         io.ConfigWindowsMoveFromTitleBarOnly = true;
         //        io.ConfigViewportsNoTaskBarIcon = true;
         io.ConfigDockingTransparentPayload = true;
-
+        io.ConfigDpiScaleFonts = true;
+        io.ConfigDpiScaleViewports = false;
+        
         auto type = gfx::get_renderer_type();
         m_program = gfx::create_program(gfx::create_embedded_shader(s_embeddedShaders, type, "vs_ocornut_imgui"),
                                         gfx::create_embedded_shader(s_embeddedShaders, type, "fs_ocornut_imgui"),
@@ -301,56 +389,67 @@ struct OcornutImguiContext
         uint8_t* data{};
         int32_t width{};
         int32_t height{};
+
+        ImFontGlyphRangesBuilder exclude_ranges_builder;
+
+        for(uint32_t ii = 0; ii < BX_COUNTOF(s_fontRangeMerge); ++ii)
+        {
+            const FontRangeMerge& frm = s_fontRangeMerge[ii];
+            exclude_ranges_builder.AddRanges(frm.ranges);
+        }
+
+        ImVector<ImWchar> exclude_ranges;
+        exclude_ranges_builder.BuildRanges(&exclude_ranges);
+
         {
             ImFontConfig config;
             config.FontDataOwnedByAtlas = false;
             config.MergeMode = false;
+            config.GlyphExcludeRanges = exclude_ranges.Data;                                      
+
             //			config.MergeGlyphCenterV = true;
 
-            const ImWchar* ranges = io.Fonts->GetGlyphRangesCyrillic();
+            const ImWchar* ranges = io.Fonts->GetGlyphRangesDefault();
 
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Thin");
             m_font[ImGui::Font::Thin] = io.Fonts->AddFontFromMemoryTTF((void*)inter_thin_ttf,
                                                                           sizeof(inter_thin_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-ExtraLight");
 
             m_font[ImGui::Font::ExtraLight] = io.Fonts->AddFontFromMemoryTTF((void*)inter_extra_light_ttf,
                                                                           sizeof(inter_extra_light_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Light");
             m_font[ImGui::Font::Light] = io.Fonts->AddFontFromMemoryTTF((void*)inter_light_ttf,
                                                                           sizeof(inter_light_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
-
-            m_font[ImGui::Font::Regular] = io.Fonts->AddFontFromMemoryTTF((void*)inter_regular_ttf,
-                                                                          sizeof(inter_regular_ttf),
-                                                                          _fontSize,
-                                                                          &config,
-                                                                          ranges);
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Medium");
             m_font[ImGui::Font::Medium] = io.Fonts->AddFontFromMemoryTTF((void*)inter_medium_ttf,
                                                                           sizeof(inter_medium_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-SemiBold");
             m_font[ImGui::Font::SemiBold] = io.Fonts->AddFontFromMemoryTTF((void*)inter_semi_bold_ttf,
                                                                           sizeof(inter_semi_bold_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
-            m_font[ImGui::Font::Bold] = io.Fonts->AddFontFromMemoryTTF((void*)inter_bold_ttf,
-                                                                          sizeof(inter_bold_ttf),
-                                                                          _fontSize,
-                                                                          &config,
-                                                                          ranges);
+
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-ExtraBold");
             m_font[ImGui::Font::ExtraBold] = io.Fonts->AddFontFromMemoryTTF((void*)inter_extra_bold_ttf,
                                                                           sizeof(inter_extra_bold_ttf),
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Black");
             m_font[ImGui::Font::Black] = io.Fonts->AddFontFromMemoryTTF((void*)inter_black_ttf,
                                                                           sizeof(inter_black_ttf),
                                                                           _fontSize,
@@ -358,64 +457,77 @@ struct OcornutImguiContext
                                                                           ranges);
 
 
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "RobotoMono-Regular");
             m_font[ImGui::Font::Mono] = io.Fonts->AddFontFromMemoryTTF((void*)s_robotoMonoRegularTtf,
                                                                        sizeof(s_robotoMonoRegularTtf),
                                                                        _fontSize,
                                                                        &config,
                                                                        ranges);
 
-            config.MergeMode = true;
-            config.DstFont = m_font[ImGui::Font::Regular];
+
+
+            ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Regular");
+            m_font[ImGui::Font::Regular] = io.Fonts->AddFontFromMemoryTTF((void*)inter_regular_ttf,
+                                                                          sizeof(inter_regular_ttf),
+                                                                          _fontSize,
+                                                                          &config,
+                                                                          ranges);
+            
 
             for(uint32_t ii = 0; ii < BX_COUNTOF(s_fontRangeMerge); ++ii)
             {
                 const FontRangeMerge& frm = s_fontRangeMerge[ii];
-
-                io.Fonts->AddFontFromMemoryTTF((void*)frm.data, (int)frm.size, _fontSize, &config, frm.ranges);
+                ImFontConfig merge_config;
+                merge_config.FontDataOwnedByAtlas = false;
+                merge_config.MergeMode = true;
+                ImFormatString(merge_config.Name, IM_ARRAYSIZE(merge_config.Name), "%s", frm.name);
+                io.Fonts->AddFontFromMemoryTTF((void*)frm.data, (int)frm.size, _fontSize, &merge_config, frm.ranges);
             }
 
-            config.MergeMode = true;
-            config.DstFont = m_font[ImGui::Font::Bold];
+            m_font[ImGui::Font::Bold] = io.Fonts->AddFontFromMemoryTTF((void*)inter_bold_ttf,
+                                                                          sizeof(inter_bold_ttf),
+                                                                          _fontSize,
+                                                                          &config,
+                                                                          ranges);
 
             for(uint32_t ii = 0; ii < BX_COUNTOF(s_fontRangeMerge); ++ii)
             {
                 const FontRangeMerge& frm = s_fontRangeMerge[ii];
 
-                io.Fonts->AddFontFromMemoryTTF((void*)frm.data, (int)frm.size, _fontSize, &config, frm.ranges);
+                ImFontConfig merge_config;
+                merge_config.FontDataOwnedByAtlas = false;
+                merge_config.MergeMode = true;
+                ImFormatString(merge_config.Name, IM_ARRAYSIZE(merge_config.Name), "%s", frm.name);
+
+                io.Fonts->AddFontFromMemoryTTF((void*)frm.data, (int)frm.size, _fontSize, &merge_config, frm.ranges);
             }
         }
 
-        io.Fonts->GetTexDataAsRGBA32(&data, &width, &height);
-
-        m_texture = gfx::create_texture_2d((uint16_t)width,
-                                           (uint16_t)height,
-                                           false,
-                                           1,
-                                           gfx::texture_format::BGRA8,
-                                           0,
-                                           gfx::copy(data, width * height * 4));
-
-        auto renderCallback = [this](unravel::render_window* window, ImGuiViewport* viewport, void* args)
+        auto render_callback = [this](unravel::render_window* window, ImGuiViewport* viewport, void* args)
         {
             RenderCallback(window, viewport, args);
         };
 
-        auto swapCallback = [this](unravel::render_window* window, ImGuiViewport* viewport, void* args)
+        auto swap_callback = [this](unravel::render_window* window, ImGuiViewport* viewport, void* args)
         {
         };
 
-        ImGui_ImplOSPP_Init(window, renderCallback, swapCallback);
+        ImGui_ImplOSPP_Init(window, render_callback, swap_callback);
     }
 
     void destroy()
     {
+        for(auto tex : ImGui::GetIO().Fonts->TexList)
+        {
+            ImGui_ImplGFX_DestroyTexture(tex);
+        }
+
         m_keepAlive.clear();
         ImGui_ImplOSPP_Shutdown();
         ImGui::DestroyContext(m_imgui);
         ImGui::SetCurrentContext(nullptr);
 
         gfx::destroy(s_tex);
-        gfx::destroy(m_texture);
 
         gfx::destroy(u_imageLodEnabled);
         gfx::destroy(m_imageProgram);
@@ -450,7 +562,7 @@ struct OcornutImguiContext
     gfx::program_handle m_program;
     gfx::program_handle m_imageProgram;
     gfx::program_handle m_cubemapImageProgram;
-    gfx::texture_handle m_texture;
+    // gfx::texture_handle m_texture;
     gfx::uniform_handle s_tex;
     gfx::uniform_handle u_imageLodEnabled;
     std::vector<gfx::texture::ptr> m_keepAlive;
@@ -504,7 +616,8 @@ namespace ImGui
 {
 void PushFont(Font::Enum _font)
 {
-    PushFont(s_ctx.m_font[_font]);
+    auto font = GetFont(_font);
+    PushFont(font, font->LegacySize);
 }
 
 ImFont* GetFont(Font::Enum _font)
@@ -552,44 +665,50 @@ void PopReadonly()
 
 void PushWindowFontSize(int size)
 {
-    auto ctx = GetCurrentContext();
-    ImGuiWindow* window = ctx->CurrentWindow;
-    IM_ASSERT(window);
-    auto currentScale = window->FontWindowScale;
-    s_ctx.m_fontScale.emplace_back(currentScale);
+    auto font = ImGui::GetFont();
+    PushFont(font, size);
+    // auto ctx = GetCurrentContext();
+    // ImGuiWindow* window = ctx->CurrentWindow;
+    // IM_ASSERT(window);
+    // auto currentScale = window->FontWindowScale;
+    // s_ctx.m_fontScale.emplace_back(currentScale);
 
-    auto currentSize = GetFontSize();
-    float scale = float(size) / currentSize;
+    // auto currentSize = GetFontSize();
+    // float scale = float(size) / currentSize;
 
-    ImGui::SetWindowFontScale(scale);
+    // ImGui::SetWindowFontScale(scale);
 }
 
 void PopWindowFontSize()
 {
-    IM_ASSERT(!s_ctx.m_fontScale.empty());
-    auto scale = s_ctx.m_fontScale.back();
-    s_ctx.m_fontScale.pop_back();
-    ImGui::SetWindowFontScale(scale);
+    PopFont();
+    // IM_ASSERT(!s_ctx.m_fontScale.empty());
+    // auto scale = s_ctx.m_fontScale.back();
+    // s_ctx.m_fontScale.pop_back();
+    // ImGui::SetWindowFontScale(scale);
 
 }
 
 void PushWindowFontScale(float scale)
 {
-    auto ctx = GetCurrentContext();
-    ImGuiWindow* window = ctx->CurrentWindow;
-    IM_ASSERT(window);
-    auto currentScale = window->FontWindowScale;
-    s_ctx.m_fontScale.emplace_back(currentScale);
+    auto font = ImGui::GetFont();
+    PushFont(font, font->LegacySize * scale);
+    // auto ctx = GetCurrentContext();
+    // ImGuiWindow* window = ctx->CurrentWindow;
+    // IM_ASSERT(window);
+    // auto currentScale = window->FontWindowScale;
+    // s_ctx.m_fontScale.emplace_back(currentScale);
 
-    ImGui::SetWindowFontScale(scale);
+    // ImGui::SetWindowFontScale(scale);
 }
 
 void PopWindowFontScale()
 {
-    IM_ASSERT(!s_ctx.m_fontScale.empty());
-    auto scale = s_ctx.m_fontScale.back();
-    s_ctx.m_fontScale.pop_back();
-    ImGui::SetWindowFontScale(scale);
+    PopFont();
+    // IM_ASSERT(!s_ctx.m_fontScale.empty());
+    // auto scale = s_ctx.m_fontScale.back();
+    // s_ctx.m_fontScale.pop_back();
+    // ImGui::SetWindowFontScale(scale);
 
 }
 

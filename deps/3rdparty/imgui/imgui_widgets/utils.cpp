@@ -601,7 +601,7 @@ bool ContentButtonItem(const ContentItem& item)
 
     if(item.name_font)
     {
-        ImGui::PushFont(item.name_font);
+        ImGui::PushFont(item.name_font, item.name_font->LegacySize);
     }
     ImVec2 textSize{};
 
@@ -616,7 +616,7 @@ bool ContentButtonItem(const ContentItem& item)
 
     if(item.type_font)
     {
-        ImGui::PushFont(item.type_font);
+        ImGui::PushFont(item.type_font, item.type_font->LegacySize);
     }
     ImVec2 typeSize{};
 
@@ -704,15 +704,16 @@ bool ContentButtonItem(const ContentItem& item)
 
         if(item.name_font)
         {
-            ImGui::PushFont(item.name_font);
+            ImGui::PushFont(item.name_font, item.name_font->LegacySize);
         }
 
-        auto end = start + ImVec2(totalSize.x - ImGui::CalcTextSize("...").x, textSize.y);
+        auto end = start + ImVec2(totalSize.x, textSize.y);
+
+        auto elipsis_max = end.x;
         ImGui::RenderTextEllipsis(window->DrawList,
                                   start,
                                   end,
-                                  start.x + totalSize.x,
-                                  start.x + totalSize.x,
+                                  elipsis_max,
                                   item.name,
                                   nullptr,
                                   &textSize);
@@ -724,7 +725,7 @@ bool ContentButtonItem(const ContentItem& item)
 
         if(item.type_font)
         {
-            ImGui::PushFont(item.type_font);
+            ImGui::PushFont(item.type_font, item.type_font->LegacySize);
         }
 
         start = originalStart;
@@ -734,14 +735,14 @@ bool ContentButtonItem(const ContentItem& item)
         {
             start.x += (totalSize.x - typeSize.x) * 0.5f;
         }
-
-        end = start + ImVec2(totalSize.x - ImGui::CalcTextSize("...").x, typeSize.y);
+        
+        end = start + ImVec2(totalSize.x, typeSize.y);
+        elipsis_max = end.x;
 
         ImGui::RenderTextEllipsis(window->DrawList,
                                   start,
                                   end,
-                                  start.x + totalSize.x,
-                                  start.x + totalSize.x,
+                                  elipsis_max,
                                   item.type,
                                   nullptr,
                                   &typeSize);
@@ -867,7 +868,7 @@ WindowTimeBlock::~WindowTimeBlock()
     char text[32];
     ImFormatString(text, IM_ARRAYSIZE(text), "%.3fms", dur.count());
 
-    ImGui::PushFont(font_);
+    ImGui::PushFont(font_, font_->LegacySize);
     auto textSize = ImGui::CalcTextSize(text);
 
     auto windowPos = ImGui::GetWindowPos();

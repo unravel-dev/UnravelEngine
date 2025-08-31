@@ -125,7 +125,7 @@ inline void ContainedContext::begin()
     ImGui::GetIO().IniFilename = nullptr;
 
     ImGui::NewFrame();
-    ImGui::PushFont(orig_font);
+    ImGui::PushFont(orig_font, orig_font->LegacySize);
 
     if (!m_config.extra_window_wrapper)
         return;

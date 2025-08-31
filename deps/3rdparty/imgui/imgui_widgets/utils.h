@@ -89,9 +89,9 @@ struct IMGUI_API ContentItem
     ImTextureID texId{};
     ImVec2 texture_size{};
     ImVec2 image_size{};
-    const char* name{""};
+    const char* name{"##name"};
     ImFont* name_font{};
-    const char* type{""};
+    const char* type{"##type"};
     ImFont* type_font{};
 
     ImVec2 uv0 = ImVec2(0, 0);
