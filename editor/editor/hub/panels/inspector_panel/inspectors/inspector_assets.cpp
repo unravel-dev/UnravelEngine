@@ -304,6 +304,7 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
             if(mat)
             {
                 result = entt::forward_as_meta(*mat);
+                return true;
             }
         }
         return false;
