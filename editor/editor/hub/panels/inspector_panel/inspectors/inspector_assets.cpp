@@ -277,7 +277,7 @@ auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_pr
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
-            var = value;
+            var.assign(value);
             return parent_proxy.impl->setter(parent_proxy, var);
         }
         return false;
@@ -352,7 +352,7 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
-            var = value;
+            var.assign(value);
             parent_proxy.impl->setter(parent_proxy, var);
 
             // Get the asset and mutate it

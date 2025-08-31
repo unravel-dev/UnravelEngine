@@ -8,11 +8,14 @@ namespace unravel
 property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val, const entt::meta_custom& custom, const std::function<void()>& on_success)
     : instance(inst), old_value(old_val), new_value(new_val), custom(custom), on_success(on_success)
 {
-    name = "Property Edit";
     
     if(inst.impl->get_name)
     {
-        name += " " + inst.impl->get_name();
+        name = inst.impl->get_name();
+    }
+    else
+    {
+        name = "Property Edit";
     }
 }
 

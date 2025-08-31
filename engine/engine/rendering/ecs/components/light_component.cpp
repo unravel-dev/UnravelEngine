@@ -129,7 +129,7 @@ int light_component::compute_projected_sphere_rect(irect32_t& rect,
 
 auto light_component::get_shadowmap_generator() -> shadow::shadowmap_generator&
 {
-    return shadowmap_generator_;
+    return *shadowmap_generator_;
 }
 
 auto skylight_component::get_mode() const noexcept -> const sky_mode&

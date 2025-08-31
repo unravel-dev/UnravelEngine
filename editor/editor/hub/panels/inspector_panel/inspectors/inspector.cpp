@@ -261,10 +261,10 @@ auto make_proxy(entt::meta_any& var) -> meta_any_proxy
     };
     proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
     {
-        entt::meta_any v;
-        if(proxy.impl->getter(v) && v)
+        entt::meta_any var;
+        if(proxy.impl->getter(var) && var)
         {
-            v = value;
+            var.assign(value);
             return true;
         }
         return false;

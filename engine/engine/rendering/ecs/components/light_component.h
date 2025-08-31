@@ -72,7 +72,7 @@ private:
     /**
      * @brief The shadow map generator.
      */
-    shadow::shadowmap_generator shadowmap_generator_;
+    std::shared_ptr<shadow::shadowmap_generator> shadowmap_generator_ = std::make_shared<shadow::shadowmap_generator>();
 };
 
 /**

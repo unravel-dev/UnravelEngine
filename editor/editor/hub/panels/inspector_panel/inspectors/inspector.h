@@ -135,6 +135,8 @@ struct var_info
     bool read_only{};
     /// Whether this is a property that can be overridden in prefabs
     bool is_property{};
+
+    bool is_copyable{true};
 };
 
 /**

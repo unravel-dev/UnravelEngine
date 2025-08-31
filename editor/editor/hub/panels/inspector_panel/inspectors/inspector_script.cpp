@@ -835,7 +835,7 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
-            var = value;
+            var.assign(value);
             parent_proxy.impl->setter(parent_proxy, var);
             return true;
         }

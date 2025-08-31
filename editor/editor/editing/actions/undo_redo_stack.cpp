@@ -70,7 +70,7 @@ void undo_redo_stack::undo()
             }
             else
             {
-                ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, 1000,"Unable to undo.\nMissing references."));
+                ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, 1000,"Unable to Undo.\nMissing references."));
             }
             
         }
@@ -90,7 +90,7 @@ void undo_redo_stack::redo()
             }
             else
             {
-                ImGui::PushNotification(ImGuiToast(	ImGuiToastType_Warning, 1000,"Unable to redo.\nMissing references."));
+                ImGui::PushNotification(ImGuiToast(	ImGuiToastType_Warning, 1000,"Unable to Redo.\nMissing references."));
             }
         }
         current_index++;

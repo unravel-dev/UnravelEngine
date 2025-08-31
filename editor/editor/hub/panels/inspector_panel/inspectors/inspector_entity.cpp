@@ -636,7 +636,10 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     // entt::meta_any comp_var;
                     // call_var_getter(comp_var, comp_var_getter);
                     auto comp_var = entt::forward_as_meta(*component);
-                    return ::unravel::inspect_var(ctx, comp_var, comp_var_proxy);
+
+                    var_info comp_info;
+                    comp_info.is_copyable = false;
+                    return ::unravel::inspect_var(ctx, comp_var, comp_var_proxy, comp_info);
                     
                 };
 
@@ -758,7 +761,11 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     // entt::meta_any obj_var;
                     // call_var_getter(obj_var, obj_getter);
                     auto obj_var = entt::forward_as_meta(*script.scoped);
-                    inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_proxy);
+
+                    var_info obj_info;
+                    obj_info.is_copyable = false;
+
+                    inspect_res |= ::unravel::inspect_var(ctx, obj_var, obj_proxy, obj_info);
                     return inspect_res;
                 };
 
