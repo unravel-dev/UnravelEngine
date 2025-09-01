@@ -687,8 +687,8 @@ void editing_manager::execute_actions()
         if (action)
         {
             // Execute the action
+            action->execution_count++;
             action->do_action();
-            
             // Add to undo stack if the action is undoable
             // Note: We need to handle merging here since the action is now executed
             if (action->is_undoable())

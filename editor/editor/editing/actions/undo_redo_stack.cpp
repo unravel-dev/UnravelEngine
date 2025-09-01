@@ -66,6 +66,7 @@ void undo_redo_stack::undo()
 
             if(action->is_valid())
             {
+                action->execution_count++;
                 action->undo_action();
             }
             else
@@ -86,6 +87,7 @@ void undo_redo_stack::redo()
             auto& action = actions[current_index];
             if(action->is_valid())
             {
+                action->execution_count++;
                 action->do_action();
             }
             else

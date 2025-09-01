@@ -21,7 +21,7 @@ property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& 
 
 void property_action_t::do_action()
 {
-    if(instance.impl->setter(instance, new_value))
+    if(instance.impl->setter(instance, new_value, execution_count))
     {
         if(on_success)
         {
@@ -32,7 +32,7 @@ void property_action_t::do_action()
 
 void property_action_t::undo_action()
 {
-    if(instance.impl->setter(instance, old_value))
+    if(instance.impl->setter(instance, old_value, execution_count))
     {
         if(on_success)
         {

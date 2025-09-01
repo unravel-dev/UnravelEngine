@@ -272,13 +272,13 @@ auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_pr
         }
         return false;
     };
-    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
             var.assign(value);
-            return parent_proxy.impl->setter(parent_proxy, var);
+            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
         }
         return false;
     };
@@ -309,14 +309,14 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
         }
         return false;
     };
-    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         // entt::meta_any var;
         // proxy.impl->getter(var);
         // if(var)
         // {
         //     var = value;
-        //     parent_proxy.impl->setter(parent_proxy, var);
+        //     parent_proxy.impl->setter(parent_proxy, var, execution_count);
         // }
         return false;
     };
@@ -348,13 +348,13 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
         return false;
     };
     
-    data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
             var.assign(value);
-            parent_proxy.impl->setter(parent_proxy, var);
+            parent_proxy.impl->setter(parent_proxy, var, execution_count);
 
             // Get the asset and mutate it
             auto data_asset = data.get(true);
@@ -363,11 +363,15 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
                 *data_asset = var.cast<T&>();
             }
 
-            // Do this after the setter is called to ensure the asset is mutable
-            auto& ctx = engine::context();
-            auto& tm = ctx.get_cached<thumbnail_manager>();
-            tm.regenerate_thumbnail(data.uid());
-            asset_writer::atomic_save_to_file(data.id(), data);
+            if(execution_count > 1)
+            {
+                // Do this after the setter is called to ensure the asset is mutable
+                auto& ctx = engine::context();
+                auto& tm = ctx.get_cached<thumbnail_manager>();
+                tm.regenerate_thumbnail(data.uid());
+                asset_writer::atomic_save_to_file(data.id(), data);
+            }
+            
 
             return true;
         }

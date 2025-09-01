@@ -629,7 +629,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         return false;
                     };
-                    comp_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    comp_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
                     {
                         return true;
                     };
@@ -754,7 +754,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         return false;
                     };
-                    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
                     {
                         return true;
                     };

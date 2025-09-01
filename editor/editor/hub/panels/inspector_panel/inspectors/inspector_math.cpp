@@ -346,8 +346,11 @@ auto inspector_quaternion::inspect(rtti::context& ctx,
     inspect_result result{};
 
     auto val = math::degrees(math::eulerAngles(data));
+
+    static const auto reset = math::zero<math::vec3>();
+
     // auto val = quat_to_vec4(data);
-    if(DragVec3(val, info))
+    if(DragVec3(val, info, &reset, "%.2f°"))
     {
         // data = vec4_to_quat(val);
         data = math::quat(math::radians(val));
@@ -428,7 +431,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_position();
                     result.changed = true;
                     result.edit_finished = true;
-                    override_ctx.record_override();
+                    
+                    auto prop_proxy = make_property_proxy(var_proxy, prop);
+                    add_property_action(ctx, override_ctx, result, prop_proxy, position, data.get_position(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::SetItemTooltipEx("Reset %s", prop_pretty_name.c_str());
@@ -443,7 +448,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                 data.set_position(position);
                 result.changed |= true;
 
-                override_ctx.record_override();
+                auto prop_proxy = make_property_proxy(var_proxy, prop);
+                add_property_action(ctx, override_ctx, result, prop_proxy, position, data.get_position(), prop.custom());
             }
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
         }
@@ -479,7 +485,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_rotation();
                     result.changed = true;
                     result.edit_finished = true;
-                    override_ctx.record_override();
+                    
+                    auto prop_proxy = make_property_proxy(var_proxy, prop);
+                    add_property_action(ctx, override_ctx, result, prop_proxy, rotation, data.get_rotation(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
@@ -496,7 +504,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                 data.rotate_local(math::radians(euler_angles - old_euler));
                 result.changed |= true;
 
-                override_ctx.record_override();
+                auto prop_proxy = make_property_proxy(var_proxy, prop);
+                add_property_action(ctx, override_ctx, result, prop_proxy, rotation, data.get_rotation(), prop.custom());
             }
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
         }
@@ -543,7 +552,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_scale();
                     result.changed = true;
                     result.edit_finished = true;
-                    override_ctx.record_override();
+                    
+                    auto prop_proxy = make_property_proxy(var_proxy, prop);
+                    add_property_action(ctx, override_ctx, result, prop_proxy, scale, data.get_scale(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
@@ -571,7 +582,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                 data.set_scale(scale);
                 result.changed |= true;
 
-                override_ctx.record_override();
+                auto prop_proxy = make_property_proxy(var_proxy, prop);
+                add_property_action(ctx, override_ctx, result, prop_proxy, scale, data.get_scale(), prop.custom());
             }
 
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
@@ -608,7 +620,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_skew();
                     result.changed = true;
                     result.edit_finished = true;
-                    override_ctx.record_override();
+                    
+                    auto prop_proxy = make_property_proxy(var_proxy, prop);
+                    add_property_action(ctx, override_ctx, result, prop_proxy, skew, data.get_skew(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::SetItemTooltipEx("Reset %s", prop_pretty_name.c_str());
@@ -622,7 +636,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
             {
                 data.set_skew(skew);
                 result.changed |= true;
-                override_ctx.record_override();
+                auto prop_proxy = make_property_proxy(var_proxy, prop);
+                add_property_action(ctx, override_ctx, result, prop_proxy, skew, data.get_skew(), prop.custom());
             }
 
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();

@@ -180,27 +180,44 @@ struct inspect_result
 };
 
 /**
- * @brief Proxy pattern for accessing and modifying meta_any variables
+ * @brief Safe deferred property access proxy for arbitrary object properties
  * 
- * Provides indirect access to variables through getter/setter functions,
- * enabling inspection of nested properties and complex data structures.
+ * Instead of storing direct references or pointers to properties (which can become invalid
+ * when objects are destroyed, moved, or reorganized), this proxy stores the "path" or "recipe"
+ * to reach a property. Each access re-evaluates the path from scratch, providing:
+ * 
+ * - Lifetime safety: No dangling pointers when objects are destroyed/moved
+ * - Graceful failure: Invalid paths return false rather than crashing
+ * - Composability: Proxies can be chained to access deeply nested properties
+ * - Undo/redo safety: Actions store stable paths, not volatile references
+ * 
+ * Example: Instead of storing `&entity.transform.position.x`, we store a chain
+ * of functions that can navigate: entity → transform → position → x each time.
  */
 struct meta_any_proxy
 {
     /**
-     * @brief Implementation details for the proxy pattern
+     * @brief Implementation containing the deferred access functions
+     * 
+     * These functions are evaluated fresh on each property access, ensuring
+     * the property path is validated and navigated safely every time.
      */
     struct meta_any_proxy_impl
     {
-        /// Function to retrieve the current value
+        /// Function to retrieve the current value by evaluating the property path
+        /// Returns false if any step in the path is invalid (safe failure)
         std::function<bool(entt::meta_any&)> getter;
-        /// Function to set a new value
-        std::function<bool(meta_any_proxy& proxy, const entt::meta_any&)> setter;
-        /// Function to get the property name for debugging
+        
+        /// Function to set a new value by navigating the property path
+        /// execution_count tracks undo/redo cycles to avoid duplicate recordings
+        std::function<bool(meta_any_proxy& proxy, const entt::meta_any&, uint64_t execution_count)> setter;
+
+        /// Function to get the property path as a string for debugging and error reporting
         std::function<std::string()> get_name;
     };
 
-    /// Shared implementation to allow copying proxies
+    /// Shared implementation allows copying proxies without duplicating the path logic
+    /// Multiple proxies can safely reference the same property access method
     std::shared_ptr<meta_any_proxy_impl> impl = std::make_shared<meta_any_proxy_impl>();
 };
 
@@ -211,6 +228,7 @@ struct meta_any_proxy
  */
 auto make_proxy(entt::meta_any& var) -> meta_any_proxy;
 
+auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy;
 
 /**
  * @brief Base class for type-specific property inspectors in the editor

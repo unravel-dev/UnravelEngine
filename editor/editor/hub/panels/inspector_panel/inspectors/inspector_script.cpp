@@ -830,14 +830,13 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
         }
         return false;
     };
-    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    obj_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
             var.assign(value);
-            parent_proxy.impl->setter(parent_proxy, var);
-            return true;
+            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
         }
         return false;
     };

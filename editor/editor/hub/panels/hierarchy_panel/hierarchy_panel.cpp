@@ -651,6 +651,8 @@ auto get_entity_tree_node_flags(rtti::context& ctx, entt::handle entity, bool ha
         flags |= ImGuiTreeNodeFlags_Leaf;
     }
 
+    flags |= ImGuiTreeNodeFlags_DrawLinesToNodes;
+
     return flags;
 }
 
@@ -788,7 +790,9 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     auto col = entity_panel::get_entity_display_color(entity);
 
     ImGui::PushStyleColor(ImGuiCol_Text, col);
+    ImGui::PushStyleVarX(ImGuiStyleVar_ItemInnerSpacing, 0.0f);
     bool opened = ImGui::TreeNodeEx(label.c_str(), flags);
+    ImGui::PopStyleVar();
 
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
     {

@@ -259,17 +259,50 @@ auto make_proxy(entt::meta_any& var) -> meta_any_proxy
         result = var;
         return true;
     };
-    proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value)
+    proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count)
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
-            var.assign(value);
-            return true;
+            return var.assign(value);
         }
         return false;
     };
     return proxy;
 }
 
+auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy
+{
+    meta_any_proxy prop_proxy;
+    prop_proxy.impl->get_name = [var_proxy, prop]()
+    {
+        auto name = var_proxy.impl->get_name();
+        if(name.empty())
+        {
+            return entt::get_pretty_name(prop);
+        }
+        return fmt::format("{}/{}", name, entt::get_pretty_name(prop));
+    };
+    prop_proxy.impl->getter = [parent_proxy = var_proxy, prop](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        if(parent_proxy.impl->getter(var) && var)
+        {
+            result = prop.get(var);
+            return true;
+        }
+        return false;
+    };
+    prop_proxy.impl->setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any var;
+        if(parent_proxy.impl->getter(var) && var)
+        {
+            prop.set(var, value);
+            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
+        }
+        return false;
+    };
+    return prop_proxy;
+}
 } // namespace unravel

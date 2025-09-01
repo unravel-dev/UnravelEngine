@@ -262,6 +262,13 @@ struct prefab_override_context
     static void mark_entity_as_removed(entt::handle entity);
 };
 
+void add_property_action(rtti::context& ctx,
+                         prefab_override_context& override_ctx,
+                         inspect_result& result,
+                         const meta_any_proxy& var_proxy,
+                         const entt::meta_any& old_var,
+                         const entt::meta_any& new_var,
+                         const entt::meta_custom& custom);
 /**
  * @brief Pushes debug view mode (increases debug view counter)
  */

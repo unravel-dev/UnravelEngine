@@ -14,9 +14,11 @@ struct editing_action_t : crtp_meta_type<editing_action_t>
     uint64_t merge_key{0};
     bool undoable{false};
     std::string name{};
+    uint64_t execution_count{0};
 
     virtual auto get_name() const -> const std::string& { return name; }
     virtual void do_action() = 0;
+    virtual auto get_execution_count() const -> uint64_t { return execution_count; }
     virtual void undo_action() = 0;
     virtual auto is_undoable() const -> bool { return undoable; } // Default: actions are undoable
     virtual auto is_mergeable(const editing_action_t& previous) const -> bool { return false; } // Default: actions are not mergeable

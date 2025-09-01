@@ -61,6 +61,44 @@ auto is_debug_view() -> bool
     return debug_view > 0;
 }
 
+
+void add_property_action(rtti::context& ctx,
+                         prefab_override_context& override_ctx,
+                         inspect_result& result,
+                         const meta_any_proxy& var_proxy,
+                         const entt::meta_any& old_var,
+                         const entt::meta_any& new_var,
+                         const entt::meta_custom& custom)
+{
+    std::function<void()> on_success = nullptr;
+    if(override_ctx.record_override())
+    {
+        auto component_type_name = override_ctx.path_context.get_component_type_name();
+        auto component_type_pretty_name = override_ctx.pretty_path_context.get_component_type_name();
+        auto prop_path = override_ctx.path_context.get_current_path();
+        auto prop_pretty_path = override_ctx.pretty_path_context.get_current_path();
+        on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path]()
+        {
+            prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path);
+        };
+    }
+
+
+    //mark_property_as_changed(entity, component_type, property_path);
+    if(!result.change_recorded)
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        em.add_action<property_action_t>({},
+                                         var_proxy,
+                                         old_var,
+                                         new_var,
+                                         custom,
+                                         on_success);
+
+        result.change_recorded = true;
+    }
+}
+
 auto prefab_override_context::begin_prefab_inspection(entt::handle e) -> bool
 {
     end_prefab_inspection();
@@ -529,37 +567,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     ImGui::PushReadonly(is_readonly);
 
 
-    meta_any_proxy prop_proxy;
-    prop_proxy.impl->get_name = [var_proxy, pretty_name]()
-    {
-        auto name = var_proxy.impl->get_name();
-        if(name.empty())
-        {
-            return pretty_name;
-        }
-        return fmt::format("{}/{}", name, pretty_name);
-    };
-    prop_proxy.impl->getter = [parent_proxy = var_proxy, prop](entt::meta_any& result)
-    {
-        entt::meta_any var;
-        if(parent_proxy.impl->getter(var) && var)
-        {
-            result = prop.get(var);
-            return true;
-        }
-        return false;
-    };
-    prop_proxy.impl->setter = [parent_proxy = var_proxy, prop](meta_any_proxy& proxy, const entt::meta_any& value) mutable
-    {
-        entt::meta_any var;
-        if(parent_proxy.impl->getter(var) && var)
-        {
-            prop.set(var, value);
-            parent_proxy.impl->setter(parent_proxy, var);
-            return true;
-        }
-        return false;
-    };
+    auto prop_proxy = make_property_proxy(var_proxy, prop);
 
 
     {
@@ -613,35 +621,8 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     if(result.changed && !is_readonly)
     {
         // prop.set(object, prop_var);
-
-
-        std::function<void()> on_success = nullptr;
-        if(override_ctx.record_override())
-        {
-            auto component_type_name = override_ctx.path_context.get_component_type_name();
-            auto component_type_pretty_name = override_ctx.pretty_path_context.get_component_type_name();
-            auto prop_path = override_ctx.path_context.get_current_path();
-            auto prop_pretty_path = override_ctx.pretty_path_context.get_current_path();
-            on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path]()
-            {
-                prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path);
-            };
-        }
-
-
-        //mark_property_as_changed(entity, component_type, property_path);
-        if(!result.change_recorded)
-        {
-            auto& em = ctx.get_cached<editing_manager>();
-            em.add_action<property_action_t>({},
-                                             prop_proxy,
-                                             prop_old_var,
-                                             prop_var,
-                                             prop.custom(),
-                                             on_success);
-
-            result.change_recorded = true;
-        }
+        add_property_action(ctx, override_ctx, result, prop_proxy, prop_old_var, prop_var, prop.custom());
+  
     }
 
     // ImGui::PopEnabled();
@@ -784,7 +765,7 @@ auto inspect_array(rtti::context& ctx,
                     }
                     return false;
                 };
-                value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+                value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
                 {
                     entt::meta_any var;
                     if(parent_proxy.impl->getter(var) && var)
@@ -792,7 +773,6 @@ auto inspect_array(rtti::context& ctx,
                         auto view = var.as_sequence_container();
                         if(view.size() > static_cast<std::size_t>(i))
                         {
-
                              // get iterator to i
                             auto it = view.begin();
                             std::advance(it, static_cast<std::ptrdiff_t>(i));
@@ -800,19 +780,12 @@ auto inspect_array(rtti::context& ctx,
                             // remove old element
                             it = view.erase(it);
 
-                    
-
                             // insert new element at position i
                             view.insert(it, value);
 
                             // If the getter returned a copy, write back; if it was a ref, this is harmless.
-                            parent_proxy.impl->setter(parent_proxy, var);
-                            
-                            // view[i] = value;
-
-                            // entt::meta_sequence_container c;
-                            // parent_proxy.impl->setter(parent_proxy, var);
-                            // return true;
+                            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
+                
                         }
                     }
                     return false;
@@ -1091,13 +1064,13 @@ auto inspect_var(rtti::context& ctx,
         }
         return false;
     };
-    derived_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value) mutable
+    derived_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
         {
             var.assign(value);
-            return parent_proxy.impl->setter(parent_proxy, var);
+            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
         }
         return false;
     };
@@ -1131,32 +1104,7 @@ auto inspect_var(rtti::context& ctx,
     {
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
 
-        std::function<void()> on_success = nullptr;
-        if(override_ctx.record_override())
-        {
-            auto component_type_name = override_ctx.path_context.get_component_type_name();
-            auto component_type_pretty_name = override_ctx.pretty_path_context.get_component_type_name();
-            auto prop_path = override_ctx.path_context.get_current_path();
-            auto prop_pretty_path = override_ctx.pretty_path_context.get_current_path();
-            on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path]()
-            {
-                prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path);
-            };
-        }
-
-        
-        if(!result.change_recorded)
-        {
-            auto& em = ctx.get_cached<editing_manager>();
-            auto pretty_path = override_ctx.pretty_path_context.get_current_path_with_component_type();
-            em.add_action<property_action_t>({},
-                                             derived_var_proxy,
-                                             old_var,
-                                             var,
-                                             custom,
-                                             on_success);
-            result.change_recorded = true;
-        }
+        add_property_action(ctx, override_ctx, result, derived_var_proxy, old_var, var, custom);
     }
 
     ImGui::PopReadonly();
