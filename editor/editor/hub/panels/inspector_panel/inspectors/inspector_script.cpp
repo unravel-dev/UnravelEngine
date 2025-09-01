@@ -38,21 +38,429 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
     return {};
 }
 
+/**
+ * @brief Proxy wrapper for mono field access that integrates with meta_any_proxy system
+ * 
+ * This allows script field changes to be properly recorded in the undo/redo system
+ * by providing a bridge between mono field access and the engine's property system.
+ */
+template<typename T>
+struct mono_field_proxy
+{
+    mono::mono_field field;
+    std::string field_name;
+    
+    mono_field_proxy(mono::mono_field f) : field(f), field_name(f.get_name()) {}
+    
+    auto get_name() const -> std::string { return field_name; }
+    
+    auto get_value(mono::mono_object& obj) const -> T
+    {
+        auto invoker = mono::make_field_invoker<T>(field);
+        return invoker.get_value(obj);
+    }
+    
+    void set_value(mono::mono_object& obj, const T& value) const
+    {
+        auto invoker = mono::make_field_invoker<T>(field);
+        invoker.set_value(obj, value);
+    }
+    
+    auto get_attributes() const
+    {
+        return field.get_attributes();
+    }
+    
+    auto get_type() const
+    {
+        return field.get_type();
+    }
+    
+    auto is_readonly() const { return field.is_readonly(); }
+    auto is_const() const { return field.is_const(); }
+};
+
+/**
+ * @brief Proxy wrapper for mono property access that integrates with meta_any_proxy system
+ * 
+ * This allows script property changes to be properly recorded in the undo/redo system
+ * by providing a bridge between mono property access and the engine's property system.
+ */
+template<typename T>
+struct mono_property_proxy
+{
+    mono::mono_property property;
+    std::string property_name;
+    
+    mono_property_proxy(mono::mono_property p) : property(p), property_name(p.get_name()) {}
+    
+    auto get_name() const -> std::string { return property_name; }
+    
+    auto get_value(mono::mono_object& obj) const -> T
+    {
+        auto invoker = mono::make_property_invoker<T>(property);
+        return invoker.get_value(obj);
+    }
+    
+    void set_value(mono::mono_object& obj, const T& value) const
+    {
+        auto invoker = mono::make_property_invoker<T>(property);
+        invoker.set_value(obj, value);
+    }
+    
+    auto get_attributes() const
+    {
+        return property.get_attributes();
+    }
+    
+    auto get_type() const
+    {
+        return property.get_type();
+    }
+    
+    auto is_readonly() const { return property.is_readonly(); }
+};
+
+/**
+ * @brief Creates a meta_any_proxy that can access script fields through the proxy wrapper
+ * 
+ * This creates the bridge between script field access and the engine's undo/redo system.
+ * The proxy stores lambdas that know how to navigate from the parent object to the specific field.
+ */
+template<typename T, typename ProxyType>
+auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_proxy) -> meta_any_proxy
+{
+    meta_any_proxy field_proxy;
+    
+    field_proxy.impl->get_name = [obj_proxy, script_proxy]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        if(parent_name.empty())
+        {
+            return script_proxy.get_name();
+        }
+        return fmt::format("{}/{}", parent_name, script_proxy.get_name());
+    };
+    
+    field_proxy.impl->getter = [obj_proxy, script_proxy](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto field_value = script_proxy.get_value(mono_obj);
+            // Create an owned copy to avoid dangling references
+            result = entt::meta_any{std::in_place_type<T>, field_value};
+            return true;
+        }
+        return false;
+    };
+    
+    field_proxy.impl->setter = [obj_proxy, script_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<T>())
+            {
+                script_proxy.set_value(mono_obj, value.cast<T>());
+                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+            }
+        }
+        return false;
+    };
+    
+    return field_proxy;
+}
+
+/**
+ * @brief Creates a specialized proxy for entity handle fields in script objects
+ * 
+ * This handles the conversion between mono entity fields and engine entity handles,
+ * avoiding capturing heavy invoker objects by storing only the field name.
+ */
+    template<typename Invoker>
+auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field, rtti::context& ctx) -> meta_any_proxy
+{
+    meta_any_proxy handle_proxy;
+    auto field_name = mutable_field.get_name();
+    
+    handle_proxy.impl->get_name = [obj_proxy, field_name]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        if(parent_name.empty())
+        {
+            return field_name;
+        }
+        return fmt::format("{}/{}", parent_name, field_name);
+    };
+    
+    handle_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            
+            // Recreate the invoker from the field name
+            auto obj_type = mono_obj.get_type();
+            auto field = obj_type.get_field(field_name);
+            auto invoker = mono::make_field_invoker<entt::entity>(field);
+            
+            auto entity = invoker.get_value(mono_obj);
+            auto& ec = ctx.get_cached<ecs>();
+            auto& scene = ec.get_scene();
+            auto handle = scene.create_handle(entity);
+            // Create an owned copy to avoid dangling references
+            result = entt::meta_any{std::in_place_type<entt::handle>, handle};
+            return true;
+        }
+        return false;
+    };
+    
+    handle_proxy.impl->setter = [obj_proxy, field_name](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<entt::handle>())
+            {
+                // Recreate the invoker from the field name
+                auto obj_type = mono_obj.get_type();
+                auto field = obj_type.get_field(field_name);
+                auto invoker = mono::make_field_invoker<entt::entity>(field);
+                
+                auto handle = value.cast<entt::handle>();
+                invoker.set_value(mono_obj, handle.entity());
+                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+            }
+        }
+        return false;
+    };
+    
+    return handle_proxy;
+}
+
+/**
+ * @brief Creates a specialized proxy for asset handle fields in script objects
+ * 
+ * This handles the conversion between mono asset handles and engine asset handles,
+ * including UID management and asset manager integration.
+ */
+template<typename T, typename Invoker>
+auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field, rtti::context& ctx) -> meta_any_proxy
+{
+    meta_any_proxy asset_proxy;
+    auto field_name = mutable_field.get_name();
+    
+    asset_proxy.impl->get_name = [obj_proxy, field_name]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        if(parent_name.empty())
+        {
+            return field_name;
+        }
+        return fmt::format("{}/{}", parent_name, field_name);
+    };
+    
+    asset_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            
+            // Recreate the invoker from the field name
+            auto obj_type = mono_obj.get_type();
+            auto field = obj_type.get_field(field_name);
+            auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            
+            auto val = invoker.get_value(mono_obj);
+            
+            // Convert mono asset handle to engine asset handle
+            asset_handle<T> asset;
+            if(val)
+            {
+                const auto& field_type = invoker.get_type();
+                auto prop = field_type.get_property("uid");
+                auto mutable_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                auto uid = mutable_prop.get_value(val);
+
+                auto& am = ctx.get_cached<asset_manager>();
+                asset = am.get_asset<T>(uid);
+            }
+            
+            // Create an owned copy to avoid dangling references
+            result = entt::meta_any{std::in_place_type<asset_handle<T>>, asset};
+            return true;
+        }
+        return false;
+    };
+    
+    asset_proxy.impl->setter = [obj_proxy, field_name](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<asset_handle<T>>())
+            {
+                // Recreate the invoker from the field name
+                auto obj_type = mono_obj.get_type();
+                auto field = obj_type.get_field(field_name);
+                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                
+                auto asset = value.cast<asset_handle<T>>();
+                const auto& field_type = invoker.get_type();
+                
+                auto val = invoker.get_value(mono_obj);
+                if(asset && !val)
+                {
+                    val = field_type.new_instance();
+                    invoker.set_value(mono_obj, val);
+                }
+
+                if(val)
+                {
+                    auto prop = field_type.get_property("uid");
+                    auto mutable_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                    mutable_prop.set_value(val, asset.uid());
+                }
+                
+                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+            }
+        }
+        return false;
+    };
+    
+    return asset_proxy;
+}
+
+/**
+ * @brief Creates a specialized proxy for individual array elements in script objects
+ * 
+ * This handles access to specific array indices while maintaining proper property paths
+ * and avoiding capturing heavy invoker objects.
+ */
+template<typename T, typename Invoker>
+auto make_array_element_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field, size_t index) -> meta_any_proxy
+{
+    meta_any_proxy element_proxy;
+    auto field_name = mutable_field.get_name();
+    
+    element_proxy.impl->get_name = [obj_proxy, field_name, index]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        auto element_name = fmt::format("{}[{}]", field_name, index);
+        if(parent_name.empty())
+        {
+            return element_name;
+        }
+        return fmt::format("{}/{}", parent_name, element_name);
+    };
+    
+    element_proxy.impl->getter = [obj_proxy, field_name, index](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            
+            // Recreate the invoker from the field name
+            auto obj_type = mono_obj.get_type();
+            auto field = obj_type.get_field(field_name);
+            auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            
+            auto val = invoker.get_value(mono_obj);
+            mono::mono_array<T> array(val);
+            
+            if(index < array.size())
+            {
+                auto element_value = array.get(index);
+                // Create an owned copy to avoid dangling references
+                result = entt::meta_any{std::in_place_type<T>, element_value};
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    element_proxy.impl->setter = [obj_proxy, field_name, index](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<T>())
+            {
+                // Recreate the invoker from the field name
+                auto obj_type = mono_obj.get_type();
+                auto field = obj_type.get_field(field_name);
+                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                
+                auto val = invoker.get_value(mono_obj);
+                mono::mono_array<T> array(val);
+                
+                if(index < array.size())
+                {
+                    array.set(index, value.cast<T>());
+                    // Note: mono arrays are reference types, so the change is already applied
+                    return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+                }
+            }
+        }
+        return false;
+    };
+    
+    return element_proxy;
+}
+
 template<typename T>
 struct mono_inspector
 {
-    template<typename Invoker>
-    static auto inspect_invoker(rtti::context& ctx,
+
+    static auto inspect_field(rtti::context& ctx,
                                 mono::mono_object& obj,
                                 const meta_any_proxy& obj_proxy,
-                                const Invoker& mutable_field,
+                                mono::mono_field& field,
                                 const var_info& info) -> inspect_result
     {
-        auto val = mutable_field.get_value(obj);
+        auto invoker = mono::make_field_invoker<T>(field);
+
+        var_info field_info;
+        field_info.is_property = true;
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
+
+        // Use the new proxy system to enable undo/redo for script fields
+        return inspect_invoker_with_proxy(ctx, obj, obj_proxy, field, field_info);
+    }
+    
+    // New method that uses the proxy system for proper undo/redo support
+    static auto inspect_invoker_with_proxy(rtti::context& ctx,
+                                          mono::mono_object& obj,
+                                          const meta_any_proxy& obj_proxy,
+                                          mono::mono_field& field,
+                                          const var_info& info) -> inspect_result
+    {
+        // Create script proxy wrapper
+        mono_field_proxy<T> script_proxy(field);
+        
+        // Create meta_any_proxy that bridges to the script system
+        auto field_proxy = make_script_proxy<T>(obj_proxy, script_proxy);
+        
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!field_proxy.impl->getter(var))
+        {
+            return {};
+        }
 
         inspect_result result;
 
-        auto attribs = mutable_field.get_attributes();
+        // Extract attributes for custom metadata
+        auto attribs = script_proxy.get_attributes();
         auto range_attrib = find_attribute("RangeAttribute", attribs);
         auto min_attrib = find_attribute("MinAttribute", attribs);
         auto max_attrib = find_attribute("MaxAttribute", attribs);
@@ -80,19 +488,16 @@ struct mono_inspector
             auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
             float min_value = invoker.get_value(range_attrib);
             meta_attribs["min"] = min_value;
+            
+            auto max_invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
+            float max_value = max_invoker.get_value(range_attrib);
+            meta_attribs["max"] = max_value;
         }
 
         if(max_attrib.valid())
         {
             auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
             float max_value = invoker.get_value(max_attrib);
-            meta_attribs["max"] = max_value;
-        }
-
-        if(range_attrib.valid())
-        {
-            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
-            float max_value = invoker.get_value(range_attrib);
             meta_attribs["max"] = max_value;
         }
 
@@ -105,51 +510,109 @@ struct mono_inspector
 
         auto custom = entt::make_custom<entt::attributes>(meta_attribs);
 
-        entt::meta_any var = entt::forward_as_meta(val);
-        auto var_proxy = make_proxy(var);
-
         {
-            property_layout layout(mutable_field.get_name(), tooltip);
-
-            result |= inspect_var(ctx, var, var_proxy, info, custom);
-        }
-
-        if(result.changed)
-        {
-            mutable_field.set_value(obj, val);
+            property_layout layout(script_proxy.get_name(), tooltip);
+            result |= inspect_var(ctx, var, field_proxy, info, custom);
         }
 
         return result;
     }
 
-    static auto inspect_field(rtti::context& ctx,
-                              mono::mono_object& obj,
-                              const meta_any_proxy& obj_proxy,
-                              mono::mono_field& field,
-                              const var_info& info) -> inspect_result
+    static auto inspect_property(rtti::context& ctx,
+                                mono::mono_object& obj,
+                                const meta_any_proxy& obj_proxy,
+                                mono::mono_property& property,
+                                const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = mono::make_property_invoker<T>(property);
 
         var_info field_info;
         field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || property.is_readonly();
 
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, field_info);
+        // Use the new proxy system to enable undo/redo for script properties
+        return inspect_property_with_proxy(ctx, obj, obj_proxy, property, field_info);
     }
 
-    static auto inspect_property(rtti::context& ctx,
-                                 mono::mono_object& obj,
-                                 const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& field,
-                                 const var_info& info) -> inspect_result
+    // New method that uses the proxy system for proper undo/redo support
+    static auto inspect_property_with_proxy(rtti::context& ctx,
+                                            mono::mono_object& obj,
+                                            const meta_any_proxy& obj_proxy,
+                                            mono::mono_property& property,
+                                            const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_property_invoker<T>(field);
+        // Create script proxy wrapper
+        mono_property_proxy<T> script_proxy(property);
+        
+        // Create meta_any_proxy that bridges to the script system
+        auto prop_proxy = make_script_proxy<T>(obj_proxy, script_proxy);
+        
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!prop_proxy.impl->getter(var))
+        {
+            return {};
+        }
 
-        var_info field_info;
-        field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
+        inspect_result result;
 
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, field_info);
+        // Extract attributes for custom metadata
+        auto attribs = script_proxy.get_attributes();
+        auto range_attrib = find_attribute("RangeAttribute", attribs);
+        auto min_attrib = find_attribute("MinAttribute", attribs);
+        auto max_attrib = find_attribute("MaxAttribute", attribs);
+        auto step_attrib = find_attribute("StepAttribute", attribs);
+        auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
+
+        std::string tooltip;
+        if(tooltip_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            tooltip = invoker.get_value(tooltip_attrib);
+        }
+
+        entt::attributes meta_attribs;
+
+        if(min_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(min_attrib.get_type(), "min");
+            float min_value = invoker.get_value(min_attrib);
+            meta_attribs["min"] = min_value;
+        }
+
+        if(range_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
+            float min_value = invoker.get_value(range_attrib);
+            meta_attribs["min"] = min_value;
+            
+            auto max_invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
+            float max_value = max_invoker.get_value(range_attrib);
+            meta_attribs["max"] = max_value;
+        }
+
+        if(max_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
+            float max_value = invoker.get_value(max_attrib);
+            meta_attribs["max"] = max_value;
+        }
+
+        if(step_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<float>(step_attrib.get_type(), "step");
+            float step_value = invoker.get_value(step_attrib);
+            meta_attribs["step"] = step_value;
+        }
+
+        auto custom = entt::make_custom<entt::attributes>(meta_attribs);
+
+        {
+            property_layout layout(script_proxy.get_name(), tooltip);
+            result |= inspect_var(ctx, var, prop_proxy, info, custom);
+        }
+
+        return result;
     }
 };
 
@@ -252,7 +715,9 @@ struct mono_inspector_enum
                     ImGui::DrawItemActivityOutline();
 
                     if(is_selected)
+                    {
                         ImGui::SetItemDefaultFocus();
+                    }
                 }
 
                 ImGui::EndCombo();
@@ -283,25 +748,221 @@ struct mono_inspector_enum
         auto invoker = mono::make_field_invoker<T>(field);
         auto mapping = field_type.get_enum_values<T>();
 
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, mapping, field_info);
+        // Use the new proxy system to enable undo/redo for enum script fields
+        return inspect_enum_field_with_proxy(ctx, obj, obj_proxy, field, mapping, field_info);
+    }
+    
+    // New method that uses the proxy system for proper undo/redo support for enum fields
+    static auto inspect_enum_field_with_proxy(rtti::context& ctx,
+                                              mono::mono_object& obj,
+                                              const meta_any_proxy& obj_proxy,
+                                              mono::mono_field& field,
+                                              const std::vector<std::pair<T, std::string>>& mapping,
+                                              const var_info& info) -> inspect_result
+    {
+        // Create script proxy wrapper
+        mono_field_proxy<T> script_proxy(field);
+        
+        // Create meta_any_proxy that bridges to the script system
+        auto field_proxy = make_script_proxy<T>(obj_proxy, script_proxy);
+        
+        // Get current value for display
+        auto val = script_proxy.get_value(obj);
+
+        inspect_result result;
+
+        auto attribs = script_proxy.get_attributes();
+        auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
+
+        std::string tooltip;
+        if(tooltip_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            tooltip = invoker.get_value(tooltip_attrib);
+        }
+
+        auto current_name = value_to_name(val, mapping);
+
+        std::vector<const char*> cstrings{};
+        cstrings.reserve(mapping.size());
+
+        int current_idx = 0;
+        int i = 0;
+        for(const auto& pair : mapping)
+        {
+            cstrings.push_back(pair.second.c_str());
+
+            if(current_name == pair.second)
+            {
+                current_idx = i;
+            }
+            i++;
+        }
+
+        property_layout layout(script_proxy.get_name(), tooltip);
+
+        if(info.read_only)
+        {
+            ImGui::LabelText("##enum", "%s", cstrings[current_idx]);
+        }
+        else
+        {
+            int listbox_item_size = static_cast<int>(cstrings.size());
+
+            ImGuiComboFlags flags = 0;
+
+            if(ImGui::BeginCombo("##enum", cstrings[current_idx], flags))
+            {
+                for(int n = 0; n < listbox_item_size; n++)
+                {
+                    const bool is_selected = (current_idx == n);
+
+                    if(ImGui::Selectable(cstrings[n], is_selected))
+                    {
+                        current_idx = n;
+                        result.changed = true;
+                        result.edit_finished |= true;
+                        val = name_to_value(cstrings[current_idx], mapping);
+                        
+                        // Record the change using the proxy
+                        entt::meta_any new_value = entt::forward_as_meta(val);
+                        entt::meta_any old_value;
+                        field_proxy.impl->getter(old_value);
+                        
+                        auto& override_ctx = ctx.get_cached<prefab_override_context>();
+                        add_property_action(ctx, override_ctx, result, field_proxy, old_value, new_value, {});
+                    }
+
+                    ImGui::DrawItemActivityOutline();
+
+                    if(is_selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+
+                ImGui::EndCombo();
+            }
+            ImGui::DrawItemActivityOutline();
+        }
+
+        return result;
     }
 
     static auto inspect_property(rtti::context& ctx,
                                  mono::mono_object& obj,
                                  const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& field,
+                                 mono::mono_property& property,
                                  const var_info& info) -> inspect_result
     {
         var_info field_info;
         field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || property.is_readonly();
 
-        const auto& field_type = field.get_type();
+        const auto& field_type = property.get_type();
 
-        auto invoker = mono::make_property_invoker<T>(field);
+        auto invoker = mono::make_property_invoker<T>(property);
         auto mapping = field_type.get_enum_values<T>();
 
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, mapping, field_info);
+        // Use the new proxy system to enable undo/redo for enum script properties
+        return inspect_enum_property_with_proxy(ctx, obj, obj_proxy, property, mapping, field_info);
+    }
+    
+    // New method that uses the proxy system for proper undo/redo support for enum properties
+    static auto inspect_enum_property_with_proxy(rtti::context& ctx,
+                                                 mono::mono_object& obj,
+                                                 const meta_any_proxy& obj_proxy,
+                                                 mono::mono_property& property,
+                                                 const std::vector<std::pair<T, std::string>>& mapping,
+                                                 const var_info& info) -> inspect_result
+    {
+        // Create script proxy wrapper
+        mono_property_proxy<T> script_proxy(property);
+        
+        // Create meta_any_proxy that bridges to the script system
+        auto prop_proxy = make_script_proxy<T>(obj_proxy, script_proxy);
+        
+        // Get current value for display
+        auto val = script_proxy.get_value(obj);
+
+        inspect_result result;
+
+        auto attribs = script_proxy.get_attributes();
+        auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
+
+        std::string tooltip;
+        if(tooltip_attrib.valid())
+        {
+            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            tooltip = invoker.get_value(tooltip_attrib);
+        }
+
+        auto current_name = value_to_name(val, mapping);
+
+        std::vector<const char*> cstrings{};
+        cstrings.reserve(mapping.size());
+
+        int current_idx = 0;
+        int i = 0;
+        for(const auto& pair : mapping)
+        {
+            cstrings.push_back(pair.second.c_str());
+
+            if(current_name == pair.second)
+            {
+                current_idx = i;
+            }
+            i++;
+        }
+
+        property_layout layout(script_proxy.get_name(), tooltip);
+
+        if(info.read_only)
+        {
+            ImGui::LabelText("##enum", "%s", cstrings[current_idx]);
+        }
+        else
+        {
+            int listbox_item_size = static_cast<int>(cstrings.size());
+
+            ImGuiComboFlags flags = 0;
+
+            if(ImGui::BeginCombo("##enum", cstrings[current_idx], flags))
+            {
+                for(int n = 0; n < listbox_item_size; n++)
+                {
+                    const bool is_selected = (current_idx == n);
+
+                    if(ImGui::Selectable(cstrings[n], is_selected))
+                    {
+                        current_idx = n;
+                        result.changed = true;
+                        result.edit_finished |= true;
+                        val = name_to_value(cstrings[current_idx], mapping);
+                        
+                        // Record the change using the proxy
+                        entt::meta_any new_value = entt::forward_as_meta(val);
+                        entt::meta_any old_value;
+                        prop_proxy.impl->getter(old_value);
+                        
+                        auto& override_ctx = ctx.get_cached<prefab_override_context>();
+                        add_property_action(ctx, override_ctx, result, prop_proxy, old_value, new_value, {});
+                    }
+
+                    ImGui::DrawItemActivityOutline();
+
+                    if(is_selected)
+                    {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+
+                ImGui::EndCombo();
+            }
+            ImGui::DrawItemActivityOutline();
+        }
+
+        return result;
     }
 };
 
@@ -317,12 +978,6 @@ struct mono_inspector<entt::handle>
     {
         inspect_result result;
 
-        auto val = mutable_field.get_value(obj);
-
-        auto& ec = ctx.get_cached<ecs>();
-        auto& scene = ec.get_scene();
-        auto e = scene.create_handle(val);
-
         auto attribs = mutable_field.get_attributes();
         auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
 
@@ -333,17 +988,19 @@ struct mono_inspector<entt::handle>
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
-        entt::meta_any var = entt::forward_as_meta(e);
-        auto var_proxy = make_proxy(var);
+        // Use the helper function to create a clean entity handle proxy
+        auto handle_proxy = make_entity_handle_proxy(obj_proxy, mutable_field, ctx);
+
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!handle_proxy.impl->getter(var))
+        {
+            return {};
+        }
 
         {
             property_layout layout(mutable_field.get_name(), tooltip);
-            result |= inspect_var(ctx, var, var_proxy, info);
-        }
-
-        if(result.changed)
-        {
-            mutable_field.set_value(obj, e.entity());
+            result |= inspect_var(ctx, var, handle_proxy, info);
         }
 
         return result;
@@ -391,21 +1048,6 @@ struct mono_inspector<asset_handle<T>>
                                 const var_info& info) -> inspect_result
     {
         inspect_result result;
-        const auto& field_type = mutable_field.get_type();
-
-        auto val = mutable_field.get_value(obj);
-
-        auto prop = field_type.get_property("uid");
-        auto mutable_prop = mono::make_property_invoker<hpp::uuid>(prop);
-
-        asset_handle<T> asset;
-        if(val)
-        {
-            auto uid = mutable_prop.get_value(val);
-
-            auto& am = ctx.get_cached<asset_manager>();
-            asset = am.get_asset<T>(uid);
-        }
 
         auto attribs = mutable_field.get_attributes();
         auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
@@ -417,26 +1059,19 @@ struct mono_inspector<asset_handle<T>>
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
-        entt::meta_any var = entt::forward_as_meta(asset);
-        auto var_proxy = make_proxy(var);
+        // Use the helper function to create a clean asset handle proxy
+        auto asset_proxy = make_asset_handle_proxy<T>(obj_proxy, mutable_field, ctx);
+
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!asset_proxy.impl->getter(var))
         {
-            property_layout layout(mutable_field.get_name(), tooltip);
-            result |= inspect_var(ctx, var, var_proxy, info);
+            return {};
         }
 
-        if(result.changed)
         {
-            auto v = var.cast<asset_handle<T>>();
-            if(v && !val)
-            {
-                val = field_type.new_instance();
-                mutable_field.set_value(obj, val);
-            }
-
-            if(val)
-            {
-                mutable_prop.set_value(val, v.uid());
-            }
+            property_layout layout(mutable_field.get_name(), tooltip);
+            result |= inspect_var(ctx, var, asset_proxy, info);
         }
 
         return result;
@@ -484,17 +1119,21 @@ struct mono_inspector<mono::mono_array<T>>
                                 const var_info& info) -> inspect_result
     {
         inspect_result result;
-        const auto& field_type = mutable_field.get_type();
 
         auto val = mutable_field.get_value(obj);
-
         mono::mono_array<T> array(val);
 
         for(size_t i = 0; i < array.size(); ++i)
         {
-            entt::meta_any element = entt::forward_as_meta(array.get(i));
-            auto var_proxy = make_proxy(element);
-            result |= unravel::inspect_var(ctx, element, var_proxy, info);
+            // Use the helper function to create a clean array element proxy
+            auto element_proxy = make_array_element_proxy<T>(obj_proxy, mutable_field, i);
+
+            // Get current value through the proxy for inspection
+            entt::meta_any element;
+            if(element_proxy.impl->getter(element))
+            {
+                result |= unravel::inspect_var(ctx, element, element_proxy, info);
+            }
         }
         return result;
     }
