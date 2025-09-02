@@ -7,6 +7,14 @@ void composite_action_t::add_sub_action(std::shared_ptr<editing_action_t> action
 {
     if (action)
     {
+
+        if(!name.empty())
+        {
+            name += "/";
+        }
+       
+        name += action->get_name();
+
         sub_actions.push_back(std::move(action));
     }
 }

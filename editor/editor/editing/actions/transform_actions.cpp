@@ -9,7 +9,7 @@ namespace unravel
 transform_move_action_t::transform_move_action_t(entt::handle ent, const math::vec3& old_pos, const math::vec3& new_pos)
     : entity(ent), old_position(old_pos), new_position(new_pos)
 {
-    name = "Move Transform";
+    name = "Position";
 }
 
 void transform_move_action_t::do_action()
@@ -56,7 +56,11 @@ auto transform_move_action_t::is_valid() const -> bool
 
 void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
 {
-    draw_in_inspector_impl(ctx, old_position, new_position, {});
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "position"}, 
+        {"pretty_name", "Position"}}
+    );
+    draw_in_inspector_impl(ctx, old_position, new_position, custom);
 }
 
 
@@ -64,7 +68,7 @@ void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
 transform_rotate_action_t::transform_rotate_action_t(entt::handle ent, const math::quat& old_rot, const math::quat& new_rot)
     : entity(ent), old_rotation(old_rot), new_rotation(new_rot)
 {
-    name = "Rotate Transform";
+    name = "Rotation";
 }
 
 void transform_rotate_action_t::do_action()
@@ -110,7 +114,11 @@ auto transform_rotate_action_t::is_valid() const -> bool
 
 void transform_rotate_action_t::draw_in_inspector(rtti::context& ctx)
 {
-    draw_in_inspector_impl(ctx, old_rotation, new_rotation, {});
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "rotation"}, 
+        {"pretty_name", "Rotation"}}
+    );
+    draw_in_inspector_impl(ctx, old_rotation, new_rotation, custom);
 }
 
 
@@ -118,7 +126,7 @@ void transform_rotate_action_t::draw_in_inspector(rtti::context& ctx)
 transform_scale_action_t::transform_scale_action_t(entt::handle ent, const math::vec3& old_sc, const math::vec3& new_sc)
     : entity(ent), old_scale(old_sc), new_scale(new_sc)
 {
-    name = "Scale Transform";
+    name = "Scale";
 }
 
 void transform_scale_action_t::do_action()
@@ -164,7 +172,11 @@ auto transform_scale_action_t::is_valid() const -> bool
 
 void transform_scale_action_t::draw_in_inspector(rtti::context& ctx)
 {
-    draw_in_inspector_impl(ctx, old_scale, new_scale, {});
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "scale"}, 
+        {"pretty_name", "Scale"}}
+    );
+    draw_in_inspector_impl(ctx, old_scale, new_scale, custom);
 }
 
 
@@ -172,7 +184,7 @@ void transform_scale_action_t::draw_in_inspector(rtti::context& ctx)
 transform_skew_action_t::transform_skew_action_t(entt::handle ent, const math::vec3& old_sk, const math::vec3& new_sk)
     : entity(ent), old_skew(old_sk), new_skew(new_sk)
 {
-    name = "Skew Transform";
+    name = "Skew";
 }
 
 void transform_skew_action_t::do_action()
@@ -218,7 +230,11 @@ auto transform_skew_action_t::is_valid() const -> bool
 
 void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
 {
-    draw_in_inspector_impl(ctx, old_skew, new_skew, {});
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "skew"}, 
+        {"pretty_name", "Skew"}}
+    );
+    draw_in_inspector_impl(ctx, old_skew, new_skew, custom);
 }
 
 

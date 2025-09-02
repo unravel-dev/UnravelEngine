@@ -52,7 +52,8 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
 
         if(override_ctx.begin_prefab_inspection(entity))
         {
-            auto proxy = make_proxy(object);
+            auto name = entity_panel::get_entity_name(entity);
+            auto proxy = make_proxy(object, name);
             auto result = inspect_var(ctx, object, proxy);
 
             if(result.edit_finished)
@@ -65,8 +66,16 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
             return;
         }
     }
+
+    std::string name;
+    if(object.type() == entt::resolve<entt::handle>())
+    {
+        auto entity = object.cast<entt::handle>();
+        name = entity_panel::get_entity_name(entity);
+    }
+
     // Fall back to normal inspection (empty reference) 
-    auto proxy = make_proxy(object);
+    auto proxy = make_proxy(object, name);
     auto result = inspect_var(ctx, object, proxy);
     
     if(result.edit_finished)

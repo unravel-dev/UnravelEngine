@@ -226,7 +226,7 @@ struct meta_any_proxy
  * @param var Variable to create proxy for
  * @return Proxy that provides direct access to the variable
  */
-auto make_proxy(entt::meta_any& var) -> meta_any_proxy;
+auto make_proxy(entt::meta_any& var, const std::string& name = {}) -> meta_any_proxy;
 
 auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy;
 
