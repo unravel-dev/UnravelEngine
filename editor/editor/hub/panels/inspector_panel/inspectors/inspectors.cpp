@@ -620,7 +620,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
     if(result.changed && !is_readonly)
     {
-        // prop.set(object, prop_var);
+        prop.set(object, prop_var);
         add_property_action(ctx, override_ctx, result, prop_proxy, prop_old_var, prop_var, prop.custom());
   
     }

@@ -1583,12 +1583,24 @@ void scene_panel::draw_inverse_kinematics_menu(editing_manager& em)
 }
 
 void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
-{
+{    
+
+
     ImGui::SetNextWindowSizeConstraints({}, {400.0f, ImGui::GetContentRegionAvail().y});
     ImGui::SetNextWindowViewportToCurrent();
+
     if(ImGui::BeginMenu(ICON_MDI_CAMERA ICON_MDI_ARROW_DOWN_BOLD))
     {
-        ImGui::TextUnformatted("Scene Camera");
+        if(ImGui::Button("Scene Camera"))
+        {
+            get_camera().destroy();
+            defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+    
+        }
+
+        ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");
+
+
 
         entt::meta_any cam = get_camera();
         inspect_var(ctx, cam, make_proxy(cam));
@@ -1684,21 +1696,21 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
 
 void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
 {
+    auto& em = ctx.get_cached<editing_manager>();
+
+
     auto camera_entity = get_camera();
     if(!camera_entity)
     {
         return;
     }
-
-    auto& em = ctx.get_cached<editing_manager>();
     auto& camera_comp = camera_entity.get<camera_component>();
     const auto& camera = camera_comp.get_camera();
     const auto& rview = camera_comp.get_render_view();
     const auto& obuffer = rview.fbo_safe_get("OBUFFER");
 
-    draw_menubar(ctx);
 
-    if(obuffer)
+    if(obuffer && obuffer->get_attachment_count() > 0)
     {
         const auto& tex = obuffer->get_texture(0);
         ImGui::Image(ImGui::ToId(tex), size);
@@ -1735,6 +1747,8 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
 
 void scene_panel::draw_ui(rtti::context& ctx)
 {
+    draw_menubar(ctx);
+
     auto& em = ctx.get_cached<editing_manager>();
     auto camera_entity = get_camera();
 
@@ -1748,6 +1762,7 @@ void scene_panel::draw_ui(rtti::context& ctx)
     auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
+
         auto pos = ImGui::GetCursorScreenPos();
         auto& camera_comp = camera_entity.get<camera_component>();
 

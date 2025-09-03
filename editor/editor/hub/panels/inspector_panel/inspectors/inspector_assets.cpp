@@ -460,6 +460,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
                 var_info tex_var_info;
                 tex_var_info.read_only = true;
+                tex_var_info.is_copyable = false;
 
                 auto tex_var_proxy = make_asset_proxy<gfx::texture>(var, var_proxy);
 
@@ -659,6 +660,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
             {
                 var_info mesh_var_info;
                 mesh_var_info.read_only = true;
+                mesh_var_info.is_copyable = false;
 
                 auto mesh_var_proxy = make_asset_proxy<mesh>(var, var_proxy);
 
@@ -1133,12 +1135,16 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
+            var_info data_var_info;
+            data_var_info.read_only = true;
+            data_var_info.is_copyable = false;
+
             auto data_var_proxy = make_asset_proxy<audio_clip>(var, var_proxy);
 
             entt::meta_any data_var;
             if(data_var_proxy.impl->getter(data_var))
             {
-                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy, data_var_info);
             }
 
             auto clip = data.get(false);
@@ -1187,10 +1193,16 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
         auto data_var = data.get(false);
         if(data_var)
         {
+            var_info data_var_info;
+            data_var_info.read_only = true;
+            data_var_info.is_copyable = false;
+
             auto data_var_proxy = make_asset_proxy<font>(var, var_proxy);
             entt::meta_any data_var;
-            data_var_proxy.impl->getter(data_var);
-            result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+            if(data_var_proxy.impl->getter(data_var))
+            {
+                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy, data_var_info);
+            }
         }
     }
 
