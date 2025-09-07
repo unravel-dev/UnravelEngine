@@ -283,11 +283,25 @@ auto camera::get_prev_view() const -> const math::transform&
     return last_view_;
 }
 
+auto camera::get_view_relative() const -> const math::transform&
+{
+    return view_relative_;
+}
+
+auto camera::get_prev_view_relative() const -> const math::transform&
+{
+    return last_view_relative_;
+}
+
 auto camera::get_view_inverse() const -> const math::transform&
 {
     return view_inverse_;
 }
 
+auto camera::get_view_inverse_relative() const -> const math::transform&
+{
+    return view_inverse_relative_;
+}
 
 auto camera::get_view_projection() const -> math::transform
 {
@@ -297,6 +311,16 @@ auto camera::get_view_projection() const -> math::transform
 auto camera::get_prev_view_projection() const -> math::transform
 {
     return get_prev_projection() * get_prev_view();
+}
+
+auto camera::get_view_projection_relative() const -> math::transform
+{
+    return get_projection() * get_view_relative();
+}
+
+auto camera::get_prev_view_projection_relative() const -> math::transform
+{
+    return get_prev_projection() * get_prev_view_relative();
 }
 
 void camera::look_at(const math::vec3& vEye, const math::vec3& vAt)
@@ -311,6 +335,11 @@ void camera::look_at(const math::vec3& vEye, const math::vec3& vAt, const math::
 
     view_ = math::lookAt(vEye, vAt, vUp);
     view_inverse_ = math::inverse(view_);
+
+
+    view_relative_ = math::lookAt(math::vec3(0.0f, 0.0f, 0.0f), vAt - vEye, vUp);
+    view_inverse_relative_ = math::inverse(view_relative_);
+
     touch();
 }
 
@@ -695,7 +724,9 @@ auto camera::estimate_pick_tolerance(float wire_tolerance,
 void camera::record_current_matrices()
 {
     last_view_ = get_view();
+    last_view_relative_ = get_view_relative();
     last_projection_ = get_projection();
+    
 }
 
 void camera::set_aa_data(const usize32_t& viewport_size,

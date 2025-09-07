@@ -16,6 +16,8 @@ REFLECT(fxaa_component)
             entt::attribute{"pretty_name", "FXAA"},
         })
         .func<&component_exists<fxaa_component>>("component_exists"_hs)
+        .func<&component_add<fxaa_component>>("component_add"_hs)
+        .func<&component_remove<fxaa_component>>("component_remove"_hs)
         .data<&fxaa_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},

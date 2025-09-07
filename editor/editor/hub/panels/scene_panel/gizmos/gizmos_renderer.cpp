@@ -61,23 +61,40 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& obuffer = rview.fbo_get("OBUFFER_DEPTH");
+    auto size = obuffer->get_size();
 
-    gfx::render_pass pass("debug_draw_pass");
-    pass.bind(obuffer.get());
-    pass.set_view_proj(view, proj);
-
-    gfx::dd_raii dd(pass.id);
-
-    bullet_backend::draw_system_gizmos(ctx, camera, dd);
-
-    draw_selection_gizmos(ctx, camera, dd);
-    draw_selection_outlines(ctx, pass.id, camera, obuffer);
-    draw_icon_gizmos(ctx, scn, camera, dd);
-
-    if(em.show_grid)
+    bool selection_mask_drawn = false;
     {
-        draw_grid(pass.id, camera, em.grid_data);
+        // Pass 1: Selection mask
+        resize_selection_mask_rt(size.width, size.height);
+        selection_mask_drawn = draw_selection_mask_pass(ctx, camera, selection_mask_);
     }
+
+    {
+        // Pass 2: Gizmos
+        gfx::render_pass pass("gizmos_pass");
+        pass.bind(obuffer.get());
+        pass.set_view_proj(view, proj);
+    
+        gfx::dd_raii dd(pass.id);
+    
+        bullet_backend::draw_system_gizmos(ctx, camera, dd);
+    
+        draw_selection_gizmos(ctx, camera, dd);
+    
+        if(selection_mask_drawn)
+        {
+            draw_outline_pass(selection_mask_, obuffer, dd);
+        }
+    
+        draw_icon_gizmos(ctx, scn, camera, dd);
+    
+        if(em.show_grid)
+        {
+            draw_grid(pass.id, camera, em.grid_data);
+        }
+    }
+    
 }
 
 auto gizmos_renderer::init(rtti::context& ctx) -> bool
@@ -123,34 +140,21 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
 void gizmos_renderer::draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    
+
     for(auto& s : em.get_selections())
     {
         draw_gizmo_var(ctx, s, camera, dd);
     }
 }
 
-void gizmos_renderer::draw_selection_outlines(rtti::context& ctx, uint32_t pass_id, const camera& camera, const gfx::frame_buffer::ptr& obuffer)
-{
-    auto size = obuffer->get_size();
-    
-    // Pass 1: Selection mask
-    resize_selection_mask_rt(size.width, size.height);
-   if(draw_selection_mask_pass(ctx, camera, selection_mask_))
-   {
-        // Pass 2: Outline
-       draw_outline_pass(pass_id, selection_mask_, obuffer);
-   }
-    
-    
-}
-
-auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool
+auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
+                                               const camera& camera,
+                                               const gfx::frame_buffer::ptr& selection_mask) -> bool
 {
     auto& em = ctx.get_cached<editing_manager>();
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
-    
+
     gfx::render_pass pass("selection_mask_pass");
     pass.bind(selection_mask.get());
     pass.set_view_proj(view, proj);
@@ -207,35 +211,30 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera&
                 model::submit_callbacks callbacks;
                 callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
                 {
-                    auto& prog = submit_params.skinned ? outline_mask_program_skinned_.program
-                                                       : outline_mask_program_.program;
+                    auto& prog =
+                        submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
                     prog->begin();
                 };
                 callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
                 {
-                    auto& prog = submit_params.skinned ? outline_mask_program_skinned_.program
-                                                       : outline_mask_program_.program;
+                    auto& prog =
+                        submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
                 };
                 callbacks.setup_params_per_submesh =
                     [&](const model::submit_callbacks::params& submit_params, const material& mat)
                 {
-                    auto& prog = submit_params.skinned ? outline_mask_program_skinned_.program
-                                                       : outline_mask_program_.program;
+                    auto& prog =
+                        submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
                     gfx::submit(pass.id, prog->native_handle(), 0, submit_params.preserve_state);
                 };
                 callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
                 {
-                    auto& prog = submit_params.skinned ? outline_mask_program_skinned_.program
-                                                       : outline_mask_program_.program;
+                    auto& prog =
+                        submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
                     prog->end();
                 };
 
-                model.submit(world_transform,
-                             submesh_transforms,
-                             bone_transforms,
-                             skinning_transforms,
-                             0,
-                             callbacks);
+                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, 0, callbacks);
 
                 any_drawn = true;
             }
@@ -245,12 +244,14 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx, const camera&
     return any_drawn;
 }
 
-void gizmos_renderer::draw_outline_pass(uint32_t pass_id, const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer)
+void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_mask,
+                                        const gfx::frame_buffer::ptr& obuffer,
+                                        gfx::dd_raii& dd)
 {
     auto size = obuffer->get_size();
-    
+
     outline_program_.program->begin();
-    
+
     // Bind the selection mask (R8) to sampler slot 0
     gfx::set_texture(outline_program_.s_tex, 0, selection_mask);
 
@@ -269,7 +270,7 @@ void gizmos_renderer::draw_outline_pass(uint32_t pass_id, const gfx::frame_buffe
     // Alpha-blend the outline over existing scene
     gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
 
-    gfx::submit(pass_id, outline_program_.program->native_handle());
+    gfx::submit(dd.view, outline_program_.program->native_handle());
 
     outline_program_.program->end();
 }
@@ -277,10 +278,10 @@ void gizmos_renderer::draw_outline_pass(uint32_t pass_id, const gfx::frame_buffe
 void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    
+
     if(!em.show_icon_gizmos)
         return;
-        
+
     hpp::for_each_type<camera_component, light_component, reflection_probe_component, audio_source_component>(
         [&](auto tag)
         {

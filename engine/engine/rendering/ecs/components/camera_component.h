@@ -6,6 +6,7 @@
 #include <engine/rendering/pipeline/passes/assao_pass.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
+#include <engine/layers/layer_mask.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -27,9 +28,9 @@ public:
 
     /**
      * @brief Sets the field of view (FOV).
-     * @param[in] fovDegrees The FOV in degrees.
+     * @param[in] fov_degrees The FOV in degrees.
      */
-    void set_fov(float fovDegrees);
+    void set_fov(float fov_degrees);
 
     /**
      * @brief Sets the near clipping distance.
@@ -137,6 +138,35 @@ public:
     auto get_pipeline_data() -> pipeline_camera&;
     auto get_pipeline_data() const -> const pipeline_camera&;
 
+    /**
+     * @brief Gets the render include mask.
+     * @return The render include mask.
+     */
+    auto get_render_include_mask() const -> layer_mask;
+
+    /**
+     * @brief Sets the render include mask.
+     * @param mask The render include mask to set.
+     */
+    void set_render_include_mask(layer_mask mask);
+
+    /**
+     * @brief Gets the render exclude mask.
+     * @return The render exclude mask.
+     */
+    auto get_render_exclude_mask() const -> layer_mask;
+
+    /**
+     * @brief Sets the render exclude mask.
+     * @param mask The render exclude mask to set.
+     */
+    void set_render_exclude_mask(layer_mask mask);
+
+    /**
+     * @brief Gets the effective render mask (include - exclude).
+     * @return The effective render mask.
+     */
+    auto get_render_mask() const -> layer_mask;
 
 private:
     /// @brief The camera object this component represents
@@ -147,6 +177,12 @@ private:
 
     /// @brief The camera storage
     camera_storage storage_;
+
+    /// @brief Layers to include when rendering
+    layer_mask render_include_mask_{layer_reserved::everything_layer};
+
+    /// @brief Layers to exclude when rendering
+    layer_mask render_exclude_mask_{layer_reserved::nothing_layer};
 };
 
 } // namespace unravel

@@ -51,8 +51,7 @@ auto create_or_resize_d_buffer(gfx::render_view& rview,
     return depth;
 }
 
-auto create_or_resize_hiz_buffer(gfx::render_view& rview,
-                                 const usize32_t& viewport_size) -> const gfx::texture::ptr&
+auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewport_size) -> const gfx::texture::ptr&
 {
     auto& hiz = rview.tex_get_or_emplace("HIZBUFFER");
     if(!hiz || (hiz && hiz->get_size() != viewport_size))
@@ -63,7 +62,7 @@ auto create_or_resize_hiz_buffer(gfx::render_view& rview,
                                              true,                            // generate mips
                                              1,                               // one layer
                                              gfx::texture_format::R32F,       // R32F for better precision
-                                                 BGFX_TEXTURE_RT |            // Render target
+                                             BGFX_TEXTURE_RT |                // Render target
                                                  BGFX_TEXTURE_COMPUTE_WRITE | // Allow compute writes
                                                  BGFX_SAMPLER_MIN_POINT |     // Point sampling for min filter
                                                  BGFX_SAMPLER_MAG_POINT |     // Point sampling for mag filter
@@ -71,7 +70,6 @@ auto create_or_resize_hiz_buffer(gfx::render_view& rview,
                                                  BGFX_SAMPLER_U_CLAMP |       // Clamp UVs
                                                  BGFX_SAMPLER_V_CLAMP         // Clamp UVs
         );
-
     }
 
     return hiz;
@@ -170,7 +168,6 @@ auto create_or_resize_r_buffer(gfx::render_view& rview,
 
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
-
     }
 
     return fbo;
@@ -183,18 +180,18 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
 
     auto& tex = rview.tex_get_or_emplace("OBUFFER");
     tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                                    viewport_size.height,
-                                                    false,
-                                                    1,
-                                                    gfx::texture_format::RGBA8,
-                                                    BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
-                                                    
+                                         viewport_size.height,
+                                         false,
+                                         1,
+                                         gfx::texture_format::RGBA8,
+                                         BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
+
     {
         auto& fbo = rview.fbo_get_or_emplace("OBUFFER_DEPTH");
         if(!fbo || (fbo && fbo->get_size() != viewport_size))
         {
             fbo = std::make_shared<gfx::frame_buffer>();
-            fbo->populate({tex, depth}); 
+            fbo->populate({tex, depth});
         }
     }
 
@@ -204,8 +201,6 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
     }
-    
-    
 
     return fbo;
 }
@@ -341,7 +336,6 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/Reflection Generation Pass");
 
-
     scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
         [&](auto e, auto&& transform_comp, auto&& reflection_probe_comp, auto&& active)
         {
@@ -424,7 +418,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
         });
 }
 
-void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags query)
+void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags query, layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
@@ -437,12 +431,15 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
     const auto& proj = camera.get_projection();
     const auto& camera_pos = camera.get_position();
 
-    scn.registry->view<transform_component, light_component, active_component>().each(
-        [&](auto e, auto&& transform_comp, auto&& light_comp, auto&& active)
+    scn.registry->view<transform_component, light_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& light_comp)
         {
             const auto& light = light_comp.get_light();
 
-            bool camera_dependant = light.type == light_type::directional;
+            bool is_directional = light.type == light_type::directional;
+            bool has_render_mask = render_mask.mask != layer_reserved::everything_layer;
+            bool camera_dependant = is_directional || has_render_mask;
+            bool is_active = scn.registry->all_of<active_component>(e);
 
             auto& generator = light_comp.get_shadowmap_generator();
             generator.enable_adaptive_shadows(true);
@@ -458,9 +455,14 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
             world_transform.reset_scale();
             const auto& light_direction = world_transform.z_unit_axis();
 
-            const auto& bounds = light_comp.get_bounds_precise(light_direction);
-            generator.update(camera, light, world_transform);
+            generator.update(camera, light, world_transform, is_active);
 
+            if(!is_active)
+            {
+                return;
+            }
+
+            const auto& bounds = light_comp.get_bounds_precise(light_direction);
             if(!camera.test_obb(bounds, world_transform))
             {
                 return;
@@ -473,7 +475,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
 
             if(!queried)
             {
-                dirty_models = gather_visible_models(scn, nullptr, query);
+                dirty_models = gather_visible_models(scn, nullptr, query, render_mask);
                 queried = true;
             }
 
@@ -493,13 +495,14 @@ auto deferred::run_pipeline(scene& scn,
                             const camera& camera,
                             gfx::render_view& rview,
                             delta_t dt,
-                            const run_params& params) -> gfx::frame_buffer::ptr
+                            const run_params& params,
+                            layer_mask render_mask) -> gfx::frame_buffer::ptr
 {
     const auto& viewport_size = camera.get_viewport_size();
     const auto& obuffer = create_or_resize_o_buffer(rview, viewport_size, params);
 
-    run_pipeline_impl(obuffer, scn, camera, rview, dt, params, pipeline_steps::full);
-    
+    run_pipeline_impl(obuffer, scn, camera, rview, dt, params, pipeline_steps::full, render_mask);
+
     return obuffer;
 }
 
@@ -508,15 +511,15 @@ void deferred::run_pipeline(const gfx::frame_buffer::ptr& output,
                             const camera& camera,
                             gfx::render_view& rview,
                             delta_t dt,
-                            const run_params& params)
+                            const run_params& params,
+                            layer_mask render_mask)
 {
-    auto obuffer = run_pipeline(scn, camera, rview, dt, params);
+    auto obuffer = run_pipeline(scn, camera, rview, dt, params, render_mask);
 
     blit_pass::run_params pass_params;
     pass_params.input = obuffer;
     pass_params.output = output;
     blit_pass_.run(pass_params);
-    
 }
 
 void deferred::set_debug_pass(int pass)
@@ -530,7 +533,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  gfx::render_view& rview,
                                  delta_t dt,
                                  const run_params& params,
-                                 pipeline_flags pflags)
+                                 pipeline_flags pflags,
+                                 layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Run Pipeline");
 
@@ -547,7 +551,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(apply_shadows)
     {
-        build_shadows(scn, camera);
+        build_shadows(scn, camera, visibility_query::not_specified, render_mask);
     }
 
     const auto& viewport_size = camera.get_viewport_size();
@@ -556,10 +560,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     create_or_resize_l_buffer(rview, viewport_size, params);
     create_or_resize_r_buffer(rview, viewport_size, params);
 
-
     if(pflags & pipeline_steps::geometry_pass)
     {
-        visibility_set = gather_visible_models(scn, &camera.get_frustum(), params.vflags);
+        visibility_set = gather_visible_models(scn, &camera.get_frustum(), params.vflags, render_mask);
     }
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
@@ -809,11 +812,13 @@ auto deferred::run_lighting_pass(scene& scn,
 
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
-
             }
             if(light.type == light_type::point)
             {
-                float light_data[4] = {light.point_data.range, light.point_data.exponent_falloff, 0.0f, light.ambient_intensity};
+                float light_data[4] = {light.point_data.range,
+                                       light.point_data.exponent_falloff,
+                                       0.0f,
+                                       light.ambient_intensity};
 
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -1091,11 +1096,11 @@ auto deferred::run_ssr_pass(const camera& camera,
 
     ssr_params.output = rview.fbo_get("RBUFFER");
     ssr_params.g_buffer = rview.fbo_get("GBUFFER");
-    
+
     ssr_params.previous_frame = rview.fbo_get("LBUFFER")->get_texture();
-    
+
     ssr_params.cam = &camera;
-        
+
     if(rparams.fill_ssr_params)
     {
         rparams.fill_ssr_params(ssr_params);
@@ -1107,9 +1112,8 @@ auto deferred::run_ssr_pass(const camera& camera,
 
         ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
     }
-    
 
-    //BUG Cone tracing is not working properly, so we disable it for now.
+    // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
 
     return ssr_pass_.run(rview, ssr_params);
@@ -1209,10 +1213,10 @@ auto deferred::run_hiz_pass(const camera& camera, gfx::render_view& rview, delta
     if(!gbuffer)
         return nullptr;
 
-
     // Run Hi-Z pass using the base class's pass
     hiz_pass::run_params params;
-    params.depth_buffer = gbuffer->get_texture(4);;
+    params.depth_buffer = gbuffer->get_texture(4);
+    ;
     params.output_hiz = rview.tex_get("HIZBUFFER");
     params.cam = &camera;
 

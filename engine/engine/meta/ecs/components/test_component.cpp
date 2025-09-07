@@ -34,6 +34,8 @@ REFLECT(test_component)
             entt::attribute{"pretty_name", "Test"},
         })
         .func<&component_exists<test_component>>("component_exists"_hs)
+        .func<&component_add<test_component>>("component_add"_hs)
+        .func<&component_remove<test_component>>("component_remove"_hs)
         .data<&test_component::str>("str"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "str"},

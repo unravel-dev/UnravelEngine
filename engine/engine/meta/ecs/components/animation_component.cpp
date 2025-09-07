@@ -35,6 +35,8 @@ REFLECT(animation_component)
             entt::attribute{"pretty_name", "Animation"},
         })
         .func<&component_exists<animation_component>>("component_exists"_hs)
+        .func<&component_add<animation_component>>("component_add"_hs)
+        .func<&component_remove<animation_component>>("component_remove"_hs)
         .data<&animation_component::set_animation, &animation_component::get_animation>("animation"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation"},

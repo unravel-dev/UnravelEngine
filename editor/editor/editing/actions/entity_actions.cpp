@@ -6,6 +6,80 @@
 namespace unravel
 {
 
+entity_add_component_action_t::entity_add_component_action_t(entt::handle ent, entt::meta_type component_type)
+    : entity(ent), component_type(component_type)
+{
+    name = "Add Component";
+}
+
+void entity_add_component_action_t::do_action()
+{
+    if (entity)
+    {
+        do_was_successful = component_type.invoke("component_add"_hs, {}, entity).cast<bool>();
+    }
+}
+
+void entity_add_component_action_t::undo_action()
+{
+    if (entity)
+    {
+        component_type.invoke("component_remove"_hs, {}, entity);
+    }
+}
+
+auto entity_add_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_add_component_action_t::is_valid() const -> bool
+{
+    return entity.valid() && component_type;
+}
+
+void entity_add_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    //draw_in_inspector_impl(ctx, component_type, component_type, {});
+}
+
+entity_remove_component_action_t::entity_remove_component_action_t(entt::handle ent, entt::meta_type component_type)
+    : entity(ent), component_type(component_type)
+{
+    name = "Remove Component";
+}
+
+void entity_remove_component_action_t::do_action()
+{
+    if (entity)
+    {
+        do_was_successful = component_type.invoke("component_remove"_hs, {}, entity).cast<bool>();
+    }
+}
+
+void entity_remove_component_action_t::undo_action()
+{
+    if (entity)
+    {
+        component_type.invoke("component_add"_hs, {}, entity);
+    }
+}
+
+auto entity_remove_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_remove_component_action_t::is_valid() const -> bool
+{
+    return entity.valid() && component_type;
+}
+
+void entity_remove_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    //draw_in_inspector_impl(ctx, component_type, component_type, {});
+}
+
 // Transform Move Action Implementation
 entity_set_active_action_t::entity_set_active_action_t(entt::handle ent, bool old_active, bool new_active)
     : entity(ent), old_active(old_active), new_active(new_active)

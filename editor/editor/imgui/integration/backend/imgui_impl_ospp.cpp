@@ -921,23 +921,50 @@ static void ImGui_ImplOSPP_UpdateMonitors()
     }
 }
 
+static void ImGui_ImplOSPP_GetWindowSizeAndFramebufferScale(unravel::render_window* window, ImVec2* out_size, ImVec2* out_framebuffer_scale)
+{
+    int w, h;
+    int display_w, display_h;
+
+    auto size = window->get_window().get_size();
+    if(window->get_window().is_minimized())
+    {
+        w = h = 0;
+    }
+    else
+    {
+        w = size.w;
+        h = size.h;
+    }
+    auto surface_size = window->get_surface()->get_size();
+    if(surface_size.width != size.w || surface_size.height != size.h)
+    {
+        display_w = surface_size.width;
+        display_h = surface_size.height;
+    }
+    else
+    {
+        display_w = w;
+        display_h = h;
+    }
+    if (out_size != nullptr)
+        *out_size = ImVec2((float)w, (float)h);
+    if (out_framebuffer_scale != nullptr)
+        *out_framebuffer_scale = (w > 0 && h > 0) ? ImVec2((float)display_w / w, (float)display_h / h) : ImVec2(1.0f, 1.0f);
+}
+
 void ImGui_ImplOSPP_NewFrame(float delta_time)
 {
     ImGui_ImplOSPP_Data* bd = ImGui_ImplOSPP_GetBackendData();
     IM_ASSERT(bd != nullptr && "Did you call ImGui_ImplOSPP_Init()?");
     ImGuiIO& io = ImGui::GetIO();
 
-    // Setup display size (every frame to accommodate for window resizing)
-    auto window_size = bd->Window->get_window().get_size();
-    io.DisplaySize = ImVec2(float(window_size.w), float(window_size.h));
+    ImGui_ImplOSPP_GetWindowSizeAndFramebufferScale(bd->Window, &io.DisplaySize, &io.DisplayFramebufferScale);
+
     io.DeltaTime = delta_time;
     if(io.DeltaTime <= 0.00001f)
         io.DeltaTime = 1.0f / 60.0f;
-    auto window_surface_size = bd->Window->get_surface()->get_size();
 
-    if(window_size.w > 0 && window_size.h > 0)
-        io.DisplayFramebufferScale = ImVec2(float(window_surface_size.width) / float(window_size.w),
-                                            float(window_surface_size.height) / float(window_size.h));
 
     // Update monitors
     if(bd->WantUpdateMonitors)
@@ -1074,6 +1101,15 @@ static void ImGui_ImplOSPP_SetWindowSize(ImGuiViewport* viewport, ImVec2 size)
     vd->Window->resize(uint32_t(size.x), uint32_t(size.y));
 }
 
+static ImVec2 ImGui_ImplOSPP_GetWindowFramebufferScale(ImGuiViewport* viewport)
+{
+    ImGui_ImplOSPP_ViewportData* vd = ImGui_ImplOSPP_GetViewportData(viewport);
+    ImVec2 framebuffer_scale;
+    ImGui_ImplOSPP_GetWindowSizeAndFramebufferScale(vd->Window, nullptr, &framebuffer_scale);
+    return framebuffer_scale;
+}
+
+
 static void ImGui_ImplOSPP_SetWindowTitle(ImGuiViewport* viewport, const char* title)
 {
     ImGui_ImplOSPP_ViewportData* vd = ImGui_ImplOSPP_GetViewportData(viewport);
@@ -1134,6 +1170,7 @@ static void ImGui_ImplOSPP_InitPlatformInterface(unravel::render_window* window)
     platform_io.Platform_GetWindowPos = ImGui_ImplOSPP_GetWindowPos;
     platform_io.Platform_SetWindowSize = ImGui_ImplOSPP_SetWindowSize;
     platform_io.Platform_GetWindowSize = ImGui_ImplOSPP_GetWindowSize;
+    platform_io.Platform_GetWindowFramebufferScale = ImGui_ImplOSPP_GetWindowFramebufferScale;
     platform_io.Platform_SetWindowFocus = ImGui_ImplOSPP_SetWindowFocus;
     platform_io.Platform_GetWindowFocus = ImGui_ImplOSPP_GetWindowFocus;
     platform_io.Platform_GetWindowMinimized = ImGui_ImplOSPP_GetWindowMinimized;

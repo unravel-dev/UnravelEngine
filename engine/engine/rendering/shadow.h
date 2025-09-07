@@ -604,7 +604,7 @@ public:
     void deinit_textures();
     void deinit_uniforms();
 
-    void update(const camera& cam, const light& l, const math::transform& ltrans);
+    void update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active);
     auto already_updated() const -> bool;
 
     void generate_shadowmaps(const shadow_map_models_t& model);

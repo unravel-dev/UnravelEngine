@@ -102,6 +102,8 @@ REFLECT(tonemapping_component)
             entt::attribute{"pretty_name", "Tonemapping"},
         })
         .func<&component_exists<tonemapping_component>>("component_exists"_hs)
+        .func<&component_add<tonemapping_component>>("component_add"_hs)
+        .func<&component_remove<tonemapping_component>>("component_remove"_hs)
         .data<&tonemapping_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},

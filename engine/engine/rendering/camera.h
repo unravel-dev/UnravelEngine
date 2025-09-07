@@ -214,20 +214,23 @@ public:
     auto get_view() const -> const math::transform&;
     auto get_prev_view() const -> const math::transform&;
     auto get_view_inverse() const -> const math::transform&;
-
+    auto get_view_relative() const -> const math::transform&;
+    auto get_prev_view_relative() const -> const math::transform&;
+    auto get_view_inverse_relative() const -> const math::transform&;
     /**
      * @brief Retrieves the previous view matrix.
      *
      * @return The previous view matrix.
      */
     auto get_prev_view_projection() const -> math::transform;
-
+    auto get_prev_view_projection_relative() const -> math::transform;
     /**
      * @brief Retrieves the current view-projection matrix.
      *
      * @return The current view-projection matrix.
      */
     auto get_view_projection() const -> math::transform;
+    auto get_view_projection_relative() const -> math::transform;
 
     /**
      * @brief Makes a copy of the current view and projection matrices before they are changed.
@@ -476,10 +479,16 @@ protected:
     /// Cached view matrix
     math::transform view_;
     math::transform view_inverse_;
+
+    math::transform view_relative_;
+    math::transform view_inverse_relative_;
+
     /// Cached projection matrix.
     mutable math::transform projection_;
     /// Cached "previous" view matrix.
     math::transform last_view_;
+    math::transform last_view_relative_;
+
     /// Cached "previous" projection matrix.
     math::transform last_projection_;
     /// Details regarding the camera frustum.

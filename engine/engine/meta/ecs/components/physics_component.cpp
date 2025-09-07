@@ -237,6 +237,8 @@ REFLECT(physics_component)
             entt::attribute{"pretty_name", "Physics"},
         })
         .func<&component_exists<physics_component>>("component_exists"_hs)
+        .func<&component_add<physics_component>>("component_add"_hs)
+        .func<&component_remove<physics_component>>("component_remove"_hs)
         .data<&physics_component::set_is_using_gravity, &physics_component::is_using_gravity>("is_using_gravity"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "is_using_gravity"},

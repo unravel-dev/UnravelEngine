@@ -94,9 +94,7 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
 
     // 2) We want to keep the camera's orientation but remove its translation,
     //    so the skybox doesn't move with the camera.
-    auto viewMtx = cam.get_view();
-    viewMtx.set_translation(0.0f, 0.0f, 0.0f);
-    pass.set_view_proj(viewMtx, cam.get_projection());
+    pass.set_view_proj(cam.get_view_relative(), cam.get_projection());
 
     // 3) Begin program, set up the cubemap
     program_.program->begin();

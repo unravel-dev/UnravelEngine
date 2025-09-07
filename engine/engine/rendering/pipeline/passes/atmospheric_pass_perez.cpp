@@ -266,7 +266,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     hour_ = bx::mod(hour_, 24.0f);
     sun_.update(hour_);
 
-    const auto& view = camera.get_view();
+    const auto& view = camera.get_view_relative();
     const auto& proj = camera.get_projection();
 
     const auto surface = input.get();

@@ -302,11 +302,34 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
     auto& transform_comp = e.get<transform_component>();
     const auto& world_transform = transform_comp.get_transform_global();
 
+    constexpr float MIN_VISIBLE_DISTANCE = 1.0f;
+    constexpr float MIN_FADE_RANGE = 0.5f;
+
+    constexpr float MAX_VISIBLE_DISTANCE = 50.0f;
+    constexpr float MAX_FADE_RANGE = 25.0f;
+
     auto dist = math::distance(world_transform.get_position(), cam.get_position());
-    dist = math::clamp(dist - std::min(dist, 1.0f), 0.0f, 1.0f);
+    
+    // Calculate distance-based alpha: full visibility in range (MIN_VISIBLE_DISTANCE - MAX_VISIBLE_DISTANCE), fade outside
+    float distance_alpha = 1.0f;
+    if(dist < MIN_VISIBLE_DISTANCE)
+    {
+        // Fade from 0 to 1 as distance goes from (MIN_VISIBLE_DISTANCE - MIN_FADE_RANGE) to MIN_VISIBLE_DISTANCE
+        float fade_start = MIN_VISIBLE_DISTANCE - MIN_FADE_RANGE;
+        distance_alpha = math::clamp((dist - fade_start) / MIN_FADE_RANGE, 0.0f, 1.0f);
+    }
+    else if(dist > MAX_VISIBLE_DISTANCE)
+    {
+        // Fade from 1 to 0 as distance goes from MAX_VISIBLE_DISTANCE to (MAX_VISIBLE_DISTANCE + MAX_FADE_RANGE)
+        distance_alpha = math::clamp(1.0f - (dist - MAX_VISIBLE_DISTANCE) / MAX_FADE_RANGE, 0.0f, 1.0f);
+    }
+    // else: dist is in range [MIN_VISIBLE_DISTANCE, MAX_VISIBLE_DISTANCE], keep distance_alpha = 1.0f
 
-
-    auto alpha = math::lerp(0.0f, em.billboard_data.opacity, dist / 1.0f);
+    auto alpha = em.billboard_data.opacity * distance_alpha;
+    
+    // Early return if completely transparent
+    if(alpha <= 0.0f)
+        return;
 
     auto col = math::color::white();
 

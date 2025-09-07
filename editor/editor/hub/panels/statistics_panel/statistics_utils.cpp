@@ -113,6 +113,7 @@ auto draw_resource_bar(const char* name,
     
     if(item_hovered)
     {
+        ImGui::SetNextWindowViewportToCurrent();
         ImGui::BeginTooltip();
         ImGui::Text("%s %5.2f%%", tooltip, static_cast<double>(percentage * 100.0f));
         ImGui::EndTooltip();

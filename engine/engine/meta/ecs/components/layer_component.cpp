@@ -17,6 +17,8 @@ REFLECT(layer_component)
             entt::attribute{"pretty_name", "Layer"},
         })
         .func<&component_exists<layer_component>>("component_exists"_hs)
+        .func<&component_add<layer_component>>("component_add"_hs)
+        .func<&component_remove<layer_component>>("component_remove"_hs)
         .data<&layer_component::layers>("layers"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "layers"},

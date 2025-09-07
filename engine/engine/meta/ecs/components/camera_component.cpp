@@ -1,6 +1,7 @@
 #include "camera_component.hpp"
 
 #include <engine/meta/rendering/camera.hpp>
+#include <engine/meta/layers/layer_mask.hpp>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -29,6 +30,8 @@ REFLECT(camera_component)
             entt::attribute{"pretty_name", "Camera"},
         })
         .func<&component_exists<camera_component>>("component_exists"_hs)
+        .func<&component_add<camera_component>>("component_add"_hs)
+        .func<&component_remove<camera_component>>("component_remove"_hs)
         .data<&camera_component::set_projection_mode, &camera_component::get_projection_mode>("projection_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "projection_mode"},
@@ -71,12 +74,32 @@ REFLECT(camera_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "far_clip_distance"},
             entt::attribute{"pretty_name", "Far Clip"},
+        })
+        .data<&camera_component::set_render_include_mask, &camera_component::get_render_include_mask>("include_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "include_layers"},
+            entt::attribute{"pretty_name", "Include Layers"},
+            entt::attribute{"tooltip", "Layers to include when rendering."},
+        })
+        .data<&camera_component::set_render_exclude_mask, &camera_component::get_render_exclude_mask>("exclude_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exclude_layers"},
+            entt::attribute{"pretty_name", "Exclude Layers"},
+            entt::attribute{"tooltip", "Layers to exclude when rendering."},
+        })
+        .data<nullptr, &camera_component::get_render_mask>("render_layers"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "render_layers"},
+            entt::attribute{"pretty_name", "Render Layers"},
+            entt::attribute{"tooltip", "Layers (Include - Exclude) used when rendering."},
         });
 }
 
 SAVE(camera_component)
 {
     try_save(ar, ser20::make_nvp("camera", obj.get_camera()));
+    try_save(ar, ser20::make_nvp("render_include_layers", obj.get_render_include_mask()));
+    try_save(ar, ser20::make_nvp("render_exclude_layers", obj.get_render_exclude_mask()));
 }
 SAVE_INSTANTIATE(camera_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(camera_component, ser20::oarchive_binary_t);
@@ -84,6 +107,18 @@ SAVE_INSTANTIATE(camera_component, ser20::oarchive_binary_t);
 LOAD(camera_component)
 {
     try_load(ar, ser20::make_nvp("camera", obj.get_camera()));
+    
+    layer_mask render_include_layers{layer_reserved::everything_layer};
+    if(try_load(ar, ser20::make_nvp("render_include_layers", render_include_layers)))
+    {
+        obj.set_render_include_mask(render_include_layers);
+    }
+    
+    layer_mask render_exclude_layers{layer_reserved::nothing_layer};
+    if(try_load(ar, ser20::make_nvp("render_exclude_layers", render_exclude_layers)))
+    {
+        obj.set_render_exclude_mask(render_exclude_layers);
+    }
 }
 LOAD_INSTANTIATE(camera_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(camera_component, ser20::iarchive_binary_t);

@@ -100,4 +100,23 @@ auto component_exists(entt::handle entity) -> bool
     return entity.all_of<T>();
 }
 
+template<typename T>
+auto component_add(entt::handle entity) -> bool
+{
+    bool has_component = entity.all_of<T>();
+    if(has_component)
+    {
+        return false;
+    }
+    entity.emplace<T>();
+    return true;
+}
+
+template<typename T>
+auto component_remove(entt::handle entity) -> bool
+{
+    size_t removed = entity.remove<T>();
+    return removed > 0;
+}
+
 } // namespace unravel

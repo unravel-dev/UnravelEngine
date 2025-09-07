@@ -17,6 +17,8 @@ REFLECT(reflection_probe_component)
             entt::attribute{"pretty_name", "Reflection Probe"},
         })
         .func<&component_exists<reflection_probe_component>>("component_exists"_hs)
+        .func<&component_add<reflection_probe_component>>("component_add"_hs)
+        .func<&component_remove<reflection_probe_component>>("component_remove"_hs)
         .data<&reflection_probe_component::set_probe, &reflection_probe_component::get_probe>("probe"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "probe"},

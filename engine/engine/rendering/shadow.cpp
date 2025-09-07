@@ -1233,11 +1233,11 @@ auto shadowmap_generator::already_updated() const -> bool
     return last_update_ == gfx::get_render_frame();
 }
 
-void shadowmap_generator::update(const camera& cam, const light& l, const math::transform& ltrans)
+void shadowmap_generator::update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active)
 {
     last_update_ = gfx::get_render_frame();
 
-    if(l.casts_shadows == false)
+    if(!l.casts_shadows)
     {
         deinit_textures();
         return;

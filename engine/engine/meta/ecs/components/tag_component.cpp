@@ -16,6 +16,8 @@ REFLECT(tag_component)
             entt::attribute{"pretty_name", "Tag"},
         })
         .func<&component_exists<tag_component>>("component_exists"_hs)
+        .func<&component_add<tag_component>>("component_add"_hs)
+        .func<&component_remove<tag_component>>("component_remove"_hs)
         .data<&tag_component::name>("name"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "name"},

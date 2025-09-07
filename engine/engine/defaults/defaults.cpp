@@ -817,7 +817,7 @@ auto defaults::calc_bounds_sphere_global(entt::handle entity, bool use_bbox_diag
     result.position = box.get_center();
 
     // 2) radius is half the diagonal length
-    math::vec3 diag = box.max - box.min;
+    math::vec3 diag = box.get_dimensions();
     float max_abs = math::max(math::abs(diag.x), math::max(math::abs(diag.y), math::abs(diag.z)));
     float     radius = 0.5f * (use_bbox_diagonal ? math::length(diag) : max_abs);
     result.radius = radius;

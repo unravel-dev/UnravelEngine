@@ -2,6 +2,7 @@
 
 #include <engine/ecs/ecs.h>
 #include <engine/rendering/camera.h>
+#include <engine/layers/layer_mask.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 
@@ -95,13 +96,15 @@ public:
     /**
      * @brief Gathers visible models from the scene based on the given query.
      * @param scn The scene to gather models from.
-     * @param camera The camera used for visibility determination.
+     * @param frustum The frustum used for visibility determination.
      * @param query The visibility query flags.
+     * @param render_mask Render mask to filter entities by layers.
      * @return A vector of handles to the visible models.
      */
     virtual auto gather_visible_models(scene& scn,
                                        const math::frustum* frustum,
-                                       visibility_flags query = visibility_query::is_static) -> visibility_set_models_t;
+                                       visibility_flags query,
+                                       const layer_mask& render_mask) -> visibility_set_models_t;
 
     /**
      * @brief Renders the entire scene from the camera's perspective.
@@ -117,7 +120,8 @@ public:
                               const camera& camera,
                               gfx::render_view& rview,
                               delta_t dt,
-                              const run_params& params) -> gfx::frame_buffer::ptr = 0;
+                              const run_params& params,
+                              layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) -> gfx::frame_buffer::ptr = 0;
 
     /**
      * @brief Renders the entire scene from the camera's perspective to the specified output.
@@ -134,7 +138,8 @@ public:
                               const camera& camera,
                               gfx::render_view& rview,
                               delta_t dt,
-                              const run_params& params) = 0;
+                              const run_params& params,
+                              layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) = 0;
 
     virtual void set_debug_pass(int pass) = 0;
 

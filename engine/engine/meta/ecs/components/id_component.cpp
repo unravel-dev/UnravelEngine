@@ -16,6 +16,8 @@ REFLECT(id_component)
             entt::attribute{"pretty_name", "Id"},
         })
         .func<&component_exists<id_component>>("component_exists"_hs)
+        .func<&component_add<id_component>>("component_add"_hs)
+        .func<&component_remove<id_component>>("component_remove"_hs)
         .data<nullptr, &id_component::id>("id"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "id"},

@@ -185,6 +185,8 @@ REFLECT(text_component)
             entt::attribute{"pretty_name", "Text"},
         })
         .func<&component_exists<text_component>>("component_exists"_hs)
+        .func<&component_add<text_component>>("component_add"_hs)
+        .func<&component_remove<text_component>>("component_remove"_hs)
         .data<&text_component::set_text, &text_component::get_text>("text"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "text"},

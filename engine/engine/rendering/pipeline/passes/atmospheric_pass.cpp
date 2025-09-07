@@ -49,7 +49,7 @@ auto atmospheric_pass::init(rtti::context& ctx) -> bool
 
 void atmospheric_pass::run(gfx::frame_buffer::ptr input, const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& params)
 {
-    const auto& view = camera.get_view();
+    const auto& view = camera.get_view_relative();
     const auto& proj = camera.get_projection();
 
     const auto surface = input.get();

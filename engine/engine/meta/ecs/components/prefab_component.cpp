@@ -56,6 +56,8 @@ REFLECT(prefab_component)
             entt::attribute{"pretty_name", "Prefab"},
         })
         .func<&component_exists<prefab_component>>("component_exists"_hs)
+        .func<&component_add<prefab_component>>("component_add"_hs)
+        .func<&component_remove<prefab_component>>("component_remove"_hs)
         .data<&prefab_component::source>("source"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "source"},
@@ -101,6 +103,8 @@ REFLECT(prefab_id_component)
             entt::attribute{"pretty_name", "Prefab Id"},
         })
         .func<&component_exists<prefab_id_component>>("component_exists"_hs)
+        .func<&component_add<prefab_id_component>>("component_add"_hs)
+        .func<&component_remove<prefab_id_component>>("component_remove"_hs)
         .data<nullptr, &prefab_id_component::id>("id"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "id"},

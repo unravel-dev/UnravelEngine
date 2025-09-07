@@ -12,6 +12,7 @@ void camera_component::update(const math::transform& t)
     // Release the unused fbos and textures
     pipeline_camera_.get_camera().record_current_matrices();
     pipeline_camera_.get_camera().look_at(t.get_position(), t.get_position() + t.z_unit_axis(), t.y_unit_axis());
+
 }
 
 
@@ -65,9 +66,9 @@ auto camera_component::get_pipeline_data() const -> const pipeline_camera&
     return pipeline_camera_;
 }
 
-void camera_component::set_fov(float fovDegrees)
+void camera_component::set_fov(float fov_degrees)
 {
-    pipeline_camera_.get_camera().set_fov(fovDegrees);
+    pipeline_camera_.get_camera().set_fov(fov_degrees);
 }
 
 void camera_component::set_near_clip(float distance)
@@ -111,5 +112,30 @@ auto camera_component::get_camera() -> camera&
 auto camera_component::get_camera() const -> const camera&
 {
     return pipeline_camera_.get_camera();
+}
+
+auto camera_component::get_render_include_mask() const -> layer_mask
+{
+    return render_include_mask_;
+}
+
+void camera_component::set_render_include_mask(layer_mask mask)
+{
+    render_include_mask_ = mask;
+}
+
+auto camera_component::get_render_exclude_mask() const -> layer_mask
+{
+    return render_exclude_mask_;
+}
+
+void camera_component::set_render_exclude_mask(layer_mask mask)
+{
+    render_exclude_mask_ = mask;
+}
+
+auto camera_component::get_render_mask() const -> layer_mask
+{
+    return layer_mask{render_include_mask_.mask & ~render_exclude_mask_.mask};
 }
 } // namespace unravel

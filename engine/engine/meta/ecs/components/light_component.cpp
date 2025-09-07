@@ -19,6 +19,8 @@ REFLECT(light_component)
             entt::attribute{"pretty_name", "Light"},
         })
         .func<&component_exists<light_component>>("component_exists"_hs)
+        .func<&component_add<light_component>>("component_add"_hs)
+        .func<&component_remove<light_component>>("component_remove"_hs)
         .data<&light_component::set_light, &light_component::get_light>("light"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light"},

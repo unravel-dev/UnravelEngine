@@ -646,11 +646,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 callbacks.on_add = [&]()
                 {
                     data.emplace<ctype>();
+
+                    // auto& em = ctx.get_cached<editing_manager>();
+                    // em.add_action<entity_add_component_action_t>("Add Component", data, type);
                 };
 
                 callbacks.on_remove = [&]()
                 {
-                    data.remove<ctype>();
+                    if(data.remove<ctype>() > 0)
+                    {
+                        //auto& em = ctx.get_cached<editing_manager>();
+                        //em.add_action<entity_remove_component_action_t>("Remove Component", data, type);
+                    }
+                    
                 };
 
                 callbacks.can_remove = []()
@@ -899,20 +907,32 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                     auto name = entt::get_pretty_name(entt::resolve<ctype>());
 
+                    auto type = entt::resolve<ctype>();
+
                     inspect_callbacks callbacks;
 
                     callbacks.on_add = [&]()
                     {
                         data.emplace<ctype>();
+                        // auto& em = ctx.get_cached<editing_manager>();
+                        // em.add_action<entity_add_component_action_t>("Add Component", data, type);
+
+
                         result.changed |= true;
                         result.edit_finished |= true;
                     };
 
                     callbacks.on_remove = [&]()
                     {
-                        data.remove<ctype>();
-                        result.changed |= true;
-                        result.edit_finished |= true;
+                        if(data.remove<ctype>() > 0)
+                        {
+                            // auto& em = ctx.get_cached<editing_manager>();
+                            // em.add_action<entity_remove_component_action_t>("Remove Component", data, type);
+                            result.changed |= true;
+                            result.edit_finished |= true;
+                        }
+                        
+                        
                     };
 
                     callbacks.can_remove = []()

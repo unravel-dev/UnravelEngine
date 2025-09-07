@@ -22,6 +22,8 @@ REFLECT(model_component)
             entt::attribute{"pretty_name", "Model"},
         })
         .func<&component_exists<model_component>>("component_exists"_hs)
+        .func<&component_add<model_component>>("component_add"_hs)
+        .func<&component_remove<model_component>>("component_remove"_hs)
         .data<&model_component::set_enabled, &model_component::is_enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},
@@ -109,6 +111,8 @@ REFLECT(bone_component)
             entt::attribute{"pretty_name", "Bone"},
         })
         .func<&component_exists<bone_component>>("component_exists"_hs)
+        .func<&component_add<bone_component>>("component_add"_hs)
+        .func<&component_remove<bone_component>>("component_remove"_hs)
         .data<nullptr, &bone_component::bone_index>("bone_index"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bone_index"},
@@ -141,6 +145,8 @@ REFLECT(submesh_component)
             entt::attribute{"pretty_name", "Submesh"},
         })
         .func<&component_exists<submesh_component>>("component_exists"_hs)
+        .func<&component_add<submesh_component>>("component_add"_hs)
+        .func<&component_remove<submesh_component>>("component_remove"_hs)
         .data<nullptr, &submesh_component::submeshes>("submeshes"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "submeshes"},

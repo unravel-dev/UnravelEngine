@@ -1,6 +1,7 @@
 #include "pipeline.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/ecs/components/layer_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
@@ -44,12 +45,12 @@ auto pipeline::init(rtti::context& ctx) -> bool
     return true;
 }
 
-auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, visibility_flags query)
+auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, visibility_flags query, const layer_mask& render_mask)
     -> visibility_set_models_t
 {
     APP_SCOPE_PERF("Cull Models Legacy");
 
-    auto view = scn.registry->view<transform_component, model_component, active_component>();
+    auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
     // Pre-allocate with estimated size
     visibility_set_models_t result;
@@ -61,13 +62,34 @@ auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, v
     std::for_each(/*std::execution::par_unseq,*/ view.begin(), view.end(),
         [&](auto entity)
         {
-            auto&& [transform_comp, model_comp, active_comp] = view.get(entity);
+            auto&& [transform_comp, model_comp, layer_comp, active_comp] = view.get(entity);
+            
+            // Get layer component if it exists, otherwise use default layer
+            auto entity_layer = layer_comp.layers;
             
             // Early exit checks
-            if(!model_comp.is_enabled()) return;
-            if((query & visibility_query::is_static) && !model_comp.is_static()) return;
-            if((query & visibility_query::is_reflection_caster) && !model_comp.casts_reflection()) return;
-            if((query & visibility_query::is_shadow_caster) && !model_comp.casts_shadow()) return;
+            if(!model_comp.is_enabled()) 
+            {
+                return;
+            }
+            if((query & visibility_query::is_static) && !model_comp.is_static()) 
+            {
+                return;
+            }
+            if((query & visibility_query::is_reflection_caster) && !model_comp.casts_reflection()) 
+            {
+                return;
+            }
+            if((query & visibility_query::is_shadow_caster) && !model_comp.casts_shadow()) 
+            {
+                return;
+            }
+            
+            // Layer filtering - check if entity's layer matches camera's render mask
+            if((entity_layer.mask & render_mask.mask) == 0)
+            {
+                return; // Entity's layer is not visible to this camera
+            }
             
             bool is_visible = true;
             

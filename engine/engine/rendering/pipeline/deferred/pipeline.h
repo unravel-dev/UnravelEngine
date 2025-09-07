@@ -28,7 +28,7 @@ public:
     auto init(rtti::context& ctx) -> bool override;
     auto deinit(rtti::context& ctx) -> bool;
 
-    auto run_pipeline(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& params)
+    auto run_pipeline(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& params, layer_mask render_mask = layer_mask{layer_reserved::everything_layer})
         -> gfx::frame_buffer::ptr override;
 
     void run_pipeline(const gfx::frame_buffer::ptr& output,
@@ -36,7 +36,8 @@ public:
                       const camera& camera,
                       gfx::render_view& rview,
                       delta_t dt,
-                      const run_params& params) override;
+                      const run_params& params,
+                      layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) override;
     void set_debug_pass(int pass) override;
 
     enum pipeline_steps : uint32_t
@@ -59,7 +60,8 @@ public:
                            gfx::render_view& rview,
                            delta_t dt,
                            const run_params& params,
-                           pipeline_flags pflags);
+                           pipeline_flags pflags,
+                           layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
     void run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                            const camera& camera,
@@ -101,7 +103,7 @@ public:
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
-    void build_shadows(scene& scn, const camera& camera, visibility_flags query = visibility_query::not_specified);
+    void build_shadows(scene& scn, const camera& camera, visibility_flags query = visibility_query::not_specified, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
     auto run_hiz_pass(const camera& camera, gfx::render_view& rview, delta_t dt) -> gfx::texture::ptr;
 

@@ -1598,4 +1598,9 @@ inline auto from_to_rotation(const glm::vec3& from, const glm::vec3& to) -> glm:
     // 6. Convert angle/axis to a quaternion
     return glm::angleAxis(angle, axis);
 }
+
+inline void set_position_relative(glm::mat4& matrix, const glm::vec3& camera_position)
+{
+    matrix[3] = glm::vec4(glm::vec3(matrix[3]) - camera_position, 1.0f);
+}
 } // namespace glm

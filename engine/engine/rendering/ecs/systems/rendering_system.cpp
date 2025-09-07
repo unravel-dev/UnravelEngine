@@ -38,7 +38,7 @@ auto rendering_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void rendering_system::on_frame_end(rtti::context& ctx, delta_t)
+void rendering_system::on_frame_end(rtti::context& ctx, delta_t dt)
 {
     debug_draw_callbacks_.clear();
 }
@@ -81,7 +81,7 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
 
     auto params = pipeline->create_run_params(camera_ent);
 
-    auto result = pipeline->run_pipeline(scn, camera, rview, dt, params);
+    auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
 
     render_debug(camera_ent);
 
@@ -115,7 +115,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
 
     auto params = pipeline->create_run_params(camera_ent);
 
-    pipeline->run_pipeline(output, scn, camera, rview, dt, params);
+    pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
 }
 

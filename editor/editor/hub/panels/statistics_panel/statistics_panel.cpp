@@ -1,4 +1,5 @@
 #include "statistics_panel.h"
+#include "imgui_widgets/utils.h"
 #include "statistics_utils.h"
 
 #include <engine/profiler/profiler.h>
@@ -74,10 +75,7 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
         if(ImGui::BeginMenu("View " ICON_MDI_ARROW_DOWN_BOLD))
         {
             ImGui::Checkbox("Show Editor Stats", &show_editor_stats_);
-            if(ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
-            }
+            ImGui::SetItemTooltip("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -200,7 +198,8 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
                      fps, avg_frame_time,
                      frame_time_samples.get_min(),
                      frame_time_samples.get_max());
-        
+                     
+        ImGui::SetNextWindowViewportToCurrent();
         ImGui::PlotLines("##FrameTime",
                          frame_time_samples.get_values(),
                          statistics_utils::sample_data::NUM_SAMPLES,
@@ -726,6 +725,7 @@ auto statistics_panel::draw_gpu_memory_section(const gfx::stats* stats, int64_t&
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
+    ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##GPUMemory",
                      gpu_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,
@@ -768,6 +768,7 @@ auto statistics_panel::draw_render_target_memory_section(const gfx::stats* stats
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
+    ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##RenderTargetMemory",
                      render_target_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,
@@ -810,6 +811,7 @@ auto statistics_panel::draw_texture_memory_section(const gfx::stats* stats, int6
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
+    ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##TextureMemory",
                      texture_memory_samples.get_values(),
                      statistics_utils::sample_data::NUM_SAMPLES,

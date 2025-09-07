@@ -355,6 +355,8 @@ REFLECT(ssr_component)
             entt::attribute{"pretty_name", "SSR"},
         })
         .func<&component_exists<ssr_component>>("component_exists"_hs)
+        .func<&component_add<ssr_component>>("component_add"_hs)
+        .func<&component_remove<ssr_component>>("component_remove"_hs)
         .data<&ssr_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},
