@@ -55,12 +55,6 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
             auto name = entity_panel::get_entity_name(entity);
             auto proxy = make_proxy(object, name);
             auto result = inspect_var(ctx, object, proxy);
-
-            if(result.edit_finished)
-            {
-                auto& em = ctx.get_cached<editing_manager>();
-                em.add_action("Property Edit",[](){});
-            }
             
             override_ctx.end_prefab_inspection();
             return;
@@ -77,12 +71,6 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
     // Fall back to normal inspection (empty reference) 
     auto proxy = make_proxy(object, name);
     auto result = inspect_var(ctx, object, proxy);
-    
-    if(result.edit_finished)
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Property Edit",[](){});
-    }
 }
 
 } // namespace

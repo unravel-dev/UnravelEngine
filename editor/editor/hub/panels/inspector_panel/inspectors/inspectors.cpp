@@ -88,7 +88,7 @@ void add_property_action(rtti::context& ctx,
     if(!result.change_recorded)
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.add_action<property_action_t>({},
+        em.do_action<property_action_t>({},
                                          var_proxy,
                                          old_var,
                                          new_var,
@@ -309,6 +309,35 @@ void prefab_override_context::mark_transform_as_changed(entt::handle entity,
     }
 }
 
+
+void prefab_override_context::mark_transform_global_as_changed(entt::handle entity,
+                                                        bool position,
+                                                        bool rotation,
+                                                        bool scale,
+                                                        bool skew)
+{
+    // also changes local transform
+    mark_transform_as_changed(entity, position, rotation, scale, skew);
+
+
+    if(position)
+    {
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "global_transform/position");
+    }
+    if(rotation)
+    {
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "global_transform/rotation");
+    }
+    if(scale)
+    {
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "global_transform/scale");
+    }
+    if(skew)
+    {
+        mark_property_as_changed(entity, entt::resolve<transform_component>(), "global_transform/skew");
+    }
+}
+
 void prefab_override_context::mark_active_as_changed(entt::handle entity)
 {
     mark_property_as_changed(entity, entt::resolve<transform_component>(), "active");
@@ -372,6 +401,17 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
             }
 
             prefab_comp->add_override(entity_uuid, current_path, current_pretty_path);
+        }
+    }
+
+
+    if(component_type_name == "transform_component")
+    {
+        auto property_path_global =string_utils::replace(property_path, "global_transform", "local_transform");
+
+        if(property_path_global != property_path)
+        {
+            mark_property_as_changed(entity, component_type_name, component_pretty_type_name, property_path_global);
         }
     }
 }

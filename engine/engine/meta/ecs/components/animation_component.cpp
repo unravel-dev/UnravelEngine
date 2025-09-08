@@ -34,9 +34,11 @@ REFLECT(animation_component)
             entt::attribute{"category", "ANIMATION"},
             entt::attribute{"pretty_name", "Animation"},
         })
-        .func<&component_exists<animation_component>>("component_exists"_hs)
-        .func<&component_add<animation_component>>("component_add"_hs)
-        .func<&component_remove<animation_component>>("component_remove"_hs)
+        .func<&component_meta<animation_component>::exists>("component_exists"_hs)
+        .func<&component_meta<animation_component>::add>("component_add"_hs)
+        .func<&component_meta<animation_component>::save>("component_save"_hs)
+        .func<&component_meta<animation_component>::load>("component_load"_hs)
+        .func<&component_meta<animation_component>::remove>("component_remove"_hs)
         .data<&animation_component::set_animation, &animation_component::get_animation>("animation"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation"},

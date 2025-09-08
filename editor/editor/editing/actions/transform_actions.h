@@ -27,6 +27,22 @@ struct transform_move_action_t : crtp_meta_type<transform_move_action_t, editing
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
+struct transform_move_global_action_t : crtp_meta_type<transform_move_global_action_t, editing_action_t>
+{
+    entt::handle entity;
+    math::vec3 old_position;
+    math::vec3 new_position;
+    
+    transform_move_global_action_t(entt::handle ent, const math::vec3& old_pos, const math::vec3& new_pos);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
 struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, editing_action_t>
 {
     entt::handle entity;

@@ -61,9 +61,11 @@ REFLECT(transform_component)
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Transform"},
         })
-        .func<&component_exists<transform_component>>("component_exists"_hs)
-        .func<&component_add<transform_component>>("component_add"_hs)
-        .func<&component_remove<transform_component>>("component_remove"_hs)
+        .func<&component_meta<transform_component>::exists>("component_exists"_hs)
+        .func<&component_meta<transform_component>::add>("component_add"_hs)
+        .func<&component_meta<transform_component>::remove>("component_remove"_hs)
+        .func<&component_meta<transform_component>::save>("component_save"_hs)
+        .func<&component_meta<transform_component>::load>("component_load"_hs)
         .data<&transform_component::set_transform_local, &transform_component::get_transform_local>("local_transform"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "local_transform"},

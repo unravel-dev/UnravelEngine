@@ -16,9 +16,11 @@ REFLECT(reflection_probe_component)
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Reflection Probe"},
         })
-        .func<&component_exists<reflection_probe_component>>("component_exists"_hs)
-        .func<&component_add<reflection_probe_component>>("component_add"_hs)
-        .func<&component_remove<reflection_probe_component>>("component_remove"_hs)
+        .func<&component_meta<reflection_probe_component>::exists>("component_exists"_hs)
+        .func<&component_meta<reflection_probe_component>::add>("component_add"_hs)
+        .func<&component_meta<reflection_probe_component>::remove>("component_remove"_hs)
+        .func<&component_meta<reflection_probe_component>::save>("component_save"_hs)
+        .func<&component_meta<reflection_probe_component>::load>("component_load"_hs)
         .data<&reflection_probe_component::set_probe, &reflection_probe_component::get_probe>("probe"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "probe"},

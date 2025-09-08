@@ -529,7 +529,7 @@ auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path
     // Use atomic_write_file to handle the temporary file creation and atomic rename
     asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) 
     {
-        return compile_shader_to_file(
+        compile_shader_to_file(
             absolute_path,
             temp_output,
             renderer
@@ -591,7 +591,7 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
     
     asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) 
     {
-        return compile_texture_to_file(
+        compile_texture_to_file(
             absolute_path, 
             temp_output, 
             *importer, 

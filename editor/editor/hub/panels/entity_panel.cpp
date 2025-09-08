@@ -27,7 +27,7 @@ void entity_panel::duplicate_entities(const std::vector<entt::handle>& entities)
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Duplicate Entities",
+    em.queue_action("Duplicate Entities",
         [entities]() mutable
         {
             auto& ctx = engine::context();
@@ -59,7 +59,7 @@ void entity_panel::focus_entities(entt::handle camera, const std::vector<entt::h
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Focus Entities",
+    em.queue_action("Focus Entities",
         [camera, entities]() mutable
         {
             defaults::focus_camera_on_entities(camera, entities, 0.4f);
@@ -70,7 +70,7 @@ void entity_panel::delete_entities(const std::vector<entt::handle>& entities)
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Delete Entities",
+    em.queue_action("Delete Entities",
         [entities]() mutable
         {
             auto& ctx = engine::context();

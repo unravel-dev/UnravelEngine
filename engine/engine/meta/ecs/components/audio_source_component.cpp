@@ -18,9 +18,11 @@ REFLECT(audio_source_component)
             entt::attribute{"category", "AUDIO"},
             entt::attribute{"pretty_name", "Audio Source"},
         })
-        .func<&component_exists<audio_source_component>>("component_exists"_hs)
-        .func<&component_add<audio_source_component>>("component_add"_hs)
-        .func<&component_remove<audio_source_component>>("component_remove"_hs)
+        .func<&component_meta<audio_source_component>::exists>("component_exists"_hs)
+        .func<&component_meta<audio_source_component>::add>("component_add"_hs)
+        .func<&component_meta<audio_source_component>::remove>("component_remove"_hs)
+        .func<&component_meta<audio_source_component>::save>("component_save"_hs)
+        .func<&component_meta<audio_source_component>::load>("component_load"_hs)
         .data<&audio_source_component::set_autoplay, &audio_source_component::get_autoplay>("auto_play"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "auto_play"},

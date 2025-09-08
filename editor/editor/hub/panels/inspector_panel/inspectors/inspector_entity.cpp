@@ -378,7 +378,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
                 result.edit_finished = true;
 
                 auto& em = ctx.get_cached<editing_manager>();
-                em.add_action<entity_set_active_action_t>("Set Active",
+                em.do_action<entity_set_active_action_t>({},
                     data,
                     old_active,
                     is_active);
@@ -421,7 +421,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
 
                 auto& em = ctx.get_cached<editing_manager>();      
 
-                em.add_action<entity_set_name_action_t>("Set Name",
+                em.do_action<entity_set_name_action_t>({},
                     data,
                     old_name,
                     tag_comp->name);
@@ -463,7 +463,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
         {
             auto& em = ctx.get_cached<editing_manager>();      
 
-            em.add_action<entity_set_tag_action_t>("Set Tag",
+            em.do_action<entity_set_tag_action_t>({},
                 data,
                 old_tag,
                 tag_comp->tag);
@@ -645,18 +645,18 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 callbacks.on_add = [&]()
                 {
-                    data.emplace<ctype>();
+                    // data.emplace<ctype>();
 
-                    // auto& em = ctx.get_cached<editing_manager>();
-                    // em.add_action<entity_add_component_action_t>("Add Component", data, type);
+                    auto& em = ctx.get_cached<editing_manager>();
+                    em.do_action<entity_add_component_action_t>({}, data, type);
                 };
 
                 callbacks.on_remove = [&]()
                 {
-                    if(data.remove<ctype>() > 0)
+                    if(data.all_of<ctype>())
                     {
-                        //auto& em = ctx.get_cached<editing_manager>();
-                        //em.add_action<entity_remove_component_action_t>("Remove Component", data, type);
+                        auto& em = ctx.get_cached<editing_manager>();
+                        em.do_action<entity_remove_component_action_t>({}, data, type);
                     }
                     
                 };
@@ -913,9 +913,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                     callbacks.on_add = [&]()
                     {
-                        data.emplace<ctype>();
-                        // auto& em = ctx.get_cached<editing_manager>();
-                        // em.add_action<entity_add_component_action_t>("Add Component", data, type);
+                        // data.emplace<ctype>();
+                        auto& em = ctx.get_cached<editing_manager>();
+                        em.do_action<entity_add_component_action_t>({}, data, type);
 
 
                         result.changed |= true;
@@ -924,10 +924,10 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                     callbacks.on_remove = [&]()
                     {
-                        if(data.remove<ctype>() > 0)
+                        if(data.all_of<ctype>())
                         {
-                            // auto& em = ctx.get_cached<editing_manager>();
-                            // em.add_action<entity_remove_component_action_t>("Remove Component", data, type);
+                            auto& em = ctx.get_cached<editing_manager>();
+                            em.do_action<entity_remove_component_action_t>({}, data, type);
                             result.changed |= true;
                             result.edit_finished |= true;
                         }

@@ -184,9 +184,11 @@ REFLECT(text_component)
             entt::attribute{"category", "UI"},
             entt::attribute{"pretty_name", "Text"},
         })
-        .func<&component_exists<text_component>>("component_exists"_hs)
-        .func<&component_add<text_component>>("component_add"_hs)
-        .func<&component_remove<text_component>>("component_remove"_hs)
+        .func<&component_meta<text_component>::exists>("component_exists"_hs)
+        .func<&component_meta<text_component>::add>("component_add"_hs)
+        .func<&component_meta<text_component>::remove>("component_remove"_hs)
+        .func<&component_meta<text_component>::save>("component_save"_hs)
+        .func<&component_meta<text_component>::load>("component_load"_hs)
         .data<&text_component::set_text, &text_component::get_text>("text"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "text"},

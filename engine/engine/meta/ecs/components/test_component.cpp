@@ -33,9 +33,11 @@ REFLECT(test_component)
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Test"},
         })
-        .func<&component_exists<test_component>>("component_exists"_hs)
-        .func<&component_add<test_component>>("component_add"_hs)
-        .func<&component_remove<test_component>>("component_remove"_hs)
+        .func<&component_meta<test_component>::exists>("component_exists"_hs)
+        .func<&component_meta<test_component>::add>("component_add"_hs)
+        .func<&component_meta<test_component>::remove>("component_remove"_hs)
+        .func<&component_meta<test_component>::save>("component_save"_hs)
+        .func<&component_meta<test_component>::load>("component_load"_hs)
         .data<&test_component::str>("str"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "str"},

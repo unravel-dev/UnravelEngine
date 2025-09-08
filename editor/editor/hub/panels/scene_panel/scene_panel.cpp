@@ -5,6 +5,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/picking_manager.h>
 #include <editor/editing/thumbnail_manager.h>
+#include <editor/editing/actions/entity_actions.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/shortcuts.h>
 
@@ -120,6 +121,7 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
     auto cursor_pos = ImGui::GetMousePos();
     auto& pick_manager = ctx.get_cached<picking_manager>();
     auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
     
     // Load the material asset
     auto material_asset = am.get_asset<material>(material_path);
@@ -129,29 +131,21 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
     pick_manager.query_pick(
         math::vec2{cursor_pos.x, cursor_pos.y}, 
         camera_comp.get_camera(),
-        [material_asset, &ctx](entt::handle entity, const math::vec2& screen_pos) {
+        [material_asset, &em](entt::handle entity, const math::vec2& screen_pos) {
             // Check if entity has a model component
             if(entity && entity.all_of<model_component>())
             {
-                // Apply material to the model
+                // Get current materials to store as old state
                 auto& model_comp = entity.get<model_component>();
+                const auto& current_model = model_comp.get_model();
+                auto old_materials = current_model.get_materials();
                 
-                // Get a non-const model by setting it back to itself
-                class model model_copy = model_comp.get_model();
-                
-                // Apply material to all submeshes
-                for(size_t i = 0; i < model_copy.get_materials().size(); ++i)
-                {
-                    model_copy.set_material(material_asset, i);
-                }
-                
-                // Update the model in the component
-                model_comp.set_model(model_copy);
-                
-                prefab_override_context::mark_material_as_changed(entity);
-                // Log success
-                APPLOG_INFO("Applied material '{}' to {}", material_asset.id(), entity_panel::get_entity_name(entity) );
+                em.push_undo_stack_enabled(true);
 
+                // Create and execute the action
+                em.queue_action<entity_set_materials_action_t>({}, entity, old_materials, material_asset);
+                
+                em.pop_undo_stack_enabled();
             }
             else if(entity)
             {
@@ -167,7 +161,7 @@ void handle_mesh_drop(rtti::context& ctx, const camera_component& camera_comp, c
     auto cursor_pos = ImGui::GetMousePos();
     auto& em = ctx.get_cached<editing_manager>();
 
-    em.add_action("Drop Mesh",
+    em.queue_action("Drop Mesh",
         [&ctx, camera = camera_comp.get_camera(), mesh_path, cursor_pos]()
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -188,7 +182,7 @@ void handle_prefab_drop(rtti::context& ctx, const camera_component& camera_comp,
     auto cursor_pos = ImGui::GetMousePos();
     auto& em = ctx.get_cached<editing_manager>();
 
-    em.add_action("Drop Prefab",
+    em.queue_action("Drop Prefab",
         [&ctx, camera = camera_comp.get_camera(), prefab_path, cursor_pos]()
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -565,7 +559,6 @@ void setup_gizmo_pivot(bool gizmo_at_center,
 }
 
 auto handle_text_component_bounds_manipulation(entt::handle active_selection,
-                                               entt::handle center,
                                                const camera_component& camera_comp,
                                                editing_manager& em,
                                                float* snap,
@@ -584,8 +577,12 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
         return false;
     }
 
-    auto& center_transform_comp = center.get<transform_component>();
+    auto& transform_comp = active_selection.get<transform_component>();
     const auto& camera = camera_comp.get_camera();
+    
+    // Store initial state for undo/redo
+    fsize_t initial_area = area;
+    math::vec3 initial_position = transform_comp.get_position_global();
     
     // Local-space half-extents = 0.5 in X & Y, zero thickness in Z
     float bounds[6] = {
@@ -598,8 +595,8 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
     };
 
     math::transform model_tr;
-    model_tr.set_position(center_transform_comp.get_position_global());
-    model_tr.set_rotation(center_transform_comp.get_rotation_global());
+    model_tr.set_position(transform_comp.get_position_global());
+    model_tr.set_rotation(transform_comp.get_rotation_global());
     model_tr.set_scale(math::vec3(area.width, area.height, 1.0f));
 
     math::mat4 output = model_tr;
@@ -620,20 +617,25 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
         const auto& scale = output_tr.get_scale();
         const auto& trans = output_tr.get_translation();
     
-        // Update the text area dimensions
-        area.width = scale.x;
-        area.height = scale.y;
-        text_comp->set_area(area);
+        // Create new area and position
+        fsize_t new_area{scale.x, scale.y};
+        math::vec3 new_position = trans;
         
-        // Update the center position - the transform delta will be applied to all selections later
-        center_transform_comp.set_position_global(trans);
-
-        em.add_action("Bounds Manipulation",
-            [active_selection]()
-        {
-            prefab_override_context::mark_transform_as_changed(active_selection, true, false, false, false);
-            prefab_override_context::mark_text_area_as_changed(active_selection); 
-        });
+        // Create composite action with both text bounds and transform changes
+        auto composite_action = std::make_shared<composite_action_t>();
+        
+        // Add text bounds action
+        composite_action->add_sub_action(std::make_shared<entity_set_text_bounds_action_t>(
+            active_selection, initial_area, new_area));
+        
+        // Add global transform action for the center entity
+        composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
+            active_selection, initial_position, new_position));
+        
+        // Execute the composite action
+        em.push_undo_stack_enabled(true);
+        em.do_action("Text Bounds Manipulation", composite_action);
+        em.pop_undo_stack_enabled();
 
         return true;
     }
@@ -813,7 +815,6 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
     if(em.operation != ImGuizmo::ROTATE && em.operation != ImGuizmo::SCALE && top_level_selections.size() == 1)
     {
         bounds_changed = handle_text_component_bounds_manipulation(*active_sel,
-                                                 center,
                                                  camera_comp,
                                                  em,
                                                  snap,
@@ -937,7 +938,7 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
     if(batch_action->sub_actions.size() > 0)
     {
         em.push_undo_stack_enabled(true);
-        em.add_action("Transform Manipulation", batch_action);
+        em.do_action("Transform Manipulation", batch_action);
         em.pop_undo_stack_enabled();
     }
 }

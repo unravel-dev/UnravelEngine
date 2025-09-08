@@ -43,18 +43,23 @@ namespace
         {
             const bool down = is_active();
     
-            // Bump the epoch on any boundary so new actions won't merge with the previous batch.
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
-                ImGui::GetIO().AppFocusLost)
-            {
-                ++epoch;
-            }
 
-            if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            if(!ImGui::IsAnyItemActive())
             {
-                ++epoch;
+                // Bump the epoch on any boundary so new actions won't merge with the previous batch.
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || 
+                    ImGui::GetIO().AppFocusLost)
+                {
+                    ++epoch;
+                }
 
+                if(ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                {
+                    ++epoch;
+
+                }
             }
+           
     
             down_prev = down;
         }
@@ -336,7 +341,7 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
 
 void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity, const asset_handle<prefab>& pfb)
 {
-    add_action("Sync Prefab Entity",
+    queue_action("Sync Prefab Entity",
         [&ctx, entity, pfb]() mutable
     {
         auto& ec = ctx.get_cached<ecs>();
@@ -421,6 +426,8 @@ auto editing_manager::get_select_mode() const -> select_mode
 
 void editing_manager::on_frame_update(rtti::context& ctx, delta_t)
 {
+    session.tick();
+
     execute_actions();
 
     if(focused_data.frames > 0)
@@ -626,17 +633,38 @@ void editing_manager::clear()
 }
 
 
-void editing_manager::add_action(const std::string& name, const std::function<void()>& action)
+void editing_manager::do_action(const std::string& name, const std::function<void()>& action)
 {
-    add_action<untracked_action_t>(name, action);
+    editing_manager::do_action<untracked_action_t>(name, action);
 }
 
-void editing_manager::add_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action)
+void editing_manager::do_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action)
 {
-    add_action<tracked_lambda_action_t>(name, do_action, undo_action);
+    editing_manager::do_action<tracked_lambda_action_t>(name, do_action, undo_action);
 }
 
-void editing_manager::add_action(const std::string& name, std::shared_ptr<editing_action_t> action)
+void editing_manager::do_action(const std::string& name, std::shared_ptr<editing_action_t> action)
+{
+    return add_action(name, action, true);
+}
+
+void editing_manager::queue_action(const std::string& name, const std::function<void()>& action)
+{
+    editing_manager::queue_action<untracked_action_t>(name, action);
+}
+
+void editing_manager::queue_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action)
+{
+    editing_manager::queue_action<tracked_lambda_action_t>(name, do_action, undo_action);
+}
+
+void editing_manager::queue_action(const std::string& name, std::shared_ptr<editing_action_t> action)
+{
+    return add_action(name, action, false);
+}
+
+
+void editing_manager::add_action(const std::string& name, std::shared_ptr<editing_action_t> action, bool immediate)
 {
     if (!action)
     {
@@ -664,6 +692,11 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
     
     // Queue the action for execution (don't execute immediately)
     pending_actions.push_back(std::move(action));
+
+    if(immediate)
+    {
+        execute_actions();
+    }
 }
 
 
@@ -678,9 +711,6 @@ void editing_manager::pop_undo_stack_enabled()
 
 void editing_manager::execute_actions()
 {
-    session.tick();
-
-
     // Process all pending actions
     for (auto& action : pending_actions)
     {

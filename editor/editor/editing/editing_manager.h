@@ -387,27 +387,44 @@ struct editing_manager
     // Whether an action is undoable depends on the action's is_undoable() method
     //
     // Usage examples:
-    // 1. Non-undoable action: add_action("Quick Fix", []() { /* do something */ });
-    // 2. Undoable action: add_action("Move", []() { move(); }, []() { restore(); });
-    // 3. Custom action: add_action<transform_move_action_t>("Move Entity", entity, old_pos, new_pos);
+    // 1. Non-undoable action: do_action("Quick Fix", []() { /* do something */ });
+    // 2. Undoable action: do_action("Move", []() { move(); }, []() { restore(); });
+    // 3. Custom action: do_action<transform_move_action_t>("Move Entity", entity, old_pos, new_pos);
     // 4. Manual undo/redo: undo(), redo(), can_undo(), can_redo()
     
     // Add an action with a lambda/function (non-undoable)
-    void add_action(const std::string& name, const std::function<void()>& action);
+    void do_action(const std::string& name, const std::function<void()>& action);
     
     // Add an action with both do and undo lambdas (undoable)
-    void add_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action);
+    void do_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action);
     
     // Add any action object (undoable or non-undoable determined by action itself)
-    void add_action(const std::string& name, std::shared_ptr<editing_action_t> action);
+    void do_action(const std::string& name, std::shared_ptr<editing_action_t> action);
     
-    // Helper template method to create and add any action type
     template<typename ActionType, typename... Args>
-    void add_action(const std::string& name, Args&&... args)
+    void do_action(const std::string& name, Args&&... args)
     {
         auto action = std::make_shared<ActionType>(std::forward<Args>(args)...);
-        add_action(name, std::move(action));
+        do_action(name, std::move(action));
     }
+
+    void queue_action(const std::string& name, const std::function<void()>& action);
+    
+    // Add an action with both do and undo lambdas (undoable)
+    void queue_action(const std::string& name, const std::function<void()>& do_action, const std::function<void()>& undo_action);
+    
+    // Add any action object (undoable or non-undoable determined by action itself)
+    void queue_action(const std::string& name, std::shared_ptr<editing_action_t> action);
+    
+    template<typename ActionType, typename... Args>
+    void queue_action(const std::string& name, Args&&... args)
+    {
+        auto action = std::make_shared<ActionType>(std::forward<Args>(args)...);
+        queue_action(name, std::move(action));
+    }
+
+    void add_action(const std::string& name, std::shared_ptr<editing_action_t> action, bool immediate = true);
+
 
     void push_undo_stack_enabled(bool enabled);
     void pop_undo_stack_enabled();

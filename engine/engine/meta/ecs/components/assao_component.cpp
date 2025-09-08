@@ -182,9 +182,11 @@ REFLECT(assao_component)
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "ASSAO"},
         })
-        .func<&component_exists<assao_component>>("component_exists"_hs)
-        .func<&component_add<assao_component>>("component_add"_hs)
-        .func<&component_remove<assao_component>>("component_remove"_hs)
+        .func<&component_meta<assao_component>::exists>("component_exists"_hs)
+        .func<&component_meta<assao_component>::add>("component_add"_hs)
+        .func<&component_meta<assao_component>::save>("component_save"_hs)
+        .func<&component_meta<assao_component>::load>("component_load"_hs)
+        .func<&component_meta<assao_component>::remove>("component_remove"_hs)
         .data<&assao_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},

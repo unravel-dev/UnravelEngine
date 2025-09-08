@@ -14,9 +14,11 @@ REFLECT(audio_listener_component)
             entt::attribute{"category", "AUDIO"},
             entt::attribute{"pretty_name", "Audio Listener"},
         })
-        .func<&component_exists<audio_listener_component>>("component_exists"_hs)
-        .func<&component_add<audio_listener_component>>("component_add"_hs)
-        .func<&component_remove<audio_listener_component>>("component_remove"_hs);
+        .func<&component_meta<audio_listener_component>::exists>("component_exists"_hs)
+        .func<&component_meta<audio_listener_component>::add>("component_add"_hs)
+        .func<&component_meta<audio_listener_component>::save>("component_save"_hs)
+        .func<&component_meta<audio_listener_component>::load>("component_load"_hs)
+        .func<&component_meta<audio_listener_component>::remove>("component_remove"_hs);
 }
 
 SAVE(audio_listener_component)

@@ -29,9 +29,11 @@ REFLECT(camera_component)
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Camera"},
         })
-        .func<&component_exists<camera_component>>("component_exists"_hs)
-        .func<&component_add<camera_component>>("component_add"_hs)
-        .func<&component_remove<camera_component>>("component_remove"_hs)
+        .func<&component_meta<camera_component>::exists>("component_exists"_hs)
+        .func<&component_meta<camera_component>::add>("component_add"_hs)
+        .func<&component_meta<camera_component>::save>("component_save"_hs)
+        .func<&component_meta<camera_component>::load>("component_load"_hs)
+        .func<&component_meta<camera_component>::remove>("component_remove"_hs)
         .data<&camera_component::set_projection_mode, &camera_component::get_projection_mode>("projection_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "projection_mode"},

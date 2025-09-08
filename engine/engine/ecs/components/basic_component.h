@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include "../ecs.h"
+#include <serialization/associative_archive.h>
 
 namespace unravel
 {
@@ -94,29 +95,62 @@ struct component_crtp : Base
     using base = Base;
 };
 
-template<typename T>
-auto component_exists(entt::handle entity) -> bool
-{
-    return entity.all_of<T>();
-}
 
 template<typename T>
-auto component_add(entt::handle entity) -> bool
+struct component_meta
 {
-    bool has_component = entity.all_of<T>();
-    if(has_component)
+    static auto exists(entt::handle entity) -> bool
     {
+        return entity.all_of<T>();
+    }
+
+    static auto add(entt::handle entity) -> bool
+    {
+        bool has_component = entity.all_of<T>();
+        if(has_component)
+        {
+            return false;
+        }
+        entity.emplace<T>();
+        return true;
+    }
+
+    static auto remove(entt::handle entity) -> bool
+    {
+        size_t removed = entity.remove<T>();
+        return removed > 0;
+    }
+    
+    static auto save(entt::handle entity, std::stringstream& stream) -> bool
+    {
+        try
+        {
+            auto ar = ser20::create_oarchive_associative(stream);
+            ar(ser20::make_nvp("component", entity.get<T>()));
+            return true;
+        }
+        catch(const ser20::Exception& e)
+        {
+            APPLOG_ERROR("Failed to save component to stream: {}", e.what());
+            return false;
+        }
+    }
+
+    static auto load(entt::handle entity, std::stringstream& stream) -> bool
+    {
+        try
+        {
+        auto ar = ser20::create_iarchive_associative(stream);
+            ar(ser20::make_nvp("component", entity.get<T>()));
+            return true;
+        }
+        catch(const ser20::Exception& e)
+        {
+            APPLOG_ERROR("Failed to load component from stream: {}", e.what());
+            return false;
+        }
         return false;
     }
-    entity.emplace<T>();
-    return true;
-}
-
-template<typename T>
-auto component_remove(entt::handle entity) -> bool
-{
-    size_t removed = entity.remove<T>();
-    return removed > 0;
-}
+};
 
 } // namespace unravel

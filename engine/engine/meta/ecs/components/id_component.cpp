@@ -15,9 +15,11 @@ REFLECT(id_component)
             entt::attribute{"category", "BASIC"},
             entt::attribute{"pretty_name", "Id"},
         })
-        .func<&component_exists<id_component>>("component_exists"_hs)
-        .func<&component_add<id_component>>("component_add"_hs)
-        .func<&component_remove<id_component>>("component_remove"_hs)
+        .func<&component_meta<id_component>::exists>("component_exists"_hs)
+        .func<&component_meta<id_component>::add>("component_add"_hs)
+        .func<&component_meta<id_component>::remove>("component_remove"_hs)
+        .func<&component_meta<id_component>::save>("component_save"_hs)
+        .func<&component_meta<id_component>::load>("component_load"_hs)
         .data<nullptr, &id_component::id>("id"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "id"},

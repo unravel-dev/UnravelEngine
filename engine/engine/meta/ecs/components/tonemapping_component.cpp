@@ -101,9 +101,11 @@ REFLECT(tonemapping_component)
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "Tonemapping"},
         })
-        .func<&component_exists<tonemapping_component>>("component_exists"_hs)
-        .func<&component_add<tonemapping_component>>("component_add"_hs)
-        .func<&component_remove<tonemapping_component>>("component_remove"_hs)
+        .func<&component_meta<tonemapping_component>::exists>("component_exists"_hs)
+        .func<&component_meta<tonemapping_component>::add>("component_add"_hs)
+        .func<&component_meta<tonemapping_component>::remove>("component_remove"_hs)
+        .func<&component_meta<tonemapping_component>::save>("component_save"_hs)
+        .func<&component_meta<tonemapping_component>::load>("component_load"_hs)
         .data<&tonemapping_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},

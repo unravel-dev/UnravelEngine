@@ -199,7 +199,8 @@ struct prefab_override_context
      * @param skew Whether skew was changed
      */
     static void mark_transform_as_changed(entt::handle entity, bool position, bool rotation, bool scale, bool skew);
-    
+    static void mark_transform_global_as_changed(entt::handle entity, bool position, bool rotation, bool scale, bool skew);
+
     /**
      * @brief Marks entity active state as changed in prefab override system
      * @param entity Entity whose active state was modified

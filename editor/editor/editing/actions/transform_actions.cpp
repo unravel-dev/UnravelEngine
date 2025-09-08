@@ -63,6 +63,62 @@ void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
     draw_in_inspector_impl(ctx, old_position, new_position, custom);
 }
 
+// Transform Move Global Action Implementation
+transform_move_global_action_t::transform_move_global_action_t(entt::handle ent, const math::vec3& old_pos, const math::vec3& new_pos)
+    : entity(ent), old_position(old_pos), new_position(new_pos)
+{
+    name = "Global Position";
+}
+
+void transform_move_global_action_t::do_action()
+{
+    if (entity)
+    {
+        if (auto transform = entity.try_get<transform_component>())
+        {
+            transform->set_position_global(new_position);
+            prefab_override_context::mark_transform_global_as_changed(entity, true, false, false, false);
+        }
+    }
+}
+
+void transform_move_global_action_t::undo_action()
+{
+    if (entity)
+    {
+        if (auto transform = entity.try_get<transform_component>())
+        {
+            transform->set_position_global(old_position);
+            prefab_override_context::mark_transform_global_as_changed(entity, true, false, false, false);
+        }
+    }
+}
+
+auto transform_move_global_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    const auto& prev = static_cast<const transform_move_global_action_t&>(previous);
+    return entity == prev.entity && name == prev.name;
+}
+
+void transform_move_global_action_t::merge_with(const editing_action_t& previous)
+{
+    const auto& prev = static_cast<const transform_move_global_action_t&>(previous);
+    old_position = prev.old_position; // Extend the range of the move
+}
+
+auto transform_move_global_action_t::is_valid() const -> bool
+{
+    return entity.valid() && entity.try_get<transform_component>();
+}   
+
+void transform_move_global_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "global_position"}, 
+        {"pretty_name", "Global Position"}}
+    );
+    draw_in_inspector_impl(ctx, old_position, new_position, custom);
+}
 
 // Transform Rotate Action Implementation
 transform_rotate_action_t::transform_rotate_action_t(entt::handle ent, const math::quat& old_rot, const math::quat& new_rot)

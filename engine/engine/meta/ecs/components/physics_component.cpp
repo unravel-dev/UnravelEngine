@@ -236,9 +236,11 @@ REFLECT(physics_component)
             entt::attribute{"category", "PHYSICS"},
             entt::attribute{"pretty_name", "Physics"},
         })
-        .func<&component_exists<physics_component>>("component_exists"_hs)
-        .func<&component_add<physics_component>>("component_add"_hs)
-        .func<&component_remove<physics_component>>("component_remove"_hs)
+        .func<&component_meta<physics_component>::exists>("component_exists"_hs)
+        .func<&component_meta<physics_component>::add>("component_add"_hs)
+        .func<&component_meta<physics_component>::remove>("component_remove"_hs)
+        .func<&component_meta<physics_component>::save>("component_save"_hs)
+        .func<&component_meta<physics_component>::load>("component_load"_hs)
         .data<&physics_component::set_is_using_gravity, &physics_component::is_using_gravity>("is_using_gravity"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "is_using_gravity"},

@@ -75,6 +75,7 @@ void undo_redo_panel::on_frame_ui_render(rtti::context& ctx)
             
             if (ImGui::IsItemHovered())
             {
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, 800.0f));
                 ImGui::BeginTooltip();
                 ImGui::Text("Latest State (all actions executed)");
                 if (!is_at_latest_state)
@@ -187,8 +188,8 @@ void undo_redo_panel::on_frame_ui_render(rtti::context& ctx)
                 
                 // Add tooltip with additional info and click instructions
                 if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetNextWindowViewportToCurrent();
+                {   
+                    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, 800.0f));
                     ImGui::BeginTooltip();
                     if(is_invalid)
                     {
@@ -251,6 +252,7 @@ void undo_redo_panel::on_frame_ui_render(rtti::context& ctx)
             
             if (ImGui::IsItemHovered())
             {
+                ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(FLT_MAX, 800.0f));
                 ImGui::BeginTooltip();
                 ImGui::Text("Initial State (no actions executed)");
                 if (!is_at_initial_state)

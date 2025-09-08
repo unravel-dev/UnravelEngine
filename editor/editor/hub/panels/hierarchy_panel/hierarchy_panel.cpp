@@ -68,7 +68,7 @@ void stop_editing_label(rtti::context& ctx, imgui_panels* panels, entt::handle e
 void create_empty_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Empty Entity",
+    em.queue_action("Create Empty Entity",
         [&ctx, panels, parent_entity]() mutable
         {
             auto& em = ctx.get_cached<editing_manager>();
@@ -83,7 +83,7 @@ void create_empty_entity(rtti::context& ctx, imgui_panels* panels, entt::handle 
 void create_empty_parent_entity(rtti::context& ctx, imgui_panels* panels, entt::handle child_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Empty Parent Entity",
+    em.queue_action("Create Empty Parent Entity",
         [&ctx, panels, child_entity]() mutable
         {
             auto current_parent = child_entity.get<transform_component>().get_parent();
@@ -101,7 +101,7 @@ void create_empty_parent_entity(rtti::context& ctx, imgui_panels* panels, entt::
 void create_mesh_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, const std::string& mesh_name)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Mesh Entity",
+    em.queue_action("Create Mesh Entity",
         [&ctx, panels, parent_entity, mesh_name]() mutable
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -122,7 +122,7 @@ void create_mesh_entity(rtti::context& ctx, imgui_panels* panels, entt::handle p
 void create_text_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Text Entity",
+    em.queue_action("Create Text Entity",
         [&ctx, panels, parent_entity]() mutable
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -141,7 +141,7 @@ void create_text_entity(rtti::context& ctx, imgui_panels* panels, entt::handle p
 void create_light_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, light_type type, const std::string& name)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Light Entity",
+    em.queue_action("Create Light Entity",
         [&ctx, panels, parent_entity, type, name]() mutable
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -159,7 +159,7 @@ void create_light_entity(rtti::context& ctx, imgui_panels* panels, entt::handle 
 void create_reflection_probe_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, probe_type type, const std::string& name)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Reflection Probe Entity",
+    em.queue_action("Create Reflection Probe Entity",
         [&ctx, panels, parent_entity, type, name]() mutable
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -177,7 +177,7 @@ void create_reflection_probe_entity(rtti::context& ctx, imgui_panels* panels, en
 void create_camera_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Create Camera Entity",
+    em.queue_action("Create Camera Entity",
         [&ctx, panels, parent_entity]() mutable
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -212,7 +212,7 @@ void handle_entity_drop(rtti::context& ctx, imgui_panels* panels, entt::handle t
     auto do_action = [&](entt::handle dropped)
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Drop Entity",
+        em.queue_action("Drop Entity",
             [&ctx, target_entity, dropped]() mutable
         {
             auto trans_comp = dropped.try_get<transform_component>();
@@ -243,7 +243,7 @@ void handle_mesh_drop(rtti::context& ctx, const std::string& absolute_path)
 {
 
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Drop Mesh",
+    em.queue_action("Drop Mesh",
         [&ctx, absolute_path]() mutable
     {
         std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
@@ -262,7 +262,7 @@ void handle_mesh_drop(rtti::context& ctx, const std::string& absolute_path)
 void handle_prefab_drop(rtti::context& ctx, const std::string& absolute_path)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.add_action("Drop Prefab",
+    em.queue_action("Drop Prefab",
         [&ctx, absolute_path]() mutable
     {
         std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
@@ -499,7 +499,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
     if(ImGui::MenuItem("Rename", ImGui::GetKeyName(shortcuts::rename_item)))
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Rename Entity",
+        em.queue_action("Rename Entity",
             [ctx, panels, entity]() mutable
             {
                 start_editing_label(ctx, panels, entity);
@@ -528,7 +528,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
         if(ImGui::MenuItem("Open Prefab"))
         {
             auto& em = ctx.get_cached<editing_manager>();
-            em.add_action("Open Prefab",
+            em.queue_action("Open Prefab",
             [&ctx, entity, panels]() mutable
             {
                 auto prefab_root = prefab_override_context::find_prefab_root_entity(entity);
@@ -547,7 +547,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
         if(ImGui::MenuItem("Unlink from Prefab"))
         {
             auto& em = ctx.get_cached<editing_manager>();
-            em.add_action("Unlink from Prefab",
+            em.queue_action("Unlink from Prefab",
             [entity]() mutable
             {
                 entity.remove<prefab_component, prefab_id_component>();
@@ -606,7 +606,7 @@ void draw_activity(rtti::context& ctx, transform_component& trans_comp)
 
         em.push_undo_stack_enabled(true);
 
-        em.add_action<entity_set_active_action_t>("Set Active",
+        em.queue_action<entity_set_active_action_t>({},
             entity,
             is_active_local,
             !is_active_local);
@@ -671,7 +671,7 @@ void handle_entity_selection(rtti::context& ctx, imgui_panels* panels, entt::han
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto mode = em.get_select_mode();
-    em.add_action("Select Entity",
+    em.queue_action("Select Entity",
         [&ctx, panels, entity, mode]() mutable
         {
             stop_editing_label(ctx, panels, entity);
@@ -685,7 +685,7 @@ void handle_entity_keyboard_shortcuts(rtti::context& ctx, imgui_panels* panels, 
     if(ImGui::IsItemKeyPressed(shortcuts::rename_item))
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.add_action("Rename Entity",
+        em.queue_action("Rename Entity",
             [&ctx, panels, entity]() mutable
             {
                 start_editing_label(ctx, panels, entity);
@@ -746,7 +746,7 @@ void draw_entity_name_editor(rtti::context& ctx, imgui_panels* panels, entt::han
         
         auto& em = ctx.get_cached<editing_manager>();
         em.push_undo_stack_enabled(true);
-        em.add_action<entity_set_name_action_t>("Set Name",
+        em.queue_action<entity_set_name_action_t>({},
             entity,
             old_name,
             edit_name);

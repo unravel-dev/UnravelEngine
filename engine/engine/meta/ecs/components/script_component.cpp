@@ -58,9 +58,11 @@ REFLECT(script_component)
             entt::attribute{"category", "SCRIPTING"},
             entt::attribute{"pretty_name", "Script"},
         })
-        .func<&component_exists<script_component>>("component_exists"_hs)
-        .func<&component_add<script_component>>("component_add"_hs)
-        .func<&component_remove<script_component>>("component_remove"_hs);
+        .func<&component_meta<script_component>::exists>("component_exists"_hs)
+        .func<&component_meta<script_component>::add>("component_add"_hs)
+        .func<&component_meta<script_component>::save>("component_save"_hs)
+        .func<&component_meta<script_component>::load>("component_load"_hs)
+        .func<&component_meta<script_component>::remove>("component_remove"_hs);
 }
 
 template<typename Archive, typename T>

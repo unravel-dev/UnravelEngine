@@ -15,9 +15,11 @@ REFLECT(fxaa_component)
             entt::attribute{"category", "RENDERING"},
             entt::attribute{"pretty_name", "FXAA"},
         })
-        .func<&component_exists<fxaa_component>>("component_exists"_hs)
-        .func<&component_add<fxaa_component>>("component_add"_hs)
-        .func<&component_remove<fxaa_component>>("component_remove"_hs)
+        .func<&component_meta<fxaa_component>::exists>("component_exists"_hs)
+        .func<&component_meta<fxaa_component>::add>("component_add"_hs)
+        .func<&component_meta<fxaa_component>::save>("component_save"_hs)
+        .func<&component_meta<fxaa_component>::load>("component_load"_hs)
+        .func<&component_meta<fxaa_component>::remove>("component_remove"_hs)
         .data<&fxaa_component::enabled>("enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},

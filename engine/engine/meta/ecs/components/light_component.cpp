@@ -18,9 +18,11 @@ REFLECT(light_component)
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Light"},
         })
-        .func<&component_exists<light_component>>("component_exists"_hs)
-        .func<&component_add<light_component>>("component_add"_hs)
-        .func<&component_remove<light_component>>("component_remove"_hs)
+        .func<&component_meta<light_component>::exists>("component_exists"_hs)
+        .func<&component_meta<light_component>::add>("component_add"_hs)
+        .func<&component_meta<light_component>::save>("component_save"_hs)
+        .func<&component_meta<light_component>::load>("component_load"_hs)
+        .func<&component_meta<light_component>::remove>("component_remove"_hs)
         .data<&light_component::set_light, &light_component::get_light>("light"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light"},
@@ -90,6 +92,11 @@ REFLECT(skylight_component)
             entt::attribute{"category", "LIGHTING"},
             entt::attribute{"pretty_name", "Skylight"},
         })
+        .func<&component_meta<skylight_component>::exists>("component_exists"_hs)
+        .func<&component_meta<skylight_component>::add>("component_add"_hs)
+        .func<&component_meta<skylight_component>::save>("component_save"_hs)
+        .func<&component_meta<skylight_component>::load>("component_load"_hs)
+        .func<&component_meta<skylight_component>::remove>("component_remove"_hs)
         .data<&skylight_component::set_mode, &skylight_component::get_mode>("mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "mode"},
