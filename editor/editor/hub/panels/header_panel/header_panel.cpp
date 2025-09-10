@@ -20,6 +20,7 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 
 namespace unravel
 {
@@ -222,10 +223,6 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             if(ImGui::MenuItem("Style"))
             {
                 parent_->get_style_panel().show(true);
-            }
-            if(ImGui::MenuItem("Undo History"))
-            {
-                parent_->get_undo_redo_panel().show(true);
             }
             ImGui::EndMenu();
         }

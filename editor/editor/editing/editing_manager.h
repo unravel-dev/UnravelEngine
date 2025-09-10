@@ -536,7 +536,7 @@ struct editing_manager
     
 
     // Prompts the user to save changes and returns true if changes should be saved
-    auto prompt_save_changes(rtti::context& ctx) -> bool;
+    auto prompt_save_changes(rtti::context& ctx, const std::function<void()>& on_save, const std::function<void()>& on_continue) -> bool;
 };
 } // namespace unravel
 

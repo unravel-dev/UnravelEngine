@@ -20,7 +20,7 @@ struct editor_actions
     static auto open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool;
     static auto save_scene(rtti::context& ctx) -> bool;
     static auto save_scene_as(rtti::context& ctx) -> bool;
-    static auto prompt_save_scene(rtti::context& ctx) -> bool;
+    static auto prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool;
 
     static auto close_project(rtti::context& ctx) -> bool;
     static auto reload_project(rtti::context& ctx) -> bool;

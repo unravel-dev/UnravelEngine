@@ -1,9 +1,14 @@
 #include "editor_actions.h"
 #include "engine/scripting/script.h"
 
+#include <editor/editing/editing_manager.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
+#include <editor/imgui/integration/imgui_notify.h>
+#include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_reader.h>
+#include <engine/assets/impl/asset_writer.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
@@ -11,15 +16,12 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
-#include <filesystem/watcher.h>
-#include <engine/assets/impl/asset_writer.h>
-#include <editor/editing/editing_manager.h>
-#include <editor/system/project_manager.h>
-#include <editor/imgui/integration/imgui_notify.h>
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
+#include <filesystem/watcher.h>
 #include <filesystem>
 #include <subprocess/subprocess.hpp>
+
 
 #include <base/platform/config.hpp>
 #include <string_utils/utils.h>
@@ -730,7 +732,7 @@ auto save_scene_impl(rtti::context& ctx, const fs::path& path) -> bool
     auto& ec = ctx.get_cached<ecs>();
     if(asset_writer::atomic_save_to_file(path.string(), ec.get_scene()))
     {
-        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000,"Scene saved."));
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000, "Scene saved."));
 
         auto& em = ctx.get_cached<editing_manager>();
         em.clear_unsaved_changes();
@@ -794,7 +796,7 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
 void try_delete_empty_parents(const fs::path& start, const fs::path& root, fs::error_code& ec)
 {
     fs::path current = start.parent_path();
-    while (current != root && fs::is_empty(current, ec))
+    while(current != root && fs::is_empty(current, ec))
     {
         APPLOG_TRACE("Removing Empty Parent Directory {}", current.generic_string());
         fs::remove(current, ec);
@@ -812,15 +814,15 @@ void remove_unreferenced_files(const fs::path& root)
     // First pass: remove matching script files
     {
         fs::recursive_directory_iterator it(root, ec);
-        while (it != end)
+        while(it != end)
         {
             const fs::path current_path = it->path();
             ++it;
 
-            for (const auto& type : ex::get_suported_formats<script>())
+            for(const auto& type : ex::get_suported_formats<script>())
             {
                 auto ext = fs::reduce_trailing_extensions(current_path).extension().generic_string();
-                if (ext == type)
+                if(ext == type)
                 {
                     APPLOG_TRACE("Removing Script {}", current_path.generic_string());
                     fs::remove(current_path, ec);
@@ -834,12 +836,12 @@ void remove_unreferenced_files(const fs::path& root)
     // Second pass: remove now-empty directories
     {
         fs::recursive_directory_iterator it(root, ec);
-        while (it != end)
+        while(it != end)
         {
             const fs::path current_path = it->path();
             ++it;
 
-            if (fs::is_directory(current_path, ec) && fs::is_empty(current_path, ec))
+            if(fs::is_directory(current_path, ec) && fs::is_empty(current_path, ec))
             {
                 APPLOG_TRACE("Removing Empty Directory {}", current_path.generic_string());
                 fs::remove(current_path, ec);
@@ -851,11 +853,15 @@ void remove_unreferenced_files(const fs::path& root)
     // Deduplicate deleted parent paths and sort deepest first
     std::sort(deleted_dirs.begin(), deleted_dirs.end());
     deleted_dirs.erase(std::unique(deleted_dirs.begin(), deleted_dirs.end()), deleted_dirs.end());
-    std::sort(deleted_dirs.begin(), deleted_dirs.end(),
-              [](const fs::path& a, const fs::path& b) { return a.string().size() > b.string().size(); });
+    std::sort(deleted_dirs.begin(),
+              deleted_dirs.end(),
+              [](const fs::path& a, const fs::path& b)
+              {
+                  return a.string().size() > b.string().size();
+              });
 
     // Final cleanup: walk up and try deleting empty parents
-    for (const auto& path : deleted_dirs)
+    for(const auto& path : deleted_dirs)
     {
         try_delete_empty_parents(path, root, ec);
     }
@@ -870,15 +876,16 @@ auto editor_actions::new_scene(rtti::context& ctx) -> bool
     {
         return false;
     }
-    prompt_save_scene(ctx);
+    prompt_save_scene(ctx, [&ctx]() {
+        auto& em = ctx.get_cached<editing_manager>();
+        em.clear();
+    
+        auto& ec = ctx.get_cached<ecs>();
+        ec.unload_scene();
+    
+        defaults::create_default_3d_scene(ctx, ec.get_scene());
+    });
 
-    auto& em = ctx.get_cached<editing_manager>();
-    em.clear();
-
-    auto& ec = ctx.get_cached<ecs>();
-    ec.unload_scene();
-
-    defaults::create_default_3d_scene(ctx, ec.get_scene());
     return true;
 }
 auto editor_actions::open_scene(rtti::context& ctx) -> bool
@@ -888,7 +895,6 @@ auto editor_actions::open_scene(rtti::context& ctx) -> bool
     {
         ev.set_play_mode(ctx, false);
     }
-
 
     std::string picked;
     if(native::open_file_dialog(picked,
@@ -900,7 +906,6 @@ auto editor_actions::open_scene(rtti::context& ctx) -> bool
         auto path = fs::convert_to_protocol(picked);
         if(ex::is_format<scene_prefab>(path.extension().generic_string()))
         {
-        
             auto& am = ctx.get_cached<asset_manager>();
             auto asset = am.get_asset<scene_prefab>(path.string());
 
@@ -911,24 +916,27 @@ auto editor_actions::open_scene(rtti::context& ctx) -> bool
 }
 
 auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
-{    
-    prompt_save_scene(ctx);
+{
+    return prompt_save_scene(ctx, [&ctx, asset]() {
+        auto& em = ctx.get_cached<editing_manager>();
+        em.clear();
+        
+        auto& ec = ctx.get_cached<ecs>();
+        ec.unload_scene();
+    
+        auto& scene = ec.get_scene();
+        bool loaded = scene.load_from(asset);
+    
+        if(loaded)
+        {
+            em.sync_prefab_instances(ctx, &scene);
+        }
 
-    auto& em = ctx.get_cached<editing_manager>();
-    em.clear();
-
-    auto& ec = ctx.get_cached<ecs>();
-    ec.unload_scene();
-
-    auto& scene = ec.get_scene();
-    bool loaded = scene.load_from(asset);
-
-    if(loaded)
-    {
-        em.sync_prefab_instances(ctx, &scene);
-    }
-
-    return loaded;
+        if(!loaded)
+        {
+            editor_actions::new_scene(ctx);
+        }
+    });
 }
 auto editor_actions::save_scene(rtti::context& ctx) -> bool
 {
@@ -971,40 +979,38 @@ auto editor_actions::save_scene_as(rtti::context& ctx) -> bool
     return save_scene_as_impl(ctx, p, scene.source.name());
 }
 
-auto editor_actions::prompt_save_scene(rtti::context& ctx) -> bool
+auto editor_actions::prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool
 {
     auto& ev = ctx.get_cached<events>();
     if(ev.is_playing)
     {
+        on_continue();
         return false;
     }
-    
+
     auto& em = ctx.get_cached<editing_manager>();
     if(!em.has_unsaved_changes())
     {
+        on_continue();
         return true;
     }
 
-    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    ImBox::ShowSaveConfirmation("Save scene?",
+                                "Do you want to save the changes you made?",
+                                [&ctx, on_continue](ImBox::ModalResult result)
+                                {
+                                    if(result == ImBox::ModalResult::Save)
+                                    {
+                                        save_scene(ctx);
+                                    }
 
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scene = ec.get_scene();
-    
-    auto result = native::message_box("Do you want to save changes you made?",
-        native::dialog_type::yes_no_cancel,
-        native::icon_type::question,
-        "Save changes?");
+                                    if(result != ImBox::ModalResult::Cancel)
+                                    {
+                                        on_continue();
+                                    }
+                                });
 
-    switch(result)
-    {
-    case native::action_type::ok_or_yes:
-        return save_scene(ctx);
-    case native::action_type::no_or_cancel:
-        return false;
-    default:
-        return true;
-    }
+    return true;
 }
 
 auto editor_actions::close_project(rtti::context& ctx) -> bool
@@ -1015,10 +1021,11 @@ auto editor_actions::close_project(rtti::context& ctx) -> bool
         return false;
     }
 
-    prompt_save_scene(ctx);
+    prompt_save_scene(ctx, [&ctx]() {
+        auto& pm = ctx.get_cached<project_manager>();
+        pm.close_project(ctx);
+    });
 
-    auto& pm = ctx.get_cached<project_manager>();
-    pm.close_project(ctx);
     return true;
 }
 
@@ -1061,7 +1068,6 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     auto& pm = ctx.get_cached<project_manager>();
     auto project_name = pm.get_name();
 
-
     // am.get_database("engine:/")
 
     if(params.deploy_dependencies)
@@ -1073,27 +1079,32 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         auto job =
             th.pool
                 ->schedule("Deploying Dependencies",
-                    [params, project_name]()
-                    {
-                        APPLOG_INFO("Deploying Dependencies...");
+                           [params, project_name]()
+                           {
+                               APPLOG_INFO("Deploying Dependencies...");
 
-                        fs::path app_executable = fs::resolve_protocol("binary:/game" + fs::executable_extension());
-                        auto deps = get_dependencies(app_executable);
+                               fs::path app_executable =
+                                   fs::resolve_protocol("binary:/game" + fs::executable_extension());
+                               auto deps = get_dependencies(app_executable);
 
-                        fs::error_code ec;
-                        for(const auto& dep : deps)
-                        {
-                            APPLOG_TRACE("Copying {} -> {}", fs::path(dep).generic_string(), params.deploy_location.generic_string());
-                            fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
-                        }
-                
-                        auto executable_path = params.deploy_location / project_name;
+                               fs::error_code ec;
+                               for(const auto& dep : deps)
+                               {
+                                   APPLOG_TRACE("Copying {} -> {}",
+                                                fs::path(dep).generic_string(),
+                                                params.deploy_location.generic_string());
+                                   fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
+                               }
 
-                        APPLOG_TRACE("Copying {} -> {}", app_executable.generic_string(), params.deploy_location.generic_string());
-                        fs::copy(app_executable, executable_path, fs::copy_options::overwrite_existing, ec);
+                               auto executable_path = params.deploy_location / project_name;
 
-                        APPLOG_INFO("Deploying Dependencies - Done");
-                    })
+                               APPLOG_TRACE("Copying {} -> {}",
+                                            app_executable.generic_string(),
+                                            params.deploy_location.generic_string());
+                               fs::copy(app_executable, executable_path, fs::copy_options::overwrite_existing, ec);
+
+                               APPLOG_INFO("Deploying Dependencies - Done");
+                           })
                 .share();
         jobs["Deploying Dependencies"] = job;
         jobs_seq.emplace_back(job);
@@ -1102,24 +1113,24 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     {
         auto job = th.pool
                        ->schedule("Deploying Project Settings",
-                           [params]()
-                           {
-                               APPLOG_INFO("Deploying Project Settings...");
+                                  [params]()
+                                  {
+                                      APPLOG_INFO("Deploying Project Settings...");
 
-                               auto data = fs::resolve_protocol("app:/settings");
-                               fs::path dst = params.deploy_location / "data" / "app" / "settings";
+                                      auto data = fs::resolve_protocol("app:/settings");
+                                      fs::path dst = params.deploy_location / "data" / "app" / "settings";
 
-                               fs::error_code ec;
+                                      fs::error_code ec;
 
-                               APPLOG_TRACE("Clearing {}", dst.generic_string());
-                               fs::remove_all(dst, ec);
-                               fs::create_directories(dst, ec);
+                                      APPLOG_TRACE("Clearing {}", dst.generic_string());
+                                      fs::remove_all(dst, ec);
+                                      fs::create_directories(dst, ec);
 
-                               APPLOG_TRACE("Copying {} -> {}", data.generic_string(), dst.generic_string());
-                               fs::copy(data, dst, fs::copy_options::recursive, ec);
+                                      APPLOG_TRACE("Copying {} -> {}", data.generic_string(), dst.generic_string());
+                                      fs::copy(data, dst, fs::copy_options::recursive, ec);
 
-                               APPLOG_INFO("Deploying Project Settings - Done");
-                           })
+                                      APPLOG_INFO("Deploying Project Settings - Done");
+                                  })
                        .share();
 
         jobs["Deploying Project Settings"] = job;
@@ -1129,7 +1140,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     {
         auto job =
             th.pool
-                ->schedule("Deploying Project Data",
+                ->schedule(
+                    "Deploying Project Data",
                     [params, &am]()
                     {
                         APPLOG_INFO("Deploying Project Data...");
@@ -1137,7 +1149,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                         fs::error_code ec;
                         {
                             auto data = fs::resolve_protocol(ex::get_compiled_directory("app"));
-                            fs::path cached_data = params.deploy_location / "data" / "app" / ex::get_compiled_directory_no_slash();
+                            fs::path cached_data =
+                                params.deploy_location / "data" / "app" / ex::get_compiled_directory_no_slash();
 
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
                             fs::remove_all(cached_data, ec);
@@ -1164,87 +1177,94 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     }
 
     {
-        auto job = th.pool
-                       ->schedule("Deploying Engine Data",
-                           [params, &am]()
-                           {
-                               APPLOG_INFO("Deploying Engine Data...");
+        auto job =
+            th.pool
+                ->schedule(
+                    "Deploying Engine Data",
+                    [params, &am]()
+                    {
+                        APPLOG_INFO("Deploying Engine Data...");
 
-                               fs::error_code ec;
-                               {
-                                   fs::path cached_data = params.deploy_location / "data" / "engine" / ex::get_compiled_directory_no_slash();
-                                   auto data = fs::resolve_protocol(ex::get_compiled_directory("engine"));
+                        fs::error_code ec;
+                        {
+                            fs::path cached_data =
+                                params.deploy_location / "data" / "engine" / ex::get_compiled_directory_no_slash();
+                            auto data = fs::resolve_protocol(ex::get_compiled_directory("engine"));
 
-                                   APPLOG_TRACE("Clearing {}", cached_data.generic_string());
-                                   fs::remove_all(cached_data, ec);
-                                   fs::create_directories(cached_data, ec);
+                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
+                            fs::remove_all(cached_data, ec);
+                            fs::create_directories(cached_data, ec);
 
-                                   APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
-                                   fs::copy(data, cached_data, fs::copy_options::recursive, ec);
+                            APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
+                            fs::copy(data, cached_data, fs::copy_options::recursive, ec);
 
-                                   remove_unreferenced_files(cached_data);
-                               }
+                            remove_unreferenced_files(cached_data);
+                        }
 
-                               {
-                                   fs::path cached_data = params.deploy_location / "data" / "engine" / "assets.pack";
-                                   APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
-                                   am.save_database("engine:/", cached_data);
-                               }
+                        {
+                            fs::path cached_data = params.deploy_location / "data" / "engine" / "assets.pack";
+                            APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
+                            am.save_database("engine:/", cached_data);
+                        }
 
-                               APPLOG_INFO("Deploying Engine Data - Done");
-                           })
-                       .share();
+                        APPLOG_INFO("Deploying Engine Data - Done");
+                    })
+                .share();
         jobs["Deploying Engine Data..."] = job;
         jobs_seq.emplace_back(job);
     }
 
     {
-        auto job = th.pool
-                       ->schedule("Deploying Mono",
-                           [params, &am, &ctx]()
-                           {
-                               APPLOG_INFO("Deploying Mono...");
+        auto job =
+            th.pool
+                ->schedule(
+                    "Deploying Mono",
+                    [params, &am, &ctx]()
+                    {
+                        APPLOG_INFO("Deploying Mono...");
 
-                               auto paths = script_system::find_mono(ctx);
-                               fs::path assembly_path = mono::get_core_assembly_path();
-                               fs::path assembly_dir = assembly_path.parent_path();
-                               fs::path lib_version = assembly_dir.filename();
+                        auto paths = script_system::find_mono(ctx);
+                        fs::path assembly_path = mono::get_core_assembly_path();
+                        fs::path assembly_dir = assembly_path.parent_path();
+                        fs::path lib_version = assembly_dir.filename();
 
-                               fs::error_code ec;
+                        fs::error_code ec;
 
-                               {
-                                   fs::path cached_data = params.deploy_location / "data" / "engine" / "mono" / "lib";
-                                   cached_data /= "mono";
+                        {
+                            fs::path cached_data = params.deploy_location / "data" / "engine" / "mono" / "lib";
+                            cached_data /= "mono";
 
-                                   APPLOG_TRACE("Clearing {}", cached_data.generic_string());
-                                   fs::remove_all(cached_data, ec);
+                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
+                            fs::remove_all(cached_data, ec);
 
-                                   cached_data /= lib_version;
+                            cached_data /= lib_version;
 
-                                   fs::create_directories(cached_data, ec);
+                            fs::create_directories(cached_data, ec);
 
-                                   APPLOG_TRACE("Copying {} -> {}", assembly_dir.generic_string(), cached_data.generic_string());
-                                   fs::copy(assembly_dir, cached_data, fs::copy_options::recursive, ec);
-                               }
+                            APPLOG_TRACE("Copying {} -> {}",
+                                         assembly_dir.generic_string(),
+                                         cached_data.generic_string());
+                            fs::copy(assembly_dir, cached_data, fs::copy_options::recursive, ec);
+                        }
 
-                               fs::path config_dir = paths.config_dir;
-                               config_dir /= "mono";
+                        fs::path config_dir = paths.config_dir;
+                        config_dir /= "mono";
 
-                               {
-                                   fs::path cached_data = params.deploy_location / "data" / "engine" / "mono" / "etc";
-                                   cached_data /= "mono";
+                        {
+                            fs::path cached_data = params.deploy_location / "data" / "engine" / "mono" / "etc";
+                            cached_data /= "mono";
 
-                                   APPLOG_TRACE("Clearing {}", cached_data.generic_string());
-                                   fs::remove_all(cached_data, ec);
-                                   fs::create_directories(cached_data, ec);
+                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
+                            fs::remove_all(cached_data, ec);
+                            fs::create_directories(cached_data, ec);
 
-                                   APPLOG_TRACE("Copying {} -> {}", config_dir.generic_string(), cached_data.generic_string());
-                                   fs::copy(config_dir, cached_data, fs::copy_options::recursive, ec);
-                               }
+                            APPLOG_TRACE("Copying {} -> {}", config_dir.generic_string(), cached_data.generic_string());
+                            fs::copy(config_dir, cached_data, fs::copy_options::recursive, ec);
+                        }
 
-                               APPLOG_INFO("Deploying Mono - Done");
-                           })
-                       .share();
+                        APPLOG_INFO("Deploying Mono - Done");
+                    })
+                .share();
         jobs["Deploying Mono..."] = job;
         jobs_seq.emplace_back(job);
     }

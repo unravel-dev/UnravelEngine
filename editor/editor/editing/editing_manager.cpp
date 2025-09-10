@@ -21,6 +21,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <imgui_widgets/gizmo.h>
 #include <editor/imgui/integration/imgui_notify.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 
 #include <filedialog/filedialog.h>
 
@@ -476,16 +477,52 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         return;
     }
 
+    
+    auto on_continue = [this,&ctx, prefab]()
+    {
+        // Store the prefab we're editing
+        edited_prefab = prefab;
+        current_mode = editing_mode::prefab;
+        
+        // Clear selection
+        unselect();
+        
+        // Create a new scene for prefab editing if it doesn't exist
+        prefab_scene.unload();
+
+        // Set up a default 3D scene with lighting
+        defaults::create_default_3d_scene_for_editing(ctx, prefab_scene);
+        
+        // Instantiate the prefab in our editing scene
+        prefab_entity = prefab_scene.instantiate(prefab);
+        
+        // Select the prefab entity
+        if (prefab_entity)
+        {
+            select(prefab_entity);
+        }
+        
+        APPLOG_INFO("Entered prefab editing mode for: {}", prefab.id());
+    };
+
     if (is_prefab_mode())
     {
         // Already in prefab mode, check if we need to save changes
         if (edited_prefab != prefab)
         {
-            // Ask to save changes to current prefab before switching
-            bool should_save = auto_save || prompt_save_changes(ctx);
-            if (should_save)
+            auto on_save = [this,&ctx]()
             {
                 save_prefab_changes(ctx);
+            };
+
+            if(auto_save)
+            {
+                on_save();
+            }
+            else
+            {
+                prompt_save_changes(ctx, on_save, on_continue);
+                return;
             }
         }
         else
@@ -497,37 +534,29 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         }
     }
 
-    // Store the prefab we're editing
-    edited_prefab = prefab;
-    current_mode = editing_mode::prefab;
-    
-    // Clear selection
-    unselect();
-    
-    // Create a new scene for prefab editing if it doesn't exist
-    prefab_scene.unload();
+    on_continue();
 
-    // Set up a default 3D scene with lighting
-    defaults::create_default_3d_scene_for_editing(ctx, prefab_scene);
-    
-    // Instantiate the prefab in our editing scene
-    prefab_entity = prefab_scene.instantiate(prefab);
-    
-    // Select the prefab entity
-    if (prefab_entity)
-    {
-        select(prefab_entity);
-    }
-    
-    APPLOG_INFO("Entered prefab editing mode for: {}", prefab.id());
+
 }
 
-auto editing_manager::prompt_save_changes(rtti::context& ctx) -> bool
+auto editing_manager::prompt_save_changes(rtti::context& ctx, const std::function<void()>& on_save, const std::function<void()>& on_continue) -> bool
 {
-    return native::message_box("Do you want to save changes to the current prefab?",
-                              native::dialog_type::yes_no,
-                              native::icon_type::question,
-                              "Save changes?") == native::action_type::ok_or_yes;
+    ImBox::ShowSaveConfirmation("Save prefab?",
+        "Do you want to save the changes you made?",
+        [&ctx, on_save, on_continue](ImBox::ModalResult result)
+    {
+        if(result == ImBox::ModalResult::Save)
+        {
+            on_save();
+        }
+
+        if(result != ImBox::ModalResult::Cancel)
+        {
+            on_continue();
+        }
+    });
+
+    return true;
 }
 
 void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_changes)
@@ -537,38 +566,56 @@ void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_chan
         return;
     }
     
-    bool should_save = false;
+    auto on_save = [this,&ctx]()
+    {
+        save_prefab_changes(ctx);
+    };
+
+    auto on_continue = [this, &ctx]()
+    {
+            // Reset state
+        current_mode = editing_mode::scene;
+        edited_prefab = {};
+        prefab_entity = {};
+        prefab_scene.unload();
+        
+        // Clear selection
+        unselect();
+        
+        APPLOG_INFO("Exited prefab editing mode");
+    };
     
     switch (save_changes)
     {
         case save_option::yes:
-            should_save = true;
+            on_save();
+            on_continue();
             break;
             
         case save_option::no:
-            should_save = false;
+            on_continue();
             break;
             
         case save_option::prompt:
-            should_save = prompt_save_changes(ctx);
+            prompt_save_changes(ctx, on_save, on_continue);
             break;
     }
     
-    if (should_save)
-    {
-        save_prefab_changes(ctx);
-    }
+    // if (should_save)
+    // {
+    //     save_prefab_changes(ctx);
+    // }
     
-    // Reset state
-    current_mode = editing_mode::scene;
-    edited_prefab = {};
-    prefab_entity = {};
-    prefab_scene.unload();
+    // // Reset state
+    // current_mode = editing_mode::scene;
+    // edited_prefab = {};
+    // prefab_entity = {};
+    // prefab_scene.unload();
     
-    // Clear selection
-    unselect();
+    // // Clear selection
+    // unselect();
     
-    APPLOG_INFO("Exited prefab editing mode");
+    // APPLOG_INFO("Exited prefab editing mode");
 }
 
 void editing_manager::save_prefab_changes(rtti::context& ctx)

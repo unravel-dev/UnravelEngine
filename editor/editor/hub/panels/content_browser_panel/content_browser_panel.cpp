@@ -5,6 +5,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/system/project_manager.h>
 #include <editor/shortcuts.h>
 #include <engine/animation/animation.h>
@@ -764,6 +765,7 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
         ImGui::PushWindowFontSize(16);
 
         bool is_popup_opened = false;
+        
 
         auto process_cache_entry = [&](const auto& cache_entry)
         {
@@ -782,6 +784,19 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                 fs::rename(absolute_path, new_absolute_path, err);
             };
 
+
+            auto prompt_delete = [](const std::string& name, const std::function<void()>& on_delete)
+            {
+                ImBox::ShowDeleteConfirmation("Delete selected asset?",
+                    fmt::format("{}\n\nYou cannot undo the delete asset action.", name).c_str(),
+                    [on_delete](ImBox::ModalResult result)
+                {
+                    if(result == ImBox::ModalResult::Delete)
+                    {
+                        on_delete();
+                    }
+                });
+            };
 
             content_browser_item item(cache_entry);
             item.on_rename = on_rename;
@@ -825,10 +840,15 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
 
                         item.on_delete = [&]()
                         {
-                            fs::error_code err;
-                            fs::remove_all(absolute_path, err);
+                            auto on_delete = [&em, absolute_path, entry]()
+                            {
+                                fs::error_code err;
+                                fs::remove_all(absolute_path, err);
+        
+                                em.unselect(entry);
+                            };
 
-                            em.unselect(entry);
+                            prompt_delete(relative, on_delete);
                         };
 
                         if constexpr(std::is_same_v<asset_t, scene_prefab>)
@@ -880,10 +900,15 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
 
                 item.on_delete = [&]()
                 {
-                    fs::error_code err;
-                    fs::remove_all(absolute_path, err);
+                    auto on_delete = [&em, absolute_path, entry]()
+                    {
+                        fs::error_code err;
+                        fs::remove_all(absolute_path, err);
 
-                    em.unselect(entry);
+                        em.unselect(entry);
+                    };
+
+                    prompt_delete(relative, on_delete);
                 };
 
                 if(fs::is_directory(cache_entry.entry.status()))

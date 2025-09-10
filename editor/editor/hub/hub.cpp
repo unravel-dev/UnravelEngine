@@ -398,10 +398,11 @@ void hub::on_os_event(rtti::context& ctx, os::event& e)
             {
                 if(render_window->get_window().get_id() == window_id)
                 {
-                    if(!editor_actions::prompt_save_scene(ctx))
-                    {
-                        e = {};
-                    }
+                    editor_actions::prompt_save_scene(ctx, []() {
+                        engine::interrupt();
+                    });
+
+                    e = {};
                 }
             }
         }
