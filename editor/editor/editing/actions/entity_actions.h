@@ -5,6 +5,7 @@
 #include <engine/assets/asset_handle.h>
 #include <base/basetypes.hpp>
 #include <math/math.h>
+#include <sstream>
 
 namespace unravel
 {
@@ -124,6 +125,41 @@ struct entity_set_text_bounds_action_t : crtp_meta_type<entity_set_text_bounds_a
     void undo_action() override;
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+// Script component specific actions
+struct entity_add_script_component_action_t : crtp_meta_type<entity_add_script_component_action_t, editing_action_t>
+{
+    entt::handle entity{};
+    std::string script_type_name{};
+
+    bool do_was_successful{false};
+
+    entity_add_script_component_action_t(entt::handle ent, const std::string& type_name);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+struct entity_remove_script_component_action_t : crtp_meta_type<entity_remove_script_component_action_t, editing_action_t>
+{
+    entt::handle entity{};
+    std::string script_type_name{};
+
+    bool do_was_successful{false};
+    // Store the script object data for restoration
+    std::stringstream removed_script_object_data{};
+
+    entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
     auto is_valid() const -> bool override;
     void draw_in_inspector(rtti::context& ctx) override;
 };

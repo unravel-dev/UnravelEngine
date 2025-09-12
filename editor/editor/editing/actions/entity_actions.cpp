@@ -6,6 +6,12 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/material.h>
+#include <engine/scripting/ecs/components/script_component.h>
+#include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/meta/ecs/components/script_component.hpp>
+#include <engine/engine.h>
+#include <serialization/associative_archive.h>
+#include <serialization/binary_archive.h>
 
 namespace unravel
 {
@@ -379,6 +385,208 @@ void entity_set_text_bounds_action_t::draw_in_inspector(rtti::context& ctx)
     entt::meta_any old_area_any = old_area;
     entt::meta_any new_area_any = new_area;
     draw_in_inspector_impl(ctx, old_area_any, new_area_any, {});
+}
+
+// Script component action implementations
+entity_add_script_component_action_t::entity_add_script_component_action_t(entt::handle ent, const std::string& type_name)
+    : entity(ent), script_type_name(type_name)
+{
+    name = "Add Script Component " + script_type_name;
+}
+
+void entity_add_script_component_action_t::do_action()
+{
+    if (entity && !script_type_name.empty())
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get_cached<script_system>();
+        
+        // Find the script type by name
+        mono::mono_type script_type{};
+        for (const auto& type : script_sys.get_all_scriptable_components())
+        {
+            if (type.get_fullname() == script_type_name)
+            {
+                script_type = type;
+                break;
+            }
+        }
+        
+        if (script_type.valid())
+        {
+            auto script_comp = entity.try_get<script_component>();
+            if (!script_comp)
+            {
+                // Add script component if it doesn't exist
+                script_comp = &entity.emplace<script_component>();
+            }
+            
+            auto script_obj = script_comp->add_script_component(script_type);
+            do_was_successful = script_obj.scoped != nullptr;
+        }
+    }
+}
+
+void entity_add_script_component_action_t::undo_action()
+{
+    if (entity && !script_type_name.empty() && do_was_successful)
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get_cached<script_system>();
+        
+        // Find the script type by name
+        mono::mono_type script_type{};
+        for (const auto& type : script_sys.get_all_scriptable_components())
+        {
+            if (type.get_fullname() == script_type_name)
+            {
+                script_type = type;
+                break;
+            }
+        }
+        
+        if (script_type.valid())
+        {
+            auto script_comp = entity.try_get<script_component>();
+            if (script_comp)
+            {
+                script_comp->remove_script_component(script_type);
+                script_comp->process_pending_deletions();
+            }
+        }
+    }
+}
+
+auto entity_add_script_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_add_script_component_action_t::is_valid() const -> bool
+{
+    return entity.valid() && !script_type_name.empty();
+}
+
+void entity_add_script_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    // Could implement visual representation if needed
+}
+
+entity_remove_script_component_action_t::entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name)
+    : entity(ent), script_type_name(type_name)
+{
+    name = "Remove Script Component " + script_type_name;
+}
+
+void entity_remove_script_component_action_t::do_action()
+{
+    if (entity && !script_type_name.empty())
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get_cached<script_system>();
+        
+        // Find the script type by name
+        mono::mono_type script_type{};
+        for (const auto& type : script_sys.get_all_scriptable_components())
+        {
+            if (type.get_fullname() == script_type_name)
+            {
+                script_type = type;
+                break;
+            }
+        }
+        
+        if (script_type.valid())
+        {
+            auto script_comp = entity.try_get<script_component>();
+            if (script_comp)
+            {
+                // Try to get the script object before removing it for restoration
+                auto script_obj = script_comp->get_script_component(script_type);
+                if (script_obj.scoped)
+                {
+                    // Serialize the script object before removing it
+                    removed_script_object_data = {};
+
+                    save_to_stream(removed_script_object_data, entity, script_obj);
+                }
+                
+                do_was_successful = script_comp->remove_script_component(script_type);
+                if (do_was_successful)
+                {
+                    script_comp->process_pending_deletions();
+                }
+            }
+        }
+    }
+}
+
+void entity_remove_script_component_action_t::undo_action()
+{
+    if (entity && !script_type_name.empty() && do_was_successful)
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get_cached<script_system>();
+        
+        // Find the script type by name
+        mono::mono_type script_type{};
+        for (const auto& type : script_sys.get_all_scriptable_components())
+        {
+            if (type.get_fullname() == script_type_name)
+            {
+                script_type = type;
+                break;
+            }
+        }
+        
+        if (script_type.valid())
+        {
+            auto& script_comp = entity.get_or_emplace<script_component>();
+            
+            // If we have serialized data, try to restore it, otherwise create new one
+            if (!removed_script_object_data.str().empty())
+            {
+                try
+                {
+                    // Deserialize the script object
+                    
+                    script_component::script_object restored_obj;
+                    
+                    removed_script_object_data.seekg(0);
+                    load_from_stream(removed_script_object_data, entity, restored_obj);
+
+                    // Add the restored script object
+                    script_comp.add_script_component(restored_obj);
+
+                }
+                catch(...)
+                {
+                    // Fallback: create new instance if deserialization fails
+                    script_comp.add_script_component(script_type);
+                }
+            }
+            else
+            {
+                // Fallback: create new instance of the type
+                script_comp.add_script_component(script_type);
+            }
+        }
+    }
+}
+
+auto entity_remove_script_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_remove_script_component_action_t::is_valid() const -> bool
+{
+    return entity.valid() && !script_type_name.empty();
+}
+
+void entity_remove_script_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    // Could implement visual representation if needed
 }
 
 } // namespace unravel

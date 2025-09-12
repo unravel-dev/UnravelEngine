@@ -768,4 +768,51 @@ LOAD(script_component)
 }
 LOAD_INSTANTIATE(script_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(script_component, ser20::iarchive_binary_t);
+
+
+
+
+auto save_to_stream(std::ostream& stream, entt::const_handle e, const script_component::script_object& obj) -> bool
+{
+    bool pushed = push_save_context();
+    auto& save_ctx = get_save_context();
+    save_ctx.save_source = e;
+    save_ctx.to_prefab = false;
+
+    bool was_successful = false;
+    try
+    {
+        ser20::oarchive_associative_t ar(stream);
+        ar(ser20::make_nvp("script_object", obj));
+        was_successful = true;
+    }
+    catch(const ser20::Exception& e)
+    {
+        APPLOG_ERROR("Failed to save script component to stream: {}", e.what());
+    }
+
+    save_ctx.to_prefab = false;
+    save_ctx.save_source = {};
+    pop_save_context(pushed);
+    return was_successful;
+}
+auto load_from_stream(std::istream& stream, entt::handle e, script_component::script_object& obj) -> bool
+{
+    bool pushed = push_load_context(*e.registry());
+
+    bool was_successful = false;
+    try
+    {
+        ser20::iarchive_associative_t ar(stream);
+        ar(ser20::make_nvp("script_object", obj));
+        was_successful = true;
+    }
+    catch(const ser20::Exception& e)
+    {
+        APPLOG_ERROR("Failed to load script component from stream: {}", e.what());
+    }
+    pop_load_context(pushed);
+    return was_successful;
+}
+
 } // namespace unravel

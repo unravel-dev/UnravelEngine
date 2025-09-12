@@ -470,6 +470,13 @@ SAVE(const_entity_handle_link)
                 flags = entity_flags::resolve_with_existing;
             }
         }
+        else
+        {
+            if(!save_ctx.is_saving_to_prefab())
+            {
+                flags = entity_flags::resolve_with_existing;
+            }
+        }
     }
 
     try_save(ar, ser20::make_nvp("flags", flags));

@@ -109,7 +109,8 @@ void run_camera_focus_transition(entt::handle camera,
     math::vec3 start_position = trans_comp.get_position_global();
     float start_ortho_size = camera_comp.get_ortho_size();
 
-    math::vec3 target_position{};
+    // Calculate initial target position to check proximity
+    math::vec3 initial_target_position{};
     if(keep_rotation)
     {
         // Keep camera rotation unchanged: move along current forward (Z axis) so center is on view axis
@@ -118,7 +119,7 @@ void run_camera_focus_transition(entt::handle camera,
         {
             forward = math::vec3{0.0f, 0.0f, -1.0f};
         }
-        target_position = target_center - target_distance * forward;
+        initial_target_position = target_center - target_distance * forward;
     }
     else
     {
@@ -128,7 +129,40 @@ void run_camera_focus_transition(entt::handle camera,
         {
             dir = math::vec3{0.0f, 0.0f, -1.0f};
         }
-        target_position = target_center - target_distance * dir;
+        initial_target_position = target_center - target_distance * dir;
+    }
+
+    // Check if we're already very close to the calculated target position
+    float distance_to_target = math::length(start_position - initial_target_position);
+    float proximity_threshold = target_distance * 0.15f; // 15% of target distance
+    
+    // If we're very close, back away to provide a wider view before focusing
+    float adjusted_target_distance = target_distance;
+    if(distance_to_target < proximity_threshold)
+    {
+        // Increase distance by 50% to back away and provide wider view
+        adjusted_target_distance = target_distance * 3.0f;
+    }
+
+    // Calculate final target position with adjusted distance
+    math::vec3 target_position{};
+    if(keep_rotation)
+    {
+        math::vec3 forward = math::normalize(trans_comp.get_z_axis_global());
+        if(math::length(forward) < 0.001f)
+        {
+            forward = math::vec3{0.0f, 0.0f, -1.0f};
+        }
+        target_position = target_center - adjusted_target_distance * forward;
+    }
+    else
+    {
+        math::vec3 dir = math::normalize(target_center - start_position);
+        if(math::length(dir) < 0.001f)
+        {
+            dir = math::vec3{0.0f, 0.0f, -1.0f};
+        }
+        target_position = target_center - adjusted_target_distance * dir;
     }
 
     auto ease = seq::ease::smooth_stop;

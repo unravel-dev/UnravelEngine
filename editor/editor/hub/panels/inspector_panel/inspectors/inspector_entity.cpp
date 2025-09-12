@@ -822,12 +822,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 script_component::script_object comp_to_add;
 
                 auto type = comp_to_remove.scoped->object.get_type();
-                script_comp->remove_script_component(comp_to_remove.scoped->object);
-                script_comp->process_pending_deletions();
+
+                auto& em = ctx.get_cached<editing_manager>();
+                auto script_type_name = type.get_fullname();
+                em.do_action<entity_remove_script_component_action_t>({}, data, script_type_name);
+
+                // script_comp->remove_script_component(comp_to_remove.scoped->object);
+                // script_comp->process_pending_deletions();
 
                 if(index_to_add != -1)
                 {
-                    script_comp->add_script_component(type);
+                    // script_comp->add_script_component(type);
+
+                    em.do_action<entity_add_script_component_action_t>({}, data, script_type_name);
                 }
 
                 result.changed |= true;
@@ -876,7 +883,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 callbacks.on_add = [&]()
                 {
-                    data.get_or_emplace<script_component>().add_script_component(type);
+                    //data.get_or_emplace<script_component>().add_script_component(type);
+                    auto& em = ctx.get_cached<editing_manager>();
+                    em.do_action<entity_add_script_component_action_t>({}, data, name);
                     result.changed |= true;
                     result.edit_finished |= true;
                 };
