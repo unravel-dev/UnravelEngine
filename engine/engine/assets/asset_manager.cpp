@@ -7,6 +7,8 @@
 #include <engine/ecs/prefab.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/physics/physics_material.h>
+#include <engine/ui/visual_tree.h>
+#include <engine/ui/style_sheet.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
@@ -80,6 +82,18 @@ auto asset_manager::init(rtti::context& ctx) -> bool
         auto& storage = add_storage<physics_material>();
         storage.load_from_file = asset_reader::load_from_file<physics_material>;
         storage.load_from_instance = asset_reader::load_from_instance<physics_material>;
+    }
+
+    {
+        auto& storage = add_storage<visual_tree>();
+        storage.load_from_file = asset_reader::load_from_file<visual_tree>;
+        storage.load_from_instance = asset_reader::load_from_instance<visual_tree>;
+    }
+
+    {
+        auto& storage = add_storage<style_sheet>();
+        storage.load_from_file = asset_reader::load_from_file<style_sheet>;
+        storage.load_from_instance = asset_reader::load_from_instance<style_sheet>;
     }
 
     {

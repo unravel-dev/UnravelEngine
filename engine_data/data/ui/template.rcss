@@ -1,0 +1,18 @@
+/* New Style Sheet */
+body {
+    font-family: Inter;
+	font-size: 25px;
+    margin: 0;
+    padding: 20px;
+    background-color: rgba(0,0,0,0);
+}
+
+h1 {
+    color: #333;
+    margin-bottom: 16px;
+}
+
+p {
+    color: #666;
+    line-height: 1.6;
+}

@@ -16,7 +16,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
-
+#include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 
 #include <logging/logging.h>
@@ -591,6 +591,13 @@ auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::s
     object.emplace<fxaa_component>();
     object.emplace<ssr_component>();
 
+    return object;
+}
+
+auto defaults::create_ui_document_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    object.emplace<ui_document_component>();
     return object;
 }
 

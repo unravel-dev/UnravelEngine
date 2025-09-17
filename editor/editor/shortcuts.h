@@ -46,6 +46,7 @@ inline const ImGuiKeyCombination undo = {ImGuiKey_LeftCtrl, ImGuiKey_Z};
 inline const ImGuiKeyCombination redo = {ImGuiKey_LeftCtrl, ImGuiKey_Y};
 inline const ImGuiKeyCombination redo_alt = {ImGuiKey_LeftCtrl, ImGuiKey_LeftShift, ImGuiKey_Z};
 inline const ImGuiKeyCombination undo_history = {ImGuiKey_LeftCtrl, ImGuiKey_U};
+inline const ImGuiKeyCombination recompile_ui = {ImGuiKey_LeftCtrl, ImGuiKey_LeftShift, ImGuiKey_R};
 // Transform operations
 inline constexpr ImGuiKey move_tool = ImGuiKey_W;
 inline constexpr ImGuiKey rotate_tool = ImGuiKey_E;

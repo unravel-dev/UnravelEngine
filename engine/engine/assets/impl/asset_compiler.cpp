@@ -22,6 +22,8 @@
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/physics/physics_material.hpp>
+#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/style_sheet.hpp>
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/mesh.hpp>
@@ -858,6 +860,62 @@ auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs:
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
         {
             save_to_file_bin(temp.string(), material);
+        }, err);
+    }
+
+    return true;
+}
+
+template<>
+auto compile<visual_tree>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
+{
+    auto absolute_path = resolve_input_file(key);
+    std::string str_input = absolute_path.string();
+    fs::error_code err;
+
+    auto tree = std::make_shared<visual_tree>();
+    {
+        // For visual_tree, we can load the HTML/RML content directly from file
+        std::ifstream file(absolute_path);
+        if (file.is_open())
+        {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            tree->content = buffer.str();
+            file.close();
+        }
+
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        {
+            save_to_file(temp.string(), tree);
+        }, err);
+    }
+
+    return true;
+}
+
+template<>
+auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
+{
+    auto absolute_path = resolve_input_file(key);
+    std::string str_input = absolute_path.string();
+    fs::error_code err;
+
+    auto sheet = std::make_shared<style_sheet>();
+    {
+        // For style_sheet, we can load the CSS/RCSS content directly from file
+        std::ifstream file(absolute_path);
+        if (file.is_open())
+        {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            sheet->content = buffer.str();
+            file.close();
+        }
+
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        {
+            save_to_file(temp.string(), sheet);
         }, err);
     }
 

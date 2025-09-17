@@ -109,6 +109,27 @@ auto thumbnail_manager::get_thumbnail<material>(const asset_handle<material>& as
     return thumbnails_.material.get();
 }
 
+
+template<>
+auto thumbnail_manager::get_thumbnail<visual_tree>(const asset_handle<visual_tree>& asset) -> gfx::texture::ptr
+{
+    if(!asset.is_valid())
+    {
+        return thumbnails_.transparent.get();
+    }
+    return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.visual_tree.get();
+}
+
+template<>
+auto thumbnail_manager::get_thumbnail<style_sheet>(const asset_handle<style_sheet>& asset) -> gfx::texture::ptr
+{
+    if(!asset.is_valid())
+    {
+        return thumbnails_.transparent.get();
+    }
+    return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.style_sheet.get();
+}
+
 template<>
 auto thumbnail_manager::get_thumbnail<script>(const asset_handle<script>& asset) -> gfx::texture::ptr
 {
@@ -304,7 +325,8 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     thumbnails_.scene_prefab = am.get_asset<gfx::texture>("editor:/data/icons/scene.png");
     thumbnails_.audio_clip = am.get_asset<gfx::texture>("editor:/data/icons/sound.png");
     thumbnails_.script = am.get_asset<gfx::texture>("editor:/data/icons/script.png");
-
+    thumbnails_.visual_tree = am.get_asset<gfx::texture>("editor:/data/icons/rhtml.png");
+    thumbnails_.style_sheet = am.get_asset<gfx::texture>("editor:/data/icons/file.png");
 
     gimzmo_icons_.camera = am.get_asset<gfx::texture>("editor:/data/icons/camera.png");
     gimzmo_icons_.sky_light = am.get_asset<gfx::texture>("editor:/data/icons/sky_light.png");

@@ -206,6 +206,11 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 editor_actions::recompile_textures();
             }
 
+            if(ImGui::MenuItem("Recompile UI"))
+            {
+                editor_actions::recompile_ui();
+            }
+
             if(ImGui::MenuItem("Recompile Scripts"))
             {
                 editor_actions::recompile_scripts();
@@ -274,6 +279,10 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         else if(ImGui::IsCombinationKeyPressed(shortcuts::undo_history))
         {
             parent_->get_undo_redo_panel().show(true);
+        }
+        else if(ImGui::IsCombinationKeyPressed(shortcuts::recompile_ui))
+        {
+            editor_actions::recompile_ui();
         }
     }
     ImGui::EndChild();

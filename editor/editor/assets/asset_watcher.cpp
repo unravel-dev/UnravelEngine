@@ -584,6 +584,8 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<audio_clip>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<font>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<script>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<visual_tree>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
 
     syncer.sync(meta_dir, cache_dir);
 
@@ -604,6 +606,8 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     watch_synced<audio_clip>(ctx, watchers, cache_dir);
     watch_synced<font>(ctx, watchers, cache_dir);
     watch_synced<script>(ctx, watchers, cache_dir);
+    watch_synced<visual_tree>(ctx, watchers, cache_dir);
+    watch_synced<style_sheet>(ctx, watchers, cache_dir);
 }
 
 asset_watcher::asset_watcher()

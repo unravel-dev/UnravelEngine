@@ -147,6 +147,14 @@ public class PhysicsMaterial : Asset<PhysicsMaterial>
 {
 }
 
+public class VisualTree : Asset<VisualTree>
+{
+}
+
+public class StyleSheet : Asset<StyleSheet>
+{
+
+}
 
 public class Font : Asset<Font>
 {

@@ -148,6 +148,14 @@ struct defaults
      */
     static auto create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
+    /**
+     * @brief Creates a UI document entity.
+     * @param ctx The context for creation.
+     * @param scn The scene to create the entity in.
+     * @param name The name of the UI document entity.
+     * @return A handle to the created entity.
+     */
+    static auto create_ui_document_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
      * @brief Creates a text entity.

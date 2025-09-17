@@ -17,10 +17,14 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
+#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/style_sheet.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
+#include <engine/ui/visual_tree.h>
+#include <engine/ui/style_sheet.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/script.h>
 
@@ -808,6 +812,8 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                                scene_prefab,
                                material,
                                physics_material,
+                               visual_tree,
+                               style_sheet,
                                audio_clip,
                                mesh,
                                prefab,
@@ -1089,6 +1095,53 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             auto new_mat_future =
                 am.get_asset_from_instance<physics_material>(key, std::make_shared<physics_material>());
             asset_writer::atomic_save_to_file(new_mat_future.id(), new_mat_future);
+
+            {
+                pending_rename = available;
+            }
+        }
+
+        if(ImGui::MenuItem("Visual Tree"))
+        {
+            auto& am = ctx.get_cached<asset_manager>();
+
+            const auto available =
+                get_new_file(target_path, "New Visual Tree", ex::get_format<visual_tree>());
+            const auto key = fs::convert_to_protocol(available).generic_string();
+
+
+            fs::error_code err;
+            asset_writer::atomic_write_file(
+            available,
+            [&](const fs::path& temp)
+            {
+                fs::error_code ec;
+                fs::copy(fs::resolve_protocol("engine:/data/ui/template.rhtml"), available, ec);
+            },
+            err);
+
+            {
+                pending_rename = available;
+            }
+        }
+
+        if(ImGui::MenuItem("Style Sheet"))
+        {
+            auto& am = ctx.get_cached<asset_manager>();
+
+            const auto available =
+                get_new_file(target_path, "New Style Sheet", ex::get_format<style_sheet>());
+            const auto key = fs::convert_to_protocol(available).generic_string();
+
+            fs::error_code err;
+            asset_writer::atomic_write_file(
+            available,
+            [&](const fs::path& temp)
+            {
+                fs::error_code ec;
+                fs::copy(fs::resolve_protocol("engine:/data/ui/template.rcss"), available, ec);
+            },
+            err);
 
             {
                 pending_rename = available;

@@ -21,7 +21,8 @@ struct physics_material;
 struct audio_clip;
 struct script;
 struct font;
-
+struct visual_tree;
+struct style_sheet;
 } // namespace unravel
 
 namespace unravel::asset_reader
@@ -48,6 +49,8 @@ DECLARE_LOADER_SPEC(physics_material);
 DECLARE_LOADER_SPEC(audio_clip);
 DECLARE_LOADER_SPEC(font);
 DECLARE_LOADER_SPEC(script);
+DECLARE_LOADER_SPEC(visual_tree);
+DECLARE_LOADER_SPEC(style_sheet);
 
 template<typename T>
 inline auto get_job_name() -> std::string

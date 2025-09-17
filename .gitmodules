@@ -40,3 +40,6 @@
 [submodule "deps/3rdparty/cpptrace/cpptrace"]
 	path = deps/3rdparty/cpptrace/cpptrace
 	url = https://github.com/jeremy-rifkin/cpptrace.git
+[submodule "deps/3rdparty/RmlUi/RmlUi"]
+	path = deps/3rdparty/RmlUi/RmlUi
+	url = https://github.com/mikke89/RmlUi.git

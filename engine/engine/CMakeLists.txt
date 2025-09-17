@@ -22,6 +22,7 @@ target_link_libraries (${target_name}
     EnTT::EnTT
     Bullet3::Bullet3
     poolSTL::poolSTL
+    RmlUi::RmlUi
     service
     context
     logging

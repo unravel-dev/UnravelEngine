@@ -1,0 +1,137 @@
+/*
+* Default styles for all the basic elements.
+*/
+
+/* Base font settings */
+html, body {
+	font-family: Inter;
+	font-size: 22dp;
+	color: #f0f0f0;
+}
+
+/* Block elements */
+div, p, h1, h2, h3, h4, h5, h6 {
+	display: block;
+}
+
+/* Typography */
+h1 {
+	font-size: 2.25rem;
+	font-weight: bold;
+	margin-bottom: 1rem;
+}
+
+h2 {
+	font-size: 2rem;
+	font-weight: bold;
+	margin-bottom: 0.875rem;
+}
+
+h3 {
+	font-size: 1.75rem;
+	font-weight: bold;
+	margin-bottom: 0.75rem;
+}
+
+h4 {
+	font-size: 1.5rem;
+	font-weight: bold;
+	margin-bottom: 0.625rem;
+}
+
+h5 {
+	font-size: 1.25rem;
+	font-weight: bold;
+	margin-bottom: 0.5rem;
+}
+
+h6 {
+	font-size: 1.125rem;
+	font-weight: bold;
+	margin-bottom: 0.5rem;
+}
+
+p {
+	margin-bottom: 1rem;
+}
+
+em {
+	font-style: italic;
+}
+
+strong {
+	font-weight: bold;
+}
+
+/* Forms */
+input, textarea, select, option {
+	font-size: 1rem;
+	padding: 0.5rem;
+	background-color: white;
+	color: #333;
+}
+
+button {
+	font-size: 1rem;
+	font-weight: bold;
+	padding: 0.5rem 1rem;
+	background-color: #007bff;
+	color: white;
+	text-align: center;
+	display: inline-block;
+	transition: background-color 0.2s;
+
+}
+
+button:hover {
+	background-color: #0056b3;
+}
+
+select {
+	text-align: left;
+}
+
+/* Tables */
+table {
+	box-sizing: border-box;
+	display: table;
+	width: 100%;
+}
+
+tr {
+	box-sizing: border-box;
+	display: table-row;
+}
+
+td, th {
+	box-sizing: border-box;
+	display: table-cell;
+	padding: 0.5em;
+	text-align: left;
+}
+
+th {
+	font-weight: bold;
+}
+
+col {
+	box-sizing: border-box;
+	display: table-column;
+}
+
+colgroup {
+	display: table-column-group;
+}
+
+thead, tbody, tfoot {
+	display: table-row-group;
+}
+
+/* RmlUi specific elements */
+tabset {
+	display: block;
+}
+
+tabset tabs {
+	display: block;
+}

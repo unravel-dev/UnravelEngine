@@ -21,6 +21,8 @@ struct physics_material;
 struct audio_clip;
 struct script;
 struct font;
+struct visual_tree;
+struct style_sheet;
 
 } // namespace unravel
 
@@ -28,7 +30,12 @@ namespace ex
 {
 
 template<typename T>
-auto get_suported_formats() -> const std::vector<std::string>&;
+auto get_suported_formats() -> const std::vector<std::string>&
+{
+    static_assert(!std::is_same_v<T, T>, "get_suported_formats must be specialized for this type");
+    static const std::vector<std::string> result = {};
+    return result;
+}
 
 template<typename T>
 auto get_suported_dependencies_formats() -> const std::vector<std::string>&;
@@ -118,6 +125,20 @@ inline auto get_suported_formats<unravel::script>() -> const std::vector<std::st
     return formats;
 }
 
+template<>
+inline auto get_suported_formats<unravel::visual_tree>() -> const std::vector<std::string>&
+{
+    static std::vector<std::string> formats = {".rhtml"};
+    return formats;
+}
+
+template<>
+inline auto get_suported_formats<unravel::style_sheet>() -> const std::vector<std::string>&
+{
+    static std::vector<std::string> formats = {".rcss"};
+    return formats;
+}
+
 inline auto get_all_formats() -> const std::vector<std::vector<std::string>>&
 {
     static const std::vector<std::vector<std::string>> types = {ex::get_suported_formats<gfx::texture>(),
@@ -130,7 +151,9 @@ inline auto get_all_formats() -> const std::vector<std::vector<std::string>>&
                                                                 ex::get_suported_formats<unravel::prefab>(),
                                                                 ex::get_suported_formats<unravel::scene_prefab>(),
                                                                 ex::get_suported_formats<unravel::physics_material>(),
-                                                                ex::get_suported_formats<unravel::script>()};
+                                                                ex::get_suported_formats<unravel::script>(),
+                                                                ex::get_suported_formats<unravel::visual_tree>(),
+                                                                ex::get_suported_formats<unravel::style_sheet>()};
 
     return types;
 }
@@ -270,13 +293,23 @@ inline auto get_type(const std::string& ex, bool is_directory = false) -> const 
         static const std::string result = "Font";
         return result;
     }
+    if(is_format<unravel::visual_tree>(ex))
+    {
+        static const std::string result = "Visual Tree";
+        return result;
+    }
+    if(is_format<unravel::style_sheet>(ex))
+    {
+        static const std::string result = "Style Sheet";
+        return result;
+    }
     if(is_directory)
     {
         static const std::string result = "Folder";
         return result;
     }
 
-    static const std::string result = "";
+    static const std::string result;
     return result;
 }
 
@@ -343,8 +376,18 @@ inline auto get_type() -> const std::string&
         static const std::string result = "Font";
         return result;
     }
+    if constexpr(std::is_same_v<T, unravel::visual_tree>)
+    {
+        static const std::string result = "Visual Tree";
+        return result;
+    }
+    if constexpr(std::is_same_v<T, unravel::style_sheet>)
+    {
+        static const std::string result = "Style Sheet";
+        return result;
+    }
 
-    static const std::string result = "";
+    static const std::string result;
     return result;
 }
 

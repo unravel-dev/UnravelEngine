@@ -1,5 +1,6 @@
 #include "editor_actions.h"
 #include "engine/scripting/script.h"
+#include "engine/ui/visual_tree.h"
 
 #include <editor/editing/editing_manager.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
@@ -1380,6 +1381,30 @@ void editor_actions::recompile_textures()
     fs::watcher::resume();
 }
 
+void editor_actions::recompile_ui()
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+    fs::watcher::pause();
+    {
+        auto assets = am.get_assets<visual_tree>();
+        for(auto& asset : assets)
+        {
+            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+            fs::watcher::touch(path, false);
+        }
+    }
+    {
+        auto assets = am.get_assets<style_sheet>();
+        for(auto& asset : assets)
+        {
+            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+            fs::watcher::touch(path, false);
+        }
+    }
+   
+    fs::watcher::resume();
+}
 void editor_actions::recompile_scripts()
 {
     auto& ctx = engine::context();

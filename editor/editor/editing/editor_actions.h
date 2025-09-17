@@ -32,6 +32,7 @@ struct editor_actions
 
     static void recompile_shaders();
     static void recompile_textures();
+    static void recompile_ui();
     static void recompile_scripts();
     static void recompile_all();
     static void generate_script_workspace();

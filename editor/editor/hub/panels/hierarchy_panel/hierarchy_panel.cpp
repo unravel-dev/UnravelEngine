@@ -188,6 +188,20 @@ void create_camera_entity(rtti::context& ctx, imgui_panels* panels, entt::handle
     });
 }
 
+void create_ui_document_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Create UI Document Entity",
+        [&ctx, panels, parent_entity]() mutable
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* active_scene = em.get_active_scene(ctx);
+        auto object = defaults::create_ui_document_entity(ctx, *active_scene, "UI Document");
+        em.select(object);
+        start_editing_label(ctx, panels, object);
+    });
+}
+
 // ============================================================================
 // Drag and Drop Operations
 // ============================================================================
@@ -477,6 +491,11 @@ void draw_common_menu_items(rtti::context& ctx, imgui_panels* panels, entt::hand
     if(ImGui::MenuItem("Camera"))
     {
         create_camera_entity(ctx, panels, parent_entity);
+    }
+
+    if(ImGui::MenuItem("UI Document"))
+    {
+        create_ui_document_entity(ctx, panels, parent_entity);
     }
 }
 

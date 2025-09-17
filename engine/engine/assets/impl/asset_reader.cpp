@@ -10,6 +10,8 @@
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/standard_material.hpp>
 #include <engine/meta/scripting/script.hpp>
+#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/style_sheet.hpp>
 
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -377,6 +379,54 @@ auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output
     };
 
     auto job = pool.schedule(get_job_name<script>(), create_resource_func).share();
+    output.set_internal_job(job);
+
+    return true;
+}
+
+template<>
+auto load_from_file<visual_tree>(tpp::thread_pool& pool, asset_handle<visual_tree>& output, const std::string& key)
+    -> bool
+{
+    std::string compiled_absolute_path{};
+
+    if(!validate(key, {}, compiled_absolute_path))
+    {
+        return false;
+    }
+
+    auto create_resource_func = [compiled_absolute_path]()
+    {
+        auto tree = std::make_shared<visual_tree>();
+        load_from_file(compiled_absolute_path, tree);
+        return tree;
+    };
+
+    auto job = pool.schedule(get_job_name<visual_tree>(), create_resource_func).share();
+    output.set_internal_job(job);
+
+    return true;
+}
+
+template<>
+auto load_from_file<style_sheet>(tpp::thread_pool& pool, asset_handle<style_sheet>& output, const std::string& key)
+    -> bool
+{
+    std::string compiled_absolute_path{};
+
+    if(!validate(key, {}, compiled_absolute_path))
+    {
+        return false;
+    }
+
+    auto create_resource_func = [compiled_absolute_path]()
+    {
+        auto sheet = std::make_shared<style_sheet>();
+        load_from_file(compiled_absolute_path, sheet);
+        return sheet;
+    };
+
+    auto job = pool.schedule(get_job_name<style_sheet>(), create_resource_func).share();
     output.set_internal_job(job);
 
     return true;

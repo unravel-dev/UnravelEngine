@@ -17,6 +17,8 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 
+#include <engine/ui/ecs/components/ui_document_component.h>
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/events.h>
 #include <engine/meta/ecs/entity.hpp>
 
@@ -152,6 +154,9 @@ scene::scene(const std::string& tag_name)
 
     registry->on_construct<script_component>().connect<&script_component::on_create_component>();
     registry->on_destroy<script_component>().connect<&script_component::on_destroy_component>();
+
+    registry->on_construct<ui_document_component>().connect<&ui_system::on_create_component>();
+    registry->on_destroy<ui_document_component>().connect<&ui_system::on_destroy_component>();
 }
 
 scene::~scene()

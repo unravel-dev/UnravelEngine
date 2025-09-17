@@ -21,6 +21,7 @@
 #include "assao_component.hpp"
 #include "ssr_component.hpp"
 #include "text_component.hpp"
+#include "../../ui/ecs/components/ui_document_component.hpp"
 #include <tuple>
 
 namespace unravel
@@ -50,7 +51,8 @@ using all_serializeable_components = std::tuple<
     audio_source_component,
     audio_listener_component,
     text_component,
-    script_component
+    script_component,
+    ui_document_component
     >;
 
 using all_inspectable_components = std::tuple<
@@ -75,7 +77,8 @@ using all_inspectable_components = std::tuple<
     physics_component,
     audio_source_component,
     audio_listener_component,
-    text_component
+    text_component,
+    ui_document_component
     >;
 
 using all_addable_components = std::tuple<
@@ -93,7 +96,8 @@ using all_addable_components = std::tuple<
     physics_component,
     audio_source_component,
     audio_listener_component,
-    text_component
+    text_component,
+    ui_document_component
     >;
 
 

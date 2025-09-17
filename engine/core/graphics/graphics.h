@@ -476,7 +476,7 @@ void set_stencil(uint32_t _fstencil, uint32_t _bstencil = BGFX_STENCIL_NONE);
 uint16_t set_scissor(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height);
 
 /**/
-void set_scissord(uint16_t _cache = UINT16_MAX);
+void set_scissor(uint16_t _cache = UINT16_MAX);
 
 /**/
 uint32_t set_transform(const void* _mtx, uint16_t _num = 1);
