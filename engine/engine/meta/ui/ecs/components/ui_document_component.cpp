@@ -1,5 +1,7 @@
 #include "ui_document_component.hpp"
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/assets/asset_handle.hpp>
+
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -25,21 +27,20 @@ REFLECT(ui_document_component)
             entt::attribute{"name", "asset"},
             entt::attribute{"pretty_name", "Asset"},
         })
-        .data<&ui_document_component::auto_show>("auto_show"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "auto_show"},
-            entt::attribute{"pretty_name", "Auto Show"},
-        });
+        ;
 }
 
 SAVE(ui_document_component)
 {
+    try_save(ar, ser20::make_nvp("asset", obj.asset));
+
 }
 SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_binary_t);
 
 LOAD(ui_document_component)
 {
+    try_load(ar, ser20::make_nvp("asset", obj.asset));
 }
 LOAD_INSTANTIATE(ui_document_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(ui_document_component, ser20::iarchive_binary_t);

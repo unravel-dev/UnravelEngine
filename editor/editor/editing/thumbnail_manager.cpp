@@ -326,7 +326,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     thumbnails_.audio_clip = am.get_asset<gfx::texture>("editor:/data/icons/sound.png");
     thumbnails_.script = am.get_asset<gfx::texture>("editor:/data/icons/script.png");
     thumbnails_.visual_tree = am.get_asset<gfx::texture>("editor:/data/icons/rhtml.png");
-    thumbnails_.style_sheet = am.get_asset<gfx::texture>("editor:/data/icons/file.png");
+    thumbnails_.style_sheet = am.get_asset<gfx::texture>("editor:/data/icons/rcss.png");
 
     gimzmo_icons_.camera = am.get_asset<gfx::texture>("editor:/data/icons/camera.png");
     gimzmo_icons_.sky_light = am.get_asset<gfx::texture>("editor:/data/icons/sky_light.png");

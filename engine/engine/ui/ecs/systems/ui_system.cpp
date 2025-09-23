@@ -1,8 +1,12 @@
 #include "ui_system.h"
 #include "../../rmlui/RmlUi_Backend_Engine.h"
-#include "../../rmlui/RmlUi_Platform_Engine.h"
+#include "../../rmlui/RmlUi_SystemInterface.h"
+#include "../../rmlui/RmlUi_FileInterface.h"
+#include "../../rmlui/RmlUi_RenderInterface.h"
 #include "../components/ui_document_component.h"
 #include "filesystem/filesystem.h"
+#include "glm/ext/scalar_constants.hpp"
+#include "glm/gtc/epsilon.hpp"
 
 
 #include <engine/events.h>
@@ -33,72 +37,16 @@ namespace unravel
 {
 namespace
 {
-auto resolve_compiled_key(const std::string& key) -> std::string
-{
-    return string_utils::replace(key + ".asset", ex::get_data_directory(), ex::get_compiled_directory());
+    
+    struct EventListener : public Rml::EventListener {
+        void ProcessEvent(Rml::Event& ev) override {
+            if (ev.GetId() == Rml::EventId::Click) {
+                // Your callback code here
+                APPLOG_INFO("Button clicked!");
+            }
+        }
+    } g_event_listener;
 }
-class unravel_file_interface : public Rml::FileInterface
-{
-
-    auto to_handle(FILE* f) -> Rml::FileHandle
-    {
-        return reinterpret_cast<Rml::FileHandle>(f);
-    }
-    auto to_file(Rml::FileHandle f) -> FILE*
-    {
-        return reinterpret_cast<FILE*>(f);
-    }
-public:
-    auto Resolve(const Rml::String& url) -> Rml::String
-    {
-        auto key = fs::convert_to_protocol(url);
-        if(fs::has_known_protocol(key))
-        {
-            auto compiled_path = resolve_compiled_key(key.string());
-            auto real = fs::resolve_protocol(compiled_path).string();
-            return real;
-        }
-        return url;
-    }
-
-    Rml::FileHandle Open(const Rml::String& url) override
-    {
-        auto real = Resolve(url);
-        if(FILE* f = std::fopen(real.c_str(), "rb"))
-        {
-            return to_handle(f);
-        }
-        return 0; // not found
-    }
-
-    void Close(Rml::FileHandle file) override
-    {
-        if(!file)
-        {
-            return;
-        }
-        // If it was ours, it’s still just a FILE* here in this example.
-        std::fclose(to_file(file));
-    }
-
-    size_t Read(void* buffer, size_t size, Rml::FileHandle file) override
-    {
-        return std::fread(buffer, 1, size, to_file(file));
-    }
-
-    bool Seek(Rml::FileHandle file, long offset, int origin) override
-    {
-        return std::fseek(to_file(file), offset, origin) == 0;
-    }
-
-    size_t Tell(Rml::FileHandle file) override
-    {
-        return std::ftell(to_file(file));
-    }
-};
-}
-
-
 
 auto ui_system::init(rtti::context& ctx) -> bool
 {
@@ -108,7 +56,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
     auto& ev = ctx.get_cached<events>();
     ev.on_frame_update.connect(sentinel_, 500, this, &ui_system::on_frame_update);
     ev.on_frame_render.connect(sentinel_, -100, this, &ui_system::on_frame_render); // Render UI last
-    ev.on_os_event.connect(sentinel_, 2000, this, &ui_system::on_os_event);
+    ev.on_os_event.connect(sentinel_, 100, this, &ui_system::on_os_event);
 
     // Initialize RmlUi backend
     if(!RmlUi_Backend_Engine::initialize(ctx, "UnravelEngine UI"))
@@ -140,11 +88,10 @@ auto ui_system::init(rtti::context& ctx) -> bool
         RmlUi_Backend_Engine::shutdown();
         return false;
     }
-    Rml::SetFileInterface(new unravel_file_interface());
 
-    auto primary_display = os::display::get_primary_display_index();
-    auto scale = os::display::get_content_scale(primary_display);
-    ui_context_->SetDensityIndependentPixelRatio(scale);
+    // auto primary_display = os::display::get_primary_display_index();
+    // auto scale = os::display::get_content_scale(primary_display);
+    // ui_context_->SetDensityIndependentPixelRatio(scale);
 
     Rml::Debugger::Initialise(ui_context_);
 
@@ -225,20 +172,6 @@ void ui_system::on_frame_render(rtti::context& ctx, delta_t dt)
     RmlUi_Backend_Engine::present_frame(obuffer);
 }
 
-void ui_system::on_window_resize(int width, int height)
-{
-    if(ui_context_)
-    {
-        ui_context_->SetDimensions(Rml::Vector2i(width, height));
-
-        auto primary_display = os::display::get_primary_display_index();
-        auto scale = os::display::get_content_scale(primary_display);
-        ui_context_->SetDensityIndependentPixelRatio(scale);
-    }
-
-    // Update backend viewport
-    RmlUi_Backend_Engine::set_viewport(width, height);
-}
 
 auto ui_system::get_context() -> Rml::Context*
 {
@@ -272,18 +205,32 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
         }
     }
 
-    // Handle window resize events
-    if(event.type == os::events::window && event.window.type == os::window_event_id::resized)
-    {
-        on_window_resize(event.window.data1, event.window.data2);
-    }
-
     if(event.type == os::events::key_down)
     {
         if(event.key.code == os::key::code::f2)
         {
             bool new_visible = !Rml::Debugger::IsVisible();
             Rml::Debugger::SetVisible(new_visible);
+        }
+    }
+
+    if(event.type == os::events::display_content_scale_changed)
+    {
+        // const auto& rend = ctx.get_cached<renderer>();
+        // const auto& window = rend.get_main_window();
+        // auto scale = window->get_window().get_display_scale();
+        // ui_context_->SetDensityIndependentPixelRatio(scale);
+
+    }
+
+    if(event.type == os::events::window)
+    {
+        if(event.window.type == os::window_event_id::size_changed)
+        {
+            // const auto& rend = ctx.get_cached<renderer>();
+            // const auto& window = rend.get_main_window();
+            // auto scale = window->get_window().get_display_scale();
+            // ui_context_->SetDensityIndependentPixelRatio(scale);
         }
     }
 }
@@ -381,121 +328,21 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
 
     auto& ev = ctx.get_cached<events>();
 
-    if(ev.is_playing)
+    // if(ev.is_playing)
     {
         auto& input = ctx.get_cached<input_system>();
 
-        // mapper.map("Mouse Left", input::mouse_button::left_button);
-        // mapper.map("Mouse Right", input::mouse_button::right_button);
-        // mapper.map("Mouse Middle", input::mouse_button::middle_button);
+    
+        auto mouse_delta_x = input.manager.get_mouse().get_axis_value(0);
+        auto mouse_delta_y = input.manager.get_mouse().get_axis_value(1);
 
-        // mapper.map("Mouse X", input::mouse_axis::x);
-        // mapper.map("Mouse Y", input::mouse_axis::y);
-        // mapper.map("Mouse ScrollWheel", input::mouse_axis::scroll);
-        // if(input.is_pressed("Mouse Left"))
-        // {
-        //     ui_context_->ProcessMouseButtonDown(0, 0);
-        // }
-        // if(input.is_pressed("Mouse Right"))
-        // {
-        //     ui_context_->ProcessMouseButtonDown(1, 0);
-        // }
-        // if(input.is_pressed("Mouse Middle"))
-        // {
-        //     ui_context_->ProcessMouseButtonDown(2, 0);
-        // }
-
-        // if(input.is_released("Mouse Left"))
-        // {
-        //     ui_context_->ProcessMouseButtonUp(0, 0);
-        // }
-        // if(input.is_released("Mouse Right"))
-        // {
-        //     ui_context_->ProcessMouseButtonUp(1, 0);
-        // }
-        // if(input.is_released("Mouse Middle"))
-        // {
-        //     ui_context_->ProcessMouseButtonUp(2, 0);
-        // }
-
-        // if(input.manager.get_mouse().get_axis_value(0) != 0.0f || input.manager.get_mouse().get_axis_value(1) != 0.0f)
-        // {
-        //     ui_context_->ProcessMouseMove(input.manager.get_mouse().get_position().x, input.manager.get_mouse().get_position().y, 0);
-        // }
-
-        // if(input.manager.get_mouse().get_scroll() != 0.0f)
-        // {
-        //     ui_context_->ProcessMouseWheel(input.manager.get_mouse().get_scroll(), 0);
-        // }
-
-    
-
-    // case os::events::key_down:
-    // {
-    //     auto rml_key = convert_key(event.key.code);
-    //     auto modifiers = get_key_modifier_state();
-    //     handled = context->ProcessKeyDown(rml_key, modifiers);
-    //     if (event.key.code == os::key::code::enter || event.key.code == os::key::code::kp_enter)
-    //     {
-    //         handled |= context->ProcessTextInput('\n');
-    //     }
-    //     break;
-    // }
-    
-    // case os::events::key_up:
-    // {
-    //     auto rml_key = convert_key(event.key.code);
-    //     auto modifiers = get_key_modifier_state();
-    //     handled = context->ProcessKeyUp(rml_key, modifiers);
-    //     break;
-    // }
-    
-    // case os::events::text_input:
-    // {
-    //     // Convert text input to RmlUi character events
-    //     for (char c : event.text.text)
-    //     {
-    //         if (c != 0)
-    //         {
-    //             handled = context->ProcessTextInput(c) || handled;
-    //         }
-    //     }
-    //     break;
-    // }
-    
-    // case os::events::mouse_button:
-    // {
-    //     auto rml_button = convert_mouse_button(event.button.button);
-    //     auto modifiers = get_key_modifier_state();
-        
-    //     if (event.button.state_id == os::state::pressed)
-    //     {
-    //         handled = context->ProcessMouseButtonDown(rml_button, modifiers);
-    //     }
-    //     else if (event.button.state_id == os::state::released)
-    //     {
-    //         handled = context->ProcessMouseButtonUp(rml_button, modifiers);
-    //     }
-    //     break;
-    // }
-    
-    // case os::events::mouse_motion:
-    // {
-    //     auto modifiers = get_key_modifier_state();
-    //     handled = context->ProcessMouseMove(event.motion.x, event.motion.y, modifiers);
-    //     break;
-    // }
-    
-    // case os::events::mouse_wheel:
-    // {
-    //     auto modifiers = get_key_modifier_state();
-    //     // RmlUi expects wheel delta as integer, ospp provides float
-    //     float wheel_delta = static_cast<float>(event.wheel.y);
-    //     handled = context->ProcessMouseWheel(wheel_delta, modifiers);
-    //     break;
-    // }
-    
-}
+        if(math::epsilonNotEqual(mouse_delta_x, 0.0f, math::epsilon<float>()) || math::epsilonNotEqual(mouse_delta_y, 0.0f, math::epsilon<float>()))
+        {
+            auto mouse_x = input.manager.get_mouse().get_position().x;
+            auto mouse_y = input.manager.get_mouse().get_position().y;
+            ui_context_->ProcessMouseMove(mouse_x, mouse_y, 0);
+        }    
+    }
 
 
 
@@ -554,7 +401,7 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
         }
 
         // Handle visibility based on auto_show flag
-        if(ui_comp.is_loaded() && ui_comp.auto_show && !ui_comp.is_visible())
+        if(ui_comp.is_loaded() && !ui_comp.is_visible())
         {
             ui_comp.document->Show();
             
@@ -602,6 +449,14 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
+
+
+
+    // ... after you load the document:
+    if (auto* btn = raw_document->GetElementById("my_button")) {
+        // Either by string name:
+        btn->AddEventListener("click", &g_event_listener);
+    }
 
     APPLOG_INFO("Successfully loaded UI document: {}", component.asset.id());
     return true;

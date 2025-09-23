@@ -8,6 +8,7 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 #include <RmlUi/Core/Types.h>
+#include <RmlUi/Core/Mesh.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -17,6 +18,7 @@
 #include <graphics/texture.h>
 #include <graphics/frame_buffer.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/assets/asset_handle.h>
 
 #include <bx/handlealloc.h>
 #include <bitset>
@@ -30,8 +32,7 @@ namespace unravel
 #define MAX_COMPILED_GEOMETRIES 4096*8
 
 // Buffer allocation thresholds (three-tier system)
-#define TRANSIENT_GEOMETRY_VERTEX_THRESHOLD 32     // Geometries with <= 8 vertices use transient buffers
-#define TRANSIENT_GEOMETRY_INDEX_THRESHOLD 48     // Geometries with <= 12 indices use transient buffers
+#define TRANSIENT_GEOMETRY_VERTEX_THRESHOLD 99999     // Geometries with <= 8 vertices use transient buffers
 
 // Define a bgfx-style handle for compiled geometry
 BGFX_HANDLE(compiled_geometry_handle)
@@ -77,17 +78,17 @@ enum class RmlUi_UniformId : uint8_t
 };
 
 /**
- * @class RenderInterface_BGfx
+ * @class RmlUi_RenderInterface
  * @brief RmlUi render interface implementation using bgfx
  * 
  * This class implements the RmlUi rendering interface using the engine's
  * gfx system (bgfx wrapper) for hardware-accelerated rendering.
  */
-class RenderInterface_BGfx : public Rml::RenderInterface
+class RmlUi_RenderInterface : public Rml::RenderInterface
 {
 public:
-    RenderInterface_BGfx();
-    ~RenderInterface_BGfx();
+    RmlUi_RenderInterface();
+    ~RmlUi_RenderInterface();
 
     /**
      * @brief Initialize the renderer with engine context
@@ -132,12 +133,12 @@ public:
 
     // -- Inherited from Rml::RenderInterface --
 
-    Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
+    auto CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) -> Rml::CompiledGeometryHandle override;
     void RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f translation, Rml::TextureHandle texture) override;
     void ReleaseGeometry(Rml::CompiledGeometryHandle handle) override;
 
-    Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
-    Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) override;
+    auto LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) -> Rml::TextureHandle override;
+    auto GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) -> Rml::TextureHandle override;
     void ReleaseTexture(Rml::TextureHandle texture_handle) override;
 
     void EnableScissorRegion(bool enable) override;
@@ -149,18 +150,18 @@ public:
 
     void SetTransform(const Rml::Matrix4f* new_transform) override;
 
-    Rml::LayerHandle PushLayer() override;
+    auto PushLayer() -> Rml::LayerHandle override;
     void CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle destination, Rml::BlendMode blend_mode,
         Rml::Span<const Rml::CompiledFilterHandle> filters) override;
     void PopLayer() override;
 
-    Rml::TextureHandle SaveLayerAsTexture() override;
-    Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
+    auto SaveLayerAsTexture() -> Rml::TextureHandle override;
+    auto SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle override;
 
-    Rml::CompiledFilterHandle CompileFilter(const Rml::String& name, const Rml::Dictionary& parameters) override;
+    auto CompileFilter(const Rml::String& name, const Rml::Dictionary& parameters) -> Rml::CompiledFilterHandle override;
     void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
 
-    Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
+    auto CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) -> Rml::CompiledShaderHandle override;
     void RenderShader(Rml::CompiledShaderHandle shader_handle, Rml::CompiledGeometryHandle geometry_handle, 
         Rml::Vector2f translation, Rml::TextureHandle texture) override;
     void ReleaseShader(Rml::CompiledShaderHandle effect_handle) override;
@@ -171,7 +172,7 @@ public:
 
     // -- Utility functions --
     
-    const Rml::Matrix4f& get_transform() const { return transform_; }
+    auto get_transform() const -> const Rml::Matrix4f& { return transform_; }
     void reset_program();
     
     // Handle conversion utilities
@@ -192,8 +193,8 @@ private:
         gfx::index_buffer_handle static_index_buffer = BGFX_INVALID_HANDLE;
         
         // Transient buffer data (used when buffer_type == Transient)
-        Rml::Vector<Rml::Vertex> vertices;
-        Rml::Vector<int> indices;
+        Rml::Span<const Rml::Vertex> vertices;
+        Rml::Span<const int> indices;
         
         uint32_t num_vertices;
         uint32_t num_indices;
@@ -208,9 +209,8 @@ private:
 
     struct CompiledTexture
     {
-        gfx::texture_handle handle = BGFX_INVALID_HANDLE;
-        int width;
-        int height;
+        gfx::texture_handle generated_texture_handle = BGFX_INVALID_HANDLE;
+        asset_handle<gfx::texture> asset_handle;
     };
 
     struct LayerFramebuffer
@@ -221,7 +221,7 @@ private:
         bool needs_rebind = true;
         gfx::view_id pass_id = 0;
         
-        bool is_valid() const { return framebuffer && framebuffer->is_valid(); }
+        auto is_valid() const -> bool { return framebuffer && framebuffer->is_valid(); }
         
         // Convenience methods to get info from framebuffer
         auto get_size() const -> usize32_t
@@ -421,6 +421,7 @@ private:
     // Layer management is now handled by render_layers_ member
 
     // Fullscreen quad for postprocessing
+    Rml::Mesh mesh_fullscreen_quad_;
     Rml::CompiledGeometryHandle fullscreen_quad_geometry_ = {};
 };
 

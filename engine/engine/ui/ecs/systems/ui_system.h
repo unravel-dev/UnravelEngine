@@ -63,13 +63,6 @@ struct ui_system
     void on_frame_render(rtti::context& ctx, delta_t dt);
 
     /**
-     * @brief Handle window resize events
-     * @param width New window width
-     * @param height New window height
-     */
-    void on_window_resize(int width, int height);
-
-    /**
      * @brief Get the main RmlUi context
      * @return Pointer to RmlUi context, or nullptr if not initialized
      */

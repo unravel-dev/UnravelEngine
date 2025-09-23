@@ -46,8 +46,6 @@ void save_to_file(const std::string& absolute_path, const visual_tree::sptr& obj
     if(stream.good())
     {
         stream.write(obj->content.c_str(), obj->content.size());
-        // auto ar = ser20::create_oarchive_associative(stream);
-        // try_save(ar, ser20::make_nvp("visual_tree", *obj));
     }
 }
 
@@ -66,9 +64,6 @@ void load_from_file(const std::string& absolute_path, visual_tree::sptr& obj)
     std::ifstream stream(absolute_path);
     if(stream.good())
     {
-        // auto ar = ser20::create_iarchive_associative(stream);
-        // try_load(ar, ser20::make_nvp("visual_tree", *obj));
-        //stream.read(obj->content.data(), obj->content.size());
         obj->content = fs::read_stream_str(stream);
     }
 }

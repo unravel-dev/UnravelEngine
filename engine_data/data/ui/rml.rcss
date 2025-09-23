@@ -9,59 +9,102 @@ html, body {
 	color: #f0f0f0;
 }
 
-/* Block elements */
-div, p, h1, h2, h3, h4, h5, h6 {
+
+body, div,
+h1, h2, h3, h4,
+h5, h6, p,
+hr, pre,
+tabset tabs
+{
 	display: block;
 }
 
-/* Typography */
-h1 {
-	font-size: 2.25rem;
+h1
+{
+	font-size: 2em;
+	margin: .67em 0;
+}
+
+h2
+{
+	font-size: 1.5em;
+	margin: .75em 0;
+}
+
+h3
+{
+	font-size: 1.17em;
+	margin: .83em 0;
+}
+
+h4, p
+{
+	margin: 1.12em 0;
+}
+
+h5
+{
+	font-size: .83em;
+	margin: 1.5em 0;
+}
+
+h6
+{
+	font-size: .75em;
+	margin: 1.67em 0;
+}
+
+h1, h2, h3, h4,
+h5, h6, strong
+{
 	font-weight: bold;
-	margin-bottom: 1rem;
 }
 
-h2 {
-	font-size: 2rem;
-	font-weight: bold;
-	margin-bottom: 0.875rem;
-}
-
-h3 {
-	font-size: 1.75rem;
-	font-weight: bold;
-	margin-bottom: 0.75rem;
-}
-
-h4 {
-	font-size: 1.5rem;
-	font-weight: bold;
-	margin-bottom: 0.625rem;
-}
-
-h5 {
-	font-size: 1.25rem;
-	font-weight: bold;
-	margin-bottom: 0.5rem;
-}
-
-h6 {
-	font-size: 1.125rem;
-	font-weight: bold;
-	margin-bottom: 0.5rem;
-}
-
-p {
-	margin-bottom: 1rem;
-}
-
-em {
+em
+{
 	font-style: italic;
 }
 
-strong {
-	font-weight: bold;
+pre
+{
+	white-space: pre;
 }
+
+hr
+{
+	border-width: 1px;
+}
+
+table
+{
+	box-sizing: border-box;
+	display: table;
+}
+tr
+{
+	box-sizing: border-box;
+	display: table-row;
+}
+td
+{
+	box-sizing: border-box;
+	display: table-cell;
+}
+col
+{
+	box-sizing: border-box;
+	display: table-column;
+}
+colgroup
+{
+	display: table-column-group;
+}
+thead, tbody, tfoot
+{
+	display: table-row-group;
+}
+
+
 
 /* Forms */
 input, textarea, select, option {
@@ -70,6 +113,7 @@ input, textarea, select, option {
 	background-color: white;
 	color: #333;
 }
+
 
 button {
 	font-size: 1rem;
@@ -85,53 +129,4 @@ button {
 
 button:hover {
 	background-color: #0056b3;
-}
-
-select {
-	text-align: left;
-}
-
-/* Tables */
-table {
-	box-sizing: border-box;
-	display: table;
-	width: 100%;
-}
-
-tr {
-	box-sizing: border-box;
-	display: table-row;
-}
-
-td, th {
-	box-sizing: border-box;
-	display: table-cell;
-	padding: 0.5em;
-	text-align: left;
-}
-
-th {
-	font-weight: bold;
-}
-
-col {
-	box-sizing: border-box;
-	display: table-column;
-}
-
-colgroup {
-	display: table-column-group;
-}
-
-thead, tbody, tfoot {
-	display: table-row-group;
-}
-
-/* RmlUi specific elements */
-tabset {
-	display: block;
-}
-
-tabset tabs {
-	display: block;
 }

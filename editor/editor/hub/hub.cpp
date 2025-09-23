@@ -554,7 +554,7 @@ void hub::render_projects_list_view(rtti::context& ctx)
                     fs::error_code ec;
                     auto ftime = fs::last_write_time(p / "settings" / "settings.cfg", ec);
                     auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                        ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+                        ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
 
                     auto name = p.stem().string();
                     auto dir = p.parent_path().string();
@@ -1044,7 +1044,7 @@ void hub::render_project_remover_view(rtti::context& ctx)
             fs::error_code ec;
             auto ftime = fs::last_write_time(project_path / "settings" / "settings.cfg", ec);
             auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                ftime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+                ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
             
             ImGui::PushFont(ImGui::Font::Bold);
             ImGui::Text("Project Information");

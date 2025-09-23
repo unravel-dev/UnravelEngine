@@ -2,7 +2,7 @@
  * RmlUi Engine Platform Interface Implementation
  */
 
-#include "RmlUi_Platform_Engine.h"
+#include "RmlUi_SystemInterface.h"
 
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
@@ -20,18 +20,18 @@
 namespace unravel
 {
 
-SystemInterface_Engine::SystemInterface_Engine()
+RmlUi_SystemInterface::RmlUi_SystemInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 }
 
-SystemInterface_Engine::~SystemInterface_Engine()
+RmlUi_SystemInterface::~RmlUi_SystemInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     cleanup_cursors();
 }
 
-auto SystemInterface_Engine::init(rtti::context& ctx) -> bool
+auto RmlUi_SystemInterface::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -41,7 +41,7 @@ auto SystemInterface_Engine::init(rtti::context& ctx) -> bool
     return true;
 }
 
-void SystemInterface_Engine::shutdown()
+void RmlUi_SystemInterface::shutdown()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     
@@ -50,12 +50,12 @@ void SystemInterface_Engine::shutdown()
     window_ = nullptr;
 }
 
-void SystemInterface_Engine::set_window(const std::unique_ptr<render_window>& window)
+void RmlUi_SystemInterface::set_window(const std::unique_ptr<render_window>& window)
 {
     window_ = &window;
 }
 
-double SystemInterface_Engine::GetElapsedTime()
+double RmlUi_SystemInterface::GetElapsedTime()
 {
     if (!ctx_ || !ctx_->has<simulation>())
     {
@@ -66,7 +66,7 @@ double SystemInterface_Engine::GetElapsedTime()
     return std::chrono::duration<double>(sim.get_time_since_launch()).count();
 }
 
-void SystemInterface_Engine::SetMouseCursor(const Rml::String& cursor_name)
+void RmlUi_SystemInterface::SetMouseCursor(const Rml::String& cursor_name)
 {
     if (!window_ || !*window_)
     {
@@ -125,37 +125,52 @@ void SystemInterface_Engine::SetMouseCursor(const Rml::String& cursor_name)
     (*window_)->get_window().set_cursor(cursor_type);
 }
 
-void SystemInterface_Engine::SetClipboardText(const Rml::String& text)
+void RmlUi_SystemInterface::SetClipboardText(const Rml::String& text)
 {
     os::clipboard::set_text(text);
 }
 
-void SystemInterface_Engine::GetClipboardText(Rml::String& text)
+void RmlUi_SystemInterface::GetClipboardText(Rml::String& text)
 {
     text = os::clipboard::get_text();
 }
 
-void SystemInterface_Engine::ActivateKeyboard(Rml::Vector2f caret_position, float line_height)
+void RmlUi_SystemInterface::ActivateKeyboard(Rml::Vector2f caret_position, float line_height)
 {
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would show the virtual keyboard
     APPLOG_TRACE("ActivateKeyboard at ({}, {}) height: {}", caret_position.x, caret_position.y, line_height);
 }
 
-void SystemInterface_Engine::DeactivateKeyboard()
+void RmlUi_SystemInterface::DeactivateKeyboard()
 {
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would hide the virtual keyboard
     APPLOG_TRACE("DeactivateKeyboard");
 }
 
-void SystemInterface_Engine::init_cursors()
+auto RmlUi_SystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) -> bool
+{
+    switch (type)
+    {
+        case Rml::Log::LT_ERROR:
+        case Rml::Log::LT_ASSERT: APPLOG_ERROR("{}", message); break;
+        case Rml::Log::LT_WARNING: APPLOG_WARNING("{}", message); break;
+        case Rml::Log::LT_INFO: APPLOG_INFO("{}", message); break;
+        case Rml::Log::LT_DEBUG: APPLOG_DEBUG("{}", message); break;
+        case Rml::Log::LT_ALWAYS: APPLOG_TRACE("{}", message); break;
+        default: APPLOG_TRACE("{}", message); break;
+    }
+    return true;
+}
+
+void RmlUi_SystemInterface::init_cursors()
 {
     // Initialize cursor handles if needed
     // For now, we'll rely on the ospp cursor system
 }
 
-void SystemInterface_Engine::cleanup_cursors()
+void RmlUi_SystemInterface::cleanup_cursors()
 {
     // Cleanup cursor resources if any were allocated
 }
@@ -224,19 +239,19 @@ auto input_event_handler(Rml::Context* context, const os::event& event) -> bool
             break;
         }
         
-        case os::events::mouse_motion:
-        {
-            auto modifiers = get_key_modifier_state();
-            handled = context->ProcessMouseMove(event.motion.x, event.motion.y, modifiers);
-            break;
-        }
+        // case os::events::mouse_motion:
+        // {
+        //     auto modifiers = get_key_modifier_state();
+        //     handled = context->ProcessMouseMove(event.motion.x, event.motion.y, modifiers);
+        //     break;
+        // }
         
         case os::events::mouse_wheel:
         {
             auto modifiers = get_key_modifier_state();
             // RmlUi expects wheel delta as integer, ospp provides float
             float wheel_delta = static_cast<float>(event.wheel.y);
-            handled = context->ProcessMouseWheel(wheel_delta, modifiers);
+            handled = context->ProcessMouseWheel(-wheel_delta, modifiers);
             break;
         }
    

@@ -19,17 +19,17 @@ namespace unravel
 {
 
 /**
- * @class SystemInterface_Engine
+ * @class RmlUi_SystemInterface
  * @brief System interface implementation using engine's ospp systems
  * 
  * This class provides RmlUi with access to system-level functionality
  * through the engine's existing ospp windowing and input systems.
  */
-class SystemInterface_Engine : public Rml::SystemInterface
+class RmlUi_SystemInterface : public Rml::SystemInterface
 {
 public:
-    SystemInterface_Engine();
-    ~SystemInterface_Engine();
+    RmlUi_SystemInterface();
+    ~RmlUi_SystemInterface();
 
     /**
      * @brief Initialize the system interface with engine context
@@ -86,6 +86,12 @@ public:
      * @brief Deactivate virtual keyboard
      */
     void DeactivateKeyboard() override;
+
+    /// Log the specified message.
+	/// @param[in] type Type of log message, ERROR, WARNING, etc.
+	/// @param[in] message Message to log.
+	/// @return True to continue execution, false to break into the debugger.
+	bool LogMessage(Rml::Log::Type type, const Rml::String& message) override;
 
 private:
     rtti::context* ctx_ = nullptr;

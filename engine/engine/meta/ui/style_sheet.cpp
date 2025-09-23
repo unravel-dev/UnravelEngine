@@ -45,8 +45,6 @@ void save_to_file(const std::string& absolute_path, const style_sheet::sptr& obj
     std::ofstream stream(absolute_path);
     if(stream.good())
     {
-        // auto ar = ser20::create_oarchive_associative(stream);
-        // try_save(ar, ser20::make_nvp("style_sheet", *obj));
         stream.write(obj->content.c_str(), obj->content.size());
     }
 }
@@ -66,8 +64,6 @@ void load_from_file(const std::string& absolute_path, style_sheet::sptr& obj)
     std::ifstream stream(absolute_path);
     if(stream.good())
     {
-        // auto ar = ser20::create_iarchive_associative(stream);
-        // try_load(ar, ser20::make_nvp("style_sheet", *obj));
         obj->content = fs::read_stream_str(stream);
     }
 }

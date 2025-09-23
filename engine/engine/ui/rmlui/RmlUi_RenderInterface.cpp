@@ -2,8 +2,7 @@
  * RmlUi BGfx Renderer Interface Implementation
  */
 
-#include "RmlUi_Renderer_BGfx.h"
-#include "bgfx/bgfx.h"
+#include "RmlUi_RenderInterface.h"
 
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/DecorationTypes.h>
@@ -15,14 +14,20 @@
 #include <RmlUi/Core/Types.h>
 
 #include <engine/assets/asset_manager.h>
+#include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/render_window.h>
 #include <engine/rendering/renderer.h>
+
+
+#include <filesystem/filesystem.h>
+#include <graphics/graphics.h>
 #include <logging/logging.h>
+#include <string_utils/utils.h>
+
 
 #include <array>
-
 // Determines the anti-aliasing quality when creating layers. Enables better-looking visuals, especially when transforms
 // are applied.
 #ifndef RMLUI_NUM_MSAA_SAMPLES
@@ -32,30 +37,30 @@
 namespace unravel
 {
 
-RenderInterface_BGfx::RenderInterface_BGfx() : compiled_geometries_()
+RmlUi_RenderInterface::RmlUi_RenderInterface() : compiled_geometries_()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 }
 
-RenderInterface_BGfx::~RenderInterface_BGfx()
+RmlUi_RenderInterface::~RmlUi_RenderInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     cleanup_resources();
 }
 
-auto RenderInterface_BGfx::to_rml_handle(compiled_geometry_handle handle) -> Rml::CompiledGeometryHandle
+auto RmlUi_RenderInterface::to_rml_handle(compiled_geometry_handle handle) -> Rml::CompiledGeometryHandle
 {
     return static_cast<Rml::CompiledGeometryHandle>(handle.idx + 1); // +1 because RmlUi uses 0 as invalid
 }
 
-auto RenderInterface_BGfx::from_rml_handle(Rml::CompiledGeometryHandle handle) -> compiled_geometry_handle
+auto RmlUi_RenderInterface::from_rml_handle(Rml::CompiledGeometryHandle handle) -> compiled_geometry_handle
 {
     compiled_geometry_handle result;
     result.idx = (handle > 0) ? static_cast<uint16_t>(handle - 1) : bx::kInvalidHandle;
     return result;
 }
 
-auto RenderInterface_BGfx::init(rtti::context& ctx) -> bool
+auto RmlUi_RenderInterface::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -89,12 +94,18 @@ auto RenderInterface_BGfx::init(rtti::context& ctx) -> bool
     // Initialize texture storage
     compiled_textures_.reserve(128);
 
+
+    // Create fullscreen quad geometry
+    Rml::MeshUtilities::GenerateQuad(mesh_fullscreen_quad_, Rml::Vector2f(-1), Rml::Vector2f(2), {});
+    fullscreen_quad_geometry_ = CompileGeometry(mesh_fullscreen_quad_.vertices, mesh_fullscreen_quad_.indices);
+
+
     is_initialized_ = true;
     APPLOG_INFO("RmlUi BGfx renderer initialized successfully");
     return true;
 }
 
-void RenderInterface_BGfx::shutdown()
+void RmlUi_RenderInterface::shutdown()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -110,10 +121,10 @@ void RenderInterface_BGfx::shutdown()
     APPLOG_INFO("RmlUi BGfx renderer shutdown complete");
 }
 
-void RenderInterface_BGfx::set_viewport(int viewport_width,
-                                        int viewport_height,
-                                        int viewport_offset_x,
-                                        int viewport_offset_y)
+void RmlUi_RenderInterface::set_viewport(int viewport_width,
+                                         int viewport_height,
+                                         int viewport_offset_x,
+                                         int viewport_offset_y)
 {
     viewport_width_ = Rml::Math::Max(viewport_width, 1);
     viewport_height_ = Rml::Math::Max(viewport_height, 1);
@@ -146,7 +157,7 @@ void RenderInterface_BGfx::set_viewport(int viewport_width,
     // viewport_offset_y);
 }
 
-void RenderInterface_BGfx::begin_frame()
+void RmlUi_RenderInterface::begin_frame()
 {
     if(!is_initialized_)
     {
@@ -169,7 +180,7 @@ void RenderInterface_BGfx::begin_frame()
     render_layers_.begin_frame(viewport_width_, viewport_height_);
 }
 
-void RenderInterface_BGfx::end_frame(const gfx::frame_buffer::ptr& framebuffer)
+void RmlUi_RenderInterface::end_frame(const gfx::frame_buffer::ptr& framebuffer)
 {
     if(!is_initialized_)
     {
@@ -178,7 +189,7 @@ void RenderInterface_BGfx::end_frame(const gfx::frame_buffer::ptr& framebuffer)
 
     if(!framebuffer)
     {
-         // End the frame (pops the layer we pushed in begin_frame)
+        // End the frame (pops the layer we pushed in begin_frame)
         render_layers_.end_frame();
         return;
     }
@@ -221,7 +232,6 @@ void RenderInterface_BGfx::end_frame(const gfx::frame_buffer::ptr& framebuffer)
 
     gfx::render_pass main_pass("rmlui_main_surface_pass");
 
- 
     main_pass.bind(framebuffer.get());
 
     // Set up identity view and projection for fullscreen quad
@@ -259,7 +269,7 @@ void RenderInterface_BGfx::end_frame(const gfx::frame_buffer::ptr& framebuffer)
     render_layers_.end_frame();
 }
 
-void RenderInterface_BGfx::clear()
+void RmlUi_RenderInterface::clear()
 {
     // Clear is typically handled by the main renderer
     // This is a no-op for now
@@ -267,8 +277,8 @@ void RenderInterface_BGfx::clear()
 
 // -- Inherited from Rml::RenderInterface --
 
-Rml::CompiledGeometryHandle RenderInterface_BGfx::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
-                                                                  Rml::Span<const int> indices)
+auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
+                                            Rml::Span<const int> indices) -> Rml::CompiledGeometryHandle
 {
     // APPLOG_TRACE("CompileGeometry: {} vertices, {} indices", vertices.size(), indices.size());
 
@@ -294,16 +304,13 @@ Rml::CompiledGeometryHandle RenderInterface_BGfx::CompileGeometry(Rml::Span<cons
 
     // Classify geometry based on size
     geometry.buffer_type = classify_geometry(geometry.num_vertices, geometry.num_indices);
+    geometry.vertices = vertices;
+    geometry.indices = indices;
 
     // Handle transient buffers (smallest geometries)
     if(geometry.buffer_type == GeometryBufferType::Transient)
     {
         APP_SCOPE_PERF("UI/RmlUi/CompileGeometry/Memcopy");
-
-        geometry.vertices.resize(vertices.size());
-        geometry.indices.resize(indices.size());
-        bx::memCopy(geometry.vertices.data(), vertices.data(), vertices.size() * sizeof(Rml::Vertex));
-        bx::memCopy(geometry.indices.data(), indices.data(), indices.size() * sizeof(int));
 
         // Convert internal handle to RmlUi handle
         compiled_geometry_handle internal_handle;
@@ -353,9 +360,9 @@ Rml::CompiledGeometryHandle RenderInterface_BGfx::CompileGeometry(Rml::Span<cons
     return rml_handle;
 }
 
-void RenderInterface_BGfx::RenderGeometry(Rml::CompiledGeometryHandle handle,
-                                          Rml::Vector2f translation,
-                                          Rml::TextureHandle texture)
+void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
+                                           Rml::Vector2f translation,
+                                           Rml::TextureHandle texture)
 {
     // if (texture != 0)
     // {
@@ -428,16 +435,20 @@ void RenderInterface_BGfx::RenderGeometry(Rml::CompiledGeometryHandle handle,
         {
             const auto& tex = compiled_textures_[texture - 1];
             auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-            if(bgfx::isValid(texture_uniform) && bgfx::isValid(tex.handle))
+
+            if(tex.asset_handle.is_valid())
             {
-                gfx::set_texture(0, texture_uniform, tex.handle);
-                // APPLOG_TRACE("Bound texture {} ({}x{}) to slot 0", texture, tex.width, tex.height);
+                gfx::set_texture(0, texture_uniform, tex.asset_handle.get()->native_handle());
+            }
+            else if(bgfx::isValid(tex.generated_texture_handle))
+            {
+                gfx::set_texture(0, texture_uniform, tex.generated_texture_handle);
             }
             else
             {
                 APPLOG_ERROR("Invalid texture uniform or handle: uniform={}, texture={}",
                              bgfx::isValid(texture_uniform),
-                             bgfx::isValid(tex.handle));
+                             bgfx::isValid(tex.generated_texture_handle));
             }
         }
 
@@ -469,7 +480,7 @@ void RenderInterface_BGfx::RenderGeometry(Rml::CompiledGeometryHandle handle,
     }
 }
 
-void RenderInterface_BGfx::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
+void RmlUi_RenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
 {
     // APPLOG_TRACE("ReleaseGeometry: handle={}", handle);
     APP_SCOPE_PERF("UI/RmlUi/ReleaseGeometry");
@@ -499,23 +510,38 @@ void RenderInterface_BGfx::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
     geometry_handles_.free(internal_handle.idx);
 }
 
-Rml::TextureHandle RenderInterface_BGfx::LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source)
+auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
+                                        const Rml::String& source) -> Rml::TextureHandle
 {
     APPLOG_TRACE("LoadTexture: source={}", source);
 
-    // TODO: Implement texture loading through engine's asset system
-    // 1. Load image file using asset_manager
-    // 2. Create bgfx texture
-    // 3. Store in compiled_textures_ vector
-    // 4. Return handle
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+    auto texture = am.get_asset<gfx::texture>(source);
+    if(!texture.is_valid())
+    {
+        APPLOG_ERROR("Failed to load texture: {}", source);
+        return 0;
+    }
 
-    texture_dimensions = {0, 0};
-    APPLOG_WARNING("LoadTexture not yet implemented");
-    return 0;
+    auto tex = texture.get();
+    if(!tex)
+    {
+        APPLOG_ERROR("Failed to load texture: {}", source);
+        return 0;
+    }
+
+    texture_dimensions = {tex->info.width, tex->info.height};
+
+    CompiledTexture compiled_texture{};
+    compiled_texture.asset_handle = texture;
+    compiled_textures_.push_back(compiled_texture);
+
+    return compiled_textures_.size();
 }
 
-Rml::TextureHandle RenderInterface_BGfx::GenerateTexture(Rml::Span<const Rml::byte> source_data,
-                                                         Rml::Vector2i source_dimensions)
+auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_data,
+                                            Rml::Vector2i source_dimensions) -> Rml::TextureHandle
 {
     APPLOG_TRACE("GenerateTexture: {}x{} pixels, {} bytes",
                  source_dimensions.x,
@@ -537,8 +563,6 @@ Rml::TextureHandle RenderInterface_BGfx::GenerateTexture(Rml::Span<const Rml::by
     }
 
     CompiledTexture texture{};
-    texture.width = source_dimensions.x;
-    texture.height = source_dimensions.y;
 
     // Use gfx::copy() instead of make_ref() because RmlUi's texture data has limited lifetime
     // bgfx::copy() creates an internal copy that bgfx owns and automatically releases
@@ -547,15 +571,16 @@ Rml::TextureHandle RenderInterface_BGfx::GenerateTexture(Rml::Span<const Rml::by
     // Create bgfx texture from raw RGBA data
     // RmlUi provides RGBA8 data with premultiplied alpha
     // Use linear filtering for smooth text rendering
-    texture.handle = gfx::create_texture_2d(static_cast<uint16_t>(source_dimensions.x),
-                                            static_cast<uint16_t>(source_dimensions.y),
-                                            false, // no mips
-                                            1,     // num layers
-                                            gfx::texture_format::RGBA8,
-                                            BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
-                                            mem);
+    texture.generated_texture_handle =
+        gfx::create_texture_2d(static_cast<uint16_t>(source_dimensions.x),
+                               static_cast<uint16_t>(source_dimensions.y),
+                               false, // no mips
+                               1,     // num layers
+                               gfx::texture_format::RGBA8,
+                               BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
+                               mem);
 
-    if(!bgfx::isValid(texture.handle))
+    if(!bgfx::isValid(texture.generated_texture_handle))
     {
         APPLOG_ERROR("Failed to create bgfx texture");
         return 0;
@@ -569,7 +594,7 @@ Rml::TextureHandle RenderInterface_BGfx::GenerateTexture(Rml::Span<const Rml::by
     return handle;
 }
 
-void RenderInterface_BGfx::ReleaseTexture(Rml::TextureHandle texture_handle)
+void RmlUi_RenderInterface::ReleaseTexture(Rml::TextureHandle texture_handle)
 {
     APPLOG_TRACE("ReleaseTexture: handle={}", texture_handle);
 
@@ -583,16 +608,16 @@ void RenderInterface_BGfx::ReleaseTexture(Rml::TextureHandle texture_handle)
     auto& texture = compiled_textures_[texture_handle - 1];
 
     // Destroy texture
-    if(bgfx::isValid(texture.handle))
+    if(bgfx::isValid(texture.generated_texture_handle))
     {
-        gfx::destroy(texture.handle);
+        gfx::destroy(texture.generated_texture_handle);
     }
 
     // Clear the texture entry (but don't remove from vector to keep handles valid)
     texture = CompiledTexture{};
 }
 
-void RenderInterface_BGfx::EnableScissorRegion(bool enable)
+void RmlUi_RenderInterface::EnableScissorRegion(bool enable)
 {
     if(!enable)
     {
@@ -610,18 +635,18 @@ static auto vertically_flipped(Rml::Rectanglei rect, int viewport_height) -> Rml
     return flipped_rect;
 }
 
-void RenderInterface_BGfx::SetScissor(Rml::Rectanglei region, bool vertically_flip)
+void RmlUi_RenderInterface::SetScissor(Rml::Rectanglei region, bool vertically_flip)
 {
     scissor_state_ = region;
     scissor_enabled_ = region.Valid();
 }
 
-void RenderInterface_BGfx::SetScissorRegion(Rml::Rectanglei region)
+void RmlUi_RenderInterface::SetScissorRegion(Rml::Rectanglei region)
 {
     SetScissor(region);
 }
 
-void RenderInterface_BGfx::EnableClipMask(bool enable)
+void RmlUi_RenderInterface::EnableClipMask(bool enable)
 {
     clip_mask_enabled_ = enable;
 
@@ -629,9 +654,9 @@ void RenderInterface_BGfx::EnableClipMask(bool enable)
     // We'll set the appropriate stencil state when rendering geometry
 }
 
-void RenderInterface_BGfx::RenderToClipMask(Rml::ClipMaskOperation mask_operation,
-                                            Rml::CompiledGeometryHandle geometry,
-                                            Rml::Vector2f translation)
+void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operation,
+                                             Rml::CompiledGeometryHandle geometry,
+                                             Rml::Vector2f translation)
 {
     if(geometry == 0)
     {
@@ -748,7 +773,7 @@ void RenderInterface_BGfx::RenderToClipMask(Rml::ClipMaskOperation mask_operatio
     }
 }
 
-void RenderInterface_BGfx::SetTransform(const Rml::Matrix4f* new_transform)
+void RmlUi_RenderInterface::SetTransform(const Rml::Matrix4f* new_transform)
 {
     // Match GL3 implementation: combine projection with transform
     transform_ = (new_transform ? (projection_ * (*new_transform)) : projection_);
@@ -758,15 +783,15 @@ void RenderInterface_BGfx::SetTransform(const Rml::Matrix4f* new_transform)
 }
 
 // Layer management - stub implementations for now
-Rml::LayerHandle RenderInterface_BGfx::PushLayer()
+auto RmlUi_RenderInterface::PushLayer() -> Rml::LayerHandle
 {
     return render_layers_.push_layer();
 }
 
-void RenderInterface_BGfx::CompositeLayers(Rml::LayerHandle source,
-                                           Rml::LayerHandle destination,
-                                           Rml::BlendMode blend_mode,
-                                           Rml::Span<const Rml::CompiledFilterHandle> filters)
+void RmlUi_RenderInterface::CompositeLayers(Rml::LayerHandle source,
+                                            Rml::LayerHandle destination,
+                                            Rml::BlendMode blend_mode,
+                                            Rml::Span<const Rml::CompiledFilterHandle> filters)
 {
     // Blit source layer to postprocessing primary buffer
     blit_layer_to_postprocess_primary(source);
@@ -778,26 +803,26 @@ void RenderInterface_BGfx::CompositeLayers(Rml::LayerHandle source,
     composite_to_destination_layer(destination, blend_mode);
 }
 
-void RenderInterface_BGfx::PopLayer()
+void RmlUi_RenderInterface::PopLayer()
 {
     render_layers_.pop_layer();
 }
 
-Rml::TextureHandle RenderInterface_BGfx::SaveLayerAsTexture()
+auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 {
     // TODO: Implement layer to texture saving
     return 0;
 }
 
-Rml::CompiledFilterHandle RenderInterface_BGfx::SaveLayerAsMaskImage()
+auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 {
     // TODO: Implement layer to mask saving
     return 0;
 }
 
 // Filter and shader management
-Rml::CompiledFilterHandle RenderInterface_BGfx::CompileFilter(const Rml::String& name,
-                                                              const Rml::Dictionary& parameters)
+auto RmlUi_RenderInterface::CompileFilter(const Rml::String& name,
+                                          const Rml::Dictionary& parameters) -> Rml::CompiledFilterHandle
 {
     CompiledFilter filter = {};
 
@@ -901,7 +926,7 @@ Rml::CompiledFilterHandle RenderInterface_BGfx::CompileFilter(const Rml::String&
     return 0;
 }
 
-void RenderInterface_BGfx::ReleaseFilter(Rml::CompiledFilterHandle filter)
+void RmlUi_RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
 {
     if(filter == 0 || filter > compiled_filters_.size())
     {
@@ -913,8 +938,8 @@ void RenderInterface_BGfx::ReleaseFilter(Rml::CompiledFilterHandle filter)
     compiled_filters_[filter - 1] = CompiledFilter{};
 }
 
-Rml::CompiledShaderHandle RenderInterface_BGfx::CompileShader(const Rml::String& name,
-                                                              const Rml::Dictionary& parameters)
+auto RmlUi_RenderInterface::CompileShader(const Rml::String& name,
+                                          const Rml::Dictionary& parameters) -> Rml::CompiledShaderHandle
 {
     auto apply_color_stop_list = [](CompiledShader& shader, const Rml::Dictionary& shader_parameters)
     {
@@ -997,10 +1022,10 @@ Rml::CompiledShaderHandle RenderInterface_BGfx::CompileShader(const Rml::String&
     return 0;
 }
 
-void RenderInterface_BGfx::RenderShader(Rml::CompiledShaderHandle shader_handle,
-                                        Rml::CompiledGeometryHandle geometry_handle,
-                                        Rml::Vector2f translation,
-                                        Rml::TextureHandle texture)
+void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle,
+                                         Rml::CompiledGeometryHandle geometry_handle,
+                                         Rml::Vector2f translation,
+                                         Rml::TextureHandle texture)
 {
     if(shader_handle > compiled_shaders_.size() || geometry_handle == 0)
     {
@@ -1148,7 +1173,7 @@ void RenderInterface_BGfx::RenderShader(Rml::CompiledShaderHandle shader_handle,
     }
 }
 
-void RenderInterface_BGfx::ReleaseShader(Rml::CompiledShaderHandle effect_handle)
+void RmlUi_RenderInterface::ReleaseShader(Rml::CompiledShaderHandle effect_handle)
 {
     if(effect_handle > compiled_shaders_.size())
     {
@@ -1160,7 +1185,7 @@ void RenderInterface_BGfx::ReleaseShader(Rml::CompiledShaderHandle effect_handle
     compiled_shaders_[effect_handle] = CompiledShader{};
 }
 
-void RenderInterface_BGfx::reset_program()
+void RmlUi_RenderInterface::reset_program()
 {
     active_program_ = RmlUi_ProgramId::Color;
     program_transform_dirty_.set();
@@ -1168,7 +1193,7 @@ void RenderInterface_BGfx::reset_program()
 
 // Private implementation methods
 
-auto RenderInterface_BGfx::init_vertex_layout() -> bool
+auto RmlUi_RenderInterface::init_vertex_layout() -> bool
 {
     // Define vertex layout for RmlUi vertices
     // RmlUi::Vertex has: position(2 floats), color(4 bytes), texcoord(2 floats)
@@ -1181,7 +1206,7 @@ auto RenderInterface_BGfx::init_vertex_layout() -> bool
     return true;
 }
 
-auto RenderInterface_BGfx::init_shaders() -> bool
+auto RmlUi_RenderInterface::init_shaders() -> bool
 {
     APPLOG_TRACE("Initializing RmlUi shaders...");
 
@@ -1302,7 +1327,7 @@ auto RenderInterface_BGfx::init_shaders() -> bool
     return true;
 }
 
-void RenderInterface_BGfx::cleanup_resources()
+void RmlUi_RenderInterface::cleanup_resources()
 {
     // Cleanup all compiled geometries using handle allocator
     auto geometry_handles = geometry_handles_;
@@ -1319,10 +1344,12 @@ void RenderInterface_BGfx::cleanup_resources()
     // Cleanup all compiled textures
     for(auto& texture : compiled_textures_)
     {
-        if(bgfx::isValid(texture.handle))
+        if(bgfx::isValid(texture.generated_texture_handle))
         {
-            gfx::destroy(texture.handle);
+            gfx::destroy(texture.generated_texture_handle);
         }
+
+        texture.asset_handle = {};
     }
 
     // Cleanup uniforms
@@ -1342,7 +1369,7 @@ void RenderInterface_BGfx::cleanup_resources()
     // Layer cleanup is handled by the RenderLayerStack destructor
 }
 
-void RenderInterface_BGfx::use_program(RmlUi_ProgramId program_id)
+void RmlUi_RenderInterface::use_program(RmlUi_ProgramId program_id)
 {
     if(active_program_ != program_id)
     {
@@ -1351,7 +1378,7 @@ void RenderInterface_BGfx::use_program(RmlUi_ProgramId program_id)
     }
 }
 
-auto RenderInterface_BGfx::get_uniform_handle(RmlUi_UniformId uniform_id) const -> gfx::uniform_handle
+auto RmlUi_RenderInterface::get_uniform_handle(RmlUi_UniformId uniform_id) const -> gfx::uniform_handle
 {
     size_t index = static_cast<size_t>(uniform_id);
     if(index < uniforms_.size())
@@ -1361,7 +1388,7 @@ auto RenderInterface_BGfx::get_uniform_handle(RmlUi_UniformId uniform_id) const 
     return gfx::uniform_handle{gfx::invalid_handle};
 }
 
-void RenderInterface_BGfx::set_scissor()
+void RmlUi_RenderInterface::set_scissor()
 {
     if(scissor_enabled_)
     {
@@ -1386,7 +1413,7 @@ void RenderInterface_BGfx::set_scissor()
     }
 }
 
-void RenderInterface_BGfx::submit_transform_uniform(Rml::Vector2f translation)
+void RmlUi_RenderInterface::submit_transform_uniform(Rml::Vector2f translation)
 {
     // Calculate final transform matrix
     // Start with projection matrix
@@ -1413,7 +1440,7 @@ void RenderInterface_BGfx::submit_transform_uniform(Rml::Vector2f translation)
     program_transform_dirty_[static_cast<size_t>(active_program_)] = false;
 }
 
-auto RenderInterface_BGfx::convert_blend_mode(Rml::BlendMode blend_mode) -> uint64_t
+auto RmlUi_RenderInterface::convert_blend_mode(Rml::BlendMode blend_mode) -> uint64_t
 {
     // Convert RmlUi blend modes to bgfx render state flags
     switch(blend_mode)
@@ -1456,25 +1483,10 @@ auto RenderInterface_BGfx::convert_blend_mode(Rml::BlendMode blend_mode) -> uint
     }
 }
 
-void RenderInterface_BGfx::clear_stencil_buffer(uint32_t clear_value)
+void RmlUi_RenderInterface::clear_stencil_buffer(uint32_t clear_value)
 {
     // BGfx doesn't have a direct stencil clear function like OpenGL's glClear(GL_STENCIL_BUFFER_BIT)
     // We need to render a fullscreen quad to clear the stencil buffer
-
-    if(fullscreen_quad_geometry_ == 0)
-    {
-        // Create fullscreen quad geometry if not already created
-        Rml::Mesh mesh;
-        Rml::MeshUtilities::GenerateQuad(mesh, Rml::Vector2f(-1), Rml::Vector2f(2), {});
-        fullscreen_quad_geometry_ = CompileGeometry(mesh.vertices, mesh.indices);
-    }
-
-    if(fullscreen_quad_geometry_ == 0)
-    {
-        APPLOG_ERROR("Failed to create fullscreen quad for stencil clearing");
-        return;
-    }
-
     // Convert RmlUi handle to internal handle
     compiled_geometry_handle internal_handle = from_rml_handle(fullscreen_quad_geometry_);
     if(!geometry_handles_.isValid(internal_handle.idx))
@@ -1530,7 +1542,7 @@ void RenderInterface_BGfx::clear_stencil_buffer(uint32_t clear_value)
     }
 }
 
-void RenderInterface_BGfx::render_filters(Rml::Span<const Rml::CompiledFilterHandle> filter_handles)
+void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHandle> filter_handles)
 {
     for(const Rml::CompiledFilterHandle filter_handle : filter_handles)
     {
@@ -1781,10 +1793,10 @@ void RenderInterface_BGfx::render_filters(Rml::Span<const Rml::CompiledFilterHan
     }
 }
 
-void RenderInterface_BGfx::render_blur(float sigma,
-                                       const LayerFramebuffer& source_destination,
-                                       const LayerFramebuffer& temp,
-                                       Rml::Rectanglei window_region)
+void RmlUi_RenderInterface::render_blur(float sigma,
+                                        const LayerFramebuffer& source_destination,
+                                        const LayerFramebuffer& temp,
+                                        Rml::Rectanglei window_region)
 {
     if(!source_destination.is_valid() || !temp.is_valid())
     {
@@ -1792,7 +1804,7 @@ void RenderInterface_BGfx::render_blur(float sigma,
         return;
     }
 
-    RMLUI_ASSERT(&source_destination != &temp && source_destination.get_size().width == temp.get_size().width && 
+    RMLUI_ASSERT(&source_destination != &temp && source_destination.get_size().width == temp.get_size().width &&
                  source_destination.get_size().height == temp.get_size().height);
     RMLUI_ASSERT(window_region.Valid());
 
@@ -1813,10 +1825,10 @@ void RenderInterface_BGfx::render_blur(float sigma,
     int fb_height = static_cast<int>(size.height);
 
     // Downscale by iterative half-scaling with bilinear filtering, to reduce aliasing.
-    // Scale UVs if we have even dimensions, such that texture fetches align perfectly between texels, thereby producing a 50% blend of
-    // neighboring texels.
+    // Scale UVs if we have even dimensions, such that texture fetches align perfectly between texels, thereby producing
+    // a 50% blend of neighboring texels.
     const Rml::Vector2f uv_scaling = {(fb_width % 2 == 1) ? (1.f - 1.f / float(fb_width)) : 1.f,
-                                     (fb_height % 2 == 1) ? (1.f - 1.f / float(fb_height)) : 1.f};
+                                      (fb_height % 2 == 1) ? (1.f - 1.f / float(fb_height)) : 1.f};
 
     if(passthrough_program.begin())
     {
@@ -1832,13 +1844,16 @@ void RenderInterface_BGfx::render_blur(float sigma,
             downscale_pass.bind(destination_fb.framebuffer.get());
 
             // Overwrite the view rectangle set by the bind
-            gfx::set_view_rect(downscale_pass.id, uint16_t(0), uint16_t(0), source_destination.get_size().width / 2, source_destination.get_size().height / 2);
+            gfx::set_view_rect(downscale_pass.id,
+                               uint16_t(0),
+                               uint16_t(0),
+                               source_destination.get_size().width / 2,
+                               source_destination.get_size().height / 2);
 
             // Set view and projection for downscaling
             auto view = Rml::Matrix4f::Identity();
             auto proj = Rml::Matrix4f::Identity();
             downscale_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
-
 
             // Bind source texture
             const LayerFramebuffer& source_fb = from_source ? source_destination : temp;
@@ -1855,14 +1870,14 @@ void RenderInterface_BGfx::render_blur(float sigma,
             // draw_fullscreen_quad();
             gfx::submit(downscale_pass.id, passthrough_program.native_handle());
             ReleaseGeometry(geometry);
-
         }
         passthrough_program.end();
     }
 
     // Note: BGfx viewport is handled by render pass view rectangles
 
-    // Ensure texture data end up in the temp buffer. Depending on the last downscaling, we might need to move it from the source_destination buffer.
+    // Ensure texture data end up in the temp buffer. Depending on the last downscaling, we might need to move it from
+    // the source_destination buffer.
     const bool transfer_to_temp_buffer = (pass_level % 2 == 0);
     if(transfer_to_temp_buffer && passthrough_program.begin())
     {
@@ -1943,7 +1958,10 @@ void RenderInterface_BGfx::render_blur(float sigma,
 
             if(bgfx::isValid(texel_offset_uniform))
             {
-                std::array<float, 4> horizontal_offset = {1.0f / float(source_destination.get_size().width), 0.0f, 0.0f, 0.0f};
+                std::array<float, 4> horizontal_offset = {1.0f / float(source_destination.get_size().width),
+                                                          0.0f,
+                                                          0.0f,
+                                                          0.0f};
                 gfx::set_uniform(texel_offset_uniform, horizontal_offset.data());
             }
 
@@ -1963,7 +1981,7 @@ void RenderInterface_BGfx::render_blur(float sigma,
     if(temp_texture && dest_texture && temp_texture->is_valid() && dest_texture->is_valid())
     {
         gfx::render_pass upscale_pass("rmlui_upscale_blur_pass");
-        
+
         const Rml::Vector2i src_min = scissor.p0;
         const Rml::Vector2i src_max = scissor.p1;
         const Rml::Vector2i dst_min = window_region.p0;
@@ -2003,16 +2021,17 @@ void RenderInterface_BGfx::render_blur(float sigma,
     layer.needs_rebind = true;
 }
 
-void RenderInterface_BGfx::sigma_to_parameters(const float desired_sigma, int& out_pass_level, float& out_sigma)
+void RmlUi_RenderInterface::sigma_to_parameters(const float desired_sigma, int& out_pass_level, float& out_sigma)
 {
     constexpr int max_num_passes = 10;
     static_assert(max_num_passes < 31, "");
     constexpr float max_single_pass_sigma = 3.0f;
-    out_pass_level = Rml::Math::Clamp(Rml::Math::Log2(int(desired_sigma * (2.f / max_single_pass_sigma))), 0, max_num_passes);
+    out_pass_level =
+        Rml::Math::Clamp(Rml::Math::Log2(int(desired_sigma * (2.f / max_single_pass_sigma))), 0, max_num_passes);
     out_sigma = Rml::Math::Clamp(desired_sigma / float(1 << out_pass_level), 0.0f, max_single_pass_sigma);
 }
 
-void RenderInterface_BGfx::set_blur_weights(float sigma)
+void RmlUi_RenderInterface::set_blur_weights(float sigma)
 {
     constexpr int blur_num_weights = 4; // (BLUR_SIZE + 1) / 2 where BLUR_SIZE = 7
     std::array<float, blur_num_weights> weights;
@@ -2045,7 +2064,7 @@ void RenderInterface_BGfx::set_blur_weights(float sigma)
     }
 }
 
-void RenderInterface_BGfx::set_tex_coord_limits(Rml::Rectanglei region, Rml::Vector2i framebuffer_size)
+void RmlUi_RenderInterface::set_tex_coord_limits(Rml::Rectanglei region, Rml::Vector2i framebuffer_size)
 {
     // Offset by half-texel values so that texture lookups are clamped to fragment centers
     const Rml::Vector2f min = (Rml::Vector2f(region.p0) + Rml::Vector2f(0.5f)) / Rml::Vector2f(framebuffer_size);
@@ -2067,43 +2086,34 @@ void RenderInterface_BGfx::set_tex_coord_limits(Rml::Rectanglei region, Rml::Vec
     }
 }
 
-void RenderInterface_BGfx::draw_fullscreen_quad()
+void RmlUi_RenderInterface::draw_fullscreen_quad()
 {
-    if(fullscreen_quad_geometry_ == 0)
-    {
-        // Create fullscreen quad geometry
-        Rml::Mesh mesh;
-        Rml::MeshUtilities::GenerateQuad(mesh, Rml::Vector2f(-1), Rml::Vector2f(2), {});
-        fullscreen_quad_geometry_ = CompileGeometry(mesh.vertices, mesh.indices);
-    }
-
-    if(fullscreen_quad_geometry_ != 0)
-    {
-        // For fullscreen quads, we don't want to apply the coordinate correction transform
-        // because we're rendering textures that are already in the corrected coordinate system
-        RenderGeometry(fullscreen_quad_geometry_, {}, TexturePostprocess);
-    }
+     // For fullscreen quads, we don't want to apply the coordinate correction transform
+    // because we're rendering textures that are already in the corrected coordinate system
+    RenderGeometry(fullscreen_quad_geometry_, {}, TexturePostprocess);
 }
 
-auto RenderInterface_BGfx::draw_fullscreen_quad_with_uv_scaling(Rml::Vector2f uv_offset, Rml::Vector2f uv_scaling) -> Rml::CompiledGeometryHandle
+auto RmlUi_RenderInterface::draw_fullscreen_quad_with_uv_scaling(Rml::Vector2f uv_offset, Rml::Vector2f uv_scaling)
+    -> Rml::CompiledGeometryHandle
 {
     // Create a temporary fullscreen quad with custom UV scaling
-    Rml::Mesh mesh;
-    Rml::MeshUtilities::GenerateQuad(mesh, Rml::Vector2f(-1), Rml::Vector2f(2), {});
-    
+    Rml::Mesh mesh = mesh_fullscreen_quad_;
+
     if(uv_offset != Rml::Vector2f() || uv_scaling != Rml::Vector2f(1.f))
     {
         for(Rml::Vertex& vertex : mesh.vertices)
+        {
             vertex.tex_coord = (vertex.tex_coord * uv_scaling) + uv_offset;
+        }
     }
-    
+
     const Rml::CompiledGeometryHandle geometry = CompileGeometry(mesh.vertices, mesh.indices);
     RenderGeometry(geometry, {}, TexturePostprocess);
 
     return geometry;
 }
 
-void RenderInterface_BGfx::set_scissor_bgfx(Rml::Rectanglei region, bool vertically_flip)
+void RmlUi_RenderInterface::set_scissor_bgfx(Rml::Rectanglei region, bool vertically_flip)
 {
     if(region.Valid() && vertically_flip)
     {
@@ -2126,7 +2136,7 @@ void RenderInterface_BGfx::set_scissor_bgfx(Rml::Rectanglei region, bool vertica
     }
 }
 
-void RenderInterface_BGfx::blit_layer_to_postprocess_primary(Rml::LayerHandle layer_handle)
+void RmlUi_RenderInterface::blit_layer_to_postprocess_primary(Rml::LayerHandle layer_handle)
 {
     if(layer_handle >= render_layers_.get_layers_size())
     {
@@ -2178,7 +2188,7 @@ void RenderInterface_BGfx::blit_layer_to_postprocess_primary(Rml::LayerHandle la
     }
 }
 
-void RenderInterface_BGfx::composite_to_destination_layer(Rml::LayerHandle destination, Rml::BlendMode blend_mode)
+void RmlUi_RenderInterface::composite_to_destination_layer(Rml::LayerHandle destination, Rml::BlendMode blend_mode)
 {
     if(destination >= render_layers_.get_layers_size())
     {
@@ -2230,7 +2240,7 @@ void RenderInterface_BGfx::composite_to_destination_layer(Rml::LayerHandle desti
     }
 }
 
-auto RenderInterface_BGfx::get_layer_pass_id() -> gfx::view_id
+auto RmlUi_RenderInterface::get_layer_pass_id() -> gfx::view_id
 {
     auto& target_layer = render_layers_.get_top_layer();
 
@@ -2254,17 +2264,17 @@ auto RenderInterface_BGfx::get_layer_pass_id() -> gfx::view_id
 // RenderLayerStack Implementation
 // ===============================
 
-RenderInterface_BGfx::RenderLayerStack::RenderLayerStack()
+RmlUi_RenderInterface::RenderLayerStack::RenderLayerStack()
 {
     fb_postprocess_.resize(4); // Primary, secondary, tertiary, blend mask
 }
 
-RenderInterface_BGfx::RenderLayerStack::~RenderLayerStack()
+RmlUi_RenderInterface::RenderLayerStack::~RenderLayerStack()
 {
     destroy_framebuffers();
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::push_layer() -> Rml::LayerHandle
+auto RmlUi_RenderInterface::RenderLayerStack::push_layer() -> Rml::LayerHandle
 {
     RMLUI_ASSERT(layers_size_ <= static_cast<int>(fb_layers_.size()));
 
@@ -2299,7 +2309,7 @@ auto RenderInterface_BGfx::RenderLayerStack::push_layer() -> Rml::LayerHandle
     return layer_handle;
 }
 
-void RenderInterface_BGfx::RenderLayerStack::pop_layer()
+void RmlUi_RenderInterface::RenderLayerStack::pop_layer()
 {
     RMLUI_ASSERT(layers_size_ > 0);
     layers_size_ -= 1;
@@ -2311,46 +2321,46 @@ void RenderInterface_BGfx::RenderLayerStack::pop_layer()
     }
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_layer(Rml::LayerHandle layer) const -> const LayerFramebuffer&
+auto RmlUi_RenderInterface::RenderLayerStack::get_layer(Rml::LayerHandle layer) const -> const LayerFramebuffer&
 {
     RMLUI_ASSERT(static_cast<size_t>(layer) < static_cast<size_t>(layers_size_));
     return fb_layers_[layer];
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_layer(Rml::LayerHandle layer) -> LayerFramebuffer&
+auto RmlUi_RenderInterface::RenderLayerStack::get_layer(Rml::LayerHandle layer) -> LayerFramebuffer&
 {
     RMLUI_ASSERT(static_cast<size_t>(layer) < static_cast<size_t>(layers_size_));
     return fb_layers_[layer];
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_top_layer() const -> const LayerFramebuffer&
+auto RmlUi_RenderInterface::RenderLayerStack::get_top_layer() const -> const LayerFramebuffer&
 {
     return get_layer(get_top_layer_handle());
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_top_layer() -> LayerFramebuffer&
+auto RmlUi_RenderInterface::RenderLayerStack::get_top_layer() -> LayerFramebuffer&
 {
     return get_layer(get_top_layer_handle());
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_top_layer_handle() const -> Rml::LayerHandle
+auto RmlUi_RenderInterface::RenderLayerStack::get_top_layer_handle() const -> Rml::LayerHandle
 {
     RMLUI_ASSERT(layers_size_ > 0);
     return static_cast<Rml::LayerHandle>(layers_size_ - 1);
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::get_top_layer_handle() -> Rml::LayerHandle
+auto RmlUi_RenderInterface::RenderLayerStack::get_top_layer_handle() -> Rml::LayerHandle
 {
     RMLUI_ASSERT(layers_size_ > 0);
     return static_cast<Rml::LayerHandle>(layers_size_ - 1);
 }
 
-void RenderInterface_BGfx::RenderLayerStack::swap_postprocess_primary_secondary()
+void RmlUi_RenderInterface::RenderLayerStack::swap_postprocess_primary_secondary()
 {
     std::swap(fb_postprocess_[0], fb_postprocess_[1]);
 }
 
-void RenderInterface_BGfx::RenderLayerStack::begin_frame(int new_width, int new_height)
+void RmlUi_RenderInterface::RenderLayerStack::begin_frame(int new_width, int new_height)
 {
     RMLUI_ASSERT(layers_size_ == 0);
 
@@ -2365,27 +2375,31 @@ void RenderInterface_BGfx::RenderLayerStack::begin_frame(int new_width, int new_
     push_layer();
 }
 
-void RenderInterface_BGfx::RenderLayerStack::end_frame()
+void RmlUi_RenderInterface::RenderLayerStack::end_frame()
 {
     RMLUI_ASSERT(layers_size_ == 1);
     pop_layer();
 }
 
-void RenderInterface_BGfx::RenderLayerStack::destroy_framebuffers()
+void RmlUi_RenderInterface::RenderLayerStack::destroy_framebuffers()
 {
     RMLUI_ASSERTMSG(layers_size_ == 0,
                     "Do not call this during frame rendering, that is, between BeginFrame() and EndFrame().");
 
     for(LayerFramebuffer& fb : fb_layers_)
+    {   
         destroy_layer_framebuffer(fb);
+    }
 
     fb_layers_.clear();
 
     for(LayerFramebuffer& fb : fb_postprocess_)
+    {
         destroy_layer_framebuffer(fb);
+    }
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::ensure_framebuffer_postprocess(int index) -> const LayerFramebuffer&
+auto RmlUi_RenderInterface::RenderLayerStack::ensure_framebuffer_postprocess(int index) -> const LayerFramebuffer&
 {
     RMLUI_ASSERT(index < static_cast<int>(fb_postprocess_.size()));
     LayerFramebuffer& fb = fb_postprocess_[index];
@@ -2396,11 +2410,11 @@ auto RenderInterface_BGfx::RenderLayerStack::ensure_framebuffer_postprocess(int 
     return fb;
 }
 
-auto RenderInterface_BGfx::RenderLayerStack::create_layer_framebuffer(int width,
-                                                                      int height,
-                                                                      int samples,
-                                                                      bool with_depth_stencil,
-                                                                      gfx::texture::ptr depth_texture)
+auto RmlUi_RenderInterface::RenderLayerStack::create_layer_framebuffer(int width,
+                                                                       int height,
+                                                                       int samples,
+                                                                       bool with_depth_stencil,
+                                                                       gfx::texture::ptr depth_texture)
     -> LayerFramebuffer
 {
     LayerFramebuffer fb{};
@@ -2480,7 +2494,7 @@ auto RenderInterface_BGfx::RenderLayerStack::create_layer_framebuffer(int width,
     return fb;
 }
 
-void RenderInterface_BGfx::RenderLayerStack::destroy_layer_framebuffer(LayerFramebuffer& fb)
+void RmlUi_RenderInterface::RenderLayerStack::destroy_layer_framebuffer(LayerFramebuffer& fb)
 {
     // Smart pointers will automatically clean up when reset
     fb.framebuffer.reset();
@@ -2490,7 +2504,7 @@ void RenderInterface_BGfx::RenderLayerStack::destroy_layer_framebuffer(LayerFram
 
 // CompiledGeometry helper function implementations
 
-void RenderInterface_BGfx::CompiledGeometry::bind_buffers(const gfx::vertex_layout& vertex_layout) const
+void RmlUi_RenderInterface::CompiledGeometry::bind_buffers(const gfx::vertex_layout& vertex_layout) const
 {
     switch(buffer_type)
     {
@@ -2531,14 +2545,14 @@ void RenderInterface_BGfx::CompiledGeometry::bind_buffers(const gfx::vertex_layo
     }
 }
 
-void RenderInterface_BGfx::CompiledGeometry::destroy_buffers()
+void RmlUi_RenderInterface::CompiledGeometry::destroy_buffers()
 {
     switch(buffer_type)
     {
         case GeometryBufferType::Transient:
             // Transient buffers are automatically managed by bgfx, just clear the structs
-            vertices.clear();
-            indices.clear();
+            vertices = {};
+            indices = {};
             break;
 
         case GeometryBufferType::Static:
@@ -2558,7 +2572,7 @@ void RenderInterface_BGfx::CompiledGeometry::destroy_buffers()
     }
 }
 
-auto RenderInterface_BGfx::CompiledGeometry::is_valid() const -> bool
+auto RmlUi_RenderInterface::CompiledGeometry::is_valid() const -> bool
 {
     switch(buffer_type)
     {
@@ -2573,24 +2587,21 @@ auto RenderInterface_BGfx::CompiledGeometry::is_valid() const -> bool
 
 // Geometry classification and transient buffer management
 
-auto RenderInterface_BGfx::classify_geometry(uint32_t num_vertices, uint32_t num_indices) const -> GeometryBufferType
+auto RmlUi_RenderInterface::classify_geometry(uint32_t num_vertices, uint32_t num_indices) const -> GeometryBufferType
 {
     // Smallest geometries use transient buffers (most efficient for single-frame use)
-    if(num_vertices <= TRANSIENT_GEOMETRY_VERTEX_THRESHOLD && num_indices <= TRANSIENT_GEOMETRY_INDEX_THRESHOLD)
+    if(num_vertices <= TRANSIENT_GEOMETRY_VERTEX_THRESHOLD)
     {
         return GeometryBufferType::Transient;
     }
-    else
-    {
-        return GeometryBufferType::Static;
-    }
+    return GeometryBufferType::Static;
 }
 
-auto RenderInterface_BGfx::allocate_transient_buffers(uint32_t num_vertices,
-                                                      uint32_t num_indices,
-                                                      const gfx::vertex_layout& vertex_layout,
-                                                      gfx::transient_vertex_buffer& tvb,
-                                                      gfx::transient_index_buffer& tib) -> bool
+auto RmlUi_RenderInterface::allocate_transient_buffers(uint32_t num_vertices,
+                                                       uint32_t num_indices,
+                                                       const gfx::vertex_layout& vertex_layout,
+                                                       gfx::transient_vertex_buffer& tvb,
+                                                       gfx::transient_index_buffer& tib) -> bool
 {
     // Check if transient buffers are available
     if(gfx::get_avail_transient_vertex_buffer(num_vertices, vertex_layout) < num_vertices ||
@@ -2606,4 +2617,4 @@ auto RenderInterface_BGfx::allocate_transient_buffers(uint32_t num_vertices,
     return tvb.data != nullptr && tib.data != nullptr;
 }
 
-} // namespace unravel
+} // namespace unravelS

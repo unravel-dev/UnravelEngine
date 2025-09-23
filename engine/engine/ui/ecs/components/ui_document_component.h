@@ -33,9 +33,6 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
 
     uint64_t version = 0;
     
-    /// Whether the document should be shown automatically when loaded
-    bool auto_show = true;
-    
     
     /**
      * @brief Check if document is currently loaded

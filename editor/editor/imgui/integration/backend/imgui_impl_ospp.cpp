@@ -557,6 +557,10 @@ auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool
         case os::events::text_input:
         {
             io.AddInputCharactersUTF8(event.text.text.c_str());
+            if(ImGui::IsAnyItemActive())
+            {
+                event = {};
+            }
             return true;
         }
         case os::events::key_up:
@@ -567,6 +571,11 @@ auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool
             io.AddKeyEvent(key, (event.type == os::events::key_down));
 
             io.SetKeyEventNativeData(key, event.key.code, event.key.code, event.key.code);
+
+            if(ImGui::IsAnyItemActive())
+            {
+                event = {};
+            }
             return true;
         }
         case os::events::window:

@@ -3,8 +3,9 @@
  */
 
 #include "RmlUi_Backend_Engine.h"
-#include "RmlUi_Platform_Engine.h"
-#include "RmlUi_Renderer_BGfx.h"
+#include "RmlUi_SystemInterface.h"
+#include "RmlUi_RenderInterface.h"
+#include "RmlUi_FileInterface.h"
 
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/Context.h>
@@ -25,8 +26,9 @@ namespace
     // Global backend data
     struct BackendData
     {
-        SystemInterface_Engine system_interface;
-        RenderInterface_BGfx render_interface;
+        RmlUi_SystemInterface system_interface;
+        RmlUi_RenderInterface render_interface;
+        RmlUi_FileInterface file_interface;
         rtti::context* engine_ctx = nullptr;
         bool running = true;
         bool initialized = false;
@@ -68,6 +70,7 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
     // Set up RmlUi with our interfaces
     Rml::SetSystemInterface(&data->system_interface);
     Rml::SetRenderInterface(&data->render_interface);
+    Rml::SetFileInterface(&data->file_interface);
 
     // Initialize RmlUi core
     if (!Rml::Initialise())
