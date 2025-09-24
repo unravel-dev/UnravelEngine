@@ -35,18 +35,6 @@
 
 namespace unravel
 {
-namespace
-{
-    
-    struct EventListener : public Rml::EventListener {
-        void ProcessEvent(Rml::Event& ev) override {
-            if (ev.GetId() == Rml::EventId::Click) {
-                // Your callback code here
-                APPLOG_INFO("Button clicked!");
-            }
-        }
-    } g_event_listener;
-}
 
 auto ui_system::init(rtti::context& ctx) -> bool
 {
@@ -440,7 +428,7 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     }
     raw_document->ReloadStyleSheet();
 
-    raw_document->SetId("hud");
+    raw_document->SetId("body");
 
     if(component.document)
     {
@@ -449,14 +437,6 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
-
-
-
-    // ... after you load the document:
-    if (auto* btn = raw_document->GetElementById("my_button")) {
-        // Either by string name:
-        btn->AddEventListener("click", &g_event_listener);
-    }
 
     APPLOG_INFO("Successfully loaded UI document: {}", component.asset.id());
     return true;

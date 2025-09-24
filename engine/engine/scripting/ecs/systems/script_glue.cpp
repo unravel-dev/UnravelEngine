@@ -19,7 +19,19 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/settings/settings.h>
+#include <engine/ui/ecs/components/ui_document_component.h>
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <graphics/debugdraw.h>
+
+// RmlUi includes
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Variant.h>
+#include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/Event.h>
+
+// Mono includes for method invocation
+#include <monopp/mono_method_invoker.h>
 
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
@@ -449,6 +461,7 @@ int register_componetns = []()
     native_comp_lut::register_native_component<bone_component>("Ace.Core.BoneComponent");
     native_comp_lut::register_native_component<submesh_component>("Ace.Core.SubmeshComponent");
     native_comp_lut::register_native_component<text_component>("Ace.Core.TextComponent");
+    native_comp_lut::register_native_component<ui_document_component>("Ace.Core.UIDocumentComponent");
 
     return 0;
 }();
@@ -958,9 +971,9 @@ auto internal_m2n_get_child(entt::entity id, const std::string& path, bool recur
         // Determine if we should enqueue children.
         // For recursive mode: allow children if no match yet or just advanced.
         // For non-recursive mode: allow children only if no match has started.
-        bool shouldEnqueue = recursive ? (candidate.matched_index == 0 || advanced) : (candidate.matched_index == 0);
+        bool should_enqueue = recursive ? (candidate.matched_index == 0 || advanced) : (candidate.matched_index == 0);
 
-        if(shouldEnqueue)
+        if(should_enqueue)
         {
             if(auto trans_comp = safe_get_component<transform_component>(candidate.entity))
             {
@@ -2484,6 +2497,739 @@ void internal_m2n_audio_source_set_audio_clip(entt::entity id, hpp::uuid uid)
 }
 
 //--------------------------------------------------
+
+//-------------------------------------------------------------------------
+/*
+
+  _    _ _____   _____           _____  _    _ __  __ ______ _   _ _______
+ | |  | |_   _| |  __ \   /\    / ____|  |  | |  \/  |  ____| \ | |__   __|
+ | |  | | | |   | |  | | /  \  | |    | |  | | \  / | |__  |  \| |  | |
+ | |  | | | |   | |  | |/ /\ \ | |    | |  | | |\/| |  __| | . ` |  | |
+ | |__| |_| |_  | |__| / ____ \| |____| |__| | |  | | |____| |\  |  | |
+  \____/|_____| |_____/_/    \_\\_____|\____/|_|  |_|______|_| \_|  |_|
+
+
+*/
+//-------------------------------------------------------------------------
+
+auto internal_m2n_ui_document_get_asset(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        return comp->asset.uid();
+    }
+
+    return {};
+}
+
+void internal_m2n_ui_document_set_asset(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        auto& ctx = engine::context();
+        auto& am = ctx.get_cached<asset_manager>();
+
+        auto asset = am.get_asset<visual_tree>(uid);
+        comp->asset = asset;
+    }
+}
+
+auto internal_m2n_ui_document_is_loaded(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        return comp->is_loaded();
+    }
+
+    return false;
+}
+
+auto internal_m2n_ui_document_is_visible(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        return comp->is_visible();
+    }
+
+    return false;
+}
+
+void internal_m2n_ui_document_show(entt::entity id)
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        if(comp->document)
+        {
+            comp->document->Show();
+        }
+    }
+}
+
+void internal_m2n_ui_document_hide(entt::entity id)
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        if(comp->document)
+        {
+            comp->document->Hide();
+        }
+    }
+}
+
+void internal_m2n_ui_document_close(entt::entity id)
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        if(comp->document)
+        {
+            comp->document->Close();
+            comp->document = nullptr;
+        }
+    }
+}
+
+auto internal_m2n_ui_document_get_title(entt::entity id) -> const std::string&
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        if(comp->document)
+        {
+            return comp->document->GetTitle();
+        }
+    }
+
+    static const std::string empty;
+    return empty;
+}
+
+void internal_m2n_ui_document_set_title(entt::entity id, const std::string& title)
+{
+    if(auto comp = safe_get_component<ui_document_component>(id))
+    {
+        if(comp->document)
+        {
+            comp->document->SetTitle(title);
+        }
+    }
+}
+
+//-------------------------------------------------------------------------
+/*
+
+  ______ _      ______ __  __ ______ _   _ _______
+ |  ____| |    |  ____|  \/  |  ____| \ | |__   __|
+ | |__  | |    | |__  | \  / | |__  |  \| |  | |
+ |  __| | |    |  __| | |\/| |  __| | . ` |  | |
+ | |____| |____| |____| |  | | |____| |\  |  | |
+ |______|______|______|_|  |_|______|_| \_|  |_|
+
+
+*/
+//-------------------------------------------------------------------------
+
+// Helper function to get UI element safely
+auto get_ui_element_safe(entt::entity entity_id, const std::string& element_id) -> Rml::Element*
+{
+    if(auto comp = safe_get_component<ui_document_component>(entity_id))
+    {
+        if(comp->document)
+        {
+            return comp->document->GetElementById(element_id);
+        }
+    }
+    return nullptr;
+}
+
+
+//-------------------------------------------------------------------------
+/*
+
+  ______ _    _ ______ _   _ _______    _____          _      _      ____          _____ _  __ _____ 
+ |  ____| |  | |  ____| \ | |__   __|  / ____|   /\   | |    | |    |  _ \   /\   / ____| |/ // ____|
+ | |__  | |  | | |__  |  \| |  | |    | |       /  \  | |    | |    | |_) | /  \ | |    | ' /| (___  
+ |  __| | |  | |  __| | . ` |  | |    | |      / /\ \ | |    | |    |  _ < / /\ \| |    |  <  \___ \ 
+ | |____| |__| | |____| |\  |  | |    | |____ / ____ \| |____| |____| |_) / ____ \ |____| . \ ____) |
+ |______|\____/|______|_| \_|  |_|     \_____/_/    \_\______|______|____/_/    \_\_____|_|\_\_____/ 
+
+
+*/
+//-------------------------------------------------------------------------
+
+// Forward declaration for event dispatching to UIEventManager
+void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& event_data);
+
+// Global event listener that dispatches all UI events to C# UIEventManager
+class ui_global_event_listener : public Rml::EventListener
+{
+    Rml::Event* current_event_ = nullptr;
+public:
+    void ProcessEvent(Rml::Event& event) override
+    {
+        current_event_ = &event;
+        try
+        {
+            // Get event information
+            auto* target_element = event.GetTargetElement();
+            if (!target_element)
+            {
+                return;
+            }
+
+            auto* current_element = event.GetCurrentElement();
+            if (!current_element)
+            {
+                return;
+            }
+
+            // Create event data
+            mono::managed_interface::ui_event_base event_data;
+            event_data.target_element_id = target_element->GetId();
+            event_data.target_element_ptr = reinterpret_cast<std::intptr_t>(target_element);
+            event_data.current_element_id = current_element->GetId();
+            event_data.current_element_ptr = reinterpret_cast<std::intptr_t>(current_element);
+            event_data.event_type = event.GetType();
+            event_data.phase = static_cast<int>(event.GetPhase());
+            // Extract mouse coordinates if available
+            event_data.mouse_x = event.GetParameter<float>("mouse_x", 0.0f);
+            event_data.mouse_y = event.GetParameter<float>("mouse_y", 0.0f);
+            
+            // Extract key code if available
+            event_data.key_code = event.GetParameter<int>("key_identifier", 0);
+
+            // Dispatch to C# UIEventManager
+        dispatch_ui_event_to_manager(event_data);
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error processing UI event: {}", e.what());
+    }
+    current_event_ = nullptr;
+}
+
+// Allow access to current event for propagation control
+auto get_current_event() const -> Rml::Event*
+{
+    return current_event_;
+}
+};
+    
+// Global event listener instance
+static std::shared_ptr<ui_global_event_listener> g_ui_global_listener = nullptr;
+
+// Dispatch event to C# UIEventManager
+void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& event_data)
+{
+    try
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get<script_system>();
+        auto assembly = script_sys.get_engine_assembly();
+        
+        // Get the UIEventManager type
+        auto ui_event_manager_type = assembly.get_type("Ace.Core", "UIEventManager");
+        if (!ui_event_manager_type.valid())
+        {
+            APPLOG_ERROR("UIEventManager type not found in assembly");
+            return;
+        }
+        
+        // Get the InternalDispatchEvent method
+        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
+        if (!dispatch_method.valid())
+        {
+            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
+            return;
+        }
+        
+        // Create method invoker and call it
+        auto method_invoker = mono::make_method_invoker<void(const mono::managed_interface::ui_event_base&)>(dispatch_method, true);
+        if (method_invoker.valid())
+        {
+            method_invoker(event_data);
+        }
+        else
+        {
+            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent");
+        }
+    }
+    catch (const mono::mono_exception& e)
+    {
+        APPLOG_ERROR("Mono exception dispatching UI event: {}", e.what());
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error dispatching UI event: {}", e.what());
+    }
+}
+
+// Ensure a native event listener is attached to the element for the given event type
+void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, const std::string& event_type)
+{
+    if (element_ptr == 0)
+    {
+        return;
+    }
+
+    try
+    {        
+        auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+        
+        // Create global listener if it doesn't exist
+        if (!g_ui_global_listener)
+        {
+            g_ui_global_listener = std::make_shared<ui_global_event_listener>();
+        }
+        
+        // Add event listener to the element
+        // Note: RmlUi handles duplicate listeners internally, so it's safe to call this multiple times
+        element->AddEventListener(event_type, g_ui_global_listener.get());
+        
+        APPLOG_TRACE("Ensured native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
+    }
+    catch (const mono::mono_exception& e)
+    {
+        APPLOG_ERROR("Mono exception ensuring native UI event listener: {}", e.what());
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error ensuring native UI event listener: {}", e.what());
+    }
+}
+
+// Stop event propagation - called from C# UIEventBase.StopPropagation()
+void internal_m2n_ui_stop_propagation()
+{
+    try
+    {
+        if (g_ui_global_listener)
+        {
+            auto* current_event = g_ui_global_listener->get_current_event();
+            if (current_event)
+            {
+                current_event->StopPropagation();
+            }
+            else
+            {
+                APPLOG_WARNING("No current UI event to stop propagation on");
+            }
+        }
+        else
+        {
+            APPLOG_ERROR("UI global event listener not initialized");
+        }
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error stopping UI event propagation: {}", e.what());
+    }
+}
+
+// Stop immediate event propagation - called from C# UIEventBase.StopImmediatePropagation()
+void internal_m2n_ui_stop_immediate_propagation()
+{
+    try
+    {
+        if (g_ui_global_listener)
+        {
+            auto* current_event = g_ui_global_listener->get_current_event();
+            if (current_event)
+            {
+                current_event->StopImmediatePropagation();
+            }
+            else
+            {
+                APPLOG_WARNING("No current UI event to stop immediate propagation on");
+            }
+        }
+        else
+        {
+            APPLOG_ERROR("UI global event listener not initialized");
+        }
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error stopping UI event immediate propagation: {}", e.what());
+    }
+}
+
+//-------------------------------------------------------------------------
+/*
+
+  _    _ _____  __          _______             _____  _____  ______ _____    _____ 
+ | |  | |_   _| \ \        / /  __ \     /\    |  __ \|  __ \|  ____|  __ \  / ____|
+ | |  | | | |    \ \  /\  / /| |__) |   /  \   | |__) | |__) | |__  | |__) || (___  
+ | |  | | | |     \ \/  \/ / |  _  /   / /\ \  |  ___/|  ___/|  __| |  _  /  \___ \ 
+ | |__| |_| |_     \  /\  /  | | \ \  / ____ \ | |    | |    | |____| | \ \  ____) |
+  \____/|_____|     \/  \/   |_|  \_\/_/    \_\|_|    |_|    |______|_|  \_\|_____/ 
+
+
+*/
+//-------------------------------------------------------------------------
+
+// Helper function to validate element pointer by checking if it exists in any UI document
+auto validate_ui_element_wrapper(std::intptr_t element_ptr) -> bool
+{
+    if (element_ptr == 0)
+    {
+        return false;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    
+    // Check if this element exists in any loaded UI document
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& scene = ec.get_scene();
+    auto& registry = *scene.registry;
+    
+    auto view = registry.view<ui_document_component>();
+    for (auto entity : view)
+    {
+        auto& ui_comp = view.get<ui_document_component>(entity);
+        if (ui_comp.document)
+        {
+            // Check if this element belongs to this document
+            if (ui_comp.document->GetElementById(element->GetId()) == element)
+            {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
+// Helper function to validate document pointer by checking if it matches any UI component
+auto validate_ui_document_wrapper(std::intptr_t document_ptr) -> bool
+{
+    if (document_ptr == 0)
+    {
+        return false;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    
+    // Check if this document exists in any UI component
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& scene = ec.get_scene();
+    auto& registry = *scene.registry;
+    
+    auto view = registry.view<ui_document_component>();
+    for (auto entity : view)
+    {
+        auto& ui_comp = view.get<ui_document_component>(entity);
+        if (ui_comp.document && ui_comp.document == document)
+        {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+//-------------------------------------------------------------------------
+// UI Document Wrapper Functions
+//-------------------------------------------------------------------------
+
+auto internal_m2n_ui_document_get_wrapper(entt::entity entity_id) -> std::intptr_t
+{
+    if (auto comp = safe_get_component<ui_document_component>(entity_id))
+    {
+        if (comp->document)
+        {
+            return reinterpret_cast<std::intptr_t>(comp->document);
+        }
+    }
+    return 0;
+}
+
+auto internal_m2n_ui_document_get_element_wrapper_by_id(std::intptr_t document_ptr, const std::string& element_id) -> std::intptr_t
+{
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    if (document)
+    {
+        auto* element = document->GetElementById(element_id);
+        return reinterpret_cast<std::intptr_t>(element);
+    }
+    
+    return 0;
+}
+
+auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_ptr, const std::string& selector) -> std::intptr_t
+{
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    if (document)
+    {
+        auto element = document->QuerySelector(selector);
+        if (element)
+        {
+            return reinterpret_cast<std::intptr_t>(element);
+        }
+    }
+    
+    return 0;
+}
+
+// Get element ID from element pointer
+auto internal_m2n_ui_element_wrapper_get_id(std::intptr_t element_ptr) -> std::string
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return "";
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->GetId();
+}
+
+//-------------------------------------------------------------------------
+// UI Document Wrapper Methods
+//-------------------------------------------------------------------------
+
+auto internal_m2n_ui_document_wrapper_is_valid(std::intptr_t document_ptr) -> bool
+{
+    return validate_ui_document_wrapper(document_ptr);
+}
+
+auto internal_m2n_ui_document_wrapper_get_title(std::intptr_t document_ptr) -> std::string
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return "";
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    return document->GetTitle();
+}
+
+void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_ptr, const std::string& title)
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    document->SetTitle(title);
+}
+
+auto internal_m2n_ui_document_wrapper_is_visible(std::intptr_t document_ptr) -> bool
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return false;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    return document->IsVisible();
+}
+
+void internal_m2n_ui_document_wrapper_show(std::intptr_t document_ptr)
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    document->Show();
+}
+
+void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_ptr)
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    document->Hide();
+}
+
+void internal_m2n_ui_document_wrapper_close(std::intptr_t document_ptr)
+{
+    if (!validate_ui_document_wrapper(document_ptr))
+    {
+        return;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    document->Close();
+}
+
+//-------------------------------------------------------------------------
+// UI Element Wrapper Methods  
+//-------------------------------------------------------------------------
+
+auto internal_m2n_ui_element_wrapper_is_valid(std::intptr_t element_ptr) -> bool
+{
+    return validate_ui_element_wrapper(element_ptr);
+}
+
+auto internal_m2n_ui_element_wrapper_get_inner_rml(std::intptr_t element_ptr) -> std::string
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return "";
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->GetInnerRML();
+}
+
+void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, const std::string& rml)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->SetInnerRML(rml);
+}
+
+auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_ptr) -> bool
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return false;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->IsVisible();
+}
+
+void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_ptr, bool visible)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    if (visible)
+    {
+        element->SetProperty("display", "block");
+    }
+    else
+    {
+        element->SetProperty("display", "none");
+    }
+}
+
+auto internal_m2n_ui_element_wrapper_get_attribute(std::intptr_t element_ptr, const std::string& attribute_name) -> std::string
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return "";
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->GetAttribute<Rml::String>(attribute_name, "");
+}
+
+void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_ptr, const std::string& attribute_name, const std::string& value)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->SetAttribute(attribute_name, value);
+}
+
+void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_ptr, const std::string& attribute_name)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->RemoveAttribute(attribute_name);
+}
+
+auto internal_m2n_ui_element_wrapper_has_attribute(std::intptr_t element_ptr, const std::string& attribute_name) -> bool
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return false;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->HasAttribute(attribute_name);
+}
+
+void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_ptr, const std::string& class_name, bool activate)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->SetClass(class_name, activate);
+}
+
+auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_ptr, const std::string& class_name) -> bool
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return false;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    return element->IsClassSet(class_name);
+}
+
+void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_ptr)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->Focus();
+}
+
+void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_ptr)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->Blur();
+}
+
+void internal_m2n_ui_element_wrapper_click(std::intptr_t element_ptr)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->Click();
+}
+
+void internal_m2n_ui_element_wrapper_scroll_into_view(std::intptr_t element_ptr, bool align_with_top)
+{
+    if (!validate_ui_element_wrapper(element_ptr))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    element->ScrollIntoView(align_with_top);
+}
+
+
+//--------------------------------------------------
 } // namespace
 
 auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
@@ -2854,6 +3600,69 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_audio_source_set_audio_clip",
                               internal_call(internal_m2n_audio_source_set_audio_clip));
     }
+
+    {
+        auto reg = mono::internal_call_registry("Ace.Core.UIDocumentComponent");
+        reg.add_internal_call("internal_m2n_ui_document_get_asset", internal_call(internal_m2n_ui_document_get_asset));
+        reg.add_internal_call("internal_m2n_ui_document_set_asset", internal_call(internal_m2n_ui_document_set_asset));
+        reg.add_internal_call("internal_m2n_ui_document_is_loaded", internal_call(internal_m2n_ui_document_is_loaded));
+        reg.add_internal_call("internal_m2n_ui_document_is_visible", internal_call(internal_m2n_ui_document_is_visible));
+        reg.add_internal_call("internal_m2n_ui_document_show", internal_call(internal_m2n_ui_document_show));
+        reg.add_internal_call("internal_m2n_ui_document_hide", internal_call(internal_m2n_ui_document_hide));
+        reg.add_internal_call("internal_m2n_ui_document_close", internal_call(internal_m2n_ui_document_close));
+        reg.add_internal_call("internal_m2n_ui_document_get_title", internal_call(internal_m2n_ui_document_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_set_title", internal_call(internal_m2n_ui_document_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_get_wrapper", internal_call(internal_m2n_ui_document_get_wrapper));
+        reg.add_internal_call("internal_m2n_ui_document_get_element_wrapper_by_id", internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
+        reg.add_internal_call("internal_m2n_ui_document_query_selector_wrapper", internal_call(internal_m2n_ui_document_query_selector_wrapper));
+    }
+
+
+    {
+        auto reg = mono::internal_call_registry("Ace.Core.UIDocument");
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", internal_call(internal_m2n_ui_document_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", internal_call(internal_m2n_ui_document_wrapper_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", internal_call(internal_m2n_ui_document_wrapper_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_visible", internal_call(internal_m2n_ui_document_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_show", internal_call(internal_m2n_ui_document_wrapper_show));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_hide", internal_call(internal_m2n_ui_document_wrapper_hide));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_close", internal_call(internal_m2n_ui_document_wrapper_close));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", internal_call(internal_m2n_ui_document_query_selector_wrapper));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", internal_call(internal_m2n_ui_document_query_selector_wrapper));
+    }
+
+    {
+        auto reg = mono::internal_call_registry("Ace.Core.UIElement");
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", internal_call(internal_m2n_ui_element_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_visible", internal_call(internal_m2n_ui_element_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_visible", internal_call(internal_m2n_ui_element_wrapper_set_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_attribute", internal_call(internal_m2n_ui_element_wrapper_get_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_attribute", internal_call(internal_m2n_ui_element_wrapper_set_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_attribute", internal_call(internal_m2n_ui_element_wrapper_remove_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", internal_call(internal_m2n_ui_element_wrapper_has_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", internal_call(internal_m2n_ui_element_wrapper_set_class));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", internal_call(internal_m2n_ui_element_wrapper_is_class_set));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", internal_call(internal_m2n_ui_element_wrapper_focus));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", internal_call(internal_m2n_ui_element_wrapper_blur));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_click", internal_call(internal_m2n_ui_element_wrapper_click));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_into_view", internal_call(internal_m2n_ui_element_wrapper_scroll_into_view));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_id", internal_call(internal_m2n_ui_element_wrapper_get_id));
+    }
+
+    {
+        auto reg = mono::internal_call_registry("Ace.Core.UIEventManager");
+        reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener", internal_call(internal_m2n_ui_ensure_native_event_listener));
+    }
+
+    {
+        auto reg = mono::internal_call_registry("Ace.Core.UIEventBase");
+        reg.add_internal_call("internal_m2n_ui_stop_propagation", internal_call(internal_m2n_ui_stop_propagation));
+        reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation", internal_call(internal_m2n_ui_stop_immediate_propagation));
+    }
+
     // mono::managed_interface::init(assembly);
 
     return true;

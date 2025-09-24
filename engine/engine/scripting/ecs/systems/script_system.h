@@ -45,6 +45,7 @@ struct script_system
 
     auto get_all_scriptable_components() const -> const std::vector<mono::mono_type>&;
     auto get_engine_assembly() const -> mono::mono_assembly;
+    auto get_app_assembly() const -> mono::mono_assembly;
 
     auto is_create_called() const -> bool;
     auto is_update_called() const -> bool;

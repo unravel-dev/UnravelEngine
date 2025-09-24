@@ -1076,7 +1076,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     std::string error;
     auto cmd = mono::create_compile_command_detailed(params);
 
-    APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
+    // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 
     fs::remove(temp, err);
     fs::remove(temp_mdb, err);

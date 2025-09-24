@@ -297,6 +297,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     copy_compiled_lib(engine_script_lib_temp, engine_script_lib);
 
     auto assembly = domain_->get_assembly(engine_script_lib.string());
+    domain_->name_assembly(engine_script_lib.string(), "Ace.Engine");
     // print_assembly_info(assembly);
 
     cache_.update_manager_type = assembly.get_type("Ace.Core", "SystemManager");
@@ -345,6 +346,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
     try
     {
         auto assembly = app_domain_->get_assembly(app_script_lib.string());
+        app_domain_->name_assembly(app_script_lib.string(), "Ace.App");
         // print_assembly_info(assembly);
 
         auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
@@ -681,6 +683,12 @@ auto script_system::get_engine_assembly() const -> mono::mono_assembly
 {
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
     return domain_->get_assembly(engine_script_lib.string());
+}
+
+auto script_system::get_app_assembly() const -> mono::mono_assembly
+{
+    auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
+    return app_domain_->get_assembly(app_script_lib.string());
 }
 
 auto script_system::is_create_called() const -> bool

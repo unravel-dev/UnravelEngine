@@ -1300,8 +1300,11 @@ void editor_actions::generate_script_workspace()
     fs::create_directories(workspace_folder, err);
 
     auto formats = ex::get_all_formats();
+    formats.emplace_back(std::vector<std::string>{".meta"});
     remove_extensions(formats, ex::get_suported_formats<gfx::shader>());
     remove_extensions(formats, ex::get_suported_formats<script>());
+    remove_extensions(formats, ex::get_suported_formats<visual_tree>());
+    remove_extensions(formats, ex::get_suported_formats<style_sheet>());
 
     auto workspace_file = workspace_folder / fmt::format("{}-workspace.code-workspace", project_name);
     generate_workspace_file(workspace_file.string(), formats, editor_settings);
