@@ -915,7 +915,7 @@ font::font(const char* path,
                                                          glyph_width_paddin,
                                                          glyph_height_padding);
 
-    ANONYMOUS::s_manager->preload_glyph_ranges(handle, ANONYMOUS::get_glyph_ranges_default());
+    // ANONYMOUS::s_manager->preload_glyph_ranges(handle, ANONYMOUS::get_glyph_ranges_default());
 }
 
 font::~font()

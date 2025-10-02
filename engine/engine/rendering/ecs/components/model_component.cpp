@@ -141,7 +141,10 @@ void get_transforms_for_entities(const std::vector<entt::handle>& entities,
                           if(bone_comp)
                           {
                               auto bone_index = bone_comp->bone_index;
-                              bone_pose.transforms[bone_index] = transform_global;
+                              if(bone_index < bone_pose.transforms.size())
+                              {
+                                  bone_pose.transforms[bone_index] = transform_global;
+                              }
                           }
                       }
                   });

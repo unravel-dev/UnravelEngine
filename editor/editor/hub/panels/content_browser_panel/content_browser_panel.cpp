@@ -1,6 +1,7 @@
 #include "content_browser_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "filesystem/filesystem.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/thumbnail_manager.h>
@@ -34,6 +35,7 @@
 
 #include <filedialog/filedialog.h>
 #include <filesystem/watcher.h>
+#include <filesystem>
 #include <hpp/utility.hpp>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -1166,6 +1168,25 @@ void content_browser_panel::set_cache_path(const fs::path& path)
     {
         return;
     }
+
+    auto resolved = fs::resolve_protocol("app:/data");
+    
+    
+    fs::error_code ec;
+    if(!fs::equivalent(resolved, path, ec))
+    {
+        if(!fs::is_any_parent_path(resolved, path))
+        {
+            return;
+        }
+    }
+
+
+    if(!fs::exists(path, ec))
+    {
+        return;
+    }
+
 
     fs::pattern_filter filter;
     filter.add_include_pattern("*");

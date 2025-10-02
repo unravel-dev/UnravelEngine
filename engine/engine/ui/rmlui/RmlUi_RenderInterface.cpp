@@ -240,7 +240,7 @@ void RmlUi_RenderInterface::end_frame(const gfx::frame_buffer::ptr& framebuffer)
         gfx::set_texture(0, tex_uniform, source_texture->native_handle());
 
         // Set blend state for premultiplied alpha (like GL implementation)
-        uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+        uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Blend);
         auto topology = gfx::clip_quad_ex({}, false);
         gfx::set_state(topology | state);
 
@@ -448,7 +448,7 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
 
         // Set up bgfx state for UI rendering
         // Enable alpha blending for UI elements
-        uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+        uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
         gfx::set_state(state);
 
         // Submit draw call
@@ -627,7 +627,6 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
                                              Rml::CompiledGeometryHandle geometry,
                                              Rml::Vector2f translation)
 {
-    return;//
     if(geometry == 0)
     {
         APPLOG_ERROR("Invalid geometry handle: {}", geometry);
@@ -1092,7 +1091,7 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
 
                 submit_transform_uniform(translation);
 
-                uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);BGFX_STATE_BLEND_ALPHA;
                 gfx::set_state(state);
 
                 gfx::submit(pass_id, render_program.native_handle());
@@ -1140,7 +1139,7 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
 
                 submit_transform_uniform(translation);
 
-                uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
+                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
                 gfx::set_state(state);
 
                 gfx::submit(pass_id, render_program.native_handle());
@@ -1443,35 +1442,8 @@ auto RmlUi_RenderInterface::convert_blend_mode(Rml::BlendMode blend_mode) -> uin
         case Rml::BlendMode::Blend:
             return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_BLEND_PREMULTIPLIED;
 
-            // Additional blend modes for advanced effects
-            // case Rml::BlendMode::Add:
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            //            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
-
-            // case Rml::BlendMode::Multiply:
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            //            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ZERO);
-
-            // case Rml::BlendMode::Screen:
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            //            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE_MINUS_DST_COLOR, BGFX_STATE_BLEND_ONE);
-
-            // case Rml::BlendMode::Overlay:
-            //     // Overlay is complex, fallback to normal blend for now
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
-
-            // case Rml::BlendMode::ColorDodge:
-            //     // Color dodge approximation
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            //            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_DST_COLOR, BGFX_STATE_BLEND_ONE);
-
-            // case Rml::BlendMode::ColorBurn:
-            //     // Color burn approximation
-            //     return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-            //            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_ONE_MINUS_SRC_COLOR);
-
         default:
-            return BGFX_STATE_BLEND_BLEND_PREMULTIPLIED;
+            return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
     }
 }
 
@@ -1571,7 +1543,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
 
                     // Set blend factor (opacity)
-                    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     if(filter.blend_factor < 1.0f)
                     {
                         // state |= BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_CONSTANT, BGFX_STATE_BLEND_ZERO);
@@ -1646,7 +1618,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto color_texture = source.get_color_texture();
                     gfx::set_texture(0, tex_uniform, color_texture->native_handle());
 
-                    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({}, false);
                     gfx::set_state(topology | state);
 
@@ -1686,7 +1658,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
 
             
                     // Set render state - disable blending for upscale
-                    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({}, false);
                     gfx::set_state(topology | state);
                     gfx::submit(pass.id, passthrough_program.native_handle());
@@ -1724,7 +1696,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto color_texture = source.get_color_texture();
                     gfx::set_texture(0, tex_uniform, color_texture->native_handle());
 
-                    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({}, false);
                     gfx::set_state(topology | state);
 
@@ -1767,7 +1739,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto mask_texture = render_layers_.get_blend_mask().get_color_texture();
                     gfx::set_texture(1, mask_uniform, mask_texture->native_handle());
 
-                    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({}, false);
                     gfx::set_state(topology | state);
 
@@ -1868,7 +1840,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             set_view_scissor(downscale_pass.id, scissor);
 
             // Set render state - disable blending for downscaling
-            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
             auto def = gfx::clip_quad_def{0.0f, 1.0f, 1.0f, 0.0f, 0.0f, uv_scaling.x, uv_scaling.y};
             auto topology = gfx::clip_quad_ex(def, false);
@@ -1898,7 +1870,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
         gfx::set_texture(0, tex_uniform, source_texture->native_handle());
 
         // Set render state - disable blending for transfer
-        uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+        uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
         auto topology = gfx::clip_quad_ex({}, false);
         gfx::set_state(topology | state);
@@ -1939,7 +1911,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             gfx::set_uniform(texel_offset_uniform, vertical_offset.data());
 
             // Set render state - disable blending for blur
-            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
             auto topology = gfx::clip_quad_ex({}, false);
             gfx::set_state(topology | state);
             gfx::submit(vertical_blur_pass.id, blur_program.native_handle());
@@ -1969,7 +1941,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             gfx::set_uniform(texel_offset_uniform, horizontal_offset.data());
 
             // Set render state - disable blending for blur
-            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
             auto topology = gfx::clip_quad_ex({}, false);
             gfx::set_state(topology | state);
             gfx::submit(horizontal_blur_pass.id, blur_program.native_handle());
@@ -2011,7 +1983,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             auto blit_quad = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
 
             // Set render state - disable blending for upscale
-            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
+            uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
             auto topology = gfx::clip_quad_ex(blit_quad, false);
             gfx::set_state(topology | state);
             gfx::submit(upscale_pass.id, passthrough_program.native_handle());
@@ -2437,21 +2409,28 @@ auto RmlUi_RenderInterface::RenderLayerStack::create_layer_framebuffer(int width
     uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST;
     if(samples > 1)
     {
-        // texture_flags |= BGFX_TEXTURE_RT_MSAA_X2; // BGfx uses specific flags for MSAA levels
-        // if(samples >= 4)
-        // {
-        //     texture_flags |= BGFX_TEXTURE_RT_MSAA_X4;
-        // }
-        // if(samples >= 8)
-        // {
-        //     texture_flags |= BGFX_TEXTURE_RT_MSAA_X8;
-        // }
-        // if(samples >= 16)
-        // {
-        //     texture_flags |= BGFX_TEXTURE_RT_MSAA_X16;
-        // }
+        texture_flags |= BGFX_TEXTURE_RT_MSAA_X2; // BGfx uses specific flags for MSAA levels
+        if(samples >= 4)
+        {
+            texture_flags |= BGFX_TEXTURE_RT_MSAA_X4;
+        }
+        if(samples >= 8)
+        {
+            texture_flags |= BGFX_TEXTURE_RT_MSAA_X8;
+        }
+        if(samples >= 16)
+        {
+            texture_flags |= BGFX_TEXTURE_RT_MSAA_X16;
+        }
 
-        // texture_flags |= BGFX_TEXTURE_RT_WRITE_ONLY;
+    }
+
+    uint64_t depth_texture_flags = texture_flags;
+
+
+    if(samples > 1)
+    {
+        depth_texture_flags |= BGFX_TEXTURE_RT_WRITE_ONLY;
     }
 
     std::vector<gfx::texture::ptr> textures;
@@ -2483,7 +2462,7 @@ auto RmlUi_RenderInterface::RenderLayerStack::create_layer_framebuffer(int width
                                                            false, // no mips
                                                            1,     // num layers
                                                            gfx::texture_format::D24S8,
-                                                           texture_flags);
+                                                           depth_texture_flags);
 
             if(!depth_texture->is_valid())
             {

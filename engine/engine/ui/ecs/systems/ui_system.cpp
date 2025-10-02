@@ -263,24 +263,24 @@ void ui_system::load_fonts()
     };
 
     // Load font
-    load_font("engine:/data/fonts/Inter/static/Inter-Thin.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-ThinItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-ExtraLight.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-ExtraLightItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-Light.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-LightItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-Regular.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-RegularItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-Medium.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-MediumItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-SemiBold.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-SemiBoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-Bold.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-BoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-ExtraBold.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-ExtraBoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/Inter-Black.ttf");
-    // load_font("engine:/data/fonts/Inter/static/Inter-BlackItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Thin.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ThinItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraLight.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraLightItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Light.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-LightItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Regular.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Italic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Medium.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-MediumItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-SemiBold.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-SemiBoldItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Bold.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-BoldItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraBold.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraBoldItalic.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Black.ttf");
+    load_font("engine:/data/fonts/Inter/static/28pt/Inter-BlackItalic.ttf");
 
 }
 

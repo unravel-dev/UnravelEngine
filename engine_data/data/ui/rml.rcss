@@ -4,7 +4,7 @@
 
 /* Base font settings */
 html, body {
-	font-family: Inter;
+	font-family: Inter 28pt;
 	font-size: 22dp;
 	color: #f0f0f0;
 }
@@ -117,7 +117,6 @@ progress
 /* Forms */
 input, textarea, select, option {
 	font-size: 1rem;
-	padding: 0.5rem;
 	background-color: white;
 	color: #333;
 	box-sizing: border-box;
