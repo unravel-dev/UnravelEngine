@@ -2,7 +2,7 @@
 
 #include <engine/ecs/components/basic_component.h>
 #include <engine/assets/asset_handle.h>
-#include <engine/ui/visual_tree.h>
+#include <engine/ui/ui_tree.h>
 #include <string>
 #include <memory>
 
@@ -25,7 +25,7 @@ namespace unravel
 struct ui_document_component : public component_crtp<ui_document_component, owned_component>
 {
     /// Path to the UI document file (HTML/RML)
-    asset_handle<visual_tree> asset;
+    asset_handle<ui_tree> asset;
 
     
     /// Shared pointer to the loaded RmlUi document

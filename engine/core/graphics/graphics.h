@@ -635,6 +635,21 @@ uint32_t get_max_blend_transforms();
 uint64_t screen_quad(float dest_width, float dest_height, float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 uint64_t clip_quad(float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 
+struct clip_quad_def
+{
+    float depth = 0.0f;
+    float width = 1.0f;
+    float height = 1.0f;
+    float offset_x = 0.0f;
+    float offset_y = 0.0f;
+    float uv_offset_x = 0.0f;
+    float uv_offset_y = 0.0f;
+    float uv_scaling_x = 1.0f;
+    float uv_scaling_y = 1.0f;
+};
+
+uint64_t clip_quad_ex(const clip_quad_def& def, bool origin_bottom_left);
+
 void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _height);
 
 

@@ -343,6 +343,7 @@ private:
     auto get_uniform_handle(RmlUi_UniformId uniform_id) const -> gfx::uniform_handle;
     void submit_transform_uniform(Rml::Vector2f translation);
     void set_scissor();
+    void set_view_scissor(gfx::view_id pass_id, const Rml::Rectanglei& region);
 
     // Layer management - now handled by RenderLayerStack
     RenderLayerStack render_layers_;
@@ -366,9 +367,6 @@ private:
     void sigma_to_parameters(const float desired_sigma, int& out_pass_level, float& out_sigma);
     void set_blur_weights(float sigma);
     void set_tex_coord_limits(Rml::Rectanglei region, Rml::Vector2i framebuffer_size);
-    void draw_fullscreen_quad();
-    auto draw_fullscreen_quad_with_uv_scaling(Rml::Vector2f uv_offset, Rml::Vector2f uv_scaling) -> Rml::CompiledGeometryHandle;
-    void set_scissor_bgfx(Rml::Rectanglei region, bool vertically_flip);
     
     // Layer composition
     void blit_layer_to_postprocess_primary(Rml::LayerHandle layer_handle);
@@ -416,7 +414,9 @@ private:
 
     // Filter and shader storage
     std::vector<CompiledFilter> compiled_filters_;
+    size_t compiled_filter_free_index_ = 0;
     std::vector<CompiledShader> compiled_shaders_;
+    size_t compiled_shader_free_index_ = 0;
 
     // Layer management is now handled by render_layers_ member
 

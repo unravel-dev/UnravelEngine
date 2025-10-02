@@ -10,7 +10,7 @@
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/standard_material.hpp>
 #include <engine/meta/scripting/script.hpp>
-#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 
 #include <engine/assets/asset_manager.h>
@@ -385,7 +385,7 @@ auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output
 }
 
 template<>
-auto load_from_file<visual_tree>(tpp::thread_pool& pool, asset_handle<visual_tree>& output, const std::string& key)
+auto load_from_file<ui_tree>(tpp::thread_pool& pool, asset_handle<ui_tree>& output, const std::string& key)
     -> bool
 {
     std::string compiled_absolute_path{};
@@ -397,12 +397,12 @@ auto load_from_file<visual_tree>(tpp::thread_pool& pool, asset_handle<visual_tre
 
     auto create_resource_func = [compiled_absolute_path]()
     {
-        auto tree = std::make_shared<visual_tree>();
+        auto tree = std::make_shared<ui_tree>();
         load_from_file(compiled_absolute_path, tree);
         return tree;
     };
 
-    auto job = pool.schedule(get_job_name<visual_tree>(), create_resource_func).share();
+    auto job = pool.schedule(get_job_name<ui_tree>(), create_resource_func).share();
     output.set_internal_job(job);
 
     return true;

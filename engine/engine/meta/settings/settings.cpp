@@ -243,11 +243,13 @@ LOAD_INLINE(settings::resolution_settings::resolution)
 SAVE_INLINE(settings::resolution_settings)
 {
     try_save(ar, ser20::make_nvp("resolutions", obj.resolutions));
+    try_save(ar, ser20::make_nvp("current_resolution", obj.current_resolution));
 }
 
 LOAD_INLINE(settings::resolution_settings)
 {
     try_load(ar, ser20::make_nvp("resolutions", obj.resolutions));
+    try_load(ar, ser20::make_nvp("current_resolution", obj.current_resolution));
 }
 
 REFLECT_INLINE(settings::resolution_settings::resolution)
@@ -300,6 +302,12 @@ REFLECT_INLINE(settings::resolution_settings)
             entt::attribute{"name", "resolutions"},
             entt::attribute{"pretty_name", "Resolutions"},
             entt::attribute{"tooltip", "List of available resolutions"},
+        })
+        .data<&settings::resolution_settings::current_resolution>("current_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "current_resolution"},
+            entt::attribute{"pretty_name", "Current Resolution"},
+            entt::attribute{"tooltip", "The current resolution to use"},
         });
 }
 
@@ -347,7 +355,7 @@ SAVE(settings)
     try_save(ar, ser20::make_nvp("layer", obj.layer));
     try_save(ar, ser20::make_nvp("input", obj.input));
     try_save(ar, ser20::make_nvp("time", obj.time));
-    try_save(ar, ser20::make_nvp("resolutions", obj.resolution.resolutions));
+    try_save(ar, ser20::make_nvp("resolutions", obj.resolution));
 }
 SAVE_INSTANTIATE(settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(settings, ser20::oarchive_binary_t);
@@ -361,7 +369,7 @@ LOAD(settings)
     try_load(ar, ser20::make_nvp("layer", obj.layer));
     try_load(ar, ser20::make_nvp("input", obj.input));
     try_load(ar, ser20::make_nvp("time", obj.time));
-    try_load(ar, ser20::make_nvp("resolutions", obj.resolution.resolutions));
+    try_load(ar, ser20::make_nvp("resolutions", obj.resolution));
 }
 LOAD_INSTANTIATE(settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(settings, ser20::iarchive_binary_t);

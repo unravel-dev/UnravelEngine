@@ -64,6 +64,16 @@ struct render_pass
     void set_view_proj(const float* v, const float* p);
 
     //-----------------------------------------------------------------------------
+    //  Name : set_view_scissor ()
+    /// <summary>
+    ///
+    ///
+    ///
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    void set_view_scissor(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height);
+    void set_view_rect(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height);
+    //-----------------------------------------------------------------------------
     //  Name : reset ()
     /// <summary>
     ///

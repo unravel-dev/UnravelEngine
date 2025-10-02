@@ -86,13 +86,13 @@ void render_pass::bind(const frame_buffer* fb) const
         const auto width = size.width;
         const auto height = size.height;
         set_view_frame_buffer(id, fb->native_handle());
-        set_view_rect(id, uint16_t(0), uint16_t(0), uint16_t(width), uint16_t(height));
-        set_view_scissor(id, uint16_t(0), uint16_t(0), uint16_t(width), uint16_t(height));
+        gfx::set_view_rect(id, 0, 0, width, height);
+        gfx::set_view_scissor(id, uint16_t(0), uint16_t(0), uint16_t(width), uint16_t(height));
     }
     else
     {
         set_view_frame_buffer(id, frame_buffer::invalid_handle());
-        set_view_rect(id, uint16_t(0), uint16_t(0), backbuffer_ratio::Equal);
+        gfx::set_view_rect(id, uint16_t(0), uint16_t(0), backbuffer_ratio::Equal);
     }
     touch();
 }
@@ -119,6 +119,16 @@ void render_pass::clear() const
 void render_pass::set_view_proj(const float* v, const float* p)
 {
     set_view_transform(id, v, p);
+}
+
+void render_pass::set_view_scissor(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height)
+{
+    gfx::set_view_scissor(id, _x, _y, _width, _height);
+}
+
+void render_pass::set_view_rect(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height)
+{
+    gfx::set_view_rect(id, _x, _y, _width, _height);
 }
 
 void render_pass::reset()

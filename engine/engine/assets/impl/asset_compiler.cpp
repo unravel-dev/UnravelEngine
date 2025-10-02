@@ -22,7 +22,7 @@
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/physics/physics_material.hpp>
-#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/material.hpp>
@@ -867,15 +867,15 @@ auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs:
 }
 
 template<>
-auto compile<visual_tree>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
+auto compile<ui_tree>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     auto absolute_path = resolve_input_file(key);
     std::string str_input = absolute_path.string();
     fs::error_code err;
 
-    auto tree = std::make_shared<visual_tree>();
+    auto tree = std::make_shared<ui_tree>();
     {
-        // For visual_tree, we can load the HTML/RML content directly from file
+        // For ui_tree, we can load the HTML/RML content directly from file
         std::ifstream file(absolute_path);
         if (file.is_open())
         {

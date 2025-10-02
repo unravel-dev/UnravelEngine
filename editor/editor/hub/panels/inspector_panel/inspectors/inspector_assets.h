@@ -21,7 +21,7 @@ struct audio_clip;
 struct font;
 struct prefab;
 struct scene_prefab;
-struct visual_tree;
+struct ui_tree;
 struct style_sheet;
 
 struct inspector_asset_handle : public crtp_meta_type<inspector_asset_handle, inspector>
@@ -127,12 +127,12 @@ struct inspector_asset_handle_font : public crtp_meta_type<inspector_asset_handl
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_font, asset_handle<font>)
 
-struct inspector_asset_handle_visual_tree : public crtp_meta_type<inspector_asset_handle_visual_tree, inspector_asset_handle>
+struct inspector_asset_handle_ui_tree : public crtp_meta_type<inspector_asset_handle_ui_tree, inspector_asset_handle>
 {
-    auto inspect_as_property(rtti::context& ctx, asset_handle<visual_tree>& data) -> inspect_result;
+    auto inspect_as_property(rtti::context& ctx, asset_handle<ui_tree>& data) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
-REFLECT_INSPECTOR_INLINE(inspector_asset_handle_visual_tree, asset_handle<visual_tree>)
+REFLECT_INSPECTOR_INLINE(inspector_asset_handle_ui_tree, asset_handle<ui_tree>)
 
 struct inspector_asset_handle_style_sheet : public crtp_meta_type<inspector_asset_handle_style_sheet, inspector_asset_handle>
 {

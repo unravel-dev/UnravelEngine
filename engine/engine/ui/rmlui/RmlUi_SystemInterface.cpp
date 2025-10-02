@@ -137,16 +137,24 @@ void RmlUi_SystemInterface::GetClipboardText(Rml::String& text)
 
 void RmlUi_SystemInterface::ActivateKeyboard(Rml::Vector2f caret_position, float line_height)
 {
+
+#if UNRAVEL_PLATFORM_OS_MOBILE
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would show the virtual keyboard
-    APPLOG_TRACE("ActivateKeyboard at ({}, {}) height: {}", caret_position.x, caret_position.y, line_height);
+    os::set_text_input_area((*window_)->get_window(), os::point(caret_position.x, caret_position.y), os::area(1, line_height), 0);
+    os::start_text_input((*window_)->get_window());
+#endif
 }
 
 void RmlUi_SystemInterface::DeactivateKeyboard()
 {
+#if UNRAVEL_PLATFORM_OS_MOBILE
+
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would hide the virtual keyboard
     APPLOG_TRACE("DeactivateKeyboard");
+    os::stop_text_input((*window_)->get_window());
+#endif
 }
 
 auto RmlUi_SystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) -> bool

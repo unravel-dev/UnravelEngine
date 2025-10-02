@@ -17,13 +17,13 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
-#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
-#include <engine/ui/visual_tree.h>
+#include <engine/ui/ui_tree.h>
 #include <engine/ui/style_sheet.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/script.h>
@@ -812,7 +812,7 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                                scene_prefab,
                                material,
                                physics_material,
-                               visual_tree,
+                               ui_tree,
                                style_sheet,
                                audio_clip,
                                mesh,
@@ -1069,11 +1069,14 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             }
         }
 
-        if(ImGui::MenuItem("Material"))
+        ImGui::Separator();
+
+        if(ImGui::MenuItem(ex::get_type<material>().c_str()))
         {
             auto& am = ctx.get_cached<asset_manager>();
 
-            const auto available = get_new_file(target_path, "New Material", ex::get_format<material>());
+            auto new_name = fmt::format("New {}", ex::get_type<material>());
+            const auto available = get_new_file(target_path, new_name, ex::get_format<material>());
             const auto key = fs::convert_to_protocol(available).generic_string();
 
             auto new_mat_future = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
@@ -1084,12 +1087,13 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             }
         }
 
-        if(ImGui::MenuItem("Physics Material"))
+        if(ImGui::MenuItem(ex::get_type<physics_material>().c_str()))
         {
             auto& am = ctx.get_cached<asset_manager>();
 
+            auto new_name = fmt::format("New {}", ex::get_type<physics_material>());
             const auto available =
-                get_new_file(target_path, "New Physics Material", ex::get_format<physics_material>());
+                get_new_file(target_path, new_name, ex::get_format<physics_material>());
             const auto key = fs::convert_to_protocol(available).generic_string();
 
             auto new_mat_future =
@@ -1101,12 +1105,15 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             }
         }
 
-        if(ImGui::MenuItem("Visual Tree"))
+        ImGui::Separator();
+
+        if(ImGui::MenuItem(ex::get_type<ui_tree>().c_str()))
         {
             auto& am = ctx.get_cached<asset_manager>();
 
+            auto new_name = fmt::format("New {}", ex::get_type<ui_tree>());
             const auto available =
-                get_new_file(target_path, "New Visual Tree", ex::get_format<visual_tree>());
+                get_new_file(target_path, new_name, ex::get_format<ui_tree>());
             const auto key = fs::convert_to_protocol(available).generic_string();
 
 
@@ -1125,12 +1132,13 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             }
         }
 
-        if(ImGui::MenuItem("Style Sheet"))
+        if(ImGui::MenuItem(ex::get_type<style_sheet>().c_str()))
         {
             auto& am = ctx.get_cached<asset_manager>();
 
+            auto new_name = fmt::format("New {}", ex::get_type<style_sheet>());
             const auto available =
-                get_new_file(target_path, "New Style Sheet", ex::get_format<style_sheet>());
+                get_new_file(target_path, new_name, ex::get_format<style_sheet>());
             const auto key = fs::convert_to_protocol(available).generic_string();
 
             fs::error_code err;

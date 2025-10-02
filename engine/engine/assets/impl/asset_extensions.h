@@ -21,7 +21,7 @@ struct physics_material;
 struct audio_clip;
 struct script;
 struct font;
-struct visual_tree;
+struct ui_tree;
 struct style_sheet;
 
 } // namespace unravel
@@ -77,6 +77,13 @@ inline auto get_suported_dependencies_formats<gfx::shader>() -> const std::vecto
 }
 
 template<>
+inline auto get_suported_dependencies_formats<unravel::ui_tree>() -> const std::vector<std::string>&
+{
+    static std::vector<std::string> formats = {".rcss"};
+    return formats;
+}
+
+template<>
 inline auto get_suported_formats<gfx::shader>() -> const std::vector<std::string>&
 {
     static std::vector<std::string> formats = {".sc"};
@@ -126,7 +133,7 @@ inline auto get_suported_formats<unravel::script>() -> const std::vector<std::st
 }
 
 template<>
-inline auto get_suported_formats<unravel::visual_tree>() -> const std::vector<std::string>&
+inline auto get_suported_formats<unravel::ui_tree>() -> const std::vector<std::string>&
 {
     static std::vector<std::string> formats = {".rhtml"};
     return formats;
@@ -152,7 +159,7 @@ inline auto get_all_formats() -> const std::vector<std::vector<std::string>>&
                                                                 ex::get_suported_formats<unravel::scene_prefab>(),
                                                                 ex::get_suported_formats<unravel::physics_material>(),
                                                                 ex::get_suported_formats<unravel::script>(),
-                                                                ex::get_suported_formats<unravel::visual_tree>(),
+                                                                ex::get_suported_formats<unravel::ui_tree>(),
                                                                 ex::get_suported_formats<unravel::style_sheet>()};
 
     return types;
@@ -293,9 +300,9 @@ inline auto get_type(const std::string& ex, bool is_directory = false) -> const 
         static const std::string result = "Font";
         return result;
     }
-    if(is_format<unravel::visual_tree>(ex))
+    if(is_format<unravel::ui_tree>(ex))
     {
-        static const std::string result = "Visual Tree";
+        static const std::string result = "UI Tree";
         return result;
     }
     if(is_format<unravel::style_sheet>(ex))
@@ -376,9 +383,9 @@ inline auto get_type() -> const std::string&
         static const std::string result = "Font";
         return result;
     }
-    if constexpr(std::is_same_v<T, unravel::visual_tree>)
+    if constexpr(std::is_same_v<T, unravel::ui_tree>)
     {
-        static const std::string result = "Visual Tree";
+        static const std::string result = "UI Tree";
         return result;
     }
     if constexpr(std::is_same_v<T, unravel::style_sheet>)

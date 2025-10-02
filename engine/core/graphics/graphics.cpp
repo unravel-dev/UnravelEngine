@@ -1129,6 +1129,80 @@ auto clip_quad(float depth, float width, float height) -> uint64_t
     return BGFX_STATE_PT_TRISTRIP;
 }
 
+uint64_t clip_quad_ex(const clip_quad_def& def, bool origin_bottom_left)
+{
+    // float texture_half = get_half_texel();
+    origin_bottom_left = is_origin_bottom_left();
+
+    if(4 == getAvailTransientVertexBuffer(4, pos_texcoord0_vertex::get_layout()))
+    {
+        transient_vertex_buffer vb;
+        alloc_transient_vertex_buffer(&vb, 4, pos_texcoord0_vertex::get_layout());
+        auto vertex = reinterpret_cast<pos_texcoord0_vertex*>(vb.data);
+
+        // Apply position offset to the quad geometry
+        const float minx = -def.width + def.offset_x;
+        const float maxx = def.width + def.offset_x;
+        const float miny = -def.height + def.offset_y;
+        const float maxy = def.height + def.offset_y;
+
+        // const float texel_half_w = texture_half;
+        // const float texel_half_h = texture_half;
+        const float minu = 0.0f;
+        const float maxu = 1.0f;
+
+        const float zz = def.depth;
+
+        float minv = 1.0f;
+        float maxv = 0.0f;
+
+        // if(origin_bottom_left)
+        // {
+        //     minv = 1.0f - minv;
+        //     maxv = 1.0f - maxv;
+        // }
+
+        vertex[0].x = minx;
+        vertex[0].y = maxy;
+        vertex[0].z = zz;
+        vertex[0].u = minu;
+        vertex[0].v = maxv;
+
+        vertex[1].x = maxx;
+        vertex[1].y = maxy;
+        vertex[1].z = zz;
+        vertex[1].u = maxu;
+        vertex[1].v = maxv;
+
+        vertex[2].x = minx;
+        vertex[2].y = miny;
+        vertex[2].z = zz;
+        vertex[2].u = minu;
+        vertex[2].v = minv;
+
+        vertex[3].x = maxx;
+        vertex[3].y = miny;
+        vertex[3].z = zz;
+        vertex[3].u = maxu;
+        vertex[3].v = minv;
+
+        // Apply UV offset and scaling
+        for(int i = 0; i < 4; i++)
+        {
+            vertex[i].u = (vertex[i].u * def.uv_scaling_x) + def.uv_offset_x;
+            vertex[i].v = (vertex[i].v * def.uv_scaling_y) + def.uv_offset_y;
+            if(origin_bottom_left)
+            {
+                vertex[i].v = 1.0f - vertex[i].v;
+            }
+        }
+
+        bgfx::setVertexBuffer(0, &vb);
+    }
+
+    return BGFX_STATE_PT_TRISTRIP;
+}
+
 void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _height)
 {
     auto stats = bgfx::getStats();

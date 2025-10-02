@@ -51,6 +51,25 @@ struct settings
     {
         friend auto operator==(const resolution_settings& lhs, const resolution_settings& rhs) -> bool = default;
 
+        auto get_current_resolution_index() const -> int
+        {
+            for(size_t i = 0; i < resolutions.size(); ++i)
+            {
+                if(resolutions[i].name == current_resolution.name)
+                {
+                    return static_cast<int>(i);
+                }
+            }
+            return 0;
+        }
+        auto set_current_resolution_index(size_t index) -> void
+        {
+            if(index < resolutions.size())
+            {
+                current_resolution = resolutions[index];
+            }
+        }
+
         struct resolution
         {
             std::string name;
@@ -70,6 +89,8 @@ struct settings
             {"QHD (2560x1440)", 2560, 1440, 16.0f / 9.0f},
             {"4K UHD (3840x2160)", 3840, 2160, 16.0f / 9.0f}
         };
+
+        resolution current_resolution = resolutions[0];
     } resolution;
    
 

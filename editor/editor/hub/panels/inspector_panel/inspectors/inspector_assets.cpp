@@ -8,7 +8,7 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/physics/physics_material.h>
-#include <engine/ui/visual_tree.h>
+#include <engine/ui/ui_tree.h>
 #include <engine/ui/style_sheet.h>
 
 #include <engine/meta/assets/asset_database.hpp>
@@ -17,7 +17,7 @@
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/texture.hpp>
-#include <engine/meta/ui/visual_tree.hpp>
+#include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -1222,7 +1222,7 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
     return result;
 }
 
-auto inspector_asset_handle_visual_tree::inspect_as_property(rtti::context& ctx, asset_handle<visual_tree>& data)
+auto inspector_asset_handle_ui_tree::inspect_as_property(rtti::context& ctx, asset_handle<ui_tree>& data)
     -> inspect_result
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -1230,18 +1230,18 @@ auto inspector_asset_handle_visual_tree::inspect_as_property(rtti::context& ctx,
     auto& em = ctx.get_cached<editing_manager>();
 
     inspect_result result{};
-    result |= pick_asset(filter, em, tm, am, data, ex::get_type<visual_tree>());
+    result |= pick_asset(filter, em, tm, am, data, ex::get_type<ui_tree>());
 
     return result;
 }
 
-auto inspector_asset_handle_visual_tree::inspect(rtti::context& ctx,
+auto inspector_asset_handle_ui_tree::inspect(rtti::context& ctx,
                                                   entt::meta_any& var,
                                                   const meta_any_proxy& var_proxy,
                                                   const var_info& info,
                                                   const entt::meta_custom& custom) -> inspect_result
 {
-    auto& data = var.cast<asset_handle<visual_tree>&>();
+    auto& data = var.cast<asset_handle<ui_tree>&>();
 
     if(info.is_property)
     {
@@ -1251,7 +1251,7 @@ auto inspector_asset_handle_visual_tree::inspect(rtti::context& ctx,
     inspect_result result{};
 
     {
-        auto data_var_proxy = make_mutable_asset_proxy<visual_tree>(var, var_proxy);
+        auto data_var_proxy = make_mutable_asset_proxy<ui_tree>(var, var_proxy);
 
         entt::meta_any data_var;
         if(data_var_proxy.impl->getter(data_var))

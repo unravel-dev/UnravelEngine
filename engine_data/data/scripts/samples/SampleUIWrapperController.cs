@@ -10,7 +10,7 @@ namespace Ace.Samples
     public class SampleUIWrapperController : ScriptComponent
     {
         // Cached UI wrapper objects - these hold C++ pointers and can be reused
-        private UIDocument documentWrapper;
+        private UIDocument document;
         private UIElement titleElement;
         private UIElement buttonElement;
         private UIElement textInputElement;
@@ -28,14 +28,14 @@ namespace Ace.Samples
             }
 
             // Get the document wrapper - this can be cached and reused
-            documentWrapper = uiDoc.GetDocumentWrapper();
-            if (documentWrapper == null)
+            document = uiDoc.GetDocument();
+            if (document == null)
             {
                 Log.Error("Failed to get document wrapper - document may not be loaded");
                 return;
             }
 
-            Log.Info($"Got document wrapper for: {documentWrapper.Title}");
+            Log.Info($"Got document wrapper for: {document.Title}");
 
             // Cache element wrappers - these hold direct C++ pointers for fast access
             CacheUIElements();
@@ -50,12 +50,12 @@ namespace Ace.Samples
         private void CacheUIElements()
         {
             // Get elements by ID and cache them - no need to search repeatedly
-            titleElement = documentWrapper.GetElementById("title");
-            buttonElement = documentWrapper.GetElementById("click-button");
-            textInputElement = documentWrapper.GetElementById("text-input");
+            titleElement = document.GetElementById("title");
+            buttonElement = document.GetElementById("click-button");
+            textInputElement = document.GetElementById("text-input");
 
             // You can also use CSS selectors
-            var headerElement = documentWrapper.QuerySelector("h1");
+            var headerElement = document.QuerySelector("h1");
             
             // Validate that we found the elements we need
             if (titleElement == null)
@@ -193,7 +193,7 @@ namespace Ace.Samples
         // Example of dynamic element creation and caching
         public void CreateDynamicElement()
         {
-            if (documentWrapper != null)
+            if (document != null)
             {
                 // You could create new elements dynamically and cache their wrappers
                 // This would require additional C++ bindings for element creation
@@ -229,7 +229,7 @@ namespace Ace.Samples
             }
 
             // Re-cache if needed
-            if (needsRecache && documentWrapper != null)
+            if (needsRecache && document != null)
             {
                 Log.Info("Re-caching UI elements");
                 CacheUIElements();

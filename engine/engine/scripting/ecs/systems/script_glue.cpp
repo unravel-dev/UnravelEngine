@@ -2529,7 +2529,7 @@ void internal_m2n_ui_document_set_asset(entt::entity id, const hpp::uuid& uid)
         auto& ctx = engine::context();
         auto& am = ctx.get_cached<asset_manager>();
 
-        auto asset = am.get_asset<visual_tree>(uid);
+        auto asset = am.get_asset<ui_tree>(uid);
         comp->asset = asset;
     }
 }
@@ -2714,7 +2714,7 @@ auto get_current_event() const -> Rml::Event*
 };
     
 // Global event listener instance
-static std::shared_ptr<ui_global_event_listener> g_ui_global_listener = nullptr;
+static ui_global_event_listener g_ui_global_listener;
 
 // Dispatch event to C# UIEventManager
 void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& event_data)
@@ -2774,15 +2774,9 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, con
     {        
         auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
         
-        // Create global listener if it doesn't exist
-        if (!g_ui_global_listener)
-        {
-            g_ui_global_listener = std::make_shared<ui_global_event_listener>();
-        }
-        
         // Add event listener to the element
         // Note: RmlUi handles duplicate listeners internally, so it's safe to call this multiple times
-        element->AddEventListener(event_type, g_ui_global_listener.get());
+        element->AddEventListener(event_type, &g_ui_global_listener);
         
         APPLOG_TRACE("Ensured native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
     }
@@ -2801,22 +2795,17 @@ void internal_m2n_ui_stop_propagation()
 {
     try
     {
-        if (g_ui_global_listener)
+
+        auto* current_event = g_ui_global_listener.get_current_event();
+        if (current_event)
         {
-            auto* current_event = g_ui_global_listener->get_current_event();
-            if (current_event)
-            {
-                current_event->StopPropagation();
-            }
-            else
-            {
-                APPLOG_WARNING("No current UI event to stop propagation on");
-            }
+            current_event->StopPropagation();
         }
         else
         {
-            APPLOG_ERROR("UI global event listener not initialized");
+            APPLOG_WARNING("No current UI event to stop propagation on");
         }
+
     }
     catch (const std::exception& e)
     {
@@ -2829,21 +2818,14 @@ void internal_m2n_ui_stop_immediate_propagation()
 {
     try
     {
-        if (g_ui_global_listener)
+        auto* current_event = g_ui_global_listener.get_current_event();
+        if (current_event)
         {
-            auto* current_event = g_ui_global_listener->get_current_event();
-            if (current_event)
-            {
-                current_event->StopImmediatePropagation();
-            }
-            else
-            {
-                APPLOG_WARNING("No current UI event to stop immediate propagation on");
-            }
+            current_event->StopImmediatePropagation();
         }
         else
         {
-            APPLOG_ERROR("UI global event listener not initialized");
+            APPLOG_WARNING("No current UI event to stop immediate propagation on");
         }
     }
     catch (const std::exception& e)
@@ -3613,8 +3595,6 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_ui_document_get_title", internal_call(internal_m2n_ui_document_get_title));
         reg.add_internal_call("internal_m2n_ui_document_set_title", internal_call(internal_m2n_ui_document_set_title));
         reg.add_internal_call("internal_m2n_ui_document_get_wrapper", internal_call(internal_m2n_ui_document_get_wrapper));
-        reg.add_internal_call("internal_m2n_ui_document_get_element_wrapper_by_id", internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
-        reg.add_internal_call("internal_m2n_ui_document_query_selector_wrapper", internal_call(internal_m2n_ui_document_query_selector_wrapper));
     }
 
 

@@ -27,7 +27,7 @@ struct physics_material;
 struct audio_clip;
 struct script;
 struct font;
-struct visual_tree;
+struct ui_tree;
 struct style_sheet;
 } // namespace unravel
 
@@ -89,7 +89,7 @@ struct thumbnail_manager
     DECLARE_THUMBNAIL_SPEC(audio_clip);
     DECLARE_THUMBNAIL_SPEC(font);
     DECLARE_THUMBNAIL_SPEC(script);
-    DECLARE_THUMBNAIL_SPEC(visual_tree);
+    DECLARE_THUMBNAIL_SPEC(ui_tree);
     DECLARE_THUMBNAIL_SPEC(style_sheet);
 
 
@@ -120,7 +120,7 @@ private:
         asset_handle<gfx::texture> prefab;
         asset_handle<gfx::texture> scene_prefab;
         asset_handle<gfx::texture> script;
-        asset_handle<gfx::texture> visual_tree;
+        asset_handle<gfx::texture> ui_tree;
         asset_handle<gfx::texture> style_sheet;
 
     } thumbnails_;

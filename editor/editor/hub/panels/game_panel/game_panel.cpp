@@ -11,6 +11,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/settings/settings.h>
+#include <editor/system/project_manager.h>
 
 
 namespace unravel
@@ -139,6 +140,7 @@ void game_panel::draw_ui(rtti::context& ctx)
         return;
     }
     const auto& resolutions = settings.resolution.resolutions;
+    current_resolution_index_ = settings.resolution.get_current_resolution_index();
     if(size.x > 0 && size.y > 0)
     {
         bool rendered = false;
@@ -199,12 +201,14 @@ void game_panel::draw_ui(rtti::context& ctx)
 
 void game_panel::draw_menubar(rtti::context& ctx)
 {
-    auto& settings = ctx.get<unravel::settings>();
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& settings = pm.get_settings();
     if(settings.resolution.resolutions.empty()) 
     {
         return;
     }
     const auto& resolutions = settings.resolution.resolutions;
+    current_resolution_index_ = settings.resolution.get_current_resolution_index();
     if(ImGui::BeginMenuBar())
     {
         if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
@@ -228,7 +232,11 @@ void game_panel::draw_menubar(rtti::context& ctx)
         {
             for(int i = 0; i < (int)resolutions.size(); ++i)
             {
-                if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_resolution_index_, i)) {}
+                if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_resolution_index_, i))
+                {
+                    settings.resolution.set_current_resolution_index(i);
+                    pm.save_project_settings(ctx);
+                }
             }
 
             if(ImGui::MenuItem("Edit ...", "", false))

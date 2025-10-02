@@ -104,6 +104,14 @@ thead, tbody, tfoot
 	display: table-row-group;
 }
 
+progress
+{
+	box-sizing: border-box;
+    display: inline-block;
+    height: 1em;
+    width: 10em;
+    vertical-align: -0.2em;
+}
 
 
 /* Forms */
@@ -112,6 +120,7 @@ input, textarea, select, option {
 	padding: 0.5rem;
 	background-color: white;
 	color: #333;
+	box-sizing: border-box;
 }
 
 

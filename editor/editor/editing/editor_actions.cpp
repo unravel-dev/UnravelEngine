@@ -1,6 +1,6 @@
 #include "editor_actions.h"
 #include "engine/scripting/script.h"
-#include "engine/ui/visual_tree.h"
+#include "engine/ui/ui_tree.h"
 
 #include <editor/editing/editing_manager.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
@@ -1303,7 +1303,7 @@ void editor_actions::generate_script_workspace()
     formats.emplace_back(std::vector<std::string>{".meta"});
     remove_extensions(formats, ex::get_suported_formats<gfx::shader>());
     remove_extensions(formats, ex::get_suported_formats<script>());
-    remove_extensions(formats, ex::get_suported_formats<visual_tree>());
+    remove_extensions(formats, ex::get_suported_formats<ui_tree>());
     remove_extensions(formats, ex::get_suported_formats<style_sheet>());
 
     auto workspace_file = workspace_folder / fmt::format("{}-workspace.code-workspace", project_name);
@@ -1390,7 +1390,7 @@ void editor_actions::recompile_ui()
     auto& am = ctx.get_cached<asset_manager>();
     fs::watcher::pause();
     {
-        auto assets = am.get_assets<visual_tree>();
+        auto assets = am.get_assets<ui_tree>();
         for(auto& asset : assets)
         {
             auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());

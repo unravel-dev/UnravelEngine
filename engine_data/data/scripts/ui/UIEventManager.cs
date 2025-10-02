@@ -18,15 +18,15 @@ namespace Ace.Core
         // Summary:
         //     The ID of the element that triggered the event.
         public string targetElementId;
-        public IntPtr targetElementPtr;
+        public IntPtr targetElementPtr = IntPtr.Zero;
 
         //
         // Summary:
         //     The ID of the element that received the event.
         public string currentElementId;
-        public IntPtr currentElementPtr;
+        public IntPtr currentElementPtr = IntPtr.Zero;
 
-        public EventPhase phase;
+        public EventPhase phase = EventPhase.None;
         //
         // Summary:
         //     The type of event that occurred (e.g., "click", "mousedown").
@@ -35,17 +35,17 @@ namespace Ace.Core
         //
         // Summary:
         //     Mouse X coordinate (for mouse events).
-        public float mouseX;
+        public float mouseX = 0.0f;
 
         //
         // Summary:
         //     Mouse Y coordinate (for mouse events).
-        public float mouseY;
+        public float mouseY = 0.0f;
 
         //
         // Summary:
         //     Key code (for keyboard events).
-        public int keyCode;
+        public int keyCode = 0;
 
         /// <summary>
         /// Stops propagation of the event if it is interruptible, but finish all listeners on the current element.

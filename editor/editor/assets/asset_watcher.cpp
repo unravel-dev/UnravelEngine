@@ -1,4 +1,6 @@
 #include "asset_watcher.h"
+#include "engine/ui/ui_tree.h"
+#include "filesystem/filesystem.h"
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
@@ -46,7 +48,15 @@ auto checking_dependencies_job_name() -> std::string
     return fmt::format("Checking dependencies of {}", ex::get_type<T>());
 }
 
+template<typename T>
 void resolve_includes(const fs::path& file_path, std::set<fs::path>& processed_files)
+{
+    
+}
+
+
+template<>
+void resolve_includes<gfx::shader>(const fs::path& file_path, std::set<fs::path>& processed_files)
 {
     if(!processed_files.insert(file_path).second)
     {
@@ -101,15 +111,102 @@ void resolve_includes(const fs::path& file_path, std::set<fs::path>& processed_f
             // std::cout << "Resolved include: " << resolvedPath << '\n';
 
             // Recurse into the included file
-            resolve_includes(resolved_path, processed_files);
+            resolve_includes<gfx::shader>(resolved_path, processed_files);
         }
     }
 }
 
+auto extract_href_from_link_tag(hpp::string_view link_tag) -> hpp::string_view
+{
+    size_t href_pos = link_tag.find("href=");
+    if(href_pos == std::string::npos)
+    {
+        return {};
+    }
+    
+    href_pos += 5; // Move past "href="
+    
+    // Find the quote character (either " or ')
+    char quote_char = link_tag[href_pos];
+    if(quote_char != '"' && quote_char != '\'')
+    {
+        return {};
+    }
+    
+    href_pos++; // Move past the opening quote
+    size_t href_end = link_tag.find(quote_char, href_pos);
+    if(href_end == std::string::npos)
+    {
+        return {};
+    }
+    
+    return link_tag.substr(href_pos, href_end - href_pos);
+}
+
+auto resolve_ui_tree_dependency_path(const fs::path& href_value, const fs::path& base_file_path) -> fs::path
+{
+    if(fs::has_known_protocol(href_value))
+    {
+        // Handle protocol paths like "engine:/data/ui/rml.rcss"
+        return fs::resolve_protocol(href_value);
+    }
+    
+    // Resolve relative path
+    return fs::absolute(base_file_path.parent_path() / href_value);
+}
+
+template<>
+void resolve_includes<ui_tree>(const fs::path& file_path, std::set<fs::path>& processed_files)
+{
+    if(!processed_files.insert(file_path).second)
+    {
+        return; // Avoid processing the same file multiple times
+    }
+
+    std::ifstream file(file_path);
+    if(!file.is_open())
+    {
+        return;
+    }
+
+    std::string content_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    hpp::string_view content(content_str);
+    // Parse HTML/RML content to find <link> tags with href attributes
+    size_t pos = 0;
+    while((pos = content.find("<link", pos)) != std::string::npos)
+    {
+        // Find the end of the link tag
+        size_t tag_end = content.find('>', pos);
+        if(tag_end == std::string::npos)
+        {
+            break;
+        }
+
+        hpp::string_view link_tag = content.substr(pos, tag_end - pos + 1);
+        hpp::string_view href_value = extract_href_from_link_tag(link_tag);
+        
+        if(!href_value.empty())
+        {
+            fs::path resolved_path = resolve_ui_tree_dependency_path(fs::path(href_value), file_path);
+            
+            // Recurse into the included file if it's a supported dependency format
+            const auto& supported_deps = ex::get_suported_dependencies_formats<ui_tree>();
+            auto extension = resolved_path.extension().string();
+            if(std::find(supported_deps.begin(), supported_deps.end(), extension) != supported_deps.end())
+            {
+                resolve_includes<ui_tree>(resolved_path, processed_files);
+            }
+        }
+        
+        pos = tag_end + 1;
+    }
+}
+
+template<typename T>
 auto has_depencency(const fs::path& file, const fs::path& dep_to_check) -> bool
 {
     std::set<fs::path> dependecies;
-    resolve_includes(file, dependecies);
+    resolve_includes<T>(file, dependecies);
 
     return dependecies.contains(dep_to_check);
 }
@@ -299,13 +396,13 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
                     auto task = ts.pool->schedule(checking_dependencies_job_name<T>(),
                         [&am, entry]()
                         {
-                            auto shaders = am.get_assets<T>();
-                            for(const auto& shader : shaders)
+                            auto assets = am.get_assets<T>();
+                            for(const auto& asset : assets)
                             {
-                                auto meta = am.get_metadata(shader.uid());
+                                auto meta = am.get_metadata(asset.uid());
                                 auto absolute_path = fs::resolve_protocol(meta.location);
 
-                                if(has_depencency(absolute_path, entry.path))
+                                if(has_depencency<T>(absolute_path, entry.path))
                                 {
                                     fs::watcher::touch(absolute_path, false);
                                 }
@@ -534,6 +631,12 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         watchers.emplace_back(id);
     }
 
+    for(const auto& dep_ex : ex::get_suported_dependencies_formats<ui_tree>())
+    {
+        auto id = watch_assets_depenencies<ui_tree>(ctx, data_dir, fs::pattern_filter("*" + dep_ex));
+        watchers.emplace_back(id);
+    }
+
     syncer.sync(data_dir, meta_dir);
 
     if(wait)
@@ -584,7 +687,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<audio_clip>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<font>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<script>(ctx, syncer, on_removed, on_renamed);
-    add_to_syncer<visual_tree>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<ui_tree>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
 
     syncer.sync(meta_dir, cache_dir);
@@ -606,7 +709,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     watch_synced<audio_clip>(ctx, watchers, cache_dir);
     watch_synced<font>(ctx, watchers, cache_dir);
     watch_synced<script>(ctx, watchers, cache_dir);
-    watch_synced<visual_tree>(ctx, watchers, cache_dir);
+    watch_synced<ui_tree>(ctx, watchers, cache_dir);
     watch_synced<style_sheet>(ctx, watchers, cache_dir);
 }
 
@@ -625,14 +728,20 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
 
     if(e.type == os::events::window)
     {
-        if(window && e.window.window_id == window->get_window().get_id())
+        
+        if(e.window.type == os::window_event_id::focus_lost)
         {
-            if(e.window.type == os::window_event_id::focus_lost)
+            if(!os::window::is_any_focused())
             {
+                // APPLOG_TRACE("Application lost focus");
                 fs::watcher::pause();
             }
-            if(e.window.type == os::window_event_id::focus_gained)
+        }
+        if(e.window.type == os::window_event_id::focus_gained)
+        {
+            if(os::window::is_any_focused())
             {
+                // APPLOG_TRACE("Application gained focus");
                 fs::watcher::resume();
             }
         }

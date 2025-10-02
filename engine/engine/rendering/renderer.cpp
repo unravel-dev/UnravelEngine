@@ -116,6 +116,16 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     APPLOG_TRACE("DebugDraw Init.");
     ddInit();
 
+    const bgfx::Caps* caps = bgfx::getCaps();
+    if (0 != (caps->supported & BGFX_CAPS_GRAPHICS_DEBUGGER) )
+    {
+        APPLOG_TRACE("Graphics debugger is supported.");
+    }
+    else
+    {
+        APPLOG_TRACE("Graphics debugger is not supported.");
+    }
+
     return true;
 }
 

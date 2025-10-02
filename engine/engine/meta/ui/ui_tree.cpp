@@ -1,4 +1,4 @@
-#include "visual_tree.hpp"
+#include "ui_tree.hpp"
 #include <filesystem/filesystem.h>
 #include <fstream>
 #include <serialization/associative_archive.h>
@@ -6,17 +6,17 @@
 
 namespace unravel
 {
-REFLECT(visual_tree)
+REFLECT(ui_tree)
 {
-    // Register visual_tree with entt
-    entt::meta_factory<visual_tree>{}
-        .type("visual_tree"_hs)
+    // Register ui_tree with entt
+    entt::meta_factory<ui_tree>{}
+        .type("ui_tree"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "visual_tree"},
+            entt::attribute{"name", "ui_tree"},
             entt::attribute{"pretty_name", "Visual Tree"},
             entt::attribute{"category", "UI"},
         })
-        .data<&visual_tree::content>("content"_hs)
+        .data<&ui_tree::content>("content"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "content"},
             entt::attribute{"pretty_name", "Content"},
@@ -26,21 +26,21 @@ REFLECT(visual_tree)
         });
 }
 
-SAVE(visual_tree)
+SAVE(ui_tree)
 {
     try_save(ar, ser20::make_nvp("content", obj.content));
 }
-SAVE_INSTANTIATE(visual_tree, ser20::oarchive_associative_t);
-SAVE_INSTANTIATE(visual_tree, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(ui_tree, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(ui_tree, ser20::oarchive_binary_t);
 
-LOAD(visual_tree)
+LOAD(ui_tree)
 {
     try_load(ar, ser20::make_nvp("content", obj.content));
 }
-LOAD_INSTANTIATE(visual_tree, ser20::iarchive_associative_t);
-LOAD_INSTANTIATE(visual_tree, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(ui_tree, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(ui_tree, ser20::iarchive_binary_t);
 
-void save_to_file(const std::string& absolute_path, const visual_tree::sptr& obj)
+void save_to_file(const std::string& absolute_path, const ui_tree::sptr& obj)
 {
     std::ofstream stream(absolute_path);
     if(stream.good())
@@ -49,17 +49,17 @@ void save_to_file(const std::string& absolute_path, const visual_tree::sptr& obj
     }
 }
 
-void save_to_file_bin(const std::string& absolute_path, const visual_tree::sptr& obj)
+void save_to_file_bin(const std::string& absolute_path, const ui_tree::sptr& obj)
 {
     std::ofstream stream(absolute_path, std::ios::binary);
     if(stream.good())
     {
         ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("visual_tree", *obj));
+        try_save(ar, ser20::make_nvp("ui_tree", *obj));
     }
 }
 
-void load_from_file(const std::string& absolute_path, visual_tree::sptr& obj)
+void load_from_file(const std::string& absolute_path, ui_tree::sptr& obj)
 {
     std::ifstream stream(absolute_path);
     if(stream.good())
@@ -68,13 +68,13 @@ void load_from_file(const std::string& absolute_path, visual_tree::sptr& obj)
     }
 }
 
-void load_from_file_bin(const std::string& absolute_path, visual_tree::sptr& obj)
+void load_from_file_bin(const std::string& absolute_path, ui_tree::sptr& obj)
 {
     std::ifstream stream(absolute_path, std::ios::binary);
     if(stream.good())
     {
         ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("visual_tree", *obj));
+        try_load(ar, ser20::make_nvp("ui_tree", *obj));
     }
 }
 

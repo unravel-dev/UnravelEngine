@@ -93,7 +93,6 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
     }
 
     data->initialized = true;
-    APPLOG_INFO("RmlUi backend initialized successfully");
     return true;
 }
 
@@ -120,7 +119,6 @@ void shutdown()
     }
 
     data.reset();
-    APPLOG_INFO("RmlUi backend shutdown complete");
 }
 
 auto get_system_interface() -> Rml::SystemInterface*

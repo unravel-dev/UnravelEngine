@@ -111,13 +111,13 @@ auto thumbnail_manager::get_thumbnail<material>(const asset_handle<material>& as
 
 
 template<>
-auto thumbnail_manager::get_thumbnail<visual_tree>(const asset_handle<visual_tree>& asset) -> gfx::texture::ptr
+auto thumbnail_manager::get_thumbnail<ui_tree>(const asset_handle<ui_tree>& asset) -> gfx::texture::ptr
 {
     if(!asset.is_valid())
     {
         return thumbnails_.transparent.get();
     }
-    return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.visual_tree.get();
+    return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.ui_tree.get();
 }
 
 template<>
@@ -325,7 +325,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     thumbnails_.scene_prefab = am.get_asset<gfx::texture>("editor:/data/icons/scene.png");
     thumbnails_.audio_clip = am.get_asset<gfx::texture>("editor:/data/icons/sound.png");
     thumbnails_.script = am.get_asset<gfx::texture>("editor:/data/icons/script.png");
-    thumbnails_.visual_tree = am.get_asset<gfx::texture>("editor:/data/icons/rhtml.png");
+    thumbnails_.ui_tree = am.get_asset<gfx::texture>("editor:/data/icons/rhtml.png");
     thumbnails_.style_sheet = am.get_asset<gfx::texture>("editor:/data/icons/rcss.png");
 
     gimzmo_icons_.camera = am.get_asset<gfx::texture>("editor:/data/icons/camera.png");

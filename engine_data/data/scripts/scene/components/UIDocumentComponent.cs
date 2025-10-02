@@ -100,7 +100,7 @@ namespace Ace.Core
         /// The wrapper will be automatically invalidated when the document is destroyed.
         /// </summary>
         /// <returns>A UIDocument if the document is loaded; otherwise, null.</returns>
-        public UIDocument GetDocumentWrapper()
+        public UIDocument GetDocument()
         {
             if (!isLoaded)
             {
@@ -114,49 +114,6 @@ namespace Ace.Core
             }
             
             return new UIDocument(documentPtr, owner);
-        }
-
-        /// <summary>
-        /// Gets a wrapper object for an element within this UI document by its ID.
-        /// The wrapper can be cached and used for direct access without repeated searches.
-        /// </summary>
-        /// <param name="elementId">The ID of the element to find.</param>
-        /// <returns>A UIElement if found; otherwise, null.</returns>
-        public UIElement GetElementById(string elementId)
-        {
-            if (!isLoaded)
-            {
-                return null;
-            }
-            
-            var elementPtr = internal_m2n_ui_document_get_element_wrapper_by_id(owner, elementId);
-            if (elementPtr == IntPtr.Zero)
-            {
-                return null;
-            }
-            
-            return new UIElement(elementPtr, owner);
-        }
-
-        /// <summary>
-        /// Gets a wrapper object for the first element that matches the specified CSS selector.
-        /// </summary>
-        /// <param name="selector">The CSS selector to match against.</param>
-        /// <returns>A UIElement if found; otherwise, null.</returns>
-        public UIElement QuerySelector(string selector)
-        {
-            if (!isLoaded)
-            {
-                return null;
-            }
-            
-            var elementPtr = internal_m2n_ui_document_query_selector_wrapper(owner, selector);
-            if (elementPtr == IntPtr.Zero)
-            {
-                return null;
-            }
-            
-            return new UIElement(elementPtr, owner);
         }
 
         // ==== Internal Calls ====
@@ -190,11 +147,5 @@ namespace Ace.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern IntPtr internal_m2n_ui_document_get_wrapper(Entity eid);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_get_element_wrapper_by_id(Entity eid, string elementId);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_query_selector_wrapper(Entity eid, string selector);
     }
 }
