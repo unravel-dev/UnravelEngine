@@ -2544,38 +2544,23 @@ auto internal_m2n_ui_document_is_loaded(entt::entity id) -> bool
     return false;
 }
 
-auto internal_m2n_ui_document_is_visible(entt::entity id) -> bool
+auto internal_m2n_ui_document_is_enabled(entt::entity id) -> bool
 {
     if(auto comp = safe_get_component<ui_document_component>(id))
     {
-        return comp->is_visible();
+        return comp->is_enabled();
     }
 
     return false;
 }
 
-void internal_m2n_ui_document_show(entt::entity id)
+void internal_m2n_ui_document_set_enabled(entt::entity id, bool enabled)
 {
     if(auto comp = safe_get_component<ui_document_component>(id))
     {
-        if(comp->document)
-        {
-            comp->document->Show();
-        }
+        comp->set_enabled(enabled);
     }
 }
-
-void internal_m2n_ui_document_hide(entt::entity id)
-{
-    if(auto comp = safe_get_component<ui_document_component>(id))
-    {
-        if(comp->document)
-        {
-            comp->document->Hide();
-        }
-    }
-}
-
 void internal_m2n_ui_document_close(entt::entity id)
 {
     if(auto comp = safe_get_component<ui_document_component>(id))
@@ -3588,9 +3573,8 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_ui_document_get_asset", internal_call(internal_m2n_ui_document_get_asset));
         reg.add_internal_call("internal_m2n_ui_document_set_asset", internal_call(internal_m2n_ui_document_set_asset));
         reg.add_internal_call("internal_m2n_ui_document_is_loaded", internal_call(internal_m2n_ui_document_is_loaded));
-        reg.add_internal_call("internal_m2n_ui_document_is_visible", internal_call(internal_m2n_ui_document_is_visible));
-        reg.add_internal_call("internal_m2n_ui_document_show", internal_call(internal_m2n_ui_document_show));
-        reg.add_internal_call("internal_m2n_ui_document_hide", internal_call(internal_m2n_ui_document_hide));
+        reg.add_internal_call("internal_m2n_ui_document_is_enabled", internal_call(internal_m2n_ui_document_is_enabled));
+        reg.add_internal_call("internal_m2n_ui_document_set_enabled", internal_call(internal_m2n_ui_document_set_enabled));
         reg.add_internal_call("internal_m2n_ui_document_close", internal_call(internal_m2n_ui_document_close));
         reg.add_internal_call("internal_m2n_ui_document_get_title", internal_call(internal_m2n_ui_document_get_title));
         reg.add_internal_call("internal_m2n_ui_document_set_title", internal_call(internal_m2n_ui_document_set_title));

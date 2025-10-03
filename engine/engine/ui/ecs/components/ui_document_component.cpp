@@ -13,9 +13,25 @@ auto ui_document_component::is_loaded() const -> bool
     return document != nullptr;
 }
 
-auto ui_document_component::is_visible() const -> bool
+auto ui_document_component::is_enabled() const -> bool
 {
-    return document && document->IsVisible();
+    return enabled_;
+}
+
+void ui_document_component::set_enabled(bool enabled)
+{
+    enabled_ = enabled;
+    if(document)
+    {
+        if(enabled)
+        {
+            document->Show();
+        }
+        else
+        {
+            document->Hide();
+        }
+    }
 }
 
 } // namespace unravel

@@ -41,10 +41,22 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
     [[nodiscard]] auto is_loaded() const -> bool;
     
     /**
-     * @brief Check if document is currently visible
-     * @return True if document is visible
+     * @brief Check if document is currently enabled
+     * @return True if document is enabled
      */
-    [[nodiscard]] auto is_visible() const -> bool;
+    [[nodiscard]] auto is_enabled() const -> bool;
+
+
+    /**
+     * @brief Set the enabled state of the document
+     * @param enabled True if document should be enabled
+     */
+    void set_enabled(bool enabled);
+
+private:
+    
+    bool enabled_ = true;
+
 };
 
 } // namespace unravel

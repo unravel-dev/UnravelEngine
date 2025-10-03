@@ -230,6 +230,16 @@ auto ui_system::is_root_element(rtti::context& ctx, Rml::Element* element) -> bo
         return false;
     }
 
+    if(!element)
+    {
+        return false;
+    }
+
+    if(element->GetTagName() == "#root")
+    {
+        return true;
+    }
+
     auto& ecs_system = ctx.get_cached<ecs>();
     auto& scene = ecs_system.get_scene();
     auto& registry = *scene.registry;
@@ -333,17 +343,6 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
     }
 
 
-
-
-
-
-
-
-
-
-
-
-
     auto& ecs_system = ctx.get_cached<ecs>();
     auto& scene = ecs_system.get_scene();
     auto& registry = *scene.registry;
@@ -366,15 +365,17 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
         auto& ui_comp = view.get<ui_document_component>(entity);
 
         
-        if(ui_comp.version != ui_comp.asset.version())
+        if(!ev.is_playing)
         {
-            if(ui_comp.document)
+            if(ui_comp.version != ui_comp.asset.version())
             {
-                ui_comp.document->Close();
-                ui_comp.document = nullptr;
+                if(ui_comp.document)
+                {
+                    ui_comp.document->Close();
+                    ui_comp.document = nullptr;
+                }
             }
         }
-
 
         // Skip if no document path is specified
         if(!ui_comp.asset)
@@ -386,13 +387,6 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
         if(!ui_comp.is_loaded())
         {
             load_ui_document(ui_comp);
-        }
-
-        // Handle visibility based on auto_show flag
-        if(ui_comp.is_loaded() && !ui_comp.is_visible())
-        {
-            ui_comp.document->Show();
-            
         }
 
     }
@@ -437,8 +431,8 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
-
-    APPLOG_INFO("Successfully loaded UI document: {}", component.asset.id());
+    component.set_enabled(component.is_enabled());
+    
     return true;
 }
 

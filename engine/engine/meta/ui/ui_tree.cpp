@@ -22,6 +22,7 @@ REFLECT(ui_tree)
             entt::attribute{"pretty_name", "Content"},
             entt::attribute{"tooltip", "The HTML/RML content of the visual tree"},
             entt::attribute{"multiline", true},
+            entt::attribute{"type", "code"},
             entt::attribute{"wrap", true},
         });
 }

@@ -22,6 +22,7 @@ REFLECT(style_sheet)
             entt::attribute{"pretty_name", "Content"},
             entt::attribute{"tooltip", "The CSS/RCSS content of the style sheet"},
             entt::attribute{"multiline", true},
+            entt::attribute{"type", "code"},
             entt::attribute{"wrap", true},
         });
 }

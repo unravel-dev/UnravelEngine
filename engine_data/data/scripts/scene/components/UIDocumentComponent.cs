@@ -43,18 +43,19 @@ namespace Ace.Core
         /// Gets a value indicating whether the UI document is currently loaded and ready for use.
         /// </summary>
         /// <value>True if the document is loaded; otherwise, false.</value>
-        public bool isLoaded
+        public bool loaded
         {
             get => internal_m2n_ui_document_is_loaded(owner);
         }
 
         /// <summary>
-        /// Gets a value indicating whether the UI document is currently visible on screen.
+        /// Gets a value indicating whether the UI document is currently enabled.
         /// </summary>
-        /// <value>True if the document is visible; otherwise, false.</value>
-        public bool isVisible
+        /// <value>True if the document is enabled; otherwise, false.</value>
+        public bool enabled
         {
-            get => internal_m2n_ui_document_is_visible(owner);
+            get => internal_m2n_ui_document_is_enabled(owner);
+            set => internal_m2n_ui_document_set_enabled(owner, value);
         }
 
         /// <summary>
@@ -65,23 +66,6 @@ namespace Ace.Core
         {
             get => internal_m2n_ui_document_get_title(owner);
             set => internal_m2n_ui_document_set_title(owner, value);
-        }
-
-        /// <summary>
-        /// Shows the UI document, making it visible on screen.
-        /// The document must be loaded before it can be shown.
-        /// </summary>
-        public void Show()
-        {
-            internal_m2n_ui_document_show(owner);
-        }
-
-        /// <summary>
-        /// Hides the UI document, making it invisible but keeping it loaded in memory.
-        /// </summary>
-        public void Hide()
-        {
-            internal_m2n_ui_document_hide(owner);
         }
 
         /// <summary>
@@ -102,7 +86,7 @@ namespace Ace.Core
         /// <returns>A UIDocument if the document is loaded; otherwise, null.</returns>
         public UIDocument GetDocument()
         {
-            if (!isLoaded)
+            if (!loaded)
             {
                 return null;
             }
@@ -128,13 +112,10 @@ namespace Ace.Core
         private static extern bool internal_m2n_ui_document_is_loaded(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_document_is_visible(Entity eid);
+        private static extern bool internal_m2n_ui_document_is_enabled(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_show(Entity eid);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_hide(Entity eid);
+        private static extern void internal_m2n_ui_document_set_enabled(Entity eid, bool enabled);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_document_close(Entity eid);

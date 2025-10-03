@@ -22,6 +22,11 @@ REFLECT(ui_document_component)
         .func<&component_meta<ui_document_component>::remove>("component_remove"_hs)
         .func<&component_meta<ui_document_component>::save>("component_save"_hs)
         .func<&component_meta<ui_document_component>::load>("component_load"_hs)
+        .data<&ui_document_component::set_enabled, &ui_document_component::is_enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Enabled"},
+        })
         .data<&ui_document_component::asset>("asset"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "asset"},
@@ -32,6 +37,8 @@ REFLECT(ui_document_component)
 
 SAVE(ui_document_component)
 {
+    bool enabled = obj.is_enabled();
+    try_save(ar, ser20::make_nvp("enabled", enabled));
     try_save(ar, ser20::make_nvp("asset", obj.asset));
 
 }
@@ -40,6 +47,9 @@ SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_binary_t);
 
 LOAD(ui_document_component)
 {
+    bool enabled = true;
+    try_load(ar, ser20::make_nvp("enabled", enabled));
+    obj.set_enabled(enabled);
     try_load(ar, ser20::make_nvp("asset", obj.asset));
 }
 LOAD_INSTANTIATE(ui_document_component, ser20::iarchive_associative_t);
