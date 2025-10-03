@@ -21,17 +21,6 @@ auto ui_document_component::is_enabled() const -> bool
 void ui_document_component::set_enabled(bool enabled)
 {
     enabled_ = enabled;
-    if(document)
-    {
-        if(enabled)
-        {
-            document->Show();
-        }
-        else
-        {
-            document->Hide();
-        }
-    }
 }
 
 } // namespace unravel

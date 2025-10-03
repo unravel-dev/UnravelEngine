@@ -13,6 +13,8 @@
 #include <engine/input/input.h>
 #include <engine/rendering/renderer.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/ecs/components/transform_component.h>
+
 #include <logging/logging.h>
 
 
@@ -35,6 +37,7 @@
 
 namespace unravel
 {
+
 
 auto ui_system::init(rtti::context& ctx) -> bool
 {
@@ -364,6 +367,7 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
     {
         auto& ui_comp = view.get<ui_document_component>(entity);
 
+        bool active = registry.all_of<active_component>(entity);
         
         if(!ev.is_playing)
         {
@@ -387,6 +391,27 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
         if(!ui_comp.is_loaded())
         {
             load_ui_document(ui_comp);
+        }
+
+        if(!ui_comp.document)
+        {
+            continue;
+        }
+
+        bool active_and_enabled = active && ui_comp.is_enabled();
+        if(active_and_enabled)
+        {
+            if(!ui_comp.document->IsVisible())
+            {
+                ui_comp.document->Show();
+            }
+        }
+        else
+        {
+            if( ui_comp.document->IsVisible())
+            {
+                ui_comp.document->Hide();
+            }
         }
 
     }
@@ -431,7 +456,6 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
-    component.set_enabled(component.is_enabled());
     
     return true;
 }

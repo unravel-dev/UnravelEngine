@@ -30,32 +30,32 @@ namespace unravel
 namespace
 {
 
-auto clone_entity_impl(entt::registry& r, entt::handle entity) -> entt::handle
-{
-    entt::handle object(r, r.create());
+// auto clone_entity_impl(entt::registry& r, entt::handle entity) -> entt::handle
+// {
+//     entt::handle object(r, r.create());
 
-    for(auto [id, storage] : r.storage())
-    {
-        auto name = storage.type().name();
+//     for(auto [id, storage] : r.storage())
+//     {
+//         auto name = storage.type().name();
 
-        if(name.find("edyn::") != std::string_view::npos)
-        {
-            continue;
-        }
+//         if(name.find("edyn::") != std::string_view::npos)
+//         {
+//             continue;
+//         }
 
-        if(name.find("bullet::") != std::string_view::npos)
-        {
-            continue;
-        }
+//         if(name.find("bullet::") != std::string_view::npos)
+//         {
+//             continue;
+//         }
 
-        if(storage.contains(entity) && !storage.contains(object))
-        {
-            storage.push(object, storage.value(entity));
-        }
-    }
+//         if(storage.contains(entity) && !storage.contains(object))
+//         {
+//             storage.push(object, storage.value(entity));
+//         }
+//     }
 
-    return object;
-}
+//     return object;
+// }
 
 template<typename Registry>
 void remove_all_components(entt::basic_handle<Registry> handle)
@@ -157,6 +157,7 @@ scene::scene(const std::string& tag_name)
 
     registry->on_construct<ui_document_component>().connect<&ui_system::on_create_component>();
     registry->on_destroy<ui_document_component>().connect<&ui_system::on_destroy_component>();
+    
 }
 
 scene::~scene()
