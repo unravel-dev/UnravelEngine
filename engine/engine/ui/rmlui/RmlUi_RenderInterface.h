@@ -28,14 +28,147 @@
 namespace unravel
 {
 
-// Maximum number of geometry handles to support
-#define MAX_COMPILED_GEOMETRIES 4096*8
+// Maximum number of handles to support for each resource type
+#define MAX_COMPILED_GEOMETRIES size_t(4096*8)
+#define MAX_COMPILED_TEXTURES size_t(4096*8)
+#define MAX_COMPILED_FILTERS size_t(4096)
+#define MAX_COMPILED_SHADERS size_t(4096)
 
 // Buffer allocation thresholds (three-tier system)
 #define TRANSIENT_GEOMETRY_VERTEX_THRESHOLD 99999     // Geometries with <= 8 vertices use transient buffers
 
-// Define a bgfx-style handle for compiled geometry
+// Define bgfx-style handles for compiled resources
 BGFX_HANDLE(compiled_geometry_handle)
+BGFX_HANDLE(compiled_texture_handle)
+BGFX_HANDLE(compiled_filter_handle)
+BGFX_HANDLE(compiled_shader_handle)
+
+/**
+ * @brief Template struct for managing compiled resources with handle allocators
+ * @tparam CompiledType The type of compiled resource (e.g., CompiledTexture, CompiledFilter)
+ * @tparam InternalHandle The internal handle type (e.g., compiled_texture_handle)
+ * @tparam RmlHandle The RmlUi handle type (e.g., Rml::TextureHandle)
+ * @tparam MaxHandles Maximum number of handles to support
+ */
+template<typename CompiledType, typename InternalHandle, typename RmlHandle, size_t MaxHandles>
+class compiled_resource_manager
+{
+public:
+    compiled_resource_manager() = default;
+    ~compiled_resource_manager() = default;
+
+    // Non-copyable, non-movable for safety
+    compiled_resource_manager(const compiled_resource_manager&) = delete;
+    compiled_resource_manager& operator=(const compiled_resource_manager&) = delete;
+    compiled_resource_manager(compiled_resource_manager&&) = delete;
+    compiled_resource_manager& operator=(compiled_resource_manager&&) = delete;
+
+    /**
+     * @brief Allocate a new resource handle
+     * @return Internal handle index, or bx::kInvalidHandle if allocation failed
+     */
+    auto alloc() -> uint16_t
+    {
+        return handle_allocator_.alloc();
+    }
+
+    /**
+     * @brief Free a resource handle
+     * @param handle_idx Internal handle index to free
+     */
+    void free(uint16_t handle_idx)
+    {
+        if(handle_allocator_.isValid(handle_idx))
+        {
+            // Clear the resource entry
+            compiled_resources_[handle_idx] = CompiledType{};
+            handle_allocator_.free(handle_idx);
+        }
+    }
+
+    /**
+     * @brief Check if a handle is valid
+     * @param handle_idx Internal handle index to check
+     * @return True if handle is valid
+     */
+    auto is_valid(uint16_t handle_idx) const -> bool
+    {
+        return handle_allocator_.isValid(handle_idx);
+    }
+
+    /**
+     * @brief Get resource by internal handle index
+     * @param handle_idx Internal handle index
+     * @return Reference to the compiled resource
+     */
+    auto get(uint16_t handle_idx) -> CompiledType&
+    {
+        return compiled_resources_[handle_idx];
+    }
+
+    /**
+     * @brief Get resource by internal handle index (const version)
+     * @param handle_idx Internal handle index
+     * @return Const reference to the compiled resource
+     */
+    auto get(uint16_t handle_idx) const -> const CompiledType&
+    {
+        return compiled_resources_[handle_idx];
+    }
+
+    /**
+     * @brief Convert internal handle to RmlUi handle
+     * @param handle Internal handle
+     * @return RmlUi handle (index + 1, since RmlUi uses 0 as invalid)
+     */
+    static auto to_rml_handle(InternalHandle handle) -> RmlHandle
+    {
+        return static_cast<RmlHandle>(handle.idx + 1);
+    }
+
+    /**
+     * @brief Convert RmlUi handle to internal handle
+     * @param handle RmlUi handle
+     * @return Internal handle
+     */
+    static auto from_rml_handle(RmlHandle handle) -> InternalHandle
+    {
+        InternalHandle result;
+        result.idx = (handle > 0) ? static_cast<uint16_t>(handle - 1) : bx::kInvalidHandle;
+        return result;
+    }
+
+    /**
+     * @brief Get the number of allocated handles
+     * @return Number of allocated handles
+     */
+    auto get_num_handles() const -> uint16_t
+    {
+        return handle_allocator_.getNumHandles();
+    }
+
+    /**
+     * @brief Cleanup all resources
+     * @param cleanup_func Function to call for each valid resource before freeing
+     */
+    template<typename CleanupFunc>
+    void cleanup_all(CleanupFunc cleanup_func)
+    {
+        auto handles_copy = handle_allocator_;
+        for(uint16_t i = 0; i < handles_copy.getNumHandles(); ++i)
+        {
+            if(handles_copy.isValid(i))
+            {
+                cleanup_func(compiled_resources_[i]);
+                free(i);
+            }
+        }
+    }
+
+private:
+    bx::HandleAllocT<MaxHandles> handle_allocator_;
+    std::array<CompiledType, MaxHandles> compiled_resources_;
+};
 
 enum class RmlUi_ProgramId : uint8_t
 {
@@ -175,9 +308,6 @@ public:
     auto get_transform() const -> const Rml::Matrix4f& { return transform_; }
     void reset_program();
     
-    // Handle conversion utilities
-    static auto to_rml_handle(compiled_geometry_handle handle) -> Rml::CompiledGeometryHandle;
-    static auto from_rml_handle(Rml::CompiledGeometryHandle handle) -> compiled_geometry_handle;
 
 private:
     enum class GeometryBufferType : uint8_t
@@ -403,26 +533,12 @@ private:
     bool clip_mask_enabled_ = false;
     uint32_t stencil_test_ref_ = 1;
 
-    // Geometry storage with handle allocator
-    bx::HandleAllocT<MAX_COMPILED_GEOMETRIES> geometry_handles_;
-    std::array<CompiledGeometry, MAX_COMPILED_GEOMETRIES> compiled_geometries_;
+    // Resource storage with handle allocators
+    compiled_resource_manager<CompiledGeometry, compiled_geometry_handle, Rml::CompiledGeometryHandle, MAX_COMPILED_GEOMETRIES> geometry_manager_;
+    compiled_resource_manager<CompiledTexture, compiled_texture_handle, Rml::TextureHandle, MAX_COMPILED_TEXTURES> texture_manager_;
+    compiled_resource_manager<CompiledFilter, compiled_filter_handle, Rml::CompiledFilterHandle, MAX_COMPILED_FILTERS> filter_manager_;
+    compiled_resource_manager<CompiledShader, compiled_shader_handle, Rml::CompiledShaderHandle, MAX_COMPILED_SHADERS> shader_manager_;
     
-    uint64_t current_frame_ = 0;
-    
-    // Texture storage (keeping vector for now)
-    std::vector<CompiledTexture> compiled_textures_;
-
-    // Filter and shader storage
-    std::vector<CompiledFilter> compiled_filters_;
-    size_t compiled_filter_free_index_ = 0;
-    std::vector<CompiledShader> compiled_shaders_;
-    size_t compiled_shader_free_index_ = 0;
-
-    // Layer management is now handled by render_layers_ member
-
-    // Fullscreen quad for postprocessing
-    Rml::Mesh mesh_fullscreen_quad_;
-    Rml::CompiledGeometryHandle fullscreen_quad_geometry_ = {};
 };
 
 } // namespace unravel

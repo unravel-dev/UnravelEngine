@@ -1,4 +1,5 @@
 #include "imgui_impl_ospp.h"
+#include "imgui/imgui_internal.h"
 #include <filesystem/filesystem.h>
 #include <imgui_widgets/utils.h>
 #include <ospp/clipboard.h>
@@ -494,6 +495,27 @@ static void ImGui_ImplOSPP_UpdateKeyModifiers(os::key_event e)
     io.AddKeyEvent(ImGuiMod_Super, e.system);
 }
 
+auto ImGui_IsAnyRealItemActive() -> bool
+{
+    if(ImGui::IsAnyItemActive())
+    {
+        bool is_window_move = false;
+        for(auto window : ImGui::GetCurrentContext()->Windows)
+        {
+            if(window->MoveId == ImGui::GetActiveID())
+            {
+                is_window_move = true;
+            }
+        }
+
+        if(!is_window_move)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your
 // inputs.
 // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or
@@ -557,9 +579,9 @@ auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool
         case os::events::text_input:
         {
             io.AddInputCharactersUTF8(event.text.text.c_str());
-            if(ImGui::IsAnyItemActive())
+            if(ImGui_IsAnyRealItemActive())
             {
-                event = {};
+                 event = {};
             }
             return true;
         }
@@ -569,12 +591,11 @@ auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool
             ImGui_ImplOSPP_UpdateKeyModifiers(event.key);
             ImGuiKey key = ImGui_ImplOSPP_KeycodeToImGuiKey(event.key.code);
             io.AddKeyEvent(key, (event.type == os::events::key_down));
-
             io.SetKeyEventNativeData(key, event.key.code, event.key.code, event.key.code);
 
-            if(ImGui::IsAnyItemActive())
+            if(ImGui_IsAnyRealItemActive())
             {
-                event = {};
+                 event = {};
             }
             return true;
         }

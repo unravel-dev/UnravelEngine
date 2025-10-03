@@ -35,7 +35,7 @@
 namespace unravel
 {
 
-RmlUi_RenderInterface::RmlUi_RenderInterface() : compiled_geometries_()
+RmlUi_RenderInterface::RmlUi_RenderInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 }
@@ -46,17 +46,6 @@ RmlUi_RenderInterface::~RmlUi_RenderInterface()
     cleanup_resources();
 }
 
-auto RmlUi_RenderInterface::to_rml_handle(compiled_geometry_handle handle) -> Rml::CompiledGeometryHandle
-{
-    return static_cast<Rml::CompiledGeometryHandle>(handle.idx + 1); // +1 because RmlUi uses 0 as invalid
-}
-
-auto RmlUi_RenderInterface::from_rml_handle(Rml::CompiledGeometryHandle handle) -> compiled_geometry_handle
-{
-    compiled_geometry_handle result;
-    result.idx = (handle > 0) ? static_cast<uint16_t>(handle - 1) : bx::kInvalidHandle;
-    return result;
-}
 
 auto RmlUi_RenderInterface::init(rtti::context& ctx) -> bool
 {
@@ -88,13 +77,6 @@ auto RmlUi_RenderInterface::init(rtti::context& ctx) -> bool
     // Set up projection matrix (will be updated in set_viewport)
     projection_ = Rml::Matrix4f::Identity();
     transform_ = Rml::Matrix4f::Identity();
-
-    // Initialize texture storage
-    compiled_textures_.reserve(128);
-
-    // Create fullscreen quad geometry
-    Rml::MeshUtilities::GenerateQuad(mesh_fullscreen_quad_, Rml::Vector2f(-1), Rml::Vector2f(2), {});
-    fullscreen_quad_geometry_ = CompileGeometry(mesh_fullscreen_quad_.vertices, mesh_fullscreen_quad_.indices);
 
     is_initialized_ = true;
     return true;
@@ -151,9 +133,6 @@ void RmlUi_RenderInterface::begin_frame()
     {
         return;
     }
-
-    // Increment frame counter for LRU tracking
-    current_frame_++;
 
     // Initialize transform to projection matrix (matching GL3 implementation)
     SetTransform(nullptr);
@@ -272,8 +251,8 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
         return 0; // Invalid handle
     }
 
-    // Allocate a handle from the pool
-    uint16_t geometry_idx = geometry_handles_.alloc();
+    // Allocate a handle from the geometry manager
+    uint16_t geometry_idx = geometry_manager_.alloc();
     if(geometry_idx == bx::kInvalidHandle)
     {
         APPLOG_ERROR("Failed to allocate geometry handle - pool exhausted");
@@ -282,8 +261,7 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
 
     APP_SCOPE_PERF("UI/RmlUi/CompileGeometry");
 
-    CompiledGeometry& geometry = compiled_geometries_[geometry_idx];
-    // geometry = CompiledGeometry{}; // Reset to default state
+    CompiledGeometry& geometry = geometry_manager_.get(geometry_idx);
     geometry.num_vertices = static_cast<uint32_t>(vertices.size());
     geometry.num_indices = static_cast<uint32_t>(indices.size());
 
@@ -300,7 +278,7 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
         // Convert internal handle to RmlUi handle
         compiled_geometry_handle internal_handle;
         internal_handle.idx = geometry_idx;
-        Rml::CompiledGeometryHandle rml_handle = to_rml_handle(internal_handle);
+        Rml::CompiledGeometryHandle rml_handle = geometry_manager_.to_rml_handle(internal_handle);
 
         // APPLOG_TRACE("Compiled geometry handle: {} (internal: {}) using transient buffers", rml_handle,
         // geometry_idx);
@@ -332,14 +310,14 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
 
         // Clean up and free the handle
         geometry.destroy_buffers();
-        geometry_handles_.free(geometry_idx);
+        geometry_manager_.free(geometry_idx);
         return 0;
     }
 
     // Convert internal handle to RmlUi handle
     compiled_geometry_handle internal_handle;
     internal_handle.idx = geometry_idx;
-    Rml::CompiledGeometryHandle rml_handle = to_rml_handle(internal_handle);
+    Rml::CompiledGeometryHandle rml_handle = geometry_manager_.to_rml_handle(internal_handle);
 
     // APPLOG_TRACE("Compiled geometry handle: {} (internal: {}) using static buffers", rml_handle, geometry_idx);
     return rml_handle;
@@ -364,15 +342,15 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
     APP_SCOPE_PERF("UI/RmlUi/RenderGeometry");
 
     // Convert RmlUi handle to internal handle
-    compiled_geometry_handle internal_handle = from_rml_handle(handle);
-    if(!geometry_handles_.isValid(internal_handle.idx))
+    compiled_geometry_handle internal_handle = geometry_manager_.from_rml_handle(handle);
+    if(!geometry_manager_.is_valid(internal_handle.idx))
     {
         APPLOG_ERROR("Invalid or released geometry handle: {}", handle);
         return;
     }
 
     // Get geometry using internal handle
-    const auto& geometry = compiled_geometries_[internal_handle.idx];
+    const auto& geometry = geometry_manager_.get(internal_handle.idx);
 
     RmlUi_ProgramId program_id = RmlUi_ProgramId::Count;
     if(texture == TexturePostprocess)
@@ -416,24 +394,33 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
         set_scissor();
 
         // Set texture if provided
-        if(texture != 0 && texture <= compiled_textures_.size())
+        if(texture != 0)
         {
-            const auto& tex = compiled_textures_[texture - 1];
-            auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
+            // Convert RmlUi handle to internal handle
+            compiled_texture_handle internal_handle = texture_manager_.from_rml_handle(texture);
+            if(texture_manager_.is_valid(internal_handle.idx))
+            {
+                const auto& tex = texture_manager_.get(internal_handle.idx);
+                auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
 
-            if(tex.asset_handle.is_valid())
-            {
-                gfx::set_texture(0, texture_uniform, tex.asset_handle.get()->native_handle());
-            }
-            else if(bgfx::isValid(tex.generated_texture_handle))
-            {
-                gfx::set_texture(0, texture_uniform, tex.generated_texture_handle);
+                if(tex.asset_handle.is_valid())
+                {
+                    gfx::set_texture(0, texture_uniform, tex.asset_handle.get()->native_handle());
+                }
+                else if(bgfx::isValid(tex.generated_texture_handle))
+                {
+                    gfx::set_texture(0, texture_uniform, tex.generated_texture_handle);
+                }
+                else
+                {
+                    APPLOG_ERROR("Invalid texture uniform or handle: uniform={}, texture={}",
+                                 bgfx::isValid(texture_uniform),
+                                 bgfx::isValid(tex.generated_texture_handle));
+                }
             }
             else
             {
-                APPLOG_ERROR("Invalid texture uniform or handle: uniform={}, texture={}",
-                             bgfx::isValid(texture_uniform),
-                             bgfx::isValid(tex.generated_texture_handle));
+                APPLOG_ERROR("Invalid texture handle: {}", texture);
             }
         }
 
@@ -470,22 +457,19 @@ void RmlUi_RenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
     }
 
     // Convert RmlUi handle to internal handle
-    compiled_geometry_handle internal_handle = from_rml_handle(handle);
-    if(!geometry_handles_.isValid(internal_handle.idx))
+    compiled_geometry_handle internal_handle = geometry_manager_.from_rml_handle(handle);
+    if(!geometry_manager_.is_valid(internal_handle.idx))
     {
         APPLOG_ERROR("Invalid or already released geometry handle: {}", handle);
         return;
     }
 
-    // Get geometry using internal handle
-    auto& geometry = compiled_geometries_[internal_handle.idx];
-
-    // Destroy/clear buffers
+    // Get geometry and destroy buffers before freeing
+    auto& geometry = geometry_manager_.get(internal_handle.idx);
     geometry.destroy_buffers();
 
-    // Clear the geometry entry and free the handle for reuse
-    // geometry = CompiledGeometry{};
-    geometry_handles_.free(internal_handle.idx);
+    // Free the handle (this also clears the geometry entry)
+    geometry_manager_.free(internal_handle.idx);
 }
 
 auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
@@ -511,11 +495,22 @@ auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
 
     texture_dimensions = {tex->info.width, tex->info.height};
 
-    CompiledTexture compiled_texture{};
-    compiled_texture.asset_handle = texture;
-    compiled_textures_.push_back(compiled_texture);
+    // Allocate handle from texture manager
+    uint16_t texture_idx = texture_manager_.alloc();
+    if(texture_idx == bx::kInvalidHandle)
+    {
+        APPLOG_ERROR("Failed to allocate texture handle - pool exhausted");
+        return 0;
+    }
 
-    return compiled_textures_.size();
+    // Set up compiled texture
+    CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
+    compiled_texture.asset_handle = texture;
+
+    // Convert internal handle to RmlUi handle
+    compiled_texture_handle internal_handle;
+    internal_handle.idx = texture_idx;
+    return texture_manager_.to_rml_handle(internal_handle);
 }
 
 auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_data,
@@ -540,7 +535,13 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
         return 0;
     }
 
-    CompiledTexture texture{};
+    // Allocate handle from texture manager
+    uint16_t texture_idx = texture_manager_.alloc();
+    if(texture_idx == bx::kInvalidHandle)
+    {
+        APPLOG_ERROR("Failed to allocate texture handle - pool exhausted");
+        return 0;
+    }
 
     // Use gfx::copy() instead of make_ref() because RmlUi's texture data has limited lifetime
     // bgfx::copy() creates an internal copy that bgfx owns and automatically releases
@@ -549,7 +550,7 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
     // Create bgfx texture from raw RGBA data
     // RmlUi provides RGBA8 data with premultiplied alpha
     // Use linear filtering for smooth text rendering
-    texture.generated_texture_handle =
+    gfx::texture_handle generated_handle =
         gfx::create_texture_2d(static_cast<uint16_t>(source_dimensions.x),
                                static_cast<uint16_t>(source_dimensions.y),
                                false, // no mips
@@ -558,41 +559,53 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
                                BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
                                mem);
 
-    if(!bgfx::isValid(texture.generated_texture_handle))
+    if(!bgfx::isValid(generated_handle))
     {
         APPLOG_ERROR("Failed to create bgfx texture");
+        texture_manager_.free(texture_idx);
         return 0;
     }
 
-    // Store texture and return handle (index + 1, since 0 is invalid)
-    compiled_textures_.push_back(texture);
-    Rml::TextureHandle handle = compiled_textures_.size();
+    // Set up compiled texture
+    CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
+    compiled_texture.generated_texture_handle = generated_handle;
 
-    APPLOG_TRACE("Generated texture handle: {} ({}x{} RGBA8)", handle, source_dimensions.x, source_dimensions.y);
-    return handle;
+    // Convert internal handle to RmlUi handle
+    compiled_texture_handle internal_handle;
+    internal_handle.idx = texture_idx;
+    Rml::TextureHandle rml_handle = texture_manager_.to_rml_handle(internal_handle);
+
+    APPLOG_TRACE("Generated texture handle: {} ({}x{} RGBA8)", rml_handle, source_dimensions.x, source_dimensions.y);
+    return rml_handle;
 }
 
 void RmlUi_RenderInterface::ReleaseTexture(Rml::TextureHandle texture_handle)
 {
     APPLOG_TRACE("ReleaseTexture: handle={}", texture_handle);
 
-    if(texture_handle == 0 || texture_handle > compiled_textures_.size())
+    if(texture_handle == 0)
     {
         APPLOG_ERROR("Invalid texture handle: {}", texture_handle);
         return;
     }
 
-    // Get texture (handle is 1-based)
-    auto& texture = compiled_textures_[texture_handle - 1];
+    // Convert RmlUi handle to internal handle
+    compiled_texture_handle internal_handle = texture_manager_.from_rml_handle(texture_handle);
+    if(!texture_manager_.is_valid(internal_handle.idx))
+    {
+        APPLOG_ERROR("Invalid or already released texture handle: {}", texture_handle);
+        return;
+    }
 
-    // Destroy texture
+    // Get texture and destroy it
+    CompiledTexture& texture = texture_manager_.get(internal_handle.idx);
     if(bgfx::isValid(texture.generated_texture_handle))
     {
         gfx::destroy(texture.generated_texture_handle);
     }
 
-    // Clear the texture entry (but don't remove from vector to keep handles valid)
-    texture = CompiledTexture{};
+    // Free the handle (this also clears the texture entry)
+    texture_manager_.free(internal_handle.idx);
 }
 
 void RmlUi_RenderInterface::EnableScissorRegion(bool enable)
@@ -634,8 +647,8 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
     }
 
     // Convert RmlUi handle to internal handle
-    compiled_geometry_handle internal_handle = from_rml_handle(geometry);
-    if(!geometry_handles_.isValid(internal_handle.idx))
+    compiled_geometry_handle internal_handle = geometry_manager_.from_rml_handle(geometry);
+    if(!geometry_manager_.is_valid(internal_handle.idx))
     {
         APPLOG_ERROR("Invalid or released geometry handle: {}", geometry);
         return;
@@ -694,7 +707,7 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
     }
 
     // Render the geometry to stencil buffer with color writes disabled
-    const auto& geom = compiled_geometries_[internal_handle.idx];
+    const auto& geom = geometry_manager_.get(internal_handle.idx);
 
     use_program(RmlUi_ProgramId::Color);
     auto render_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Color)];
@@ -883,27 +896,21 @@ auto RmlUi_RenderInterface::CompileFilter(const Rml::String& name,
 
     if(filter.type != FilterType::Invalid)
     {
-
-        bool found = false;
-        for(size_t i = compiled_filter_free_index_; i < compiled_filters_.size(); i++)
+        // Allocate handle from filter manager
+        uint16_t filter_idx = filter_manager_.alloc();
+        if(filter_idx == bx::kInvalidHandle)
         {
-            if(compiled_filters_[i].type == FilterType::Invalid)
-            {
-                compiled_filters_[i] = filter;
-                compiled_filter_free_index_ = i + 1;
-                found = true;
-                break;
-            }
+            APPLOG_ERROR("Failed to allocate filter handle - pool exhausted");
+            return 0;
         }
 
-        if(!found)
-        {
-            compiled_filters_.push_back(filter);
-            compiled_filter_free_index_ = compiled_filters_.size();
-        }
+        // Set up compiled filter
+        filter_manager_.get(filter_idx) = filter;
 
-
-        return compiled_filter_free_index_; // 0-based handle
+        // Convert internal handle to RmlUi handle
+        compiled_filter_handle internal_handle;
+        internal_handle.idx = filter_idx;
+        return filter_manager_.to_rml_handle(internal_handle);
     }
 
     return 0;
@@ -911,15 +918,22 @@ auto RmlUi_RenderInterface::CompileFilter(const Rml::String& name,
 
 void RmlUi_RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
 {
-    if(filter == 0 || filter > compiled_filters_.size())
+    if(filter == 0)
     {
         APPLOG_ERROR("Invalid filter handle: {}", filter);
         return;
     }
 
-    // Clear the filter entry (but don't remove from vector to keep handles valid)
-    compiled_filters_[filter - 1] = CompiledFilter{};
-    compiled_filter_free_index_ = filter - 1;
+    // Convert RmlUi handle to internal handle
+    compiled_filter_handle internal_handle = filter_manager_.from_rml_handle(filter);
+    if(!filter_manager_.is_valid(internal_handle.idx))
+    {
+        APPLOG_ERROR("Invalid or already released filter handle: {}", filter);
+        return;
+    }
+
+    // Free the handle (this also clears the filter entry)
+    filter_manager_.free(internal_handle.idx);
 }
 
 auto RmlUi_RenderInterface::CompileShader(const Rml::String& name,
@@ -999,8 +1013,21 @@ auto RmlUi_RenderInterface::CompileShader(const Rml::String& name,
 
     if(shader.type != CompiledShaderType::Invalid)
     {
-        compiled_shaders_.push_back(shader);
-        return compiled_shaders_.size() - 1; // 0-based handle
+        // Allocate handle from shader manager
+        uint16_t shader_idx = shader_manager_.alloc();
+        if(shader_idx == bx::kInvalidHandle)
+        {
+            APPLOG_ERROR("Failed to allocate shader handle - pool exhausted");
+            return 0;
+        }
+
+        // Set up compiled shader
+        shader_manager_.get(shader_idx) = shader;
+
+        // Convert internal handle to RmlUi handle
+        compiled_shader_handle internal_handle;
+        internal_handle.idx = shader_idx;
+        return shader_manager_.to_rml_handle(internal_handle);
     }
 
     return 0;
@@ -1011,22 +1038,30 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
                                          Rml::Vector2f translation,
                                          Rml::TextureHandle texture)
 {
-    if(shader_handle > compiled_shaders_.size() || geometry_handle == 0)
+    if(shader_handle == 0 || geometry_handle == 0)
     {
         APPLOG_ERROR("Invalid shader or geometry handle: shader={}, geometry={}", shader_handle, geometry_handle);
         return;
     }
 
+    // Convert RmlUi shader handle to internal handle
+    compiled_shader_handle internal_shader_handle = shader_manager_.from_rml_handle(shader_handle);
+    if(!shader_manager_.is_valid(internal_shader_handle.idx))
+    {
+        APPLOG_ERROR("Invalid or released shader handle: {}", shader_handle);
+        return;
+    }
+
     // Convert RmlUi geometry handle to internal handle
-    compiled_geometry_handle internal_handle = from_rml_handle(geometry_handle);
-    if(!geometry_handles_.isValid(internal_handle.idx))
+    compiled_geometry_handle internal_geometry_handle = geometry_manager_.from_rml_handle(geometry_handle);
+    if(!geometry_manager_.is_valid(internal_geometry_handle.idx))
     {
         APPLOG_ERROR("Invalid or released geometry handle: {}", geometry_handle);
         return;
     }
 
-    const CompiledShader& shader = compiled_shaders_[shader_handle];
-    const CompiledGeometry& geometry = compiled_geometries_[internal_handle.idx];
+    const CompiledShader& shader = shader_manager_.get(internal_shader_handle.idx);
+    const CompiledGeometry& geometry = geometry_manager_.get(internal_geometry_handle.idx);
 
     switch(shader.type)
     {
@@ -1159,14 +1194,22 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
 
 void RmlUi_RenderInterface::ReleaseShader(Rml::CompiledShaderHandle effect_handle)
 {
-    if(effect_handle > compiled_shaders_.size())
+    if(effect_handle == 0)
     {
         APPLOG_ERROR("Invalid shader handle: {}", effect_handle);
         return;
     }
 
-    // Clear the shader entry (but don't remove from vector to keep handles valid)
-    compiled_shaders_[effect_handle] = CompiledShader{};
+    // Convert RmlUi handle to internal handle
+    compiled_shader_handle internal_handle = shader_manager_.from_rml_handle(effect_handle);
+    if(!shader_manager_.is_valid(internal_handle.idx))
+    {
+        APPLOG_ERROR("Invalid or already released shader handle: {}", effect_handle);
+        return;
+    }
+
+    // Free the handle (this also clears the shader entry)
+    shader_manager_.free(internal_handle.idx);
 }
 
 void RmlUi_RenderInterface::reset_program()
@@ -1313,28 +1356,29 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
 
 void RmlUi_RenderInterface::cleanup_resources()
 {
-    // Cleanup all compiled geometries using handle allocator
-    auto geometry_handles = geometry_handles_;
-    for(uint16_t i = 0; i < geometry_handles.getNumHandles(); ++i)
-    {
-        if(geometry_handles.isValid(i))
-        {
-            CompiledGeometry& geometry = compiled_geometries_[i];
-            geometry.destroy_buffers();
-            geometry_handles_.free(i);
-        }
-    }
+    // Cleanup all compiled geometries using the geometry manager
+    geometry_manager_.cleanup_all([](CompiledGeometry& geometry) {
+        geometry.destroy_buffers();
+    });
 
-    // Cleanup all compiled textures
-    for(auto& texture : compiled_textures_)
-    {
+    // Cleanup all compiled textures using the texture manager
+    texture_manager_.cleanup_all([](CompiledTexture& texture) {
         if(bgfx::isValid(texture.generated_texture_handle))
         {
             gfx::destroy(texture.generated_texture_handle);
         }
-
         texture.asset_handle = {};
-    }
+    });
+
+    // Cleanup all compiled filters using the filter manager
+    filter_manager_.cleanup_all([](CompiledFilter&) {
+        // Filters don't have resources to cleanup
+    });
+
+    // Cleanup all compiled shaders using the shader manager
+    shader_manager_.cleanup_all([](CompiledShader&) {
+        // Shaders don't have resources to cleanup
+    });
 
     // Cleanup uniforms
     for(auto& uniform : uniforms_)
@@ -1345,11 +1389,6 @@ void RmlUi_RenderInterface::cleanup_resources()
             uniform = gfx::uniform_handle{gfx::invalid_handle};
         }
     }
-
-    // Clear all containers
-    compiled_textures_.clear();
-    compiled_filters_.clear();
-    compiled_shaders_.clear();
     // Layer cleanup is handled by the RenderLayerStack destructor
 }
 
@@ -1514,13 +1553,21 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
 {
     for(const Rml::CompiledFilterHandle filter_handle : filter_handles)
     {
-        if(filter_handle == 0 || filter_handle > compiled_filters_.size())
+        if(filter_handle == 0)
         {
             APPLOG_ERROR("Invalid filter handle: {}", filter_handle);
             continue;
         }
 
-        const CompiledFilter& filter = compiled_filters_[filter_handle - 1];
+        // Convert RmlUi handle to internal handle
+        compiled_filter_handle internal_handle = filter_manager_.from_rml_handle(filter_handle);
+        if(!filter_manager_.is_valid(internal_handle.idx))
+        {
+            APPLOG_ERROR("Invalid or released filter handle: {}", filter_handle);
+            continue;
+        }
+
+        const CompiledFilter& filter = filter_manager_.get(internal_handle.idx);
 
         switch(filter.type)
         {
