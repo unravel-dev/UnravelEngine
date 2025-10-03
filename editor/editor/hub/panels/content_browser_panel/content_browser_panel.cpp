@@ -39,6 +39,7 @@
 #include <hpp/utility.hpp>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <imgui_widgets/imcoolbar.h>
 #include <logging/logging.h>
 #include <subprocess/subprocess.hpp>
 
@@ -747,6 +748,7 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
     }
     ImGui::PopStyleVar(2);
 
+
     ImGui::SameLine(0.0f, 0.0f);
     ImGui::AlignedItem(1.0f,
                        ImGui::GetContentRegionAvail().x,
@@ -953,11 +955,14 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
 
                 const auto& name = cache_entry.stem;
                 const auto& filename = cache_entry.filename;
+                const auto& extension = cache_entry.extension;
 
-                if(filter_.PassFilter(name.c_str()))
+                if(filter_.PassFilter(name.c_str()) || 
+                   filter_.PassFilter(ex::get_type(extension, cache_entry.entry.is_directory()).c_str()))
                 {
                     filtered_entries.emplace_back(cache_entry);
                 }
+                
             }
 
             ImGui::ItemBrowser(size,

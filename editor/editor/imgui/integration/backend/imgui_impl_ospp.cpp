@@ -5,6 +5,7 @@
 #include <ospp/clipboard.h>
 #include <ospp/display_mode.h>
 #include <ospp/hints.h>
+#include <string_utils/utils.h>
 #include <utility>
 
 #if defined(_WIN32)
@@ -252,7 +253,8 @@ static auto ImGui_ImplOSPP_GetClipboardText(ImGuiContext* ctx) -> const char*
 
 static void ImGui_ImplOSPP_SetClipboardText(ImGuiContext* ctx, const char* text)
 {
-    os::clipboard::set_text(text);
+    auto unwrapped_text = string_utils::replace(text, "\n\r", "");
+    os::clipboard::set_text(unwrapped_text);
 }
 
 static void ImGui_ImplOSPP_SetPlatformImeData(ImGuiContext* ctx, ImGuiViewport* viewport, ImGuiPlatformImeData* data)

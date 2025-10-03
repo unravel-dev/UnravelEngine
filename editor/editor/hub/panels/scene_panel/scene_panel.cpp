@@ -32,6 +32,7 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <imgui_widgets/gizmo.h>
+#include <imgui_widgets/imcoolbar.h>
 
 
 #include <algorithm>
@@ -1737,6 +1738,44 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     handle_camera_movement(camera_entity, move_dir_, acceleration_, is_dragging_);
     draw_selected_camera(ctx, camera_entity, size);
 
+    // {
+        
+    //     const float& ref_font_scale = ImGui::GetCurrentContext()->FontSizeBase;
+
+    //     ImGui::ImCoolBarConfig config;
+    //     config.normal_size = 35.0f;
+    //     config.hovered_size = 145.0f;
+    //     config.anchor = ImVec2(0.0f, 0.5f);
+    //     config.anchor_area = ImRect(ImGui::GetWindowPos(),  ImGui::GetWindowPos() + ImGui::GetWindowSize());
+        
+    //     if (ImGui::BeginCoolBar("CoolBarMainWin", ImCoolBarFlags_Vertical, config))
+    //     {
+    //         if (ImGui::CoolBarItemGuard item{"imgui_demo"})
+    //         {
+    //             ImVec2 size(item.ctx.width, 0);
+    //             ImGui::Button("Test", size);
+    //         }
+        
+    //         if (ImGui::CoolBarItemGuard item{"imgui_demo1"})
+    //         {
+    //             ImVec2 size(item.ctx.width, 0);
+    //             ImGui::Button("Test", size);
+    //         }
+
+    //         if (ImGui::CoolBarItemGuard item{"imgui_demo2"})
+    //         {
+    //             ImVec2 size(item.ctx.width, 0);
+    //             ImGui::Button("Test", size);
+    //         }
+
+    //         if (ImGui::CoolBarItemGuard item{"imgui_demo3"})
+    //         {
+    //             ImVec2 size(item.ctx.width, 0);
+    //             ImGui::Button("Test", size);
+    //         }
+    //         ImGui::EndCoolBar();
+    //     }
+    // }
     // Draw drag selection rectangle if active
     if(is_drag_selecting_)
     {

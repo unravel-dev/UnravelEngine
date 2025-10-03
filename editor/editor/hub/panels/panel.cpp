@@ -173,6 +173,11 @@ auto imgui_panels::get_style_panel() -> style_panel&
     return *style_panel_;
 }
 
+auto imgui_panels::get_animation_panel() -> animation_panel&
+{
+    return *animation_panel_;
+}
+
 auto imgui_panels::get_undo_redo_panel() -> undo_redo_panel&
 {
     return *undo_redo_panel_;

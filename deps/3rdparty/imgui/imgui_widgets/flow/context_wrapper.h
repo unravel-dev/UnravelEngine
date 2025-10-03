@@ -123,6 +123,8 @@ inline void ContainedContext::begin()
     ImGui::GetIO().DisplaySize = m_size / m_scale;
     ImGui::GetIO().ConfigInputTrickleEventQueue = false;
     ImGui::GetIO().IniFilename = nullptr;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+    ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
 
     ImGui::NewFrame();
     ImGui::PushFont(orig_font, orig_font->LegacySize);

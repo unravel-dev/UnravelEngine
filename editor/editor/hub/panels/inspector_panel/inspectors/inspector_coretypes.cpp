@@ -1,7 +1,8 @@
 #include "inspector_coretypes.h"
-#include <engine/assets/asset_manager.h>
-#include <engine/engine.h>
-#include <engine/rendering/ecs/components/text_component.h>
+#include "imgui/imgui.h"
+// #include <engine/assets/asset_manager.h>
+// #include <engine/engine.h>
+// #include <engine/rendering/ecs/components/text_component.h>
 #include <filedialog/filedialog.h>
 #include <limits>
 #include <string>
@@ -15,101 +16,101 @@ namespace unravel
 namespace
 {
 
-auto get_wrap_marker() -> std::string
-{
-    return "\n\r";
-}
+// auto get_wrap_marker() -> std::string
+// {
+//     return "\n\r";
+// }
 
-auto wrap_text_two_passes(text_component& tc, const std::string& raw, float width_px, float height_px) -> std::string
-{
-    // common setup
-    float w_m = tc.px_to_meters(width_px);
-    float h_m = tc.px_to_meters(height_px);
-    tc.set_area({w_m, h_m});
-    tc.set_is_rich_text(false);
+// auto wrap_text_two_passes(text_component& tc, const std::string& raw, float width_px, float height_px) -> std::string
+// {
+//     // common setup
+//     float w_m = tc.px_to_meters(width_px);
+//     float h_m = tc.px_to_meters(height_px);
+//     tc.set_area({w_m, h_m});
+//     tc.set_is_rich_text(false);
 
-    // 1) First pass: extract “logical” lines by disabling wrapping
-    tc.set_overflow_type(text_component::overflow_type::none);
-    tc.set_text(raw);
-    auto orig = tc.get_lines();
+//     // 1) First pass: extract “logical” lines by disabling wrapping
+//     tc.set_overflow_type(text_component::overflow_type::none);
+//     tc.set_text(raw);
+//     auto orig = tc.get_lines();
 
-    std::string out;
+//     std::string out;
 
-    // 2) Now for each original line, re-wrap under word-wrap
-    tc.set_overflow_type(text_component::overflow_type::word);
+//     // 2) Now for each original line, re-wrap under word-wrap
+//     tc.set_overflow_type(text_component::overflow_type::word);
 
-    for(size_t i = 0; i < orig.size(); ++i)
-    {
-        auto& para = orig[i];
+//     for(size_t i = 0; i < orig.size(); ++i)
+//     {
+//         auto& para = orig[i];
 
-        // wrap *that* paragraph
-        tc.set_text(para.line);
-        auto wrapped = tc.get_lines();
-        for(size_t j = 0; j < wrapped.size(); ++j)
-        {
-            out += wrapped[j].line;
-            // insert your wrap-marker between soft-wrapped lines
-            if(j + 1 < wrapped.size())
-            {
-                out += get_wrap_marker();
-            }
-        }
+//         // wrap *that* paragraph
+//         tc.set_text(para.line);
+//         auto wrapped = tc.get_lines();
+//         for(size_t j = 0; j < wrapped.size(); ++j)
+//         {
+//             out += wrapped[j].line;
+//             // insert your wrap-marker between soft-wrapped lines
+//             if(j + 1 < wrapped.size())
+//             {
+//                 out += get_wrap_marker();
+//             }
+//         }
 
-        // preserve the *one* hard newline that was between paragraphs
-        if(i + 1 < orig.size())
-        {
-            out += '\n';
-        }
-    }
+//         // preserve the *one* hard newline that was between paragraphs
+//         if(i + 1 < orig.size())
+//         {
+//             out += '\n';
+//         }
+//     }
 
-    return out;
-}
+//     return out;
+// }
 
-auto wrap_text(const std::string& input, float width, float height) -> std::string
-{
-    text_component tc;
+// auto wrap_text(const std::string& input, float width, float height) -> std::string
+// {
+//     text_component tc;
 
-    auto& ctx = engine::context();
-    auto& am = ctx.get_cached<asset_manager>();
-    tc.set_font(font::default_regular());
-    tc.set_font_size(ImGui::GetFontSize());
-    tc.set_is_rich_text(false);
+//     auto& ctx = engine::context();
+//     auto& am = ctx.get_cached<asset_manager>();
+//     tc.set_font(font::default_regular());
+//     tc.set_font_size(ImGui::GetFontSize());
+//     tc.set_is_rich_text(false);
 
-    return wrap_text_two_passes(tc, input, width, height);
-}
+//     return wrap_text_two_passes(tc, input, width, height);
+// }
 
-auto unwrap_text(const std::string& input) -> std::string
-{
-    return string_utils::replace(input, get_wrap_marker(), "");
-}
+// auto unwrap_text(const std::string& input) -> std::string
+// {
+//     return string_utils::replace(input, get_wrap_marker(), "");
+// }
 
-// A wrapper around ImGui::InputTextMultiline that preserves user newlines
-// but only wraps on our custom "\n\r" markers.
-template<size_t BuffSize = 256>
-auto InputTextWidgetMultilineWrapped(const char* label, std::string& raw_buf, ImGuiInputTextFlags flags = 0) -> bool
-{
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
-    float h = (true ? ImGui::GetFontSize() * 8.0f : label_size.y);
-    ImVec2 frame_size =
-        ImGui::CalcItemSize(ImVec2(0.0f, 0.0f),
-                            ImGui::CalcItemWidth(),
-                            h + style.FramePadding.y * 2.0f); // Arbitrary default of 8 lines high for multi-line
-    bool changed = false;
+// // A wrapper around ImGui::InputTextMultiline that preserves user newlines
+// // but only wraps on our custom "\n\r" markers.
+// template<size_t BuffSize = 256>
+// auto InputTextWidgetMultilineWrapped(const char* label, std::string& raw_buf, ImGuiInputTextFlags flags = 0, ImVec2 size = ImVec2(0, 0)) -> bool
+// {
+//     const ImGuiStyle& style = ImGui::GetStyle();
+//     const ImVec2 label_size = ImGui::CalcTextSize(label, NULL, true);
+//     float h = (true ? ImGui::GetFontSize() * 8.0f : label_size.y);
+//     ImVec2 frame_size =
+//         ImGui::CalcItemSize(ImVec2(0.0f, 0.0f),
+//                             ImGui::CalcItemWidth(),
+//                             h + style.FramePadding.y * 2.0f); // Arbitrary default of 8 lines high for multi-line
+//     bool changed = false;
 
-    // 1) If we’re not currently editing, regenerate display_buf from raw_buf:
-    auto display_buf = wrap_text(raw_buf, (frame_size.x - style.ScrollbarSize), frame_size.y);
+//     // 1) If we’re not currently editing, regenerate display_buf from raw_buf:
+//     auto display_buf = wrap_text(raw_buf, (frame_size.x - style.ScrollbarSize), frame_size.y);
 
-    // 2) Show InputTextMultiline on display_buf:
-    ImGui::SetNextItemWidth(frame_size.x);
-    if(ImGui::InputTextWidget<BuffSize>(label, display_buf, true, flags))
-    {
-        raw_buf = unwrap_text(display_buf);
-        changed = true;
-    }
+//     // 2) Show InputTextMultiline on display_buf:
+//     ImGui::SetNextItemWidth(frame_size.x);
+//     if(ImGui::InputTextWidget<BuffSize>(label, display_buf, true, flags, size))
+//     {
+//         raw_buf = unwrap_text(display_buf);
+//         changed = true;
+//     }
 
-    return changed;
-}
+//     return changed;
+// }
 
 enum class SizeUnit
 {
@@ -435,19 +436,23 @@ auto inspector_string::inspect(rtti::context& ctx,
     bool multiline = entt::get_attribute_as<bool>(custom, "multiline");
 
     bool wrap = entt::get_attribute_as<bool>(custom, "wrap");
+    std::string text_type = entt::get_attribute_as<std::string>(custom, "type");
 
     inspect_result result{};
 
     if(multiline)
     {
+        ImVec2 widget_size = ImVec2(0, 0);
+        if(text_type == "code")
+        {
+            widget_size = ImVec2(ImGui::GetContentRegionAvail());
+        }
         if(wrap)
         {
-            result.changed |= InputTextWidgetMultilineWrapped<4096>("##", data, flags);
+            flags |= ImGuiInputTextFlags_WordWrap;
         }
-        else
-        {
-            result.changed |= ImGui::InputTextWidget<4096>("##", data, multiline, flags);
-        }
+     
+        result.changed |= ImGui::InputTextWidget<4096*16>("##", data, multiline, flags, widget_size);
     }
     else
     {

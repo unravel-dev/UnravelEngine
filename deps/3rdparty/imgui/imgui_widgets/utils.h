@@ -121,12 +121,13 @@ template<size_t BufferSize = 64>
 bool InputTextWidget(const std::string& label,
                      std::array<char, BufferSize>& buffer,
                      bool multiline = false,
-                     ImGuiInputTextFlags flags = 0)
+                     ImGuiInputTextFlags flags = 0,
+                     ImVec2 size = ImVec2(0, 0))
 {
 
     if(multiline)
     {
-        if(ImGui::InputTextMultiline(label.c_str(), buffer.data(), buffer.size(), ImVec2(0, 0), flags))
+        if(ImGui::InputTextMultiline(label.c_str(), buffer.data(), buffer.size(), size, flags))
         {
             return true;
         }
@@ -146,12 +147,13 @@ template<size_t BuffSize = 64>
 bool InputTextWidget(const std::string& label,
                      std::string& source,
                      bool multiline = false,
-                     ImGuiInputTextFlags flags = 0)
+                     ImGuiInputTextFlags flags = 0,
+                     ImVec2 size = ImVec2(0, 0))
 {
 
     auto buffer = CreateInputTextBuffer<BuffSize>(source);
 
-    if(InputTextWidget(label, buffer, multiline, flags))
+    if(InputTextWidget(label, buffer, multiline, flags, size))
     {
         source = buffer.data();
         return true;

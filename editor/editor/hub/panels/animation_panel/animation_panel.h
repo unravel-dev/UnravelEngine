@@ -25,7 +25,7 @@ private:
 
     imgui_panels* parent_{};
     bool show_request_{};
-    bool show_{};
+    bool show_{false};
     ImFlow::ImNodeFlow flow_;
     ImGuiTextFilter filter_;
 

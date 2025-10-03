@@ -46,7 +46,7 @@ public:
     auto get_console_log_panel() -> console_log_panel&;
     auto get_style_panel() -> style_panel&;
     auto get_undo_redo_panel() -> undo_redo_panel&;
-
+    auto get_animation_panel() -> animation_panel&;
     void set_external_drop_in_progress(bool in_progress);
 
     auto get_external_drop_in_progress() const -> bool;
