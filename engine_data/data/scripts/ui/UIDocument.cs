@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Represents a wrapper around a native RmlUi document with managed lifetime.

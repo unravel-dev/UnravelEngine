@@ -1,7 +1,7 @@
 using System;
-using Ace.Core;
+using Unravel.Core;
 
-namespace Ace.Samples
+namespace Unravel.Samples
 {
     /// <summary>
     /// Sample script demonstrating the use of UI wrapper objects for caching and direct manipulation.

@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Represents a base class for all components in the entity-component system.

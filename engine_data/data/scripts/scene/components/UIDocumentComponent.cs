@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Component that manages an RmlUi document for rendering HTML/CSS-based user interfaces.

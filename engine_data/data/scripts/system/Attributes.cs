@@ -1,6 +1,6 @@
 using System;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Specifies a range for a numeric field in a class or struct.

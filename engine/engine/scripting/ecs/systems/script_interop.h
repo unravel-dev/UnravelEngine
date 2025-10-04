@@ -184,7 +184,7 @@ struct mono_converter<managed_interface::ui_event_base>
     {
         auto& ctx = unravel::engine::context();
         auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Ace.Core", "UIEventBase");
+        auto type = app_assembly.get_type("Unravel.Core", "UIEventBase");
         auto instance = type.new_instance();
         mono::set_field_value(instance, "targetElementId", obj.target_element_id);
         mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);

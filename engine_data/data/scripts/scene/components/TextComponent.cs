@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Flags for horizontal and vertical text alignment, matching ace::align.

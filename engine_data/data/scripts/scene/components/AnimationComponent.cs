@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Ace.Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Provides functionality to manage and blend animation clips on an entity.

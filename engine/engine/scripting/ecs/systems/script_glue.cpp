@@ -120,15 +120,15 @@ auto get_mono_asset(size_t type_hash) -> const mono_asset*
     // clang-format off
     static std::map<size_t, std::shared_ptr<mono_asset>> reg =
     {
-        {mono::mono_type::get_hash("Ace.Core.Texture"),         std::make_shared<mono_asset_impl<gfx::texture>>()},
-        {mono::mono_type::get_hash("Ace.Core.Material"),        std::make_shared<mono_asset_impl<material>>()},
-        {mono::mono_type::get_hash("Ace.Core.Mesh"),            std::make_shared<mono_asset_impl<mesh>>()},
-        {mono::mono_type::get_hash("Ace.Core.AnimationClip"),   std::make_shared<mono_asset_impl<animation_clip>>()},
-        {mono::mono_type::get_hash("Ace.Core.Prefab"),          std::make_shared<mono_asset_impl<prefab>>()},
-        {mono::mono_type::get_hash("Ace.Core.Scene"),           std::make_shared<mono_asset_impl<scene_prefab>>()},
-        {mono::mono_type::get_hash("Ace.Core.PhysicsMaterial"), std::make_shared<mono_asset_impl<physics_material>>()},
-        {mono::mono_type::get_hash("Ace.Core.AudioClip"),       std::make_shared<mono_asset_impl<audio_clip>>()},
-        {mono::mono_type::get_hash("Ace.Core.Font"),            std::make_shared<mono_asset_impl<font>>()}
+        {mono::mono_type::get_hash("Unravel.Core.Texture"),         std::make_shared<mono_asset_impl<gfx::texture>>()},
+        {mono::mono_type::get_hash("Unravel.Core.Material"),        std::make_shared<mono_asset_impl<material>>()},
+        {mono::mono_type::get_hash("Unravel.Core.Mesh"),            std::make_shared<mono_asset_impl<mesh>>()},
+        {mono::mono_type::get_hash("Unravel.Core.AnimationClip"),   std::make_shared<mono_asset_impl<animation_clip>>()},
+        {mono::mono_type::get_hash("Unravel.Core.Prefab"),          std::make_shared<mono_asset_impl<prefab>>()},
+        {mono::mono_type::get_hash("Unravel.Core.Scene"),           std::make_shared<mono_asset_impl<scene_prefab>>()},
+        {mono::mono_type::get_hash("Unravel.Core.PhysicsMaterial"), std::make_shared<mono_asset_impl<physics_material>>()},
+        {mono::mono_type::get_hash("Unravel.Core.AudioClip"),       std::make_shared<mono_asset_impl<audio_clip>>()},
+        {mono::mono_type::get_hash("Unravel.Core.Font"),            std::make_shared<mono_asset_impl<font>>()}
     };
     // clang-format on
 
@@ -448,20 +448,20 @@ struct native_comp_lut
 
 int register_componetns = []()
 {
-    native_comp_lut::register_native_component<transform_component>("Ace.Core.TransformComponent");
-    native_comp_lut::register_native_component<id_component>("Ace.Core.IdComponent");
-    native_comp_lut::register_native_component<model_component>("Ace.Core.ModelComponent");
-    native_comp_lut::register_native_component<camera_component>("Ace.Core.CameraComponent");
-    native_comp_lut::register_native_component<light_component>("Ace.Core.LightComponent");
-    native_comp_lut::register_native_component<reflection_probe_component>("Ace.Core.ReflectionProbeComponent");
-    native_comp_lut::register_native_component<physics_component>("Ace.Core.PhysicsComponent");
-    native_comp_lut::register_native_component<animation_component>("Ace.Core.AnimationComponent");
-    native_comp_lut::register_native_component<audio_listener_component>("Ace.Core.AudioListenerComponent");
-    native_comp_lut::register_native_component<audio_source_component>("Ace.Core.AudioSourceComponent");
-    native_comp_lut::register_native_component<bone_component>("Ace.Core.BoneComponent");
-    native_comp_lut::register_native_component<submesh_component>("Ace.Core.SubmeshComponent");
-    native_comp_lut::register_native_component<text_component>("Ace.Core.TextComponent");
-    native_comp_lut::register_native_component<ui_document_component>("Ace.Core.UIDocumentComponent");
+    native_comp_lut::register_native_component<transform_component>("Unravel.Core.TransformComponent");
+    native_comp_lut::register_native_component<id_component>("Unravel.Core.IdComponent");
+    native_comp_lut::register_native_component<model_component>("Unravel.Core.ModelComponent");
+    native_comp_lut::register_native_component<camera_component>("Unravel.Core.CameraComponent");
+    native_comp_lut::register_native_component<light_component>("Unravel.Core.LightComponent");
+    native_comp_lut::register_native_component<reflection_probe_component>("Unravel.Core.ReflectionProbeComponent");
+    native_comp_lut::register_native_component<physics_component>("Unravel.Core.PhysicsComponent");
+    native_comp_lut::register_native_component<animation_component>("Unravel.Core.AnimationComponent");
+    native_comp_lut::register_native_component<audio_listener_component>("Unravel.Core.AudioListenerComponent");
+    native_comp_lut::register_native_component<audio_source_component>("Unravel.Core.AudioSourceComponent");
+    native_comp_lut::register_native_component<bone_component>("Unravel.Core.BoneComponent");
+    native_comp_lut::register_native_component<submesh_component>("Unravel.Core.SubmeshComponent");
+    native_comp_lut::register_native_component<text_component>("Unravel.Core.TextComponent");
+    native_comp_lut::register_native_component<ui_document_component>("Unravel.Core.UIDocumentComponent");
 
     return 0;
 }();
@@ -2711,7 +2711,7 @@ void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& 
         auto assembly = script_sys.get_engine_assembly();
         
         // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Ace.Core", "UIEventManager");
+        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
         if (!ui_event_manager_type.valid())
         {
             APPLOG_ERROR("UIEventManager type not found in assembly");
@@ -3204,7 +3204,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Log");
+        auto reg = mono::internal_call_registry("Unravel.Core.Log");
         reg.add_internal_call("internal_m2n_log_trace", internal_call(internal_m2n_log_trace));
         reg.add_internal_call("internal_m2n_log_info", internal_call(internal_m2n_log_info));
         reg.add_internal_call("internal_m2n_log_warning", internal_call(internal_m2n_log_warning));
@@ -3212,7 +3212,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Scene");
+        auto reg = mono::internal_call_registry("Unravel.Core.Scene");
         reg.add_internal_call("internal_m2n_load_scene", internal_call(internal_m2n_load_scene));
         reg.add_internal_call("internal_m2n_create_scene", internal_call(internal_m2n_create_scene));
         reg.add_internal_call("internal_m2n_destroy_scene", internal_call(internal_m2n_destroy_scene));
@@ -3234,7 +3234,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Entity");
+        auto reg = mono::internal_call_registry("Unravel.Core.Entity");
         reg.add_internal_call("internal_m2n_add_component", internal_call(internal_m2n_add_component));
         reg.add_internal_call("internal_m2n_get_component", internal_call(internal_m2n_get_component));
         reg.add_internal_call("internal_m2n_get_component_in_children",
@@ -3268,7 +3268,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.TransformComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.TransformComponent");
         reg.add_internal_call("internal_m2n_get_children", internal_call(internal_m2n_get_children));
         reg.add_internal_call("internal_m2n_get_child", internal_call(internal_m2n_get_child));
         reg.add_internal_call("internal_m2n_get_parent", internal_call(internal_m2n_get_parent));
@@ -3335,7 +3335,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.PhysicsComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.PhysicsComponent");
         reg.add_internal_call("internal_m2n_physics_apply_explosion_force",
                               internal_call(internal_m2n_physics_apply_explosion_force));
         reg.add_internal_call("internal_m2n_physics_apply_force", internal_call(internal_m2n_physics_apply_force));
@@ -3360,7 +3360,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.AnimationComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.AnimationComponent");
         reg.add_internal_call("internal_m2n_animation_blend", internal_call(internal_m2n_animation_blend));
         reg.add_internal_call("internal_m2n_animation_play", internal_call(internal_m2n_animation_play));
         reg.add_internal_call("internal_m2n_animation_pause", internal_call(internal_m2n_animation_pause));
@@ -3371,13 +3371,13 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.CameraComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.CameraComponent");
         reg.add_internal_call("internal_m2n_camera_screen_point_to_ray",
                               internal_call(internal_m2n_camera_screen_point_to_ray));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.ModelComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.ModelComponent");
         reg.add_internal_call("internal_m2n_model_get_enabled", internal_call(internal_m2n_model_get_enabled));
         reg.add_internal_call("internal_m2n_model_set_enabled", internal_call(internal_m2n_model_set_enabled));
         reg.add_internal_call("internal_m2n_model_get_shared_material",
@@ -3395,7 +3395,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.TextComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.TextComponent");
         reg.add_internal_call("internal_m2n_text_get_text", internal_call(internal_m2n_text_get_text));
         reg.add_internal_call("internal_m2n_text_set_text", internal_call(internal_m2n_text_set_text));
         reg.add_internal_call("internal_m2n_text_get_buffer_type", internal_call(internal_m2n_text_get_buffer_type));
@@ -3435,13 +3435,13 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.LightComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.LightComponent");
         reg.add_internal_call("internal_m2n_light_get_color", internal_call(internal_m2n_light_get_color));
         reg.add_internal_call("internal_m2n_light_set_color", internal_call(internal_m2n_light_set_color));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Assets");
+        auto reg = mono::internal_call_registry("Unravel.Core.Assets");
         reg.add_internal_call("internal_m2n_get_asset_by_uuid", internal_call(internal_m2n_get_asset_by_uuid));
         reg.add_internal_call("internal_m2n_get_asset_by_key", internal_call(internal_m2n_get_asset_by_key));
         reg.add_internal_call("internal_m2n_get_material_properties",
@@ -3449,7 +3449,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.AudioClip");
+        auto reg = mono::internal_call_registry("Unravel.Core.AudioClip");
         reg.add_internal_call("internal_m2n_audio_clip_get_length", internal_call(internal_m2n_audio_clip_get_length));
     }
 
@@ -3463,24 +3463,24 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Gizmos");
+        auto reg = mono::internal_call_registry("Unravel.Core.Gizmos");
         reg.add_internal_call("internal_m2n_gizmos_add_sphere", internal_call(internal_m2n_gizmos_add_sphere));
         reg.add_internal_call("internal_m2n_gizmos_add_ray", internal_call(internal_m2n_gizmos_add_ray));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Tests");
+        auto reg = mono::internal_call_registry("Unravel.Core.Tests");
         reg.add_internal_call("m2n_test_uuid", internal_call(m2n_test_uuid));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.LayerMask");
+        auto reg = mono::internal_call_registry("Unravel.Core.LayerMask");
         reg.add_internal_call("internal_m2n_layers_layer_to_name", internal_call(internal_m2n_layers_layer_to_name));
         reg.add_internal_call("internal_m2n_layers_name_to_layer", internal_call(internal_m2n_layers_name_to_layer));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Input");
+        auto reg = mono::internal_call_registry("Unravel.Core.Input");
         reg.add_internal_call("internal_m2n_input_get_analog_value",
                               internal_call(internal_m2n_input_get_analog_value));
         reg.add_internal_call("internal_m2n_input_get_digital_value",
@@ -3502,7 +3502,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.Physics");
+        auto reg = mono::internal_call_registry("Unravel.Core.Physics");
         reg.add_internal_call("internal_m2n_physics_ray_cast", internal_call(internal_m2n_physics_ray_cast));
         reg.add_internal_call("internal_m2n_physics_ray_cast_all", internal_call(internal_m2n_physics_ray_cast_all));
         reg.add_internal_call("internal_m2n_physics_sphere_cast", internal_call(internal_m2n_physics_sphere_cast));
@@ -3513,7 +3513,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.IK");
+        auto reg = mono::internal_call_registry("Unravel.Core.IK");
         reg.add_internal_call("internal_m2n_utils_set_ik_posiiton_ccd",
                               internal_call(internal_m2n_utils_set_ik_posiiton_ccd));
         reg.add_internal_call("internal_m2n_utils_set_ik_posiiton_fabrik",
@@ -3526,7 +3526,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.AudioSourceComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.AudioSourceComponent");
         reg.add_internal_call("internal_m2n_audio_source_get_loop", internal_call(internal_m2n_audio_source_get_loop));
         reg.add_internal_call("internal_m2n_audio_source_set_loop", internal_call(internal_m2n_audio_source_set_loop));
         reg.add_internal_call("internal_m2n_audio_source_get_volume",
@@ -3569,7 +3569,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.UIDocumentComponent");
+        auto reg = mono::internal_call_registry("Unravel.Core.UIDocumentComponent");
         reg.add_internal_call("internal_m2n_ui_document_get_asset", internal_call(internal_m2n_ui_document_get_asset));
         reg.add_internal_call("internal_m2n_ui_document_set_asset", internal_call(internal_m2n_ui_document_set_asset));
         reg.add_internal_call("internal_m2n_ui_document_is_loaded", internal_call(internal_m2n_ui_document_is_loaded));
@@ -3583,7 +3583,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
 
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.UIDocument");
+        auto reg = mono::internal_call_registry("Unravel.Core.UIDocument");
         reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", internal_call(internal_m2n_ui_document_wrapper_is_valid));
         reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", internal_call(internal_m2n_ui_document_wrapper_get_title));
         reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", internal_call(internal_m2n_ui_document_wrapper_set_title));
@@ -3597,7 +3597,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.UIElement");
+        auto reg = mono::internal_call_registry("Unravel.Core.UIElement");
         reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", internal_call(internal_m2n_ui_element_wrapper_is_valid));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
@@ -3617,12 +3617,12 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.UIEventManager");
+        auto reg = mono::internal_call_registry("Unravel.Core.UIEventManager");
         reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener", internal_call(internal_m2n_ui_ensure_native_event_listener));
     }
 
     {
-        auto reg = mono::internal_call_registry("Ace.Core.UIEventBase");
+        auto reg = mono::internal_call_registry("Unravel.Core.UIEventBase");
         reg.add_internal_call("internal_m2n_ui_stop_propagation", internal_call(internal_m2n_ui_stop_propagation));
         reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation", internal_call(internal_m2n_ui_stop_immediate_propagation));
     }
