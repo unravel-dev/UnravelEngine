@@ -2668,6 +2668,7 @@ public:
 
             // Create event data
             mono::managed_interface::ui_event_base event_data;
+            event_data.native_ptr = reinterpret_cast<std::intptr_t>(&event);
             event_data.target_element_id = target_element->GetId();
             event_data.target_element_ptr = reinterpret_cast<std::intptr_t>(target_element);
             event_data.current_element_id = current_element->GetId();
@@ -2776,13 +2777,13 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, con
 }
 
 // Stop event propagation - called from C# UIEventBase.StopPropagation()
-void internal_m2n_ui_stop_propagation()
+void internal_m2n_ui_stop_propagation(std::intptr_t native_ptr)
 {
     try
     {
 
         auto* current_event = g_ui_global_listener.get_current_event();
-        if (current_event)
+        if (current_event && current_event == reinterpret_cast<Rml::Event*>(native_ptr))
         {
             current_event->StopPropagation();
         }
@@ -2799,7 +2800,7 @@ void internal_m2n_ui_stop_propagation()
 }
 
 // Stop immediate event propagation - called from C# UIEventBase.StopImmediatePropagation()
-void internal_m2n_ui_stop_immediate_propagation()
+void internal_m2n_ui_stop_immediate_propagation(std::intptr_t native_ptr)
 {
     try
     {

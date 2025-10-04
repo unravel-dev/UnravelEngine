@@ -136,6 +136,7 @@ struct material_properties
 
 struct ui_event_base
 {
+    std::intptr_t native_ptr{};
     std::string target_element_id{};
     std::intptr_t target_element_ptr{};
     std::string current_element_id{};
@@ -186,6 +187,7 @@ struct mono_converter<managed_interface::ui_event_base>
         auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
         auto type = app_assembly.get_type("Unravel.Core", "UIEventBase");
         auto instance = type.new_instance();
+        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
         mono::set_field_value(instance, "targetElementId", obj.target_element_id);
         mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
         mono::set_field_value(instance, "currentElementId", obj.current_element_id);
@@ -202,6 +204,7 @@ struct mono_converter<managed_interface::ui_event_base>
     {
         mono::mono_object object(obj);
         native_type data;
+        mono::get_field_value(object, "nativePtr", data.native_ptr);
         mono::get_field_value(object, "targetElementId", data.target_element_id);
         mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
         mono::get_field_value(object, "currentElementId", data.current_element_id);

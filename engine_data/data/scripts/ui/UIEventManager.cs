@@ -14,6 +14,7 @@ namespace Unravel.Core
     }
     public class UIEventBase
     {
+        private IntPtr nativePtr = IntPtr.Zero;
         //
         // Summary:
         //     The ID of the element that triggered the event.
@@ -52,7 +53,7 @@ namespace Unravel.Core
         /// </summary>
         public void StopPropagation()
         {
-            internal_m2n_ui_stop_propagation();
+            internal_m2n_ui_stop_propagation(nativePtr);
         }
 
         /// <summary>
@@ -60,15 +61,15 @@ namespace Unravel.Core
         /// </summary>
         public void StopImmediatePropagation()
         {
-            internal_m2n_ui_stop_immediate_propagation();
+            internal_m2n_ui_stop_immediate_propagation(nativePtr);
         }
 
         // Internal calls to C++ functions
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_stop_propagation();
+        private static extern void internal_m2n_ui_stop_propagation(IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_stop_immediate_propagation();
+        private static extern void internal_m2n_ui_stop_immediate_propagation(IntPtr nativePtr);
     }
     public delegate void UIEventCallback(UIEventBase ev);
 
