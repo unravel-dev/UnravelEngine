@@ -2856,7 +2856,7 @@ auto validate_ui_element_wrapper(std::intptr_t element_ptr) -> bool
         if (ui_comp.document)
         {
             // Check if this element belongs to this document
-            if (ui_comp.document->GetElementById(element->GetId()) == element)
+            if (ui_comp.document->Contains(element))
             {
                 return true;
             }
