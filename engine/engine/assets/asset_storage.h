@@ -113,6 +113,11 @@ struct animation_importer_meta : crtp_meta_type<animation_importer_meta, asset_i
     } root_motion;
 };
 
+struct audio_importer_meta : crtp_meta_type<audio_importer_meta, asset_importer_meta>
+{
+    bool force_to_mono{false};
+};
+
 /**
  * @struct asset_meta
  * @brief Metadata for an asset, including its UUID and type.

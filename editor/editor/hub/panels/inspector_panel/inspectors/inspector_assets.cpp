@@ -12,6 +12,7 @@
 #include <engine/ui/style_sheet.h>
 
 #include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/meta/physics/physics_material.hpp>
@@ -1140,32 +1141,85 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
         return inspect_as_property(ctx, data);
     }
 
+    if(inspected_asset_ != data || inspected_version_ != data.version())
+    {
+        inspected_asset_ = data;
+        inspected_version_ = data.version();
+        importer_ = nullptr;
+    }
+
     auto& am = ctx.get_cached<asset_manager>();
     inspect_result result{};
 
+    if(ImGui::BeginTabBar("asset_handle_audio_clip",
+                          ImGuiTabBarFlags_NoCloseWithMiddleMouseButton | ImGuiTabBarFlags_FittingPolicyScroll))
     {
-        auto data_var = data.get(false);
-        if(data_var)
+        if(ImGui::BeginTabItem(ex::get_type(data.extension()).c_str()))
         {
-            var_info data_var_info;
-            data_var_info.read_only = true;
-            data_var_info.is_copyable = false;
+            ImGui::BeginChild(ex::get_type(data.extension()).c_str());
 
-            auto data_var_proxy = make_asset_proxy<audio_clip>(var, var_proxy);
-
-            entt::meta_any data_var;
-            if(data_var_proxy.impl->getter(data_var))
+            auto data_var = data.get(false);
+            if(data_var)
             {
-                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy, data_var_info);
+                var_info data_var_info;
+                data_var_info.read_only = true;
+                data_var_info.is_copyable = false;
+
+                auto data_var_proxy = make_asset_proxy<audio_clip>(var, var_proxy);
+
+                entt::meta_any data_var;
+                if(data_var_proxy.impl->getter(data_var))
+                {
+                    result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy, data_var_info);
+                }
+
+                auto clip = data.get(false);
+
+                if(clip)
+                {
+                    inspect_clip(clip);
+                }
             }
 
-            auto clip = data.get(false);
-
-            if(clip)
-            {
-                inspect_clip(clip);
-            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
         }
+        if(ImGui::BeginTabItem("Import"))
+        {
+            auto meta = am.get_metadata(data.uid());
+            auto base_importer = meta.meta.importer;
+
+            auto importer = std::static_pointer_cast<audio_importer_meta>(base_importer);
+
+            if(importer)
+            {
+                if(!importer_)
+                {
+                    importer_ = std::make_shared<audio_importer_meta>(*importer);
+                }
+
+                result |= ::unravel::inspect(ctx, *importer_);
+            }
+
+            if(ImGui::Button("Revert"))
+            {
+                importer_ = {};
+            }
+            ImGui::SameLine();
+            if(ImGui::Button("Apply"))
+            {
+                if(importer_)
+                {
+                    *importer = *importer_;
+                }
+
+                auto meta_absolute_path = asset_writer::resolve_meta_file(data);
+                asset_writer::atomic_save_to_file(meta_absolute_path.string(), meta.meta);
+            }
+
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
 
     return result;

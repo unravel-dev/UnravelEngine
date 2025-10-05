@@ -19,6 +19,7 @@
 #include <engine/settings/settings.h>
 #include <engine/meta/animation/animation.hpp>
 #include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/physics/physics_material.hpp>
@@ -923,8 +924,44 @@ auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path
 }
 
 template<>
+auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
+{
+    auto absolute = fs::resolve_protocol(key).string();
+    asset_meta meta;
+    if(load_from_file(absolute, meta))
+    {
+        if(!meta.importer)
+        {
+            meta.importer = std::make_shared<audio_importer_meta>();
+
+            meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
+
+            fs::error_code err;
+            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) 
+            {
+                save_to_file(temp.string(), meta);
+            }, err);
+
+            return nullptr;
+        }
+    }
+
+    return meta.importer;
+}
+
+template<>
 auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    // Try to import first.
+    auto base_importer = read_importer<audio_clip>(am, key);
+
+    if(!base_importer)
+    {
+        return true;
+    }
+
+    auto importer = std::static_pointer_cast<audio_importer_meta>(base_importer);
+
     auto absolute_path = resolve_input_file(key);
 
     std::string str_input = absolute_path.string();
@@ -940,7 +977,10 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
             return false;
         }
 
-        clip.convert_to_mono();
+        if(importer->force_to_mono)
+        {
+            clip.convert_to_mono();
+        }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
         {

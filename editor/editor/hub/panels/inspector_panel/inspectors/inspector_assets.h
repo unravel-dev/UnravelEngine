@@ -112,8 +112,12 @@ struct inspector_asset_handle_audio_clip : public crtp_meta_type<inspector_asset
 {
     auto inspect_as_property(rtti::context& ctx, asset_handle<audio_clip>& data) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
-private:
 
+    asset_handle<audio_clip> inspected_asset_;
+    std::shared_ptr<audio_importer_meta> importer_;
+    uintptr_t inspected_version_{};
+
+private:
     void inspect_clip(const std::shared_ptr<audio_clip>& clip);
     std::shared_ptr<audio::source> source_; ///< The audio source object.
 };

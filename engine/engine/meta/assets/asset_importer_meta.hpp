@@ -25,6 +25,10 @@ SAVE_EXTERN(animation_importer_meta);
 LOAD_EXTERN(animation_importer_meta);
 REFLECT_EXTERN(animation_importer_meta);
 
+SAVE_EXTERN(audio_importer_meta);
+LOAD_EXTERN(audio_importer_meta);
+REFLECT_EXTERN(audio_importer_meta);
+
 } // namespace unravel
 
 
@@ -34,3 +38,4 @@ REFLECT_EXTERN(animation_importer_meta);
 SERIALIZE_REGISTER_TYPE_WITH_NAME(unravel::mesh_importer_meta, "mesh_importer_meta")
 SERIALIZE_REGISTER_TYPE_WITH_NAME(unravel::texture_importer_meta, "texture_importer_meta")
 SERIALIZE_REGISTER_TYPE_WITH_NAME(unravel::animation_importer_meta, "animation_importer_meta")
+SERIALIZE_REGISTER_TYPE_WITH_NAME(unravel::audio_importer_meta, "audio_importer_meta")
