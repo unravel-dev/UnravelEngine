@@ -15,6 +15,11 @@
 #include <ospp/event.h>
 #include <ospp/window.h>
 
+// Forward declarations
+namespace input {
+    enum class key_code : int32_t;
+}
+
 namespace unravel
 {
 
@@ -106,7 +111,8 @@ private:
  * @namespace RmlEngine
  * @brief Utility functions for ospp to RmlUi integration
  */
-namespace RmlEngine {
+namespace RmlEngine
+{
 
 /**
  * @brief Process ospp event and forward to RmlUi context
@@ -122,6 +128,20 @@ auto input_event_handler(Rml::Context* context, const os::event& event) -> bool;
  * @return RmlUi key identifier
  */
 auto convert_key(os::key::code ospp_key) -> Rml::Input::KeyIdentifier;
+
+/**
+ * @brief Convert RmlUi key identifier to ospp key code
+ * @param rml_key RmlUi key identifier
+ * @return ospp key code
+ */
+auto convert_rml_key_to_ospp(Rml::Input::KeyIdentifier rml_key) -> os::key::code;
+
+/**
+ * @brief Convert RmlUi key identifier to engine input key code
+ * @param rml_key RmlUi key identifier
+ * @return engine input key code
+ */
+auto convert_rml_key_to_input(Rml::Input::KeyIdentifier rml_key) -> input::key_code;
 
 /**
  * @brief Convert ospp mouse button to RmlUi mouse button

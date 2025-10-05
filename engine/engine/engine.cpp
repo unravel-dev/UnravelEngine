@@ -160,8 +160,8 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<animation_system>();
     ctx.add<physics_system>();
     ctx.add<input_system>();
-    ctx.add<ui_system>();
     ctx.add<script_system>();
+    ctx.add<ui_system>();
 
     return true;
 }
@@ -255,13 +255,13 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    if(!ctx.get_cached<ui_system>().init(ctx))
+    if(!ctx.get_cached<script_system>().init(ctx))
     {
         print_init_error(ctx);
         return false;
     }
-
-    if(!ctx.get_cached<script_system>().init(ctx))
+  
+    if(!ctx.get_cached<ui_system>().init(ctx))
     {
         print_init_error(ctx);
         return false;
@@ -284,13 +284,13 @@ auto engine::deinit() -> bool
     {
         return false;
     }
-
-    if(!ctx.get_cached<script_system>().deinit(ctx))
+    
+    if(!ctx.get_cached<ui_system>().deinit(ctx))
     {
         return false;
     }
 
-    if(!ctx.get_cached<ui_system>().deinit(ctx))
+    if(!ctx.get_cached<script_system>().deinit(ctx))
     {
         return false;
     }
@@ -368,8 +368,8 @@ auto engine::destroy() -> bool
     auto& ctx = engine::context();
 
     ctx.remove<defaults>();
-    ctx.remove<script_system>();
     ctx.remove<ui_system>();
+    ctx.remove<script_system>();
     ctx.remove<input_system>();
     ctx.remove<physics_system>();
     ctx.remove<animation_system>();

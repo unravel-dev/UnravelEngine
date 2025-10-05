@@ -18,6 +18,15 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Loads a scene using a Scene asset.
+        /// </summary>
+        /// <param name="scene">The Scene asset to load.</param>
+        public static void LoadScene(Scene scene)
+        {
+            internal_m2n_load_scene_uid(scene.uid);
+        }
+
+        /// <summary>
         /// Instantiates an entity from a specified prefab.
         /// </summary>
         /// <param name="prefab">The prefab to instantiate.</param>
@@ -140,6 +149,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_load_scene(string key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_load_scene_uid(Guid uid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private extern void internal_m2n_create_scene();

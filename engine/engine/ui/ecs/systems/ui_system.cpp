@@ -46,7 +46,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
     // Connect to engine events
     auto& ev = ctx.get_cached<events>();
     ev.on_frame_update.connect(sentinel_, 500, this, &ui_system::on_frame_update);
-    ev.on_frame_render.connect(sentinel_, -100, this, &ui_system::on_frame_render); // Render UI last
+    // ev.on_frame_render.connect(sentinel_, -100, this, &ui_system::on_frame_render); // Render UI last
     ev.on_os_event.connect(sentinel_, 100, this, &ui_system::on_os_event);
 
     // Initialize RmlUi backend
@@ -104,6 +104,25 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
     // Remove RmlUi context
     if(ui_context_)
     {
+
+        auto& ecs_system = ctx.get_cached<ecs>();
+        auto& scene = ecs_system.get_scene();
+        auto& registry = *scene.registry;
+    
+        // Iterate over all entities with ui_document_component
+        auto view = registry.view<ui_document_component>();
+    
+        for(auto entity : view)
+        {
+            auto& ui_comp = view.get<ui_document_component>(entity);
+            if(ui_comp.document)
+            {
+                ui_comp.document->Close();
+                ui_comp.document = nullptr;
+            }
+        }
+
+
         Rml::RemoveContext("main");
         ui_context_ = nullptr;
     }
@@ -133,7 +152,7 @@ void ui_system::on_frame_update(rtti::context& ctx, delta_t dt)
     ui_context_->Update();
 }
 
-void ui_system::on_frame_render(rtti::context& ctx, delta_t dt)
+void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, delta_t dt)
 {
     if(!ui_context_)
     {
@@ -148,19 +167,7 @@ void ui_system::on_frame_render(rtti::context& ctx, delta_t dt)
     // Render RmlUi context
     ui_context_->Render();
 
-    auto& ecs_system = ctx.get_cached<ecs>();
-    auto& scene = ecs_system.get_scene();
-    auto& registry = *scene.registry;
-
-    gfx::frame_buffer::ptr obuffer;
-    registry.view<camera_component>().each(
-        [&](auto e, auto&& camera)
-                {
-                    const auto& rview = camera.get_render_view();
-                    obuffer = rview.fbo_safe_get("OBUFFER");
-                });
-            
-    RmlUi_Backend_Engine::present_frame(obuffer);
+    RmlUi_Backend_Engine::present_frame(output);
 }
 
 

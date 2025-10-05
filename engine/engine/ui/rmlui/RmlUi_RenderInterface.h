@@ -339,8 +339,9 @@ private:
 
     struct CompiledTexture
     {
-        gfx::texture_handle generated_texture_handle = BGFX_INVALID_HANDLE;
         asset_handle<gfx::texture> asset_handle;
+        gfx::texture::ptr generated_texture_ptr; // For textures created directly (like SaveLayerAsTexture)
+        gfx::frame_buffer::ptr generated_framebuffer_ptr; // Keep framebuffer alive when texture is render target
     };
 
     struct LayerFramebuffer

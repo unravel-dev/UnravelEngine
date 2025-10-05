@@ -8,6 +8,7 @@
 
 #include <string>
 #include <entt/entt.hpp>
+#include <graphics/frame_buffer.h>
 
 // Forward declarations
 namespace Rml
@@ -57,10 +58,10 @@ struct ui_system
 
     /**
      * @brief Render UI (called every frame after update)
-     * @param ctx Engine context
+     * @param output Output frame buffer
      * @param dt Delta time since last frame
      */
-    void on_frame_render(rtti::context& ctx, delta_t dt);
+    void on_frame_render(const gfx::frame_buffer::ptr& output, delta_t dt);
 
     /**
      * @brief Get the main RmlUi context

@@ -35,6 +35,61 @@
 namespace unravel
 {
 
+/// Helper function that creates a positioned quad for blitting (no scissor needed)
+/// @param src_rect Source rectangle in texture coordinates
+/// @param dst_rect Destination rectangle in framebuffer coordinates
+/// @param src_texture_size Size of the source texture
+/// @param dst_framebuffer_size Size of the destination framebuffer
+/// @return clip_quad_def configured for positioned blit operation
+static gfx::clip_quad_def create_positioned_blit_quad(const Rml::Rectanglei& src_rect,
+                                                      const Rml::Rectanglei& dst_rect,
+                                                      const Rml::Vector2i& src_texture_size,
+                                                      const Rml::Vector2i& dst_framebuffer_size)
+{
+    // Convert source rectangle to UV coordinates (0.0 to 1.0)
+    const float src_width = static_cast<float>(src_texture_size.x);
+    const float src_height = static_cast<float>(src_texture_size.y);
+
+    const float uv_min_x = static_cast<float>(src_rect.Left()) / src_width;
+    const float uv_min_y = static_cast<float>(src_rect.Top()) / src_height;
+    const float uv_max_x = static_cast<float>(src_rect.Right()) / src_width;
+    const float uv_max_y = static_cast<float>(src_rect.Bottom()) / src_height;
+
+    // Calculate UV offset and scaling
+    const float uv_offset_x = uv_min_x;
+    const float uv_offset_y = uv_min_y;
+    const float uv_scaling_x = uv_max_x - uv_min_x;
+    const float uv_scaling_y = uv_max_y - uv_min_y;
+
+    // Convert destination rectangle from framebuffer coordinates to NDC
+    const float fb_width = static_cast<float>(dst_framebuffer_size.x);
+    const float fb_height = static_cast<float>(dst_framebuffer_size.y);
+
+    // Convert to NDC space (-1 to 1)
+    const float ndc_left = (static_cast<float>(dst_rect.Left()) / fb_width) * 2.0f - 1.0f;
+    const float ndc_right = (static_cast<float>(dst_rect.Right()) / fb_width) * 2.0f - 1.0f;
+    const float ndc_top = 1.0f - (static_cast<float>(dst_rect.Top()) / fb_height) * 2.0f;
+    const float ndc_bottom = 1.0f - (static_cast<float>(dst_rect.Bottom()) / fb_height) * 2.0f;
+
+    // Calculate quad center and size in NDC
+    const float center_x = (ndc_left + ndc_right) * 0.5f;
+    const float center_y = (ndc_top + ndc_bottom) * 0.5f;
+    const float half_width = (ndc_right - ndc_left) * 0.5f;
+    const float half_height = (ndc_top - ndc_bottom) * 0.5f;
+
+    return gfx::clip_quad_def{
+        0.0f,         // depth
+        half_width,   // width (half-size since clip_quad uses -width to +width)
+        half_height,  // height (half-size since clip_quad uses -height to +height)
+        center_x,     // offset_x (center position)
+        center_y,     // offset_y (center position)
+        uv_offset_x,  // uv_offset_x
+        uv_offset_y,  // uv_offset_y
+        uv_scaling_x, // uv_scaling_x
+        uv_scaling_y  // uv_scaling_y
+    };
+}
+
 RmlUi_RenderInterface::RmlUi_RenderInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
@@ -173,30 +228,6 @@ void RmlUi_RenderInterface::end_frame(const gfx::frame_buffer::ptr& framebuffer)
     auto source_texture = top_layer.get_color_texture();
     // auto dest_texture = postprocess_primary.get_color_texture();
 
-    // if(source_texture && dest_texture && source_texture->is_valid() && dest_texture->is_valid())
-    // {
-    //     gfx::render_pass blit_pass("rmlui_blit_to_postprocess");
-    //     // Set identity view and projection for filter rendering
-    //     auto view = Rml::Matrix4f::Identity();
-    //     auto proj = Rml::Matrix4f::Identity();
-    //     blit_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
-    //     auto size = top_layer.get_size();
-    //     gfx::blit(blit_pass.id,
-    //               dest_texture->native_handle(),
-    //               0,
-    //               0,
-    //               source_texture->native_handle(),
-    //               0,
-    //               0,
-    //               static_cast<uint16_t>(size.width),
-    //               static_cast<uint16_t>(size.height));
-    // }
-
-    // Bind main surface and do fullscreen passthrough
-    // auto& rend = ctx_->get_cached<renderer>();
-    // const auto& main_window = rend.get_main_window();
-    // const auto& main_surface = main_window->get_surface();
-
     gfx::render_pass main_pass("main_surface_pass");
 
     main_pass.bind(framebuffer.get());
@@ -219,7 +250,7 @@ void RmlUi_RenderInterface::end_frame(const gfx::frame_buffer::ptr& framebuffer)
         gfx::set_texture(0, tex_uniform, source_texture->native_handle());
 
         // Set blend state for premultiplied alpha (like GL implementation)
-        uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Blend);
+        uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
         auto topology = gfx::clip_quad_ex({}, false);
         gfx::set_state(topology | state);
 
@@ -259,7 +290,7 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
         return 0;
     }
 
-    APP_SCOPE_PERF("UI/RmlUi/CompileGeometry");
+    // APP_SCOPE_PERF("UI/RmlUi/CompileGeometry");
 
     CompiledGeometry& geometry = geometry_manager_.get(geometry_idx);
     geometry.num_vertices = static_cast<uint32_t>(vertices.size());
@@ -273,7 +304,7 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
     // Handle transient buffers (smallest geometries)
     if(geometry.buffer_type == GeometryBufferType::Transient)
     {
-        APP_SCOPE_PERF("UI/RmlUi/CompileGeometry/Memcopy");
+        // APP_SCOPE_PERF("UI/RmlUi/CompileGeometry/Memcopy");
 
         // Convert internal handle to RmlUi handle
         compiled_geometry_handle internal_handle;
@@ -339,7 +370,7 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
         return;
     }
 
-    APP_SCOPE_PERF("UI/RmlUi/RenderGeometry");
+    // APP_SCOPE_PERF("UI/RmlUi/RenderGeometry");
 
     // Convert RmlUi handle to internal handle
     compiled_geometry_handle internal_handle = geometry_manager_.from_rml_handle(handle);
@@ -407,15 +438,13 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
                 {
                     gfx::set_texture(0, texture_uniform, tex.asset_handle.get()->native_handle());
                 }
-                else if(bgfx::isValid(tex.generated_texture_handle))
+                else if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
                 {
-                    gfx::set_texture(0, texture_uniform, tex.generated_texture_handle);
+                    gfx::set_texture(0, texture_uniform, tex.generated_texture_ptr->native_handle());
                 }
                 else
                 {
-                    APPLOG_ERROR("Invalid texture uniform or handle: uniform={}, texture={}",
-                                 bgfx::isValid(texture_uniform),
-                                 bgfx::isValid(tex.generated_texture_handle));
+                    APPLOG_ERROR("Invalid texture uniform or handle: uniform={}", bgfx::isValid(texture_uniform));
                 }
             }
             else
@@ -448,7 +477,7 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
 void RmlUi_RenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle handle)
 {
     // APPLOG_TRACE("ReleaseGeometry: handle={}", handle);
-    APP_SCOPE_PERF("UI/RmlUi/ReleaseGeometry");
+    // APP_SCOPE_PERF("UI/RmlUi/ReleaseGeometry");
 
     if(handle == 0)
     {
@@ -547,19 +576,19 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
     // bgfx::copy() creates an internal copy that bgfx owns and automatically releases
     const gfx::memory_view* mem = gfx::copy(source_data.data(), source_data.size());
 
-    // Create bgfx texture from raw RGBA data
+    // Create bgfx texture shared pointer directly from raw RGBA data
     // RmlUi provides RGBA8 data with premultiplied alpha
     // Use linear filtering for smooth text rendering
-    gfx::texture_handle generated_handle =
-        gfx::create_texture_2d(static_cast<uint16_t>(source_dimensions.x),
-                               static_cast<uint16_t>(source_dimensions.y),
-                               false, // no mips
-                               1,     // num layers
-                               gfx::texture_format::RGBA8,
-                               BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
-                               mem);
+    auto generated_texture = std::make_shared<gfx::texture>(
+        static_cast<uint16_t>(source_dimensions.x),
+        static_cast<uint16_t>(source_dimensions.y),
+        false, // no mips
+        1,     // num layers
+        gfx::texture_format::RGBA8,
+        BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
+        mem);
 
-    if(!bgfx::isValid(generated_handle))
+    if(!generated_texture->is_valid())
     {
         APPLOG_ERROR("Failed to create bgfx texture");
         texture_manager_.free(texture_idx);
@@ -568,20 +597,20 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
 
     // Set up compiled texture
     CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
-    compiled_texture.generated_texture_handle = generated_handle;
+    compiled_texture.generated_texture_ptr = generated_texture;
 
     // Convert internal handle to RmlUi handle
     compiled_texture_handle internal_handle;
     internal_handle.idx = texture_idx;
     Rml::TextureHandle rml_handle = texture_manager_.to_rml_handle(internal_handle);
 
-    APPLOG_TRACE("Generated texture handle: {} ({}x{} RGBA8)", rml_handle, source_dimensions.x, source_dimensions.y);
+    // APPLOG_TRACE("Generated texture handle: {} ({}x{} RGBA8)", rml_handle, source_dimensions.x, source_dimensions.y);
     return rml_handle;
 }
 
 void RmlUi_RenderInterface::ReleaseTexture(Rml::TextureHandle texture_handle)
 {
-    APPLOG_TRACE("ReleaseTexture: handle={}", texture_handle);
+    // APPLOG_TRACE("ReleaseTexture: handle={}", texture_handle);
 
     if(texture_handle == 0)
     {
@@ -599,10 +628,8 @@ void RmlUi_RenderInterface::ReleaseTexture(Rml::TextureHandle texture_handle)
 
     // Get texture and destroy it
     CompiledTexture& texture = texture_manager_.get(internal_handle.idx);
-    if(bgfx::isValid(texture.generated_texture_handle))
-    {
-        gfx::destroy(texture.generated_texture_handle);
-    }
+    // Shared pointers will automatically clean up when reset
+    texture = {};
 
     // Free the handle (this also clears the texture entry)
     texture_manager_.free(internal_handle.idx);
@@ -787,14 +814,206 @@ void RmlUi_RenderInterface::PopLayer()
 
 auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 {
-    // TODO: Implement layer to texture saving
-    return 0;
+    RMLUI_ASSERT(scissor_state_.Valid());
+    const Rml::Rectanglei bounds = scissor_state_;
+
+    // Create a new texture with the size of the scissor region
+    const int width = bounds.Width();
+    const int height = bounds.Height();
+    
+    if(width <= 0 || height <= 0)
+    {
+        APPLOG_ERROR("Invalid scissor bounds for SaveLayerAsTexture: {}x{}", width, height);
+        return 0;
+    }
+
+    // Allocate handle from texture manager
+    uint16_t texture_idx = texture_manager_.alloc();
+    if(texture_idx == bx::kInvalidHandle)
+    {
+        APPLOG_ERROR("Failed to allocate texture handle - pool exhausted");
+        return 0;
+    }
+
+    // Create BGfx texture shared pointer directly for the render target
+    auto render_texture = std::make_shared<gfx::texture>(
+        static_cast<uint16_t>(width),
+        static_cast<uint16_t>(height),
+        false, // no mips
+        1,     // num layers
+        gfx::texture_format::RGBA8,
+        BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST
+    );
+
+    if(!render_texture->is_valid())
+    {
+        APPLOG_ERROR("Failed to create render texture for SaveLayerAsTexture");
+        texture_manager_.free(texture_idx);
+        return 0;
+    }
+
+    // Blit top layer to postprocess primary (resolve MSAA if needed)
+    blit_layer_to_postprocess_primary(render_layers_.get_top_layer_handle());
+
+    // Temporarily disable scissor for the blit operations
+    bool prev_scissor_enabled = scissor_enabled_;
+    scissor_enabled_ = false;
+
+    // Get source texture from postprocess primary
+    const LayerFramebuffer& source_fb = render_layers_.get_postprocess_primary();
+    auto source_texture = source_fb.get_color_texture();
+    
+    if(!source_texture || !source_texture->is_valid())
+    {
+        APPLOG_ERROR("Invalid source texture for SaveLayerAsTexture");
+        texture_manager_.free(texture_idx);
+        scissor_enabled_ = prev_scissor_enabled;
+        return 0;
+    }
+
+    // Create a temporary framebuffer for the destination texture
+    std::vector<gfx::texture::ptr> temp_textures;
+    temp_textures.push_back(render_texture);
+    auto temp_framebuffer = std::make_shared<gfx::frame_buffer>(temp_textures);
+
+    if(!temp_framebuffer->is_valid())
+    {
+        APPLOG_ERROR("Failed to create temporary framebuffer for SaveLayerAsTexture");
+        texture_manager_.free(texture_idx);
+        scissor_enabled_ = prev_scissor_enabled;
+        return 0;
+    }
+
+    // Use passthrough shader to copy the scissor region to the new texture
+    use_program(RmlUi_ProgramId::Passthrough);
+    auto render_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Passthrough)];
+
+    if(render_program.begin())
+    {
+        gfx::render_pass copy_pass("save_layer_as_texture_pass");
+        copy_pass.bind(temp_framebuffer.get());
+
+        // Set identity view and projection
+        auto view = Rml::Matrix4f::Identity();
+        auto proj = Rml::Matrix4f::Identity();
+        copy_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
+
+        // Set viewport to match texture size
+        copy_pass.set_view_rect(0, 0, static_cast<uint16_t>(width), static_cast<uint16_t>(height));
+
+        // Bind source texture
+        auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
+        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+
+        // Use the existing positioned blit quad function to handle UV calculations
+        auto source_size = source_fb.get_size();
+        const Rml::Vector2i src_texture_size(source_size.width, source_size.height);
+        const Rml::Vector2i dst_framebuffer_size(width, height); // Destination is the new texture size
+        
+        // Source rectangle is the scissor bounds, destination is the full new texture
+        const Rml::Rectanglei src_rect = bounds;
+        const Rml::Rectanglei dst_rect = Rml::Rectanglei::FromCorners({0, 0}, {width, height});
+        
+        auto quad_def = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
+
+        uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);
+        auto topology = gfx::clip_quad_ex(quad_def, false);
+        gfx::set_state(topology | state);
+
+        gfx::submit(copy_pass.id, render_program.native_handle());
+        render_program.end();
+    }
+
+    // Restore scissor state
+    scissor_enabled_ = prev_scissor_enabled;
+
+    // Set up compiled texture
+    CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
+    compiled_texture.generated_texture_ptr = render_texture;
+    compiled_texture.generated_framebuffer_ptr = temp_framebuffer; // Keep framebuffer alive
+
+    // Convert internal handle to RmlUi handle
+    compiled_texture_handle internal_handle;
+    internal_handle.idx = texture_idx;
+    Rml::TextureHandle rml_handle = texture_manager_.to_rml_handle(internal_handle);
+
+    // APPLOG_TRACE("SaveLayerAsTexture: Created texture handle {} ({}x{})", rml_handle, width, height);
+    return rml_handle;
 }
 
 auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 {
-    // TODO: Implement layer to mask saving
-    return 0;
+    // Blit top layer to postprocess primary (resolve MSAA if needed)
+    blit_layer_to_postprocess_primary(render_layers_.get_top_layer_handle());
+
+    // Get source and destination framebuffers
+    const LayerFramebuffer& source_fb = render_layers_.get_postprocess_primary();
+    const LayerFramebuffer& destination_fb = render_layers_.get_blend_mask();
+
+    auto source_texture = source_fb.get_color_texture();
+    if(!source_texture || !source_texture->is_valid())
+    {
+        APPLOG_ERROR("Invalid source texture for SaveLayerAsMaskImage");
+        return 0;
+    }
+
+    if(!destination_fb.is_valid())
+    {
+        APPLOG_ERROR("Invalid blend mask framebuffer for SaveLayerAsMaskImage");
+        return 0;
+    }
+
+    // Use passthrough shader to copy the layer content to the blend mask
+    use_program(RmlUi_ProgramId::Passthrough);
+    auto render_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Passthrough)];
+
+    if(render_program.begin())
+    {
+        gfx::render_pass mask_pass("save_layer_as_mask_pass");
+        mask_pass.bind(destination_fb.framebuffer.get());
+
+        // Set identity view and projection for mask rendering
+        auto view = Rml::Matrix4f::Identity();
+        auto proj = Rml::Matrix4f::Identity();
+        mask_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
+
+        // Bind source texture
+        auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
+        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+
+        // Set render state - disable blending for mask copy (replace mode)
+        uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);
+        auto topology = gfx::clip_quad_ex({}, false);
+        gfx::set_state(topology | state);
+
+        gfx::submit(mask_pass.id, render_program.native_handle());
+        render_program.end();
+
+        // Mark the top layer as needing rebind since we've changed render state
+        auto& layer = render_layers_.get_top_layer();
+        layer.needs_rebind = true;
+    }
+
+    // Create and return a MaskImage filter
+    // Allocate handle from filter manager
+    uint16_t filter_idx = filter_manager_.alloc();
+    if(filter_idx == bx::kInvalidHandle)
+    {
+        APPLOG_ERROR("Failed to allocate filter handle - pool exhausted");
+        return 0;
+    }
+
+    // Set up compiled filter
+    CompiledFilter& filter = filter_manager_.get(filter_idx);
+    filter.type = FilterType::MaskImage;
+
+    // Convert internal handle to RmlUi handle
+    compiled_filter_handle internal_handle;
+    internal_handle.idx = filter_idx;
+    Rml::CompiledFilterHandle rml_handle = filter_manager_.to_rml_handle(internal_handle);
+
+    // APPLOG_TRACE("SaveLayerAsMaskImage: Created mask filter handle {}", rml_handle);
+    return rml_handle;
 }
 
 // Filter and shader management
@@ -1363,11 +1582,8 @@ void RmlUi_RenderInterface::cleanup_resources()
 
     // Cleanup all compiled textures using the texture manager
     texture_manager_.cleanup_all([](CompiledTexture& texture) {
-        if(bgfx::isValid(texture.generated_texture_handle))
-        {
-            gfx::destroy(texture.generated_texture_handle);
-        }
-        texture.asset_handle = {};
+        // Shared pointers will automatically clean up when reset
+        texture = {};
     });
 
     // Cleanup all compiled filters using the filter manager
@@ -1494,60 +1710,7 @@ void RmlUi_RenderInterface::clear_stencil_buffer(uint32_t clear_value)
     gfx::touch(pass_id);
 }
 
-/// Helper function that creates a positioned quad for blitting (no scissor needed)
-/// @param src_rect Source rectangle in texture coordinates
-/// @param dst_rect Destination rectangle in framebuffer coordinates
-/// @param src_texture_size Size of the source texture
-/// @param dst_framebuffer_size Size of the destination framebuffer
-/// @return clip_quad_def configured for positioned blit operation
-static gfx::clip_quad_def create_positioned_blit_quad(const Rml::Rectanglei& src_rect,
-                                                      const Rml::Rectanglei& dst_rect,
-                                                      const Rml::Vector2i& src_texture_size,
-                                                      const Rml::Vector2i& dst_framebuffer_size)
-{
-    // Convert source rectangle to UV coordinates (0.0 to 1.0)
-    const float src_width = static_cast<float>(src_texture_size.x);
-    const float src_height = static_cast<float>(src_texture_size.y);
 
-    const float uv_min_x = static_cast<float>(src_rect.Left()) / src_width;
-    const float uv_min_y = static_cast<float>(src_rect.Top()) / src_height;
-    const float uv_max_x = static_cast<float>(src_rect.Right()) / src_width;
-    const float uv_max_y = static_cast<float>(src_rect.Bottom()) / src_height;
-
-    // Calculate UV offset and scaling
-    const float uv_offset_x = uv_min_x;
-    const float uv_offset_y = uv_min_y;
-    const float uv_scaling_x = uv_max_x - uv_min_x;
-    const float uv_scaling_y = uv_max_y - uv_min_y;
-
-    // Convert destination rectangle from framebuffer coordinates to NDC
-    const float fb_width = static_cast<float>(dst_framebuffer_size.x);
-    const float fb_height = static_cast<float>(dst_framebuffer_size.y);
-
-    // Convert to NDC space (-1 to 1)
-    const float ndc_left = (static_cast<float>(dst_rect.Left()) / fb_width) * 2.0f - 1.0f;
-    const float ndc_right = (static_cast<float>(dst_rect.Right()) / fb_width) * 2.0f - 1.0f;
-    const float ndc_top = 1.0f - (static_cast<float>(dst_rect.Top()) / fb_height) * 2.0f;
-    const float ndc_bottom = 1.0f - (static_cast<float>(dst_rect.Bottom()) / fb_height) * 2.0f;
-
-    // Calculate quad center and size in NDC
-    const float center_x = (ndc_left + ndc_right) * 0.5f;
-    const float center_y = (ndc_top + ndc_bottom) * 0.5f;
-    const float half_width = (ndc_right - ndc_left) * 0.5f;
-    const float half_height = (ndc_top - ndc_bottom) * 0.5f;
-
-    return gfx::clip_quad_def{
-        0.0f,         // depth
-        half_width,   // width (half-size since clip_quad uses -width to +width)
-        half_height,  // height (half-size since clip_quad uses -height to +height)
-        center_x,     // offset_x (center position)
-        center_y,     // offset_y (center position)
-        uv_offset_x,  // uv_offset_x
-        uv_offset_y,  // uv_offset_y
-        uv_scaling_x, // uv_scaling_x
-        uv_scaling_y  // uv_scaling_y
-    };
-}
 
 void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHandle> filter_handles)
 {
@@ -2529,7 +2692,7 @@ auto RmlUi_RenderInterface::RenderLayerStack::create_layer_framebuffer(int width
         return fb;
     }
 
-    APPLOG_TRACE("Created framebuffer {}x{} with {} MSAA samples", width, height, samples);
+    // APPLOG_TRACE("Created framebuffer {}x{} with {} MSAA samples", width, height, samples);
     return fb;
 }
 

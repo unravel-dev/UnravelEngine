@@ -225,6 +225,31 @@ namespace Unravel.Core
             return UIEventManager.Unsubscribe(this, eventType, callback);
         }
 
+        /// <summary>
+        /// Registers a typed event callback with compile-time type safety and zero runtime casting.
+        /// </summary>
+        /// <typeparam name="T">The specific event type (e.g., UIKeyEvent, UIPointerEvent)</typeparam>
+        /// <param name="eventType">The type of event to listen for.</param>
+        /// <param name="callback">The callback to invoke when the event occurs.</param>
+        public void RegisterCallback<T>(string eventType, Action<T> callback) where T : UIEventBase
+        {
+            ValidateAndThrow();
+            UIEventManager.Subscribe<T>(this, eventType, callback);
+        }
+
+        /// <summary>
+        /// Unregisters a typed event callback.
+        /// </summary>
+        /// <typeparam name="T">The specific event type</typeparam>
+        /// <param name="eventType">The type of event.</param>
+        /// <param name="callback">The callback to remove.</param>
+        /// <returns>True if the callback was found and removed.</returns>
+        public bool UnregisterCallback<T>(string eventType, Action<T> callback) where T : UIEventBase
+        {
+            ValidateAndThrow();
+            return UIEventManager.Unsubscribe<T>(this, eventType, callback);
+        }
+
         // ==== Helper Methods ====
 
         /// <summary>

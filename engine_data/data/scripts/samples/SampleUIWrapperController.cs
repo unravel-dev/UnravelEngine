@@ -6,6 +6,7 @@ namespace Unravel.Samples
     /// <summary>
     /// Sample script demonstrating the use of UI wrapper objects for caching and direct manipulation.
     /// This approach allows you to get UI elements once and keep them for later use without repeated searches.
+    /// Also demonstrates the new typed UI event system with UIPointerEvent and UIKeyEvent.
     /// </summary>
     public class SampleUIWrapperController : ScriptComponent
     {
@@ -109,16 +110,16 @@ namespace Unravel.Samples
 
         private void RegisterEventHandlers()
         {
-            // Register events directly on the wrapper objects
+            // Register events directly on the wrapper objects using new typed event system
             if (buttonElement != null)
             {
-                buttonElement.AddEventListener("click", OnButtonClick);
+                buttonElement.RegisterCallback<UIPointerEvent>("click", OnButtonClick);
             }
 
             if (textInputElement != null)
             {
-                textInputElement.AddEventListener("change", OnTextInputChange);
-                textInputElement.AddEventListener("keydown", OnTextInputKeyDown);
+                textInputElement.RegisterCallback<UIEventBase>("change", OnTextInputChange);
+                textInputElement.RegisterCallback<UIKeyEvent>("keydown", OnTextInputKeyDown);
             }
         }
 
@@ -133,10 +134,12 @@ namespace Unravel.Samples
             }
         }
 
-        // Event handlers
-        private void OnButtonClick(UIEventBase ev)
+        // Event handlers using typed events
+        private void OnButtonClick(UIPointerEvent ev)
         {
             clickCount++;
+            
+            Log.Info($"Button clicked at position ({ev.x}, {ev.y}) with button {ev.button}");
             
             if (buttonElement != null)
             {
@@ -169,9 +172,11 @@ namespace Unravel.Samples
             }
         }
 
-        private void OnTextInputKeyDown(UIEventBase ev)
+        private void OnTextInputKeyDown(UIKeyEvent ev)
         {
-            if (ev.keyCode == 13) // Enter key
+            Log.Info($"Key pressed: {ev.Key}, Modifiers - Ctrl: {ev.ctrlKey}, Shift: {ev.shiftKey}, Alt: {ev.altKey}");
+            
+            if (ev.keyCode == KeyCode.Enter) // Enter key
             {
                 Log.Info("Enter pressed in text input");
                 
@@ -181,12 +186,17 @@ namespace Unravel.Samples
                     buttonElement.Click();
                 }
             }
+            else if (ev.ctrlKey && ev.keyCode == KeyCode.A)
+            {
+                Log.Info("Ctrl+A pressed - select all functionality could go here");
+            }
         }
 
         public override void OnDestroy()
         {
             // No need to manually clean up wrappers - they automatically become invalid
             // when the underlying C++ objects are destroyed
+            // Event callbacks are also automatically cleaned up by the UIEventManager
             Log.Info("UI wrapper controller destroyed");
         }
 
