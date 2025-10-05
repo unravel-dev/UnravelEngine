@@ -1097,7 +1097,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                    fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
                                }
 
-                               auto executable_path = params.deploy_location / project_name;
+                               auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
 
                                APPLOG_TRACE("Copying {} -> {}",
                                             app_executable.generic_string(),
