@@ -8,14 +8,11 @@ namespace unravel
 void audio_source_component::on_play_begin()
 {
     source_.reset();
-
-    if(get_autoplay())
-    {
-        play();
-    }
+    auto_play_consumed_ = false;
 }
 void audio_source_component::on_play_end()
 {
+    auto_play_consumed_ = true;
     if(source_)
     {
         source_->stop();
@@ -25,10 +22,19 @@ void audio_source_component::on_play_end()
 
 void audio_source_component::update(const math::transform& t, delta_t dt)
 {
+    if(get_autoplay() && !auto_play_consumed_)
+    {
+        if(play())
+        {
+            auto_play_consumed_ = true;
+        }
+    }
+
     if(!source_)
     {
         return;
     }
+
     source_->update(std::chrono::milliseconds(16));
     auto pos = t.get_position();
     auto forward = t.z_unit_axis();
@@ -158,13 +164,13 @@ auto audio_source_component::get_playback_duration() const -> audio::duration_t
     return source_->get_playback_duration();
 }
 
-void audio_source_component::play()
+auto audio_source_component::play() -> bool
 {
     if(!source_)
     {
         if(!create_source())
         {
-            return;
+            return false;
         }
     }
 
@@ -172,7 +178,10 @@ void audio_source_component::play()
     {
         source_->bind(*sound_.get());
         source_->play();
+        return true;
     }
+
+    return false;
 }
 
 void audio_source_component::stop()

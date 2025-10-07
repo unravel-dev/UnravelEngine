@@ -207,7 +207,7 @@ namespace Unravel.Core
         /// </summary>
         /// <param name="eventType">The type of event to listen for.</param>
         /// <param name="callback">The callback to invoke when the event occurs.</param>
-        public void AddEventListener(string eventType, UIEventCallback callback)
+        public void RegisterCallback(string eventType, UIEventCallback callback)
         {
             ValidateAndThrow();
             UIEventManager.Subscribe(this, eventType, callback);
@@ -219,7 +219,7 @@ namespace Unravel.Core
         /// <param name="eventType">The type of event.</param>
         /// <param name="callback">The callback to remove.</param>
         /// <returns>True if the listener was removed successfully.</returns>
-        public bool RemoveEventListener(string eventType, UIEventCallback callback)
+        public bool UnregisterCallback(string eventType, UIEventCallback callback)
         {
             ValidateAndThrow();
             return UIEventManager.Unsubscribe(this, eventType, callback);

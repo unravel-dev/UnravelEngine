@@ -121,7 +121,7 @@ public:
     /**
      * @brief Starts playing the audio source.
      */
-    void play();
+    auto play() -> bool;
 
     /**
      * @brief Stops playing the audio source.
@@ -213,6 +213,8 @@ private:
     frange_t range_ = {1.0f, 20.0f};        ///< The range of the audio source.
     std::shared_ptr<audio::source> source_; ///< The audio source object.
     asset_handle<audio_clip> sound_;        ///< The audio clip bound to the audio source.
+
+    bool auto_play_consumed_ = true;     ///< Indicates if the audio source should autoplay.
 };
 
 } // namespace unravel

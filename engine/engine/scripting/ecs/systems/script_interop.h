@@ -194,6 +194,14 @@ struct ui_textinput_event : ui_event_base
 };
 
 
+struct ui_slider_event : ui_event_base
+{
+    float value{};
+    float min_value{};
+    float max_value{};
+    float step{};
+};
+
 
 
 } // namespace managed_interface
@@ -420,6 +428,59 @@ struct mono_converter<managed_interface::ui_textinput_event>
     }
 };
 
+// Custom converter for ui_textinput_event
+template<>
+struct mono_converter<managed_interface::ui_slider_event>
+{
+    using native_type = managed_interface::ui_slider_event;
+    using managed_type = MonoObject*;
+
+    static auto to_mono(const native_type& obj) -> managed_type
+    {
+        auto& ctx = unravel::engine::context();
+        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
+        auto type = app_assembly.get_type("Unravel.Core", "UISliderEvent");
+        auto instance = type.new_instance();
+        
+        // Set base class fields
+        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
+        mono::set_field_value(instance, "targetElementId", obj.target_element_id);
+        mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
+        mono::set_field_value(instance, "currentElementId", obj.current_element_id);
+        mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
+        mono::set_field_value(instance, "phase", obj.phase);
+        mono::set_field_value(instance, "eventType", obj.event_type);
+        
+        // Set text input-specific fields
+        mono::set_field_value(instance, "value", obj.value);
+        mono::set_field_value(instance, "minValue", obj.min_value);
+        mono::set_field_value(instance, "maxValue", obj.max_value);
+        mono::set_field_value(instance, "step", obj.step);
+        
+        return instance.get_internal_ptr();
+    }
+
+    static auto from_mono(const managed_type& obj) -> native_type
+    {
+        // Implementation for C# to C++ conversion if needed
+        mono::mono_object object(obj);
+        native_type data;
+        // Set base fields
+        mono::get_field_value(object, "nativePtr", data.native_ptr);
+        mono::get_field_value(object, "targetElementId", data.target_element_id);
+        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
+        mono::get_field_value(object, "currentElementId", data.current_element_id);
+        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
+        mono::get_field_value(object, "phase", data.phase);
+        mono::get_field_value(object, "eventType", data.event_type);
+        // Set text input-specific fields
+        mono::get_field_value(object, "value", data.value);
+        mono::get_field_value(object, "minValue", data.min_value);
+        mono::get_field_value(object, "maxValue", data.max_value);
+        mono::get_field_value(object, "step", data.step);
+        return data;
+    }
+};
 
 } // namespace mono
 

@@ -123,6 +123,100 @@ input, textarea, select, option {
 }
 
 
+
+scrollbarvertical {
+	z-index: 100;
+	margin-top: 75dp;
+	margin-bottom: 20dp;
+	margin-right: 0dp;
+	width: 0dp;
+}
+scrollbarvertical sliderbar {
+	margin-left: -14dp;
+	width: 12dp;
+	min-height: 25dp;
+	background: #d3e9ea66;
+	border-radius: 4dp;
+}
+scrollbarvertical sliderbar:hover, scrollbarvertical sliderbar:active {
+	background: #d3e9eaaa;
+}
+
+input.range {
+	width: 100%;
+	height: 15dp;
+	transition: opacity 0.2s cubic-out;
+}
+
+input.range:disabled { 
+	opacity: 0.3;
+}
+
+input.range slidertrack {
+	background-color: #ffffff;
+  	border-radius: 5dp;
+}
+
+input.range sliderbar {
+	width: 25dp;
+  	height: 25dp;
+ 	margin-top: -5px;
+	border-radius: 5dp;
+}
+
+input.range:hover sliderbar { 
+ 	background-color: #3f7a9c;
+}
+
+input.range sliderbar:active { 
+	background-color: #5baedf;
+}
+
+input.range sliderbar, input.range sliderbar:disabled {
+	background-color: #4686ac;
+}
+
+input.range sliderprogress {
+  	background-color: #4686ac;
+  	border-top-left-radius: 5dp;
+  	border-bottom-left-radius: 5dp;
+}
+
+input.range:hover sliderprogress {
+	background-color: #3f7a9c;
+}
+input.range:active sliderprogress {
+	background-color: #5baedf;
+}
+
+input.range sliderarrowdec, input.range sliderarrowinc {
+	width: 0dp;
+	height: 0dp;
+}
+input.range sliderarrowdec { border-radius: 2dp 0 0 2dp; }
+input.range sliderarrowinc { border-radius: 0 2dp 2dp 0; }
+input.range sliderarrowdec:hover,    input.range sliderarrowinc:hover    { background-color: #dddddd; }
+input.range sliderarrowdec:active,   input.range sliderarrowinc:active   { background-color: #eeeeee; }
+input.range sliderarrowdec,          input.range sliderarrowinc,
+input.range sliderarrowdec:disabled, input.range sliderarrowinc:disabled { background-color: #cccccc; }
+
+
+input.radio, input.checkbox {
+	width: 15dp;
+	height: 15dp;
+	border: 1dp #cccccc;
+	background: #ffffff;
+	border-radius: 2dp;
+}
+input.radio {
+	border-radius: 8dp;
+}
+input.radio:hover,   input.checkbox:hover   { background-color: #ff3; }
+input.radio:active,  input.checkbox:active  { background-color: #ddd; }
+input.radio:checked, input.checkbox:checked { background-color: #555; }
+
+
+
 button {
 	font-size: 1rem;
 	font-weight: bold;

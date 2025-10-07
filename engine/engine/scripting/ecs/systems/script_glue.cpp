@@ -190,20 +190,34 @@ auto safe_get_component(entt::entity id) -> T*
 
 void internal_m2n_load_scene(const std::string& key)
 {
-    auto& ctx = engine::context();
-    auto& ec = ctx.get_cached<ecs>();
-    auto& am = ctx.get_cached<asset_manager>();
+    auto delay = seq::delay(1ms);
+    delay.on_end.connect(
+        [key]()
+        {
+            auto& ctx = engine::context();
+            auto& ec = ctx.get_cached<ecs>();
+            auto& am = ctx.get_cached<asset_manager>();
+        
+            ec.get_scene().load_from(am.get_asset<scene_prefab>(key));
+        });
 
-    ec.get_scene().load_from(am.get_asset<scene_prefab>(key));
+    seq::start(delay, "script");
 }
 
 void internal_m2n_load_scene_uid(const hpp::uuid& uid)
 {
-    auto& ctx = engine::context();
-    auto& ec = ctx.get_cached<ecs>();
-    auto& am = ctx.get_cached<asset_manager>();
+    auto delay = seq::delay(1ms);
+    delay.on_end.connect(
+        [uid]()
+        {
+            auto& ctx = engine::context();
+            auto& ec = ctx.get_cached<ecs>();
+            auto& am = ctx.get_cached<asset_manager>();
+        
+            ec.get_scene().load_from(am.get_asset<scene_prefab>(uid));
+        });
 
-    ec.get_scene().load_from(am.get_asset<scene_prefab>(uid));
+    seq::start(delay, "script");
 }
 
 void internal_m2n_create_scene(const mono::mono_object& this_ptr)
@@ -906,8 +920,6 @@ void internal_m2n_log_error(const std::string& message, const std::string& func,
 
 void internal_m2n_application_quit()
 {
-
-
     auto delay = seq::delay(1ms);
     delay.on_end.connect(
         []()
@@ -2669,8 +2681,55 @@ auto get_ui_element_safe(entt::entity entity_id, const std::string& element_id) 
 //-------------------------------------------------------------------------
 
 // Forward declaration for event dispatching to UIEventManager
-void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& event_data);
-void dispatch_textinput_event_to_manager(const Rml::Event& event, Rml::Element* target_element, Rml::Element* current_element);
+
+// Legacy dispatch event to C# UIEventManager (kept for backward compatibility)
+template<typename T>
+void dispatch_ui_event_to_manager(const T& event_data)
+{
+    try
+    {
+        auto& ctx = engine::context();
+        auto& script_sys = ctx.get<script_system>();
+        auto assembly = script_sys.get_engine_assembly();
+        
+        // Get the UIEventManager type
+        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
+        if (!ui_event_manager_type.valid())
+        {
+            APPLOG_ERROR("UIEventManager type not found in assembly");
+            return;
+        }
+        
+        // Get the InternalDispatchEvent method
+        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
+        if (!dispatch_method.valid())
+        {
+            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
+            return;
+        }
+        
+        // Create method invoker and call it
+        auto method_invoker = mono::make_method_invoker<void(const T&)>(dispatch_method, true);
+        if (method_invoker.valid())
+        {
+            method_invoker(event_data);
+        }
+        else
+        {
+            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent");
+        }
+    }
+    catch (const mono::mono_exception& e)
+    {
+        APPLOG_ERROR("Mono exception dispatching UI event: {}", e.what());
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error dispatching UI event: {}", e.what());
+    }
+}
+
+
 
 // Helper functions to determine event type using efficient enum comparisons
 auto is_key_event(Rml::EventId event_id) -> bool
@@ -2681,6 +2740,11 @@ auto is_key_event(Rml::EventId event_id) -> bool
 auto is_textinput_event(Rml::EventId event_id) -> bool
 {
     return event_id == Rml::EventId::Textinput;
+}
+
+auto is_value_event(const Rml::Event& event) -> bool
+{
+    return event.GetId() == Rml::EventId::Change && event.GetParameter<std::string>("value", "") != "";
 }
 
 auto is_pointer_event(Rml::EventId event_id) -> bool
@@ -2712,59 +2776,20 @@ void dispatch_key_event_to_manager(const Rml::Event& event,
                                   Rml::Element* target_element, 
                                   Rml::Element* current_element)
 {
-    try
-    {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
-        {
-            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
-            return;
-        }
-        
-        // Create key event data
-        mono::managed_interface::ui_key_event key_event_data;
-        fill_base_event_data(key_event_data, event, target_element, current_element);
-        
-        // Fill key-specific data based on actual RmlUi parameters
-        auto key_identifier = event.GetParameter<int>("key_identifier", 0);
-        key_event_data.key_code = RmlEngine::convert_rml_key_to_input(static_cast<Rml::Input::KeyIdentifier>(key_identifier));
-        key_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
-        key_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
-        key_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
-        key_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
-        
-        // Create method invoker and call it
-        auto method_invoker = mono::make_method_invoker<void(const mono::managed_interface::ui_key_event&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(key_event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent (key event)");
-        }
-    }
-    catch (const mono::mono_exception& e)
-    {
-        APPLOG_ERROR("Mono exception dispatching UI key event: {}", e.what());
-    }
-    catch (const std::exception& e)
-    {
-        APPLOG_ERROR("Error dispatching UI key event: {}", e.what());
-    }
+     
+    // Create key event data
+    mono::managed_interface::ui_key_event key_event_data;
+    fill_base_event_data(key_event_data, event, target_element, current_element);
+    
+    // Fill key-specific data based on actual RmlUi parameters
+    auto key_identifier = event.GetParameter<int>("key_identifier", 0);
+    key_event_data.key_code = RmlEngine::convert_rml_key_to_input(static_cast<Rml::Input::KeyIdentifier>(key_identifier));
+    key_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
+    key_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
+    key_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
+    key_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
+    
+    dispatch_ui_event_to_manager(key_event_data);
 }
 
 // Dispatch pointer event to C# UIEventManager
@@ -2772,62 +2797,24 @@ void dispatch_pointer_event_to_manager(const Rml::Event& event,
                                       Rml::Element* target_element, 
                                       Rml::Element* current_element)
 {
-    try
-    {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
-        {
-            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
-            return;
-        }
-        
-        // Create pointer event data
-        mono::managed_interface::ui_pointer_event pointer_event_data;
-        fill_base_event_data(pointer_event_data, event, target_element, current_element);
-        
-        // Fill pointer-specific data based on actual RmlUi parameters
-        pointer_event_data.x = event.GetParameter<float>("mouse_x", 0.0f);
-        pointer_event_data.y = event.GetParameter<float>("mouse_y", 0.0f);
-        pointer_event_data.button = event.GetParameter<int>("button", -1);
-        pointer_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
-        pointer_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
-        pointer_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
-        pointer_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
-        pointer_event_data.delta_x = event.GetParameter<float>("wheel_delta_x", 0.0f);
-        pointer_event_data.delta_y = event.GetParameter<float>("wheel_delta_y", 0.0f);
-        
-        // Create method invoker and call it
-        auto method_invoker = mono::make_method_invoker<void(const mono::managed_interface::ui_pointer_event&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(pointer_event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent (pointer event)");
-        }
-    }
-    catch (const mono::mono_exception& e)
-    {
-        APPLOG_ERROR("Mono exception dispatching UI pointer event: {}", e.what());
-    }
-    catch (const std::exception& e)
-    {
-        APPLOG_ERROR("Error dispatching UI pointer event: {}", e.what());
-    }
+
+    // Create pointer event data
+    mono::managed_interface::ui_pointer_event pointer_event_data;
+    fill_base_event_data(pointer_event_data, event, target_element, current_element);
+    
+    // Fill pointer-specific data based on actual RmlUi parameters
+    pointer_event_data.x = event.GetParameter<float>("mouse_x", 0.0f);
+    pointer_event_data.y = event.GetParameter<float>("mouse_y", 0.0f);
+    pointer_event_data.button = event.GetParameter<int>("button", -1);
+    pointer_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
+    pointer_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
+    pointer_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
+    pointer_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
+    pointer_event_data.delta_x = event.GetParameter<float>("wheel_delta_x", 0.0f);
+    pointer_event_data.delta_y = event.GetParameter<float>("wheel_delta_y", 0.0f);
+    
+    dispatch_ui_event_to_manager(pointer_event_data);
+
 }
 
 // Dispatch text input event to C# UIEventManager
@@ -2835,58 +2822,46 @@ void dispatch_textinput_event_to_manager(const Rml::Event& event,
                                          Rml::Element* target_element, 
                                          Rml::Element* current_element)
 {
-    try
+    // Create text input event data
+    mono::managed_interface::ui_textinput_event textinput_event_data;
+    fill_base_event_data(textinput_event_data, event, target_element, current_element);
+
+          
+    // Fill text input-specific data
+    textinput_event_data.text = event.GetParameter<std::string>("text", "");
+    textinput_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
+    textinput_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
+    textinput_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
+    textinput_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
+    
+    
+    dispatch_ui_event_to_manager(textinput_event_data);
+}
+
+// Dispatch value event to C# UIEventManager
+void dispatch_value_event_to_manager(const Rml::Event& event, 
+                                     Rml::Element* target_element, 
+                                     Rml::Element* current_element)
+{
+   
+    // Create value event data
+    mono::managed_interface::ui_slider_event value_event_data;
+    fill_base_event_data(value_event_data, event, target_element, current_element);
+    
+    // Fill value-specific data
+    value_event_data.value = event.GetParameter<float>("value", 0);
+
+    if(auto* slider_element = event.GetCurrentElement())
     {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
-        {
-            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
-            return;
-        }
-        
-        // Create text input event data
-        mono::managed_interface::ui_textinput_event textinput_event_data;
-        fill_base_event_data(textinput_event_data, event, target_element, current_element);
-        
-        // Fill text input-specific data
-        textinput_event_data.text = event.GetParameter<std::string>("text", "");
-        textinput_event_data.ctrl_key = event.GetParameter<int>("ctrl_key", 0) > 0;
-        textinput_event_data.shift_key = event.GetParameter<int>("shift_key", 0) > 0;
-        textinput_event_data.alt_key = event.GetParameter<int>("alt_key", 0) > 0;
-        textinput_event_data.meta_key = event.GetParameter<int>("meta_key", 0) > 0;
-        
-        // Create method invoker and call it
-        auto method_invoker = mono::make_method_invoker<void(const mono::managed_interface::ui_textinput_event&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(textinput_event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent (text input event)");
-        }
+        value_event_data.min_value = slider_element->GetAttribute<float>("min", 0);
+        value_event_data.max_value = slider_element->GetAttribute<float>("max", 0);
+        value_event_data.step = slider_element->GetAttribute<float>("step", 0);
     }
-    catch (const mono::mono_exception& e)
-    {
-        APPLOG_ERROR("Mono exception dispatching UI text input event: {}", e.what());
-    }
-    catch (const std::exception& e)
-    {
-        APPLOG_ERROR("Error dispatching UI text input event: {}", e.what());
-    }
+
+
+
+    dispatch_ui_event_to_manager(value_event_data);
+
 }
 
 // Dispatch base event to C# UIEventManager (fallback)
@@ -2937,74 +2912,32 @@ public:
             {
                 dispatch_pointer_event_to_manager(event, target_element, current_element);
             }
+            else if (is_value_event(event))
+            {
+                dispatch_value_event_to_manager(event, target_element, current_element);
+            }
             else
             {
                 // Fallback to base event for unknown types
                 dispatch_base_event_to_manager(event, target_element, current_element);
             }
+        }
+        catch (const std::exception& e)
+        {
+            APPLOG_ERROR("Error processing UI event: {}", e.what());
+        }
+        current_event_ = nullptr;
     }
-    catch (const std::exception& e)
-    {
-        APPLOG_ERROR("Error processing UI event: {}", e.what());
-    }
-    current_event_ = nullptr;
-}
 
-// Allow access to current event for propagation control
-auto get_current_event() const -> Rml::Event*
-{
-    return current_event_;
-}
+    // Allow access to current event for propagation control
+    auto get_current_event() const -> Rml::Event*
+    {
+        return current_event_;
+    }
 };
     
 // Global event listener instance
 ui_global_event_listener g_ui_global_listener;
-
-// Legacy dispatch event to C# UIEventManager (kept for backward compatibility)
-void dispatch_ui_event_to_manager(const mono::managed_interface::ui_event_base& event_data)
-{
-    try
-    {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
-        {
-            APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
-            return;
-        }
-        
-        // Create method invoker and call it
-        auto method_invoker = mono::make_method_invoker<void(const mono::managed_interface::ui_event_base&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent");
-        }
-    }
-    catch (const mono::mono_exception& e)
-    {
-        APPLOG_ERROR("Mono exception dispatching UI event: {}", e.what());
-    }
-    catch (const std::exception& e)
-    {
-        APPLOG_ERROR("Error dispatching UI event: {}", e.what());
-    }
-}
 
 // Ensure a native event listener is attached to the element for the given event type
 void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, const std::string& event_type)

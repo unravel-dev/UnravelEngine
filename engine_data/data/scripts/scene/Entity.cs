@@ -31,18 +31,22 @@ public struct Entity : IEquatable<Entity>, IFormattable
 	public bool activeLocal
 	{
 		get => internal_m2n_get_active_local(this);
-		set => internal_m2n_set_active_local(this, value);
+	}
+	
+	public void SetActive(bool active)
+	{
+		internal_m2n_set_active_local(this, active);
 	}
 
 	/// <summary>
-	/// Gets or sets the name of the entity.
-	/// </summary>
-	/// <value>The name associated with the entity.</value>
-	public string name
-	{
-		get => internal_m2n_get_name(this);
-		set => internal_m2n_set_name(this, value);
-	}
+			/// Gets or sets the name of the entity.
+			/// </summary>
+			/// <value>The name associated with the entity.</value>
+			public string name
+			{
+				get => internal_m2n_get_name(this);
+				set => internal_m2n_set_name(this, value);
+			}
 
 	/// <summary>
 	/// Gets or sets the tag of the entity.
