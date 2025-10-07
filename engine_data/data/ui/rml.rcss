@@ -146,6 +146,7 @@ input.range {
 	width: 100%;
 	height: 15dp;
 	transition: opacity 0.2s cubic-out;
+	border-radius: 5dp;
 }
 
 input.range:disabled { 
@@ -165,28 +166,28 @@ input.range sliderbar {
 }
 
 input.range:hover sliderbar { 
- 	background-color: #3f7a9c;
+ 	background-color: #357abd;
 }
 
 input.range sliderbar:active { 
-	background-color: #5baedf;
+	background-color: #2e6bb8;
 }
 
 input.range sliderbar, input.range sliderbar:disabled {
-	background-color: #4686ac;
+	background-color: #4a90e2;
 }
 
 input.range sliderprogress {
-  	background-color: #4686ac;
+  	background-color: #4a90e2;
   	border-top-left-radius: 5dp;
   	border-bottom-left-radius: 5dp;
 }
 
 input.range:hover sliderprogress {
-	background-color: #3f7a9c;
+	background-color: #357abd;
 }
 input.range:active sliderprogress {
-	background-color: #5baedf;
+	background-color: #2e6bb8;
 }
 
 input.range sliderarrowdec, input.range sliderarrowinc {

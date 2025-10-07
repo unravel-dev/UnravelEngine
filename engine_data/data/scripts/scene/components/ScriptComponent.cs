@@ -1,22 +1,29 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Reflection;
 
 namespace Unravel
 {
 namespace Core
 {
+    [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
+    public sealed class ScriptSourceFileAttribute : Attribute
+    {
+        public string Path { get; }
+        public ScriptSourceFileAttribute([CallerFilePath] string path = "") => Path = path;
+    }
     /// <summary>
     /// Represents a script component that provides lifecycle hooks and event handling for an entity.
     /// </summary>
     public abstract class ScriptComponent : Component
     {
         private bool m_started = false;
-        private string SourceFilePath { get; }
+        protected string SourceFilePath { get; set; }
         protected ScriptComponent([CallerFilePath] string file = "")
         {
             SourceFilePath = file;
-        }
+        }        
 
         /// <summary>
         /// Called when the script is created. Override this method to initialize resources or data.

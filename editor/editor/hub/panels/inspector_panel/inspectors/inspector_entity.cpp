@@ -966,10 +966,14 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
     if(result.changed)
     {
-        if(auto prefab = data.try_get<prefab_component>())
+        if(data)
         {
-            prefab->changed = true;
+            if(auto prefab = data.try_get<prefab_component>())
+            {
+                prefab->changed = true;
+            }
         }
+        
         var = data;
     }
 

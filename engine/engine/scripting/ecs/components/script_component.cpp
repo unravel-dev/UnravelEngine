@@ -673,6 +673,15 @@ auto script_component::get_script_source_location(const script_object& obj) cons
     const auto& type = object.get_type();
     try
     {
+        auto attrs = type.get_attributes();
+        for(auto& attr : attrs)
+        {
+            if(attr.get_type().get_fullname() == "Unravel.Core.ScriptSourceFileAttribute")
+            {
+                auto invoker = mono::make_property_invoker<std::string>(attr.get_type(), "Path");
+                return invoker.get_value(attr);
+            }
+        }
         auto prop = type.get_property("SourceFilePath");
         auto invoker = mono::make_property_invoker<std::string>(prop);
         return invoker.get_value(object);

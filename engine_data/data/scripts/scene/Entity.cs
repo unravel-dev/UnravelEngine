@@ -39,14 +39,14 @@ public struct Entity : IEquatable<Entity>, IFormattable
 	}
 
 	/// <summary>
-			/// Gets or sets the name of the entity.
-			/// </summary>
-			/// <value>The name associated with the entity.</value>
-			public string name
-			{
-				get => internal_m2n_get_name(this);
-				set => internal_m2n_set_name(this, value);
-			}
+	/// Gets or sets the name of the entity.
+	/// </summary>
+	/// <value>The name associated with the entity.</value>
+	public string name
+	{
+		get => internal_m2n_get_name(this);
+		set => internal_m2n_set_name(this, value);
+	}
 
 	/// <summary>
 	/// Gets or sets the tag of the entity.
@@ -80,6 +80,7 @@ public struct Entity : IEquatable<Entity>, IFormattable
 	/// <inheritdoc/>
 	public override bool Equals(object obj)
 	{
+		
 		if (obj == null || !(obj is Entity))
 			return false;
 
@@ -114,6 +115,16 @@ public struct Entity : IEquatable<Entity>, IFormattable
 	/// <param name="rhs">The second entity.</param>
 	/// <returns><c>true</c> if both entities are not equal; otherwise, <c>false</c>.</returns>
 	public static bool operator !=(Entity lhs, Entity rhs) => !(lhs == rhs);
+
+	/// <summary>
+	/// Implicit conversion to bool for null checking. Returns true if the entity is valid.
+	/// </summary>
+	/// <param name="entity">The entity to check.</param>
+	/// <returns><c>true</c> if the entity is valid; otherwise, <c>false</c>.</returns>
+	public static implicit operator bool(Entity entity)
+	{
+		return entity.IsValid();
+	}
 
 	/// <inheritdoc/>
 	public override int GetHashCode() => Id.GetHashCode();

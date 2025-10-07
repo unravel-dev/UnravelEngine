@@ -25,11 +25,27 @@ public struct FixedUpdateInfo
 public static class Time
 {
     public static float deltaTime;
-    public static float timeScale;
+    internal static float _timeScale = 1.0f;
 
     public static float fixedDeltaTime;
 
     public static long frameCount;
+
+    /// <summary>
+    /// Gets or sets the time scale for the application.
+    /// </summary>
+    public static float timeScale
+    {
+        get { return _timeScale; }
+        set 
+        { 
+            _timeScale = value;
+            internal_m2n_set_time_scale(value);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_set_time_scale(float scale);
 }
 
 /// <summary>
@@ -43,14 +59,12 @@ public static class Time
 public sealed class ScriptComponentManager
 {
     private bool isInvoking = false;
-    // If we marked anything null during invocation, set this so we know to cleanup after.
-    private bool anyNulls = false;  
 
     // The main list.  (component, priority).
     private List<Entry> entries = new List<Entry>();
 
     // List of comps to add after the invocation finishes
-    private List<ScriptComponent> pendingAdd = new List<ScriptComponent>();
+    private List<PendingOp> pendingOps = new List<PendingOp>();
 
     // Type-based priorities
     private Dictionary<Type, int> typePriorities = new Dictionary<Type,int>();
@@ -68,7 +82,7 @@ public sealed class ScriptComponentManager
 
     /// <summary>
     /// Add a ScriptComponent. 
-    /// If we’re currently invoking, we defer it into 'pendingAdd'. 
+    /// If we're currently invoking, we defer it into 'pendingOps'. 
     /// Otherwise, we insert it directly.
     /// </summary>
     public void Add(ScriptComponent comp)
@@ -76,8 +90,8 @@ public sealed class ScriptComponentManager
         if (comp == null) return;
         if (isInvoking)
         {
-            // Defer until after invocation
-            pendingAdd.Add(comp);
+            // Collapse operations to avoid redundant add/remove chains
+            CollapseOperations(comp, true);
         }
         else
         {
@@ -91,7 +105,7 @@ public sealed class ScriptComponentManager
     /// <summary>
     /// Remove a ScriptComponent. 
     /// If not currently invoking, remove them directly from 'entries'.
-    /// If we are invoking, mark all matching comps as null and set 'anyNulls=true'.
+    /// If we are invoking, defer the operation and collapse with existing operations.
     /// </summary>
     public void Remove(ScriptComponent comp)
     {
@@ -99,14 +113,13 @@ public sealed class ScriptComponentManager
 
         if (isInvoking)
         {
-            // Mark them null, skip physically removing
-            MarkAllNull(comp);
-            anyNulls = true;
+            // Collapse operations to avoid redundant add/remove chains
+            CollapseOperations(comp, false);
         }
         else
         {
             // Direct removal
-            entries.RemoveAll(e => e.Comp == comp);
+            RemoveComponent(comp);
         }
     }
 
@@ -116,9 +129,8 @@ public sealed class ScriptComponentManager
     public void Clear()
     {
         entries.Clear();
-        pendingAdd.Clear();
+        pendingOps.Clear();
         isInvoking = false;
-        anyNulls = false;
     }
 
     // If you want more update passes, you can replicate:
@@ -135,7 +147,7 @@ public sealed class ScriptComponentManager
             // Iterate in current sorted order
             foreach (var entry in entries)
             {
-                if (entry.Comp != null)
+                if (entry.Comp != null && !IsRemoved(entry.Comp))
                 {
                     action(entry.Comp);
                 }
@@ -146,21 +158,21 @@ public sealed class ScriptComponentManager
             isInvoking = false;
         }
 
-        // If we marked anything null, remove them
-        if (anyNulls)
-        {
-            entries.RemoveAll(e => e.Comp == null);
-            anyNulls = false;
-        }
-
         // Insert any pending additions
-        if (pendingAdd.Count > 0)
+        if (pendingOps.Count > 0)
         {
-            foreach (var comp in pendingAdd)
+            foreach (var op in pendingOps)
             {
-                InsertComponent(comp);
+                if (op.add)
+                {
+                    InsertComponent(op.Comp);
+                }
+                else
+                {
+                    RemoveComponent(op.Comp);
+                }
             }
-            pendingAdd.Clear();
+            pendingOps.Clear();
 
             // Re-sort
             Resort();
@@ -194,20 +206,9 @@ public sealed class ScriptComponentManager
         int p = GetPriorityFor(comp);
         entries.Add(new Entry { Comp = comp, Priority = p });
     }
-
-    // Mark every matching 'comp' as null in 'entries'
-    // So we skip them in the iteration
-    private void MarkAllNull(ScriptComponent comp)
+    private void RemoveComponent(ScriptComponent comp)
     {
-        for (int i = 0; i < entries.Count; i++)
-        {
-            if (entries[i].Comp == comp)
-            {
-                entries[i] = new Entry { Comp = null, Priority = entries[i].Priority };
-                // if you want to remove duplicates, keep going; 
-                // if you assume unique, break after first
-            }
-        }
+        entries.RemoveAll(e => e.Comp == comp);
     }
 
     // Retrieve or default a priority for this comp
@@ -218,16 +219,72 @@ public sealed class ScriptComponentManager
             return p;
         return 100; // fallback
     }
+    
+    private bool IsRemoved(ScriptComponent comp)
+    {
+        return pendingOps.Any(op => op.Comp == comp && !op.add);
+    }
+
+    /// <summary>
+    /// Collapses operations for a component to avoid redundant add/remove chains.
+    /// </summary>
+    /// <param name="comp">The component to process operations for.</param>
+    /// <param name="isAdd">True if this is an add operation, false if remove.</param>
+    private void CollapseOperations(ScriptComponent comp, bool isAdd)
+    {
+        // Find the last operation for this component
+        int lastOpIndex = -1;
+        for (int i = pendingOps.Count - 1; i >= 0; i--)
+        {
+            if (pendingOps[i].Comp == comp)
+            {
+                lastOpIndex = i;
+                break;
+            }
+        }
+
+        if (lastOpIndex == -1)
+        {
+            // No previous operations for this component, just add the new one
+            pendingOps.Add(new PendingOp { add = isAdd, Comp = comp });
+        }
+        else
+        {
+            var lastOp = pendingOps[lastOpIndex];
+            
+            if (lastOp.add && !isAdd)
+            {
+                // Last was add, this is remove -> cancel both operations
+                pendingOps.RemoveAt(lastOpIndex);
+            }
+            else if (!lastOp.add && isAdd)
+            {
+                // Last was remove, this is add -> cancel both operations
+                pendingOps.RemoveAt(lastOpIndex);
+            }
+            else if (lastOp.add && isAdd)
+            {
+                // Last was add, this is add -> do nothing (already added)
+                // No need to add another add operation
+            }
+            else if (!lastOp.add && !isAdd)
+            {
+                // Last was remove, this is remove -> do nothing (already removed)
+                // No need to add another remove operation
+            }
+        }
+    }
 
     // Internal data
     private struct Entry
     {
         public ScriptComponent Comp;
-        public int Priority;
+        public int Priority;        
     }
 
-    private struct PendingAdd
+    private struct PendingOp
     {
+        public bool add;
         public ScriptComponent Comp;
     }
 }
@@ -240,7 +297,7 @@ public static class SystemManager
     public static void internal_n2m_update(UpdateInfo info)
     {
         Time.deltaTime = info.deltaTime;
-        Time.timeScale = info.timeScale;
+        Time._timeScale = info.timeScale;
         Time.frameCount = info.frameCount;
 
         ScriptManager.InvokeUpdate();

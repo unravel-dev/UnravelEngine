@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using Unravel.Core;
 
+[ScriptSourceFile]
 class NewComponentTemplate : ScriptComponent
 {
 	/// <summary>
@@ -34,7 +35,7 @@ class NewComponentTemplate : ScriptComponent
 	{
 	}
 
-	
+
 	/// <summary>
 	/// For more functions <see cref="ScriptComponent"/>.
 	/// </summary>

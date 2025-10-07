@@ -34,6 +34,7 @@
 // Mono includes for method invocation
 #include <monopp/mono_method_invoker.h>
 
+#include <simulation/simulation.h>
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
 #include <seq/seq.h>
@@ -930,6 +931,13 @@ void internal_m2n_application_quit()
         });
 
     seq::start(delay, "script");
+}
+
+void internal_m2n_set_time_scale(float scale)
+{
+    auto& ctx = engine::context();
+    auto& sim = ctx.get_cached<simulation>();
+    sim.set_time_scale(scale);
 }
 
 //-------------------------------------------------------------------------
@@ -3823,6 +3831,11 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     {
         auto reg = mono::internal_call_registry("Unravel.Core.Application");
         reg.add_internal_call("internal_m2n_application_quit", internal_call(internal_m2n_application_quit));
+    }
+
+    {
+        auto reg = mono::internal_call_registry("Unravel.Core.Time");
+        reg.add_internal_call("internal_m2n_set_time_scale", internal_call(internal_m2n_set_time_scale));
     }
 
     // mono::managed_interface::init(assembly);
