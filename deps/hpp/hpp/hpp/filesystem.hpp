@@ -220,18 +220,20 @@ inline std::string executable_extension()
 
 inline void show_in_graphical_env(const path& _path)
 {
+	auto _path_preferred = _path;
+	_path_preferred.make_preferred();
 	if(is_regular_file(_path))
 	{
 		// Open Explorer and select the file
 		// The correct format is: explorer.exe /select,"path\to\file"
 		// Note the lack of space between /select, and the path
-		std::string params = "/select,\"" + _path.string() + "\"";
+		std::string params = "/select,\"" + _path_preferred.string() + "\"";
 		ShellExecuteA(nullptr, "open", "explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
 	}
 	else
 	{
 		// Just open the directory
-		ShellExecuteA(nullptr, "open", "explorer.exe", _path.string().c_str(), nullptr, SW_SHOWNORMAL);
+		ShellExecuteA(nullptr, "open", "explorer.exe", _path_preferred.string().c_str(), nullptr, SW_SHOWNORMAL);
 	}
 }
 

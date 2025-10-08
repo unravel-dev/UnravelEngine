@@ -14,6 +14,7 @@ namespace Core
 [StructLayout(LayoutKind.Sequential)]
 public struct Entity : IEquatable<Entity>, IFormattable
 {
+	public static readonly Entity Invalid = new Entity(0);
 	/// <summary>
 	/// Gets the unique identifier of the entity.
 	/// </summary>

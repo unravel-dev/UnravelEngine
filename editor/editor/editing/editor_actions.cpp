@@ -1226,7 +1226,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
                         auto paths = script_system::find_mono(ctx);
                         fs::path assembly_path = mono::get_core_assembly_path();
-                        fs::path assembly_dir = assembly_path.parent_path();
+                        fs::path assembly_dir = assembly_path.parent_path().parent_path();
                         fs::path lib_version = assembly_dir.filename();
 
                         fs::error_code ec;
@@ -1238,7 +1238,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
                             fs::remove_all(cached_data, ec);
 
-                            cached_data /= lib_version;
+                            // cached_data /= lib_version;
 
                             fs::create_directories(cached_data, ec);
 
