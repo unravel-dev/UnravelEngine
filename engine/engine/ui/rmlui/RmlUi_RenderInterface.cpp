@@ -90,6 +90,111 @@ static gfx::clip_quad_def create_positioned_blit_quad(const Rml::Rectanglei& src
     };
 }
 
+
+static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
+                          const Rml::Rectanglei& dst_rect,
+                          const Rml::Vector2i& src_texture_size,
+                          const Rml::Vector2i& dst_framebuffer_size)
+{
+    bool origin_bottom_left = gfx::is_origin_bottom_left();
+
+    if(4 == gfx::get_avail_transient_vertex_buffer(4, gfx::pos_texcoord0_vertex::get_layout()))
+    {
+        gfx::transient_vertex_buffer vb;
+        gfx::alloc_transient_vertex_buffer(&vb, 4, gfx::pos_texcoord0_vertex::get_layout());
+        auto vertex = reinterpret_cast<gfx::pos_texcoord0_vertex*>(vb.data);
+
+        // Convert source rectangle to UV coordinates (0.0 to 1.0)
+        const float src_width = static_cast<float>(src_texture_size.x);
+        const float src_height = static_cast<float>(src_texture_size.y);
+
+        auto src_top = src_rect.Top();
+        auto src_bottom = src_rect.Bottom();
+        auto src_left = src_rect.Left();
+        auto src_right = src_rect.Right();
+
+        // if(origin_bottom_left)
+        // {
+        //     src_top = src_height - src_top;
+        //     src_bottom = src_height - src_bottom;
+        //     std::swap(src_top, src_bottom);
+        // }
+        
+        float min_u = static_cast<float>(src_left) / src_width;
+        float max_u = static_cast<float>(src_right) / src_width;
+        float min_v = static_cast<float>(src_top) / src_height;
+        float max_v = static_cast<float>(src_bottom) / src_height;
+
+        // Convert destination rectangle from framebuffer coordinates to NDC (-1 to 1)
+        const float fb_width = static_cast<float>(dst_framebuffer_size.x);
+        const float fb_height = static_cast<float>(dst_framebuffer_size.y);
+
+        auto dst_top = dst_rect.Top();
+        auto dst_bottom = dst_rect.Bottom();
+        auto dst_left = dst_rect.Left();
+        auto dst_right = dst_rect.Right();
+
+        // if(origin_bottom_left)
+        // {
+        //     dst_top = dst_framebuffer_size.y - dst_top;
+        //     dst_bottom = dst_framebuffer_size.y - dst_bottom;
+        //     // std::swap(dst_top, dst_bottom);
+        // }
+        
+        const float ndc_left = (static_cast<float>(dst_left) / fb_width) * 2.0f - 1.0f;
+        const float ndc_right = (static_cast<float>(dst_right) / fb_width) * 2.0f - 1.0f;
+        
+        float ndc_top = 1.0f - (static_cast<float>(dst_top) / fb_height) * 2.0f;
+        float ndc_bottom = 1.0f - (static_cast<float>(dst_bottom) / fb_height) * 2.0f;
+        
+        // // For OpenGL, we need to flip the Y coordinates since it uses bottom-left origin
+        // if(origin_bottom_left)
+        // {
+        //     ndc_top = -ndc_top;
+        //     ndc_bottom = -ndc_bottom;
+        //     std::swap(ndc_top, ndc_bottom);
+        // }
+
+        // // Handle UV coordinate system differences for bottom-left origin (like clip_quad does)
+        if(origin_bottom_left)
+        {
+            min_v = 1.0f - min_v;
+            max_v = 1.0f - max_v;
+            std::swap(min_v, max_v);
+        }
+
+        // Create quad vertices in triangle strip order
+        vertex[0].x = ndc_left;
+        vertex[0].y = ndc_top;
+        vertex[0].z = 0.0f;
+        vertex[0].u = min_u;
+        vertex[0].v = min_v;
+
+        vertex[1].x = ndc_right;
+        vertex[1].y = ndc_top;
+        vertex[1].z = 0.0f;
+        vertex[1].u = max_u;
+        vertex[1].v = min_v;
+
+        vertex[2].x = ndc_left;
+        vertex[2].y = ndc_bottom;
+        vertex[2].z = 0.0f;
+        vertex[2].u = min_u;
+        vertex[2].v = max_v;
+
+        // Vertex 3: Bottom-right
+        vertex[3].x = ndc_right;
+        vertex[3].y = ndc_bottom;
+        vertex[3].z = 0.0f;
+        vertex[3].u = max_u;
+        vertex[3].v = max_v;
+
+        gfx::set_vertex_buffer(0, &vb);
+    }
+
+    return BGFX_STATE_PT_TRISTRIP;
+}
+
 RmlUi_RenderInterface::RmlUi_RenderInterface()
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
@@ -251,7 +356,7 @@ void RmlUi_RenderInterface::end_frame(const gfx::frame_buffer::ptr& framebuffer)
 
         // Set blend state for premultiplied alpha (like GL implementation)
         uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
-        auto topology = gfx::clip_quad_ex({}, false);
+        auto topology = gfx::clip_quad_ex({});
         gfx::set_state(topology | state);
 
         // Submit fullscreen quad
@@ -914,10 +1019,11 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
         const Rml::Rectanglei src_rect = bounds;
         const Rml::Rectanglei dst_rect = Rml::Rectanglei::FromCorners({0, 0}, {width, height});
         
-        auto quad_def = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
-
+        
         uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);
-        auto topology = gfx::clip_quad_ex(quad_def, false);
+        // auto quad_def = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
+        // auto topology = gfx::clip_quad_ex(quad_def);
+        auto topology = blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
         gfx::set_state(topology | state);
 
         gfx::submit(copy_pass.id, render_program.native_handle());
@@ -983,7 +1089,7 @@ auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 
         // Set render state - disable blending for mask copy (replace mode)
         uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);
-        auto topology = gfx::clip_quad_ex({}, false);
+        auto topology = gfx::clip_quad_ex({});
         gfx::set_state(topology | state);
 
         gfx::submit(mask_pass.id, render_program.native_handle());
@@ -1765,7 +1871,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
                     gfx::set_texture(0, tex_uniform, source_texture->native_handle());
 
-                    auto topology = gfx::clip_quad_ex({}, false);
+                    auto topology = gfx::clip_quad_ex({});
                     gfx::set_state(topology | state);
 
                     gfx::submit(pass.id, render_program.native_handle());
@@ -1829,7 +1935,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     gfx::set_texture(0, tex_uniform, color_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
-                    auto topology = gfx::clip_quad_ex({}, false);
+                    auto topology = gfx::clip_quad_ex({});
                     gfx::set_state(topology | state);
 
                     gfx::submit(pass.id, render_program.native_handle());
@@ -1869,7 +1975,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
             
                     // Set render state - disable blending for upscale
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
-                    auto topology = gfx::clip_quad_ex({}, false);
+                    auto topology = gfx::clip_quad_ex({});
                     gfx::set_state(topology | state);
                     gfx::submit(pass.id, passthrough_program.native_handle());
                 
@@ -1907,7 +2013,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     gfx::set_texture(0, tex_uniform, color_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
-                    auto topology = gfx::clip_quad_ex({}, false);
+                    auto topology = gfx::clip_quad_ex({});
                     gfx::set_state(topology | state);
 
                     gfx::submit(pass.id, render_program.native_handle());
@@ -1950,7 +2056,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     gfx::set_texture(1, mask_uniform, mask_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
-                    auto topology = gfx::clip_quad_ex({}, false);
+                    auto topology = gfx::clip_quad_ex({});
                     gfx::set_state(topology | state);
 
                     gfx::submit(pass.id, render_program.native_handle());
@@ -2053,7 +2159,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
             auto def = gfx::clip_quad_def{0.0f, 1.0f, 1.0f, 0.0f, 0.0f, uv_scaling.x, uv_scaling.y};
-            auto topology = gfx::clip_quad_ex(def, false);
+            auto topology = gfx::clip_quad_ex(def);
             gfx::set_state(topology | state);
 
             gfx::submit(downscale_pass.id, passthrough_program.native_handle());
@@ -2082,7 +2188,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
         // Set render state - disable blending for transfer
         uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
-        auto topology = gfx::clip_quad_ex({}, false);
+        auto topology = gfx::clip_quad_ex({});
         gfx::set_state(topology | state);
         gfx::submit(transfer_pass.id, passthrough_program.native_handle());
         passthrough_program.end();
@@ -2122,7 +2228,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
             // Set render state - disable blending for blur
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
-            auto topology = gfx::clip_quad_ex({}, false);
+            auto topology = gfx::clip_quad_ex({});
             gfx::set_state(topology | state);
             gfx::submit(vertical_blur_pass.id, blur_program.native_handle());
         }
@@ -2152,7 +2258,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
             // Set render state - disable blending for blur
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
-            auto topology = gfx::clip_quad_ex({}, false);
+            auto topology = gfx::clip_quad_ex({});
             gfx::set_state(topology | state);
             gfx::submit(horizontal_blur_pass.id, blur_program.native_handle());
         }
@@ -2189,12 +2295,12 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             auto source_destination_size = source_destination.get_size();
             const Rml::Vector2i dst_framebuffer_size(source_destination_size.width, source_destination_size.height);
 
-            // Use positioned blit quad (no scissor needed - geometry is positioned correctly)
-            auto blit_quad = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
-
+            
             // Set render state - disable blending for upscale
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
-            auto topology = gfx::clip_quad_ex(blit_quad, false);
+            // Use positioned blit quad (no scissor needed - geometry is positioned correctly)
+            auto blit_quad = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
+            auto topology = gfx::clip_quad_ex(blit_quad);
             gfx::set_state(topology | state);
             gfx::submit(upscale_pass.id, passthrough_program.native_handle());
         }
@@ -2235,7 +2341,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
     //         auto blit_quad = create_positioned_blit_quad(src_rect, target_rect, src_texture_size, dst_framebuffer_size);
 
     //         uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
-    //         auto topology = gfx::clip_quad_ex(blit_quad, false);
+    //         auto topology = gfx::clip_quad_ex(blit_quad);
     //         gfx::set_state(topology | state);
     //         gfx::submit(power_of_two_pass.id, passthrough_program.native_handle());
     //     }
@@ -2419,7 +2525,7 @@ void RmlUi_RenderInterface::composite_to_destination_layer(Rml::LayerHandle dest
 
         // Set up render state based on blend mode
         uint64_t state = convert_blend_mode(blend_mode);
-        auto topology = gfx::clip_quad_ex({}, false);
+        auto topology = gfx::clip_quad_ex({});
         gfx::set_state(topology | state);
 
         gfx::submit(pass.id, render_program.native_handle());

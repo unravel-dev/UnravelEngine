@@ -1129,10 +1129,10 @@ auto clip_quad(float depth, float width, float height) -> uint64_t
     return BGFX_STATE_PT_TRISTRIP;
 }
 
-uint64_t clip_quad_ex(const clip_quad_def& def, bool origin_bottom_left)
+uint64_t clip_quad_ex(const clip_quad_def& def)
 {
     // float texture_half = get_half_texel();
-    origin_bottom_left = is_origin_bottom_left();
+    bool origin_bottom_left = is_origin_bottom_left();
 
     if(4 == getAvailTransientVertexBuffer(4, pos_texcoord0_vertex::get_layout()))
     {
@@ -1155,12 +1155,6 @@ uint64_t clip_quad_ex(const clip_quad_def& def, bool origin_bottom_left)
 
         float minv = 1.0f;
         float maxv = 0.0f;
-
-        // if(origin_bottom_left)
-        // {
-        //     minv = 1.0f - minv;
-        //     maxv = 1.0f - maxv;
-        // }
 
         vertex[0].x = minx;
         vertex[0].y = maxy;

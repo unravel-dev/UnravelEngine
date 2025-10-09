@@ -648,7 +648,7 @@ struct clip_quad_def
     float uv_scaling_y = 1.0f;
 };
 
-uint64_t clip_quad_ex(const clip_quad_def& def, bool origin_bottom_left);
+uint64_t clip_quad_ex(const clip_quad_def& def);
 
 void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _height);
 
