@@ -11,7 +11,7 @@ namespace
     };
     struct uniform_cache
     {
-        using cache_t = std::unordered_map<std::string, std::unordered_map<gfx::uniform_type, std::unordered_map<uint16_t, ref_counted_handle>>>;
+        using cache_t = std::unordered_map<std::string, std::unordered_map<gfx::uniform_type, ref_counted_handle>>;
         cache_t cache;
         // std::unordered_map<uint16_t, ref_counted_handle*> lut;
     };
@@ -24,24 +24,23 @@ namespace
 
     auto aquire(const std::string& _name, gfx::uniform_type _type, std::uint16_t _num) -> gfx::uniform_handle
     {
-        auto& cache = get_uniform_cache();
-        auto& by_name = cache.cache[_name];
-        BX_ASSERT(by_name.size() <= 1, "Uniform %s has different types in cache", _name.c_str());
+        // auto& cache = get_uniform_cache();
+        // auto& by_name = cache.cache[_name];
+        // BX_ASSERT(by_name.size() <= 1, "Uniform %s has different types in cache", _name.c_str());
    
-        auto& by_type = by_name[_type];
-        BX_ASSERT(by_type.size() <= 1, "Uniform %s has different nums in cache", _name.c_str());
-        auto& by_num = by_type[_num];
-        auto& counted_uniform = by_num;
+        // auto& by_type = by_name[_type];
+        // auto& counted_uniform = by_type;
 
-        if(counted_uniform.ref_count == 0)
-        {
-            counted_uniform.handle = gfx::create_uniform(_name.c_str(), _type, _num);
-            // cache.lut[counted_uniform.handle.idx] = &counted_uniform;
-        }
+        // if(counted_uniform.ref_count == 0)
+        // {
+        //     counted_uniform.handle = gfx::create_uniform(_name.c_str(), _type, _num);
+        //     // cache.lut[counted_uniform.handle.idx] = &counted_uniform;
+        // }
 
-        counted_uniform.ref_count++;
+        // counted_uniform.ref_count++;
 
-        return counted_uniform.handle;
+        // return counted_uniform.handle;
+        return gfx::create_uniform(_name.c_str(), _type, _num);
     }
 
     void release(gfx::uniform_handle _handle)

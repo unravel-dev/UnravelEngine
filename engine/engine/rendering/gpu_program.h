@@ -160,7 +160,7 @@ public:
 
 private:
     std::vector<asset_handle<gfx::shader>> shaders_; ///< Shaders that created this program.
-    std::vector<gfx::shader::ptr> shaders_cached_;      ///< Cached shaders.
+    std::array<gfx::shader::ptr, 2> shaders_cached_{nullptr, nullptr};      ///< Cached shaders.
     std::shared_ptr<gfx::program> program_;          ///< The GPU program.
 };
 

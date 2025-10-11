@@ -202,6 +202,11 @@ struct ui_slider_event : ui_event_base
     float step{};
 };
 
+struct ui_change_event : ui_event_base
+{
+    std::string value;
+};
+
 
 
 } // namespace managed_interface
@@ -219,12 +224,15 @@ struct mono_converter<managed_interface::ui_event_base>
     using native_type = managed_interface::ui_event_base;
     using managed_type = MonoObject*;
 
-    static auto to_mono(const native_type& obj) -> managed_type
+    static auto create_instance(const std::string& namespace_name, const std::string& type_name) -> mono::mono_object
     {
         auto& ctx = unravel::engine::context();
         auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Unravel.Core", "UIEventBase");
-        auto instance = type.new_instance();
+        auto type = app_assembly.get_type(namespace_name, type_name);
+        return type.new_instance();
+    }
+    static void to_mono_base(const native_type& obj, mono::mono_object& instance)
+    {
         mono::set_field_value(instance, "nativePtr", obj.native_ptr);
         mono::set_field_value(instance, "targetElementId", obj.target_element_id);
         mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
@@ -232,6 +240,22 @@ struct mono_converter<managed_interface::ui_event_base>
         mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
         mono::set_field_value(instance, "phase", obj.phase);
         mono::set_field_value(instance, "eventType", obj.event_type);
+    }
+    static void from_mono_base(const mono::mono_object& object, native_type& data)
+    {
+        mono::get_field_value(object, "nativePtr", data.native_ptr);
+        mono::get_field_value(object, "targetElementId", data.target_element_id);
+        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
+        mono::get_field_value(object, "currentElementId", data.current_element_id);
+        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
+        mono::get_field_value(object, "phase", data.phase);
+        mono::get_field_value(object, "eventType", data.event_type);
+    }
+
+    static auto to_mono(const native_type& obj) -> managed_type
+    {
+        auto instance = create_instance("Unravel.Core", "UIEventBase");
+        to_mono_base(obj, instance);
         // Note: Mouse and keyboard properties removed from base event
         return instance.get_internal_ptr();
     }
@@ -240,13 +264,7 @@ struct mono_converter<managed_interface::ui_event_base>
     {
         mono::mono_object object(obj);
         native_type data;
-        mono::get_field_value(object, "nativePtr", data.native_ptr);
-        mono::get_field_value(object, "targetElementId", data.target_element_id);
-        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
-        mono::get_field_value(object, "currentElementId", data.current_element_id);
-        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
-        mono::get_field_value(object, "phase", data.phase);
-        mono::get_field_value(object, "eventType", data.event_type);
+        from_mono_base(object, data);
         // Note: Mouse and keyboard properties removed from base event
         return data;
     }
@@ -254,26 +272,17 @@ struct mono_converter<managed_interface::ui_event_base>
 
 // Custom converter for ui_pointer_event
 template<>
-struct mono_converter<managed_interface::ui_pointer_event>
+struct mono_converter<managed_interface::ui_pointer_event> : mono_converter<managed_interface::ui_event_base>
 {
     using native_type = managed_interface::ui_pointer_event;
     using managed_type = MonoObject*;
 
     static auto to_mono(const native_type& obj) -> managed_type
     {
-        auto& ctx = unravel::engine::context();
-        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Unravel.Core", "UIPointerEvent");
-        auto instance = type.new_instance();
+        auto instance = create_instance("Unravel.Core", "UIPointerEvent");
         
         // Set base class fields
-        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
-        mono::set_field_value(instance, "targetElementId", obj.target_element_id);
-        mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
-        mono::set_field_value(instance, "currentElementId", obj.current_element_id);
-        mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
-        mono::set_field_value(instance, "phase", obj.phase);
-        mono::set_field_value(instance, "eventType", obj.event_type);
+        to_mono_base(obj, instance);
         
         // Set pointer-specific fields
         mono::set_field_value(instance, "x", obj.x);
@@ -295,13 +304,7 @@ struct mono_converter<managed_interface::ui_pointer_event>
         mono::mono_object object(obj);
         native_type data;
         // Set base fields
-        mono::get_field_value(object, "nativePtr", data.native_ptr);
-        mono::get_field_value(object, "targetElementId", data.target_element_id);
-        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
-        mono::get_field_value(object, "currentElementId", data.current_element_id);
-        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
-        mono::get_field_value(object, "phase", data.phase);
-        mono::get_field_value(object, "eventType", data.event_type);
+        from_mono_base(object, data);
         // Set pointer-specific fields
         mono::get_field_value(object, "x", data.x);
         mono::get_field_value(object, "y", data.y);
@@ -318,26 +321,17 @@ struct mono_converter<managed_interface::ui_pointer_event>
 
 // Custom converter for ui_key_event
 template<>
-struct mono_converter<managed_interface::ui_key_event>
+struct mono_converter<managed_interface::ui_key_event> : mono_converter<managed_interface::ui_event_base>
 {
     using native_type = managed_interface::ui_key_event;
     using managed_type = MonoObject*;
 
     static auto to_mono(const native_type& obj) -> managed_type
     {
-        auto& ctx = unravel::engine::context();
-        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Unravel.Core", "UIKeyEvent");
-        auto instance = type.new_instance();
+        auto instance = create_instance("Unravel.Core", "UIKeyEvent");
         
         // Set base class fields
-        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
-        mono::set_field_value(instance, "targetElementId", obj.target_element_id);
-        mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
-        mono::set_field_value(instance, "currentElementId", obj.current_element_id);
-        mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
-        mono::set_field_value(instance, "phase", obj.phase);
-        mono::set_field_value(instance, "eventType", obj.event_type);
+        to_mono_base(obj, instance);
         
         // Set key-specific fields
         mono::set_field_value(instance, "keyCode", obj.key_code);
@@ -355,13 +349,7 @@ struct mono_converter<managed_interface::ui_key_event>
         mono::mono_object object(obj);
         native_type data;
         // Set base fields
-        mono::get_field_value(object, "nativePtr", data.native_ptr);
-        mono::get_field_value(object, "targetElementId", data.target_element_id);
-        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
-        mono::get_field_value(object, "currentElementId", data.current_element_id);
-        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
-        mono::get_field_value(object, "phase", data.phase);
-        mono::get_field_value(object, "eventType", data.event_type);
+        from_mono_base(object, data);
         // Set key-specific fields
         mono::get_field_value(object, "keyCode", data.key_code);
         mono::get_field_value(object, "ctrlKey", data.ctrl_key);
@@ -374,26 +362,17 @@ struct mono_converter<managed_interface::ui_key_event>
 
 // Custom converter for ui_textinput_event
 template<>
-struct mono_converter<managed_interface::ui_textinput_event>
+struct mono_converter<managed_interface::ui_textinput_event> : mono_converter<managed_interface::ui_event_base>
 {
     using native_type = managed_interface::ui_textinput_event;
     using managed_type = MonoObject*;
 
     static auto to_mono(const native_type& obj) -> managed_type
     {
-        auto& ctx = unravel::engine::context();
-        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Unravel.Core", "UITextInputEvent");
-        auto instance = type.new_instance();
+        auto instance = create_instance("Unravel.Core", "UITextInputEvent");
         
         // Set base class fields
-        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
-        mono::set_field_value(instance, "targetElementId", obj.target_element_id);
-        mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
-        mono::set_field_value(instance, "currentElementId", obj.current_element_id);
-        mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
-        mono::set_field_value(instance, "phase", obj.phase);
-        mono::set_field_value(instance, "eventType", obj.event_type);
+        to_mono_base(obj, instance);
         
         // Set text input-specific fields
         mono::set_field_value(instance, "text", obj.text);
@@ -411,13 +390,7 @@ struct mono_converter<managed_interface::ui_textinput_event>
         mono::mono_object object(obj);
         native_type data;
         // Set base fields
-        mono::get_field_value(object, "nativePtr", data.native_ptr);
-        mono::get_field_value(object, "targetElementId", data.target_element_id);
-        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
-        mono::get_field_value(object, "currentElementId", data.current_element_id);
-        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
-        mono::get_field_value(object, "phase", data.phase);
-        mono::get_field_value(object, "eventType", data.event_type);
+        from_mono_base(object, data);
         // Set text input-specific fields
         mono::get_field_value(object, "text", data.text);
         mono::get_field_value(object, "ctrlKey", data.ctrl_key);
@@ -428,30 +401,21 @@ struct mono_converter<managed_interface::ui_textinput_event>
     }
 };
 
-// Custom converter for ui_textinput_event
+// Custom converter for ui_slider_event
 template<>
-struct mono_converter<managed_interface::ui_slider_event>
+struct mono_converter<managed_interface::ui_slider_event> : mono_converter<managed_interface::ui_event_base>
 {
     using native_type = managed_interface::ui_slider_event;
     using managed_type = MonoObject*;
 
     static auto to_mono(const native_type& obj) -> managed_type
     {
-        auto& ctx = unravel::engine::context();
-        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type("Unravel.Core", "UISliderEvent");
-        auto instance = type.new_instance();
+        auto instance = create_instance("Unravel.Core", "UISliderEvent");
         
         // Set base class fields
-        mono::set_field_value(instance, "nativePtr", obj.native_ptr);
-        mono::set_field_value(instance, "targetElementId", obj.target_element_id);
-        mono::set_field_value(instance, "targetElementPtr", obj.target_element_ptr);
-        mono::set_field_value(instance, "currentElementId", obj.current_element_id);
-        mono::set_field_value(instance, "currentElementPtr", obj.current_element_ptr);
-        mono::set_field_value(instance, "phase", obj.phase);
-        mono::set_field_value(instance, "eventType", obj.event_type);
+        to_mono_base(obj, instance);
         
-        // Set text input-specific fields
+        // Set slider-specific fields
         mono::set_field_value(instance, "value", obj.value);
         mono::set_field_value(instance, "minValue", obj.min_value);
         mono::set_field_value(instance, "maxValue", obj.max_value);
@@ -466,18 +430,45 @@ struct mono_converter<managed_interface::ui_slider_event>
         mono::mono_object object(obj);
         native_type data;
         // Set base fields
-        mono::get_field_value(object, "nativePtr", data.native_ptr);
-        mono::get_field_value(object, "targetElementId", data.target_element_id);
-        mono::get_field_value(object, "targetElementPtr", data.target_element_ptr);
-        mono::get_field_value(object, "currentElementId", data.current_element_id);
-        mono::get_field_value(object, "currentElementPtr", data.current_element_ptr);
-        mono::get_field_value(object, "phase", data.phase);
-        mono::get_field_value(object, "eventType", data.event_type);
-        // Set text input-specific fields
+        from_mono_base(object, data);
+        // Set slider-specific fields
         mono::get_field_value(object, "value", data.value);
         mono::get_field_value(object, "minValue", data.min_value);
         mono::get_field_value(object, "maxValue", data.max_value);
         mono::get_field_value(object, "step", data.step);
+        return data;
+    }
+};
+
+// Custom converter for ui_change_event
+template<>
+struct mono_converter<managed_interface::ui_change_event> : mono_converter<managed_interface::ui_event_base>
+{
+    using native_type = managed_interface::ui_change_event;
+    using managed_type = MonoObject*;
+
+    static auto to_mono(const native_type& obj) -> managed_type
+    {
+        auto instance = create_instance("Unravel.Core", "UIChangeEvent");
+        
+        // Set base class fields
+        to_mono_base(obj, instance);
+        
+        // Set change-specific fields
+        mono::set_field_value(instance, "value", obj.value);
+        
+        return instance.get_internal_ptr();
+    }
+
+    static auto from_mono(const managed_type& obj) -> native_type
+    {
+        // Implementation for C# to C++ conversion if needed
+        mono::mono_object object(obj);
+        native_type data;
+        // Set base fields
+        from_mono_base(object, data);
+        // Set change-specific fields
+        mono::get_field_value(object, "value", data.value);
         return data;
     }
 };

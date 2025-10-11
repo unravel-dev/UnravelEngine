@@ -20,12 +20,10 @@ void gpu_program::attach_shader(asset_handle<gfx::shader> shader)
 {
     if(!shader)
     {
-        shaders_cached_.push_back(nullptr);
         shaders_.push_back(shader);
         return;
     }
 
-    shaders_cached_.push_back(nullptr);
     shaders_.emplace_back(std::move(shader));
 }
 
@@ -56,10 +54,10 @@ void gpu_program::populate()
             program_ = std::make_shared<gfx::program>(*vertex_shader.get(), *fragment_shader.get());
         }
 
-        shaders_cached_.clear();
-        for(const auto& shader : shaders_)
+        for(std::size_t i = 0; i < shaders_.size(); ++i)
         {
-            shaders_cached_.push_back(shader.get());
+            const auto& shader = shaders_[i];
+            shaders_cached_[i] = shader.get();
         }
     }
 }
@@ -124,7 +122,7 @@ auto gpu_program::is_valid() const -> bool
 auto gpu_program::begin() -> bool
 {
     bool repopulate = false;
-    for(std::size_t i = 0; i < shaders_cached_.size(); ++i)
+    for(std::size_t i = 0; i < shaders_.size(); ++i)
     {
         auto shader_ptr = shaders_[i];
         if(!shader_ptr)

@@ -2739,29 +2739,68 @@ void dispatch_ui_event_to_manager(const T& event_data)
 
 
 
-// Helper functions to determine event type using efficient enum comparisons
-auto is_key_event(Rml::EventId event_id) -> bool
+// UI Event Type Classification
+enum class ui_event_type
 {
-    return event_id == Rml::EventId::Keydown || event_id == Rml::EventId::Keyup;
+    unknown,
+    key,
+    textinput,
+    pointer,
+    change,
+    value
+};
+
+// Determine UI event type for efficient dispatch
+auto get_ui_event_type(const Rml::Event& event) -> ui_event_type
+{
+    const auto event_id = event.GetId();
+    
+    // Check key events first (most common check)
+    if (event_id == Rml::EventId::Keydown || event_id == Rml::EventId::Keyup)
+    {
+        return ui_event_type::key;
+    }
+    
+    // Check text input events
+    if (event_id == Rml::EventId::Textinput)
+    {
+        return ui_event_type::textinput;
+    }
+    
+    // Check pointer events
+    if (event_id == Rml::EventId::Click || event_id == Rml::EventId::Mousedown || event_id == Rml::EventId::Mouseup ||
+        event_id == Rml::EventId::Mousemove || event_id == Rml::EventId::Mouseover || event_id == Rml::EventId::Mouseout ||
+        event_id == Rml::EventId::Mousescroll || event_id == Rml::EventId::Dblclick || event_id == Rml::EventId::Drag ||
+        event_id == Rml::EventId::Dragstart || event_id == Rml::EventId::Dragover || event_id == Rml::EventId::Dragdrop)
+    {
+        return ui_event_type::pointer;
+    }
+    
+    // Check change events (need to examine the event more closely)
+    if (event_id == Rml::EventId::Change)
+    {
+        auto value_str = event.GetParameter<std::string>("value", "");
+        if (!value_str.empty())
+        {
+            // If the element doesn't have min/max attributes, it's likely a text input or similar (change event)
+            if (auto* element = event.GetCurrentElement())
+            {
+                if (!element->HasAttribute("min") && !element->HasAttribute("max"))
+                {
+                    return ui_event_type::change;
+                }
+                else
+                {
+                    // Has min/max attributes, likely a slider (value event)
+                    return ui_event_type::value;
+                }
+            }
+        }
+    }
+    
+    return ui_event_type::unknown;
 }
 
-auto is_textinput_event(Rml::EventId event_id) -> bool
-{
-    return event_id == Rml::EventId::Textinput;
-}
-
-auto is_value_event(const Rml::Event& event) -> bool
-{
-    return event.GetId() == Rml::EventId::Change && event.GetParameter<std::string>("value", "") != "";
-}
-
-auto is_pointer_event(Rml::EventId event_id) -> bool
-{
-    return event_id == Rml::EventId::Click || event_id == Rml::EventId::Mousedown || event_id == Rml::EventId::Mouseup ||
-           event_id == Rml::EventId::Mousemove || event_id == Rml::EventId::Mouseover || event_id == Rml::EventId::Mouseout ||
-           event_id == Rml::EventId::Mousescroll || event_id == Rml::EventId::Dblclick || event_id == Rml::EventId::Drag ||
-           event_id == Rml::EventId::Dragstart || event_id == Rml::EventId::Dragover || event_id == Rml::EventId::Dragdrop;
-}
 
 // Fill base event data common to all event types
 void fill_base_event_data(mono::managed_interface::ui_event_base& event_data, 
@@ -2776,7 +2815,6 @@ void fill_base_event_data(mono::managed_interface::ui_event_base& event_data,
     event_data.current_element_ptr = reinterpret_cast<std::intptr_t>(current_element);
     event_data.event_type = event.GetType();
     event_data.phase = static_cast<int>(event.GetPhase());
-    // Note: Mouse and keyboard properties moved to derived event types
 }
 
 // Dispatch key event to C# UIEventManager
@@ -2866,9 +2904,23 @@ void dispatch_value_event_to_manager(const Rml::Event& event,
         value_event_data.step = slider_element->GetAttribute<float>("step", 0);
     }
 
-
-
     dispatch_ui_event_to_manager(value_event_data);
+}
+
+// Dispatch change event to C# UIEventManager
+void dispatch_change_event_to_manager(const Rml::Event& event, 
+                                      Rml::Element* target_element, 
+                                      Rml::Element* current_element)
+{
+   
+    // Create change event data
+    mono::managed_interface::ui_change_event change_event_data;
+    fill_base_event_data(change_event_data, event, target_element, current_element);
+    
+    // Fill change-specific data
+    change_event_data.value = event.GetParameter<std::string>("value", "");
+
+    dispatch_ui_event_to_manager(change_event_data);
 
 }
 
@@ -2905,29 +2957,36 @@ public:
                 return;
             }
 
-            // Create specific event type based on event ID (much faster than string comparison)
-            const auto event_id = event.GetId();
+            // Determine event type and dispatch accordingly using efficient switch
+            const auto event_type = get_ui_event_type(event);
             
-            if (is_key_event(event_id))
+            switch (event_type)
             {
-                dispatch_key_event_to_manager(event, target_element, current_element);
-            }
-            else if (is_textinput_event(event_id))
-            {
-                dispatch_textinput_event_to_manager(event, target_element, current_element);
-            }
-            else if (is_pointer_event(event_id))
-            {
-                dispatch_pointer_event_to_manager(event, target_element, current_element);
-            }
-            else if (is_value_event(event))
-            {
-                dispatch_value_event_to_manager(event, target_element, current_element);
-            }
-            else
-            {
-                // Fallback to base event for unknown types
-                dispatch_base_event_to_manager(event, target_element, current_element);
+                case ui_event_type::key:
+                    dispatch_key_event_to_manager(event, target_element, current_element);
+                    break;
+                    
+                case ui_event_type::textinput:
+                    dispatch_textinput_event_to_manager(event, target_element, current_element);
+                    break;
+                    
+                case ui_event_type::pointer:
+                    dispatch_pointer_event_to_manager(event, target_element, current_element);
+                    break;
+                    
+                case ui_event_type::change:
+                    dispatch_change_event_to_manager(event, target_element, current_element);
+                    break;
+                    
+                case ui_event_type::value:
+                    dispatch_value_event_to_manager(event, target_element, current_element);
+                    break;
+                    
+                case ui_event_type::unknown:
+                default:
+                    // Fallback to base event for unknown types
+                    dispatch_base_event_to_manager(event, target_element, current_element);
+                    break;
             }
         }
         catch (const std::exception& e)

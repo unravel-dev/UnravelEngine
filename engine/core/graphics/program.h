@@ -14,7 +14,7 @@
 namespace gfx
 {
 
-struct program : public handle_impl<program, program_handle>
+struct  program : public handle_impl<program, program_handle>
 {
     using uniform_ptr = std::shared_ptr<uniform>;
     //-----------------------------------------------------------------------------
