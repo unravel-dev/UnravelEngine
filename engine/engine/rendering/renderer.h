@@ -13,7 +13,7 @@
 namespace unravel
 {
 
-struct renderer
+struct ENGINE_EXPORT renderer
 {
     using render_window_t = std::unique_ptr<render_window>;
 
@@ -25,8 +25,8 @@ struct renderer
 
     auto create_window_for_display(int index, const std::string& title, uint32_t flags)
         -> const std::unique_ptr<render_window>&;
-    auto set_main_window(os::window&& window) -> const std::unique_ptr<render_window>&;
-    auto get_main_window() const -> const std::unique_ptr<render_window>&;
+    void set_main_window(os::window&& window);
+    auto get_main_window() const -> render_window*;
     void close_main_window();
     void request_screenshot(const std::string& file);
 

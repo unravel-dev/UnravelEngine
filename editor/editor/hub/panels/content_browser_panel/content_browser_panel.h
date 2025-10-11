@@ -55,6 +55,21 @@ private:
     void import(rtti::context& ctx, const fs::path& target_path);
     void on_import(rtti::context& ctx, const std::vector<std::string>& paths, const fs::path& target_path);
     void handle_window_empty_click(rtti::context& ctx) const;
+    
+    // Helper method to avoid MSVC ICE with complex template lambdas
+    template<typename AssetType>
+    void setup_asset_item(rtti::context& ctx, content_browser_item& item, 
+                         const fs::path& absolute_path,
+                         const std::string& relative,
+                         const std::string& file_ext);
+    
+    // Reusable member functions for consistent behavior
+    template<typename EntryType>
+    void setup_delete_handler(content_browser_item& item, const std::string& relative, 
+                             const fs::path& absolute_path, const EntryType& entry, rtti::context& ctx);
+    void setup_rename_handler(content_browser_item& item, const fs::path& absolute_path, 
+                             const std::string& file_ext);
+    void prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete);
 
     fs::directory_cache cache_;
 

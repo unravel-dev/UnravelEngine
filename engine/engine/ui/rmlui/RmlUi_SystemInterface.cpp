@@ -36,7 +36,6 @@ auto RmlUi_SystemInterface::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    ctx_ = &ctx;
     init_cursors();
     
     return true;
@@ -47,29 +46,26 @@ void RmlUi_SystemInterface::shutdown()
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     
     cleanup_cursors();
-    ctx_ = nullptr;
-    window_ = nullptr;
 }
 
-void RmlUi_SystemInterface::set_window(const std::unique_ptr<render_window>& window)
-{
-    window_ = &window;
-}
 
 double RmlUi_SystemInterface::GetElapsedTime()
 {
-    if (!ctx_ || !ctx_->has<simulation>())
+    auto& ctx = engine::context();
+    if (!ctx.has<simulation>())
     {
         return 0.0;
     }
 
-    const auto& sim = ctx_->get_cached<simulation>();
+    const auto& sim = ctx.get_cached<simulation>();
     return std::chrono::duration<double>(sim.get_time_since_launch()).count();
 }
 
 void RmlUi_SystemInterface::SetMouseCursor(const Rml::String& cursor_name)
 {
-    if (!window_ || !*window_)
+    auto& ctx = engine::context();
+    auto window = ctx.get_cached<renderer>().get_main_window();
+    if (!window)
     {
         return;
     }
@@ -123,7 +119,7 @@ void RmlUi_SystemInterface::SetMouseCursor(const Rml::String& cursor_name)
     }
 
     // Set cursor on the window
-    (*window_)->get_window().set_cursor(cursor_type);
+    window->get_window().set_cursor(cursor_type);
 }
 
 void RmlUi_SystemInterface::SetClipboardText(const Rml::String& text)
@@ -142,8 +138,10 @@ void RmlUi_SystemInterface::ActivateKeyboard(Rml::Vector2f caret_position, float
 #if UNRAVEL_PLATFORM_OS_MOBILE
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would show the virtual keyboard
-    os::set_text_input_area((*window_)->get_window(), os::point(caret_position.x, caret_position.y), os::area(1, line_height), 0);
-    os::start_text_input((*window_)->get_window());
+    auto& ctx = engine::context();
+    auto& window = ctx.get_cached<renderer>().get_main_window();
+    os::set_text_input_area(window->get_window(), os::point(caret_position.x, caret_position.y), os::area(1, line_height), 0);
+    os::start_text_input(window->get_window());
 #endif
 }
 
@@ -154,7 +152,9 @@ void RmlUi_SystemInterface::DeactivateKeyboard()
     // For desktop platforms, this is typically a no-op
     // On mobile platforms, this would hide the virtual keyboard
     APPLOG_TRACE("DeactivateKeyboard");
-    os::stop_text_input((*window_)->get_window());
+    auto& ctx = engine::context();
+    auto& window = ctx.get_cached<renderer>().get_main_window();
+    os::stop_text_input(window->get_window());
 #endif
 }
 

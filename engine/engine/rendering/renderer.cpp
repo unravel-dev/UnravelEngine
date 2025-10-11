@@ -1,6 +1,7 @@
 #include "renderer.h"
 #include "../events.h"
 #include "spdlog/common.h"
+#include "gpu_program.h"
 
 #include <base/assert.hpp>
 #include <graphics/debugdraw.h>
@@ -78,16 +79,14 @@ auto renderer::create_window_for_display(int index, const std::string& title, ui
     return render_window_;
 }
 
-auto renderer::set_main_window(os::window&& window) -> const std::unique_ptr<render_window>&
+void renderer::set_main_window(os::window&& window)
 {
     render_window_ = std::make_unique<render_window>(std::move(window));
-    return render_window_;
 }
 
 auto renderer::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
-
     return true;
 }
 
@@ -228,9 +227,9 @@ renderer::~renderer()
     os::shutdown();
 }
 
-auto renderer::get_main_window() const -> const std::unique_ptr<render_window>&
+auto renderer::get_main_window() const -> render_window*
 {
-    return render_window_;
+    return render_window_.get();
 }
 
 void renderer::close_main_window()
@@ -265,9 +264,12 @@ void renderer::set_vsync(bool vsync)
 
 void renderer::frame_begin(rtti::context& /*ctx*/, delta_t /*dt*/)
 {
-    auto& window = get_main_window();
-    auto& pass = window->begin_present_pass();
-    pass.clear();
+    auto window = get_main_window();
+    if(window)
+    {
+        auto& pass = window->begin_present_pass();
+        pass.clear();
+    }
 }
 
 void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)

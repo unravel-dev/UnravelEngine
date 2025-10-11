@@ -68,6 +68,11 @@ struct gfx_callback final : public bgfx::CallbackI
         }
         out[len] = '\0';
 
+        // Determine log type based on prefix
+        if (strncmp(out, "WARN ", 5) == 0)
+        {
+            log("warning", out + 5, _filePath, _line);
+        }
         //log("trace", out, _filePath, _line);
     }
 

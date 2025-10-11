@@ -775,7 +775,7 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
         bool is_popup_opened = false;
         
 
-        auto process_cache_entry = [&](const auto& cache_entry)
+        auto process_cache_entry = [&, this](const auto& cache_entry)
         {
             const auto& absolute_path = cache_entry.entry.path();
             const auto& name = cache_entry.stem;
@@ -783,32 +783,11 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
             const auto& relative = cache_entry.protocol_path;
             const auto& file_ext = cache_entry.extension;
 
-            const auto on_rename = [&](const std::string& new_name)
-            {
-                fs::path new_absolute_path = absolute_path;
-                new_absolute_path.remove_filename();
-                new_absolute_path /= new_name + file_ext;
-                fs::error_code err;
-                fs::rename(absolute_path, new_absolute_path, err);
-            };
-
-
-            auto prompt_delete = [](const std::string& name, const std::function<void()>& on_delete)
-            {
-                ImBox::ShowDeleteConfirmation("Delete selected asset?",
-                    fmt::format("{}\n\nYou cannot undo the delete asset action.", name).c_str(),
-                    [on_delete](ImBox::ModalResult result)
-                {
-                    if(result == ImBox::ModalResult::Delete)
-                    {
-                        on_delete();
-                    }
-                });
-            };
-
             content_browser_item item(cache_entry);
-            item.on_rename = on_rename;
             item.size = size;
+            
+            // Use reusable rename handler
+            setup_rename_handler(item, absolute_path, file_ext);
 
             bool known = false;
             hpp::for_each_type<gfx::texture,
@@ -836,66 +815,13 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                     if(ex::is_format<asset_t>(file_ext))
                     {
                         known = true;
-                        using entry_t = asset_handle<asset_t>;
-                        const auto& entry = am.find_asset<asset_t>(relative);
-
-                        item.icon = tm.get_thumbnail(entry);
-                        item.is_selected = em.is_selected(entry);
-                        item.is_focused = em.is_focused(entry);
-                        item.is_loading = !entry.is_ready();
-                        item.on_click = [&]()
-                        {
-                            em.select(entry, em.get_select_mode());
-                        };
-
-                        item.on_delete = [&]()
-                        {
-                            auto on_delete = [&em, absolute_path, entry]()
-                            {
-                                fs::error_code err;
-                                fs::remove_all(absolute_path, err);
-        
-                                em.unselect(entry);
-                            };
-
-                            prompt_delete(relative, on_delete);
-                        };
-
-                        if constexpr(std::is_same_v<asset_t, scene_prefab>)
-                        {
-                            item.on_double_click = [&]()
-                            {
-                                editor_actions::open_scene_from_asset(ctx, entry);
-                            };
-                        }
-
-                        if constexpr(std::is_same_v<asset_t, prefab>)
-                        {
-                            item.on_double_click = [&]()
-                            {
-                                auto& em = ctx.get_cached<editing_manager>();
-                                auto& scene_panel = parent_->get_scene_panel();
-                                
-                                bool auto_save = scene_panel.get_auto_save_prefab();
-                                em.enter_prefab_mode(ctx, entry, auto_save);
-                            };
-                        }
-
-                        if constexpr(std::is_same_v<asset_t, script>)
-                        {
-                            item.on_double_click = [&]()
-                            {
-                                editor_actions::open_workspace_on_file(absolute_path);
-                            };
-                        }
-
+                        setup_asset_item<asset_t>(ctx, item, absolute_path, relative, file_ext);
                         is_popup_opened |= draw_item(item);
                     }
                 });
 
             if(!known)
             {
-
                 fs::error_code ec;
                 using entry_t = fs::path;
                 const entry_t& entry = absolute_path;
@@ -903,27 +829,20 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                 item.is_selected = em.is_selected(entry);
                 item.is_focused = em.is_focused(entry);
 
-                item.on_click = [&]()
+                item.on_click = [&em, entry]()
                 {
                     em.select(entry, em.get_select_mode());
                 };
 
-                item.on_delete = [&]()
-                {
-                    auto on_delete = [&em, absolute_path, entry]()
-                    {
-                        fs::error_code err;
-                        fs::remove_all(absolute_path, err);
+                // Use reusable template delete handler for unknown assets
+                setup_delete_handler(item, relative, absolute_path, entry, ctx);
 
-                        em.unselect(entry);
-                    };
-
-                    prompt_delete(relative, on_delete);
-                };
+                // Use reusable rename handler
+                setup_rename_handler(item, absolute_path, file_ext);
 
                 if(fs::is_directory(cache_entry.entry.status()))
                 {
-                    item.on_double_click = [&]()
+                    item.on_double_click = [&current_path, &em, entry]()
                     {
                         current_path = entry;
                         em.try_unselect<entry_t>();
@@ -1230,4 +1149,111 @@ void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std:
             filename);
     }
 }
+
+void content_browser_panel::prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete)
+{
+    ImBox::ShowDeleteConfirmation("Delete selected asset?",
+        fmt::format("{}\n\nYou cannot undo the delete asset action.", name),
+        [on_delete](ImBox::ModalResult result)
+        {
+            if(result == ImBox::ModalResult::Delete)
+            {
+                on_delete();
+            }
+        });
+}
+
+template<typename EntryType>
+void content_browser_panel::setup_delete_handler(content_browser_item& item, const std::string& relative, 
+                                                const fs::path& absolute_path, const EntryType& entry, rtti::context& ctx)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    
+    item.on_delete = [this, relative, absolute_path, &em, entry]()
+    {
+        auto delete_impl = [&em, absolute_path, entry]()
+        {
+            fs::error_code err;
+            fs::remove_all(absolute_path, err);
+            em.unselect(entry);  // Works for both asset handles and fs::path
+        };
+        
+        this->prompt_delete_asset(relative, delete_impl);
+    };
+}
+
+void content_browser_panel::setup_rename_handler(content_browser_item& item, const fs::path& absolute_path, 
+                                                const std::string& file_ext)
+{
+    item.on_rename = [absolute_path, file_ext](const std::string& new_name)
+    {
+        fs::path new_absolute_path = absolute_path;
+        new_absolute_path.remove_filename();
+        new_absolute_path /= new_name + file_ext;
+        fs::error_code err;
+        fs::rename(absolute_path, new_absolute_path, err);
+    };
+}
+
+template<typename AssetType>
+void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser_item& item, 
+                                            const fs::path& absolute_path, 
+                                            const std::string& relative,
+                                            const std::string& file_ext)
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+    auto& tm = ctx.get_cached<thumbnail_manager>();
+    
+    using entry_t = asset_handle<AssetType>;
+    const auto& entry = am.find_asset<AssetType>(relative);
+
+    item.icon = tm.get_thumbnail(entry);
+    item.is_selected = em.is_selected(entry);
+    item.is_focused = em.is_focused(entry);
+    item.is_loading = !entry.is_ready();
+    
+    // Simple click handler
+    item.on_click = [&em, entry]()
+    {
+        em.select(entry, em.get_select_mode());
+    };
+
+    // Use reusable template delete handler
+    setup_delete_handler(item, relative, absolute_path, entry, ctx);
+
+    // Use reusable rename handler
+    setup_rename_handler(item, absolute_path, file_ext);
+
+    // Set up double-click handlers based on asset type
+    if constexpr(std::is_same_v<AssetType, scene_prefab>)
+    {
+        item.on_double_click = [&ctx, entry]()
+        {
+            editor_actions::open_scene_from_asset(ctx, entry);
+        };
+    }
+    else if constexpr(std::is_same_v<AssetType, prefab>)
+    {
+        item.on_double_click = [this, &ctx, entry]()
+        {
+            auto& em_local = ctx.get_cached<editing_manager>();
+            auto& scene_panel = parent_->get_scene_panel();
+            
+            bool auto_save = scene_panel.get_auto_save_prefab();
+            em_local.enter_prefab_mode(ctx, entry, auto_save);
+        };
+    }
+    else if constexpr(std::is_same_v<AssetType, script> || 
+                      std::is_same_v<AssetType, gfx::shader> ||
+                      std::is_same_v<AssetType, style_sheet>)
+    {
+        item.on_double_click = [absolute_path]()
+        {
+            editor_actions::open_workspace_on_file(absolute_path);
+        };
+    }
+    // For other asset types, no double-click action for now
+}
+
 } // namespace unravel

@@ -85,12 +85,6 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
     // Set viewport size
     data->render_interface.set_viewport(width, height);
 
-    // Connect to engine's renderer for window access
-    if (ctx.has<renderer>())
-    {
-        auto& rend = ctx.get_cached<renderer>();
-        data->system_interface.set_window(rend.get_main_window());
-    }
 
     data->initialized = true;
     return true;

@@ -393,7 +393,7 @@ void hub::on_os_event(rtti::context& ctx, os::event& e)
             auto window_id = e.window.window_id;
 
             auto& rend = ctx.get_cached<renderer>();
-            auto& render_window = rend.get_main_window();
+            auto render_window = rend.get_main_window();
             if(render_window)
             {
                 if(render_window->get_window().get_id() == window_id)

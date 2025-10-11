@@ -47,13 +47,6 @@ public:
      * @brief Cleanup resources
      */
     void shutdown();
-
-    /**
-     * @brief Set the window for cursor management
-     * @param window Pointer to the main engine window
-     */
-    void set_window(const std::unique_ptr<class render_window>& window);
-
     // -- Inherited from Rml::SystemInterface --
 
     /**
@@ -99,9 +92,6 @@ public:
 	bool LogMessage(Rml::Log::Type type, const Rml::String& message) override;
 
 private:
-    rtti::context* ctx_ = nullptr;
-    const std::unique_ptr<class render_window>* window_ = nullptr;
-
     // Initialize cursors
     void init_cursors();
     void cleanup_cursors();

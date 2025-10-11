@@ -50,7 +50,7 @@ void runner::on_frame_update(rtti::context& ctx, delta_t dt)
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
-    auto& window = rend.get_main_window();
+    auto window = rend.get_main_window();
     auto size = window->get_window().get_size();
 
     scene.registry->view<camera_component>().each(
@@ -76,7 +76,7 @@ void runner::on_frame_render(rtti::context& ctx, delta_t dt)
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
-    auto& window = rend.get_main_window();
+    auto window = rend.get_main_window();
 
     path.render_scene(window->get_surface(), scene, dt);
     ctx.get_cached<ui_system>().on_frame_render(window->get_surface(), dt);
