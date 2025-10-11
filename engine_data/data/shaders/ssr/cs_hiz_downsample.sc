@@ -14,7 +14,8 @@ IMAGE2D_RO(s_hiz_input, r32f, 0);
 IMAGE2D_WO(s_hiz_output, r32f, 1);
 
 // Uniforms for mip generation
-uniform vec4 u_hiz_params; // x: current_mip_width, y: current_mip_height, z: unused, w: current_mip_level
+// x: current_mip_width, y: current_mip_height, z: unused, w: current_mip_level
+uniform vec4 u_hiz_params;
 
 NUM_THREADS(8, 8, 1)
 void main()

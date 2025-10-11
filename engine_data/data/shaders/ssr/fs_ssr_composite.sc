@@ -3,10 +3,14 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 
-SAMPLER2D(s_ssr_history, 0);  // Temporally filtered SSR result (rgb = filtered color, a = normalized weight)
-SAMPLER2D(s_ssr_curr, 1);     // Current frame SSR result (rgb = color, a = confidence)
-SAMPLER2D(s_normal, 2);       // Normal buffer for Fresnel calculation
-SAMPLER2D(s_depth, 3);        // Depth buffer
+// Temporally filtered SSR result (rgb = filtered color, a = normalized weight)
+SAMPLER2D(s_ssr_history, 0);
+// Current frame SSR result (rgb = color, a = confidence)
+SAMPLER2D(s_ssr_curr, 1);
+// Normal buffer for Fresnel calculation
+SAMPLER2D(s_normal, 2);
+// Depth buffer
+SAMPLER2D(s_depth, 3);
 
 #define MAX_ROUGHNESS 0.6
 

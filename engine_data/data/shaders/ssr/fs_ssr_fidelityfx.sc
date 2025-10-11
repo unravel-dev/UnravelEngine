@@ -3,43 +3,37 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 
-SAMPLER2D(s_color, 0); // Input color (G-buffer or previous frame)
-SAMPLER2D(s_normal, 1);    // Normal buffer
-SAMPLER2D(s_depth, 2);     // Depth buffer
-SAMPLER2D(s_hiz, 3);       // Hi-Z depth hierarchy
-SAMPLER2D(s_color_blurred, 4); // Pre-blurred color buffer with mip chain for cone tracing
+SAMPLER2D(s_color, 0);
+SAMPLER2D(s_normal, 1);
+SAMPLER2D(s_depth, 2);
+SAMPLER2D(s_hiz, 3);
+SAMPLER2D(s_color_blurred, 4);
 
-
-uniform vec4 u_ssr_params; // x: max_steps, y: depth_tolerance, z: max_rays, w: brightness
+uniform vec4 u_ssr_params;
 #define u_max_steps         u_ssr_params.x
 #define u_depth_tolerance   u_ssr_params.y
 #define u_max_rays          u_ssr_params.z
 #define u_brightness        u_ssr_params.w
 
-uniform vec4 u_hiz_params; // x: buffer_width, y: buffer_height, z: num_depth_mips, w: ssr_resolution_scale
+uniform vec4 u_hiz_params;
 #define u_hiz_width         u_hiz_params.x
 #define u_hiz_height        u_hiz_params.y
 #define u_hiz_num_mips      u_hiz_params.z
 #define u_ssr_resolution_scale u_hiz_params.w
 
-uniform vec4 u_fade_params; // x: fade_in_start, y: fade_in_end, z: roughness_depth_tolerance, w: facing_reflections_fading
+uniform vec4 u_fade_params;
 #define u_fade_in_start     u_fade_params.x
 #define u_fade_in_end       u_fade_params.y
 #define u_roughness_depth_tolerance u_fade_params.z
 #define u_facing_reflections_fading u_fade_params.w
 
-uniform vec4 u_cone_params; // x: cone_angle_bias, y: max_mip_level, z: frame_index, w: enable_cone_tracing
+uniform vec4 u_cone_params;
 #define u_cone_angle_bias   u_cone_params.x
 #define u_max_mip_level     u_cone_params.y
 #define u_frame_index_mod       u_cone_params.z
 #define u_enable_cone_tracing     u_cone_params.w
 
-
-// Tonemapping parameters removed - now sampling directly from HDR buffer
-
-
-uniform mat4 u_prev_view_proj; // Previous frame view-projection matrix
-
+uniform mat4 u_prev_view_proj;
 
 // Constants
 #define FFX_SSSR_FLOAT_MAX 3.402823466e+38
@@ -47,6 +41,7 @@ uniform mat4 u_prev_view_proj; // Previous frame view-projection matrix
 #define HAMMERSLEY_SAMPLES 16
 #define HAMMERSLEY_TYPE 1
 #define MAX_ROUGHNESS 0.6
+
 
 /*
  * FidelityFX-inspired SSR Implementation with Cone Tracing

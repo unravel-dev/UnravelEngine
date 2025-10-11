@@ -10,8 +10,8 @@ SAMPLER2D(s_tex1, 1);
 SAMPLER2D(s_tex2, 2);
 SAMPLER2D(s_tex3, 3);
 SAMPLER2D(s_tex4, 4);
-SAMPLER2D(s_tex5, 5); // reflection data
-SAMPLER2D(s_tex6, 6); // ibl_brdf_lut
+SAMPLER2D(s_tex5, 5);
+SAMPLER2D(s_tex6, 6);
 
 uniform vec4 u_light_position;
 uniform vec4 u_light_direction;

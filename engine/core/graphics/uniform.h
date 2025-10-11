@@ -12,9 +12,13 @@
 
 namespace gfx
 {
+
+void deinit_uniform_cache();
+
 struct uniform : public handle_impl<uniform, uniform_handle>
 {
     uniform() = default;
+    ~uniform();
     //-----------------------------------------------------------------------------
     //  Name : populate ()
     /// <summary>

@@ -14,7 +14,8 @@ SAMPLER2D(s_depth, 0);
 IMAGE2D_WO(s_hiz_output, r32f, 1);
 
 // Uniforms for texture dimensions
-uniform vec4 u_hiz_params; // x: output width, y: output height, z: unused, w: unused
+// x: output width, y: output height, z: unused, w: unused
+uniform vec4 u_hiz_params;
 
 NUM_THREADS(8, 8, 1)
 void main()

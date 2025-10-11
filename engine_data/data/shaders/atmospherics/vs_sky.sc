@@ -5,7 +5,7 @@ $output v_skyColor, v_screenPos, v_viewDir
 
 uniform vec4 u_sunDirection;
 uniform vec4 u_skyLuminanceXYZ;
-uniform vec4 u_parameters; // x - sun size, y - sun bloom, z - exposition
+uniform vec4 u_parameters;
 uniform vec4 u_perezCoeff[5];
 
 #define u_sun_size u_parameters.x

@@ -3,30 +3,34 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 
-SAMPLER2D(s_ssr_curr, 0);    // Current frame SSR result (rgb = color, a = confidence)
-SAMPLER2D(s_ssr_history, 1); // Previous frame SSR history (rgb = filtered color, a = normalized weight)
-SAMPLER2D(s_normal, 2);      // Normal buffer for validity checks
-SAMPLER2D(s_depth, 3);       // Depth buffer for validity checks
+// Current frame SSR result (rgb = color, a = confidence)
+SAMPLER2D(s_ssr_curr, 0);
+// Previous frame SSR history (rgb = filtered color, a = normalized weight)
+SAMPLER2D(s_ssr_history, 1);
+// Normal buffer for validity checks
+SAMPLER2D(s_normal, 2);
+// Depth buffer for validity checks
+SAMPLER2D(s_depth, 3);
 
-uniform vec4 u_temporal_params; // x: enable_temporal, y: history_strength, z: depth_threshold, w: roughness_sensitivity
+uniform vec4 u_temporal_params;
 #define u_enable_temporal         u_temporal_params.x
 #define u_history_strength        u_temporal_params.y
 #define u_depth_threshold         u_temporal_params.z
 #define u_roughness_sensitivity   u_temporal_params.w
 
-uniform vec4 u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
+uniform vec4 u_motion_params;
 #define u_motion_scale_pixels     u_motion_params.x
 #define u_normal_dot_threshold    u_motion_params.y
 #define u_max_accum_frames        u_motion_params.z
 #define u_motion_unused_w         u_motion_params.w
 
-uniform vec4 u_fade_params;      // x: fade_in_start, y: fade_in_end, z: ssr_resolution_scale, w: unused
+uniform vec4 u_fade_params;
 #define u_fade_in_start           u_fade_params.x
 #define u_fade_in_end             u_fade_params.y
 #define u_ssr_resolution_scale    u_fade_params.z
 #define u_fade_unused_w           u_fade_params.w
 
-uniform mat4 u_prev_view_proj;   // Previous frame view-projection matrix
+uniform mat4 u_prev_view_proj;
 
 // Constants for temporal accumulation
 #define DECAY_MIN 0.80

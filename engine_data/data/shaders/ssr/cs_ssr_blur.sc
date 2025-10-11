@@ -5,9 +5,10 @@ $input v_texcoord0
 
 IMAGE2D_WO(i_output, rgba8, 0);
 IMAGE2D_RO(i_input, rgba8, 1);
-SAMPLER2D(s_normal, 2);  // G-buffer normal texture containing roughness
+SAMPLER2D(s_normal, 2);
 
-uniform vec4 u_blur_params; // x: mip_level, y: sigma, z: unused, w: unused
+// x: mip_level, y: sigma, z: unused, w: unused
+uniform vec4 u_blur_params;
 
 /*
  * Separable Gaussian Blur Compute Shader for SSR Cone Tracing

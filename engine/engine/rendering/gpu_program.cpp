@@ -40,6 +40,10 @@ void gpu_program::populate()
 
     if(all_valid)
     {
+        if(program_)
+        {
+            program_.reset();
+        }
         if(shaders_.size() == 1)
         {
             const auto& compute_shader = shaders_[0];
@@ -146,6 +150,7 @@ auto gpu_program::begin() -> bool
 void gpu_program::end()
 {
 }
+
 
 } // namespace unravel
 

@@ -6,6 +6,7 @@
 #include <graphics/program.h>
 #include <graphics/shader.h>
 #include <math/math.h>
+#include <unordered_set>
 
 namespace unravel
 {
@@ -184,13 +185,8 @@ struct uniforms_cache
         if(uniform == nullptr)
         {
             uniform = std::make_shared<gfx::uniform>(std::string(name), type, num);
-            //APPLOG_TRACE("Uniform {} created.", name);
         }
-        else
-        {
-            //APPLOG_TRACE("Uniform {} found.", name);
-        }
-
+        
         program->end();
     }
 };

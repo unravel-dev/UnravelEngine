@@ -2,17 +2,90 @@
 
 namespace gfx
 {
+namespace
+{
+    struct ref_counted_handle
+    {
+        gfx::uniform_handle handle = {bgfx::kInvalidHandle};
+        uint64_t ref_count{};
+    };
+    struct uniform_cache
+    {
+        using cache_t = std::unordered_map<std::string, std::unordered_map<gfx::uniform_type, std::unordered_map<uint16_t, ref_counted_handle>>>;
+        cache_t cache;
+        // std::unordered_map<uint16_t, ref_counted_handle*> lut;
+    };
+
+    auto get_uniform_cache() -> uniform_cache&
+    {
+        static uniform_cache cache;
+        return cache;
+    }
+
+    auto aquire(const std::string& _name, gfx::uniform_type _type, std::uint16_t _num) -> gfx::uniform_handle
+    {
+        auto& cache = get_uniform_cache();
+        auto& by_name = cache.cache[_name];
+        BX_ASSERT(by_name.size() <= 1, "Uniform %s has different types in cache", _name.c_str());
+   
+        auto& by_type = by_name[_type];
+        BX_ASSERT(by_type.size() <= 1, "Uniform %s has different nums in cache", _name.c_str());
+        auto& by_num = by_type[_num];
+        auto& counted_uniform = by_num;
+
+        if(counted_uniform.ref_count == 0)
+        {
+            counted_uniform.handle = gfx::create_uniform(_name.c_str(), _type, _num);
+            // cache.lut[counted_uniform.handle.idx] = &counted_uniform;
+        }
+
+        counted_uniform.ref_count++;
+
+        return counted_uniform.handle;
+    }
+
+    void release(gfx::uniform_handle _handle)
+    {
+        // auto& cache = get_uniform_cache();
+        // auto& counted_uniform = cache.lut[_handle.idx];
+        // counted_uniform->ref_count--;
+        // if(counted_uniform->ref_count == 0)
+        // {
+        //     gfx::destroy(counted_uniform->handle);
+        //     cache.lut.erase(counted_uniform->handle.idx);
+        // }
+    }
+}
+
+void deinit_uniform_cache()
+{
+    auto& cache = get_uniform_cache();
+    // BX_ASSERT(cache.lut.empty(), "Uniform cache is not empty");
+    // cache.lut.clear();
+    cache.cache.clear();
+}
 
 uniform::uniform(const std::string& _name, uniform_type _type, std::uint16_t _num /*= 1*/)
 {
-    handle_ = gfx::create_uniform(_name.c_str(), _type, _num);
+    // handle_ = gfx::create_uniform(_name.c_str(), _type, _num);
+    handle_ = aquire(_name, _type, _num);
     gfx::get_uniform_info(handle_, info);
 }
 
 uniform::uniform(handle_type_t _handle)
 {
     gfx::get_uniform_info(_handle, info);
-    handle_ = gfx::create_uniform(info.name, info.type, info.num);
+    // handle_ = gfx::create_uniform(info.name, info.type, info.num);
+    handle_ = aquire(info.name, info.type, info.num);
+}
+
+uniform::~uniform()
+{
+    if(is_valid())
+    {
+        release(handle_);
+    }
+    handle_ = invalid_handle();
 }
 
 
