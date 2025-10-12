@@ -275,7 +275,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
 
         const auto& particle_emitter_comp = e.get<particle_emitter_component>();
         const auto& bounds = particle_emitter_comp.get_world_bounds();
-        if(frustum.test_aabb(bounds))
+        // if(frustum.test_aabb(bounds))
         {
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xff00ffff);

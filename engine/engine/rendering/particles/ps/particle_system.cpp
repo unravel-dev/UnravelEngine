@@ -195,57 +195,6 @@ namespace ps
 			// Safety check: ensure m_num never exceeds m_max
 			BX_ASSERT(m_num <= m_max, "Particle count exceeded maximum! m_num=%d, m_max=%d", m_num, m_max);
 			m_num = bx::min(m_num, m_max);
-			
-			// Update AABB for culling
-			updateAabb();
-		}
-
-		void updateAabb()
-		{
-			if (0 == m_num)
-			{
-				// No particles - set empty AABB
-				bx::memSet(&m_aabb, 0, sizeof(bx::Aabb));
-				return;
-			}
-
-			// Initialize AABB to extreme values
-			bx::Aabb aabb =
-			{
-				{  bx::kFloatInfinity,  bx::kFloatInfinity,  bx::kFloatInfinity },
-				{ -bx::kFloatInfinity, -bx::kFloatInfinity, -bx::kFloatInfinity },
-			};
-
-			// Get easing functions for position calculation
-			bx::EaseFn easePos = bx::getEaseFunc(m_uniforms.m_easePos);
-			bx::EaseFn easeScale = bx::getEaseFunc(m_uniforms.m_easeScale);
-
-			// Calculate AABB by examining all active particles
-			for (uint32_t ii = 0; ii < m_num; ++ii)
-			{
-				const Particle& particle = m_particles[ii];
-
-				// Calculate current particle position (same logic as in render)
-				const float ttPos = easePos(particle.life);
-				const float ttScale = easeScale(particle.life);
-
-				const bx::Vec3 p0 = bx::lerp(particle.start, particle.end[0], ttPos);
-				const bx::Vec3 p1 = bx::lerp(particle.end[0], particle.end[1], ttPos);
-				const bx::Vec3 pos = bx::lerp(p0, p1, ttPos);
-
-				// Calculate particle scale for AABB expansion
-				const float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, ttScale);
-
-				// Expand AABB to include this particle with its scale
-				const bx::Vec3 halfSize = { scale, scale, scale };
-				const bx::Vec3 minPos = bx::sub(pos, halfSize);
-				const bx::Vec3 maxPos = bx::add(pos, halfSize);
-
-				aabbExpand(aabb, minPos);
-				aabbExpand(aabb, maxPos);
-			}
-
-			m_aabb = aabb;
 		}
 
 		void spawn(float _dt)
