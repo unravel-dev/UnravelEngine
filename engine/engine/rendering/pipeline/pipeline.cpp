@@ -10,7 +10,9 @@
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
-
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
+ 
 #include <engine/profiler/profiler.h>
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
@@ -41,6 +43,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
 
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
+
+    particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
 
     return true;
 }
@@ -202,6 +206,46 @@ void pipeline::ui_pass(scene& scn, const camera& camera, gfx::render_view& rview
         });
 
     gfx::discard();
+}
+
+
+void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
+{
+    APP_SCOPE_PERF("Rendering/Particle Pass");
+
+    auto lbuffer_depth = rview.fbo_get("LBUFFER_DEPTH");
+
+    // Set up render pass to render particles to the output framebuffer
+    gfx::render_pass pass("particle_pass");
+    pass.bind(lbuffer_depth.get());
+    
+    const auto& view = camera.get_view();
+    const auto& proj = camera.get_projection();
+    pass.set_view_proj(view, proj);
+
+    if(particle_program_ && particle_program_->begin())
+    {
+        // Render particles using the particle system
+        auto cam_pos = camera.get_position();
+        auto cam_view = camera.get_view();
+        bx::Vec3 eye_pos(cam_pos.x, cam_pos.y, cam_pos.z);
+    
+
+        scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
+            [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
+            {
+                if(!camera.test_aabb(particle_emitter_comp.get_world_bounds()))
+                {
+                    return;
+                }
+                // particle_emitter_comp.update_emitter(transform_comp.get_transform_global(), delta_t(0.016f));
+                particle_emitter_comp.render_emitter(pass.id, particle_program_->native_handle(), cam_view, eye_pos);
+            });
+
+        // Render all particles
+
+        particle_program_->end();
+    }
 }
 
 } // namespace rendering

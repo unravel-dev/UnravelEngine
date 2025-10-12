@@ -47,8 +47,9 @@ public:
         reflection_probe = 1 << 3,
         lighting = 1 << 4,
         atmospheric = 1 << 5,
+        particles_pass = 1 << 6,
 
-        full = geometry_pass | shadow_pass | reflection_probe | lighting | atmospheric,
+        full = geometry_pass | shadow_pass | reflection_probe | lighting | atmospheric | particles_pass,
         probe = lighting | atmospheric,
     };
 
@@ -254,7 +255,6 @@ private:
     color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];
 
     asset_handle<gfx::texture> ibl_brdf_lut_;
-
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

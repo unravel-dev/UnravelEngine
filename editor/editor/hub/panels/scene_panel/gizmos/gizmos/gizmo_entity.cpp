@@ -269,6 +269,24 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
+    if(e.all_of<particle_emitter_component>())
+    {
+        const auto& frustum = cam.get_frustum();
+
+        const auto& particle_emitter_comp = e.get<particle_emitter_component>();
+        const auto& bounds = particle_emitter_comp.get_world_bounds();
+        if(frustum.test_aabb(bounds))
+        {
+            DebugDrawEncoderScopePush scope(dd.encoder);
+            dd.encoder.setColor(0xff00ffff);
+            dd.encoder.setWireframe(true);
+            bx::Aabb aabb;
+            aabb.min = to_bx(bounds.min);
+            aabb.max = to_bx(bounds.max);
+            dd.encoder.draw(aabb);
+        }
+    }
+
     hpp::for_each_tuple_type<all_inspectable_components>(
         [&](auto index)
         {

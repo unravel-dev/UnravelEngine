@@ -190,6 +190,7 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
         return;
     }
 
+
     // Forward event to RmlUi
     if(RmlEngine::input_event_handler(ui_context_, event))
     {
@@ -336,11 +337,9 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
 
     auto& ev = ctx.get_cached<events>();
 
-    // if(ev.is_playing)
+    auto& input = ctx.get_cached<input_system>();
+    if(input.manager.is_input_allowed())
     {
-        auto& input = ctx.get_cached<input_system>();
-
-    
         auto mouse_delta_x = input.manager.get_mouse().get_axis_value(0);
         auto mouse_delta_y = input.manager.get_mouse().get_axis_value(1);
 

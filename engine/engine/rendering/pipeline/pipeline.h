@@ -145,6 +145,9 @@ public:
 
     virtual void ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
 
+    virtual void particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
+
+
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
 
 protected:
@@ -158,6 +161,8 @@ protected:
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{};  ///< Hi-Z buffer generation pass
+
+    std::unique_ptr<gpu_program> particle_program_{};
 };
 } // namespace rendering
 } // namespace unravel

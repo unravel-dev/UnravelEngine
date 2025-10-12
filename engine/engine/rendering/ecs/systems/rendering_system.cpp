@@ -1,8 +1,10 @@
 #include "rendering_system.h"
+#include "particle_system.h"
 
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <engine/profiler/profiler.h>
 
 #include <engine/animation/ecs/systems/animation_system.h>
 #include <engine/ecs/components/transform_component.h>
@@ -51,6 +53,7 @@ void rendering_system::on_frame_update(scene& scn, delta_t dt)
     ctx.get_cached<model_system>().on_frame_update(scn, dt);
     ctx.get_cached<animation_system>().on_frame_update(scn, dt);
     ctx.get_cached<reflection_probe_system>().on_frame_update(scn, dt);
+    ctx.get_cached<particle_system>().on_frame_update(scn, dt);
 }
 
 void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
@@ -116,6 +119,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     auto params = pipeline->create_run_params(camera_ent);
 
     pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
+ 
     render_debug(camera_ent);
 }
 
@@ -160,5 +164,6 @@ void rendering_system::add_debugdraw_call(const std::function<void(gfx::dd_raii&
 {
     debug_draw_callbacks_.emplace_back(callback);
 }
+
 
 } // namespace unravel

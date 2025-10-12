@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
@@ -282,7 +283,7 @@ void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const cam
     if(!em.show_icon_gizmos)
         return;
 
-    hpp::for_each_type<camera_component, light_component, reflection_probe_component, audio_source_component>(
+    hpp::for_each_type<camera_component, light_component, reflection_probe_component, audio_source_component, particle_emitter_component>(
         [&](auto tag)
         {
             using type_t = typename std::decay_t<decltype(tag)>::type;

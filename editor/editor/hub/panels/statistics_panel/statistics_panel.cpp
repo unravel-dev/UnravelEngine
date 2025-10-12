@@ -383,6 +383,13 @@ auto statistics_panel::draw_resources_section() -> void
     ImGui::Indent();
     
     using namespace statistics_utils;
+    draw_resource_bar("TIB", "Transient Index Buffer Used",
+                     stats->transientIbUsed, caps->limits.transientIbSize,
+                     resource_bar_width, item_height);
+    
+    draw_resource_bar("TVB", "Transient Vertex Buffer Used",
+                     stats->transientVbUsed, caps->limits.transientVbSize,
+                     resource_bar_width, item_height);
     
     draw_resource_bar("DIB", "Dynamic Index Buffers",
                      stats->numDynamicIndexBuffers, caps->limits.maxDynamicIndexBuffers,

@@ -2,6 +2,8 @@
 
 #include <engine/ecs/ecs.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
+#include <engine/rendering/camera.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 #include <graphics/debugdraw.h>
@@ -86,7 +88,15 @@ public:
     void render_scene(const gfx::frame_buffer::ptr& output, entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt);
 
     void add_debugdraw_call(const std::function<void(gfx::dd_raii& dd)>& callback);
+
 private:
+    /**
+     * @brief Renders particles to the specified framebuffer.
+     * @param output The output framebuffer.
+     * @param camera The camera for rendering.
+     * @param scene The scene containing particles.
+     * @param dt Delta time.
+     */
     void render_debug(entt::handle camera_entity);
 
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;

@@ -167,6 +167,24 @@ struct defaults
     static auto create_text_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
+     * @brief Creates a particle emitter entity.
+     * @param ctx The context for creation.
+     * @param scn The scene to create the entity in.
+     * @param name The name of the particle emitter entity.
+     * @return A handle to the created entity.
+     */
+    static auto create_particle_emitter_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+
+    /**
+     * @brief Creates a audio source entity.
+     * @param ctx The context for creation.
+     * @param scn The scene to create the entity in.
+     * @param name The name of the audio source entity.
+     * @return A handle to the created entity.
+     */
+    static auto create_audio_source_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+
+    /**
      * @brief Creates a default 3D scene.
      * @param ctx The context for creation.
      * @param scn The scene to create.

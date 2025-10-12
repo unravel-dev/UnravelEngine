@@ -265,7 +265,8 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 hpp::for_each_type<camera_component,
                                    light_component,
                                    reflection_probe_component,
-                                   audio_source_component>(
+                                   audio_source_component,
+                                   particle_emitter_component>(
                     [&](auto tag)
                     {
                         using type_t = typename std::decay_t<decltype(tag)>::type;

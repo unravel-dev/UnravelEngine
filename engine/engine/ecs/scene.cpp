@@ -5,11 +5,11 @@
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/prefab_component.h>
-
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/animation/ecs/systems/animation_system.h>
@@ -157,6 +157,9 @@ scene::scene(const std::string& tag_name)
 
     registry->on_construct<ui_document_component>().connect<&ui_system::on_create_component>();
     registry->on_destroy<ui_document_component>().connect<&ui_system::on_destroy_component>();
+
+    registry->on_construct<particle_emitter_component>().connect<&particle_emitter_component::on_create_component>();
+    registry->on_destroy<particle_emitter_component>().connect<&particle_emitter_component::on_destroy_component>();
     
 }
 

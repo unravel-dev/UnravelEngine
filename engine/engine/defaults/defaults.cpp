@@ -4,6 +4,7 @@
 
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/audio/ecs/components/audio_listener_component.h>
+#include <engine/audio/ecs/components/audio_source_component.h>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
@@ -16,6 +17,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 
@@ -611,6 +613,19 @@ auto defaults::create_text_entity(rtti::context& ctx, scene& scn, const std::str
     return object;
 }
 
+auto defaults::create_particle_emitter_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    object.emplace<particle_emitter_component>();
+    return object;
+}
+
+auto defaults::create_audio_source_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    object.emplace<audio_source_component>();
+    return object;
+}
 
 void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
 {

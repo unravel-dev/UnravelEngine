@@ -135,6 +135,7 @@ private:
         asset_handle<gfx::texture> spot_light;
         asset_handle<gfx::texture> audio_source;
         asset_handle<gfx::texture> reflection_probe;
+        asset_handle<gfx::texture> particle_emitter;
 
     } gimzmo_icons_;
 

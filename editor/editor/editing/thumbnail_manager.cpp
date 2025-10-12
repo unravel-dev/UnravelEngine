@@ -297,6 +297,11 @@ auto thumbnail_manager::get_gizmo_icon(entt::handle e) -> gfx::texture::ptr
         icon = gimzmo_icons_.audio_source;
     }
 
+    if(e.all_of<particle_emitter_component>())
+    {
+        icon = gimzmo_icons_.particle_emitter;
+    }
+
     return icon.get();
 }
 
@@ -335,6 +340,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     gimzmo_icons_.spot_light = am.get_asset<gfx::texture>("editor:/data/icons/spot_light.png");
     gimzmo_icons_.audio_source = am.get_asset<gfx::texture>("editor:/data/icons/audio_source.png");
     gimzmo_icons_.reflection_probe = am.get_asset<gfx::texture>("editor:/data/icons/reflection_probe.png");
+    gimzmo_icons_.particle_emitter = am.get_asset<gfx::texture>("editor:/data/icons/particle_emitter.png");
     return true;
 }
 

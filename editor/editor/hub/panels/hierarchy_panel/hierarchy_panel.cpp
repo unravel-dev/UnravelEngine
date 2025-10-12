@@ -138,6 +138,24 @@ void create_text_entity(rtti::context& ctx, imgui_panels* panels, entt::handle p
     });
 }
 
+void create_particle_emitter_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Create Particle Emitter Entity",
+        [&ctx, panels, parent_entity]() mutable
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* active_scene = em.get_active_scene(ctx);
+        auto object = defaults::create_particle_emitter_entity(ctx, *active_scene, "Particle Emitter");
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
+        em.select(object);
+        start_editing_label(ctx, panels, object);
+    });
+}
+
 void create_light_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, light_type type, const std::string& name)
 {
     auto& em = ctx.get_cached<editing_manager>();
@@ -183,6 +201,28 @@ void create_camera_entity(rtti::context& ctx, imgui_panels* panels, entt::handle
         auto& em = ctx.get_cached<editing_manager>();
         auto* active_scene = em.get_active_scene(ctx);
         auto object = defaults::create_camera_entity(ctx, *active_scene, "Camera");
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
+        em.select(object);
+        start_editing_label(ctx, panels, object);
+    });
+}
+
+void create_audio_source_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Create Audio Source Entity",
+        [&ctx, panels, parent_entity]() mutable
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* active_scene = em.get_active_scene(ctx);
+        auto object = defaults::create_audio_source_entity(ctx, *active_scene, "Audio Source");
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
         em.select(object);
         start_editing_label(ctx, panels, object);
     });
@@ -197,6 +237,10 @@ void create_ui_document_entity(rtti::context& ctx, imgui_panels* panels, entt::h
         auto& em = ctx.get_cached<editing_manager>();
         auto* active_scene = em.get_active_scene(ctx);
         auto object = defaults::create_ui_document_entity(ctx, *active_scene, "UI Document");
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
         em.select(object);
         start_editing_label(ctx, panels, object);
     });
@@ -491,6 +535,17 @@ void draw_common_menu_items(rtti::context& ctx, imgui_panels* panels, entt::hand
     if(ImGui::MenuItem("Camera"))
     {
         create_camera_entity(ctx, panels, parent_entity);
+    }
+
+    if(ImGui::MenuItem("Audio Source"))
+    {
+        create_audio_source_entity(ctx, panels, parent_entity);
+    }
+
+    
+    if(ImGui::MenuItem("Particle Emitter"))
+    {
+        create_particle_emitter_entity(ctx, panels, parent_entity);
     }
 
     if(ImGui::MenuItem("UI Document"))

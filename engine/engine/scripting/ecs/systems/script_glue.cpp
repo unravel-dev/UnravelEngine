@@ -14,6 +14,7 @@
 #include <engine/audio/ecs/components/audio_source_component.h>
 #include <engine/input/input.h>
 #include <engine/meta/ecs/components/all_components.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -486,6 +487,7 @@ int register_componetns = []()
     native_comp_lut::register_native_component<bone_component>("Unravel.Core.BoneComponent");
     native_comp_lut::register_native_component<submesh_component>("Unravel.Core.SubmeshComponent");
     native_comp_lut::register_native_component<text_component>("Unravel.Core.TextComponent");
+    native_comp_lut::register_native_component<particle_emitter_component>("Unravel.Core.ParticleEmitterComponent");
     native_comp_lut::register_native_component<ui_document_component>("Unravel.Core.UIDocumentComponent");
 
     return 0;

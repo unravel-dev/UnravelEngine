@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
+#include <engine/rendering/ecs/systems/particle_system.h>
 #include <ospp/event.h>
 
 #include <crash/crash.hpp>
@@ -158,11 +159,11 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<reflection_probe_system>();
     ctx.add<model_system>();
     ctx.add<animation_system>();
+    ctx.add<particle_system>();
     ctx.add<physics_system>();
     ctx.add<input_system>();
     ctx.add<script_system>();
     ctx.add<ui_system>();
-
     return true;
 }
 
@@ -249,6 +250,12 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    if(!ctx.get_cached<particle_system>().init(ctx))
+    {
+        print_init_error(ctx);
+        return false;
+    }
+
     if(!ctx.get_cached<input_system>().init(ctx))
     {
         print_init_error(ctx);
@@ -291,6 +298,11 @@ auto engine::deinit() -> bool
     }
 
     if(!ctx.get_cached<script_system>().deinit(ctx))
+    {
+        return false;
+    }
+
+    if(!ctx.get_cached<particle_system>().deinit(ctx))
     {
         return false;
     }
@@ -370,6 +382,7 @@ auto engine::destroy() -> bool
     ctx.remove<defaults>();
     ctx.remove<ui_system>();
     ctx.remove<script_system>();
+    ctx.remove<particle_system>();
     ctx.remove<input_system>();
     ctx.remove<physics_system>();
     ctx.remove<animation_system>();

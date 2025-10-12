@@ -579,6 +579,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     target = run_atmospherics_pass(target, scn, camera, rview, dt);
 
+    if(pflags & pipeline_steps::particles_pass)
+    {
+        particle_pass(scn, camera, rview, target);
+    }
+
     target = run_tonemapping_pass(rview, target, output, params);
 
     run_fxaa_pass(rview, target, output, params);
