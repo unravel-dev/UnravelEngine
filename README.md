@@ -8,7 +8,7 @@
 ![macos](https://github.com/unravel-dev/UnravelEngine/actions/workflows/macos.yml/badge.svg)
 [![Release](https://img.shields.io/github/v/release/unravel-dev/UnravelEngine)](https://github.com/unravel-dev/UnravelEngine/releases)
 
-[📥 Download](https://github.com/unravel-dev/UnravelEngine/releases) • [📖 Documentation](https://unravel-dev.github.io/unravel-engine-api/) • [🎯 Demo Project](#editor) • [💬 Community](#community--support)
+[📥 Download](https://github.com/unravel-dev/UnravelEngine/releases) • [📖 Documentation](https://unravel-dev.github.io/UnravelEngine/script-api/html/) • [💬 Community](#community--support)
 
 </div>
 
@@ -67,9 +67,9 @@ DirectX 11 • DirectX 12 • Vulkan • OpenGL
 <img width="2560" height="1380" alt="Screenshot 2025-08-10 234618" src="https://github.com/user-attachments/assets/98475418-1f0f-41be-9dac-4e2268c9feda" />
 
 ## 📖 Documentation
-Engine C++ documentation can be found here - [Engine Api](https://unravel-dev.github.io/unravel-engine-api/html/index.html)
+Engine C++ documentation can be found here - [Engine Api](https://unravel-dev.github.io/UnravelEngine/engine-api/html/)
 
-Scripting C# documentation can be found here - [Script Api](https://unravel-dev.github.io/unravel-script-api/html/index.html)
+Scripting C# documentation can be found here - [Scripting Api](https://unravel-dev.github.io/UnravelEngine/script-api/html/)
 
 ## 🚧 Current Status
 
