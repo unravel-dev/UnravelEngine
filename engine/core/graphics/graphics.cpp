@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <map>
 #include <vector>
+#include <cstring>
 namespace gfx
 {
 namespace
