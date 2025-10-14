@@ -108,6 +108,20 @@ public:
     void set_force_over_lifetime(const math::vec3& force);
     auto get_force_over_lifetime() const -> math::vec3;
 
+    void set_size_by_speed_range(const frange_t& size_range);
+    auto get_size_by_speed_range() const -> const frange_t&;
+
+    void set_size_by_speed_velocity_range(const frange_t& velocity_range);
+    auto get_size_by_speed_velocity_range() const -> const frange_t&;
+
+    void set_color_by_speed_slow_color(const math::color& color);
+    auto get_color_by_speed_slow_color() const -> math::color;
+    void set_color_by_speed_fast_color(const math::color& color);
+    auto get_color_by_speed_fast_color() const -> math::color;
+
+    void set_color_by_speed_velocity_range(const frange_t& velocity_range);
+    auto get_color_by_speed_velocity_range() const -> const frange_t&;
+
     // Lifetime properties
     void set_lifetime(std::chrono::duration<float> lifetime);
     auto get_lifetime() const -> std::chrono::duration<float>;
@@ -217,6 +231,13 @@ private:
     frange_t scale_end_range_{0.3f, 0.4f};
     frange_t blend_start_range_{0.8f, 1.0f};
     frange_t blend_end_range_{0.0f, 0.2f};
+    
+    /// Speed-based effect properties
+    frange_t size_by_speed_range_{1.0f, 1.0f};
+    frange_t size_by_speed_velocity_range_{0.0f, 10.0f};
+    math::color color_by_speed_slow_color_{0xffffffff};
+    math::color color_by_speed_fast_color_{0xffffffff};
+    frange_t color_by_speed_velocity_range_{0.0f, 10.0f};
     
     /// Color array for easier manipulation
     std::array<math::color, 5> rgba_colors_{

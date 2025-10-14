@@ -232,6 +232,14 @@ REFLECT(particle_emitter_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
         })
+        .data<&particle_emitter_component::set_lifetime, &particle_emitter_component::get_lifetime>("lifetime"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lifetime"},
+            entt::attribute{"pretty_name", "Lifetime"},
+            entt::attribute{"tooltip", "How long each particle lives in seconds. Longer lifetimes create more persistent effects."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        })
         .data<&particle_emitter_component::set_emission_rate, &particle_emitter_component::get_emission_rate>("emission_rate"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "emission_rate"},
@@ -247,21 +255,7 @@ REFLECT(particle_emitter_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
-        .data<&particle_emitter_component::set_velocity_damping, &particle_emitter_component::get_velocity_damping>("velocity_damping"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "velocity_damping"},
-            entt::attribute{"pretty_name", "Velocity Damping"},
-            entt::attribute{"tooltip", "Reduces particle velocity over time. 0.0 = no damping (particles maintain speed), 1.0 = full damping (particles stop immediately)."},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.01f},
-        })
-        .data<&particle_emitter_component::set_force_over_lifetime, &particle_emitter_component::get_force_over_lifetime>("force_over_lifetime"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "force_over_lifetime"},
-            entt::attribute{"pretty_name", "Force Over Lifetime"},
-            entt::attribute{"tooltip", "Additional force applied to particles throughout their lifetime. Use for wind, magnetism, or other environmental effects. Values are in world units."},
-        })
+
         .data<&particle_emitter_component::set_gravity_scale, &particle_emitter_component::get_gravity_scale>("gravity_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gravity_scale"},
@@ -287,79 +281,157 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Emitter Direction"},
             entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position."},
         })
-        .data<&particle_emitter_component::set_lifetime, &particle_emitter_component::get_lifetime>("lifetime"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "lifetime"},
-            entt::attribute{"pretty_name", "Lifetime"},
-            entt::attribute{"tooltip", "How long each particle lives in seconds. Longer lifetimes create more persistent effects."},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"step", 0.1f},
-        })
         .data<&particle_emitter_component::set_velocity_start_range, &particle_emitter_component::get_velocity_start_range>("velocity_start_range"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_start_range"},
             entt::attribute{"pretty_name", "Velocity Start Range"},
             entt::attribute{"tooltip", "Minimum and maximum initial speed when particles are spawned. Higher values make particles move faster from their spawn position."},
+            entt::attribute{"group", "Velocity over lifetime"},
+
         })
         .data<&particle_emitter_component::set_velocity_end_range, &particle_emitter_component::get_velocity_end_range>("velocity_end_range"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_end_range"},
             entt::attribute{"pretty_name", "Velocity End Range"},
             entt::attribute{"tooltip", "Minimum and maximum target speed particles move toward over their lifetime. Creates acceleration/deceleration effects."},
+            entt::attribute{"group", "Velocity over lifetime"},
         })
-        .data<&particle_emitter_component::set_scale_start_range, &particle_emitter_component::get_scale_start_range>("scale_start_range"_hs)
+        .data<&particle_emitter_component::set_velocity_damping, &particle_emitter_component::get_velocity_damping>("velocity_damping"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "scale_start_range"},
-            entt::attribute{"pretty_name", "Scale Start Range"},
-            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles spawn. 1.0 = normal size, 0.5 = half size, 2.0 = double size."},
-        })
-        .data<&particle_emitter_component::set_scale_end_range, &particle_emitter_component::get_scale_end_range>("scale_end_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "scale_end_range"},
-            entt::attribute{"pretty_name", "Scale End Range"},
-            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles die. Creates growing/shrinking effects as particles animate."},
-        })
-        .data<&particle_emitter_component::set_blend_start_range, &particle_emitter_component::get_blend_start_range>("blend_start_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_start_range"},
-            entt::attribute{"pretty_name", "Blend Start Range"},
-            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles spawn. 0.0 = fully transparent, 1.0 = fully opaque."},
-        })
-        .data<&particle_emitter_component::set_blend_end_range, &particle_emitter_component::get_blend_end_range>("blend_end_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_end_range"},
-            entt::attribute{"pretty_name", "Blend End Range"},
-            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles die. Creates fade-in/fade-out effects over particle lifetime."},
-        })
-        .data<&particle_emitter_component::set_rgba_colors, &particle_emitter_component::get_rgba_colors>("rgba_colors"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "rgba_colors"},
-            entt::attribute{"pretty_name", "RGBA Colors"},
-            entt::attribute{"tooltip", "5-point color gradient defining particle color over lifetime. Colors are interpolated smoothly from spawn (color 0) to death (color 4)."},
+            entt::attribute{"name", "velocity_damping"},
+            entt::attribute{"pretty_name", "Velocity Damping"},
+            entt::attribute{"tooltip", "Reduces particle velocity over time. 0.0 = no damping (particles maintain speed), 1.0 = full damping (particles stop immediately)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"group", "Velocity over lifetime"},
+
         })
         .data<&particle_emitter_component::set_position_easing, &particle_emitter_component::get_position_easing>("position_easing"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "position_easing"},
             entt::attribute{"pretty_name", "Position Easing"},
             entt::attribute{"tooltip", "Curve controlling how particles move from start to end position. Linear = constant speed, EaseIn = slow start, EaseOut = slow end."},
+            entt::attribute{"group", "Position over lifetime"},
+
         })
-        .data<&particle_emitter_component::set_rgba_easing, &particle_emitter_component::get_rgba_easing>("rgba_easing"_hs)
+
+        .data<&particle_emitter_component::set_force_over_lifetime, &particle_emitter_component::get_force_over_lifetime>("force_over_lifetime"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "rgba_easing"},
-            entt::attribute{"pretty_name", "RGBA Easing"},
-            entt::attribute{"tooltip", "Curve controlling how particle colors change over lifetime. Affects the speed of color transitions through the 5-color gradient."},
+            entt::attribute{"name", "force_over_lifetime"},
+            entt::attribute{"pretty_name", "Force Over Lifetime"},
+            entt::attribute{"tooltip", "Additional force applied to particles throughout their lifetime. Use for wind, magnetism, or other environmental effects. Values are in world units."},
+            entt::attribute{"group", "Force over lifetime"},
+
         })
-        .data<&particle_emitter_component::set_blend_easing, &particle_emitter_component::get_blend_easing>("blend_easing"_hs)
+        .data<&particle_emitter_component::set_scale_start_range, &particle_emitter_component::get_scale_start_range>("scale_start_range"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_easing"},
-            entt::attribute{"pretty_name", "Blend Easing"},
-            entt::attribute{"tooltip", "Curve controlling how particle opacity changes over lifetime. Affects fade-in/fade-out timing and smoothness."},
+            entt::attribute{"name", "scale_start_range"},
+            entt::attribute{"pretty_name", "Scale Start Range"},
+            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles spawn. 1.0 = normal size, 0.5 = half size, 2.0 = double size."},
+            entt::attribute{"group", "Size over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_scale_end_range, &particle_emitter_component::get_scale_end_range>("scale_end_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scale_end_range"},
+            entt::attribute{"pretty_name", "Scale End Range"},
+            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles die. Creates growing/shrinking effects as particles animate."},
+            entt::attribute{"group", "Size over lifetime"},
+
         })
         .data<&particle_emitter_component::set_scale_easing, &particle_emitter_component::get_scale_easing>("scale_easing"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "scale_easing"},
             entt::attribute{"pretty_name", "Scale Easing"},
             entt::attribute{"tooltip", "Curve controlling how particle size changes over lifetime. Affects growth/shrink timing and smoothness."},
+            entt::attribute{"group", "Size over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_size_by_speed_range, &particle_emitter_component::get_size_by_speed_range>("size_by_speed_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_by_speed_range"},
+            entt::attribute{"pretty_name", "Size by Speed Range"},
+            entt::attribute{"tooltip", "Size multiplier range based on particle speed. Min = size at slow speed, Max = size at fast speed. Use values like 0.5-2.0 for dramatic effects."},
+            entt::attribute{"min", 0.1f},
+            entt::attribute{"max", 5.0f},
+            entt::attribute{"group", "Size by Speed"},
+
+        })
+        .data<&particle_emitter_component::set_size_by_speed_velocity_range, &particle_emitter_component::get_size_by_speed_velocity_range>("size_by_speed_velocity_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_by_speed_velocity_range"},
+            entt::attribute{"pretty_name", "Size by Speed Velocity Range"},
+            entt::attribute{"tooltip", "Velocity range for size mapping. Particles moving at min speed get min size, particles at max speed get max size."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 100.0f},
+            entt::attribute{"group", "Size by Speed"},
+
+        })
+        .data<&particle_emitter_component::set_blend_start_range, &particle_emitter_component::get_blend_start_range>("blend_start_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_start_range"},
+            entt::attribute{"pretty_name", "Blend Start Range"},
+            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles spawn. 0.0 = fully transparent, 1.0 = fully opaque."},
+            entt::attribute{"group", "Opacity over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_blend_end_range, &particle_emitter_component::get_blend_end_range>("blend_end_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_end_range"},
+            entt::attribute{"pretty_name", "Blend End Range"},
+            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles die. Creates fade-in/fade-out effects over particle lifetime."},
+            entt::attribute{"group", "Opacity over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_blend_easing, &particle_emitter_component::get_blend_easing>("blend_easing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_easing"},
+            entt::attribute{"pretty_name", "Blend Easing"},
+            entt::attribute{"tooltip", "Curve controlling how particle opacity changes over lifetime. Affects fade-in/fade-out timing and smoothness."},
+            entt::attribute{"group", "Opacity over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_rgba_colors, &particle_emitter_component::get_rgba_colors>("rgba_colors"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rgba_colors"},
+            entt::attribute{"pretty_name", "RGBA Colors"},
+            entt::attribute{"tooltip", "5-point color gradient defining particle color over lifetime. Colors are interpolated smoothly from spawn (color 0) to death (color 4)."},
+            entt::attribute{"group", "Color over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_rgba_easing, &particle_emitter_component::get_rgba_easing>("rgba_easing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rgba_easing"},
+            entt::attribute{"pretty_name", "RGBA Easing"},
+            entt::attribute{"tooltip", "Curve controlling how particle colors change over lifetime. Affects the speed of color transitions through the 5-color gradient."},
+            entt::attribute{"group", "Color over lifetime"},
+        })
+        .data<&particle_emitter_component::set_color_by_speed_slow_color, &particle_emitter_component::get_color_by_speed_slow_color>("color_by_speed_slow_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "color_by_speed_slow_color"},
+            entt::attribute{"pretty_name", "Color by Speed (Slow)"},
+            entt::attribute{"tooltip", "Color for slow-moving particles. Combined with fast color to create speed-based color gradient."},
+            entt::attribute{"group", "Color by Speed"},
+
+        })
+        .data<&particle_emitter_component::set_color_by_speed_fast_color, &particle_emitter_component::get_color_by_speed_fast_color>("color_by_speed_fast_color"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "color_by_speed_fast_color"},
+            entt::attribute{"pretty_name", "Color by Speed (Fast)"},
+            entt::attribute{"tooltip", "Color for fast-moving particles. Combined with slow color to create speed-based color gradient."},
+            entt::attribute{"group", "Color by Speed"},
+
+        })
+        .data<&particle_emitter_component::set_color_by_speed_velocity_range, &particle_emitter_component::get_color_by_speed_velocity_range>("color_by_speed_velocity_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "color_by_speed_velocity_range"},
+            entt::attribute{"pretty_name", "Color by Speed Velocity Range"},
+            entt::attribute{"tooltip", "Velocity range for color mapping. Particles moving at min speed get slow color, particles at max speed get fast color."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 100.0f},
+            entt::attribute{"group", "Color by Speed"},
+
         })
         .data<&particle_emitter_component::set_texture, &particle_emitter_component::get_texture>("texture"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -384,6 +456,11 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("temporal_motion", obj.get_temporal_motion()));
     try_save(ar, ser20::make_nvp("velocity_damping", obj.get_velocity_damping()));
     try_save(ar, ser20::make_nvp("force_over_lifetime", obj.get_force_over_lifetime()));
+    try_save(ar, ser20::make_nvp("size_by_speed_range", obj.get_size_by_speed_range()));
+    try_save(ar, ser20::make_nvp("size_by_speed_velocity_range", obj.get_size_by_speed_velocity_range()));
+    try_save(ar, ser20::make_nvp("color_by_speed_slow_color", obj.get_color_by_speed_slow_color()));
+    try_save(ar, ser20::make_nvp("color_by_speed_fast_color", obj.get_color_by_speed_fast_color()));
+    try_save(ar, ser20::make_nvp("color_by_speed_velocity_range", obj.get_color_by_speed_velocity_range()));
     
     // Range properties
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
@@ -398,10 +475,10 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("rgba_colors", obj.get_rgba_colors()));
     
     // Easing functions
-    try_save(ar, ser20::make_nvp("position_easing", static_cast<int>(obj.get_position_easing())));
-    try_save(ar, ser20::make_nvp("rgba_easing", static_cast<int>(obj.get_rgba_easing())));
-    try_save(ar, ser20::make_nvp("blend_easing", static_cast<int>(obj.get_blend_easing())));
-    try_save(ar, ser20::make_nvp("scale_easing", static_cast<int>(obj.get_scale_easing())));
+    try_save(ar, ser20::make_nvp("position_easing", obj.get_position_easing()));
+    try_save(ar, ser20::make_nvp("rgba_easing", obj.get_rgba_easing()));
+    try_save(ar, ser20::make_nvp("blend_easing", obj.get_blend_easing()));
+    try_save(ar, ser20::make_nvp("scale_easing", obj.get_scale_easing()));
     
     // Texture handle
     try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
@@ -470,6 +547,35 @@ LOAD(particle_emitter_component)
         obj.set_force_over_lifetime(force_over_lifetime);
     }
     
+    frange_t size_by_speed_range{1.0f, 1.0f};
+    if(try_load(ar, ser20::make_nvp("size_by_speed_range", size_by_speed_range)))
+    {
+        obj.set_size_by_speed_range(size_by_speed_range);
+    }
+    
+    frange_t size_by_speed_velocity_range{0.0f, 10.0f};
+    if(try_load(ar, ser20::make_nvp("size_by_speed_velocity_range", size_by_speed_velocity_range)))
+    {
+        obj.set_size_by_speed_velocity_range(size_by_speed_velocity_range);
+    }
+    
+    math::color color_by_speed_slow_color{0xffffffff};
+    if(try_load(ar, ser20::make_nvp("color_by_speed_slow_color", color_by_speed_slow_color)))
+    {
+        obj.set_color_by_speed_slow_color(color_by_speed_slow_color);
+    }
+    math::color color_by_speed_fast_color{0xffffffff};
+    if(try_load(ar, ser20::make_nvp("color_by_speed_fast_color", color_by_speed_fast_color)))
+    {
+        obj.set_color_by_speed_fast_color(color_by_speed_fast_color);
+    }
+    
+    frange_t color_by_speed_velocity_range{0.0f, 10.0f};
+    if(try_load(ar, ser20::make_nvp("color_by_speed_velocity_range", color_by_speed_velocity_range)))
+    {
+        obj.set_color_by_speed_velocity_range(color_by_speed_velocity_range);
+    }
+    
     // Range properties
     std::chrono::duration<float> lifetime{1.0f};
     if(try_load(ar, ser20::make_nvp("lifetime", lifetime)))
@@ -527,15 +633,24 @@ LOAD(particle_emitter_component)
     }
     
     // Easing functions
-    int pos_easing{0}, rgba_easing{0}, blend_easing{0}, scale_easing{0};
-    try_load(ar, ser20::make_nvp("position_easing", pos_easing));
-    try_load(ar, ser20::make_nvp("rgba_easing", rgba_easing));
-    try_load(ar, ser20::make_nvp("blend_easing", blend_easing));
-    try_load(ar, ser20::make_nvp("scale_easing", scale_easing));
-    obj.set_position_easing(static_cast<bx::Easing::Enum>(pos_easing));
-    obj.set_rgba_easing(static_cast<bx::Easing::Enum>(rgba_easing));
-    obj.set_blend_easing(static_cast<bx::Easing::Enum>(blend_easing));
-    obj.set_scale_easing(static_cast<bx::Easing::Enum>(scale_easing));
+    bx::Easing::Enum position_easing{}, rgba_easing{}, blend_easing{}, scale_easing{};
+    
+    if(try_load(ar, ser20::make_nvp("position_easing", position_easing)))
+    {
+        obj.set_position_easing(position_easing);
+    }
+    if(try_load(ar, ser20::make_nvp("rgba_easing", rgba_easing)))
+    {
+        obj.set_rgba_easing(rgba_easing);
+    }
+    if(try_load(ar, ser20::make_nvp("blend_easing", blend_easing)))
+    {
+        obj.set_blend_easing(blend_easing);
+    }
+    if(try_load(ar, ser20::make_nvp("scale_easing", scale_easing)))
+    {
+        obj.set_scale_easing(scale_easing);
+    }
     
     // Texture handle
     asset_handle<gfx::texture> texture;

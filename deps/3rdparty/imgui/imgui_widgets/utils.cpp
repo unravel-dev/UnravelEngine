@@ -483,9 +483,9 @@ void RenderFocusFrame(ImVec2 p_min, ImVec2 p_max, ImU32 color, float thickness)
     window->DrawList->AddRect(display_rect.Min, display_rect.Max, color, rounding, 0, thickness);
 }
 
-void SetItemFocusFrame(ImU32 color)
+void SetItemFocusFrame(ImU32 color, float thickness)
 {
-    RenderFocusFrame(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), color);
+    RenderFocusFrame(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), color, thickness);
 }
 
 void SameLineInner()

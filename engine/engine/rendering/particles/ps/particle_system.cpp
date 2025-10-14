@@ -94,6 +94,14 @@ void EmitterUniforms::reset()
 	m_forceOverLifetime[0] = 0.0f; // Default: no additional force
 	m_forceOverLifetime[1] = 0.0f;
 	m_forceOverLifetime[2] = 0.0f;
+	m_sizeBySpeedRange[0] = 1.0f; // Default: no size change
+	m_sizeBySpeedRange[1] = 1.0f;
+	m_sizeBySpeedVelocityRange[0] = 0.0f; // Default velocity range
+	m_sizeBySpeedVelocityRange[1] = 10.0f;
+	m_colorBySpeedColors[0] = 0xffffffff; // Default: white to white (no color change)
+	m_colorBySpeedColors[1] = 0xffffffff;
+	m_colorBySpeedVelocityRange[0] = 0.0f; // Default velocity range
+	m_colorBySpeedVelocityRange[1] = 10.0f;
 	m_scale[0] = 1.0f; // Default: no scaling
 	m_scale[1] = 1.0f;
 	m_scale[2] = 1.0f;
@@ -167,6 +175,47 @@ namespace ps
 			m_firstUpdate = true;
 
 			m_rng.reset();
+		}
+
+		// Helper function to calculate approximate particle speed
+		float calculateParticleSpeed(const Particle& particle, float ttPos) const
+		{
+			// Use trajectory-based approximation for better performance
+			const bx::Vec3 initialVelocity = bx::sub(particle.end[0], particle.start);
+			const bx::Vec3 finalVelocity = bx::sub(particle.end[1], particle.end[0]);
+			
+			// Interpolate velocity based on position in trajectory
+			const bx::Vec3 currentVelocity = bx::lerp(initialVelocity, finalVelocity, ttPos);
+			
+			// Scale by lifetime to get velocity per second
+			const bx::Vec3 velocityPerSecond = bx::mul(currentVelocity, 1.0f / particle.lifeSpan);
+			
+			return bx::length(velocityPerSecond);
+		}
+		
+		// Helper function to interpolate between two colors
+		// Colors are in RGBA format: R=byte0, G=byte1, B=byte2, A=byte3 (same as math::color)
+		uint32_t lerpColor(uint32_t color1, uint32_t color2, float t) const
+		{
+			const float r1 = float(color1 & 0xff) / 255.0f;
+			const float g1 = float((color1 >> 8) & 0xff) / 255.0f;
+			const float b1 = float((color1 >> 16) & 0xff) / 255.0f;
+			const float a1 = float((color1 >> 24) & 0xff) / 255.0f;
+			
+			const float r2 = float(color2 & 0xff) / 255.0f;
+			const float g2 = float((color2 >> 8) & 0xff) / 255.0f;
+			const float b2 = float((color2 >> 16) & 0xff) / 255.0f;
+			const float a2 = float((color2 >> 24) & 0xff) / 255.0f;
+			
+			const float r = bx::lerp(r1, r2, t);
+			const float g = bx::lerp(g1, g2, t);
+			const float b = bx::lerp(b1, b2, t);
+			const float a = bx::lerp(a1, a2, t);
+			
+			return uint32_t(r * 255.0f) |
+				   (uint32_t(g * 255.0f) << 8) |
+				   (uint32_t(b * 255.0f) << 16) |
+				   (uint32_t(a * 255.0f) << 24);
 		}
 
 		void update(float _dt)
@@ -433,6 +482,9 @@ namespace ps
 				sort.dist = bx::length(tmp0);
 				sort.idx  = jj; // Use local particle index for vertex buffer indexing
 
+				// Calculate particle speed for speed-based effects
+				const float particleSpeed = calculateParticleSpeed(particle, ttPos);
+
 				uint32_t idx = uint32_t(ttRgba*4);
 				float ttmod = bx::mod(ttRgba, 0.25f)/0.25f;
 				uint32_t rgbaStart = particle.rgba[idx];
@@ -443,10 +495,49 @@ namespace ps
 				float bb = bx::lerp( ( (uint8_t*)&rgbaStart)[2], ( (uint8_t*)&rgbaEnd)[2], ttmod)/255.0f;
 				float aa = bx::lerp( ( (uint8_t*)&rgbaStart)[3], ( (uint8_t*)&rgbaEnd)[3], ttmod)/255.0f;
 
+				// Apply color by speed if enabled
+				if (m_uniforms.m_colorBySpeedVelocityRange[1] > m_uniforms.m_colorBySpeedVelocityRange[0] &&
+					(m_uniforms.m_colorBySpeedColors[0] != m_uniforms.m_colorBySpeedColors[1]))
+				{
+					const float speedFactor = bx::clamp(
+						(particleSpeed - m_uniforms.m_colorBySpeedVelocityRange[0]) / 
+						(m_uniforms.m_colorBySpeedVelocityRange[1] - m_uniforms.m_colorBySpeedVelocityRange[0]), 
+						0.0f, 1.0f
+					);
+					
+					const uint32_t speedColor = lerpColor(m_uniforms.m_colorBySpeedColors[0], m_uniforms.m_colorBySpeedColors[1], speedFactor);
+					
+					// Blend the speed color with the original color
+					// Extract RGBA components (R=byte0, G=byte1, B=byte2, A=byte3)
+					const float speedRr = float(speedColor & 0xff) / 255.0f;
+					const float speedGg = float((speedColor >> 8) & 0xff) / 255.0f;
+					const float speedBb = float((speedColor >> 16) & 0xff) / 255.0f;
+					const float speedAa = float((speedColor >> 24) & 0xff) / 255.0f;
+					
+					rr *= speedRr;
+					gg *= speedGg;
+					bb *= speedBb;
+					aa *= speedAa; // Multiply alpha to preserve transparency
+				}
+
 				float blend = bx::lerp(particle.blendStart, particle.blendEnd, ttBlend);
 				// Use average scale for uniform particle sizing
 				const float avgSystemScale = (m_uniforms.m_scale[0] + m_uniforms.m_scale[1] + m_uniforms.m_scale[2]) / 3.0f;
 				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, ttScale) * avgSystemScale;
+				
+				// Apply size by speed if enabled
+				if (m_uniforms.m_sizeBySpeedVelocityRange[1] > m_uniforms.m_sizeBySpeedVelocityRange[0] &&
+					(m_uniforms.m_sizeBySpeedRange[0] != m_uniforms.m_sizeBySpeedRange[1]))
+				{
+					const float speedFactor = bx::clamp(
+						(particleSpeed - m_uniforms.m_sizeBySpeedVelocityRange[0]) / 
+						(m_uniforms.m_sizeBySpeedVelocityRange[1] - m_uniforms.m_sizeBySpeedVelocityRange[0]), 
+						0.0f, 1.0f
+					);
+					
+					const float sizeMultiplier = bx::lerp(m_uniforms.m_sizeBySpeedRange[0], m_uniforms.m_sizeBySpeedRange[1], speedFactor);
+					scale *= sizeMultiplier;
+				}
 
 				uint32_t abgr = toAbgr(rr, gg, bb, aa);
 

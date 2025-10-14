@@ -162,6 +162,64 @@ auto particle_emitter_component::get_force_over_lifetime() const -> math::vec3
     return math::vec3(uniforms_.m_forceOverLifetime[0], uniforms_.m_forceOverLifetime[1], uniforms_.m_forceOverLifetime[2]);
 }
 
+void particle_emitter_component::set_size_by_speed_range(const frange_t& size_range)
+{
+    size_by_speed_range_ = size_range;
+    uniforms_.m_sizeBySpeedRange[0] = size_range.min;
+    uniforms_.m_sizeBySpeedRange[1] = size_range.max;
+}
+
+auto particle_emitter_component::get_size_by_speed_range() const -> const frange_t&
+{
+    return size_by_speed_range_;
+}
+
+void particle_emitter_component::set_size_by_speed_velocity_range(const frange_t& velocity_range)
+{
+    size_by_speed_velocity_range_ = velocity_range;
+    uniforms_.m_sizeBySpeedVelocityRange[0] = velocity_range.min;
+    uniforms_.m_sizeBySpeedVelocityRange[1] = velocity_range.max;
+}
+
+auto particle_emitter_component::get_size_by_speed_velocity_range() const -> const frange_t&
+{
+    return size_by_speed_velocity_range_;
+}
+
+void particle_emitter_component::set_color_by_speed_slow_color(const math::color& color)
+{
+    color_by_speed_slow_color_ = color;
+    uniforms_.m_colorBySpeedColors[0] = static_cast<uint32_t>(color);
+}
+
+void particle_emitter_component::set_color_by_speed_fast_color(const math::color& color)
+{
+    color_by_speed_fast_color_ = color;
+    uniforms_.m_colorBySpeedColors[1] = static_cast<uint32_t>(color);
+}
+
+auto particle_emitter_component::get_color_by_speed_slow_color() const -> math::color
+{
+    return color_by_speed_slow_color_;
+}
+
+auto particle_emitter_component::get_color_by_speed_fast_color() const -> math::color
+{
+    return color_by_speed_fast_color_;
+}
+
+void particle_emitter_component::set_color_by_speed_velocity_range(const frange_t& velocity_range)
+{
+    color_by_speed_velocity_range_ = velocity_range;
+    uniforms_.m_colorBySpeedVelocityRange[0] = velocity_range.min;
+    uniforms_.m_colorBySpeedVelocityRange[1] = velocity_range.max;
+}
+
+auto particle_emitter_component::get_color_by_speed_velocity_range() const -> const frange_t&
+{
+    return color_by_speed_velocity_range_;
+}
+
 void particle_emitter_component::set_lifetime(std::chrono::duration<float> lifetime)
 {
     uniforms_.m_lifetime  = math::max(lifetime.count(), 0.0f);
@@ -439,6 +497,19 @@ void particle_emitter_component::sync_uniforms_from_members()
     
     uniforms_.m_blendEnd[0] = blend_end_range_.min;
     uniforms_.m_blendEnd[1] = blend_end_range_.max;
+    
+    // Sync speed-based properties
+    uniforms_.m_sizeBySpeedRange[0] = size_by_speed_range_.min;
+    uniforms_.m_sizeBySpeedRange[1] = size_by_speed_range_.max;
+    
+    uniforms_.m_sizeBySpeedVelocityRange[0] = size_by_speed_velocity_range_.min;
+    uniforms_.m_sizeBySpeedVelocityRange[1] = size_by_speed_velocity_range_.max;
+    
+    uniforms_.m_colorBySpeedColors[0] = static_cast<uint32_t>(color_by_speed_slow_color_);
+    uniforms_.m_colorBySpeedColors[1] = static_cast<uint32_t>(color_by_speed_fast_color_);
+    
+    uniforms_.m_colorBySpeedVelocityRange[0] = color_by_speed_velocity_range_.min;
+    uniforms_.m_colorBySpeedVelocityRange[1] = color_by_speed_velocity_range_.max;
     
     // Sync color properties
     for(int i = 0; i < 5; ++i)

@@ -4,6 +4,7 @@
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
 #include "entt/core/any.hpp"
+#include "imgui_widgets/utils.h"
 #include "inspector.h"
 #include "property_path_generator.h"
 
@@ -635,7 +636,9 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
                 ImGui::AlignTextToFramePadding();
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
 
-                bool open = ImGui::TreeNode(pretty_name.c_str());
+                ImGui::BeginGroup();
+
+                bool open = ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
 
                 if(open)
                 {
@@ -645,7 +648,15 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
                     ImGui::TreePop();
                     ImGui::TreePop();
+
+                    ImGui::EndGroup();
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
                 }
+                else
+                {
+                    ImGui::EndGroup();
+                }
+                
             }
             else
             {
@@ -1223,7 +1234,8 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             {
                 ImGui::AlignTextToFramePadding();
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
-                if(ImGui::TreeNode(kvp.first.c_str()))
+                ImGui::BeginGroup();
+                if(ImGui::TreeNodeEx(kvp.first.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
                     ImGui::TreePush(kvp.first.c_str());
 
@@ -1237,6 +1249,13 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                     ImGui::TreePop();
 
                     ImGui::TreePop();
+
+                    ImGui::EndGroup();
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+                }
+                else
+                {
+                    ImGui::EndGroup();
                 }
             }
         }

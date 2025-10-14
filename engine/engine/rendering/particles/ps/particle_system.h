@@ -67,6 +67,10 @@ struct EmitterUniforms
 	float m_temporalMotion; // Temporal motion interpolation factor (0.0 = no interpolation, 1.0 = full interpolation)
 	float m_velocityDamping; // Velocity damping factor (0.0 = no damping, 1.0 = full damping)
 	float m_forceOverLifetime[3]; // Additional force applied over particle lifetime (x, y, z)
+	float m_sizeBySpeedRange[2]; // Size multiplier range [min_multiplier, max_multiplier]
+	float m_sizeBySpeedVelocityRange[2]; // Velocity range for size mapping [min_speed, max_speed]
+	uint32_t m_colorBySpeedColors[2]; // Color gradient [slow_color, fast_color]
+	float m_colorBySpeedVelocityRange[2]; // Velocity range for color mapping [min_speed, max_speed]
 	float m_scale[3]; // 3D scale for the entire particle system (x, y, z)
 
 	uint32_t m_rgba[5];
