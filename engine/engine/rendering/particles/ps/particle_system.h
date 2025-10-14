@@ -65,6 +65,7 @@ struct EmitterUniforms
 	float m_lifeSpan[2];
 	float m_gravityScale;
 	float m_explosiveness;
+	float m_scale[3]; // 3D scale for the entire particle system (x, y, z)
 
 	uint32_t m_rgba[5];
 	float m_emissionLifetime; // Duration of one emission cycle

@@ -325,6 +325,12 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         uniforms_.m_angle[0] = euler.x;
         uniforms_.m_angle[1] = euler.y;
         uniforms_.m_angle[2] = euler.z;
+        
+        // Update scale from transform
+        const auto& world_scale = world_transform.get_scale();
+        uniforms_.m_scale[0] = world_scale.x;
+        uniforms_.m_scale[1] = world_scale.y;
+        uniforms_.m_scale[2] = world_scale.z;
 
         sync_uniforms_from_members();
         

@@ -90,6 +90,9 @@ void EmitterUniforms::reset()
 
 	m_gravityScale  = 0.0f;
 	m_explosiveness = 0.0f;
+	m_scale[0] = 1.0f; // Default: no scaling
+	m_scale[1] = 1.0f;
+	m_scale[2] = 1.0f;
 
 	m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
 
@@ -216,24 +219,30 @@ namespace ps
 			const float maxLifeSpan = m_uniforms.m_lifeSpan[1]; // Use maximum lifespan
 			const float maxVelocity = bx::max(m_uniforms.m_velocityEnd[1], m_uniforms.m_velocityStart[1]); // Maximum velocity
 			const float maxScale = m_uniforms.m_scaleEnd[1]; // Maximum scale
+			const bx::Vec3 systemScale = { m_uniforms.m_scale[0], m_uniforms.m_scale[1], m_uniforms.m_scale[2] }; // System-wide scale
 			
-			// Estimate maximum travel distance based on velocity and gravity
+			// Estimate maximum travel distance based on velocity and gravity (scaled)
 			// This is a conservative estimate - particles could travel this far in any direction
-			float maxTravelDistance = maxVelocity;
+			const float maxSystemScale = bx::max(bx::max(systemScale.x, systemScale.y), systemScale.z);
+			float maxTravelDistance = maxVelocity * maxSystemScale;
 			
-			// Add gravity effect over maximum lifespan
+			// Add gravity effect over maximum lifespan (scaled)
 			if (m_uniforms.m_gravityScale != 0.0f)
 			{
-				const float gravityDistance = 0.5f * 9.81f * m_uniforms.m_gravityScale * bx::square(maxLifeSpan);
+				const float gravityDistance = 0.5f * 9.81f * m_uniforms.m_gravityScale * bx::square(maxLifeSpan) * systemScale.y;
 				maxTravelDistance += bx::abs(gravityDistance);
 			}
 			
-			// Add some padding for particle scale
-			const float padding = maxScale * 2.0f;
+			// Add some padding for particle scale (scaled)
+			const float padding = maxScale * maxSystemScale * 2.0f;
 			maxTravelDistance += padding;
 			
-			// Create conservative AABB around emitter position
-			const bx::Vec3 extent = { maxTravelDistance, maxTravelDistance, maxTravelDistance };
+			// Create conservative AABB around emitter position with per-axis scaling
+			const bx::Vec3 extent = { 
+				maxTravelDistance * systemScale.x, 
+				maxTravelDistance * systemScale.y, 
+				maxTravelDistance * systemScale.z 
+			};
 			m_aabb.min = bx::sub(emitterPos, extent);
 			m_aabb.max = bx::add(emitterPos, extent);
 		}
@@ -402,16 +411,19 @@ namespace ps
 				}
 
 				const float startVelocity = bx::lerp(m_uniforms.m_velocityStart[0], m_uniforms.m_velocityStart[1], bx::frnd(&m_rng) );
-				const bx::Vec3 start = bx::mul(pos, startVelocity);
+				const bx::Vec3 systemScale = { m_uniforms.m_scale[0], m_uniforms.m_scale[1], m_uniforms.m_scale[2] };
+				const bx::Vec3 scaledPos = { pos.x * systemScale.x, pos.y * systemScale.y, pos.z * systemScale.z };
+				const bx::Vec3 start = bx::mul(scaledPos, startVelocity);
 
 				const float endVelocity = bx::lerp(m_uniforms.m_velocityEnd[0], m_uniforms.m_velocityEnd[1], bx::frnd(&m_rng) );
-				const bx::Vec3 tmp1 = bx::mul(dir, endVelocity);
+				const bx::Vec3 scaledDir = { dir.x * systemScale.x, dir.y * systemScale.y, dir.z * systemScale.z };
+				const bx::Vec3 tmp1 = bx::mul(scaledDir, endVelocity);
 				const bx::Vec3 end  = bx::add(tmp1, start);
 
 				particle->life = 0.0f; // Always start at 0 for new particles
 				particle->lifeSpan = bx::lerp(m_uniforms.m_lifeSpan[0], m_uniforms.m_lifeSpan[1], bx::frnd(&m_rng) );
 
-				const bx::Vec3 gravity = { 0.0f, -9.81f * m_uniforms.m_gravityScale * bx::square(particle->lifeSpan), 0.0f };
+				const bx::Vec3 gravity = { 0.0f, -9.81f * m_uniforms.m_gravityScale * bx::square(particle->lifeSpan) * systemScale.y, 0.0f };
 
 				// Calculate interpolated emitter position for temporal emission gap handling
 				bx::Vec3 interpolatedEmitterPos = currentPos;
@@ -490,7 +502,9 @@ namespace ps
 				float aa = bx::lerp( ( (uint8_t*)&rgbaStart)[3], ( (uint8_t*)&rgbaEnd)[3], ttmod)/255.0f;
 
 				float blend = bx::lerp(particle.blendStart, particle.blendEnd, ttBlend);
-				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, ttScale);
+				// Use average scale for uniform particle sizing
+				const float avgSystemScale = (m_uniforms.m_scale[0] + m_uniforms.m_scale[1] + m_uniforms.m_scale[2]) / 3.0f;
+				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, ttScale) * avgSystemScale;
 
 				uint32_t abgr = toAbgr(rr, gg, bb, aa);
 
