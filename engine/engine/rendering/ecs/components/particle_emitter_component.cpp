@@ -120,7 +120,7 @@ auto particle_emitter_component::get_gravity_scale() const -> float
 
 void particle_emitter_component::set_explosiveness(float explosiveness)
 {
-    uniforms_.m_explosiveness = explosiveness;
+    uniforms_.m_explosiveness = math::clamp(explosiveness, 0.0f, 1.0f);
 }
 
 auto particle_emitter_component::get_explosiveness() const -> float
@@ -140,74 +140,74 @@ auto particle_emitter_component::get_life_span_range() const -> const frange_t&
     return life_span_range_;
 }
 
-void particle_emitter_component::set_offset_start_range(const math::vec2& offset_start)
+void particle_emitter_component::set_velocity_start_range(const frange_t& velocity_start)
 {
-    offset_start_range_ = offset_start;
-    uniforms_.m_offsetStart[0] = offset_start.x;
-    uniforms_.m_offsetStart[1] = offset_start.y;
+    velocity_start_range_ = velocity_start;
+    uniforms_.m_velocityStart[0] = velocity_start.min;
+    uniforms_.m_velocityStart[1] = velocity_start.max;
 }
 
-auto particle_emitter_component::get_offset_start_range() const -> const math::vec2&
+auto particle_emitter_component::get_velocity_start_range() const -> const frange_t&
 {
-    return offset_start_range_;
+    return velocity_start_range_;
 }
 
-void particle_emitter_component::set_offset_end_range(const math::vec2& offset_end)
+void particle_emitter_component::set_velocity_end_range(const frange_t& velocity_end)
 {
-    offset_end_range_ = offset_end;
-    uniforms_.m_offsetEnd[0] = offset_end.x;
-    uniforms_.m_offsetEnd[1] = offset_end.y;
+    velocity_end_range_ = velocity_end;
+    uniforms_.m_velocityEnd[0] = velocity_end.min;
+    uniforms_.m_velocityEnd[1] = velocity_end.max;
 }
 
-auto particle_emitter_component::get_offset_end_range() const -> const math::vec2&
+auto particle_emitter_component::get_velocity_end_range() const -> const frange_t&
 {
-    return offset_end_range_;
+    return velocity_end_range_;
 }
 
-void particle_emitter_component::set_scale_start_range(const math::vec2& scale_start)
+void particle_emitter_component::set_scale_start_range(const frange_t& scale_start)
 {
     scale_start_range_ = scale_start;
-    uniforms_.m_scaleStart[0] = scale_start.x;
-    uniforms_.m_scaleStart[1] = scale_start.y;
+    uniforms_.m_scaleStart[0] = scale_start.min;
+    uniforms_.m_scaleStart[1] = scale_start.max;
 }
 
-auto particle_emitter_component::get_scale_start_range() const -> const math::vec2&
+auto particle_emitter_component::get_scale_start_range() const -> const frange_t&
 {
     return scale_start_range_;
 }
 
-void particle_emitter_component::set_scale_end_range(const math::vec2& scale_end)
+void particle_emitter_component::set_scale_end_range(const frange_t& scale_end)
 {
     scale_end_range_ = scale_end;
-    uniforms_.m_scaleEnd[0] = scale_end.x;
-    uniforms_.m_scaleEnd[1] = scale_end.y;
+    uniforms_.m_scaleEnd[0] = scale_end.min;
+    uniforms_.m_scaleEnd[1] = scale_end.max;
 }
 
-auto particle_emitter_component::get_scale_end_range() const -> const math::vec2&
+auto particle_emitter_component::get_scale_end_range() const -> const frange_t&
 {
     return scale_end_range_;
 }
 
-void particle_emitter_component::set_blend_start_range(const math::vec2& blend_start)
+void particle_emitter_component::set_blend_start_range(const frange_t& blend_start)
 {
     blend_start_range_ = blend_start;
-    uniforms_.m_blendStart[0] = blend_start.x;
-    uniforms_.m_blendStart[1] = blend_start.y;
+    uniforms_.m_blendStart[0] = blend_start.min;
+    uniforms_.m_blendStart[1] = blend_start.max;
 }
 
-auto particle_emitter_component::get_blend_start_range() const -> const math::vec2&
+auto particle_emitter_component::get_blend_start_range() const -> const frange_t&
 {
     return blend_start_range_;
 }
 
-void particle_emitter_component::set_blend_end_range(const math::vec2& blend_end)
+void particle_emitter_component::set_blend_end_range(const frange_t& blend_end)
 {
     blend_end_range_ = blend_end;
-    uniforms_.m_blendEnd[0] = blend_end.x;
-    uniforms_.m_blendEnd[1] = blend_end.y;
+    uniforms_.m_blendEnd[0] = blend_end.min;
+    uniforms_.m_blendEnd[1] = blend_end.max;
 }
 
-auto particle_emitter_component::get_blend_end_range() const -> const math::vec2&
+auto particle_emitter_component::get_blend_end_range() const -> const frange_t&
 {
     return blend_end_range_;
 }
@@ -308,13 +308,6 @@ auto particle_emitter_component::get_texture() const -> const asset_handle<gfx::
     return texture_;
 }
 
-void particle_emitter_component::update_emitter()
-{
-    if(isValid(emitter_handle_) && enabled_)
-    {
-        psUpdateEmitter(emitter_handle_, &uniforms_);
-    }
-}
 
 void particle_emitter_component::update_emitter(const math::transform& world_transform, delta_t dt)
 {
@@ -377,9 +370,7 @@ void particle_emitter_component::recreate_emitter()
         APPLOG_ERROR("Failed to create particle emitter");
         return;
     }
-    
-    // Update with current uniforms
-    update_emitter();
+
 }
 
 void particle_emitter_component::sync_uniforms_from_members()
@@ -388,23 +379,23 @@ void particle_emitter_component::sync_uniforms_from_members()
     uniforms_.m_lifeSpan[0] = life_span_range_.min;
     uniforms_.m_lifeSpan[1] = life_span_range_.max;
     
-    uniforms_.m_offsetStart[0] = offset_start_range_.x;
-    uniforms_.m_offsetStart[1] = offset_start_range_.y;
+    uniforms_.m_velocityStart[0] = velocity_start_range_.min;
+    uniforms_.m_velocityStart[1] = velocity_start_range_.max;
     
-    uniforms_.m_offsetEnd[0] = offset_end_range_.x;
-    uniforms_.m_offsetEnd[1] = offset_end_range_.y;
+    uniforms_.m_velocityEnd[0] = velocity_end_range_.min;
+    uniforms_.m_velocityEnd[1] = velocity_end_range_.max;
     
-    uniforms_.m_scaleStart[0] = scale_start_range_.x;
-    uniforms_.m_scaleStart[1] = scale_start_range_.y;
+    uniforms_.m_scaleStart[0] = scale_start_range_.min;
+    uniforms_.m_scaleStart[1] = scale_start_range_.max;
     
-    uniforms_.m_scaleEnd[0] = scale_end_range_.x;
-    uniforms_.m_scaleEnd[1] = scale_end_range_.y;
+    uniforms_.m_scaleEnd[0] = scale_end_range_.min;
+    uniforms_.m_scaleEnd[1] = scale_end_range_.max;
     
-    uniforms_.m_blendStart[0] = blend_start_range_.x;
-    uniforms_.m_blendStart[1] = blend_start_range_.y;
+    uniforms_.m_blendStart[0] = blend_start_range_.min;
+    uniforms_.m_blendStart[1] = blend_start_range_.max;
     
-    uniforms_.m_blendEnd[0] = blend_end_range_.x;
-    uniforms_.m_blendEnd[1] = blend_end_range_.y;
+    uniforms_.m_blendEnd[0] = blend_end_range_.min;
+    uniforms_.m_blendEnd[1] = blend_end_range_.max;
     
     // Sync color properties
     for(int i = 0; i < 5; ++i)

@@ -234,11 +234,10 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
         scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
             {
-                // if(!camera.test_aabb(particle_emitter_comp.get_world_bounds()))
-                // {
-                //     return;
-                // }
-                // particle_emitter_comp.update_emitter(transform_comp.get_transform_global(), delta_t(0.016f));
+                if(!camera.test_aabb(particle_emitter_comp.get_world_bounds()))
+                {
+                    return;
+                }
                 particle_emitter_comp.render_emitter(pass.id, particle_program_->native_handle(), cam_view, eye_pos);
             });
 

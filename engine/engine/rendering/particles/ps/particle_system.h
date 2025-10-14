@@ -58,8 +58,8 @@ struct EmitterUniforms
 
 	float m_blendStart[2];
 	float m_blendEnd[2];
-	float m_offsetStart[2];
-	float m_offsetEnd[2];
+	float m_velocityStart[2];
+	float m_velocityEnd[2];
 	float m_scaleStart[2];
 	float m_scaleEnd[2];
 	float m_lifeSpan[2];
@@ -100,13 +100,7 @@ uint32_t psGetNumParticles(EmitterHandle _handle);
 void psDestroyEmitter(EmitterHandle _handle);
 
 ///
-void psUpdate(float _dt);
-
-///
 void psUpdateEmitter(EmitterHandle _handle, float _dt);
-
-///
-void psRender(uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye);
 
 ///
 void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye);

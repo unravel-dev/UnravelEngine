@@ -272,10 +272,11 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
     if(e.all_of<particle_emitter_component>())
     {
         const auto& frustum = cam.get_frustum();
-
         const auto& particle_emitter_comp = e.get<particle_emitter_component>();
+        
+        // Draw world bounds
         const auto& bounds = particle_emitter_comp.get_world_bounds();
-        // if(frustum.test_aabb(bounds))
+        if(frustum.test_aabb(bounds))
         {
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xff00ffff);
@@ -284,6 +285,134 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             aabb.min = to_bx(bounds.min);
             aabb.max = to_bx(bounds.max);
             dd.encoder.draw(aabb);
+        }
+
+        // Draw emission shape
+        {
+            DebugDrawEncoderScopePush scope(dd.encoder);
+            dd.encoder.setColor(0xffff8000); // Orange color for emission shape
+            dd.encoder.setWireframe(true);
+            dd.encoder.pushTransform((const float*)world_transform);
+            
+            const auto shape = particle_emitter_comp.get_shape();
+            const auto direction = particle_emitter_comp.get_direction();
+            const float shape_size = 1.0f; // Base size for visualization
+            
+            switch(shape)
+            {
+                case EmitterShape::Sphere:
+                {
+                    // Draw a wireframe sphere
+                    math::vec3 center{0.0f, 0.0f, 0.0f};
+                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size);
+                    break;
+                }
+                case EmitterShape::Hemisphere:
+                {
+                    // Draw hemisphere (half sphere facing up)
+                    math::vec3 center{0.0f, 0.0f, 0.0f};
+                    // Full circles on X and Z axes
+                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size);
+                    // Draw lines to indicate hemisphere boundary
+                    dd.encoder.moveTo(-shape_size, 0.0f, 0.0f);
+                    dd.encoder.lineTo(shape_size, 0.0f, 0.0f);
+                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size);
+                    dd.encoder.lineTo(0.0f, 0.0f, shape_size);
+                    break;
+                }
+                case EmitterShape::Circle:
+                {
+                    // Draw a circle in the XZ plane
+                    math::vec3 center{0.0f, 0.0f, 0.0f};
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    break;
+                }
+                case EmitterShape::Disc:
+                {
+                    // Draw a filled disc representation (circle with cross lines)
+                    math::vec3 center{0.0f, 0.0f, 0.0f};
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    // Add cross lines to indicate it's filled
+                    dd.encoder.moveTo(-shape_size, 0.0f, 0.0f);
+                    dd.encoder.lineTo(shape_size, 0.0f, 0.0f);
+                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size);
+                    dd.encoder.lineTo(0.0f, 0.0f, shape_size);
+                    break;
+                }
+                case EmitterShape::Rect:
+                {
+                    // Draw a rectangle in the XZ plane
+                    const float half_size = shape_size;
+                    bx::Aabb rect_aabb;
+                    rect_aabb.min = {-half_size, -0.01f, -half_size};
+                    rect_aabb.max = {half_size, 0.01f, half_size};
+                    dd.encoder.draw(rect_aabb);
+                    break;
+                }
+                default:
+                    break;
+            }
+            
+            // Draw direction indicators
+            dd.encoder.setColor(0xff00ff00); // Green color for direction
+            const float arrow_length = shape_size * 0.5f;
+            const float arrow_head_size = arrow_length * 0.2f;
+            
+            switch(direction)
+            {
+                case EmitterDirection::Up:
+                {
+                    // Draw upward arrows
+                    dd.encoder.moveTo(0.0f, 0.0f, 0.0f);
+                    dd.encoder.lineTo(0.0f, arrow_length, 0.0f);
+                    // Arrow head
+                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                    dd.encoder.lineTo(-arrow_head_size, arrow_length - arrow_head_size, 0.0f);
+                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                    dd.encoder.lineTo(arrow_head_size, arrow_length - arrow_head_size, 0.0f);
+                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                    dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, -arrow_head_size);
+                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                    dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, arrow_head_size);
+                    break;
+                }
+                case EmitterDirection::Outward:
+                {
+                    // Draw multiple outward arrows
+                    const int num_arrows = 6;
+                    for(int i = 0; i < num_arrows; ++i)
+                    {
+                        const float angle = (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
+                        const float cos_a = math::cos(angle);
+                        const float sin_a = math::sin(angle);
+                        
+                        // Arrow shaft
+                        dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
+                        dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
+                        
+                        // Arrow head
+                        const float head_x = cos_a * arrow_length;
+                        const float head_z = sin_a * arrow_length;
+                        const float back_x = cos_a * (arrow_length - arrow_head_size);
+                        const float back_z = sin_a * (arrow_length - arrow_head_size);
+                        
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f, 0.0f, back_z + cos_a * arrow_head_size * 0.5f);
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f, 0.0f, back_z - cos_a * arrow_head_size * 0.5f);
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+            
+            dd.encoder.popTransform();
         }
     }
 

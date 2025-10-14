@@ -103,26 +103,26 @@ public:
     void set_life_span_range(const frange_t& life_span);
     auto get_life_span_range() const -> const frange_t&;
 
-    // Offset properties
-    void set_offset_start_range(const math::vec2& offset_start);
-    auto get_offset_start_range() const -> const math::vec2&;
+    // Velocity properties
+    void set_velocity_start_range(const frange_t& velocity_start);
+    auto get_velocity_start_range() const -> const frange_t&;
 
-    void set_offset_end_range(const math::vec2& offset_end);
-    auto get_offset_end_range() const -> const math::vec2&;
+    void set_velocity_end_range(const frange_t& velocity_end);
+    auto get_velocity_end_range() const -> const frange_t&;
 
     // Scale properties
-    void set_scale_start_range(const math::vec2& scale_start);
-    auto get_scale_start_range() const -> const math::vec2&;
+    void set_scale_start_range(const frange_t& scale_start);
+    auto get_scale_start_range() const -> const frange_t&;
 
-    void set_scale_end_range(const math::vec2& scale_end);
-    auto get_scale_end_range() const -> const math::vec2&;
+    void set_scale_end_range(const frange_t& scale_end);
+    auto get_scale_end_range() const -> const frange_t&;
 
     // Blend properties
-    void set_blend_start_range(const math::vec2& blend_start);
-    auto get_blend_start_range() const -> const math::vec2&;
+    void set_blend_start_range(const frange_t& blend_start);
+    auto get_blend_start_range() const -> const frange_t&;
 
-    void set_blend_end_range(const math::vec2& blend_end);
-    auto get_blend_end_range() const -> const math::vec2&;
+    void set_blend_end_range(const frange_t& blend_end);
+    auto get_blend_end_range() const -> const frange_t&;
 
     // Color properties
     void set_rgba_colors(const std::array<math::color, 5>& colors);
@@ -152,10 +152,6 @@ public:
     void set_texture(const asset_handle<gfx::texture>& texture);
     auto get_texture() const -> const asset_handle<gfx::texture>&;
 
-    /**
-     * @brief Updates the emitter with current uniforms.
-     */
-    void update_emitter();
 
     void render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const bx::Vec3& eye);
 
@@ -202,12 +198,12 @@ private:
     
     /// Range properties for easier manipulation
     frange_t life_span_range_{1.0f, 2.0f};
-    math::vec2 offset_start_range_{0.0f, 1.0f};
-    math::vec2 offset_end_range_{2.0f, 3.0f};
-    math::vec2 scale_start_range_{0.1f, 0.2f};
-    math::vec2 scale_end_range_{0.3f, 0.4f};
-    math::vec2 blend_start_range_{0.8f, 1.0f};
-    math::vec2 blend_end_range_{0.0f, 0.2f};
+    frange_t velocity_start_range_{0.0f, 1.0f};
+    frange_t velocity_end_range_{2.0f, 3.0f};
+    frange_t scale_start_range_{0.1f, 0.2f};
+    frange_t scale_end_range_{0.3f, 0.4f};
+    frange_t blend_start_range_{0.8f, 1.0f};
+    frange_t blend_end_range_{0.0f, 0.2f};
     
     /// Color array for easier manipulation
     std::array<math::color, 5> rgba_colors_{

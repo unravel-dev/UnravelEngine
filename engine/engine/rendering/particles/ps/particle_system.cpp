@@ -64,10 +64,10 @@ void EmitterUniforms::reset()
 	m_prevPosition[2] = 0.0f;
 
 
-	m_offsetStart[0] = 0.0f;
-	m_offsetStart[1] = 1.0f;
-	m_offsetEnd[0]   = 2.0f;
-	m_offsetEnd[1]   = 3.0f;
+	m_velocityStart[0] = 0.0f;
+	m_velocityStart[1] = 1.0f;
+	m_velocityEnd[0]   = 2.0f;
+	m_velocityEnd[1]   = 3.0f;
 
 	m_rgba[0] = 0x00ffffff;
 	m_rgba[1] = UINT32_MAX;
@@ -195,6 +195,47 @@ namespace ps
 			// Safety check: ensure m_num never exceeds m_max
 			BX_ASSERT(m_num <= m_max, "Particle count exceeded maximum! m_num=%d, m_max=%d", m_num, m_max);
 			m_num = bx::min(m_num, m_max);
+			
+			// Update AABB - use worst-case estimation on first update, then render will keep it updated
+			if (m_firstUpdate)
+			{
+				updateWorstCaseAabb();
+				m_firstUpdate = false;
+			}
+		}
+
+		void updateWorstCaseAabb()
+		{
+			// Calculate worst-case AABB based on emitter parameters
+			// This gives us conservative bounds for culling before any particles are rendered
+			
+			// Start with emitter position
+			const bx::Vec3 emitterPos = { m_uniforms.m_position[0], m_uniforms.m_position[1], m_uniforms.m_position[2] };
+			
+			// Calculate maximum possible particle travel distance
+			const float maxLifeSpan = m_uniforms.m_lifeSpan[1]; // Use maximum lifespan
+			const float maxVelocity = bx::max(m_uniforms.m_velocityEnd[1], m_uniforms.m_velocityStart[1]); // Maximum velocity
+			const float maxScale = m_uniforms.m_scaleEnd[1]; // Maximum scale
+			
+			// Estimate maximum travel distance based on velocity and gravity
+			// This is a conservative estimate - particles could travel this far in any direction
+			float maxTravelDistance = maxVelocity;
+			
+			// Add gravity effect over maximum lifespan
+			if (m_uniforms.m_gravityScale != 0.0f)
+			{
+				const float gravityDistance = 0.5f * 9.81f * m_uniforms.m_gravityScale * bx::square(maxLifeSpan);
+				maxTravelDistance += bx::abs(gravityDistance);
+			}
+			
+			// Add some padding for particle scale
+			const float padding = maxScale * 2.0f;
+			maxTravelDistance += padding;
+			
+			// Create conservative AABB around emitter position
+			const bx::Vec3 extent = { maxTravelDistance, maxTravelDistance, maxTravelDistance };
+			m_aabb.min = bx::sub(emitterPos, extent);
+			m_aabb.max = bx::add(emitterPos, extent);
 		}
 
 		void spawn(float _dt)
@@ -238,32 +279,63 @@ namespace ps
 
 			constexpr bx::Vec3 up = { 0.0f, 1.0f, 0.0f };
 
-			// Calculate how many particles to emit this frame based on emission rate
-			const float emissionRate = float(m_max) / emissionCycleLength; // particles per second
-			const float particlesToEmit = emissionRate * _dt;
-			
-			// Apply explosiveness - compress emission into a smaller time window
-			const float explosivenessFactor = 1.0f - m_uniforms.m_explosiveness;
-			const float adjustedParticlesToEmit = particlesToEmit / bx::max(explosivenessFactor, 0.01f);
-			
-			// Emit particles
-			const uint32_t particleCount = uint32_t(adjustedParticlesToEmit);
-			const float fractionalPart = adjustedParticlesToEmit - float(particleCount);
-			
-			// Handle fractional particles with random chance
-			uint32_t totalParticlesToEmit = particleCount;
-			if (bx::frnd(&m_rng) < fractionalPart)
+			// Check each particle to see if it should restart based on explosiveness (like the reference implementation)
+			for (uint32_t ii = 0; ii < m_max; ++ii)
 			{
-				totalParticlesToEmit++;
-			}
-			
-			// Limit to available particle slots
-			totalParticlesToEmit = bx::min(totalParticlesToEmit, m_max - m_num);
-			
-			for (uint32_t ii = 0; ii < totalParticlesToEmit; ++ii)
-			{
-				// Calculate emission phase for this particle (for motion interpolation)
-				const float emissionPhase = totalParticlesToEmit > 1 ? float(ii) / float(totalParticlesToEmit - 1) : 0.0f;
+				// Calculate restart phase for this particle index (same as reference implementation)
+				const float restartPhase = float(ii) / float(m_max);
+				
+				// Apply explosiveness compression to restart time (same formula as reference)
+				const float compressedPhase = restartPhase * (1.0f - m_uniforms.m_explosiveness);
+				const float restartTime = compressedPhase * emissionCycleLength;
+				
+				// Check if this particle should restart in this frame (same logic as reference)
+				bool shouldRestart = false;
+				if (m_emissionTime > prevEmissionTime)
+				{
+					// Normal case: time is advancing
+					shouldRestart = restartTime >= prevEmissionTime && restartTime < m_emissionTime;
+				}
+				else if (_dt > 0.0f)
+				{
+					// Wrapped case: emission time wrapped around
+					shouldRestart = restartTime >= prevEmissionTime || restartTime < m_emissionTime;
+				}
+				
+				if (!shouldRestart)
+				{
+					continue;
+				}
+				
+				// Calculate emission phase for temporal motion interpolation (within current frame)
+				float emissionPhase = 0.0f;
+				if (m_emissionTime > prevEmissionTime)
+				{
+					// Normal case: calculate where in the frame this particle was emitted
+					const float frameEmissionTime = m_emissionTime - prevEmissionTime;
+					if (frameEmissionTime > 0.0f)
+					{
+						const float particleEmissionTime = restartTime - prevEmissionTime;
+						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
+					}
+				}
+				else if (_dt > 0.0f)
+				{
+					// Wrapped case: more complex calculation needed
+					const float frameEmissionTime = _dt;
+					if (restartTime >= prevEmissionTime)
+					{
+						// Particle emitted before wrap
+						const float particleEmissionTime = restartTime - prevEmissionTime;
+						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
+					}
+					else
+					{
+						// Particle emitted after wrap
+						const float particleEmissionTime = (emissionCycleLength - prevEmissionTime) + restartTime;
+						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
+					}
+				}
 				
 				// Find an inactive particle to restart, or create new one
 				Particle* particle = nullptr;
@@ -329,11 +401,11 @@ namespace ps
 						break;
 				}
 
-				const float startOffset = bx::lerp(m_uniforms.m_offsetStart[0], m_uniforms.m_offsetStart[1], bx::frnd(&m_rng) );
-				const bx::Vec3 start = bx::mul(pos, startOffset);
+				const float startVelocity = bx::lerp(m_uniforms.m_velocityStart[0], m_uniforms.m_velocityStart[1], bx::frnd(&m_rng) );
+				const bx::Vec3 start = bx::mul(pos, startVelocity);
 
-				const float endOffset = bx::lerp(m_uniforms.m_offsetEnd[0], m_uniforms.m_offsetEnd[1], bx::frnd(&m_rng) );
-				const bx::Vec3 tmp1 = bx::mul(dir, endOffset);
+				const float endVelocity = bx::lerp(m_uniforms.m_velocityEnd[0], m_uniforms.m_velocityEnd[1], bx::frnd(&m_rng) );
+				const bx::Vec3 tmp1 = bx::mul(dir, endVelocity);
 				const bx::Vec3 end  = bx::add(tmp1, start);
 
 				particle->life = 0.0f; // Always start at 0 for new particles
@@ -535,16 +607,6 @@ namespace ps
 
 		// Sprite system removed - textures are managed externally and passed via EmitterUniforms
 
-		void update(float _dt)
-		{
-			for (uint16_t ii = 0, num = m_emitterAlloc->getNumHandles(); ii < num; ++ii)
-			{
-				const uint16_t idx = m_emitterAlloc->getHandleAt(ii);
-				Emitter& emitter = m_emitter[idx];
-				emitter.update(_dt);
-			}
-		}
-
 		void updateEmitterById(EmitterHandle _handle, float _dt)
 		{
 			BX_ASSERT(isValid(_handle)
@@ -554,99 +616,6 @@ namespace ps
 
 			Emitter& emitter = m_emitter[_handle.idx];
 			emitter.update(_dt);
-		}
-
-		void render(uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye)
-		{
-
-			auto program = bgfx::isValid(_program) ? _program : m_particleProgram;
-
-			// Render each emitter separately to support per-emitter textures
-			for (uint16_t ii = 0, numEmitters = m_emitterAlloc->getNumHandles(); ii < numEmitters; ++ii)
-			{
-				const uint16_t idx = m_emitterAlloc->getHandleAt(ii);
-				Emitter& emitter = m_emitter[idx];
-
-				if (0 == emitter.m_num || !bgfx::isValid(emitter.m_uniforms.m_texture))
-				{
-					continue; // Skip emitters with no particles or invalid texture
-				}
-
-				bgfx::TransientVertexBuffer tvb;
-				bgfx::TransientIndexBuffer tib;
-
-				const uint32_t numVertices = bgfx::getAvailTransientVertexBuffer(emitter.m_num*4, PosColorTexCoord0Vertex::ms_layout);
-				const uint32_t numIndices  = bgfx::getAvailTransientIndexBuffer(emitter.m_num*6);
-				const uint32_t max = bx::uint32_min(numVertices/4, numIndices/6);
-				
-				if (0 == max)
-				{
-					continue; // Skip if no transient buffer space available
-				}
-
-				BX_WARN(emitter.m_num == max
-					, "Truncating transient buffer for emitter particles to maximum available (requested %d, available %d)."
-					, emitter.m_num
-					, max
-					);
-
-				bgfx::allocTransientBuffers(&tvb
-					, PosColorTexCoord0Vertex::ms_layout
-					, max*4
-					, &tib
-					, max*6
-					);
-				PosColorTexCoord0Vertex* vertices = (PosColorTexCoord0Vertex*)tvb.data;
-
-				ParticleSort* particleSort = (ParticleSort*)bx::alloc(m_allocator, max*sizeof(ParticleSort) );
-				if (!particleSort)
-				{
-					continue; // Skip this emitter if allocation failed
-				}
-
-				// Render particles for this emitter only
-				const uint32_t particleCount = emitter.render(_mtxView, _eye, 0, max, particleSort, vertices);
-
-				// Sort particles within this emitter for proper alpha blending
-				qsort(particleSort
-					, particleCount
-					, sizeof(ParticleSort)
-					, particleSortFn
-					);
-
-				// Generate indices for sorted particles
-				uint16_t* indices = (uint16_t*)tib.data;
-				for (uint32_t jj = 0; jj < particleCount; ++jj)
-				{
-					const ParticleSort& sort = particleSort[jj];
-					uint16_t* index = &indices[jj*6];
-					uint16_t vertexIdx = (uint16_t)sort.idx;
-					index[0] = vertexIdx*4+0;
-					index[1] = vertexIdx*4+1;
-					index[2] = vertexIdx*4+2;
-					index[3] = vertexIdx*4+2;
-					index[4] = vertexIdx*4+3;
-					index[5] = vertexIdx*4+0;
-				}
-
-				// Ensure we're freeing valid memory
-				BX_ASSERT(particleSort != nullptr, "Attempting to free null particleSort pointer");
-				bx::free(m_allocator, particleSort);
-				particleSort = nullptr; // Prevent double-free
-
-				// Render this emitter with its specific texture
-				bgfx::setState(0
-					| BGFX_STATE_WRITE_RGB
-					| BGFX_STATE_WRITE_A
-					| BGFX_STATE_DEPTH_TEST_LESS
-					| BGFX_STATE_CULL_CW
-					| BGFX_STATE_BLEND_NORMAL
-					);
-				bgfx::setVertexBuffer(0, &tvb);
-				bgfx::setIndexBuffer(&tib);
-				bgfx::setTexture(0, s_texColor, emitter.m_uniforms.m_texture);	
-				bgfx::submit(_view, program);
-			}
 		}
 
 		void renderEmitterById(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye)
@@ -772,34 +741,28 @@ namespace ps
 			}
 			else
 			{
-				// Store previous position before updating uniforms
-				if (!emitter.m_firstUpdate)
+				// Copy new uniforms
+				EmitterUniforms newUniforms = *_uniforms;
+
+	            float prevPosition[3];
+				prevPosition[0] = newUniforms.m_position[0];
+				prevPosition[1] = newUniforms.m_position[1];
+				prevPosition[2] = newUniforms.m_position[2];
+				
+				emitter.m_uniforms = newUniforms;
+
+				emitter.m_uniforms.m_prevPosition[0] = prevPosition[0];
+				emitter.m_uniforms.m_prevPosition[1] = prevPosition[1];
+				emitter.m_uniforms.m_prevPosition[2] = prevPosition[2];
+
+				if(emitter.m_firstUpdate)
 				{
 					emitter.m_uniforms.m_prevPosition[0] = emitter.m_uniforms.m_position[0];
 					emitter.m_uniforms.m_prevPosition[1] = emitter.m_uniforms.m_position[1];
 					emitter.m_uniforms.m_prevPosition[2] = emitter.m_uniforms.m_position[2];
 				}
+
 				
-				// Copy new uniforms
-				EmitterUniforms newUniforms = *_uniforms;
-				
-				// If this is the first update, set previous position to current position
-				if (emitter.m_firstUpdate)
-				{
-					newUniforms.m_prevPosition[0] = newUniforms.m_position[0];
-					newUniforms.m_prevPosition[1] = newUniforms.m_position[1];
-					newUniforms.m_prevPosition[2] = newUniforms.m_position[2];
-					emitter.m_firstUpdate = false;
-				}
-				else
-				{
-					// Keep the previous position we stored above
-					newUniforms.m_prevPosition[0] = emitter.m_uniforms.m_prevPosition[0];
-					newUniforms.m_prevPosition[1] = emitter.m_uniforms.m_prevPosition[1];
-					newUniforms.m_prevPosition[2] = emitter.m_uniforms.m_prevPosition[2];
-				}
-				
-				emitter.m_uniforms = newUniforms;
 			}
 		}
 
@@ -899,19 +862,9 @@ void psDestroyEmitter(EmitterHandle _handle)
 	s_ctx.destroyEmitter(_handle);
 }
 
-void psUpdate(float _dt)
-{
-	s_ctx.update(_dt);
-}
-
 void psUpdateEmitter(EmitterHandle _handle, float _dt)
 {
 	s_ctx.updateEmitterById(_handle, _dt);
-}
-
-void psRender(uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye)
-{
-	s_ctx.render(_view, _program, _mtxView, _eye);
 }
 
 void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye)

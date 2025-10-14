@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <map>
 #include <vector>
-#include <cstring>
 namespace gfx
 {
 namespace
@@ -69,10 +68,11 @@ struct gfx_callback final : public bgfx::CallbackI
         }
         out[len] = '\0';
 
+        bx::StringView out_view(out, len);
         // Determine log type based on prefix
-        if (strncmp(out, "WARN ", 5) == 0)
+        if (bx::strCmp(out_view, "WARN ") == 0)
         {
-            log("warning", out + 5, _filePath, _line);
+            log("warning", out_view.getPtr() + 5, _filePath, _line);
         }
         //log("trace", out, _filePath, _line);
     }
