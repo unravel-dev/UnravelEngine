@@ -3,9 +3,11 @@
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include <serialization/types/array.hpp>
+#include <serialization/types/chrono.hpp>
 #include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
+
 namespace unravel
 {
 
@@ -227,6 +229,23 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "emission_lifetime"},
             entt::attribute{"pretty_name", "Emission Lifetime"},
             entt::attribute{"tooltip", "Duration of one complete emission cycle in seconds. Controls how long the emitter takes to spawn all particles before restarting the cycle."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        })
+        .data<&particle_emitter_component::set_emission_rate, &particle_emitter_component::get_emission_rate>("emission_rate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "emission_rate"},
+            entt::attribute{"pretty_name", "Emission Rate"},
+            entt::attribute{"tooltip", "Emission rate in particles per second. Higher values create denser particle effects. 0 = no emission."},
+            entt::attribute{"min", 0.0f},
+        })
+        .data<&particle_emitter_component::set_temporal_motion, &particle_emitter_component::get_temporal_motion>("temporal_motion"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temporal_motion"},
+            entt::attribute{"pretty_name", "Temporal Motion"},
+            entt::attribute{"tooltip", "Controls temporal interpolation for moving emitters. 1.0 = full interpolation (smooth trails), 0.0 = no interpolation (discrete emission)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
         })
         .data<&particle_emitter_component::set_gravity_scale, &particle_emitter_component::get_gravity_scale>("gravity_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -234,14 +253,7 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Gravity Scale"},
             entt::attribute{"tooltip", "Multiplier for gravity effect on particles. 0.0 = no gravity, 1.0 = Earth-like gravity, negative values = upward force."},
         })
-        .data<&particle_emitter_component::set_explosiveness, &particle_emitter_component::get_explosiveness>("explosiveness"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "explosiveness"},
-            entt::attribute{"pretty_name", "Explosiveness"},
-            entt::attribute{"tooltip", "Controls emission timing compression. 0.0 = particles spawn gradually over the emission cycle, 1.0 = all particles spawn instantly in a burst."},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-        })
+
         .data<nullptr, &particle_emitter_component::get_world_bounds>("world_bounds"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_bounds"},
@@ -260,11 +272,13 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Emitter Direction"},
             entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position."},
         })
-        .data<&particle_emitter_component::set_life_span_range, &particle_emitter_component::get_life_span_range>("life_span_range"_hs)
+        .data<&particle_emitter_component::set_lifetime, &particle_emitter_component::get_lifetime>("lifetime"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "life_span_range"},
-            entt::attribute{"pretty_name", "Life Span Range"},
-            entt::attribute{"tooltip", "Minimum and maximum lifetime for particles in seconds. Each particle gets a random lifetime within this range before disappearing."},
+            entt::attribute{"name", "lifetime"},
+            entt::attribute{"pretty_name", "Lifetime"},
+            entt::attribute{"tooltip", "How long each particle lives in seconds. Longer lifetimes create more persistent effects."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
         })
         .data<&particle_emitter_component::set_velocity_start_range, &particle_emitter_component::get_velocity_start_range>("velocity_start_range"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -351,10 +365,11 @@ SAVE(particle_emitter_component)
     // Emission properties
     try_save(ar, ser20::make_nvp("emission_lifetime", obj.get_emission_lifetime()));
     try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
-    try_save(ar, ser20::make_nvp("explosiveness", obj.get_explosiveness()));
+    try_save(ar, ser20::make_nvp("emission_rate", obj.get_emission_rate()));
+    try_save(ar, ser20::make_nvp("temporal_motion", obj.get_temporal_motion()));
     
     // Range properties
-    try_save(ar, ser20::make_nvp("life_span_range", obj.get_life_span_range()));
+    try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
     try_save(ar, ser20::make_nvp("velocity_start_range", obj.get_velocity_start_range()));
     try_save(ar, ser20::make_nvp("velocity_end_range", obj.get_velocity_end_range()));
     try_save(ar, ser20::make_nvp("scale_start_range", obj.get_scale_start_range()));
@@ -402,7 +417,7 @@ LOAD(particle_emitter_component)
     }
     
     // Emission properties
-    float emission_lifetime{2.0f};
+    std::chrono::duration<float> emission_lifetime{2.0f};
     if(try_load(ar, ser20::make_nvp("emission_lifetime", emission_lifetime)))
     {
         obj.set_emission_lifetime(emission_lifetime);
@@ -414,17 +429,23 @@ LOAD(particle_emitter_component)
         obj.set_gravity_scale(gravity_scale);
     }
     
-    float explosiveness{0.0f};
-    if(try_load(ar, ser20::make_nvp("explosiveness", explosiveness)))
+    float emission_rate{50.0f};
+    if(try_load(ar, ser20::make_nvp("emission_rate", emission_rate)))
     {
-        obj.set_explosiveness(explosiveness);
+        obj.set_emission_rate(emission_rate);
+    }
+    
+    float temporal_motion{1.0f};
+    if(try_load(ar, ser20::make_nvp("temporal_motion", temporal_motion)))
+    {
+        obj.set_temporal_motion(temporal_motion);
     }
     
     // Range properties
-    frange_t life_span_range{1.0f, 2.0f};
-    if(try_load(ar, ser20::make_nvp("life_span_range", life_span_range)))
+    std::chrono::duration<float> lifetime{1.0f};
+    if(try_load(ar, ser20::make_nvp("lifetime", lifetime)))
     {
-        obj.set_life_span_range(life_span_range);
+        obj.set_lifetime(lifetime);
     }
     
     frange_t velocity_start_range{0.0f, 1.0f};

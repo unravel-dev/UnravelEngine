@@ -26,12 +26,14 @@ auto inspect_range_scalar(rtti::context& ctx,
         min_ptr = &min;
     }
 
+    
     auto max_var = entt::get_attribute(custom, "max");
     if(max_var && max_var.allow_cast<T>())
     {
         max = max_var.cast<T>();
         max_ptr = &max;
     }
+    
     const auto formatted0 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
     const auto formatted1 = fmt::format("{}{}", fmt1, ImGui::GetDataPrintFormat<T>());
 
@@ -46,6 +48,20 @@ auto inspect_range_scalar(rtti::context& ctx,
                                                    min_ptr,
                                                    max_ptr,
                                                    formats.data());
+
+    if(result.changed)
+    {
+        if(data.max < data.min)
+        {
+            data.max = data.min;
+        }
+
+        if(data.min > data.max)
+        {
+            data.min = data.max;
+        }
+    }
+
     ImGui::ActiveItemWrapMousePos();
 
     result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();

@@ -49,7 +49,6 @@ struct EmitterUniforms
 {
 	void reset();
 
-	bool updated;
 	float m_position[3];
 	float m_angle[3];
 	
@@ -62,9 +61,10 @@ struct EmitterUniforms
 	float m_velocityEnd[2];
 	float m_scaleStart[2];
 	float m_scaleEnd[2];
-	float m_lifeSpan[2];
+	float m_lifetime;
 	float m_gravityScale;
-	float m_explosiveness;
+	float m_particlesPerSecond; // Emission rate in particles per second
+	float m_temporalMotion; // Temporal motion interpolation factor (0.0 = no interpolation, 1.0 = full interpolation)
 	float m_scale[3]; // 3D scale for the entire particle system (x, y, z)
 
 	uint32_t m_rgba[5];
@@ -90,7 +90,10 @@ void psShutdown();
 EmitterHandle psCreateEmitter(EmitterShape::Enum _shape, EmitterDirection::Enum _direction, uint32_t _maxParticles);
 
 ///
-void psUpdateEmitter(EmitterHandle _handle, const EmitterUniforms* _uniforms = nullptr);
+void psUpdateEmitter(EmitterHandle _handle, float _dt, const EmitterUniforms* _uniforms = nullptr);
+
+///
+void psResetEmitter(EmitterHandle _handle);
 
 ///
 void psGetAabb(EmitterHandle _handle, bx::Aabb& _outAabb);
@@ -99,9 +102,6 @@ uint32_t psGetNumParticles(EmitterHandle _handle);
 
 ///
 void psDestroyEmitter(EmitterHandle _handle);
-
-///
-void psUpdateEmitter(EmitterHandle _handle, float _dt);
 
 ///
 void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye);

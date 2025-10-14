@@ -85,11 +85,11 @@ void EmitterUniforms::reset()
 	m_scaleEnd[0]   = 0.3f;
 	m_scaleEnd[1]   = 0.4f;
 
-	m_lifeSpan[0]   = 1.0f;
-	m_lifeSpan[1]   = 2.0f;
+	m_lifetime = 1.0f;
 
 	m_gravityScale  = 0.0f;
-	m_explosiveness = 0.0f;
+	m_particlesPerSecond = 50.0f; // Default: 50 particles per second
+	m_temporalMotion = 1.0f; // Default: full temporal interpolation
 	m_scale[0] = 1.0f; // Default: no scaling
 	m_scale[1] = 1.0f;
 	m_scale[2] = 1.0f;
@@ -160,9 +160,6 @@ namespace ps
 			m_uniforms.reset();
 			m_num = 0;
 			bx::memSet(&m_aabb, 0, sizeof(bx::Aabb) );
-			m_prevExplosiveness = m_uniforms.m_explosiveness;
-			m_emissionTime = 0.0f;
-			m_oldestParticleIndex = 0;
 			m_firstUpdate = true;
 
 			m_rng.reset();
@@ -216,7 +213,7 @@ namespace ps
 			const bx::Vec3 emitterPos = { m_uniforms.m_position[0], m_uniforms.m_position[1], m_uniforms.m_position[2] };
 			
 			// Calculate maximum possible particle travel distance
-			const float maxLifeSpan = m_uniforms.m_lifeSpan[1]; // Use maximum lifespan
+			const float maxLifeSpan = m_uniforms.m_lifetime;
 			const float maxVelocity = bx::max(m_uniforms.m_velocityEnd[1], m_uniforms.m_velocityStart[1]); // Maximum velocity
 			const float maxScale = m_uniforms.m_scaleEnd[1]; // Maximum scale
 			const bx::Vec3 systemScale = { m_uniforms.m_scale[0], m_uniforms.m_scale[1], m_uniforms.m_scale[2] }; // System-wide scale
@@ -249,27 +246,27 @@ namespace ps
 
 		void spawn(float _dt)
 		{
-			// Check if explosiveness changed - if so, reset the simulation
-			if (bx::abs(m_uniforms.m_explosiveness - m_prevExplosiveness) > 0.001f)
+			// Skip emission if rate is zero or negative
+			if (m_uniforms.m_particlesPerSecond <= 0.0f)
 			{
-				m_num = 0; // Clear all existing particles
-				m_dt = 0.0f; // Reset time accumulator
-				m_emissionTime = 0.0f; // Reset emission time
-				m_prevExplosiveness = m_uniforms.m_explosiveness;
+				return;
 			}
 			
-			// Track emission cycle time
-			const float prevEmissionTime = m_emissionTime;
-			m_emissionTime += _dt;
+			// Calculate time per particle and accumulate time
+			const float timePerParticle = 1.0f / m_uniforms.m_particlesPerSecond;
+			m_dt += _dt;
 			
-			// Use the emission lifetime directly - much simpler!
-			const float emissionCycleLength = m_uniforms.m_emissionLifetime;
+			// Calculate how many particles to emit this frame
+			const uint32_t numParticlesToEmit = uint32_t(m_dt / timePerParticle);
+			m_dt -= numParticlesToEmit * timePerParticle; // Remove emitted time from accumulator
 			
-			// Wrap emission time
-			if (m_emissionTime > emissionCycleLength)
+			// Don't emit more particles than we have space for
+			const uint32_t maxEmittable = m_max - m_num;
+			const uint32_t actualEmitCount = bx::min(numParticlesToEmit, maxEmittable);
+			
+			if (actualEmitCount == 0)
 			{
-				
-				m_emissionTime = bx::mod(m_emissionTime, emissionCycleLength);
+				return;
 			}
 			
 			// Calculate motion delta for temporal emission gap handling
@@ -277,92 +274,20 @@ namespace ps
 			const bx::Vec3 prevPos = { m_uniforms.m_prevPosition[0], m_uniforms.m_prevPosition[1], m_uniforms.m_prevPosition[2] };
 			const bx::Vec3 deltaPos = bx::sub(currentPos, prevPos);
 			const float motionDistance = bx::length(deltaPos);
-			
-			// Base transformation matrix (we'll modify position per particle)
-			float mtx[16];
-			bx::mtxSRT(mtx
-				, 1.0f, 1.0f, 1.0f
-				, m_uniforms.m_angle[0],    m_uniforms.m_angle[1],    m_uniforms.m_angle[2]
-				, m_uniforms.m_position[0], m_uniforms.m_position[1], m_uniforms.m_position[2]
-				);
 
 			constexpr bx::Vec3 up = { 0.0f, 1.0f, 0.0f };
 
-			// Check each particle to see if it should restart based on explosiveness (like the reference implementation)
-			for (uint32_t ii = 0; ii < m_max; ++ii)
+			// Emit particles with temporal interpolation
+			for (uint32_t ii = 0; ii < actualEmitCount; ++ii)
 			{
-				// Calculate restart phase for this particle index (same as reference implementation)
-				const float restartPhase = float(ii) / float(m_max);
+				// Calculate emission phase for temporal motion interpolation
+				// Distribute particles evenly across the frame, scaled by temporal motion factor
+				const float baseEmissionPhase = float(ii) / float(actualEmitCount);
+				const float emissionPhase = baseEmissionPhase * m_uniforms.m_temporalMotion;
 				
-				// Apply explosiveness compression to restart time (same formula as reference)
-				const float compressedPhase = restartPhase * (1.0f - m_uniforms.m_explosiveness);
-				const float restartTime = compressedPhase * emissionCycleLength;
-				
-				// Check if this particle should restart in this frame (same logic as reference)
-				bool shouldRestart = false;
-				if (m_emissionTime > prevEmissionTime)
-				{
-					// Normal case: time is advancing
-					shouldRestart = restartTime >= prevEmissionTime && restartTime < m_emissionTime;
-				}
-				else if (_dt > 0.0f)
-				{
-					// Wrapped case: emission time wrapped around
-					shouldRestart = restartTime >= prevEmissionTime || restartTime < m_emissionTime;
-				}
-				
-				if (!shouldRestart)
-				{
-					continue;
-				}
-				
-				// Calculate emission phase for temporal motion interpolation (within current frame)
-				float emissionPhase = 0.0f;
-				if (m_emissionTime > prevEmissionTime)
-				{
-					// Normal case: calculate where in the frame this particle was emitted
-					const float frameEmissionTime = m_emissionTime - prevEmissionTime;
-					if (frameEmissionTime > 0.0f)
-					{
-						const float particleEmissionTime = restartTime - prevEmissionTime;
-						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
-					}
-				}
-				else if (_dt > 0.0f)
-				{
-					// Wrapped case: more complex calculation needed
-					const float frameEmissionTime = _dt;
-					if (restartTime >= prevEmissionTime)
-					{
-						// Particle emitted before wrap
-						const float particleEmissionTime = restartTime - prevEmissionTime;
-						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
-					}
-					else
-					{
-						// Particle emitted after wrap
-						const float particleEmissionTime = (emissionCycleLength - prevEmissionTime) + restartTime;
-						emissionPhase = bx::clamp(particleEmissionTime / frameEmissionTime, 0.0f, 1.0f);
-					}
-				}
-				
-				// Find an inactive particle to restart, or create new one
-				Particle* particle = nullptr;
-				if (m_num < m_max)
-				{
-					particle = &m_particles[m_num];
-					m_num++;
-				}
-				else
-				{
-					// This shouldn't happen due to the limit above, but safety check
-					break;
-				}
-				
-				if (!particle)
-				{
-					continue;
-				}
+				// Find next available particle slot
+				Particle* particle = &m_particles[m_num];
+				m_num++;
 
 				bx::Vec3 pos(bx::InitNone);
 				switch (m_shape)
@@ -421,17 +346,12 @@ namespace ps
 				const bx::Vec3 end  = bx::add(tmp1, start);
 
 				particle->life = 0.0f; // Always start at 0 for new particles
-				particle->lifeSpan = bx::lerp(m_uniforms.m_lifeSpan[0], m_uniforms.m_lifeSpan[1], bx::frnd(&m_rng) );
+				particle->lifeSpan = m_uniforms.m_lifetime;
 
 				const bx::Vec3 gravity = { 0.0f, -9.81f * m_uniforms.m_gravityScale * bx::square(particle->lifeSpan) * systemScale.y, 0.0f };
 
 				// Calculate interpolated emitter position for temporal emission gap handling
-				bx::Vec3 interpolatedEmitterPos = currentPos;
-				if (motionDistance > 0.001f) // Only interpolate if there's significant motion
-				{
-					// Use the emission phase calculated above to interpolate position
-					interpolatedEmitterPos = bx::lerp(prevPos, currentPos, emissionPhase);
-				}
+				bx::Vec3 interpolatedEmitterPos = bx::lerp(prevPos, currentPos, emissionPhase);
 
 				// Create transformation matrix with interpolated position
 				float particleMtx[16];
@@ -550,7 +470,10 @@ namespace ps
 				++vertex;
 			}
 
-			m_aabb = aabb;
+			if(numToRender > 0)
+			{
+				m_aabb = aabb;
+			}
 
 			return numToRender;
 		}
@@ -568,9 +491,6 @@ namespace ps
 		uint32_t m_num;
 		uint32_t m_max;
 		
-		float m_prevExplosiveness;
-		float m_emissionTime; // Track emission cycle time
-		uint32_t m_oldestParticleIndex; // Cache index of oldest particle for replacement
 		bool m_firstUpdate; // Track if this is the first update to avoid interpolation
 	};
 
@@ -759,9 +679,9 @@ namespace ps
 				EmitterUniforms newUniforms = *_uniforms;
 
 	            float prevPosition[3];
-				prevPosition[0] = newUniforms.m_position[0];
-				prevPosition[1] = newUniforms.m_position[1];
-				prevPosition[2] = newUniforms.m_position[2];
+				prevPosition[0] = emitter.m_uniforms.m_position[0];
+				prevPosition[1] = emitter.m_uniforms.m_position[1];
+				prevPosition[2] = emitter.m_uniforms.m_position[2];
 				
 				emitter.m_uniforms = newUniforms;
 
@@ -856,9 +776,23 @@ EmitterHandle psCreateEmitter(EmitterShape::Enum _shape, EmitterDirection::Enum 
 	return s_ctx.createEmitter(_shape, _direction, _maxParticles);
 }
 
-void psUpdateEmitter(EmitterHandle _handle, const EmitterUniforms* _uniforms)
+void psUpdateEmitter(EmitterHandle _handle, float _dt, const EmitterUniforms* _uniforms)
 {
-	s_ctx.updateEmitter(_handle, _uniforms);
+	if (_uniforms != nullptr)
+	{
+		s_ctx.updateEmitter(_handle, _uniforms);
+	}
+	s_ctx.updateEmitterById(_handle, _dt);
+}
+
+void psResetEmitter(EmitterHandle _handle)
+{
+	BX_ASSERT(isValid(_handle)
+		, "psResetEmitter handle %d is not valid."
+		, _handle.idx
+		);
+
+	s_ctx.m_emitter[_handle.idx].reset();
 }
 
 void psGetAabb(EmitterHandle _handle, bx::Aabb& _outAabb)
@@ -874,11 +808,6 @@ uint32_t psGetNumParticles(EmitterHandle _handle)
 void psDestroyEmitter(EmitterHandle _handle)
 {
 	s_ctx.destroyEmitter(_handle);
-}
-
-void psUpdateEmitter(EmitterHandle _handle, float _dt)
-{
-	s_ctx.updateEmitterById(_handle, _dt);
 }
 
 void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye)

@@ -98,14 +98,14 @@ auto particle_emitter_component::get_max_particles() const -> uint32_t
 }
 
 
-void particle_emitter_component::set_emission_lifetime(float lifetime)
+void particle_emitter_component::set_emission_lifetime(std::chrono::duration<float> lifetime)
 {
-    uniforms_.m_emissionLifetime = lifetime;
+    uniforms_.m_emissionLifetime = lifetime.count();
 }
 
-auto particle_emitter_component::get_emission_lifetime() const -> float
+auto particle_emitter_component::get_emission_lifetime() const -> std::chrono::duration<float>
 {
-    return uniforms_.m_emissionLifetime;
+    return std::chrono::duration<float>(uniforms_.m_emissionLifetime);
 }
 
 void particle_emitter_component::set_gravity_scale(float scale)
@@ -118,26 +118,37 @@ auto particle_emitter_component::get_gravity_scale() const -> float
     return uniforms_.m_gravityScale;
 }
 
-void particle_emitter_component::set_explosiveness(float explosiveness)
+void particle_emitter_component::set_emission_rate(float emission_rate)
 {
-    uniforms_.m_explosiveness = math::clamp(explosiveness, 0.0f, 1.0f);
+    uniforms_.m_particlesPerSecond = math::max(emission_rate, 0.0f);
+
+    reset_emitter();
 }
 
-auto particle_emitter_component::get_explosiveness() const -> float
+auto particle_emitter_component::get_emission_rate() const -> float
 {
-    return uniforms_.m_explosiveness;
+    return uniforms_.m_particlesPerSecond;
 }
 
-void particle_emitter_component::set_life_span_range(const frange_t& life_span)
+void particle_emitter_component::set_temporal_motion(float temporal_motion)
 {
-    life_span_range_ = life_span;
-    uniforms_.m_lifeSpan[0] = life_span.min;
-    uniforms_.m_lifeSpan[1] = life_span.max;
+    uniforms_.m_temporalMotion = math::clamp(temporal_motion, 0.0f, 1.0f);
 }
 
-auto particle_emitter_component::get_life_span_range() const -> const frange_t&
+auto particle_emitter_component::get_temporal_motion() const -> float
 {
-    return life_span_range_;
+    return uniforms_.m_temporalMotion;
+}
+
+void particle_emitter_component::set_lifetime(std::chrono::duration<float> lifetime)
+{
+    uniforms_.m_lifetime  = math::max(lifetime.count(), 0.0f);
+    reset_emitter();
+}
+
+auto particle_emitter_component::get_lifetime() const -> std::chrono::duration<float>
+{
+    return std::chrono::duration<float>(uniforms_.m_lifetime);
 }
 
 void particle_emitter_component::set_velocity_start_range(const frange_t& velocity_start)
@@ -334,8 +345,7 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
 
         sync_uniforms_from_members();
         
-        psUpdateEmitter(emitter_handle_, &uniforms_);
-        psUpdateEmitter(emitter_handle_, dt.count());
+        psUpdateEmitter(emitter_handle_, dt.count(), &uniforms_);
 
     }
 }
@@ -379,12 +389,17 @@ void particle_emitter_component::recreate_emitter()
 
 }
 
+void particle_emitter_component::reset_emitter()
+{
+    if(isValid(emitter_handle_))
+    {
+        psResetEmitter(emitter_handle_);
+    }
+}
+
 void particle_emitter_component::sync_uniforms_from_members()
 {
-    // Sync range properties
-    uniforms_.m_lifeSpan[0] = life_span_range_.min;
-    uniforms_.m_lifeSpan[1] = life_span_range_.max;
-    
+    // Sync lifetime property    
     uniforms_.m_velocityStart[0] = velocity_start_range_.min;
     uniforms_.m_velocityStart[1] = velocity_start_range_.max;
     

@@ -90,18 +90,21 @@ public:
 
 
     // Particle emission properties
-    void set_emission_lifetime(float lifetime);
-    auto get_emission_lifetime() const -> float;
+    void set_emission_lifetime(std::chrono::duration<float> lifetime);
+    auto get_emission_lifetime() const -> std::chrono::duration<float>;
 
     void set_gravity_scale(float scale);
     auto get_gravity_scale() const -> float;
 
-    void set_explosiveness(float explosiveness);
-    auto get_explosiveness() const -> float;
+    void set_emission_rate(float emission_rate);
+    auto get_emission_rate() const -> float;
 
-    // Life span properties
-    void set_life_span_range(const frange_t& life_span);
-    auto get_life_span_range() const -> const frange_t&;
+    void set_temporal_motion(float temporal_motion);
+    auto get_temporal_motion() const -> float;
+
+    // Lifetime properties
+    void set_lifetime(std::chrono::duration<float> lifetime);
+    auto get_lifetime() const -> std::chrono::duration<float>;
 
     // Velocity properties
     void set_velocity_start_range(const frange_t& velocity_start);
@@ -173,6 +176,11 @@ public:
      */
     void recreate_emitter();
 
+    /**
+     * @brief Resets the emitter, clearing all particles and resetting internal state.
+     */
+    void reset_emitter();
+
 private:
     /**
      * @brief Syncs uniforms from member variables.
@@ -197,7 +205,6 @@ private:
     EmitterUniforms uniforms_;
     
     /// Range properties for easier manipulation
-    frange_t life_span_range_{1.0f, 2.0f};
     frange_t velocity_start_range_{0.0f, 1.0f};
     frange_t velocity_end_range_{2.0f, 3.0f};
     frange_t scale_start_range_{0.1f, 0.2f};

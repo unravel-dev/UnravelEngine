@@ -19,8 +19,8 @@ struct range
                                                  , max(data[1])
     {
     }
-    T min = 0;
-    T max = 0;
+    T min{};
+    T max{};
 
     inline bool contains(const T& val) const
     {
