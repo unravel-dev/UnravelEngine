@@ -65,6 +65,8 @@ struct EmitterUniforms
 	float m_gravityScale;
 	float m_particlesPerSecond; // Emission rate in particles per second
 	float m_temporalMotion; // Temporal motion interpolation factor (0.0 = no interpolation, 1.0 = full interpolation)
+	float m_velocityDamping; // Velocity damping factor (0.0 = no damping, 1.0 = full damping)
+	float m_forceOverLifetime[3]; // Additional force applied over particle lifetime (x, y, z)
 	float m_scale[3]; // 3D scale for the entire particle system (x, y, z)
 
 	uint32_t m_rgba[5];

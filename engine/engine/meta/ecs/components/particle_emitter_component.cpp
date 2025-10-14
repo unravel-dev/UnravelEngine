@@ -247,6 +247,21 @@ REFLECT(particle_emitter_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
+        .data<&particle_emitter_component::set_velocity_damping, &particle_emitter_component::get_velocity_damping>("velocity_damping"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "velocity_damping"},
+            entt::attribute{"pretty_name", "Velocity Damping"},
+            entt::attribute{"tooltip", "Reduces particle velocity over time. 0.0 = no damping (particles maintain speed), 1.0 = full damping (particles stop immediately)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+        })
+        .data<&particle_emitter_component::set_force_over_lifetime, &particle_emitter_component::get_force_over_lifetime>("force_over_lifetime"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "force_over_lifetime"},
+            entt::attribute{"pretty_name", "Force Over Lifetime"},
+            entt::attribute{"tooltip", "Additional force applied to particles throughout their lifetime. Use for wind, magnetism, or other environmental effects. Values are in world units."},
+        })
         .data<&particle_emitter_component::set_gravity_scale, &particle_emitter_component::get_gravity_scale>("gravity_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gravity_scale"},
@@ -367,6 +382,8 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
     try_save(ar, ser20::make_nvp("emission_rate", obj.get_emission_rate()));
     try_save(ar, ser20::make_nvp("temporal_motion", obj.get_temporal_motion()));
+    try_save(ar, ser20::make_nvp("velocity_damping", obj.get_velocity_damping()));
+    try_save(ar, ser20::make_nvp("force_over_lifetime", obj.get_force_over_lifetime()));
     
     // Range properties
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
@@ -439,6 +456,18 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("temporal_motion", temporal_motion)))
     {
         obj.set_temporal_motion(temporal_motion);
+    }
+    
+    float velocity_damping{0.0f};
+    if(try_load(ar, ser20::make_nvp("velocity_damping", velocity_damping)))
+    {
+        obj.set_velocity_damping(velocity_damping);
+    }
+    
+    math::vec3 force_over_lifetime{0.0f, 0.0f, 0.0f};
+    if(try_load(ar, ser20::make_nvp("force_over_lifetime", force_over_lifetime)))
+    {
+        obj.set_force_over_lifetime(force_over_lifetime);
     }
     
     // Range properties

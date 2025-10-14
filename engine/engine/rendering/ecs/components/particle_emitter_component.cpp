@@ -140,6 +140,28 @@ auto particle_emitter_component::get_temporal_motion() const -> float
     return uniforms_.m_temporalMotion;
 }
 
+void particle_emitter_component::set_velocity_damping(float velocity_damping)
+{
+    uniforms_.m_velocityDamping = math::clamp(velocity_damping, 0.0f, 1.0f);
+}
+
+auto particle_emitter_component::get_velocity_damping() const -> float
+{
+    return uniforms_.m_velocityDamping;
+}
+
+void particle_emitter_component::set_force_over_lifetime(const math::vec3& force)
+{
+    uniforms_.m_forceOverLifetime[0] = force.x;
+    uniforms_.m_forceOverLifetime[1] = force.y;
+    uniforms_.m_forceOverLifetime[2] = force.z;
+}
+
+auto particle_emitter_component::get_force_over_lifetime() const -> math::vec3
+{
+    return math::vec3(uniforms_.m_forceOverLifetime[0], uniforms_.m_forceOverLifetime[1], uniforms_.m_forceOverLifetime[2]);
+}
+
 void particle_emitter_component::set_lifetime(std::chrono::duration<float> lifetime)
 {
     uniforms_.m_lifetime  = math::max(lifetime.count(), 0.0f);

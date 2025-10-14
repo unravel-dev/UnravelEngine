@@ -90,6 +90,10 @@ void EmitterUniforms::reset()
 	m_gravityScale  = 0.0f;
 	m_particlesPerSecond = 50.0f; // Default: 50 particles per second
 	m_temporalMotion = 1.0f; // Default: full temporal interpolation
+	m_velocityDamping = 0.0f; // Default: no damping
+	m_forceOverLifetime[0] = 0.0f; // Default: no additional force
+	m_forceOverLifetime[1] = 0.0f;
+	m_forceOverLifetime[2] = 0.0f;
 	m_scale[0] = 1.0f; // Default: no scaling
 	m_scale[1] = 1.0f;
 	m_scale[2] = 1.0f;
@@ -349,6 +353,13 @@ namespace ps
 				particle->lifeSpan = m_uniforms.m_lifetime;
 
 				const bx::Vec3 gravity = { 0.0f, -9.81f * m_uniforms.m_gravityScale * bx::square(particle->lifeSpan) * systemScale.y, 0.0f };
+				
+				// Apply force over lifetime (scaled by lifetime and system scale)
+				const bx::Vec3 forceOverLifetime = { 
+					m_uniforms.m_forceOverLifetime[0] * bx::square(particle->lifeSpan) * systemScale.x,
+					m_uniforms.m_forceOverLifetime[1] * bx::square(particle->lifeSpan) * systemScale.y,
+					m_uniforms.m_forceOverLifetime[2] * bx::square(particle->lifeSpan) * systemScale.z
+				};
 
 				// Calculate interpolated emitter position for temporal emission gap handling
 				bx::Vec3 interpolatedEmitterPos = bx::lerp(prevPos, currentPos, emissionPhase);
@@ -363,7 +374,18 @@ namespace ps
 
 				particle->start  = bx::mul(start, particleMtx);
 				particle->end[0] = bx::mul(end,   particleMtx);
-				particle->end[1] = bx::add(particle->end[0], gravity);
+				
+				// Apply damping to the velocity (reduce the distance from start to end[0])
+				if (m_uniforms.m_velocityDamping > 0.0f)
+				{
+					const bx::Vec3 velocity = bx::sub(particle->end[0], particle->start);
+					const bx::Vec3 dampedVelocity = bx::mul(velocity, 1.0f - m_uniforms.m_velocityDamping);
+					particle->end[0] = bx::add(particle->start, dampedVelocity);
+				}
+				
+				// Combine gravity and additional forces
+				const bx::Vec3 totalForce = bx::add(gravity, forceOverLifetime);
+				particle->end[1] = bx::add(particle->end[0], totalForce);
 
 				bx::memCopy(particle->rgba, m_uniforms.m_rgba, BX_COUNTOF(m_uniforms.m_rgba)*sizeof(uint32_t) );
 

@@ -102,6 +102,12 @@ public:
     void set_temporal_motion(float temporal_motion);
     auto get_temporal_motion() const -> float;
 
+    void set_velocity_damping(float velocity_damping);
+    auto get_velocity_damping() const -> float;
+
+    void set_force_over_lifetime(const math::vec3& force);
+    auto get_force_over_lifetime() const -> math::vec3;
+
     // Lifetime properties
     void set_lifetime(std::chrono::duration<float> lifetime);
     auto get_lifetime() const -> std::chrono::duration<float>;

@@ -40,6 +40,8 @@ auto inspect_range_scalar(rtti::context& ctx,
     std::array<const char*, 2> formats = {{formatted0.c_str(), formatted1.c_str()}};
 
     inspect_result result{};
+    T prev_min = data.min;
+    T prev_max = data.max;
     result.changed = ImGui::DragMultiFormatScalarN("##",
                                                    ImGui::GetDataType<T>(),
                                                    &data.min,
@@ -51,12 +53,14 @@ auto inspect_range_scalar(rtti::context& ctx,
 
     if(result.changed)
     {
-        if(data.max < data.min)
+        bool min_changed = prev_min != data.min;
+        bool max_changed = prev_max != data.max;
+        if(max_changed && data.max < data.min)
         {
             data.max = data.min;
         }
 
-        if(data.min > data.max)
+        if(min_changed && data.min > data.max)
         {
             data.min = data.max;
         }

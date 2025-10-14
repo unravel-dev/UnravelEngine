@@ -268,7 +268,9 @@ auto inspector_vec2::inspect(rtti::context& ctx,
     auto& data = var.cast<math::vec2&>();
     inspect_result result{};
 
-    if(DragVec2(data, info))
+    static const auto reset = math::zero<math::vec2>();
+
+    if(DragVec2(data, info, &reset))
     {
         result.changed = true;
     }
@@ -286,7 +288,9 @@ auto inspector_vec3::inspect(rtti::context& ctx,
     auto& data = var.cast<math::vec3&>();
     inspect_result result{};
 
-    if(DragVec3(data, info))
+    static const auto reset = math::zero<math::vec3>();
+
+    if(DragVec3(data, info, &reset))
     {
         result.changed = true;
     }
@@ -304,7 +308,9 @@ auto inspector_vec4::inspect(rtti::context& ctx,
     auto& data = var.cast<math::vec4&>();
     inspect_result result{};
 
-    if(DragVec4(data, info))
+    static const auto reset = math::zero<math::vec4>();
+
+    if(DragVec4(data, info, &reset))
     {
         result.changed = true;
     }
@@ -356,6 +362,39 @@ auto inspector_quaternion::inspect(rtti::context& ctx,
         data = math::quat(math::radians(val));
         result.changed = true;
     }
+    result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
+
+    ImGui::DrawItemActivityOutline();
+
+    return result;
+}
+
+auto inspector_bbox::inspect(rtti::context& ctx,
+                                   entt::meta_any& var,
+                                   const meta_any_proxy& var_proxy,
+                                   const var_info& info,
+                                   const entt::meta_custom& custom) -> inspect_result
+{
+    auto& data = var.cast<math::bbox&>();
+    inspect_result result{};
+
+
+    static const auto reset = math::zero<math::vec3>();
+
+    ImGui::BeginGroup();
+    ImGui::PushID("Min");
+    if(DragVec3(data.min, info, &reset, "Min %.2f"))
+    {  
+        result.changed = true;
+    }
+    ImGui::PopID();
+    ImGui::PushID("Max");
+    if(DragVec3(data.max, info, &reset, "Max %.2f"))
+    {  
+        result.changed = true;
+    }
+    ImGui::PopID();
+    ImGui::EndGroup();
     result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
     ImGui::DrawItemActivityOutline();
