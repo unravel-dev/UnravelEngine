@@ -112,7 +112,10 @@ namespace ps
 		float scaleStart;
 		float scaleEnd;
 
-		// Color is now sampled from gradient during rendering
+		// Cached computed properties (updated during update, used during render)
+		uint32_t cachedColor;  // Final color with all effects applied
+		float cachedScale;     // Final scale with all effects applied
+		float cachedBlend;     // Final blend value
 
 		float life;
 		float lifeSpan;
@@ -156,9 +159,70 @@ namespace ps
 			return bx::length(velocityPerSecond);
 		}
 		
+		// Update particle properties that were previously calculated in render
+		void updateParticleProperties(Particle& particle, float avgSystemScale, bx::EaseFn easePos, bool hasColorBySpeed, bool hasSizeBySpeed)
+		{
+			const float ttPos = easePos(particle.life);
+			
+			// Calculate particle speed for speed-based effects
+			const float particleSpeed = calculateParticleSpeed(particle, ttPos);
+			
+			// Sample color from gradient based on particle life
+			math::color sampledColor = m_uniforms.m_colorGradient.sample(particle.life);
+			
+			// Apply color by speed if enabled
+			if (hasColorBySpeed)
+			{
+				const float speedFactor = bx::clamp(
+					(particleSpeed - m_uniforms.m_colorBySpeedVelocityRange.min) / 
+					(m_uniforms.m_colorBySpeedVelocityRange.max - m_uniforms.m_colorBySpeedVelocityRange.min), 
+					0.0f, 1.0f
+				);
+				
+				const math::color speedColor = m_uniforms.m_colorBySpeedGradient.sample(speedFactor);
+				
+				// Blend the speed color with the original color (multiply blend)
+				sampledColor.value *= speedColor.value;
+			}
+			
+			// Cache final color
+			particle.cachedColor = sampledColor;
+			
+			// Calculate blend
+			particle.cachedBlend = bx::lerp(particle.blendStart, particle.blendEnd, particle.life);
+			
+			// Calculate scale with system scaling
+			float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, particle.life) * avgSystemScale;
+			
+			// Apply size by speed if enabled
+			if (hasSizeBySpeed)
+			{
+				const float speedFactor = bx::clamp(
+					(particleSpeed - m_uniforms.m_sizeBySpeedVelocityRange.min) / 
+					(m_uniforms.m_sizeBySpeedVelocityRange.max - m_uniforms.m_sizeBySpeedVelocityRange.min), 
+					0.0f, 1.0f
+				);
+				
+				const float sizeMultiplier = bx::lerp(m_uniforms.m_sizeBySpeedRange.min, m_uniforms.m_sizeBySpeedRange.max, speedFactor);
+				scale *= sizeMultiplier;
+			}
+			
+			// Cache final scale
+			particle.cachedScale = scale;
+		}
+		
 
 		void update(float _dt)
 		{
+			// Pre-calculate per-frame constants to avoid recalculating per particle
+			const float avgSystemScale = (m_uniforms.m_scale.x + m_uniforms.m_scale.y + m_uniforms.m_scale.z) / 3.0f;
+			const bx::EaseFn easePos = bx::getEaseFunc(m_uniforms.m_easePos);
+			
+			// Pre-calculate speed-based effect conditions
+			const bool hasColorBySpeed = (m_uniforms.m_colorBySpeedVelocityRange.max > m_uniforms.m_colorBySpeedVelocityRange.min);
+			const bool hasSizeBySpeed = (m_uniforms.m_sizeBySpeedVelocityRange.max > m_uniforms.m_sizeBySpeedVelocityRange.min &&
+										 m_uniforms.m_sizeBySpeedRange.min != m_uniforms.m_sizeBySpeedRange.max);
+			
 			uint32_t num = m_num;
 			for (uint32_t ii = 0; ii < num; ++ii)
 			{
@@ -174,7 +238,11 @@ namespace ps
 					}
 
 					--num;
+					continue; // Skip processing for dead particles
 				}
+				
+				// Update cached properties for living particles
+				updateParticleProperties(particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
 			}
 
 			m_num = num;
@@ -267,6 +335,13 @@ namespace ps
 			{
 				return;
 			}
+			
+			// Pre-calculate constants for new particle property calculation
+			const float avgSystemScale = (m_uniforms.m_scale.x + m_uniforms.m_scale.y + m_uniforms.m_scale.z) / 3.0f;
+			const bx::EaseFn easePos = bx::getEaseFunc(m_uniforms.m_easePos);
+			const bool hasColorBySpeed = (m_uniforms.m_colorBySpeedVelocityRange.max > m_uniforms.m_colorBySpeedVelocityRange.min);
+			const bool hasSizeBySpeed = (m_uniforms.m_sizeBySpeedVelocityRange.max > m_uniforms.m_sizeBySpeedVelocityRange.min &&
+										 m_uniforms.m_sizeBySpeedRange.min != m_uniforms.m_sizeBySpeedRange.max);
 			
 			// Calculate motion delta for temporal emission gap handling
 			const bx::Vec3 currentPos = { m_uniforms.m_position.x, m_uniforms.m_position.y, m_uniforms.m_position.z };
@@ -399,6 +474,9 @@ namespace ps
 				const frange_t endScaleRange = m_uniforms.m_scaleGradient.sample(1.0f);
 				particle->scaleStart = bx::lerp(startScaleRange.min, startScaleRange.max, bx::frnd(&m_rng));
 				particle->scaleEnd   = bx::lerp(endScaleRange.min, endScaleRange.max, bx::frnd(&m_rng));
+				
+				// Calculate properties immediately for new particles
+				updateParticleProperties(*particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
 			}
 		}
 
@@ -408,7 +486,7 @@ namespace ps
 			BX_ASSERT(m_num <= m_max, "Render: Particle count exceeded maximum! m_num=%d, m_max=%d", m_num, m_max);
 			const uint32_t safeNum = bx::min(m_num, m_max);
 			
-			// Only position easing remains - color, blend, and scale handled by gradients
+			// Position easing function (calculated once per frame)
 			bx::EaseFn easePos = bx::getEaseFunc(m_uniforms.m_easePos);
 
 			bx::Aabb aabb =
@@ -422,58 +500,22 @@ namespace ps
 			{
 				const Particle& particle = m_particles[jj];
 
+				// Calculate position (this still needs to be done in render for sorting)
 				const float ttPos = easePos(particle.life);
-				// Blend and scale now sampled from gradients based on particle life
 				const bx::Vec3 p0  = bx::lerp(particle.start,  particle.end[0], ttPos);
 				const bx::Vec3 p1  = bx::lerp(particle.end[0], particle.end[1], ttPos);
 				const bx::Vec3 pos = bx::lerp(p0, p1, ttPos);
 
-				ParticleSort& sort = _outSort[jj]; // Use local index jj instead of global current
+				// Calculate distance for sorting
+				ParticleSort& sort = _outSort[jj];
 				const bx::Vec3 tmp0 = bx::sub(_eye, pos);
 				sort.dist = bx::length(tmp0);
-				sort.idx  = jj; // Use local particle index for vertex buffer indexing
+				sort.idx  = jj;
 
-				// Calculate particle speed for speed-based effects
-				const float particleSpeed = calculateParticleSpeed(particle, ttPos);
-
-				// Sample color from gradient based on particle life
-				math::color sampledColor = m_uniforms.m_colorGradient.sample(particle.life);
-				// Apply color by speed if enabled
-				if (m_uniforms.m_colorBySpeedVelocityRange.max > m_uniforms.m_colorBySpeedVelocityRange.min)
-				{
-					const float speedFactor = bx::clamp(
-						(particleSpeed - m_uniforms.m_colorBySpeedVelocityRange.min) / 
-						(m_uniforms.m_colorBySpeedVelocityRange.max - m_uniforms.m_colorBySpeedVelocityRange.min), 
-						0.0f, 1.0f
-					);
-					
-					const math::color speedColor = m_uniforms.m_colorBySpeedGradient.sample(speedFactor);
-					
-					// Blend the speed color with the original color (multiply blend)
-					sampledColor.value *= speedColor.value;
-				}
-
-				// Sample blend and scale from gradients based on particle life
-				float blend = bx::lerp(particle.blendStart, particle.blendEnd, particle.life);
-				// Use average scale for uniform particle sizing
-				const float avgSystemScale = (m_uniforms.m_scale.x + m_uniforms.m_scale.y + m_uniforms.m_scale.z) / 3.0f;
-				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, particle.life) * avgSystemScale;
-				
-				// Apply size by speed if enabled
-				if (m_uniforms.m_sizeBySpeedVelocityRange.max > m_uniforms.m_sizeBySpeedVelocityRange.min &&
-					(m_uniforms.m_sizeBySpeedRange.min != m_uniforms.m_sizeBySpeedRange.max))
-				{
-					const float speedFactor = bx::clamp(
-						(particleSpeed - m_uniforms.m_sizeBySpeedVelocityRange.min) / 
-						(m_uniforms.m_sizeBySpeedVelocityRange.max - m_uniforms.m_sizeBySpeedVelocityRange.min), 
-						0.0f, 1.0f
-					);
-					
-					const float sizeMultiplier = bx::lerp(m_uniforms.m_sizeBySpeedRange.min, m_uniforms.m_sizeBySpeedRange.max, speedFactor);
-					scale *= sizeMultiplier;
-				}
-
-				uint32_t abgr = sampledColor;
+				// Use cached properties (calculated in update)
+				const uint32_t abgr = particle.cachedColor;
+				const float blend = particle.cachedBlend;
+				const float scale = particle.cachedScale;
 
 				const bx::Vec3 udir = { _mtxView[0]*scale, _mtxView[4]*scale, _mtxView[8]*scale };
 				const bx::Vec3 vdir = { _mtxView[1]*scale, _mtxView[5]*scale, _mtxView[9]*scale };
