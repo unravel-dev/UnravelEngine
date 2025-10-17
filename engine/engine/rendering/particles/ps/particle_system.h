@@ -11,6 +11,9 @@
 #include <bx/easing.h>
 #include <bx/rng.h>
 #include <bgfx/bgfx.h>
+#include <math/gradient.h>
+#include <math/math.h>
+#include <core/base/basetypes.hpp>
 
 struct EmitterHandle { uint16_t idx; };
 
@@ -49,37 +52,31 @@ struct EmitterUniforms
 {
 	void reset();
 
-	float m_position[3];
-	float m_angle[3];
-	
-	// Previous position for motion interpolation (set internally)
-	float m_prevPosition[3];
+	math::vec3 m_position;
+	math::vec3 m_angle;
+	math::vec3 m_scale; // 3D scale for the entire particle system (x, y, z)
 
-	float m_blendStart[2];
-	float m_blendEnd[2];
-	float m_velocityStart[2];
-	float m_velocityEnd[2];
-	float m_scaleStart[2];
-	float m_scaleEnd[2];
+	// Previous position for motion interpolation (set internally)
+	math::vec3 m_prevPosition;
+
+	math::gradient<frange_t> m_velocityGradient; // Velocity gradient over particle lifetime
+	math::gradient<frange_t> m_blendGradient;    // Blend/opacity gradient over particle lifetime
+	math::gradient<frange_t> m_scaleGradient;    // Scale gradient over particle lifetime
 	float m_lifetime;
 	float m_gravityScale;
 	float m_particlesPerSecond; // Emission rate in particles per second
 	float m_temporalMotion; // Temporal motion interpolation factor (0.0 = no interpolation, 1.0 = full interpolation)
 	float m_velocityDamping; // Velocity damping factor (0.0 = no damping, 1.0 = full damping)
-	float m_forceOverLifetime[3]; // Additional force applied over particle lifetime (x, y, z)
-	float m_sizeBySpeedRange[2]; // Size multiplier range [min_multiplier, max_multiplier]
-	float m_sizeBySpeedVelocityRange[2]; // Velocity range for size mapping [min_speed, max_speed]
-	uint32_t m_colorBySpeedColors[2]; // Color gradient [slow_color, fast_color]
-	float m_colorBySpeedVelocityRange[2]; // Velocity range for color mapping [min_speed, max_speed]
-	float m_scale[3]; // 3D scale for the entire particle system (x, y, z)
+	math::vec3 m_forceOverLifetime; // Additional force applied over particle lifetime
+	frange_t m_sizeBySpeedRange; // Size multiplier range [min_multiplier, max_multiplier]
+	frange_t m_sizeBySpeedVelocityRange; // Velocity range for size mapping [min_speed, max_speed]
+	math::gradient<math::color> m_colorBySpeedGradient; // Color gradient based on speed
+	frange_t m_colorBySpeedVelocityRange; // Velocity range for color mapping [min_speed, max_speed]
 
-	uint32_t m_rgba[5];
+	math::gradient<math::color> m_colorGradient; // Color gradient over particle lifetime
 	float m_emissionLifetime; // Duration of one emission cycle
 
-	bx::Easing::Enum m_easePos;
-	bx::Easing::Enum m_easeRgba;
-	bx::Easing::Enum m_easeBlend;
-	bx::Easing::Enum m_easeScale;
+	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 
 	bgfx::TextureHandle m_texture;
 };

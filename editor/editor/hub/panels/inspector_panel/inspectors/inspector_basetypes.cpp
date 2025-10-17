@@ -16,6 +16,7 @@ auto inspect_range_scalar(rtti::context& ctx,
 
     T min{};
     T max{};
+    float step = 0.01f;
 
     T* min_ptr{};
     T* max_ptr{};
@@ -33,6 +34,13 @@ auto inspect_range_scalar(rtti::context& ctx,
         max = max_var.cast<T>();
         max_ptr = &max;
     }
+
+    
+    auto step_var = entt::get_attribute(custom, "step");
+    if(step_var && step_var.try_cast<float>())
+    {
+        step = step_var.cast<float>();
+    }
     
     const auto formatted0 = fmt::format("{}{}", fmt0, ImGui::GetDataPrintFormat<T>());
     const auto formatted1 = fmt::format("{}{}", fmt1, ImGui::GetDataPrintFormat<T>());
@@ -46,7 +54,7 @@ auto inspect_range_scalar(rtti::context& ctx,
                                                    ImGui::GetDataType<T>(),
                                                    &data.min,
                                                    2,
-                                                   0.5f,
+                                                   step,
                                                    min_ptr,
                                                    max_ptr,
                                                    formats.data());

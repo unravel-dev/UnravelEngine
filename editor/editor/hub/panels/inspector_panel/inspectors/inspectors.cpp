@@ -1238,6 +1238,7 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                 if(ImGui::TreeNodeEx(kvp.first.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
                     ImGui::TreePush(kvp.first.c_str());
+                    ImGui::PushID(kvp.first.c_str());
 
                     for(auto& prop : props)
                     {
@@ -1246,6 +1247,7 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                         ImGui::PopID();
                         i++;
                     }
+                    ImGui::PopID();
                     ImGui::TreePop();
 
                     ImGui::TreePop();

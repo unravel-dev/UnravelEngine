@@ -183,7 +183,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                           armature_transform_comp.set_scale_local(transform.get_scale());
 
                                           auto position_local = armature_transform_comp.get_position_local();
-                                          auto result_positon_local = math::lerp(position_local,
+                                          auto result_positon_local = math::mix(position_local,
                                                                                  transform.get_position(),
                                                                                  motion_result.bone_position_weights);
                                           armature_transform_comp.set_position_local(result_positon_local);
@@ -197,7 +197,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                           delta_translation_logical *= scale_global;
 
                                           // Blend translation as needed:
-                                          auto result_move_local = math::lerp(math::zero<math::vec3>(),
+                                          auto result_move_local = math::mix(math::zero<math::vec3>(),
                                                                               delta_translation_logical,
                                                                               motion_result.root_position_weights);
                                           // APPLOG_INFO("position_weights {}", motion_result.position_weights);

@@ -10,6 +10,7 @@
 #include <base/basetypes.hpp>
 #include <array>
 
+
 namespace unravel
 {
 
@@ -114,10 +115,8 @@ public:
     void set_size_by_speed_velocity_range(const frange_t& velocity_range);
     auto get_size_by_speed_velocity_range() const -> const frange_t&;
 
-    void set_color_by_speed_slow_color(const math::color& color);
-    auto get_color_by_speed_slow_color() const -> math::color;
-    void set_color_by_speed_fast_color(const math::color& color);
-    auto get_color_by_speed_fast_color() const -> math::color;
+    void set_color_by_speed_gradient(const math::gradient<math::color>& gradient);
+    auto get_color_by_speed_gradient() const -> const math::gradient<math::color>&;
 
     void set_color_by_speed_velocity_range(const frange_t& velocity_range);
     auto get_color_by_speed_velocity_range() const -> const frange_t&;
@@ -127,45 +126,24 @@ public:
     auto get_lifetime() const -> std::chrono::duration<float>;
 
     // Velocity properties
-    void set_velocity_start_range(const frange_t& velocity_start);
-    auto get_velocity_start_range() const -> const frange_t&;
-
-    void set_velocity_end_range(const frange_t& velocity_end);
-    auto get_velocity_end_range() const -> const frange_t&;
+    void set_velocity_gradient(const math::gradient<frange_t>& gradient);
+    auto get_velocity_gradient() const -> const math::gradient<frange_t>&;
 
     // Scale properties
-    void set_scale_start_range(const frange_t& scale_start);
-    auto get_scale_start_range() const -> const frange_t&;
-
-    void set_scale_end_range(const frange_t& scale_end);
-    auto get_scale_end_range() const -> const frange_t&;
+    void set_scale_gradient(const math::gradient<frange_t>& gradient);
+    auto get_scale_gradient() const -> const math::gradient<frange_t>&;
 
     // Blend properties
-    void set_blend_start_range(const frange_t& blend_start);
-    auto get_blend_start_range() const -> const frange_t&;
-
-    void set_blend_end_range(const frange_t& blend_end);
-    auto get_blend_end_range() const -> const frange_t&;
+    void set_blend_gradient(const math::gradient<frange_t>& gradient);
+    auto get_blend_gradient() const -> const math::gradient<frange_t>&;
 
     // Color properties
-    void set_rgba_colors(const std::array<math::color, 5>& colors);
-    auto get_rgba_colors() const -> const std::array<math::color, 5>&;
-    
-    void set_rgba_color(int index, const math::color& color);
-    auto get_rgba_color(int index) const -> const math::color&;
+    void set_color_gradient(const math::gradient<math::color>& gradient);
+    auto get_color_gradient() const -> const math::gradient<math::color>&;
 
-    // Easing functions
+    // Easing functions (only position easing remains - others handled by gradients)
     void set_position_easing(bx::Easing::Enum easing);
     auto get_position_easing() const -> bx::Easing::Enum;
-
-    void set_rgba_easing(bx::Easing::Enum easing);
-    auto get_rgba_easing() const -> bx::Easing::Enum;
-
-    void set_blend_easing(bx::Easing::Enum easing);
-    auto get_blend_easing() const -> bx::Easing::Enum;
-
-    void set_scale_easing(bx::Easing::Enum easing);
-    auto get_scale_easing() const -> bx::Easing::Enum;
 
 
     auto get_num_particles() const -> uint32_t;
@@ -224,30 +202,11 @@ private:
     /// Emitter uniforms containing all particle properties
     EmitterUniforms uniforms_;
     
-    /// Range properties for easier manipulation
-    frange_t velocity_start_range_{0.0f, 1.0f};
-    frange_t velocity_end_range_{2.0f, 3.0f};
-    frange_t scale_start_range_{0.1f, 0.2f};
-    frange_t scale_end_range_{0.3f, 0.4f};
-    frange_t blend_start_range_{0.8f, 1.0f};
-    frange_t blend_end_range_{0.0f, 0.2f};
+    // Range properties removed - now handled by gradients in uniforms
     
     /// Speed-based effect properties
-    frange_t size_by_speed_range_{1.0f, 1.0f};
-    frange_t size_by_speed_velocity_range_{0.0f, 10.0f};
-    math::color color_by_speed_slow_color_{0xffffffff};
-    math::color color_by_speed_fast_color_{0xffffffff};
-    frange_t color_by_speed_velocity_range_{0.0f, 10.0f};
+    // Removed: color_by_speed_slow_color_ and color_by_speed_fast_color_ - now handled by gradient in uniforms
     
-    /// Color array for easier manipulation
-    std::array<math::color, 5> rgba_colors_{
-        math::color(0x00ffffff),  // RGBA0
-        math::color(0xffffffff),  // RGBA1
-        math::color(0xffffffff),  // RGBA2
-        math::color(0xffffffff),  // RGBA3
-        math::color(0x00ffffff)   // RGBA4
-    };
-
     asset_handle<gfx::texture> texture_;
 };
 

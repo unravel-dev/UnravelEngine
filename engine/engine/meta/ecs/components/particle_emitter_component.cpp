@@ -1,4 +1,5 @@
 #include "particle_emitter_component.hpp"
+#include "serialization/serialization.h"
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -281,21 +282,15 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Emitter Direction"},
             entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position."},
         })
-        .data<&particle_emitter_component::set_velocity_start_range, &particle_emitter_component::get_velocity_start_range>("velocity_start_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "velocity_start_range"},
-            entt::attribute{"pretty_name", "Velocity Start Range"},
-            entt::attribute{"tooltip", "Minimum and maximum initial speed when particles are spawned. Higher values make particles move faster from their spawn position."},
-            entt::attribute{"group", "Velocity over lifetime"},
+         .data<&particle_emitter_component::set_velocity_gradient, &particle_emitter_component::get_velocity_gradient>("velocity_gradient"_hs)
+         .custom<entt::attributes>(entt::attributes{
+             entt::attribute{"name", "velocity_gradient"},
+             entt::attribute{"pretty_name", "Velocity Gradient"},
+             entt::attribute{"tooltip", "Velocity range gradient over particle lifetime. Controls how particle speed changes from spawn to death."},
+             entt::attribute{"group", "Velocity over lifetime"},
+             entt::attribute{"step", 0.05f},
 
-        })
-        .data<&particle_emitter_component::set_velocity_end_range, &particle_emitter_component::get_velocity_end_range>("velocity_end_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "velocity_end_range"},
-            entt::attribute{"pretty_name", "Velocity End Range"},
-            entt::attribute{"tooltip", "Minimum and maximum target speed particles move toward over their lifetime. Creates acceleration/deceleration effects."},
-            entt::attribute{"group", "Velocity over lifetime"},
-        })
+         })
         .data<&particle_emitter_component::set_velocity_damping, &particle_emitter_component::get_velocity_damping>("velocity_damping"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_damping"},
@@ -324,30 +319,14 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Force over lifetime"},
 
         })
-        .data<&particle_emitter_component::set_scale_start_range, &particle_emitter_component::get_scale_start_range>("scale_start_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "scale_start_range"},
-            entt::attribute{"pretty_name", "Scale Start Range"},
-            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles spawn. 1.0 = normal size, 0.5 = half size, 2.0 = double size."},
-            entt::attribute{"group", "Size over lifetime"},
+         .data<&particle_emitter_component::set_scale_gradient, &particle_emitter_component::get_scale_gradient>("scale_gradient"_hs)
+         .custom<entt::attributes>(entt::attributes{
+             entt::attribute{"name", "scale_gradient"},
+             entt::attribute{"pretty_name", "Scale Gradient"},
+             entt::attribute{"tooltip", "Scale range gradient over particle lifetime. Controls how particle size changes from spawn to death."},
+             entt::attribute{"group", "Size over lifetime"},
 
-        })
-        .data<&particle_emitter_component::set_scale_end_range, &particle_emitter_component::get_scale_end_range>("scale_end_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "scale_end_range"},
-            entt::attribute{"pretty_name", "Scale End Range"},
-            entt::attribute{"tooltip", "Minimum and maximum size multiplier when particles die. Creates growing/shrinking effects as particles animate."},
-            entt::attribute{"group", "Size over lifetime"},
-
-        })
-        .data<&particle_emitter_component::set_scale_easing, &particle_emitter_component::get_scale_easing>("scale_easing"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "scale_easing"},
-            entt::attribute{"pretty_name", "Scale Easing"},
-            entt::attribute{"tooltip", "Curve controlling how particle size changes over lifetime. Affects growth/shrink timing and smoothness."},
-            entt::attribute{"group", "Size over lifetime"},
-
-        })
+         })
         .data<&particle_emitter_component::set_size_by_speed_range, &particle_emitter_component::get_size_by_speed_range>("size_by_speed_range"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size_by_speed_range"},
@@ -368,58 +347,27 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Size by Speed"},
 
         })
-        .data<&particle_emitter_component::set_blend_start_range, &particle_emitter_component::get_blend_start_range>("blend_start_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_start_range"},
-            entt::attribute{"pretty_name", "Blend Start Range"},
-            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles spawn. 0.0 = fully transparent, 1.0 = fully opaque."},
-            entt::attribute{"group", "Opacity over lifetime"},
+         .data<&particle_emitter_component::set_blend_gradient, &particle_emitter_component::get_blend_gradient>("blend_gradient"_hs)
+         .custom<entt::attributes>(entt::attributes{
+             entt::attribute{"name", "blend_gradient"},
+             entt::attribute{"pretty_name", "Blend Gradient"},
+             entt::attribute{"tooltip", "Opacity range gradient over particle lifetime. Controls how particle transparency changes from spawn to death."},
+             entt::attribute{"group", "Opacity over lifetime"},
 
-        })
-        .data<&particle_emitter_component::set_blend_end_range, &particle_emitter_component::get_blend_end_range>("blend_end_range"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_end_range"},
-            entt::attribute{"pretty_name", "Blend End Range"},
-            entt::attribute{"tooltip", "Minimum and maximum opacity/transparency when particles die. Creates fade-in/fade-out effects over particle lifetime."},
-            entt::attribute{"group", "Opacity over lifetime"},
+         })
+         .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
+         .custom<entt::attributes>(entt::attributes{
+             entt::attribute{"name", "color_gradient"},
+             entt::attribute{"pretty_name", "Color Gradient"},
+             entt::attribute{"tooltip", "Color gradient defining particle color over lifetime. Colors are interpolated smoothly based on gradient keyframes."},
+             entt::attribute{"group", "Color over lifetime"},
 
-        })
-        .data<&particle_emitter_component::set_blend_easing, &particle_emitter_component::get_blend_easing>("blend_easing"_hs)
+         })
+        .data<&particle_emitter_component::set_color_by_speed_gradient, &particle_emitter_component::get_color_by_speed_gradient>("color_by_speed_gradient"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_easing"},
-            entt::attribute{"pretty_name", "Blend Easing"},
-            entt::attribute{"tooltip", "Curve controlling how particle opacity changes over lifetime. Affects fade-in/fade-out timing and smoothness."},
-            entt::attribute{"group", "Opacity over lifetime"},
-
-        })
-        .data<&particle_emitter_component::set_rgba_colors, &particle_emitter_component::get_rgba_colors>("rgba_colors"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "rgba_colors"},
-            entt::attribute{"pretty_name", "RGBA Colors"},
-            entt::attribute{"tooltip", "5-point color gradient defining particle color over lifetime. Colors are interpolated smoothly from spawn (color 0) to death (color 4)."},
-            entt::attribute{"group", "Color over lifetime"},
-
-        })
-        .data<&particle_emitter_component::set_rgba_easing, &particle_emitter_component::get_rgba_easing>("rgba_easing"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "rgba_easing"},
-            entt::attribute{"pretty_name", "RGBA Easing"},
-            entt::attribute{"tooltip", "Curve controlling how particle colors change over lifetime. Affects the speed of color transitions through the 5-color gradient."},
-            entt::attribute{"group", "Color over lifetime"},
-        })
-        .data<&particle_emitter_component::set_color_by_speed_slow_color, &particle_emitter_component::get_color_by_speed_slow_color>("color_by_speed_slow_color"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "color_by_speed_slow_color"},
-            entt::attribute{"pretty_name", "Color by Speed (Slow)"},
-            entt::attribute{"tooltip", "Color for slow-moving particles. Combined with fast color to create speed-based color gradient."},
-            entt::attribute{"group", "Color by Speed"},
-
-        })
-        .data<&particle_emitter_component::set_color_by_speed_fast_color, &particle_emitter_component::get_color_by_speed_fast_color>("color_by_speed_fast_color"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "color_by_speed_fast_color"},
-            entt::attribute{"pretty_name", "Color by Speed (Fast)"},
-            entt::attribute{"tooltip", "Color for fast-moving particles. Combined with slow color to create speed-based color gradient."},
+            entt::attribute{"name", "color_by_speed_gradient"},
+            entt::attribute{"pretty_name", "Color by Speed Gradient"},
+            entt::attribute{"tooltip", "Color gradient applied based on particle speed. Slow particles use colors from the start of the gradient, fast particles use colors from the end."},
             entt::attribute{"group", "Color by Speed"},
 
         })
@@ -458,27 +406,20 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("force_over_lifetime", obj.get_force_over_lifetime()));
     try_save(ar, ser20::make_nvp("size_by_speed_range", obj.get_size_by_speed_range()));
     try_save(ar, ser20::make_nvp("size_by_speed_velocity_range", obj.get_size_by_speed_velocity_range()));
-    try_save(ar, ser20::make_nvp("color_by_speed_slow_color", obj.get_color_by_speed_slow_color()));
-    try_save(ar, ser20::make_nvp("color_by_speed_fast_color", obj.get_color_by_speed_fast_color()));
+    try_save(ar, ser20::make_nvp("color_by_speed_gradient", obj.get_color_by_speed_gradient()));
     try_save(ar, ser20::make_nvp("color_by_speed_velocity_range", obj.get_color_by_speed_velocity_range()));
     
-    // Range properties
+    // Gradient properties
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
-    try_save(ar, ser20::make_nvp("velocity_start_range", obj.get_velocity_start_range()));
-    try_save(ar, ser20::make_nvp("velocity_end_range", obj.get_velocity_end_range()));
-    try_save(ar, ser20::make_nvp("scale_start_range", obj.get_scale_start_range()));
-    try_save(ar, ser20::make_nvp("scale_end_range", obj.get_scale_end_range()));
-    try_save(ar, ser20::make_nvp("blend_start_range", obj.get_blend_start_range()));
-    try_save(ar, ser20::make_nvp("blend_end_range", obj.get_blend_end_range()));
+    try_save(ar, ser20::make_nvp("velocity_gradient", obj.get_velocity_gradient()));
+    try_save(ar, ser20::make_nvp("scale_gradient", obj.get_scale_gradient()));
+    try_save(ar, ser20::make_nvp("blend_gradient", obj.get_blend_gradient()));
     
     // Colors
-    try_save(ar, ser20::make_nvp("rgba_colors", obj.get_rgba_colors()));
-    
-    // Easing functions
+    try_save(ar, ser20::make_nvp("color_gradient", obj.get_color_gradient()));
+
+    // Easing functions (only position easing remains)
     try_save(ar, ser20::make_nvp("position_easing", obj.get_position_easing()));
-    try_save(ar, ser20::make_nvp("rgba_easing", obj.get_rgba_easing()));
-    try_save(ar, ser20::make_nvp("blend_easing", obj.get_blend_easing()));
-    try_save(ar, ser20::make_nvp("scale_easing", obj.get_scale_easing()));
     
     // Texture handle
     try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
@@ -559,15 +500,26 @@ LOAD(particle_emitter_component)
         obj.set_size_by_speed_velocity_range(size_by_speed_velocity_range);
     }
     
-    math::color color_by_speed_slow_color{0xffffffff};
-    if(try_load(ar, ser20::make_nvp("color_by_speed_slow_color", color_by_speed_slow_color)))
+    math::gradient<math::color> color_by_speed_gradient;
+    if(try_load(ar, ser20::make_nvp("color_by_speed_gradient", color_by_speed_gradient)))
     {
-        obj.set_color_by_speed_slow_color(color_by_speed_slow_color);
+        obj.set_color_by_speed_gradient(color_by_speed_gradient);
     }
-    math::color color_by_speed_fast_color{0xffffffff};
-    if(try_load(ar, ser20::make_nvp("color_by_speed_fast_color", color_by_speed_fast_color)))
+    else
     {
-        obj.set_color_by_speed_fast_color(color_by_speed_fast_color);
+        // Legacy loading: try to load old slow/fast colors and convert to gradient
+        math::color color_by_speed_slow_color{0xffffffff};
+        math::color color_by_speed_fast_color{0xffffffff};
+        bool has_slow = try_load(ar, ser20::make_nvp("color_by_speed_slow_color", color_by_speed_slow_color));
+        bool has_fast = try_load(ar, ser20::make_nvp("color_by_speed_fast_color", color_by_speed_fast_color));
+        
+        if(has_slow || has_fast)
+        {
+            math::gradient<math::color> legacy_gradient;
+            legacy_gradient.add_point(color_by_speed_slow_color, 0.0f);
+            legacy_gradient.add_point(color_by_speed_fast_color, 1.0f);
+            obj.set_color_by_speed_gradient(legacy_gradient);
+        }
     }
     
     frange_t color_by_speed_velocity_range{0.0f, 10.0f};
@@ -576,81 +528,50 @@ LOAD(particle_emitter_component)
         obj.set_color_by_speed_velocity_range(color_by_speed_velocity_range);
     }
     
-    // Range properties
+    // Gradient properties
     std::chrono::duration<float> lifetime{1.0f};
     if(try_load(ar, ser20::make_nvp("lifetime", lifetime)))
     {
         obj.set_lifetime(lifetime);
     }
     
-    frange_t velocity_start_range{0.0f, 1.0f};
-    if(try_load(ar, ser20::make_nvp("velocity_start_range", velocity_start_range)))
+    math::gradient<frange_t> velocity_gradient;
+    if(try_load(ar, ser20::make_nvp("velocity_gradient", velocity_gradient)))
     {
-        obj.set_velocity_start_range(velocity_start_range);
+        obj.set_velocity_gradient(velocity_gradient);
     }
     
-    frange_t velocity_end_range{2.0f, 3.0f};
-    if(try_load(ar, ser20::make_nvp("velocity_end_range", velocity_end_range)))
+    math::gradient<frange_t> scale_gradient;
+    if(try_load(ar, ser20::make_nvp("scale_gradient", scale_gradient)))
     {
-        obj.set_velocity_end_range(velocity_end_range);
+        obj.set_scale_gradient(scale_gradient);
     }
     
-    frange_t scale_start_range{0.1f, 0.2f};
-    if(try_load(ar, ser20::make_nvp("scale_start_range", scale_start_range)))
+    math::gradient<frange_t> blend_gradient;
+    if(try_load(ar, ser20::make_nvp("blend_gradient", blend_gradient)))
     {
-        obj.set_scale_start_range(scale_start_range);
-    }
-    
-    frange_t scale_end_range{0.3f, 0.4f};
-    if(try_load(ar, ser20::make_nvp("scale_end_range", scale_end_range)))
-    {
-        obj.set_scale_end_range(scale_end_range);
-    }
-    
-    frange_t blend_start_range{0.8f, 1.0f};
-    if(try_load(ar, ser20::make_nvp("blend_start_range", blend_start_range)))
-    {
-        obj.set_blend_start_range(blend_start_range);
-    }
-    
-    frange_t blend_end_range{0.0f, 0.2f};
-    if(try_load(ar, ser20::make_nvp("blend_end_range", blend_end_range)))
-    {
-        obj.set_blend_end_range(blend_end_range);
+        obj.set_blend_gradient(blend_gradient);
     }
     
     // Colors
-    std::array<math::color, 5> rgba_colors{
-        math::color(0x00ffffff),
-        math::color(0xffffffff),
-        math::color(0xffffffff),
-        math::color(0xffffffff),
-        math::color(0x00ffffff)
-    };
-    if(try_load(ar, ser20::make_nvp("rgba_colors", rgba_colors)))
+    // Try to load gradient first (new format)
+    math::gradient<math::color> color_gradient;
+    if(try_load(ar, ser20::make_nvp("color_gradient", color_gradient)))
     {
-        obj.set_rgba_colors(rgba_colors);
+        obj.set_color_gradient(color_gradient);
     }
     
-    // Easing functions
-    bx::Easing::Enum position_easing{}, rgba_easing{}, blend_easing{}, scale_easing{};
-    
+    // Easing functions (only position easing remains)
+    bx::Easing::Enum position_easing{};
     if(try_load(ar, ser20::make_nvp("position_easing", position_easing)))
     {
         obj.set_position_easing(position_easing);
     }
-    if(try_load(ar, ser20::make_nvp("rgba_easing", rgba_easing)))
-    {
-        obj.set_rgba_easing(rgba_easing);
-    }
-    if(try_load(ar, ser20::make_nvp("blend_easing", blend_easing)))
-    {
-        obj.set_blend_easing(blend_easing);
-    }
-    if(try_load(ar, ser20::make_nvp("scale_easing", scale_easing)))
-    {
-        obj.set_scale_easing(scale_easing);
-    }
+    
+    // Load old easing values for backward compatibility but ignore them
+    bx::Easing::Enum blend_easing{}, scale_easing{};
+    try_load(ar, ser20::make_nvp("blend_easing", blend_easing));
+    try_load(ar, ser20::make_nvp("scale_easing", scale_easing));
     
     // Texture handle
     asset_handle<gfx::texture> texture;

@@ -51,39 +51,33 @@ bgfx::VertexLayout PosColorTexCoord0Vertex::ms_layout;
 
 void EmitterUniforms::reset()
 {
-	m_position[0] = 0.0f;
-	m_position[1] = 0.0f;
-	m_position[2] = 0.0f;
-
-	m_angle[0] = 0.0f;
-	m_angle[1] = 0.0f;
-	m_angle[2] = 0.0f;
-
-	m_prevPosition[0] = 0.0f;
-	m_prevPosition[1] = 0.0f;
-	m_prevPosition[2] = 0.0f;
+	m_position = math::vec3(0.0f, 0.0f, 0.0f);
+	m_angle = math::vec3(0.0f, 0.0f, 0.0f);
+	m_prevPosition = math::vec3(0.0f, 0.0f, 0.0f);
 
 
-	m_velocityStart[0] = 0.0f;
-	m_velocityStart[1] = 1.0f;
-	m_velocityEnd[0]   = 2.0f;
-	m_velocityEnd[1]   = 3.0f;
+	// Initialize velocity gradient with default 2-point gradient (start -> end)
+	m_velocityGradient = math::gradient<frange_t>();
+	m_velocityGradient.add_point(frange_t(0.0f, 1.0f), 0.0f);  // Start velocity range
+	m_velocityGradient.add_point(frange_t(2.0f, 3.0f), 1.0f);  // End velocity range
 
-	m_rgba[0] = 0x00ffffff;
-	m_rgba[1] = UINT32_MAX;
-	m_rgba[2] = UINT32_MAX;
-	m_rgba[3] = UINT32_MAX;
-	m_rgba[4] = 0x00ffffff;
+	// Initialize color gradient with default 5-point gradient (transparent -> white -> white -> white -> transparent)
+	m_colorGradient = math::gradient<math::color>();
+	m_colorGradient.add_point(math::color(0x00ffffff), 0.0f);   // Transparent white at start
+	m_colorGradient.add_point(math::color(0xffffffff), 0.25f);  // Opaque white
+	m_colorGradient.add_point(math::color(0xffffffff), 0.5f);   // Opaque white
+	m_colorGradient.add_point(math::color(0xffffffff), 0.75f);  // Opaque white
+	m_colorGradient.add_point(math::color(0x00ffffff), 1.0f);   // Transparent white at end
 
-	m_blendStart[0] = 0.8f;
-	m_blendStart[1] = 1.0f;
-	m_blendEnd[0]   = 0.0f;
-	m_blendEnd[1]   = 0.2f;
+	// Initialize blend gradient with default 2-point gradient (start -> end)
+	m_blendGradient = math::gradient<frange_t>();
+	m_blendGradient.add_point(frange_t(0.8f, 1.0f), 0.0f);  // Start blend range
+	m_blendGradient.add_point(frange_t(0.0f, 0.2f), 1.0f);  // End blend range
 
-	m_scaleStart[0] = 0.1f;
-	m_scaleStart[1] = 0.2f;
-	m_scaleEnd[0]   = 0.3f;
-	m_scaleEnd[1]   = 0.4f;
+	// Initialize scale gradient with default 2-point gradient (start -> end)
+	m_scaleGradient = math::gradient<frange_t>();
+	m_scaleGradient.add_point(frange_t(0.1f, 0.2f), 0.0f);  // Start scale range
+	m_scaleGradient.add_point(frange_t(0.3f, 0.4f), 1.0f);  // End scale range
 
 	m_lifetime = 1.0f;
 
@@ -91,27 +85,18 @@ void EmitterUniforms::reset()
 	m_particlesPerSecond = 50.0f; // Default: 50 particles per second
 	m_temporalMotion = 1.0f; // Default: full temporal interpolation
 	m_velocityDamping = 0.0f; // Default: no damping
-	m_forceOverLifetime[0] = 0.0f; // Default: no additional force
-	m_forceOverLifetime[1] = 0.0f;
-	m_forceOverLifetime[2] = 0.0f;
-	m_sizeBySpeedRange[0] = 1.0f; // Default: no size change
-	m_sizeBySpeedRange[1] = 1.0f;
-	m_sizeBySpeedVelocityRange[0] = 0.0f; // Default velocity range
-	m_sizeBySpeedVelocityRange[1] = 10.0f;
-	m_colorBySpeedColors[0] = 0xffffffff; // Default: white to white (no color change)
-	m_colorBySpeedColors[1] = 0xffffffff;
-	m_colorBySpeedVelocityRange[0] = 0.0f; // Default velocity range
-	m_colorBySpeedVelocityRange[1] = 10.0f;
-	m_scale[0] = 1.0f; // Default: no scaling
-	m_scale[1] = 1.0f;
-	m_scale[2] = 1.0f;
+	m_forceOverLifetime = math::vec3(0.0f, 0.0f, 0.0f); // Default: no additional force
+	m_sizeBySpeedRange = frange_t(1.0f, 1.0f); // Default: no size change
+	m_sizeBySpeedVelocityRange = frange_t(0.0f, 10.0f); // Default velocity range
+	m_colorBySpeedGradient = math::gradient<math::color>();
+	m_colorBySpeedGradient.add_point(math::color(0xffffffff), 0.0f); // Slow speed: white
+	m_colorBySpeedGradient.add_point(math::color(0xffffffff), 1.0f); // Fast speed: white (no color change by default)
+	m_colorBySpeedVelocityRange = frange_t(0.0f, 10.0f); // Default velocity range
+	m_scale = math::vec3(1.0f, 1.0f, 1.0f); // Default: no scaling
 
 	m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
 
-	m_easePos   = bx::Easing::Linear;
-	m_easeRgba  = bx::Easing::Linear;
-	m_easeBlend = bx::Easing::Linear;
-	m_easeScale = bx::Easing::Linear;
+	m_easePos = bx::Easing::Linear; // Only position easing remains
 
 	m_texture = BGFX_INVALID_HANDLE;
 }
@@ -127,7 +112,7 @@ namespace ps
 		float scaleStart;
 		float scaleEnd;
 
-		uint32_t rgba[5];
+		// Color is now sampled from gradient during rendering
 
 		float life;
 		float lifeSpan;
@@ -138,28 +123,6 @@ namespace ps
 		float    dist;
 		uint32_t idx;
 	};
-
-	inline uint32_t toAbgr(const float* _rgba)
-	{
-		return 0
-			| (uint8_t(_rgba[0]*255.0f)<< 0)
-			| (uint8_t(_rgba[1]*255.0f)<< 8)
-			| (uint8_t(_rgba[2]*255.0f)<<16)
-			| (uint8_t(_rgba[3]*255.0f)<<24)
-			;
-	}
-
-	inline uint32_t toAbgr(float _rr, float _gg, float _bb, float _aa)
-	{
-		return 0
-			| (uint8_t(_rr*255.0f)<< 0)
-			| (uint8_t(_gg*255.0f)<< 8)
-			| (uint8_t(_bb*255.0f)<<16)
-			| (uint8_t(_aa*255.0f)<<24)
-			;
-	}
-
-// Sprite atlas system removed - using direct texture handles per emitter
 
 	struct Emitter
 	{
@@ -193,30 +156,6 @@ namespace ps
 			return bx::length(velocityPerSecond);
 		}
 		
-		// Helper function to interpolate between two colors
-		// Colors are in RGBA format: R=byte0, G=byte1, B=byte2, A=byte3 (same as math::color)
-		uint32_t lerpColor(uint32_t color1, uint32_t color2, float t) const
-		{
-			const float r1 = float(color1 & 0xff) / 255.0f;
-			const float g1 = float((color1 >> 8) & 0xff) / 255.0f;
-			const float b1 = float((color1 >> 16) & 0xff) / 255.0f;
-			const float a1 = float((color1 >> 24) & 0xff) / 255.0f;
-			
-			const float r2 = float(color2 & 0xff) / 255.0f;
-			const float g2 = float((color2 >> 8) & 0xff) / 255.0f;
-			const float b2 = float((color2 >> 16) & 0xff) / 255.0f;
-			const float a2 = float((color2 >> 24) & 0xff) / 255.0f;
-			
-			const float r = bx::lerp(r1, r2, t);
-			const float g = bx::lerp(g1, g2, t);
-			const float b = bx::lerp(b1, b2, t);
-			const float a = bx::lerp(a1, a2, t);
-			
-			return uint32_t(r * 255.0f) |
-				   (uint32_t(g * 255.0f) << 8) |
-				   (uint32_t(b * 255.0f) << 16) |
-				   (uint32_t(a * 255.0f) << 24);
-		}
 
 		void update(float _dt)
 		{
@@ -263,13 +202,20 @@ namespace ps
 			// This gives us conservative bounds for culling before any particles are rendered
 			
 			// Start with emitter position
-			const bx::Vec3 emitterPos = { m_uniforms.m_position[0], m_uniforms.m_position[1], m_uniforms.m_position[2] };
+			const bx::Vec3 emitterPos = { m_uniforms.m_position.x, m_uniforms.m_position.y, m_uniforms.m_position.z };
 			
 			// Calculate maximum possible particle travel distance
 			const float maxLifeSpan = m_uniforms.m_lifetime;
-			const float maxVelocity = bx::max(m_uniforms.m_velocityEnd[1], m_uniforms.m_velocityStart[1]); // Maximum velocity
-			const float maxScale = m_uniforms.m_scaleEnd[1]; // Maximum scale
-			const bx::Vec3 systemScale = { m_uniforms.m_scale[0], m_uniforms.m_scale[1], m_uniforms.m_scale[2] }; // System-wide scale
+			// Sample maximum velocity from gradient (conservative estimate using end points)
+			const frange_t startVelRange = m_uniforms.m_velocityGradient.sample(0.0f);
+			const frange_t endVelRange = m_uniforms.m_velocityGradient.sample(1.0f);
+			const float maxVelocity = bx::max(bx::max(startVelRange.max, endVelRange.max), bx::max(startVelRange.min, endVelRange.min));
+			
+			// Sample maximum scale from gradient (conservative estimate using end points)
+			const frange_t startScaleRange = m_uniforms.m_scaleGradient.sample(0.0f);
+			const frange_t endScaleRange = m_uniforms.m_scaleGradient.sample(1.0f);
+			const float maxScale = bx::max(bx::max(startScaleRange.max, endScaleRange.max), bx::max(startScaleRange.min, endScaleRange.min));
+			const bx::Vec3 systemScale = { m_uniforms.m_scale.x, m_uniforms.m_scale.y, m_uniforms.m_scale.z }; // System-wide scale
 			
 			// Estimate maximum travel distance based on velocity and gravity (scaled)
 			// This is a conservative estimate - particles could travel this far in any direction
@@ -323,8 +269,8 @@ namespace ps
 			}
 			
 			// Calculate motion delta for temporal emission gap handling
-			const bx::Vec3 currentPos = { m_uniforms.m_position[0], m_uniforms.m_position[1], m_uniforms.m_position[2] };
-			const bx::Vec3 prevPos = { m_uniforms.m_prevPosition[0], m_uniforms.m_prevPosition[1], m_uniforms.m_prevPosition[2] };
+			const bx::Vec3 currentPos = { m_uniforms.m_position.x, m_uniforms.m_position.y, m_uniforms.m_position.z };
+			const bx::Vec3 prevPos = { m_uniforms.m_prevPosition.x, m_uniforms.m_prevPosition.y, m_uniforms.m_prevPosition.z };
 			const bx::Vec3 deltaPos = bx::sub(currentPos, prevPos);
 			const float motionDistance = bx::length(deltaPos);
 
@@ -388,12 +334,16 @@ namespace ps
 						break;
 				}
 
-				const float startVelocity = bx::lerp(m_uniforms.m_velocityStart[0], m_uniforms.m_velocityStart[1], bx::frnd(&m_rng) );
-				const bx::Vec3 systemScale = { m_uniforms.m_scale[0], m_uniforms.m_scale[1], m_uniforms.m_scale[2] };
+				// Sample velocity range from gradient at particle spawn (t=0)
+				const frange_t startVelocityRange = m_uniforms.m_velocityGradient.sample(0.0f);
+				const float startVelocity = bx::lerp(startVelocityRange.min, startVelocityRange.max, bx::frnd(&m_rng));
+				const bx::Vec3 systemScale = { m_uniforms.m_scale.x, m_uniforms.m_scale.y, m_uniforms.m_scale.z };
 				const bx::Vec3 scaledPos = { pos.x * systemScale.x, pos.y * systemScale.y, pos.z * systemScale.z };
 				const bx::Vec3 start = bx::mul(scaledPos, startVelocity);
 
-				const float endVelocity = bx::lerp(m_uniforms.m_velocityEnd[0], m_uniforms.m_velocityEnd[1], bx::frnd(&m_rng) );
+				// Sample velocity range from gradient at particle end (t=1)
+				const frange_t endVelocityRange = m_uniforms.m_velocityGradient.sample(1.0f);
+				const float endVelocity = bx::lerp(endVelocityRange.min, endVelocityRange.max, bx::frnd(&m_rng));
 				const bx::Vec3 scaledDir = { dir.x * systemScale.x, dir.y * systemScale.y, dir.z * systemScale.z };
 				const bx::Vec3 tmp1 = bx::mul(scaledDir, endVelocity);
 				const bx::Vec3 end  = bx::add(tmp1, start);
@@ -405,9 +355,9 @@ namespace ps
 				
 				// Apply force over lifetime (scaled by lifetime and system scale)
 				const bx::Vec3 forceOverLifetime = { 
-					m_uniforms.m_forceOverLifetime[0] * bx::square(particle->lifeSpan) * systemScale.x,
-					m_uniforms.m_forceOverLifetime[1] * bx::square(particle->lifeSpan) * systemScale.y,
-					m_uniforms.m_forceOverLifetime[2] * bx::square(particle->lifeSpan) * systemScale.z
+					m_uniforms.m_forceOverLifetime.x * bx::square(particle->lifeSpan) * systemScale.x,
+					m_uniforms.m_forceOverLifetime.y * bx::square(particle->lifeSpan) * systemScale.y,
+					m_uniforms.m_forceOverLifetime.z * bx::square(particle->lifeSpan) * systemScale.z
 				};
 
 				// Calculate interpolated emitter position for temporal emission gap handling
@@ -417,7 +367,7 @@ namespace ps
 				float particleMtx[16];
 				bx::mtxSRT(particleMtx
 					, 1.0f, 1.0f, 1.0f
-					, m_uniforms.m_angle[0], m_uniforms.m_angle[1], m_uniforms.m_angle[2]
+					, m_uniforms.m_angle.x, m_uniforms.m_angle.y, m_uniforms.m_angle.z
 					, interpolatedEmitterPos.x, interpolatedEmitterPos.y, interpolatedEmitterPos.z
 					);
 
@@ -436,13 +386,19 @@ namespace ps
 				const bx::Vec3 totalForce = bx::add(gravity, forceOverLifetime);
 				particle->end[1] = bx::add(particle->end[0], totalForce);
 
-				bx::memCopy(particle->rgba, m_uniforms.m_rgba, BX_COUNTOF(m_uniforms.m_rgba)*sizeof(uint32_t) );
+				// Color will be sampled from gradient during rendering - no need to copy here
 
-				particle->blendStart = bx::lerp(m_uniforms.m_blendStart[0], m_uniforms.m_blendStart[1], bx::frnd(&m_rng) );
-				particle->blendEnd   = bx::lerp(m_uniforms.m_blendEnd[0],   m_uniforms.m_blendEnd[1],   bx::frnd(&m_rng) );
+				// Sample blend range from gradient at particle spawn (t=0) and end (t=1)
+				const frange_t startBlendRange = m_uniforms.m_blendGradient.sample(0.0f);
+				const frange_t endBlendRange = m_uniforms.m_blendGradient.sample(1.0f);
+				particle->blendStart = bx::lerp(startBlendRange.min, startBlendRange.max, bx::frnd(&m_rng));
+				particle->blendEnd   = bx::lerp(endBlendRange.min, endBlendRange.max, bx::frnd(&m_rng));
 
-				particle->scaleStart = bx::lerp(m_uniforms.m_scaleStart[0], m_uniforms.m_scaleStart[1], bx::frnd(&m_rng) );
-				particle->scaleEnd   = bx::lerp(m_uniforms.m_scaleEnd[0],   m_uniforms.m_scaleEnd[1],   bx::frnd(&m_rng) );
+				// Sample scale range from gradient at particle spawn (t=0) and end (t=1)
+				const frange_t startScaleRange = m_uniforms.m_scaleGradient.sample(0.0f);
+				const frange_t endScaleRange = m_uniforms.m_scaleGradient.sample(1.0f);
+				particle->scaleStart = bx::lerp(startScaleRange.min, startScaleRange.max, bx::frnd(&m_rng));
+				particle->scaleEnd   = bx::lerp(endScaleRange.min, endScaleRange.max, bx::frnd(&m_rng));
 			}
 		}
 
@@ -452,10 +408,8 @@ namespace ps
 			BX_ASSERT(m_num <= m_max, "Render: Particle count exceeded maximum! m_num=%d, m_max=%d", m_num, m_max);
 			const uint32_t safeNum = bx::min(m_num, m_max);
 			
-			bx::EaseFn easeRgba  = bx::getEaseFunc(m_uniforms.m_easeRgba);
-			bx::EaseFn easePos   = bx::getEaseFunc(m_uniforms.m_easePos);
-			bx::EaseFn easeBlend = bx::getEaseFunc(m_uniforms.m_easeBlend);
-			bx::EaseFn easeScale = bx::getEaseFunc(m_uniforms.m_easeScale);
+			// Only position easing remains - color, blend, and scale handled by gradients
+			bx::EaseFn easePos = bx::getEaseFunc(m_uniforms.m_easePos);
 
 			bx::Aabb aabb =
 			{
@@ -468,11 +422,8 @@ namespace ps
 			{
 				const Particle& particle = m_particles[jj];
 
-				const float ttPos   = easePos(particle.life);
-				const float ttScale = easeScale(particle.life);
-				const float ttBlend = bx::clamp(easeBlend(particle.life), 0.0f, 1.0f);
-				const float ttRgba  = bx::clamp(easeRgba(particle.life),  0.0f, 1.0f);
-
+				const float ttPos = easePos(particle.life);
+				// Blend and scale now sampled from gradients based on particle life
 				const bx::Vec3 p0  = bx::lerp(particle.start,  particle.end[0], ttPos);
 				const bx::Vec3 p1  = bx::lerp(particle.end[0], particle.end[1], ttPos);
 				const bx::Vec3 pos = bx::lerp(p0, p1, ttPos);
@@ -485,61 +436,44 @@ namespace ps
 				// Calculate particle speed for speed-based effects
 				const float particleSpeed = calculateParticleSpeed(particle, ttPos);
 
-				uint32_t idx = uint32_t(ttRgba*4);
-				float ttmod = bx::mod(ttRgba, 0.25f)/0.25f;
-				uint32_t rgbaStart = particle.rgba[idx];
-				uint32_t rgbaEnd   = particle.rgba[idx+1];
-
-				float rr = bx::lerp( ( (uint8_t*)&rgbaStart)[0], ( (uint8_t*)&rgbaEnd)[0], ttmod)/255.0f;
-				float gg = bx::lerp( ( (uint8_t*)&rgbaStart)[1], ( (uint8_t*)&rgbaEnd)[1], ttmod)/255.0f;
-				float bb = bx::lerp( ( (uint8_t*)&rgbaStart)[2], ( (uint8_t*)&rgbaEnd)[2], ttmod)/255.0f;
-				float aa = bx::lerp( ( (uint8_t*)&rgbaStart)[3], ( (uint8_t*)&rgbaEnd)[3], ttmod)/255.0f;
-
+				// Sample color from gradient based on particle life
+				math::color sampledColor = m_uniforms.m_colorGradient.sample(particle.life);
 				// Apply color by speed if enabled
-				if (m_uniforms.m_colorBySpeedVelocityRange[1] > m_uniforms.m_colorBySpeedVelocityRange[0] &&
-					(m_uniforms.m_colorBySpeedColors[0] != m_uniforms.m_colorBySpeedColors[1]))
+				if (m_uniforms.m_colorBySpeedVelocityRange.max > m_uniforms.m_colorBySpeedVelocityRange.min)
 				{
 					const float speedFactor = bx::clamp(
-						(particleSpeed - m_uniforms.m_colorBySpeedVelocityRange[0]) / 
-						(m_uniforms.m_colorBySpeedVelocityRange[1] - m_uniforms.m_colorBySpeedVelocityRange[0]), 
+						(particleSpeed - m_uniforms.m_colorBySpeedVelocityRange.min) / 
+						(m_uniforms.m_colorBySpeedVelocityRange.max - m_uniforms.m_colorBySpeedVelocityRange.min), 
 						0.0f, 1.0f
 					);
 					
-					const uint32_t speedColor = lerpColor(m_uniforms.m_colorBySpeedColors[0], m_uniforms.m_colorBySpeedColors[1], speedFactor);
+					const math::color speedColor = m_uniforms.m_colorBySpeedGradient.sample(speedFactor);
 					
-					// Blend the speed color with the original color
-					// Extract RGBA components (R=byte0, G=byte1, B=byte2, A=byte3)
-					const float speedRr = float(speedColor & 0xff) / 255.0f;
-					const float speedGg = float((speedColor >> 8) & 0xff) / 255.0f;
-					const float speedBb = float((speedColor >> 16) & 0xff) / 255.0f;
-					const float speedAa = float((speedColor >> 24) & 0xff) / 255.0f;
-					
-					rr *= speedRr;
-					gg *= speedGg;
-					bb *= speedBb;
-					aa *= speedAa; // Multiply alpha to preserve transparency
+					// Blend the speed color with the original color (multiply blend)
+					sampledColor.value *= speedColor.value;
 				}
 
-				float blend = bx::lerp(particle.blendStart, particle.blendEnd, ttBlend);
+				// Sample blend and scale from gradients based on particle life
+				float blend = bx::lerp(particle.blendStart, particle.blendEnd, particle.life);
 				// Use average scale for uniform particle sizing
-				const float avgSystemScale = (m_uniforms.m_scale[0] + m_uniforms.m_scale[1] + m_uniforms.m_scale[2]) / 3.0f;
-				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, ttScale) * avgSystemScale;
+				const float avgSystemScale = (m_uniforms.m_scale.x + m_uniforms.m_scale.y + m_uniforms.m_scale.z) / 3.0f;
+				float scale = bx::lerp(particle.scaleStart, particle.scaleEnd, particle.life) * avgSystemScale;
 				
 				// Apply size by speed if enabled
-				if (m_uniforms.m_sizeBySpeedVelocityRange[1] > m_uniforms.m_sizeBySpeedVelocityRange[0] &&
-					(m_uniforms.m_sizeBySpeedRange[0] != m_uniforms.m_sizeBySpeedRange[1]))
+				if (m_uniforms.m_sizeBySpeedVelocityRange.max > m_uniforms.m_sizeBySpeedVelocityRange.min &&
+					(m_uniforms.m_sizeBySpeedRange.min != m_uniforms.m_sizeBySpeedRange.max))
 				{
 					const float speedFactor = bx::clamp(
-						(particleSpeed - m_uniforms.m_sizeBySpeedVelocityRange[0]) / 
-						(m_uniforms.m_sizeBySpeedVelocityRange[1] - m_uniforms.m_sizeBySpeedVelocityRange[0]), 
+						(particleSpeed - m_uniforms.m_sizeBySpeedVelocityRange.min) / 
+						(m_uniforms.m_sizeBySpeedVelocityRange.max - m_uniforms.m_sizeBySpeedVelocityRange.min), 
 						0.0f, 1.0f
 					);
 					
-					const float sizeMultiplier = bx::lerp(m_uniforms.m_sizeBySpeedRange[0], m_uniforms.m_sizeBySpeedRange[1], speedFactor);
+					const float sizeMultiplier = bx::lerp(m_uniforms.m_sizeBySpeedRange.min, m_uniforms.m_sizeBySpeedRange.max, speedFactor);
 					scale *= sizeMultiplier;
 				}
 
-				uint32_t abgr = toAbgr(rr, gg, bb, aa);
+				uint32_t abgr = sampledColor;
 
 				const bx::Vec3 udir = { _mtxView[0]*scale, _mtxView[4]*scale, _mtxView[8]*scale };
 				const bx::Vec3 vdir = { _mtxView[1]*scale, _mtxView[5]*scale, _mtxView[9]*scale };
@@ -627,7 +561,7 @@ namespace ps
 			}
 
 			m_emitterAlloc = bx::createHandleAlloc(m_allocator, _maxEmitters);
-			m_emitter = (Emitter*)bx::alloc(m_allocator, sizeof(Emitter)*_maxEmitters);
+			m_emitter.resize(_maxEmitters);
 
 			PosColorTexCoord0Vertex::init();
 
@@ -647,7 +581,7 @@ namespace ps
 			bgfx::destroy(s_texColor);
 
 			bx::destroyHandleAlloc(m_allocator, m_emitterAlloc);
-			bx::free(m_allocator, m_emitter);
+			// bx::free(m_allocator, m_emitter);
 
 			m_allocator = nullptr;
 		}
@@ -791,22 +725,15 @@ namespace ps
 				// Copy new uniforms
 				EmitterUniforms newUniforms = *_uniforms;
 
-	            float prevPosition[3];
-				prevPosition[0] = emitter.m_uniforms.m_position[0];
-				prevPosition[1] = emitter.m_uniforms.m_position[1];
-				prevPosition[2] = emitter.m_uniforms.m_position[2];
+				math::vec3 prevPosition = emitter.m_uniforms.m_position;
 				
 				emitter.m_uniforms = newUniforms;
 
-				emitter.m_uniforms.m_prevPosition[0] = prevPosition[0];
-				emitter.m_uniforms.m_prevPosition[1] = prevPosition[1];
-				emitter.m_uniforms.m_prevPosition[2] = prevPosition[2];
+				emitter.m_uniforms.m_prevPosition = prevPosition;
 
 				if(emitter.m_firstUpdate)
 				{
-					emitter.m_uniforms.m_prevPosition[0] = emitter.m_uniforms.m_position[0];
-					emitter.m_uniforms.m_prevPosition[1] = emitter.m_uniforms.m_position[1];
-					emitter.m_uniforms.m_prevPosition[2] = emitter.m_uniforms.m_position[2];
+					emitter.m_uniforms.m_prevPosition = emitter.m_uniforms.m_position;
 				}
 
 				
@@ -844,7 +771,7 @@ namespace ps
 		bx::AllocatorI* m_allocator;
 
 		bx::HandleAlloc* m_emitterAlloc;
-		Emitter* m_emitter;
+		std::vector<Emitter> m_emitter;
 
 		bgfx::UniformHandle s_texColor;
 		bgfx::ProgramHandle m_particleProgram;

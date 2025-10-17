@@ -5,6 +5,17 @@
 #include <logging/logging.h>
 #include <engine/rendering/material.h>
 
+
+namespace math
+{
+template<>
+auto gradient_lerp(const frange_t& start, const frange_t& end, float progress) -> frange_t
+{
+    return frange_t(gradient_lerp(start.min, end.min, progress), gradient_lerp(start.max, end.max, progress));
+}
+}
+
+
 namespace unravel
 {
 
@@ -16,7 +27,7 @@ void particle_emitter_component::on_create_component(entt::registry& r, entt::en
     
     // Initialize uniforms with default values
     component.uniforms_.reset();
-    
+
     // Sync member variables with uniforms
     component.sync_uniforms_from_members();
     
@@ -152,72 +163,52 @@ auto particle_emitter_component::get_velocity_damping() const -> float
 
 void particle_emitter_component::set_force_over_lifetime(const math::vec3& force)
 {
-    uniforms_.m_forceOverLifetime[0] = force.x;
-    uniforms_.m_forceOverLifetime[1] = force.y;
-    uniforms_.m_forceOverLifetime[2] = force.z;
+    uniforms_.m_forceOverLifetime = force;
 }
 
 auto particle_emitter_component::get_force_over_lifetime() const -> math::vec3
 {
-    return math::vec3(uniforms_.m_forceOverLifetime[0], uniforms_.m_forceOverLifetime[1], uniforms_.m_forceOverLifetime[2]);
+    return uniforms_.m_forceOverLifetime;
 }
 
 void particle_emitter_component::set_size_by_speed_range(const frange_t& size_range)
 {
-    size_by_speed_range_ = size_range;
-    uniforms_.m_sizeBySpeedRange[0] = size_range.min;
-    uniforms_.m_sizeBySpeedRange[1] = size_range.max;
+    uniforms_.m_sizeBySpeedRange = size_range;
 }
 
 auto particle_emitter_component::get_size_by_speed_range() const -> const frange_t&
 {
-    return size_by_speed_range_;
+    return uniforms_.m_sizeBySpeedRange;
 }
 
 void particle_emitter_component::set_size_by_speed_velocity_range(const frange_t& velocity_range)
 {
-    size_by_speed_velocity_range_ = velocity_range;
-    uniforms_.m_sizeBySpeedVelocityRange[0] = velocity_range.min;
-    uniforms_.m_sizeBySpeedVelocityRange[1] = velocity_range.max;
+    uniforms_.m_sizeBySpeedVelocityRange = velocity_range;
 }
 
 auto particle_emitter_component::get_size_by_speed_velocity_range() const -> const frange_t&
 {
-    return size_by_speed_velocity_range_;
+    return uniforms_.m_sizeBySpeedVelocityRange;
 }
 
-void particle_emitter_component::set_color_by_speed_slow_color(const math::color& color)
+void particle_emitter_component::set_color_by_speed_gradient(const math::gradient<math::color>& gradient)
 {
-    color_by_speed_slow_color_ = color;
-    uniforms_.m_colorBySpeedColors[0] = static_cast<uint32_t>(color);
+    uniforms_.m_colorBySpeedGradient = gradient;
 }
 
-void particle_emitter_component::set_color_by_speed_fast_color(const math::color& color)
+auto particle_emitter_component::get_color_by_speed_gradient() const -> const math::gradient<math::color>&
 {
-    color_by_speed_fast_color_ = color;
-    uniforms_.m_colorBySpeedColors[1] = static_cast<uint32_t>(color);
-}
-
-auto particle_emitter_component::get_color_by_speed_slow_color() const -> math::color
-{
-    return color_by_speed_slow_color_;
-}
-
-auto particle_emitter_component::get_color_by_speed_fast_color() const -> math::color
-{
-    return color_by_speed_fast_color_;
+    return uniforms_.m_colorBySpeedGradient;
 }
 
 void particle_emitter_component::set_color_by_speed_velocity_range(const frange_t& velocity_range)
 {
-    color_by_speed_velocity_range_ = velocity_range;
-    uniforms_.m_colorBySpeedVelocityRange[0] = velocity_range.min;
-    uniforms_.m_colorBySpeedVelocityRange[1] = velocity_range.max;
+    uniforms_.m_colorBySpeedVelocityRange = velocity_range;
 }
 
 auto particle_emitter_component::get_color_by_speed_velocity_range() const -> const frange_t&
 {
-    return color_by_speed_velocity_range_;
+    return uniforms_.m_colorBySpeedVelocityRange;
 }
 
 void particle_emitter_component::set_lifetime(std::chrono::duration<float> lifetime)
@@ -231,109 +222,44 @@ auto particle_emitter_component::get_lifetime() const -> std::chrono::duration<f
     return std::chrono::duration<float>(uniforms_.m_lifetime);
 }
 
-void particle_emitter_component::set_velocity_start_range(const frange_t& velocity_start)
+void particle_emitter_component::set_velocity_gradient(const math::gradient<frange_t>& gradient)
 {
-    velocity_start_range_ = velocity_start;
-    uniforms_.m_velocityStart[0] = velocity_start.min;
-    uniforms_.m_velocityStart[1] = velocity_start.max;
+    uniforms_.m_velocityGradient = gradient;
 }
 
-auto particle_emitter_component::get_velocity_start_range() const -> const frange_t&
+auto particle_emitter_component::get_velocity_gradient() const -> const math::gradient<frange_t>&
 {
-    return velocity_start_range_;
+    return uniforms_.m_velocityGradient;
 }
 
-void particle_emitter_component::set_velocity_end_range(const frange_t& velocity_end)
+void particle_emitter_component::set_scale_gradient(const math::gradient<frange_t>& gradient)
 {
-    velocity_end_range_ = velocity_end;
-    uniforms_.m_velocityEnd[0] = velocity_end.min;
-    uniforms_.m_velocityEnd[1] = velocity_end.max;
+    uniforms_.m_scaleGradient = gradient;
 }
 
-auto particle_emitter_component::get_velocity_end_range() const -> const frange_t&
+auto particle_emitter_component::get_scale_gradient() const -> const math::gradient<frange_t>&
 {
-    return velocity_end_range_;
+    return uniforms_.m_scaleGradient;
 }
 
-void particle_emitter_component::set_scale_start_range(const frange_t& scale_start)
+void particle_emitter_component::set_blend_gradient(const math::gradient<frange_t>& gradient)
 {
-    scale_start_range_ = scale_start;
-    uniforms_.m_scaleStart[0] = scale_start.min;
-    uniforms_.m_scaleStart[1] = scale_start.max;
+    uniforms_.m_blendGradient = gradient;
 }
 
-auto particle_emitter_component::get_scale_start_range() const -> const frange_t&
+auto particle_emitter_component::get_blend_gradient() const -> const math::gradient<frange_t>&
 {
-    return scale_start_range_;
+    return uniforms_.m_blendGradient;
 }
 
-void particle_emitter_component::set_scale_end_range(const frange_t& scale_end)
+void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
-    scale_end_range_ = scale_end;
-    uniforms_.m_scaleEnd[0] = scale_end.min;
-    uniforms_.m_scaleEnd[1] = scale_end.max;
+    uniforms_.m_colorGradient = gradient;
 }
 
-auto particle_emitter_component::get_scale_end_range() const -> const frange_t&
+auto particle_emitter_component::get_color_gradient() const -> const math::gradient<math::color>&
 {
-    return scale_end_range_;
-}
-
-void particle_emitter_component::set_blend_start_range(const frange_t& blend_start)
-{
-    blend_start_range_ = blend_start;
-    uniforms_.m_blendStart[0] = blend_start.min;
-    uniforms_.m_blendStart[1] = blend_start.max;
-}
-
-auto particle_emitter_component::get_blend_start_range() const -> const frange_t&
-{
-    return blend_start_range_;
-}
-
-void particle_emitter_component::set_blend_end_range(const frange_t& blend_end)
-{
-    blend_end_range_ = blend_end;
-    uniforms_.m_blendEnd[0] = blend_end.min;
-    uniforms_.m_blendEnd[1] = blend_end.max;
-}
-
-auto particle_emitter_component::get_blend_end_range() const -> const frange_t&
-{
-    return blend_end_range_;
-}
-
-void particle_emitter_component::set_rgba_colors(const std::array<math::color, 5>& colors)
-{
-    rgba_colors_ = colors;
-    for(int i = 0; i < 5; ++i)
-    {
-        uniforms_.m_rgba[i] = static_cast<uint32_t>(colors[i]);
-    }
-}
-
-auto particle_emitter_component::get_rgba_colors() const -> const std::array<math::color, 5>&
-{
-    return rgba_colors_;
-}
-
-void particle_emitter_component::set_rgba_color(int index, const math::color& color)
-{
-    if(index >= 0 && index < 5)
-    {
-        rgba_colors_[index] = color;
-        uniforms_.m_rgba[index] = static_cast<uint32_t>(color);
-    }
-}
-
-auto particle_emitter_component::get_rgba_color(int index) const -> const math::color&
-{
-    if(index >= 0 && index < 5)
-    {
-        return rgba_colors_[index];
-    }
-    static const math::color default_color = math::color::white();
-    return default_color;
+    return uniforms_.m_colorGradient;
 }
 
 void particle_emitter_component::set_position_easing(bx::Easing::Enum easing)
@@ -346,35 +272,7 @@ auto particle_emitter_component::get_position_easing() const -> bx::Easing::Enum
     return uniforms_.m_easePos;
 }
 
-void particle_emitter_component::set_rgba_easing(bx::Easing::Enum easing)
-{
-    uniforms_.m_easeRgba = easing;
-}
-
-auto particle_emitter_component::get_rgba_easing() const -> bx::Easing::Enum
-{
-    return uniforms_.m_easeRgba;
-}
-
-void particle_emitter_component::set_blend_easing(bx::Easing::Enum easing)
-{
-    uniforms_.m_easeBlend = easing;
-}
-
-auto particle_emitter_component::get_blend_easing() const -> bx::Easing::Enum
-{
-    return uniforms_.m_easeBlend;
-}
-
-void particle_emitter_component::set_scale_easing(bx::Easing::Enum easing)
-{
-    uniforms_.m_easeScale = easing;
-}
-
-auto particle_emitter_component::get_scale_easing() const -> bx::Easing::Enum
-{
-    return uniforms_.m_easeScale;
-}
+// Blend and scale easing removed - interpolation is now handled by gradients
 
 auto particle_emitter_component::get_num_particles() const -> uint32_t
 {
@@ -405,23 +303,14 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
     if(isValid(emitter_handle_) && enabled_)
     {
         // Update position from transform
-        const auto& world_pos = world_transform.get_position();
-        uniforms_.m_position[0] = world_pos.x;
-        uniforms_.m_position[1] = world_pos.y;
-        uniforms_.m_position[2] = world_pos.z;
+        uniforms_.m_position = world_transform.get_position();
         
         // Update rotation from transform (convert quaternion to Euler angles)
         const auto& world_rot = world_transform.get_rotation();
-        auto euler = math::eulerAngles(glm::inverse(world_rot));
-        uniforms_.m_angle[0] = euler.x;
-        uniforms_.m_angle[1] = euler.y;
-        uniforms_.m_angle[2] = euler.z;
+        uniforms_.m_angle = math::eulerAngles(glm::inverse(world_rot));
         
         // Update scale from transform
-        const auto& world_scale = world_transform.get_scale();
-        uniforms_.m_scale[0] = world_scale.x;
-        uniforms_.m_scale[1] = world_scale.y;
-        uniforms_.m_scale[2] = world_scale.z;
+        uniforms_.m_scale = world_transform.get_scale();
 
         sync_uniforms_from_members();
         
@@ -479,44 +368,11 @@ void particle_emitter_component::reset_emitter()
 
 void particle_emitter_component::sync_uniforms_from_members()
 {
-    // Sync lifetime property    
-    uniforms_.m_velocityStart[0] = velocity_start_range_.min;
-    uniforms_.m_velocityStart[1] = velocity_start_range_.max;
-    
-    uniforms_.m_velocityEnd[0] = velocity_end_range_.min;
-    uniforms_.m_velocityEnd[1] = velocity_end_range_.max;
-    
-    uniforms_.m_scaleStart[0] = scale_start_range_.min;
-    uniforms_.m_scaleStart[1] = scale_start_range_.max;
-    
-    uniforms_.m_scaleEnd[0] = scale_end_range_.min;
-    uniforms_.m_scaleEnd[1] = scale_end_range_.max;
-    
-    uniforms_.m_blendStart[0] = blend_start_range_.min;
-    uniforms_.m_blendStart[1] = blend_start_range_.max;
-    
-    uniforms_.m_blendEnd[0] = blend_end_range_.min;
-    uniforms_.m_blendEnd[1] = blend_end_range_.max;
-    
-    // Sync speed-based properties
-    uniforms_.m_sizeBySpeedRange[0] = size_by_speed_range_.min;
-    uniforms_.m_sizeBySpeedRange[1] = size_by_speed_range_.max;
-    
-    uniforms_.m_sizeBySpeedVelocityRange[0] = size_by_speed_velocity_range_.min;
-    uniforms_.m_sizeBySpeedVelocityRange[1] = size_by_speed_velocity_range_.max;
-    
-    uniforms_.m_colorBySpeedColors[0] = static_cast<uint32_t>(color_by_speed_slow_color_);
-    uniforms_.m_colorBySpeedColors[1] = static_cast<uint32_t>(color_by_speed_fast_color_);
-    
-    uniforms_.m_colorBySpeedVelocityRange[0] = color_by_speed_velocity_range_.min;
-    uniforms_.m_colorBySpeedVelocityRange[1] = color_by_speed_velocity_range_.max;
-    
-    // Sync color properties
-    for(int i = 0; i < 5; ++i)
-    {
-        uniforms_.m_rgba[i] = static_cast<uint32_t>(rgba_colors_[i]);
-    }
 
+    
+    // Color by speed gradient now handled directly in uniforms - no sync needed
+    
+    
     if(texture_.is_valid())
     {
         auto tex = texture_.get();

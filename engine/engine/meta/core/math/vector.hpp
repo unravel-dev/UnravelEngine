@@ -2,6 +2,7 @@
 
 #include <math/math.h>
 #include <serialization/serialization.h>
+#include <serialization/types/vector.hpp>
 
 namespace ser20
 {
@@ -37,4 +38,31 @@ inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::color& obj)
     try_serialize(ar, ser20::make_nvp("b", obj.value.b));
     try_serialize(ar, ser20::make_nvp("a", obj.value.a));
 }
+
+
+template<typename Archive, typename T>
+inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::gradient_point<T>& obj)
+{
+    try_serialize(ar, ser20::make_nvp("progress", obj.progress));
+    try_serialize(ar, ser20::make_nvp("element", obj.element));
+}
+
+
+template<typename Archive, typename T>
+inline void SAVE_FUNCTION_NAME(Archive& ar, const math::gradient<T>& obj)
+{
+    const auto& points = obj.get_points();
+    try_save(ar, ser20::make_nvp("points", points));
+}
+template<typename Archive, typename T>
+inline void LOAD_FUNCTION_NAME(Archive& ar, math::gradient<T>& obj)
+{
+    std::vector<typename math::gradient<T>::point_t> points;
+    if(try_load(ar, ser20::make_nvp("points", points)))
+    {
+        obj.set_points(points);
+    }
+}
+
+
 } // namespace ser20

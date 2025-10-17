@@ -1,0 +1,233 @@
+#pragma once
+
+#include "detail/glm_includes.h"
+#include <string>
+#include <algorithm>
+
+namespace math
+{
+using namespace glm;
+
+struct color
+{
+    static color white()
+    {
+        static color c(1.0f, 1.0f, 1.0f, 1.0f);
+        return c;
+    }
+    static color black()
+    {
+        static color c(0.0f, 0.0f, 0.0f, 1.0f);
+        return c;
+    }
+    static color transparent()
+    {
+        static color c(0.0f, 0.0f, 0.0f, 0.0f);
+        return c;
+    }
+    static color red()
+    {
+        static color c(1.0f, 0.0f, 0.0f, 1.0f);
+        return c;
+    }
+    static color purple()
+    {
+        static color c(1.0f, 0.0f, 1.0f, 1.0f);
+        return c;
+    }
+
+    /**
+     * @brief Generates a consistent random color based on a string seed.
+     * @param seed The string to use as a seed for random generation.
+     * @return A color generated deterministically from the seed.
+     */
+    static color random(const char* seed)
+    {
+        return random(std::string(seed));
+    }
+
+    /**
+     * @brief Generates a consistent random color based on a string seed.
+     * @param seed The string to use as a seed for random generation.
+     * @return A color generated deterministically from the seed.
+     */
+    static color random(const std::string& seed)
+    {
+        // Use std::hash to convert string to numeric seed
+        std::hash<std::string> hasher;
+        std::size_t hash_value = hasher(seed);
+        
+        // Simple linear congruential generator using the hash as seed
+        auto lcg = [](std::size_t& state) -> float {
+            state = (state * 1103515245u + 12345u) & 0x7fffffffu;
+            return static_cast<float>(state) / static_cast<float>(0x7fffffffu);
+        };
+        
+        std::size_t state = hash_value;
+        
+        // Generate hue in full range [0, 1)
+        float hue = lcg(state);
+        
+        // Generate saturation with bias toward higher values for more vibrant colors
+        float saturation = 0.4f + 0.6f * lcg(state);
+        
+        // Generate value/brightness with bias toward higher values for better visibility
+        float value = 0.6f + 0.4f * lcg(state);
+        
+        return hsv(hue, saturation, value, 1.0f);
+    }
+
+    vec4 value{};
+
+    color()
+    {
+        value.x = value.y = value.z = value.w = 0.0f;
+    }
+    color(int r, int g, int b, int a = 255)
+    {
+        float sc = 1.0f / 255.0f;
+        value.x = (float)r * sc;
+        value.y = (float)g * sc;
+        value.z = (float)b * sc;
+        value.w = (float)a * sc;
+    }
+    color(std::uint32_t rgba)
+    {
+        float sc = 1.0f / 255.0f;
+        value.x = (float)(rgba & 0xFF) * sc;
+        value.y = (float)((rgba >> 8) & 0xFF) * sc;
+        value.z = (float)((rgba >> 16) & 0xFF) * sc;
+        value.w = (float)(rgba >> 24) * sc;
+    }
+    color(float r, float g, float b, float a = 1.0f)
+    {
+        value.x = r;
+        value.y = g;
+        value.z = b;
+        value.w = a;
+    }
+    color(const vec4& col)
+    {
+        value = col;
+    }
+    inline operator std::uint32_t() const
+    {
+        return float4_to_u32(value);
+    }
+    inline operator vec4() const
+    {
+        return value;
+    }
+
+    inline void set_hsv(float h, float s, float v, float a = 1.0f)
+    {
+        hsv_to_rgb(h, s, v, value.x, value.y, value.z);
+        value.w = a;
+    }
+
+    static color hsv(float h, float s, float v, float a = 1.0f)
+    {
+        float r, g, b;
+        hsv_to_rgb(h, s, v, r, g, b);
+        return {r, g, b, a};
+    }
+
+    static vec4 u32_to_float4(std::uint32_t in)
+    {
+        float s = 1.0f / 255.0f;
+        return vec4((in & 0xFF) * s, ((in >> 8) & 0xFF) * s, ((in >> 16) & 0xFF) * s, (in >> 24) * s);
+    }
+
+    static std::uint32_t float4_to_u32(const vec4& in)
+    {
+        std::uint32_t out;
+        out = ((std::uint32_t)(saturate(in.x) * 255.0f));
+        out |= ((std::uint32_t)(saturate(in.y) * 255.0f)) << 8;
+        out |= ((std::uint32_t)(saturate(in.z) * 255.0f)) << 16;
+        out |= ((std::uint32_t)(saturate(in.w) * 255.0f)) << 24;
+        return out;
+    }
+
+    // Convert rgb floats ([0-1],[0-1],[0-1]) to hsv floats ([0-1],[0-1],[0-1]),
+    // from Foley & van Dam p592
+    // Optimized http://lolengine.net/blog/2013/01/13/fast-rgb-to-hsv
+    static void rgb_to_hsv(float r, float g, float b, float& out_h, float& out_s, float& out_v)
+    {
+        float K = 0.f;
+        if(g < b)
+        {
+            const float tmp = g;
+            g = b;
+            b = tmp;
+            K = -1.f;
+        }
+        if(r < g)
+        {
+            const float tmp = r;
+            r = g;
+            g = tmp;
+            K = -2.f / 6.f - K;
+        }
+
+        const float chroma = r - (g < b ? g : b);
+        out_h = glm::abs(K + (g - b) / (6.f * chroma + 1e-20f));
+        out_s = chroma / (r + 1e-20f);
+        out_v = r;
+    }
+
+    // Convert hsv floats ([0-1],[0-1],[0-1]) to rgb floats ([0-1],[0-1],[0-1]),
+    // from Foley & van Dam p593
+    // also http://en.wikipedia.org/wiki/HSL_and_HSV
+    static void hsv_to_rgb(float h, float s, float v, float& out_r, float& out_g, float& out_b)
+    {
+        if(s == 0.0f)
+        {
+            // gray
+            out_r = out_g = out_b = v;
+            return;
+        }
+
+        h = glm::mod(h, 1.0f) / (60.0f / 360.0f);
+        auto i = int(h);
+        float f = h - float(i);
+        float p = v * (1.0f - s);
+        float q = v * (1.0f - s * f);
+        float t = v * (1.0f - s * (1.0f - f));
+
+        switch(i)
+        {
+            case 0:
+                out_r = v;
+                out_g = t;
+                out_b = p;
+                break;
+            case 1:
+                out_r = q;
+                out_g = v;
+                out_b = p;
+                break;
+            case 2:
+                out_r = p;
+                out_g = v;
+                out_b = t;
+                break;
+            case 3:
+                out_r = p;
+                out_g = q;
+                out_b = v;
+                break;
+            case 4:
+                out_r = t;
+                out_g = p;
+                out_b = v;
+                break;
+            case 5:
+            default:
+                out_r = v;
+                out_g = p;
+                out_b = q;
+                break;
+        }
+    }
+};
+} // namespace math

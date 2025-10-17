@@ -5,6 +5,11 @@
 #include <engine/profiler/profiler.h>
 #include <logging/logging.h>
 
+
+#define POOLSTL_STD_SUPPLEMENT 1
+#include <poolstl/poolstl.hpp>
+
+
 namespace unravel
 {
 
@@ -49,9 +54,14 @@ void particle_system::on_frame_update(scene& scn, delta_t dt)
     auto& registry = *scn.registry;
     
     // Update all particle emitter components that have both transform and particle emitter components
-    auto view = registry.view<transform_component, particle_emitter_component>();
+    auto view = registry.view<transform_component, particle_emitter_component, active_component>();
     
-    for(auto entity : view)
+       // this code should be thread safe as each task works with a whole hierarchy and
+    // there is no interleaving between tasks.
+    std::for_each(std::execution::par,
+        view.begin(),
+        view.end(),
+        [&](entt::entity entity)
     {
         auto& transform_comp = view.get<transform_component>(entity);
         auto& emitter_comp = view.get<particle_emitter_component>(entity);
@@ -59,7 +69,7 @@ void particle_system::on_frame_update(scene& scn, delta_t dt)
         // Get the world transform and pass it to the emitter
         const auto& world_transform = transform_comp.get_transform_global();
         emitter_comp.update_emitter(world_transform, dt);
-    }
+    });
     
 }
 
