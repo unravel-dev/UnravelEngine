@@ -109,6 +109,9 @@ public:
     void set_force_over_lifetime(const math::vec3& force);
     auto get_force_over_lifetime() const -> math::vec3;
 
+    void set_emission_shape_scale(const math::vec3& scale);
+    auto get_emission_shape_scale() const -> math::vec3;
+
     void set_size_by_speed_range(const frange_t& size_range);
     auto get_size_by_speed_range() const -> const frange_t&;
 
@@ -148,13 +151,14 @@ public:
 
     auto get_num_particles() const -> uint32_t;
     auto get_world_bounds() const -> math::bbox;
+    auto get_updated_world_bounds(const math::transform& world_transform) const -> math::bbox;
 
     // Sprite handle
     void set_texture(const asset_handle<gfx::texture>& texture);
     auto get_texture() const -> const asset_handle<gfx::texture>&;
 
 
-    void render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const bx::Vec3& eye);
+    void render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const math::vec3& eye);
 
     /**
      * @brief Updates the emitter with external transform data.
@@ -166,7 +170,6 @@ public:
      * @brief Gets the emitter uniforms for direct access.
      * @return Reference to the emitter uniforms.
      */
-    auto get_uniforms() -> EmitterUniforms&;
     auto get_uniforms() const -> const EmitterUniforms&;
 
     /**
@@ -180,10 +183,6 @@ public:
     void reset_emitter();
 
 private:
-    /**
-     * @brief Syncs uniforms from member variables.
-     */
-    void sync_uniforms_from_members();
     /// Whether the emitter is enabled
     bool enabled_ = true;
 
@@ -201,11 +200,6 @@ private:
 
     /// Emitter uniforms containing all particle properties
     EmitterUniforms uniforms_;
-    
-    // Range properties removed - now handled by gradients in uniforms
-    
-    /// Speed-based effect properties
-    // Removed: color_by_speed_slow_color_ and color_by_speed_fast_color_ - now handled by gradient in uniforms
     
     asset_handle<gfx::texture> texture_;
 };

@@ -295,6 +295,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.pushTransform((const float*)world_transform);
             
             const auto shape = particle_emitter_comp.get_shape();
+            const auto scale = particle_emitter_comp.get_emission_shape_scale();
             const auto direction = particle_emitter_comp.get_direction();
             const float shape_size = 1.0f; // Base size for visualization
             
@@ -304,9 +305,9 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 {
                     // Draw a wireframe sphere
                     math::vec3 center{0.0f, 0.0f, 0.0f};
-                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size);
-                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
-                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size * scale.x);
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size * scale.y);
+                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size * scale.z);
                     break;
                 }
                 case EmitterShape::Hemisphere:
@@ -314,32 +315,30 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     // Draw hemisphere (half sphere facing up)
                     math::vec3 center{0.0f, 0.0f, 0.0f};
                     // Full circles on X and Z axes
-                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size);
-                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size * scale.x);
+                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size * scale.z);
                     // Draw lines to indicate hemisphere boundary
-                    dd.encoder.moveTo(-shape_size, 0.0f, 0.0f);
-                    dd.encoder.lineTo(shape_size, 0.0f, 0.0f);
-                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size);
-                    dd.encoder.lineTo(0.0f, 0.0f, shape_size);
+                    dd.encoder.moveTo(-shape_size * scale.x, 0.0f, 0.0f);
+                    dd.encoder.lineTo(shape_size * scale.x, 0.0f, 0.0f);
+                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size * scale.z);
+                    dd.encoder.lineTo(0.0f, 0.0f, shape_size * scale.z);
                     break;
                 }
                 case EmitterShape::Circle:
                 {
                     // Draw a circle in the XZ plane
                     math::vec3 center{0.0f, 0.0f, 0.0f};
-                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size * scale.y);
                     break;
                 }
-                case EmitterShape::Disc:
+                case EmitterShape::Box:
                 {
-                    // Draw a filled disc representation (circle with cross lines)
-                    math::vec3 center{0.0f, 0.0f, 0.0f};
-                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
-                    // Add cross lines to indicate it's filled
-                    dd.encoder.moveTo(-shape_size, 0.0f, 0.0f);
-                    dd.encoder.lineTo(shape_size, 0.0f, 0.0f);
-                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size);
-                    dd.encoder.lineTo(0.0f, 0.0f, shape_size);
+                    // Draw a box
+                    const float half_size = shape_size;
+                    bx::Aabb box_aabb;
+                    box_aabb.min = {-half_size * scale.x, -half_size * scale.y, -half_size * scale.z};
+                    box_aabb.max = {half_size * scale.x, half_size * scale.y, half_size * scale.z};
+                    dd.encoder.draw(box_aabb);
                     break;
                 }
                 case EmitterShape::Rect:
@@ -347,8 +346,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     // Draw a rectangle in the XZ plane
                     const float half_size = shape_size;
                     bx::Aabb rect_aabb;
-                    rect_aabb.min = {-half_size, -0.01f, -half_size};
-                    rect_aabb.max = {half_size, 0.01f, half_size};
+                    rect_aabb.min = {-half_size * scale.x, -0.01f, -half_size * scale.z};
+                    rect_aabb.max = {half_size * scale.x, 0.01f, half_size * scale.z};
                     dd.encoder.draw(rect_aabb);
                     break;
                 }

@@ -16,6 +16,7 @@ auto gradient<T>::add_point(const T& element, float progress) -> size_t
 
     auto it = std::find(points_.begin(), points_.end(), point);
 
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
     return std::distance(points_.begin(), it);
 }
 
@@ -29,6 +30,7 @@ void gradient<T>::remove_point(int index)
 
     points_.erase(points_.begin() + index);
     std::sort(points_.begin(), points_.end());
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
 }
 
 template<typename T>
@@ -36,6 +38,7 @@ void gradient<T>::set_points(const points_t& points)
 {
     points_ = points;
     std::sort(points_.begin(), points_.end());
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
 }
 
 template<typename T>
@@ -52,6 +55,7 @@ void gradient<T>::reverse()
         p.progress = 1.0f - p.progress;
     }
     std::sort(points_.begin(), points_.end());
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
 }
 
 template<typename T>
@@ -64,6 +68,7 @@ void gradient<T>::set_progress(int index, float progress)
 
     points_[index].progress = progress;
     std::sort(points_.begin(), points_.end());
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
 }
 
 template<typename T>
@@ -86,6 +91,7 @@ void gradient<T>::set_element(int index, const T& element)
     }
 
     points_[index].element = element;
+    mark_lut_dirty(); // Invalidate LUT when gradient changes
 }
 
 template<typename T>
@@ -107,6 +113,21 @@ auto gradient<T>::is_valid() const noexcept -> bool
 
 template<typename T>
 auto gradient<T>::sample(float progress) const -> T
+{
+    // Use LUT if available, otherwise fall back to original implementation
+    if(has_lut())
+    {
+        regenerate_lut_if_needed();
+        return sample_from_lut(progress);
+    }
+    else
+    {
+        return sample_original(progress);
+    }
+}
+
+template<typename T>
+auto gradient<T>::sample_original(float progress) const -> T
 {
     if(false == is_valid())
     {
@@ -176,6 +197,7 @@ template<typename T>
 void gradient<T>::set_interpolation_mode(gradient_interpolation_mode_t mode)
 {
     interpolation_mode_ = mode;
+    mark_lut_dirty(); // Invalidate LUT when interpolation mode changes
 }
 
 template<typename T>
@@ -193,6 +215,67 @@ auto gradient<T>::operator==(const gradient<T>& other) const -> bool
     }
 
     return points_ == other.points_;
+}
+
+// LUT Implementation
+template<typename T>
+void gradient<T>::generate_lut(size_t lut_size)
+{
+    lut_size_ = lut_size;
+    lut_.resize(lut_size_);
+    
+    // Pre-sample the gradient into the LUT
+    for(size_t i = 0; i < lut_size_; ++i)
+    {
+        const float progress = float(i) / float(lut_size_ - 1);
+        lut_[i] = sample_original(progress);
+    }
+    
+    lut_dirty_ = false;
+}
+
+template<typename T>
+void gradient<T>::clear_lut()
+{
+    lut_.clear();
+    lut_size_ = 0;
+    lut_dirty_ = true;
+}
+
+template<typename T>
+void gradient<T>::regenerate_lut_if_needed() const
+{
+    if(lut_dirty_ && !lut_.empty())
+    {
+        // Regenerate LUT using current settings
+        const_cast<gradient<T>*>(this)->generate_lut(lut_size_);
+    }
+}
+
+template<typename T>
+auto gradient<T>::sample_from_lut(float progress) const -> T
+{
+    if(lut_.empty())
+    {
+        return {};
+    }
+    
+    // Clamp progress to [0, 1]
+    progress = std::max(0.0f, std::min(1.0f, progress));
+    
+    // Calculate LUT index with fractional part
+    const float index_f = progress * float(lut_size_ - 1);
+    const size_t index = size_t(index_f);
+    const float frac = index_f - float(index);
+    
+    // Handle edge case
+    if(index >= lut_size_ - 1)
+    {
+        return lut_.back();
+    }
+    
+    // Linear interpolation between LUT entries for smooth results
+    return gradient_lerp(lut_[index], lut_[index + 1], frac);
 }
 
 } // namespace math

@@ -196,7 +196,7 @@ struct defaults
      * @param camera The camera to focus.
      * @param entity The entity to focus on.
      */
-    static void focus_camera_on_entities(entt::handle camera, const std::vector<entt::handle>& entities);
+    static void focus_camera_on_entities(entt::handle camera, hpp::span<const entt::handle> entities);
 
     /**
      * @brief Focuses a camera on a specified entity with a timed transition.
@@ -205,7 +205,7 @@ struct defaults
      * @param duration The duration of the transition in seconds.
      */
     static void focus_camera_on_entities(entt::handle camera, 
-                                        const std::vector<entt::handle>& entities,
+                                        hpp::span<const entt::handle> entities,
                                         float duration);
 
     /**
@@ -238,11 +238,17 @@ struct defaults
      * @param asset The asset to preview.
      * @param size The size of the preview.
      */
+
+    struct asset_preview_result
+    {
+        entt::handle object;
+        entt::handle camera;
+    };
     template<typename T>
-    static void create_default_3d_scene_for_asset_preview(rtti::context& ctx,
+    static auto create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                           scene& scn,
                                                           const asset_handle<T>& asset,
-                                                          const usize32_t& size);
+                                                          const usize32_t& size, bool focus_camera = true) -> asset_preview_result;
 
     /**
      * @brief Creates a default 3D scene for editing.

@@ -228,20 +228,37 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
         // Render particles using the particle system
         auto cam_pos = camera.get_position();
         auto cam_view = camera.get_view();
-        bx::Vec3 eye_pos(cam_pos.x, cam_pos.y, cam_pos.z);
     
 
+        struct sort_key
+        {
+            particle_emitter_component* component;
+            float distance;
+        };
+        hpp::small_vector<sort_key, 16> particle_emitters;
         scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
             {
-                if(!camera.test_aabb(particle_emitter_comp.get_world_bounds()))
+                const auto& bounds = particle_emitter_comp.get_world_bounds();
+                if(!camera.test_aabb(bounds))
                 {
                     return;
                 }
-                particle_emitter_comp.render_emitter(pass.id, particle_program_->native_handle(), cam_view, eye_pos);
-            });
 
+                auto distance = math::distance(bounds.get_center(), cam_pos);
+                particle_emitters.emplace_back(sort_key{&particle_emitter_comp, distance});
+        });
+        std::sort(particle_emitters.begin(), particle_emitters.end(), [](const sort_key& a, const sort_key& b)
+        {
+            return a.distance < b.distance;
+        });
+
+        
         // Render all particles
+        for(const auto& particle_emitter : particle_emitters)
+        {
+            particle_emitter.component->render_emitter(pass.id, particle_program_->native_handle(), cam_view, cam_pos);
+        }
 
         particle_program_->end();
     }

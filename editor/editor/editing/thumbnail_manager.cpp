@@ -30,7 +30,7 @@ namespace
 {
 
 template<typename T>
-auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset) -> gfx::texture::ptr
+auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 1, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
 {
     auto& thumbnail = gen.thumbnails[asset.uid()];
     auto current_fbo = thumbnail.get();
@@ -42,12 +42,22 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             auto& scn = gen.get_scene();
             scn.unload();
             auto& ctx = engine::context();
-            defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, {256, 256});
-
-            delta_t dt(0.016667f);
+            bool focus_camera = frames == 1;
+            auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, {256, 256}, focus_camera);
 
             auto& rpath = ctx.get_cached<rendering_system>();
-            rpath.on_frame_update(scn, dt);
+            for(int i = 0; i < frames; i++)
+            {
+                rpath.on_frame_update(scn, dt);
+            }
+
+            if(result.object && !focus_camera)
+            {
+                std::array<entt::handle, 1> entities = {result.object};
+                defaults::focus_camera_on_entities(result.camera, entities);
+            }
+
+            
             rpath.on_frame_before_render(scn, dt);
             auto new_fbo = rpath.render_scene(scn, dt);
             thumbnail.set(new_fbo);
@@ -65,7 +75,8 @@ template<typename T>
 auto get_thumbnail_impl(thumbnail_manager::generator& gen,
                         const asset_handle<T>& asset,
                         const asset_handle<gfx::texture>& transparent,
-                        const asset_handle<gfx::texture>& loading) -> gfx::texture::ptr
+                        const asset_handle<gfx::texture>& loading,
+                        int frames = 1, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
 {
     if(!asset.is_valid())
     {
@@ -77,7 +88,7 @@ auto get_thumbnail_impl(thumbnail_manager::generator& gen,
         return loading.get();
     }
 
-    return make_thumbnail(gen, asset);
+    return make_thumbnail(gen, asset, frames, dt);
 }
 
 } // namespace
@@ -205,7 +216,9 @@ auto thumbnail_manager::get_thumbnail<gfx::shader>(const asset_handle<gfx::shade
 template<>
 auto thumbnail_manager::get_thumbnail<prefab>(const asset_handle<prefab>& asset) -> gfx::texture::ptr
 {
-    auto thumbnail = get_thumbnail_impl(gen_, asset, thumbnails_.transparent, thumbnails_.loading);
+    delta_t dt(0.016667f * 5.0f);
+    int frames = 2;
+    auto thumbnail = get_thumbnail_impl(gen_, asset, thumbnails_.transparent, thumbnails_.loading, frames, dt);
 
     if(thumbnail)
     {

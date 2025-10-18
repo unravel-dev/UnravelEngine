@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 #include "color.h"
 
 namespace math
@@ -70,10 +71,26 @@ public:
     void set_interpolation_mode(gradient_interpolation_mode_t mode);
     auto get_interpolation_mode() const noexcept -> gradient_interpolation_mode_t;
 
+    // LUT functionality
+    void generate_lut(size_t lut_size = 256);
+    void clear_lut();
+    bool has_lut() const noexcept { return !lut_.empty(); }
+
     auto operator==(const gradient<T>& other) const -> bool;
 private:
     points_t points_{};
     gradient_interpolation_mode_t interpolation_mode_ = gradient_interpolation_mode_t::linear;
+    
+    // LUT cache for O(1) sampling
+    mutable std::vector<T> lut_;
+    mutable size_t lut_size_ = 0;
+    mutable bool lut_dirty_ = true;
+    
+    // Internal methods
+    void regenerate_lut_if_needed() const;
+    T sample_from_lut(float progress) const;
+    T sample_original(float progress) const;
+    void mark_lut_dirty() const { lut_dirty_ = true; }
 };
 
 } // namespace math

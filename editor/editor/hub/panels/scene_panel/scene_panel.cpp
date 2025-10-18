@@ -1204,7 +1204,8 @@ void scene_panel::handle_prefab_mode_changes(rtti::context& ctx)
     // Detect when we enter prefab mode
     if(is_prefab_mode && !was_prefab_mode_)
     {
-        defaults::focus_camera_on_entities(get_camera(), {em.prefab_entity}, 0.4);
+        std::array<entt::handle, 1> entities = {em.prefab_entity};
+        defaults::focus_camera_on_entities(get_camera(), entities, 0.4);
     }
     // Detect when we exit prefab mode (e.g., due to external factors)
     else if(!is_prefab_mode && was_prefab_mode_)

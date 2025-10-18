@@ -242,6 +242,15 @@ void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
         }
     }
 
+    if(auto* pc = entity.try_get<particle_emitter_component>())
+    {
+        auto b = pc->get_updated_world_bounds(world_xform);
+        for(const auto& corner : b.get_corners())
+        {
+            bounds.add_point(corner);
+        }
+    }
+
     // recurse into children
     if(depth != 0) // depth<0 means infinite
     {
@@ -715,68 +724,46 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
 }
 
 template<>
-void defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
+auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                          scene& scn,
                                                          const asset_handle<material>& asset,
-                                                         const usize32_t& size)
+                                                         const usize32_t& size, bool focus_camera)
+    -> asset_preview_result
 {
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
-    {
-        auto object = create_embedded_mesh_entity(ctx, scn, "Sphere");
-        auto& model_comp = object.get<model_component>();
-        auto model = model_comp.get_model();
-        model.set_material(asset, 0);
-        model_comp.set_model(model);
-        model_comp.set_casts_shadow(false);
-        model_comp.set_casts_reflection(false);
+    
+    auto object = create_embedded_mesh_entity(ctx, scn, "Sphere");
+    auto& model_comp = object.get<model_component>();
+    auto model = model_comp.get_model();
+    model.set_material(asset, 0);
+    model_comp.set_model(model);
+    model_comp.set_casts_shadow(false);
+    model_comp.set_casts_reflection(false);
 
+    if(focus_camera)
+    {
         ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object, false));
     }
+
+
+    return asset_preview_result{object, camera};
 }
 
 template<>
-void defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
+auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                          scene& scn,
                                                          const asset_handle<prefab>& asset,
-                                                         const usize32_t& size)
+                                                         const usize32_t& size, bool focus_camera)
+    -> asset_preview_result
 {
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
+    
+    auto object = scn.instantiate(asset);
+
+    if(object)
     {
-        auto object = scn.instantiate(asset);
-
-        if(object)
-        {
-            if(auto model_comp = object.try_get<model_component>())
-            {
-                model_comp->set_casts_shadow(false);
-                model_comp->set_casts_reflection(false);
-            }
-
-            auto bounds = calc_bounds_sphere_global(object);
-            if(bounds.radius < 1.0f)
-            {
-                float scale = 1.0f / bounds.radius;
-                object.get<transform_component>().scale_by_local(math::vec3(scale));
-            }
-
-            ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object));
-        }
-    }
-}
-
-template<>
-void defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
-                                                         scene& scn,
-                                                         const asset_handle<mesh>& asset,
-                                                         const usize32_t& size)
-{
-    auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
-
-    {
-        auto object = create_mesh_entity_at(ctx, scn, asset.id());
-
         if(auto model_comp = object.try_get<model_component>())
         {
             model_comp->set_casts_shadow(false);
@@ -790,12 +777,49 @@ void defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
             object.get<transform_component>().scale_by_local(math::vec3(scale));
         }
 
+        if(focus_camera)
+        {
+            ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object));
+        }
+    }
+    
+    return asset_preview_result{object, camera};
+}
+
+template<>
+auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
+                                                         scene& scn,
+                                                         const asset_handle<mesh>& asset,
+                                                         const usize32_t& size, bool focus_camera)
+    -> asset_preview_result
+{
+    auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
+
+    auto object = create_mesh_entity_at(ctx, scn, asset.id());
+
+    if(auto model_comp = object.try_get<model_component>())
+    {
+        model_comp->set_casts_shadow(false);
+        model_comp->set_casts_reflection(false);
+    }
+
+    auto bounds = calc_bounds_sphere_global(object);
+    if(bounds.radius < 1.0f)
+    {
+        float scale = 1.0f / bounds.radius;
+        object.get<transform_component>().scale_by_local(math::vec3(scale));
+    }
+
+    if(focus_camera)
+    {
         ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object));
     }
+
+    return asset_preview_result{object, camera};
 }
 
 
-void defaults::focus_camera_on_entities(entt::handle camera, const std::vector<entt::handle>& entities)
+void defaults::focus_camera_on_entities(entt::handle camera, hpp::span<const entt::handle> entities)
 {
     if(camera.all_of<transform_component, camera_component>())
     {
@@ -822,7 +846,7 @@ void defaults::focus_camera_on_entities(entt::handle camera, const std::vector<e
 }
 
 void defaults::focus_camera_on_entities(entt::handle camera, 
-                                        const std::vector<entt::handle>& entities,
+                                        hpp::span<const entt::handle> entities,
                                         float duration)
 {
     if(camera.all_of<transform_component, camera_component>())

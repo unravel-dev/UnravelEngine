@@ -13,6 +13,7 @@
 #include <bgfx/bgfx.h>
 #include <math/gradient.h>
 #include <math/math.h>
+#include <math/bbox.h>
 #include <core/base/basetypes.hpp>
 
 struct EmitterHandle { uint16_t idx; };
@@ -30,7 +31,7 @@ struct EmitterShape
 		Sphere,
 		Hemisphere,
 		Circle,
-		Disc,
+		Box,
 		Rect,
 
 		Count
@@ -55,6 +56,7 @@ struct EmitterUniforms
 	math::vec3 m_position;
 	math::vec3 m_angle;
 	math::vec3 m_scale; // 3D scale for the entire particle system (x, y, z)
+	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
 
 	// Previous position for motion interpolation (set internally)
 	math::vec3 m_prevPosition;
@@ -93,13 +95,15 @@ void psShutdown();
 EmitterHandle psCreateEmitter(EmitterShape::Enum _shape, EmitterDirection::Enum _direction, uint32_t _maxParticles);
 
 ///
-void psUpdateEmitter(EmitterHandle _handle, float _dt, const EmitterUniforms* _uniforms = nullptr);
+void psUpdateEmitter(EmitterHandle _handle, float _dt, EmitterUniforms* _uniforms = nullptr);
+
+bool psHasUpdated(EmitterHandle _handle);
 
 ///
 void psResetEmitter(EmitterHandle _handle);
 
 ///
-void psGetAabb(EmitterHandle _handle, bx::Aabb& _outAabb);
+void psGetAabb(EmitterHandle _handle, math::bbox& _outAabb);
 
 uint32_t psGetNumParticles(EmitterHandle _handle);
 
@@ -107,6 +111,6 @@ uint32_t psGetNumParticles(EmitterHandle _handle);
 void psDestroyEmitter(EmitterHandle _handle);
 
 ///
-void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const bx::Vec3& _eye);
+void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
 
 #endif // PARTICLE_SYSTEM_H_HEADER_GUARD

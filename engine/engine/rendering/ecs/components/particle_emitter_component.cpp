@@ -27,10 +27,6 @@ void particle_emitter_component::on_create_component(entt::registry& r, entt::en
     
     // Initialize uniforms with default values
     component.uniforms_.reset();
-
-    // Sync member variables with uniforms
-    component.sync_uniforms_from_members();
-    
     // Create the particle emitter
     component.recreate_emitter();
 }
@@ -171,6 +167,16 @@ auto particle_emitter_component::get_force_over_lifetime() const -> math::vec3
     return uniforms_.m_forceOverLifetime;
 }
 
+void particle_emitter_component::set_emission_shape_scale(const math::vec3& scale)
+{
+    uniforms_.m_emissionShapeScale = scale;
+}
+
+auto particle_emitter_component::get_emission_shape_scale() const -> math::vec3
+{
+    return uniforms_.m_emissionShapeScale;
+}
+
 void particle_emitter_component::set_size_by_speed_range(const frange_t& size_range)
 {
     uniforms_.m_sizeBySpeedRange = size_range;
@@ -194,6 +200,7 @@ auto particle_emitter_component::get_size_by_speed_velocity_range() const -> con
 void particle_emitter_component::set_color_by_speed_gradient(const math::gradient<math::color>& gradient)
 {
     uniforms_.m_colorBySpeedGradient = gradient;
+    uniforms_.m_colorBySpeedGradient.generate_lut(256); // Generate LUT for optimization
 }
 
 auto particle_emitter_component::get_color_by_speed_gradient() const -> const math::gradient<math::color>&
@@ -225,6 +232,7 @@ auto particle_emitter_component::get_lifetime() const -> std::chrono::duration<f
 void particle_emitter_component::set_velocity_gradient(const math::gradient<frange_t>& gradient)
 {
     uniforms_.m_velocityGradient = gradient;
+    uniforms_.m_velocityGradient.generate_lut(256); // Generate LUT for optimization
 }
 
 auto particle_emitter_component::get_velocity_gradient() const -> const math::gradient<frange_t>&
@@ -235,6 +243,7 @@ auto particle_emitter_component::get_velocity_gradient() const -> const math::gr
 void particle_emitter_component::set_scale_gradient(const math::gradient<frange_t>& gradient)
 {
     uniforms_.m_scaleGradient = gradient;
+    uniforms_.m_scaleGradient.generate_lut(256); // Generate LUT for optimization
 }
 
 auto particle_emitter_component::get_scale_gradient() const -> const math::gradient<frange_t>&
@@ -245,6 +254,7 @@ auto particle_emitter_component::get_scale_gradient() const -> const math::gradi
 void particle_emitter_component::set_blend_gradient(const math::gradient<frange_t>& gradient)
 {
     uniforms_.m_blendGradient = gradient;
+    uniforms_.m_blendGradient.generate_lut(256); // Generate LUT for optimization
 }
 
 auto particle_emitter_component::get_blend_gradient() const -> const math::gradient<frange_t>&
@@ -255,6 +265,7 @@ auto particle_emitter_component::get_blend_gradient() const -> const math::gradi
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
     uniforms_.m_colorGradient = gradient;
+    uniforms_.m_colorGradient.generate_lut(256); // Generate LUT for optimization
 }
 
 auto particle_emitter_component::get_color_gradient() const -> const math::gradient<math::color>&
@@ -281,11 +292,20 @@ auto particle_emitter_component::get_num_particles() const -> uint32_t
 
 auto particle_emitter_component::get_world_bounds() const -> math::bbox
 {
-    bx::Aabb bounds;
+    math::bbox bounds(math::vec3(-1.0f), math::vec3(1.0f));
     psGetAabb(emitter_handle_, bounds);
-    return math::bbox(bounds.min.x, bounds.min.y, bounds.min.z, bounds.max.x, bounds.max.y, bounds.max.z);
+    return bounds;
 }
 
+auto particle_emitter_component::get_updated_world_bounds(const math::transform& world_transform) const -> math::bbox
+{
+    auto bounds = get_world_bounds();
+    if(!psHasUpdated(emitter_handle_))
+    {
+        bounds.mul(world_transform);
+    }
+    return bounds;
+}
 
 void particle_emitter_component::set_texture(const asset_handle<gfx::texture>& texture)
 {
@@ -302,8 +322,11 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
 {
     if(isValid(emitter_handle_) && enabled_)
     {
+        auto prev_position = uniforms_.m_position;
         // Update position from transform
         uniforms_.m_position = world_transform.get_position();
+
+        uniforms_.m_prevPosition = prev_position;
         
         // Update rotation from transform (convert quaternion to Euler angles)
         const auto& world_rot = world_transform.get_rotation();
@@ -312,26 +335,40 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         // Update scale from transform
         uniforms_.m_scale = world_transform.get_scale();
 
-        sync_uniforms_from_members();
+        auto tex = [&]()
+        {
+            if(texture_.is_valid())
+            {
+                return texture_.get();
+            }
+            return material::default_color_map().get();
+        }();
+        uniforms_.m_texture = tex->native_handle();
         
         psUpdateEmitter(emitter_handle_, dt.count(), &uniforms_);
 
     }
 }
 
-void particle_emitter_component::render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const bx::Vec3& eye)
+void particle_emitter_component::render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const math::vec3& eye)
 {
     if(isValid(emitter_handle_) && enabled_)
     {
-        psRenderEmitter(emitter_handle_, view, program, mtxView, eye);
+        
+        auto tex = [&]()
+        {
+            if(texture_.is_valid())
+            {
+                return texture_.get();
+            }
+            return material::default_color_map().get();
+        }();
+        auto texture_handle = tex->native_handle();
+
+        psRenderEmitter(emitter_handle_, view, program, mtxView, eye, texture_handle);
     }
 }
 
-
-auto particle_emitter_component::get_uniforms() -> EmitterUniforms&
-{
-    return uniforms_;
-}
 
 auto particle_emitter_component::get_uniforms() const -> const EmitterUniforms&
 {
@@ -366,23 +403,5 @@ void particle_emitter_component::reset_emitter()
     }
 }
 
-void particle_emitter_component::sync_uniforms_from_members()
-{
-
-    
-    // Color by speed gradient now handled directly in uniforms - no sync needed
-    
-    
-    if(texture_.is_valid())
-    {
-        auto tex = texture_.get();
-        uniforms_.m_texture = tex->native_handle();
-    }
-    else
-    {
-        uniforms_.m_texture = material::default_color_map().get()->native_handle();
-    }
-
-}
 
 } // namespace unravel

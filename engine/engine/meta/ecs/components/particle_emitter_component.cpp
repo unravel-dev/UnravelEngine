@@ -38,10 +38,10 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "Circle"},
             entt::attribute{"pretty_name", "Circle"},
         })
-        .data<EmitterShape::Disc>("Disc"_hs)
+        .data<EmitterShape::Box>("Box"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "Disc"},
-            entt::attribute{"pretty_name", "Disc"},
+            entt::attribute{"name", "Box"},
+            entt::attribute{"pretty_name", "Box"},
         })
         .data<EmitterShape::Rect>("Rect"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -275,6 +275,12 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "shape"},
             entt::attribute{"pretty_name", "Emitter Shape"},
             entt::attribute{"tooltip", "Geometric shape from which particles are spawned. Sphere = 3D ball, Hemisphere = half sphere, Circle = 2D ring, Disc = filled circle, Rect = rectangle."},
+        })
+        .data<&particle_emitter_component::set_emission_shape_scale, &particle_emitter_component::get_emission_shape_scale>("emission_shape_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "emission_shape_scale"},
+            entt::attribute{"pretty_name", "Emitter Shape Scale"},
+            entt::attribute{"tooltip", "Scale of the emission shape. 1.0 = no scaling, 2.0 = double size, 0.5 = half size."},
         })
         .data<&particle_emitter_component::set_direction, &particle_emitter_component::get_direction>("direction"_hs)
         .custom<entt::attributes>(entt::attributes{
