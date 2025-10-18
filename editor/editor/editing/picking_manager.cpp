@@ -31,6 +31,90 @@ auto from_bx(const bx::Vec3& data) -> math::vec3
 
 } // namespace
 
+// Helper functions for different picking types
+namespace
+{
+// Type 1: Position-only picking
+bool is_position_in_selection_area(const math::vec3& world_position,
+                                   const camera& pick_camera,
+                                   const math::vec2& pick_position,
+                                   const math::vec2& pick_area)
+{
+    // Project position to screen space
+    math::vec3 screen_pos = pick_camera.world_to_viewport(world_position);
+
+    // Check if position is within the selection rectangle
+    return (
+        screen_pos.x >= pick_position.x - pick_area.x * 0.5f && screen_pos.x <= pick_position.x + pick_area.x * 0.5f &&
+        screen_pos.y >= pick_position.y - pick_area.y * 0.5f && screen_pos.y <= pick_position.y + pick_area.y * 0.5f);
+}
+
+// Type 3: Global bounds (already world-space)
+bool are_corners_in_selection_area(hpp::span<const math::vec3> corners,
+                                   const camera& pick_camera,
+                                   const math::vec2& pick_position,
+                                   const math::vec2& pick_area)
+{
+    // Check if all corners are in selection area
+    bool all_corners_in_selection = true;
+    for(int i = 0; i < 8; ++i)
+    {
+        // Project to screen space (corners are already in world space)
+        math::vec3 screen_pos = pick_camera.world_to_viewport(corners[i]);
+
+        // Check if this corner is within the selection rectangle
+        bool corner_in_selection = (screen_pos.x >= pick_position.x - pick_area.x * 0.5f &&
+                                    screen_pos.x <= pick_position.x + pick_area.x * 0.5f &&
+                                    screen_pos.y >= pick_position.y - pick_area.y * 0.5f &&
+                                    screen_pos.y <= pick_position.y + pick_area.y * 0.5f);
+
+        all_corners_in_selection &= corner_in_selection;
+    }
+
+    return all_corners_in_selection;
+}
+
+// Type 2: Local bounds with transform (existing logic)
+bool are_local_bounds_in_selection_area(const math::bbox& local_bounds,
+                                        const math::transform& world_transform,
+                                        const camera& pick_camera,
+                                        const math::vec2& pick_position,
+                                        const math::vec2& pick_area)
+{
+    // Generate bounding box corners
+    math::vec3 corners[8] = {
+        world_transform.transform_coord({local_bounds.min.x, local_bounds.min.y, local_bounds.min.z}),
+        world_transform.transform_coord({local_bounds.max.x, local_bounds.min.y, local_bounds.min.z}),
+        world_transform.transform_coord({local_bounds.min.x, local_bounds.max.y, local_bounds.min.z}),
+        world_transform.transform_coord({local_bounds.max.x, local_bounds.max.y, local_bounds.min.z}),
+        world_transform.transform_coord({local_bounds.min.x, local_bounds.min.y, local_bounds.max.z}),
+        world_transform.transform_coord({local_bounds.max.x, local_bounds.min.y, local_bounds.max.z}),
+        world_transform.transform_coord({local_bounds.min.x, local_bounds.max.y, local_bounds.max.z}),
+        world_transform.transform_coord({local_bounds.max.x, local_bounds.max.y, local_bounds.max.z})};
+
+    return are_corners_in_selection_area(corners, pick_camera, pick_position, pick_area);
+}
+
+// Type 3: Global bounds (already world-space)
+bool are_global_bounds_in_selection_area(const math::bbox& world_bounds,
+                                         const camera& pick_camera,
+                                         const math::vec2& pick_position,
+                                         const math::vec2& pick_area)
+{
+    // Generate bounding box corners (already in world space)
+    math::vec3 corners[8] = {{world_bounds.min.x, world_bounds.min.y, world_bounds.min.z},
+                             {world_bounds.max.x, world_bounds.min.y, world_bounds.min.z},
+                             {world_bounds.min.x, world_bounds.max.y, world_bounds.min.z},
+                             {world_bounds.max.x, world_bounds.max.y, world_bounds.min.z},
+                             {world_bounds.min.x, world_bounds.min.y, world_bounds.max.z},
+                             {world_bounds.max.x, world_bounds.min.y, world_bounds.max.z},
+                             {world_bounds.min.x, world_bounds.max.y, world_bounds.max.z},
+                             {world_bounds.max.x, world_bounds.max.y, world_bounds.max.z}};
+
+    return are_corners_in_selection_area(corners, pick_camera, pick_position, pick_area);
+}
+} // namespace
+
 constexpr int picking_manager::tex_id_dim;
 void picking_manager::on_frame_render(rtti::context& ctx, delta_t dt)
 {
@@ -43,8 +127,8 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 
     // Get the appropriate scene based on edit mode
     scene* target_scene = em.get_active_scene(ctx);
-    
-    if (!target_scene)
+
+    if(!target_scene)
     {
         return;
     }
@@ -53,87 +137,93 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
     {
         const auto& pick_camera = *pick_camera_;
 
-        target_scene->registry->view<transform_component, model_component, active_component>().each(
-            [&](auto e, auto&& transform_comp, auto&& model_comp, auto&& active)
+        auto on_pick_failed = [&](auto e)
+        {
+            auto ue = target_scene->create_handle(e);
+            em.unselect(ue);
+        };
+
+        auto on_pick_success = [&](auto e)
+        {
+            auto id = ENTT_ID_TYPE(e);
+            process_pick_result(ctx, target_scene, id);
+        };
+
+        // Area picking supports three types of entities:
+        // Type 1: Position-only picking for entities with just transform_component (no visual bounds)
+        target_scene->registry->view<transform_component, active_component>().each(
+            [&](auto e, auto&& transform_comp, auto&& active)
             {
-                auto& model = model_comp.get_model();
-                if(!model.is_valid())
-                {
-                    return;
-                }
-
                 const auto& world_transform = transform_comp.get_transform_global();
+                const auto& world_position = world_transform.get_position();
 
-                auto lod = model.get_lod(0);
-                if(!lod)
+                // if(auto model_comp = target_scene->registry->try_get<model_component>(e))
+                // {
+                //     auto& model = model_comp->get_model();
+                //     if(!model.is_valid())
+                //     {
+                //         return;
+                //     }
+
+                //     auto lod = model.get_lod(0);
+                //     if(!lod)
+                //     {
+                //         return;
+                //     }
+
+                //     const auto& mesh = lod.get();
+                //     const auto& bounds = mesh->get_bounds();
+
+                //     if(!pick_camera.test_obb(bounds, world_transform))
+                //     {
+                //         on_pick_failed(e);
+                //         return;
+                //     }
+
+                //     if(!are_local_bounds_in_selection_area(bounds, world_transform, pick_camera, pick_position_,
+                //     pick_area_))
+                //     {
+                //         on_pick_failed(e);
+                //         return;
+                //     }
+                // }
+
+                // if(auto particle_comp = target_scene->registry->try_get<particle_emitter_component>(e))
+                // {
+                //     const auto& world_bounds = particle_comp->get_world_bounds();
+                //     if(!pick_camera.test_aabb(world_bounds))
+                //     {
+                //         on_pick_failed(e);
+                //         return;
+                //     }
+
+                //     if(!are_global_bounds_in_selection_area(world_bounds, pick_camera, pick_position_, pick_area_))
+                //     {
+                //         on_pick_failed(e);
+                //         return;
+                //     }
+                // }
+
+                if(!pick_camera.get_frustum().test_point(world_position))
                 {
+                    on_pick_failed(e);
                     return;
                 }
 
-                const auto& mesh = lod.get();
-                const auto& bounds = mesh->get_bounds();
-
-                // Test the bounding box of the mesh
-                if(!pick_camera.test_obb(bounds, world_transform))
+                // Test if position is in selection area
+                if(!is_position_in_selection_area(world_position, pick_camera, pick_position_, pick_area_))
                 {
-                    auto ue = target_scene->create_handle(e);
-                    em.unselect(ue);
+                    on_pick_failed(e);
                     return;
                 }
 
-                // After OBB test, check if the screen bounds are in the rect area
-                // Project the bounding box corners to screen space and check if any are in the selection area
-                const auto& bbox = bounds;
-                math::vec3 corners[8] = {
-                    {bbox.min.x, bbox.min.y, bbox.min.z},
-                    {bbox.max.x, bbox.min.y, bbox.min.z},
-                    {bbox.min.x, bbox.max.y, bbox.min.z},
-                    {bbox.max.x, bbox.max.y, bbox.min.z},
-                    {bbox.min.x, bbox.min.y, bbox.max.z},
-                    {bbox.max.x, bbox.min.y, bbox.max.z},
-                    {bbox.min.x, bbox.max.y, bbox.max.z},
-                    {bbox.max.x, bbox.max.y, bbox.max.z}
-                };
-
-                bool in_selection_area = true;
-                for(int i = 0; i < 8; ++i)
-                {
-                    bool corner_in_selection_area = false;
-                    // Transform corner to world space
-                    math::vec3 world_corner = world_transform.transform_coord(corners[i]);
-                    
-                    // Project to screen space
-                    math::vec3 screen_pos = pick_camera.world_to_viewport(world_corner);
-                    
-                    // Check if this corner is within the selection rectangle
-                    if(screen_pos.x >= pick_position_.x - pick_area_.x * 0.5f &&
-                       screen_pos.x <= pick_position_.x + pick_area_.x * 0.5f &&
-                       screen_pos.y >= pick_position_.y - pick_area_.y * 0.5f &&
-                       screen_pos.y <= pick_position_.y + pick_area_.y * 0.5f)
-                    {
-                        corner_in_selection_area = true;
-                    }
-
-                    in_selection_area &= corner_in_selection_area;
-                }
-
-
-                if(!in_selection_area)
-                {
-                    auto ue = target_scene->create_handle(e);
-                    em.unselect(ue);
-                    return;
-                }
-
-                auto id = ENTT_ID_TYPE(e);
-
-                process_pick_result(ctx, target_scene, id);
+                on_pick_success(e);
             });
 
         pick_camera_.reset();
         pick_position_ = {};
         pick_area_ = {};
-        
+
         return;
     }
 
@@ -153,6 +243,10 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         pass.bind(surface_.get());
 
         bool anything_picked = false;
+
+        // Regular picking (render-to-texture) supports:
+        // Type 2: Model components - rendered with actual geometry
+        // Type 1 & 3: Other components - handled via gizmo icons (see gizmo section below)
         target_scene->registry->view<transform_component, model_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& model_comp, auto&& active)
             {
@@ -304,11 +398,9 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                             });
                     });
 
-
                 dd.encoder.popProgram();
                 program_gizmos_->end();
             }
-
         }
 
         pick_camera_.reset();
@@ -398,7 +490,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 em.unselect();
             }
         }
-        
+
         // Clear the callback after processing
         pick_callback_ = {};
     }
@@ -409,14 +501,14 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     // Create entity handle (may be invalid if id_key is 0)
     auto entity = entt::entity(id_key);
     entt::handle picked_entity;
-    
+
     // Only try to create a handle if the entity ID is valid
-    if (id_key != 0)
+    if(id_key != 0)
     {
         picked_entity = target_scene->create_handle(entity);
     }
-    
-    if (pick_callback_)
+
+    if(pick_callback_)
     {
         // Call the custom callback with either a valid entity or an invalid handle
         // Do this because the callback can reassign the pick_callback_ variable
@@ -427,7 +519,7 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     {
         // Use the traditional selection mechanism
         auto& em = ctx.get_cached<editing_manager>();
-        if (picked_entity)
+        if(picked_entity)
         {
             em.select(picked_entity, pick_mode_);
         }
@@ -515,7 +607,6 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
     {
         // Area picking: copy the passed camera and adjust for the selection area
         pick_camera = cam; // Copy the passed camera
-        
     }
     else
     {
@@ -523,14 +614,14 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
         const auto near_clip = cam.get_near_clip();
         const auto far_clip = cam.get_far_clip();
         const auto& frustum = cam.get_frustum();
-    
+
         math::vec3 pick_eye;
         math::vec3 pick_at;
         math::vec3 pick_up = cam.y_unit_axis();
-    
+
         if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::near_plane], pick_eye, true))
             return;
-    
+
         if(!cam.viewport_to_world(pos, frustum.planes[math::volume_plane::far_plane], pick_at, true))
             return;
 
@@ -557,7 +648,10 @@ void picking_manager::cancel_pick()
     start_readback_ = false;
 }
 
-void picking_manager::request_pick(const camera& cam, editing_manager::select_mode mode, math::vec2 pos, math::vec2 area)
+void picking_manager::request_pick(const camera& cam,
+                                   editing_manager::select_mode mode,
+                                   math::vec2 pos,
+                                   math::vec2 area)
 {
     setup_pick_camera(cam, pos, area);
     pick_mode_ = mode;
@@ -573,11 +667,11 @@ void picking_manager::request_pick(const camera& cam, editing_manager::select_mo
 void picking_manager::query_pick(math::vec2 pos, const camera& cam, pick_callback callback, bool force)
 {
     // If already picking, ignore this request
-    if (!force && is_picking())
+    if(!force && is_picking())
     {
         return;
     }
-    
+
     // Set up the pick operation
     setup_pick_camera(cam, pos);
     pick_callback_ = callback;
