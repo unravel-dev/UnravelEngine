@@ -163,6 +163,8 @@ protected:
     hiz_pass hiz_pass_{};  ///< Hi-Z buffer generation pass
 
     std::unique_ptr<gpu_program> particle_program_{};
+    std::unique_ptr<gpu_program> particle_program_instanced_{};
+
 };
 } // namespace rendering
 } // namespace unravel

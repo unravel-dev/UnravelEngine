@@ -45,6 +45,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
     };
 
     particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
+    particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
+
 
     return true;
 }
@@ -223,7 +225,7 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
     const auto& proj = camera.get_projection();
     pass.set_view_proj(view, proj);
 
-    if(particle_program_ && particle_program_->begin())
+    if(particle_program_instanced_ && particle_program_instanced_->begin())
     {
         // Render particles using the particle system
         auto cam_pos = camera.get_position();
@@ -257,10 +259,10 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
         // Render all particles
         for(const auto& particle_emitter : particle_emitters)
         {
-            particle_emitter.component->render_emitter(pass.id, particle_program_->native_handle(), cam_view, cam_pos);
+            particle_emitter.component->render_emitter(pass.id, particle_program_instanced_->native_handle(), cam_view, cam_pos);
         }
 
-        particle_program_->end();
+        particle_program_instanced_->end();
     }
 }
 

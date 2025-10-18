@@ -38,6 +38,40 @@ struct PosColorTexCoord0Vertex
 
 bgfx::VertexLayout PosColorTexCoord0Vertex::ms_layout;
 
+// New instanced particle vertex structure (just position and UV)
+struct ParticleVertex
+{
+    float x;
+    float y;
+    float z;
+    float u;
+    float v;
+
+    static void init()
+    {
+        ms_layout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .end();
+    }
+
+    static bgfx::VertexLayout ms_layout;
+};
+
+bgfx::VertexLayout ParticleVertex::ms_layout;
+
+// Static quad geometry for instanced particles
+static ParticleVertex s_quadVertices[4] = {
+    {-0.5f, -0.5f, 0.0f, 0.0f, 1.0f}, // Bottom-left
+    { 0.5f, -0.5f, 0.0f, 1.0f, 1.0f}, // Bottom-right
+    { 0.5f,  0.5f, 0.0f, 1.0f, 0.0f}, // Top-right
+    {-0.5f,  0.5f, 0.0f, 0.0f, 0.0f}  // Top-left
+};
+
+static const uint16_t s_quadIndices[6] = {
+    0, 1, 2, 2, 3, 0
+};
+
 void EmitterUniforms::reset()
 {
     m_position = math::vec3(0.0f, 0.0f, 0.0f);
@@ -231,7 +265,12 @@ struct Emitter
             (uniforms_.m_sizeBySpeedVelocityRange.max > uniforms_.m_sizeBySpeedVelocityRange.min &&
              uniforms_.m_sizeBySpeedRange.min != uniforms_.m_sizeBySpeedRange.max);
 
+
         uint32_t num = num_particles_;
+
+		math::bbox aabb;
+		aabb.reset();
+
         for(uint32_t ii = 0; ii < num; ++ii)
         {
             Particle& particle = particles_[ii];
@@ -251,7 +290,17 @@ struct Emitter
 
             // Update cached properties for living particles
             updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
+			
+			// Add particle position with some padding for scale
+			math::vec3 padding(particle.scale * 0.5f);
+			aabb.add_point(particle.position - padding);
+			aabb.add_point(particle.position + padding);
         }
+
+		if(num > 0)
+		{
+			aabb_ = aabb;
+		}
 
         num_particles_ = num;
 
@@ -264,67 +313,10 @@ struct Emitter
         BX_ASSERT(num_particles_ <= max_particles_, "Particle count exceeded maximum! num_particles_=%d, max_particles_=%d", num_particles_, max_particles_);
         num_particles_ = math::min(num_particles_, max_particles_);
 
-        // Update AABB - use worst-case estimation on first update, then render will keep it updated
         if(first_update_)
         {
-            updateWorstCaseAabb(uniforms_);
             first_update_ = false;
         }
-    }
-
-    void updateWorstCaseAabb(EmitterUniforms& uniforms_)
-    {
-        // Calculate worst-case AABB based on emitter parameters
-        // This gives us conservative bounds for culling before any particles are rendered
-
-        // Start with emitter position
-        const math::vec3 emitterPos = uniforms_.m_position;
-        const float maxLifeSpan = uniforms_.m_lifetime;
-        const math::vec3 systemScale = uniforms_.m_scale;
-
-        // Sample maximum velocity from gradient (conservative estimate using end points)
-        const frange_t startVelRange = uniforms_.m_velocityGradient.sample(0.0f);
-        const frange_t endVelRange = uniforms_.m_velocityGradient.sample(1.0f);
-        const float maxVelocity =
-            math::max(math::max(startVelRange.max, endVelRange.max), math::max(startVelRange.min, endVelRange.min));
-
-        // Sample maximum scale from gradient (conservative estimate using end points)
-        const frange_t startScaleRange = uniforms_.m_scaleGradient.sample(0.0f);
-        const frange_t endScaleRange = uniforms_.m_scaleGradient.sample(1.0f);
-        const float maxScale = math::max(math::max(startScaleRange.max, endScaleRange.max),
-                                         math::max(startScaleRange.min, endScaleRange.min));
-
-        // Calculate per-axis extents for more accurate bounds
-        math::vec3 maxExtent = math::vec3(0.0f);
-
-        // 1. Emission shape extent (scaled by emission shape scale)
-        maxExtent += uniforms_.m_emissionShapeScale;
-
-        // 2. Velocity-based travel distance (per-axis)
-        const math::vec3 velocityExtent = systemScale * maxVelocity * maxLifeSpan;
-        maxExtent += velocityExtent;
-
-        // 3. Gravity effect (only affects Y axis)
-        if(uniforms_.m_gravityScale != 0.0f)
-        {
-            const float gravityDistance =
-                0.5f * 9.81f * math::abs(uniforms_.m_gravityScale) * (maxLifeSpan * maxLifeSpan) * systemScale.y;
-            maxExtent.y += gravityDistance;
-        }
-
-        // 4. Force over lifetime effect (per-axis)
-        const math::vec3 forceExtent =
-            math::abs(uniforms_.m_forceOverLifetime) * (maxLifeSpan * maxLifeSpan) * systemScale;
-        maxExtent += forceExtent;
-
-        // 5. Particle scale padding (affects all axes equally)
-        const float maxSystemScale = math::max(math::max(systemScale.x, systemScale.y), systemScale.z);
-        const float scalePadding = maxScale * maxSystemScale;
-        maxExtent += math::vec3(scalePadding);
-
-        // Apply system scale to final extent and create AABB
-        aabb_.min = emitterPos - maxExtent;
-        aabb_.max = emitterPos + maxExtent;
     }
 
     void spawn(EmitterUniforms& uniforms_, float _dt)
@@ -497,95 +489,6 @@ struct Emitter
         }
     }
 
-    uint32_t render(const float* _mtxView,
-                    const math::vec3& _eye,
-                    uint32_t _first,
-                    uint32_t _max,
-                    ParticleSort* _outSort,
-                    PosColorTexCoord0Vertex* _outVertices)
-    {
-        // Safety check: ensure num_particles_ is within bounds
-        BX_ASSERT(num_particles_ <= max_particles_, "Render: Particle count exceeded maximum! num_particles_=%d, max_particles_=%d", num_particles_, max_particles_);
-        const uint32_t safeNum = math::min(num_particles_, max_particles_);
-
-        math::bbox aabb;
-        aabb.reset();
-
-        const uint32_t numToRender = math::min(safeNum, _max);
-        for(uint32_t jj = 0; jj < numToRender; ++jj)
-        {
-            const Particle& particle = particles_[jj];
-            const math::vec3& pos = particle.position;
-
-            // Calculate distance for sorting
-            ParticleSort& sort = _outSort[jj];
-            const math::vec3 tmp0 = _eye - pos;
-            sort.dist = math::length(tmp0);
-            sort.idx = jj;
-
-            // Use cached properties (calculated in update)
-            const uint32_t abgr = particle.color;
-            const float blend = particle.blend;
-            const float scale = particle.scale;
-
-            const math::vec3 udir = math::vec3(_mtxView[0] * scale, _mtxView[4] * scale, _mtxView[8] * scale);
-            const math::vec3 vdir = math::vec3(_mtxView[1] * scale, _mtxView[5] * scale, _mtxView[9] * scale);
-
-            PosColorTexCoord0Vertex* vertex = &_outVertices[jj * 4];
-
-            const math::vec3 ul = pos - udir - vdir;
-            vertex->x = ul.x;
-            vertex->y = ul.y;
-            vertex->z = ul.z;
-            aabb.add_point(ul);
-            vertex->abgr = abgr;
-            vertex->u = 0.0f;
-            vertex->v = 0.0f;
-            vertex->blend = blend;
-            ++vertex;
-
-            const math::vec3 ur = pos + udir - vdir;
-            vertex->x = ur.x;
-            vertex->y = ur.y;
-            vertex->z = ur.z;
-            aabb.add_point(ur);
-            vertex->abgr = abgr;
-            vertex->u = 1.0f;
-            vertex->v = 0.0f;
-            vertex->blend = blend;
-            ++vertex;
-
-            const math::vec3 br = pos + udir + vdir;
-            vertex->x = br.x;
-            vertex->y = br.y;
-            vertex->z = br.z;
-            aabb.add_point(br);
-            vertex->abgr = abgr;
-            vertex->u = 1.0f;
-            vertex->v = 1.0f;
-            vertex->blend = blend;
-            ++vertex;
-
-            const math::vec3 bl = pos - udir + vdir;
-            vertex->x = bl.x;
-            vertex->y = bl.y;
-            vertex->z = bl.z;
-            aabb.add_point(bl);
-            vertex->abgr = abgr;
-            vertex->u = 0.0f;
-            vertex->v = 1.0f;
-            vertex->blend = blend;
-            ++vertex;
-        }
-
-        if(numToRender > 0)
-        {
-            aabb_ = aabb;
-        }
-
-        return numToRender;
-    }
-
     EmitterShape::Enum shape_;
     EmitterDirection::Enum direction_;
 
@@ -624,7 +527,19 @@ struct ParticleSystem
         m_emitterAlloc = bx::createHandleAlloc(m_allocator, _maxEmitters);
         m_emitter.resize(_maxEmitters);
 
+        // Initialize vertex layouts
         PosColorTexCoord0Vertex::init();
+        ParticleVertex::init();
+
+        // Create static quad geometry for instanced rendering
+        m_quadVBH = bgfx::createVertexBuffer(
+            bgfx::makeRef(s_quadVertices, sizeof(s_quadVertices)),
+            ParticleVertex::ms_layout
+        );
+
+        m_quadIBH = bgfx::createIndexBuffer(
+            bgfx::makeRef(s_quadIndices, sizeof(s_quadIndices))
+        );
 
         s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     }
@@ -632,6 +547,8 @@ struct ParticleSystem
     void shutdown()
     {
         bgfx::destroy(s_texColor);
+        bgfx::destroy(m_quadVBH);
+        bgfx::destroy(m_quadIBH);
 
         bx::destroyHandleAlloc(m_allocator, m_emitterAlloc);
         // bx::free(m_allocator, m_emitter);
@@ -656,58 +573,81 @@ struct ParticleSystem
             return; // Skip emitters with no particles or invalid texture
         }
 
-        bgfx::TransientVertexBuffer tvb;
-        bgfx::TransientIndexBuffer tib;
-
-        if(false == checkAvailTransientBuffers(emitter.num_particles_ * 4 + 1024 * 100,
-                                               PosColorTexCoord0Vertex::ms_layout,
-                                               emitter.num_particles_ * 6))
+        // Use instanced rendering - much more efficient!
+        const uint16_t instanceStride = 32; // 32 bytes per instance
+        
+        // Get available instance buffer space
+        uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(emitter.num_particles_, instanceStride);
+        
+        if(maxInstances == 0)
         {
-            BX_WARN(false, "Particle budget exceeded.");
-            return; // Skip if no transient buffer space available
+            BX_WARN(false, "No instance buffer space available.");
+            return;
         }
-
-        const uint32_t numVertices =
-            bgfx::getAvailTransientVertexBuffer(emitter.num_particles_ * 4, PosColorTexCoord0Vertex::ms_layout);
-        const uint32_t numIndices = bgfx::getAvailTransientIndexBuffer(emitter.num_particles_ * 6);
-        const uint32_t max = bx::uint32_min(numVertices / 4, numIndices / 6);
-
-        BX_WARN(emitter.num_particles_ == max,
-                "Truncating transient buffer for emitter particles to maximum available (requested %d, available %d).",
-                emitter.num_particles_,
-                max);
-
-        bgfx::allocTransientBuffers(&tvb, PosColorTexCoord0Vertex::ms_layout, max * 4, &tib, max * 6);
-        PosColorTexCoord0Vertex* vertices = (PosColorTexCoord0Vertex*)tvb.data;
-
-        // Render particles for this emitter only
-        const uint32_t particleCount = emitter.render(_mtxView, _eye, 0, max, emitter.particle_sort_, vertices);
-
-        // Sort particles within this emitter for proper alpha blending
-        qsort(emitter.particle_sort_, particleCount, sizeof(ParticleSort), particleSortFn);
-
-        // Generate indices for sorted particles
-        uint16_t* indices = (uint16_t*)tib.data;
-        for(uint32_t jj = 0; jj < particleCount; ++jj)
-        {
-            const ParticleSort& sort = emitter.particle_sort_[jj];
-            uint16_t* index = &indices[jj * 6];
-            uint16_t vertexIdx = (uint16_t)sort.idx;
-            index[0] = vertexIdx * 4 + 0;
-            index[1] = vertexIdx * 4 + 1;
-            index[2] = vertexIdx * 4 + 2;
-            index[3] = vertexIdx * 4 + 2;
-            index[4] = vertexIdx * 4 + 3;
-            index[5] = vertexIdx * 4 + 0;
-        }
-
-        // Render this emitter with its specific texture
-        bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
+        
+        // Allocate instance data buffer
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, maxInstances, instanceStride);
+        
+        // Generate instance data
+        generateInstanceData(emitter, idb, maxInstances, instanceStride, _eye);
+        
+        // Set static quad geometry
+        bgfx::setVertexBuffer(0, m_quadVBH);
+        bgfx::setIndexBuffer(m_quadIBH);
+        
+        // Set instance data
+        bgfx::setInstanceDataBuffer(&idb);
+        
+        // Set render state and texture
+        bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
+                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        BGFX_STATE_BLEND_NORMAL);
-        bgfx::setVertexBuffer(0, &tvb);
-        bgfx::setIndexBuffer(&tib);	
         bgfx::setTexture(0, s_texColor, _texture);
+        
+        // Single draw call for all particles!
         bgfx::submit(_view, _program);
+    }
+
+    void generateInstanceData(Emitter& emitter, bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, uint16_t instanceStride, const math::vec3& _eye)
+    {
+        uint8_t* data = idb.data;
+        
+        // Sort particles for proper alpha blending (simplified - just by distance)
+        for(uint32_t i = 0; i < emitter.num_particles_; ++i)
+        {
+            const Particle& particle = emitter.particles_[i];
+            const math::vec3 tmp0 = _eye - particle.position;
+            emitter.particle_sort_[i].dist = math::length(tmp0);
+            emitter.particle_sort_[i].idx = i;
+        }
+        
+        // Sort by distance (back to front for alpha blending)
+        qsort(emitter.particle_sort_, emitter.num_particles_, sizeof(ParticleSort), particleSortFn);
+        
+        // Generate instance data for sorted particles
+        uint32_t numToRender = math::min(emitter.num_particles_, maxInstances);
+        for(uint32_t i = 0; i < numToRender; ++i)
+        {
+            const ParticleSort& sort = emitter.particle_sort_[i];
+            const Particle& particle = emitter.particles_[sort.idx];
+            
+            // Position + Scale (16 bytes)
+            float* posScale = (float*)data;
+            posScale[0] = particle.position.x;
+            posScale[1] = particle.position.y;
+            posScale[2] = particle.position.z;
+            posScale[3] = particle.scale;
+            
+            // Color + Blend + Angle + Padding (16 bytes)
+            float* colorBlend = (float*)&data[16];
+            colorBlend[0] = *(float*)&particle.color; // Reinterpret uint32 as float for packing
+            colorBlend[1] = particle.blend;
+            colorBlend[2] = 0.0f; // angle (could add rotation later)
+            colorBlend[3] = 0.0f; // padding
+            
+            data += instanceStride;
+        }
     }
 
     EmitterHandle createEmitter(EmitterShape::Enum _shape, EmitterDirection::Enum _direction, uint32_t _maxParticles)
@@ -772,6 +712,10 @@ struct ParticleSystem
 
     bx::HandleAlloc* m_emitterAlloc;
     std::vector<Emitter> m_emitter;
+
+    // Static geometry for instanced rendering
+    bgfx::VertexBufferHandle m_quadVBH;
+    bgfx::IndexBufferHandle m_quadIBH;
 
     bgfx::UniformHandle s_texColor;
 };
