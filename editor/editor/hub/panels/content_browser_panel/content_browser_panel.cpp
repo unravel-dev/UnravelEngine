@@ -1246,7 +1246,8 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
     }
     else if constexpr(std::is_same_v<AssetType, script> || 
                       std::is_same_v<AssetType, gfx::shader> ||
-                      std::is_same_v<AssetType, style_sheet>)
+                      std::is_same_v<AssetType, style_sheet> ||
+                      std::is_same_v<AssetType, ui_tree>)
     {
         item.on_double_click = [absolute_path]()
         {
