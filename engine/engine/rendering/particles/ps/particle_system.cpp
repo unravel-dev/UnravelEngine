@@ -274,6 +274,9 @@ struct Emitter
 		math::bbox aabb;
 		aabb.reset();
 
+		aabb.add_point(uniforms_.m_position - math::vec3(0.5f));
+		aabb.add_point(uniforms_.m_position + math::vec3(0.5f));
+
         for(uint32_t ii = 0; ii < num; ++ii)
         {
             Particle& particle = particles_[ii];
@@ -300,10 +303,7 @@ struct Emitter
 			aabb.add_point(particle.position + padding);
         }
 
-		if(num > 0)
-		{
-			aabb_ = aabb;
-		}
+		aabb_ = aabb;
 
         num_particles_ = num;
 
@@ -489,6 +489,11 @@ struct Emitter
 
             // Calculate properties immediately for new particles
             updateParticleProperties(uniforms_, *particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
+
+			// Add particle position with some padding for scale
+			math::vec3 padding(particle->scale * 0.5f);
+			aabb_.add_point(particle->position - padding);
+			aabb_.add_point(particle->position + padding);
         }
     }
 
