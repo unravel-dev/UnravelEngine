@@ -157,6 +157,6 @@ auto get_app_profiler() -> performance_profiler*;
 /// // const char* name = "dynamic_name";
 /// // APP_SCOPE_PERF(name); // [ERROR] Clear static_assert message about string literals
 /// @endcode
-#define APP_SCOPE_PERF(name) const scope_perf_timer APP_SCOPE_PERF_UNIQUE_VAR(timer)(name, get_app_profiler())
+#define APP_SCOPE_PERF(name) const ::unravel::scope_perf_timer APP_SCOPE_PERF_UNIQUE_VAR(timer)(name, ::unravel::get_app_profiler())
 
 } // namespace unravel

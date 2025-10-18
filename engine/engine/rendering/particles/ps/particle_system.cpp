@@ -12,6 +12,9 @@
 #include <bx/easing.h>
 #include <bx/handlealloc.h>
 #include <math/math.h>
+#include <vector>
+#include <algorithm>
+#include <engine/profiler/profiler.h>
 
 struct PosColorTexCoord0Vertex
 {
@@ -618,7 +621,7 @@ struct ParticleSystem
         {
             const Particle& particle = emitter.particles_[i];
             const math::vec3 tmp0 = _eye - particle.position;
-            emitter.particle_sort_[i].dist = math::length(tmp0);
+            emitter.particle_sort_[i].dist = math::dot(tmp0, tmp0);
             emitter.particle_sort_[i].idx = i;
         }
         
@@ -631,6 +634,153 @@ struct ParticleSystem
         {
             const ParticleSort& sort = emitter.particle_sort_[i];
             const Particle& particle = emitter.particles_[sort.idx];
+            
+            // Position + Scale (16 bytes)
+            float* posScale = (float*)data;
+            posScale[0] = particle.position.x;
+            posScale[1] = particle.position.y;
+            posScale[2] = particle.position.z;
+            posScale[3] = particle.scale;
+            
+            // Color + Blend + Angle + Padding (16 bytes)
+            float* colorBlend = (float*)&data[16];
+            colorBlend[0] = *(float*)&particle.color; // Reinterpret uint32 as float for packing
+            colorBlend[1] = particle.blend;
+            colorBlend[2] = 0.0f; // angle (could add rotation later)
+            colorBlend[3] = 0.0f; // padding
+            
+            data += instanceStride;
+        }
+    }
+
+    // Batch rendering support structures and functions
+    struct BatchedParticle
+    {
+        float dist; // Squared distance from camera for sorting
+        uint32_t emitter_idx; // Which emitter this particle belongs to
+        uint32_t particle_idx; // Index within that emitter's particle array
+    };
+
+    static int32_t batchedParticleSortFn(const void* _lhs, const void* _rhs)
+    {
+        const BatchedParticle& lhs = *(const BatchedParticle*)_lhs;
+        const BatchedParticle& rhs = *(const BatchedParticle*)_rhs;
+        // Sort by squared distance (back to front for proper alpha blending)
+        return lhs.dist > rhs.dist ? -1 : 1;
+    }
+
+    uint32_t renderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, 
+                           uint8_t _view, bgfx::ProgramHandle _program, 
+                           const float* _mtxView, const math::vec3& _eye, 
+                           bgfx::TextureHandle _texture)
+    {
+        if(_count == 0 || !bgfx::isValid(_texture))
+        {
+            return 0; // Nothing to render
+        }
+
+		APP_SCOPE_PERF("Rendering/Particle Pass/Render Batched Emitters");
+
+
+        // Count total particles across all emitters
+        uint32_t totalParticles = 0;
+        for(uint32_t i = 0; i < _count; ++i)
+        {
+            if(!isValid(_handles[i]))
+            {
+                continue;
+            }
+            
+            const Emitter& emitter = m_emitter[_handles[i].idx];
+            totalParticles += emitter.num_particles_;
+        }
+
+        if(totalParticles == 0)
+        {
+            return 0; // No particles to render
+        }
+
+        // Use instanced rendering for the batch
+        const uint16_t instanceStride = 32; // 32 bytes per instance
+        
+        // Get available instance buffer space
+        uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(totalParticles, instanceStride);
+        
+        if(maxInstances == 0)
+        {
+            BX_WARN(false, "No instance buffer space available for batch rendering.");
+            return 0;
+        }
+        
+        // Allocate instance data buffer
+        bgfx::InstanceDataBuffer idb;
+        bgfx::allocInstanceDataBuffer(&idb, maxInstances, instanceStride);
+        
+        // Generate batched instance data
+        generateBatchedInstanceData(_handles, _count, idb, maxInstances, instanceStride, _eye);
+        
+        // Set static quad geometry
+        bgfx::setVertexBuffer(0, m_quadVBH);
+        bgfx::setIndexBuffer(m_quadIBH);
+        
+        // Set instance data
+        bgfx::setInstanceDataBuffer(&idb);
+        
+        // Set render state and texture
+        bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
+                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
+                       BGFX_STATE_BLEND_NORMAL);
+        bgfx::setTexture(0, s_texColor, _texture);
+        
+        // Single draw call for all particles from all emitters!
+        bgfx::submit(_view, _program);
+
+		return totalParticles;
+    }
+
+    void generateBatchedInstanceData(const EmitterHandle* _handles, uint32_t _count,
+                                   bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, 
+                                   uint16_t instanceStride, const math::vec3& _eye)
+    {
+        // First, collect all particles from all emitters and calculate distances
+        static std::vector<BatchedParticle> batchedParticles; // Static to avoid allocations
+        batchedParticles.clear();
+        
+        for(uint32_t emitterIdx = 0; emitterIdx < _count; ++emitterIdx)
+        {
+            if(!isValid(_handles[emitterIdx]))
+            {
+                continue;
+            }
+            
+            const Emitter& emitter = m_emitter[_handles[emitterIdx].idx];
+            
+			batchedParticles.reserve(batchedParticles.size() + emitter.num_particles_);
+            for(uint32_t particleIdx = 0; particleIdx < emitter.num_particles_; ++particleIdx)
+            {
+                const Particle& particle = emitter.particles_[particleIdx];
+                const math::vec3 tmp0 = _eye - particle.position;
+                const float distSquared = math::dot(tmp0, tmp0);
+                
+                batchedParticles.emplace_back(distSquared, emitterIdx, particleIdx);
+            }
+        }
+        
+        // Sort all particles by distance (back to front for alpha blending)
+        std::sort(batchedParticles.begin(), batchedParticles.end(), 
+                 [](const BatchedParticle& a, const BatchedParticle& b) {
+                     return a.dist > b.dist; // Back to front
+                 });
+        
+        // Generate instance data for sorted particles
+        uint8_t* data = idb.data;
+        uint32_t numToRender = math::min(static_cast<uint32_t>(batchedParticles.size()), maxInstances);
+        
+        for(uint32_t i = 0; i < numToRender; ++i)
+        {
+            const BatchedParticle& batchedParticle = batchedParticles[i];
+            const Emitter& emitter = m_emitter[_handles[batchedParticle.emitter_idx].idx];
+            const Particle& particle = emitter.particles_[batchedParticle.particle_idx];
             
             // Position + Scale (16 bytes)
             float* posScale = (float*)data;
@@ -802,4 +952,15 @@ void psRenderEmitter(EmitterHandle _handle,
                      bgfx::TextureHandle _texture)
 {
     s_ctx.renderEmitterById(_handle, _view, _program, _mtxView, _eye, _texture);
+}
+
+uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
+                         uint32_t _count,
+                         uint8_t _view,
+                         bgfx::ProgramHandle _program,
+                         const float* _mtxView,
+                         const math::vec3& _eye,
+                         bgfx::TextureHandle _texture)
+{
+    return s_ctx.renderEmitterBatch(_handles, _count, _view, _program, _mtxView, _eye, _texture);
 }

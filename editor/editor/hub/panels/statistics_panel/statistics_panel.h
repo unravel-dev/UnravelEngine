@@ -133,6 +133,13 @@ private:
     //-----------------------------------------------------------------------------
     auto draw_resources_section() -> void;
 
+    //-----------------------------------------------------------------------------
+    /// <summary>
+    /// Draw pipeline statistics section.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto draw_pipeline_stats() -> void;
+
     // Helper methods for updating and drawing specific components
     auto update_sample_data() -> void;
     auto get_draw_call_breakdown(const gfx::stats* stats, std::uint32_t& scene_calls, std::uint32_t& editor_calls, std::uint32_t& total_calls) -> void;

@@ -1,29 +1,32 @@
 #pragma once
 
 #include <engine/ecs/ecs.h>
-#include <engine/rendering/camera.h>
 #include <engine/layers/layer_mask.h>
+#include <engine/rendering/camera.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
+
 
 #include "passes/assao_pass.h"
 #include "passes/atmospheric_pass.h"
 #include "passes/atmospheric_pass_perez.h"
 #include "passes/atmospheric_pass_skybox.h"
-#include "passes/fxaa_pass.h"
-#include "passes/tonemapping_pass.h"
 #include "passes/blit_pass.h"
+#include "passes/fxaa_pass.h"
+#include "passes/hiz_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
-#include "passes/hiz_pass.h"
+#include "passes/tonemapping_pass.h"
+
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 
+#include <hpp/small_vector.hpp>
 #include <map>
 #include <memory>
 #include <vector>
-#include <hpp/small_vector.hpp>
+
 
 namespace unravel
 {
@@ -43,15 +46,21 @@ struct lod_data
 using lod_data_container = std::map<entt::handle, lod_data>;
 using visibility_set_models_t = hpp::small_vector<entt::handle>;
 
-/**
- * @struct per_camera_data
- * @brief Contains data specific to a camera, including LOD information.
- */
-struct per_camera_data
+struct pipeline_stats
 {
-    lod_data_container entity_lods; ///< Container for entity LOD data.
-};
+    uint32_t drawn_models = 0;
+    uint32_t drawn_skinned_models = 0;
+    uint32_t drawn_lights = 0;
+    uint32_t drawn_lights_casting_shadows = 0;
+    uint32_t drawn_particles = 0;
+    uint32_t drawn_particles_batches = 0;
 
+    auto anything_drawn() const -> bool
+    {
+        return drawn_models > 0 || drawn_skinned_models > 0 || drawn_lights > 0 ||
+               drawn_lights_casting_shadows > 0 || drawn_particles > 0 || drawn_particles_batches > 0;
+    }
+};
 /**
  * @class rendering_pipeline
  * @brief Base class for different rendering paths in the ACE framework.
@@ -121,7 +130,8 @@ public:
                               gfx::render_view& rview,
                               delta_t dt,
                               const run_params& params,
-                              layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) -> gfx::frame_buffer::ptr = 0;
+                              layer_mask render_mask = layer_mask{
+                                  layer_reserved::everything_layer}) -> gfx::frame_buffer::ptr = 0;
 
     /**
      * @brief Renders the entire scene from the camera's perspective to the specified output.
@@ -143,12 +153,22 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
-    virtual void ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
+    virtual void ui_pass(scene& scn,
+                         const camera& camera,
+                         gfx::render_view& rview,
+                         const gfx::frame_buffer::ptr& output);
 
-    virtual void particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
-
+    virtual void particle_pass(scene& scn,
+                               const camera& camera,
+                               gfx::render_view& rview,
+                               const gfx::frame_buffer::ptr& output);
 
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
+
+    auto get_stats() -> pipeline_stats&
+    {
+        return stats_;
+    }
 
 protected:
     prefilter_pass prefilter_pass_{};
@@ -160,11 +180,12 @@ protected:
     fxaa_pass fxaa_pass_{};
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};
-    hiz_pass hiz_pass_{};  ///< Hi-Z buffer generation pass
+    hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
 
     std::unique_ptr<gpu_program> particle_program_{};
     std::unique_ptr<gpu_program> particle_program_instanced_{};
 
+    pipeline_stats stats_{};
 };
 } // namespace rendering
 } // namespace unravel

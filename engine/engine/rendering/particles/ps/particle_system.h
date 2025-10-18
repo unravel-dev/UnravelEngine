@@ -113,4 +113,16 @@ void psDestroyEmitter(EmitterHandle _handle);
 ///
 void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
 
+///
+/// Render multiple emitters in a single batched draw call (all must use the same texture)
+/// This is much more efficient than calling psRenderEmitter multiple times as it:
+/// - Combines all particles into a single instance buffer
+/// - Sorts all particles globally for proper alpha blending
+/// - Uses only one draw call instead of multiple
+/// 
+/// Example usage:
+///   EmitterHandle handles[] = {fire_emitter, smoke_emitter, spark_emitter};
+///   psRenderEmitterBatch(handles, 3, view, program, viewMatrix, cameraPos, fireTexture);
+uint32_t psRenderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
+
 #endif // PARTICLE_SYSTEM_H_HEADER_GUARD

@@ -658,6 +658,7 @@ auto transform_component::set_parent(const entt::handle& p, bool global_stays) -
         cached_transform_global = get_transform_global();
     }
 
+    bool was_active = is_active();
     parent_ = new_parent;
     set_dirty(true);
 
@@ -687,6 +688,8 @@ auto transform_component::set_parent(const entt::handle& p, bool global_stays) -
     {
         old_parent.get<transform_component>().remove_child(get_owner(), *this);
     }
+
+    set_active(was_active);
 
     return true;
 }

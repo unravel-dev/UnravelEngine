@@ -225,6 +225,9 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
     const auto& proj = camera.get_projection();
     pass.set_view_proj(view, proj);
 
+    stats_.drawn_particles = 0;
+    stats_.drawn_particles_batches = 0;
+
     if(particle_program_instanced_ && particle_program_instanced_->begin())
     {
         // Render particles using the particle system
@@ -238,28 +241,81 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
             float distance;
         };
         hpp::small_vector<sort_key, 16> particle_emitters;
-        scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
-            [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
-            {
-                const auto& bounds = particle_emitter_comp.get_world_bounds();
-                if(!camera.test_aabb(bounds))
+
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Cull Emitters");
+            scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
+                [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
                 {
-                    return;
+                    const auto& bounds = particle_emitter_comp.get_world_bounds();
+                    if(!particle_emitter_comp.is_enabled() || !camera.test_aabb(bounds))
+                    {
+                        return;
+                    }
+    
+                    auto distance = math::distance(bounds.get_center(), cam_pos);
+                    particle_emitters.emplace_back(sort_key{&particle_emitter_comp, distance});
+            });
+        }
+       
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters");
+            // Sort by distance first (back to front for proper alpha blending)
+            std::sort(particle_emitters.begin(), particle_emitters.end(), [](const sort_key& a, const sort_key& b)
+            {
+                return a.distance < b.distance;
+            });
+
+        }
+
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Group Emitters by Texture");
+            // Group by texture while maintaining distance order
+            // This batches emitters with the same texture together for efficient rendering
+            // while preserving the distance-sorted order for proper alpha blending
+            hpp::small_vector<EmitterHandle, 16> current_batch;
+            asset_handle<gfx::texture> current_texture;
+            
+            for(const auto& particle_emitter : particle_emitters)
+            {
+                // Check if we need to start a new batch (different texture)
+                if(current_texture != particle_emitter.component->get_texture())
+                {
+                    // Render the current batch if it has emitters
+                    if(!current_batch.empty())
+                    {
+                        auto texture = current_texture.get()->native_handle();
+                        stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
+                                        pass.id, particle_program_instanced_->native_handle(), 
+                                        cam_view, cam_pos, texture);
+                        stats_.drawn_particles_batches++;
+                    }
+                    
+                    // Start new batch
+                    current_batch.clear();
+                    current_texture = particle_emitter.component->get_texture();
                 }
-
-                auto distance = math::distance(bounds.get_center(), cam_pos);
-                particle_emitters.emplace_back(sort_key{&particle_emitter_comp, distance});
-        });
-        std::sort(particle_emitters.begin(), particle_emitters.end(), [](const sort_key& a, const sort_key& b)
-        {
-            return a.distance < b.distance;
-        });
-
-        
-        // Render all particles
-        for(const auto& particle_emitter : particle_emitters)
-        {
-            particle_emitter.component->render_emitter(pass.id, particle_program_instanced_->native_handle(), cam_view, cam_pos);
+                
+                // Add emitter to current batch (only if it's enabled and has valid handle)
+                if(particle_emitter.component->is_enabled())
+                {
+                    auto emitter_handle = particle_emitter.component->get_emitter_handle();
+                    if(isValid(emitter_handle))
+                    {
+                        current_batch.push_back(emitter_handle);
+                    }
+                }
+            }
+            
+            // Render the final batch
+            if(!current_batch.empty() && current_texture.is_valid())
+            {
+                auto texture = current_texture.get()->native_handle();
+                stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
+                                pass.id, particle_program_instanced_->native_handle(), 
+                                cam_view, cam_pos, texture);
+                stats_.drawn_particles_batches++;
+            }
         }
 
         particle_program_instanced_->end();

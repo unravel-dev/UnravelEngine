@@ -2,6 +2,10 @@
 #include "imgui_widgets/utils.h"
 #include "statistics_utils.h"
 
+
+#include <engine/engine.h>
+#include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/ecs/scene.h>
 #include <engine/profiler/profiler.h>
 #include <graphics/graphics.h>
 #include <math/math.h>
@@ -267,9 +271,45 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
            
         // Primitive counts
         draw_primitive_counts(stats, io);
+
+        // Pipeline stats
+        draw_pipeline_stats();
         
       
         ImGui::PopFont();
+    }
+}
+
+auto statistics_panel::draw_pipeline_stats() -> void
+{
+    if(!ImGui::CollapsingHeader(ICON_MDI_CUBE_OUTLINE "\tPipeline Statistics", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        for(auto scn : scene::get_all_scenes())
+        {
+            if(!scn)
+            {
+                continue;
+            }
+
+            scn->registry->view<camera_component>().each([&](auto e, auto&& camera_comp)
+            {
+                auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
+                const auto& stats = pipeline->get_stats();
+                if(!stats.anything_drawn())
+                {
+                    return;
+                }
+
+                ImGui::Text("Pipeline Stats for %s:", scn->tag.c_str());
+                ImGui::Text("  Drawn Particles: %u", stats.drawn_particles);
+                ImGui::Text("  Drawn Particles Batches: %u", stats.drawn_particles_batches);
+                ImGui::Text("  Drawn Models: %u", stats.drawn_models);
+                ImGui::Text("  Drawn Skinned Models: %u", stats.drawn_skinned_models);
+                ImGui::Text("  Drawn Lights: %u", stats.drawn_lights);
+                ImGui::Text("  Drawn Lights Casting Shadows: %u", stats.drawn_lights_casting_shadows);
+            });
+        }
+        
     }
 }
 

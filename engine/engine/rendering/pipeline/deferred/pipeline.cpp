@@ -538,6 +538,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 {
     APP_SCOPE_PERF("Rendering/Run Pipeline");
 
+    if(pipeline_steps::full == pflags)
+    {
+        stats_ = {};
+    }
+
     visibility_set_models_t visibility_set;
     gfx::frame_buffer::ptr target = nullptr;
 
@@ -564,6 +569,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         visibility_set = gather_visible_models(scn, &camera.get_frustum(), params.vflags, render_mask);
     }
+
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
     run_assao_pass(visibility_set, camera, rview, dt, params);
@@ -662,9 +668,13 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
         auto camera_pos = camera.get_position();
 
+
         model::submit_callbacks callbacks;
         callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
         {
+            stats_.drawn_models++;
+            stats_.drawn_skinned_models += uint32_t(submit_params.skinned);
+            
             geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
 
             prog.program->begin();
@@ -803,9 +813,13 @@ auto deferred::run_lighting_pass(scene& scn,
                    .compute_projected_sphere_rect(rect, light_position, light_direction, camera_pos, view, proj) == 0)
                 return;
 
+            
             APP_SCOPE_PERF("Rendering/Lighting Pass/Per Light");
 
             bool has_shadows = light.casts_shadows && apply_shadows;
+
+            stats_.drawn_lights++;
+            stats_.drawn_lights_casting_shadows += uint32_t(has_shadows);
 
             const auto& lprogram = has_shadows ? get_light_program(light) : get_light_program_no_shadows(light);
 
