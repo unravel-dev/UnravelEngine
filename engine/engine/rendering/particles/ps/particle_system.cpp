@@ -143,7 +143,7 @@ struct Particle
     float scale_end;
 
     // Cached computed properties (updated during update, used during render)
-    uint32_t color; // Final color with all effects applied
+    math::color color; // Final color with all effects applied
 	math::vec3 position;
     float scale;    // Final scale with all effects applied
     float blend;    // Final blend value
@@ -644,10 +644,17 @@ struct ParticleSystem
             
             // Color + Blend + Angle + Padding (16 bytes)
             float* colorBlend = (float*)&data[16];
-            colorBlend[0] = *(float*)&particle.color; // Reinterpret uint32 as float for packing
-            colorBlend[1] = particle.blend;
-            colorBlend[2] = 0.0f; // angle (could add rotation later)
-            colorBlend[3] = 0.0f; // padding
+            colorBlend[0] = particle.color.value.r;
+            colorBlend[1] = particle.color.value.g;
+            colorBlend[2] = particle.color.value.b;
+            colorBlend[3] = particle.color.value.a;
+            
+            // Speed + Padding (8 bytes)
+            float* rotationBlend = (float*)&data[32];
+			rotationBlend[0] = 0.0f; // angle (could add rotation later)
+			rotationBlend[1] = particle.blend;
+            rotationBlend[2] = 0.0f; 
+            rotationBlend[3] = 0.0f; // padding
             
             data += instanceStride;
         }
@@ -701,7 +708,7 @@ struct ParticleSystem
         }
 
         // Use instanced rendering for the batch
-        const uint16_t instanceStride = 32; // 32 bytes per instance
+        const uint16_t instanceStride = 48; // 48 bytes per instance
         
         // Get available instance buffer space
         uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(totalParticles, instanceStride);
@@ -791,11 +798,17 @@ struct ParticleSystem
             
             // Color + Blend + Angle + Padding (16 bytes)
             float* colorBlend = (float*)&data[16];
-            colorBlend[0] = *(float*)&particle.color; // Reinterpret uint32 as float for packing
-            colorBlend[1] = particle.blend;
-            colorBlend[2] = 0.0f; // angle (could add rotation later)
-            colorBlend[3] = 0.0f; // padding
+            colorBlend[0] = particle.color.value.r;
+            colorBlend[1] = particle.color.value.g;
+            colorBlend[2] = particle.color.value.b;
+            colorBlend[3] = particle.color.value.a;
             
+            // Speed + Padding (8 bytes)
+            float* rotationBlend = (float*)&data[32];
+			rotationBlend[0] = 0.0f; // angle (could add rotation later)
+			rotationBlend[1] = particle.blend;
+            rotationBlend[2] = 0.0f; 
+            rotationBlend[3] = 0.0f; // padding
             data += instanceStride;
         }
     }
