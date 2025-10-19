@@ -140,6 +140,9 @@ public:
     void set_blend_gradient(const math::gradient<frange_t>& gradient);
     auto get_blend_gradient() const -> const math::gradient<frange_t>&;
 
+    void set_blend_multiplier(float multiplier);
+    auto get_blend_multiplier() const -> float;
+
     // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
     auto get_color_gradient() const -> const math::gradient<math::color>&;
@@ -156,9 +159,6 @@ public:
     // Sprite handle
     void set_texture(const asset_handle<gfx::texture>& texture);
     auto get_texture() const -> const asset_handle<gfx::texture>&;
-
-
-    void render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const math::vec3& eye);
 
     /**
      * @brief Updates the emitter with external transform data.

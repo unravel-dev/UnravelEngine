@@ -121,6 +121,7 @@ void EmitterUniforms::reset()
     m_scale = math::vec3(1.0f, 1.0f, 1.0f);                          // Default: no scaling
 
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
+    m_blendMultiplier = 1.0f;  // Default: no blend modification
 
     m_easePos = bx::Easing::Linear; // Only position easing remains
     // Generate LUTs for all gradients to optimize sampling performance
@@ -224,8 +225,8 @@ struct Emitter
         // Cache final color
         particle.color = sampledColor;
 
-        // Calculate blend
-        particle.blend = math::mix(particle.blend_start, particle.blend_end, particle.life);
+        // Calculate blend and apply global blend multiplier
+        particle.blend = math::mix(particle.blend_start, particle.blend_end, particle.life) * uniforms_.m_blendMultiplier;
 
         // Calculate scale with system scaling
         float scale = math::mix(particle.scale_start, particle.scale_end, particle.life) * avgSystemScale;

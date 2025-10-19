@@ -361,6 +361,16 @@ REFLECT(particle_emitter_component)
              entt::attribute{"group", "Opacity over lifetime"},
 
          })
+        .data<&particle_emitter_component::set_blend_multiplier, &particle_emitter_component::get_blend_multiplier>("blend_multiplier"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_multiplier"},
+            entt::attribute{"pretty_name", "Blend Multiplier"},
+            entt::attribute{"tooltip", "Global blend multiplier for all particles regardless of lifetime. 0.0 = fully transparent, 1.0 = no change, values > 1.0 = enhanced opacity."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"group", "Opacity over lifetime"},
+        })
          .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
          .custom<entt::attributes>(entt::attributes{
              entt::attribute{"name", "color_gradient"},
@@ -420,6 +430,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("velocity_gradient", obj.get_velocity_gradient()));
     try_save(ar, ser20::make_nvp("scale_gradient", obj.get_scale_gradient()));
     try_save(ar, ser20::make_nvp("blend_gradient", obj.get_blend_gradient()));
+    try_save(ar, ser20::make_nvp("blend_multiplier", obj.get_blend_multiplier()));
     
     // Colors
     try_save(ar, ser20::make_nvp("color_gradient", obj.get_color_gradient()));
@@ -557,6 +568,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("blend_gradient", blend_gradient)))
     {
         obj.set_blend_gradient(blend_gradient);
+    }
+    
+    float blend_multiplier{1.0f};
+    if(try_load(ar, ser20::make_nvp("blend_multiplier", blend_multiplier)))
+    {
+        obj.set_blend_multiplier(blend_multiplier);
     }
     
     // Colors

@@ -77,6 +77,7 @@ struct EmitterUniforms
 
 	math::gradient<math::color> m_colorGradient; // Color gradient over particle lifetime
 	float m_emissionLifetime; // Duration of one emission cycle
+	float m_blendMultiplier; // Global blend multiplier for all particles (0.0 = fully transparent, 1.0 = no change)
 
 	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 

@@ -262,6 +262,16 @@ auto particle_emitter_component::get_blend_gradient() const -> const math::gradi
     return uniforms_.m_blendGradient;
 }
 
+void particle_emitter_component::set_blend_multiplier(float multiplier)
+{
+    uniforms_.m_blendMultiplier = math::clamp(multiplier, 0.0f, 1.0f);
+}
+
+auto particle_emitter_component::get_blend_multiplier() const -> float
+{
+    return uniforms_.m_blendMultiplier;
+}
+
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
     uniforms_.m_colorGradient = gradient;
@@ -314,7 +324,11 @@ void particle_emitter_component::set_texture(const asset_handle<gfx::texture>& t
 
 auto particle_emitter_component::get_texture() const -> const asset_handle<gfx::texture>&
 {
-    return texture_;
+    if(texture_.is_valid())
+    {
+        return texture_;
+    }
+    return material::default_color_map();
 }
 
 
@@ -347,25 +361,6 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         
         psUpdateEmitter(emitter_handle_, dt.count(), &uniforms_);
 
-    }
-}
-
-void particle_emitter_component::render_emitter(uint8_t view, bgfx::ProgramHandle program, const float* mtxView, const math::vec3& eye)
-{
-    if(isValid(emitter_handle_) && enabled_)
-    {
-        
-        auto tex = [&]()
-        {
-            if(texture_.is_valid())
-            {
-                return texture_.get();
-            }
-            return material::default_color_map().get();
-        }();
-        auto texture_handle = tex->native_handle();
-
-        psRenderEmitter(emitter_handle_, view, program, mtxView, eye, texture_handle);
     }
 }
 
