@@ -22,7 +22,7 @@ namespace Unravel.Core
         /// </summary>
         public override bool IsValid()
         {
-            return nativePtr != IntPtr.Zero && internal_m2n_ui_element_wrapper_is_valid(nativePtr);
+            return nativePtr != IntPtr.Zero && internal_m2n_ui_element_wrapper_is_valid(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -33,7 +33,7 @@ namespace Unravel.Core
         /// <summary>
         /// Gets the element ID.
         /// </summary>
-        public string ElementId => IsValid() ? internal_m2n_ui_element_wrapper_get_id(nativePtr) : "";
+        public string ElementId => IsValid() ? internal_m2n_ui_element_wrapper_get_id(nativePtr, ownerEntity) : "";
 
         /// <summary>
         /// Internal constructor - only called from C++ side.
@@ -70,12 +70,12 @@ namespace Unravel.Core
             get
             {
                 ValidateAndThrow();
-                return internal_m2n_ui_element_wrapper_get_inner_rml(nativePtr);
+                return internal_m2n_ui_element_wrapper_get_inner_rml(nativePtr, ownerEntity);
             }
             set
             {
                 ValidateAndThrow();
-                internal_m2n_ui_element_wrapper_set_inner_rml(nativePtr, value ?? "");
+                internal_m2n_ui_element_wrapper_set_inner_rml(nativePtr, ownerEntity, value ?? "");
             }
         }
 
@@ -87,12 +87,12 @@ namespace Unravel.Core
             get
             {
                 ValidateAndThrow();
-                return internal_m2n_ui_element_wrapper_is_visible(nativePtr);
+                return internal_m2n_ui_element_wrapper_is_visible(nativePtr, ownerEntity);
             }
             set
             {
                 ValidateAndThrow();
-                internal_m2n_ui_element_wrapper_set_visible(nativePtr, value);
+                internal_m2n_ui_element_wrapper_set_visible(nativePtr, ownerEntity, value);
             }
         }
 
@@ -106,7 +106,7 @@ namespace Unravel.Core
         public string GetAttribute(string attributeName)
         {
             ValidateAndThrow();
-            return internal_m2n_ui_element_wrapper_get_attribute(nativePtr, attributeName);
+            return internal_m2n_ui_element_wrapper_get_attribute(nativePtr, ownerEntity, attributeName);
         }
 
         /// <summary>
@@ -117,7 +117,7 @@ namespace Unravel.Core
         public void SetAttribute(string attributeName, string value)
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_set_attribute(nativePtr, attributeName, value ?? "");
+            internal_m2n_ui_element_wrapper_set_attribute(nativePtr, ownerEntity, attributeName, value ?? "");
         }
 
         /// <summary>
@@ -127,7 +127,7 @@ namespace Unravel.Core
         public void RemoveAttribute(string attributeName)
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_remove_attribute(nativePtr, attributeName);
+            internal_m2n_ui_element_wrapper_remove_attribute(nativePtr, ownerEntity, attributeName);
         }
 
         /// <summary>
@@ -138,7 +138,7 @@ namespace Unravel.Core
         public bool HasAttribute(string attributeName)
         {
             ValidateAndThrow();
-            return internal_m2n_ui_element_wrapper_has_attribute(nativePtr, attributeName);
+            return internal_m2n_ui_element_wrapper_has_attribute(nativePtr, ownerEntity, attributeName);
         }
 
         /// <summary>
@@ -149,7 +149,7 @@ namespace Unravel.Core
         public void SetClass(string className, bool activate)
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_set_class(nativePtr, className, activate);
+            internal_m2n_ui_element_wrapper_set_class(nativePtr, ownerEntity, className, activate);
         }
 
         /// <summary>
@@ -160,7 +160,7 @@ namespace Unravel.Core
         public bool IsClassSet(string className)
         {
             ValidateAndThrow();
-            return internal_m2n_ui_element_wrapper_is_class_set(nativePtr, className);
+            return internal_m2n_ui_element_wrapper_is_class_set(nativePtr, ownerEntity, className);
         }
 
         /// <summary>
@@ -169,7 +169,7 @@ namespace Unravel.Core
         public void Focus()
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_focus(nativePtr);
+            internal_m2n_ui_element_wrapper_focus(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -178,7 +178,7 @@ namespace Unravel.Core
         public void Blur()
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_blur(nativePtr);
+            internal_m2n_ui_element_wrapper_blur(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -187,7 +187,7 @@ namespace Unravel.Core
         public void Click()
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_click(nativePtr);
+            internal_m2n_ui_element_wrapper_click(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -197,7 +197,7 @@ namespace Unravel.Core
         public void ScrollIntoView(bool alignWithTop = true)
         {
             ValidateAndThrow();
-            internal_m2n_ui_element_wrapper_scroll_into_view(nativePtr, alignWithTop);
+            internal_m2n_ui_element_wrapper_scroll_into_view(nativePtr, ownerEntity, alignWithTop);
         }
 
         // ==== Event Handling ====
@@ -281,51 +281,51 @@ namespace Unravel.Core
         // ==== Internal Calls ====
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_valid(IntPtr elementPtr);
+        private static extern bool internal_m2n_ui_element_wrapper_is_valid(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_inner_rml(IntPtr elementPtr);
+        private static extern string internal_m2n_ui_element_wrapper_get_inner_rml(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_inner_rml(IntPtr elementPtr, string rml);
+        private static extern void internal_m2n_ui_element_wrapper_set_inner_rml(IntPtr elementPtr, Entity ownerEntity, string rml);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_visible(IntPtr elementPtr);
+        private static extern bool internal_m2n_ui_element_wrapper_is_visible(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_visible(IntPtr elementPtr, bool visible);
+        private static extern void internal_m2n_ui_element_wrapper_set_visible(IntPtr elementPtr, Entity ownerEntity, bool visible);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_attribute(IntPtr elementPtr, string attributeName);
+        private static extern string internal_m2n_ui_element_wrapper_get_attribute(IntPtr elementPtr, Entity ownerEntity, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_attribute(IntPtr elementPtr, string attributeName, string value);
+        private static extern void internal_m2n_ui_element_wrapper_set_attribute(IntPtr elementPtr, Entity ownerEntity, string attributeName, string value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_remove_attribute(IntPtr elementPtr, string attributeName);
+        private static extern void internal_m2n_ui_element_wrapper_remove_attribute(IntPtr elementPtr, Entity ownerEntity, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_has_attribute(IntPtr elementPtr, string attributeName);
+        private static extern bool internal_m2n_ui_element_wrapper_has_attribute(IntPtr elementPtr, Entity ownerEntity, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_class(IntPtr elementPtr, string className, bool activate);
+        private static extern void internal_m2n_ui_element_wrapper_set_class(IntPtr elementPtr, Entity ownerEntity, string className, bool activate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_class_set(IntPtr elementPtr, string className);
+        private static extern bool internal_m2n_ui_element_wrapper_is_class_set(IntPtr elementPtr, Entity ownerEntity, string className);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_focus(IntPtr elementPtr);
+        private static extern void internal_m2n_ui_element_wrapper_focus(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_blur(IntPtr elementPtr);
+        private static extern void internal_m2n_ui_element_wrapper_blur(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_click(IntPtr elementPtr);
+        private static extern void internal_m2n_ui_element_wrapper_click(IntPtr elementPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_scroll_into_view(IntPtr elementPtr, bool alignWithTop);
+        private static extern void internal_m2n_ui_element_wrapper_scroll_into_view(IntPtr elementPtr, Entity ownerEntity, bool alignWithTop);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_id(IntPtr elementPtr);
+        private static extern string internal_m2n_ui_element_wrapper_get_id(IntPtr elementPtr, Entity ownerEntity);
     }
 }

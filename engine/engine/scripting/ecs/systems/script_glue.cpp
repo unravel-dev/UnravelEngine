@@ -2690,9 +2690,6 @@ auto get_ui_element_safe(entt::entity entity_id, const std::string& element_id) 
 */
 //-------------------------------------------------------------------------
 
-// Forward declaration for event dispatching to UIEventManager
-
-// Legacy dispatch event to C# UIEventManager (kept for backward compatibility)
 template<typename T>
 void dispatch_ui_event_to_manager(const T& event_data)
 {
@@ -3094,8 +3091,8 @@ void internal_m2n_ui_stop_immediate_propagation(std::intptr_t native_ptr)
 */
 //-------------------------------------------------------------------------
 
-// Helper function to validate element pointer by checking if it exists in any UI document
-auto validate_ui_element_wrapper(std::intptr_t element_ptr) -> bool
+// Helper function to validate element pointer by checking if it exists in the owner entity's UI document
+auto validate_ui_element_wrapper(std::intptr_t element_ptr, entt::entity owner_entity) -> bool
 {
     if (element_ptr == 0)
     {
@@ -3104,23 +3101,13 @@ auto validate_ui_element_wrapper(std::intptr_t element_ptr) -> bool
     
     auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
     
-    // Check if this element exists in any loaded UI document
-    auto& ctx = engine::context();
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scene = ec.get_scene();
-    auto& registry = *scene.registry;
-    
-    auto view = registry.view<ui_document_component>();
-    for (auto entity : view)
+    // Check if this element exists in the owner entity's UI document
+    if (auto comp = safe_get_component<ui_document_component>(owner_entity))
     {
-        auto& ui_comp = view.get<ui_document_component>(entity);
-        if (ui_comp.document)
+        if (comp->document)
         {
             // Check if this element belongs to this document
-            if (ui_comp.document->Contains(element))
-            {
-                return true;
-            }
+            return comp->document->Contains(element);
         }
     }
     
@@ -3200,9 +3187,9 @@ auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_ptr,
 }
 
 // Get element ID from element pointer
-auto internal_m2n_ui_element_wrapper_get_id(std::intptr_t element_ptr) -> std::string
+auto internal_m2n_ui_element_wrapper_get_id(std::intptr_t element_ptr, entt::entity owner_entity) -> std::string
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return "";
     }
@@ -3290,14 +3277,14 @@ void internal_m2n_ui_document_wrapper_close(std::intptr_t document_ptr)
 // UI Element Wrapper Methods  
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_element_wrapper_is_valid(std::intptr_t element_ptr) -> bool
+auto internal_m2n_ui_element_wrapper_is_valid(std::intptr_t element_ptr, entt::entity owner_entity) -> bool
 {
-    return validate_ui_element_wrapper(element_ptr);
+    return validate_ui_element_wrapper(element_ptr, owner_entity);
 }
 
-auto internal_m2n_ui_element_wrapper_get_inner_rml(std::intptr_t element_ptr) -> std::string
+auto internal_m2n_ui_element_wrapper_get_inner_rml(std::intptr_t element_ptr, entt::entity owner_entity) -> std::string
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return "";
     }
@@ -3306,9 +3293,9 @@ auto internal_m2n_ui_element_wrapper_get_inner_rml(std::intptr_t element_ptr) ->
     return element->GetInnerRML();
 }
 
-void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, const std::string& rml)
+void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& rml)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3317,9 +3304,9 @@ void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, co
     element->SetInnerRML(rml);
 }
 
-auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_ptr) -> bool
+auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_ptr, entt::entity owner_entity) -> bool
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return false;
     }
@@ -3328,9 +3315,9 @@ auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_ptr) -> bo
     return element->IsVisible();
 }
 
-void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_ptr, bool visible)
+void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_ptr, entt::entity owner_entity, bool visible)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3346,9 +3333,9 @@ void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_ptr, bool
     }
 }
 
-auto internal_m2n_ui_element_wrapper_get_attribute(std::intptr_t element_ptr, const std::string& attribute_name) -> std::string
+auto internal_m2n_ui_element_wrapper_get_attribute(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& attribute_name) -> std::string
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return "";
     }
@@ -3357,9 +3344,9 @@ auto internal_m2n_ui_element_wrapper_get_attribute(std::intptr_t element_ptr, co
     return element->GetAttribute<Rml::String>(attribute_name, "");
 }
 
-void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_ptr, const std::string& attribute_name, const std::string& value)
+void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& attribute_name, const std::string& value)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3368,9 +3355,9 @@ void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_ptr, co
     element->SetAttribute(attribute_name, value);
 }
 
-void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_ptr, const std::string& attribute_name)
+void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& attribute_name)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3379,9 +3366,9 @@ void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_ptr,
     element->RemoveAttribute(attribute_name);
 }
 
-auto internal_m2n_ui_element_wrapper_has_attribute(std::intptr_t element_ptr, const std::string& attribute_name) -> bool
+auto internal_m2n_ui_element_wrapper_has_attribute(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& attribute_name) -> bool
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return false;
     }
@@ -3390,9 +3377,9 @@ auto internal_m2n_ui_element_wrapper_has_attribute(std::intptr_t element_ptr, co
     return element->HasAttribute(attribute_name);
 }
 
-void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_ptr, const std::string& class_name, bool activate)
+void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& class_name, bool activate)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3401,9 +3388,9 @@ void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_ptr, const 
     element->SetClass(class_name, activate);
 }
 
-auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_ptr, const std::string& class_name) -> bool
+auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_ptr, entt::entity owner_entity, const std::string& class_name) -> bool
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return false;
     }
@@ -3412,9 +3399,9 @@ auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_ptr, con
     return element->IsClassSet(class_name);
 }
 
-void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_ptr)
+void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3423,9 +3410,9 @@ void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_ptr)
     element->Focus();
 }
 
-void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_ptr)
+void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3434,9 +3421,9 @@ void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_ptr)
     element->Blur();
 }
 
-void internal_m2n_ui_element_wrapper_click(std::intptr_t element_ptr)
+void internal_m2n_ui_element_wrapper_click(std::intptr_t element_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
@@ -3445,9 +3432,9 @@ void internal_m2n_ui_element_wrapper_click(std::intptr_t element_ptr)
     element->Click();
 }
 
-void internal_m2n_ui_element_wrapper_scroll_into_view(std::intptr_t element_ptr, bool align_with_top)
+void internal_m2n_ui_element_wrapper_scroll_into_view(std::intptr_t element_ptr, entt::entity owner_entity, bool align_with_top)
 {
-    if (!validate_ui_element_wrapper(element_ptr))
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
     {
         return;
     }
