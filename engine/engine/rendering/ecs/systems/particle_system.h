@@ -45,7 +45,7 @@ public:
      * @param scn The scene containing particle emitters.
      * @param dt The delta time for this frame.
      */
-    void on_frame_update(scene& scn, delta_t dt);
+    void on_frame_before_render(scene& scn, delta_t dt);
 
 
 private:

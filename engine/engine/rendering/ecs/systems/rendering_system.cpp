@@ -53,7 +53,6 @@ void rendering_system::on_frame_update(scene& scn, delta_t dt)
     ctx.get_cached<model_system>().on_frame_update(scn, dt);
     ctx.get_cached<animation_system>().on_frame_update(scn, dt);
     ctx.get_cached<reflection_probe_system>().on_frame_update(scn, dt);
-    ctx.get_cached<particle_system>().on_frame_update(scn, dt);
 }
 
 void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
@@ -61,6 +60,8 @@ void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
     auto& ctx = engine::context();
     ctx.get_cached<model_system>().on_frame_before_render(scn, dt);
     ctx.get_cached<camera_system>().on_frame_before_render(scn, dt);
+    ctx.get_cached<particle_system>().on_frame_before_render(scn, dt);
+
 
 }
 

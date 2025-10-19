@@ -42,7 +42,7 @@ auto particle_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void particle_system::on_frame_update(scene& scn, delta_t dt)
+void particle_system::on_frame_before_render(scene& scn, delta_t dt)
 {
     if(!initialized_)
     {
