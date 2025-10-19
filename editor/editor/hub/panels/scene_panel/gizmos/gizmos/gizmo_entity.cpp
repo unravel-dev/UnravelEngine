@@ -1,5 +1,6 @@
 #include "gizmo_entity.h"
 #include "gizmos.h"
+#include "glm/ext.hpp"
 
 #include <engine/meta/ecs/components/all_components.h>
 
@@ -303,32 +304,94 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             {
                 case EmitterShape::Sphere:
                 {
+                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+
                     // Draw a wireframe sphere
                     math::vec3 center{0.0f, 0.0f, 0.0f};
-                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size * scale.x);
-                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size * scale.y);
-                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size * scale.z);
+                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size);
+
+                    dd.encoder.popTransform();
                     break;
                 }
                 case EmitterShape::Hemisphere:
                 {
+                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+
                     // Draw hemisphere (half sphere facing up)
                     math::vec3 center{0.0f, 0.0f, 0.0f};
-                    // Full circles on X and Z axes
-                    dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, shape_size * scale.x);
-                    dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, shape_size * scale.z);
-                    // Draw lines to indicate hemisphere boundary
-                    dd.encoder.moveTo(-shape_size * scale.x, 0.0f, 0.0f);
-                    dd.encoder.lineTo(shape_size * scale.x, 0.0f, 0.0f);
-                    dd.encoder.moveTo(0.0f, 0.0f, -shape_size * scale.z);
-                    dd.encoder.lineTo(0.0f, 0.0f, shape_size * scale.z);
+                    
+                    // Draw the base circle (full circle at Y=0)
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+                    
+                    // Draw vertical arcs to form the hemisphere dome
+                    // Each arc goes from one side of the base circle, over the top, to the other side
+                    const int num_arcs = 8; // Number of vertical arcs around the hemisphere
+                    for(int i = 0; i < num_arcs; ++i)
+                    {
+                        const float angle = (3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arcs);
+                        const float cos_a = math::cos(angle);
+                        const float sin_a = math::sin(angle);
+                        
+                        // Position each arc at a different point around the base circle
+                        // and draw a 180-degree arc that goes up and over
+                        const float x_pos = cos_a * shape_size;
+                        const float z_pos = sin_a * shape_size;
+                        
+                        // Draw arc in the plane that contains the Y axis and the radial direction
+                        // We need to use moveTo/lineTo to manually create the hemisphere arcs
+                        const int arc_segments = 16;
+                        bool first_point = true;
+                        
+                        for(int j = 0; j <= arc_segments; ++j)
+                        {
+                            const float arc_angle = (3.14159265f * static_cast<float>(j)) / static_cast<float>(arc_segments);
+                            const float y = shape_size * math::sin(arc_angle);
+                            const float radius_at_height = shape_size * math::cos(arc_angle);
+                            
+                            const float x = cos_a * radius_at_height;
+                            const float z = sin_a * radius_at_height;
+                            
+                            if(first_point)
+                            {
+                                dd.encoder.moveTo(x, y, z);
+                                first_point = false;
+                            }
+                            else
+                            {
+                                dd.encoder.lineTo(x, y, z);
+                            }
+                        }
+                    }
+                    
+                    // Draw horizontal circles at different heights to show the hemisphere shape
+                    const int num_horizontal_circles = 2;
+                    for(int i = 1; i <= num_horizontal_circles; ++i)
+                    {
+                        const float height_ratio = static_cast<float>(i) / static_cast<float>(num_horizontal_circles + 1);
+                        const float y_pos = shape_size * height_ratio;
+                        const float radius_at_height = shape_size * math::sqrt(1.0f - height_ratio * height_ratio);
+                        
+                        // Draw circles at different heights
+                        dd.encoder.drawCircle(Axis::Y, center.x, y_pos, center.z, radius_at_height);
+                    }
+
+                    dd.encoder.popTransform();
                     break;
                 }
                 case EmitterShape::Circle:
                 {
+                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+
                     // Draw a circle in the XZ plane
                     math::vec3 center{0.0f, 0.0f, 0.0f};
-                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size * scale.y);
+                    dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, shape_size);
+
+                    dd.encoder.popTransform();
                     break;
                 }
                 case EmitterShape::Box:
