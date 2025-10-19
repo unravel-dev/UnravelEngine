@@ -4,6 +4,7 @@
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
+#include <engine/assets/impl/asset_manifest.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/ecs.h>
@@ -46,6 +47,44 @@ template<typename T>
 auto checking_dependencies_job_name() -> std::string
 {
     return fmt::format("Checking dependencies of {}", ex::get_type<T>());
+}
+
+/// Check if recompilation is needed based on manifest
+auto needs_recompilation(const fs::path& source_file_path, const fs::path& compiled_output_path) -> bool
+{
+    fs::error_code err;
+    
+    // If output doesn't exist, we need to compile
+    if(!fs::exists(compiled_output_path, err) || err)
+    {
+        return true;
+    }
+    
+    // Check if manifest exists
+    auto manifest_path = asset_compiler::get_manifest_path(compiled_output_path);
+    if(!fs::exists(manifest_path, err) || err)
+    {
+        // APPLOG_TRACE("Manifest missing for {}, cannot check if recompilation is needed", compiled_output_path.string());
+        return true;
+    }
+    
+    // Load manifest and check if source has changed
+    asset_compiler::asset_manifest manifest;
+    if(!asset_compiler::load_manifest(manifest_path, manifest))
+    {
+        APPLOG_TRACE("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
+        return true;
+    }
+    
+    // Check if source file has changed
+    if(asset_compiler::is_source_file_changed(source_file_path, manifest))
+    {
+        APPLOG_TRACE("Source file changed for {}, recompilation needed", compiled_output_path.string());
+        return true;
+    }
+    
+    // APPLOG_TRACE("Asset {} is up to date, skipping compilation", compiled_output_path.string());
+    return false;
 }
 
 template<typename T>
@@ -432,11 +471,12 @@ static void add_to_syncer(rtti::context& ctx,
 
         for(const auto& output : paths)
         {
-            fs::error_code err;
-            if(is_initial_listing && fs::exists(output, err))
+            // Check if recompilation is needed based on manifest
+            if(is_initial_listing && !needs_recompilation(ref_path, output))
             {
                 continue;
             }
+            
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
@@ -494,8 +534,8 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 continue;
             }
 
-            fs::error_code err;
-            if(is_initial_listing && fs::exists(output, err))
+            // Check if recompilation is needed based on manifest
+            if(is_initial_listing && !needs_recompilation(ref_path, output))
             {
                 continue;
             }

@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 
 namespace hpp
 {
@@ -286,6 +287,30 @@ public:
 		if(zero_terminate)
 			base64[SHA1_BASE64_SIZE - 1] = '\0';
 		return *this;
+	}
+
+	template<size_t ChunkSize = 64 * 1024>
+	static auto compute_file_sha1(std::ifstream& file) -> sha1
+	{
+		sha1 hasher;
+		 // Read file in chunks to avoid loading large files entirely into memory
+        // This is especially beneficial for large assets like textures, meshes, and audio files
+        std::array<char, ChunkSize> buffer{};
+        
+        while(file.good() && !file.eof())
+        {
+            file.read(buffer.data(), ChunkSize);
+            std::streamsize bytes_read = file.gcount();
+            
+            if(bytes_read > 0)
+            {
+                hasher.add(buffer.data(), static_cast<size_t>(bytes_read));
+            }
+        }
+        
+        hasher.finalize();
+
+		return hasher;
 	}
 };
 } //end of namespace hpp

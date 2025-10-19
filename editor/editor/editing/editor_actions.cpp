@@ -834,7 +834,29 @@ void remove_unreferenced_files(const fs::path& root)
         }
     }
 
-    // Second pass: remove now-empty directories
+    // Second pass: remove manifest files
+    {
+        fs::recursive_directory_iterator it(root, ec);
+        while(it != end)
+        {
+            const fs::path current_path = it->path();
+            ++it;
+
+            if(current_path.extension().generic_string() == ".manifest")
+            {
+                APPLOG_TRACE("Removing Manifest {}", current_path.generic_string());
+                fs::remove(current_path, ec);
+            }
+
+            if(current_path.extension().generic_string() == ".temp")
+            {
+                APPLOG_TRACE("Removing Temp File {}", current_path.generic_string());
+                fs::remove(current_path, ec);
+            }
+        }
+    }
+
+    // Third pass: remove now-empty directories
     {
         fs::recursive_directory_iterator it(root, ec);
         while(it != end)
@@ -1426,5 +1448,6 @@ void editor_actions::recompile_all()
     recompile_shaders();
     recompile_textures();
     recompile_scripts();
+    recompile_ui();
 }
 } // namespace unravel

@@ -1,5 +1,6 @@
 #include "asset_compiler.h"
 #include "asset_writer.h"
+#include "asset_manifest.h"
 #include "importers/mesh_importer.h"
 
 #include <bx/error.h>
@@ -517,6 +518,23 @@ auto compile_shader_to_file(const fs::path& input_path,
     return true;
 }
 
+auto write_manifest_file(const fs::path& input_path, const fs::path& output_path) -> bool
+{
+    // Generate manifest file for the compiled shader
+    asset_manifest manifest(input_path);
+    manifest.compute_source_sha();
+    auto manifest_path = get_manifest_path(output_path);
+
+    fs::error_code err;
+    bool success = true;
+    asset_writer::atomic_write_file(manifest_path, [&](const fs::path& temp_manifest_path) 
+    {
+        success = save_manifest(temp_manifest_path, manifest);
+    }, err);
+
+    return !err && success;
+}
+
 } // namespace
 
 template<>
@@ -543,6 +561,12 @@ auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path
     {
         APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
             str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled shader: {0}", output.string());
         return false;
     }
     
@@ -608,6 +632,12 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
             str_input, output.filename().string(), err.message());
         return false;
     }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled texture: {0}", output.string());
+        return false;
+    }
     
     return true;
 }
@@ -631,6 +661,18 @@ auto compile<material>(asset_manager& am, const fs::path& key, const fs::path& o
         }, err);
     }
 
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled material: {0}", output.string());
+        return false;
+    }
 
     return true;
 }
@@ -745,6 +787,19 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         }
     }
 
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled mesh: {0}", output.string());
+        return false;
+    }
+
     return true;
 }
 
@@ -809,6 +864,19 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
         }, err);
     }
 
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled animation: {0}", output.string());
+        return false;
+    }
+
     return true;
 }
 
@@ -819,6 +887,12 @@ auto compile<font>(asset_manager& am, const fs::path& key, const fs::path& outpu
     std::string str_input = absolute_path.string();
 
     copy_compiled_file(absolute_path, output, str_input);
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled font: {0}", output.string());
+        return false;
+    }
 
     return true;
 }
@@ -831,6 +905,12 @@ auto compile<prefab>(asset_manager& am, const fs::path& key, const fs::path& out
 
     copy_compiled_file(absolute_path, output, str_input);
 
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled prefab: {0}", output.string());
+        return false;
+    }
+
     return true;
 }
 
@@ -841,6 +921,12 @@ auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::pat
     std::string str_input = absolute_path.string();
 
     copy_compiled_file(absolute_path, output, str_input);
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled scene_prefab: {0}", output.string());
+        return false;
+    }
 
     return true;
 }
@@ -862,6 +948,19 @@ auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs:
         {
             save_to_file_bin(temp.string(), material);
         }, err);
+    }
+
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled physics_material: {0}", output.string());
+        return false;
     }
 
     return true;
@@ -892,6 +991,19 @@ auto compile<ui_tree>(asset_manager& am, const fs::path& key, const fs::path& ou
         }, err);
     }
 
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled ui_tree: {0}", output.string());
+        return false;
+    }
+
     return true;
 }
 
@@ -918,6 +1030,19 @@ auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path
         {
             save_to_file(temp.string(), sheet);
         }, err);
+    }
+
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled style_sheet: {0}", output.string());
+        return false;
     }
 
     return true;
@@ -986,6 +1111,19 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
         {
             save_to_file_bin(temp.string(), clip);
         }, err);
+    }
+
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled audio_clip: {0}", output.string());
+        return false;
     }
 
     return true;
@@ -1181,9 +1319,19 @@ auto compile<script>(asset_manager& am, const fs::path& key, const fs::path& out
     fs::error_code er;
     asset_writer::atomic_copy_file(absolute_path, output, er);
 
-    // APPLOG_INFO("Successful copy to {0}", output.string());
+    if(er)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
+            absolute_path.string(), output.filename().string(), er.message());
+        return false;
+    }
 
-    //script_system::set_needs_recompile(fs::extract_protocol(fs::convert_to_protocol(key)).string());
+    if(!write_manifest_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled script: {0}", output.string());
+        return false;
+    }
+
 
     return true;
 }

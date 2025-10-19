@@ -49,6 +49,7 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             for(int i = 0; i < frames; i++)
             {
                 rpath.on_frame_update(scn, dt);
+                rpath.on_frame_before_render(scn, dt);
             }
 
             if(result.object && !focus_camera)
@@ -58,7 +59,6 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             }
 
             
-            rpath.on_frame_before_render(scn, dt);
             auto new_fbo = rpath.render_scene(scn, dt);
             thumbnail.set(new_fbo);
         }
