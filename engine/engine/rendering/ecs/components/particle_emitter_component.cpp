@@ -343,8 +343,7 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         uniforms_.m_prevPosition = prev_position;
         
         // Update rotation from transform (convert quaternion to Euler angles)
-        const auto& world_rot = world_transform.get_rotation();
-        uniforms_.m_angle = math::eulerAngles(glm::inverse(world_rot));
+        uniforms_.m_angle = world_transform.get_rotation_euler();
         
         // Update scale from transform
         uniforms_.m_scale = world_transform.get_scale();
