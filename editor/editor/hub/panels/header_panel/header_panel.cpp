@@ -182,43 +182,50 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         if(ImGui::BeginMenu("Developer"))
         {
 
-            
-            if(ImGui::MenuItem("Crash(Abort)"))
+            if(ImGui::BeginMenu("Crash"))
             {
-                std::abort();
-            }
-            if(ImGui::MenuItem("Crash(Terminate)"))
-            {
-                std::terminate();
-            }
-            if(ImGui::MenuItem("Crash(SIGSEGV)"))
-            {
-                *(volatile int*)0 = 0;
-            }
-
-            if(ImGui::MenuItem("Recompile Shaders"))
-            {
-                editor_actions::recompile_shaders();
+                if(ImGui::MenuItem("Abort"))
+                {
+                    std::abort();
+                }
+                if(ImGui::MenuItem("Terminate"))
+                {
+                    std::terminate();
+                }
+                if(ImGui::MenuItem("Segmentation Fault"))
+                {
+                    *(volatile int*)0 = 0;
+                }
+                ImGui::EndMenu();
             }
 
-            if(ImGui::MenuItem("Recompile Textures"))
+            if(ImGui::BeginMenu("Recompile"))
             {
-                editor_actions::recompile_textures();
-            }
+                if(ImGui::MenuItem("Shaders"))
+                {
+                    editor_actions::recompile_shaders();
+                }
 
-            if(ImGui::MenuItem("Recompile UI"))
-            {
-                editor_actions::recompile_ui();
-            }
+                if(ImGui::MenuItem("Textures"))
+                {
+                    editor_actions::recompile_textures();
+                }
 
-            if(ImGui::MenuItem("Recompile Scripts"))
-            {
-                editor_actions::recompile_scripts();
-            }
+                if(ImGui::MenuItem("UI", ImGui::GetKeyCombinationName(shortcuts::recompile_ui).c_str()))
+                {
+                    editor_actions::recompile_ui();
+                }
 
-            if(ImGui::MenuItem("Recompile All"))
-            {
-                editor_actions::recompile_all();
+                if(ImGui::MenuItem("Scripts"))
+                {
+                    editor_actions::recompile_scripts();
+                }
+
+                if(ImGui::MenuItem("All"))
+                {
+                    editor_actions::recompile_all();
+                }
+                ImGui::EndMenu();
             }
 
             ImGui::EndMenu();

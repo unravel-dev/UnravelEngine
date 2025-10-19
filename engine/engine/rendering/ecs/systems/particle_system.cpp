@@ -23,7 +23,6 @@ auto particle_system::init(rtti::context& ctx) -> bool
     
     initialized_ = true;
     
-    APPLOG_INFO("Particle system initialized successfully");
     return true;
 }
 
@@ -38,7 +37,6 @@ auto particle_system::deinit(rtti::context& ctx) -> bool
         initialized_ = false;
     }
     
-    APPLOG_INFO("Particle system deinitialized successfully");
     return true;
 }
 

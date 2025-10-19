@@ -61,6 +61,12 @@ double RmlUi_SystemInterface::GetElapsedTime()
     return std::chrono::duration<double>(sim.get_time_since_launch()).count();
 }
 
+
+auto RmlUi_SystemInterface::TranslateString(Rml::String& translated, const Rml::String& input) -> int
+{
+    return Rml::SystemInterface::TranslateString(translated, input);
+}
+
 void RmlUi_SystemInterface::SetMouseCursor(const Rml::String& cursor_name)
 {
     auto& ctx = engine::context();

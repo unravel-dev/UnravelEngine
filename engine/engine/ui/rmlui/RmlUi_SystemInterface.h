@@ -55,6 +55,15 @@ public:
      */
     double GetElapsedTime() override;
 
+
+    /**
+     * @brief Translate the input string into the translated string.
+     * @param[out] translated Translated string ready for display.
+     * @param[in] input String as received from XML.
+     * @return Number of translations that occured.
+     */
+	auto TranslateString(Rml::String& translated, const Rml::String& input) -> int override;
+
     /**
      * @brief Set the mouse cursor
      * @param cursor_name Name of the cursor to set
