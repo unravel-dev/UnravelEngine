@@ -143,6 +143,15 @@ public:
     void set_blend_multiplier(float multiplier);
     auto get_blend_multiplier() const -> float;
 
+    // Playback control
+    void play();
+    void stop();
+    void stop_and_reset();
+    void pause();
+    void resume();
+    auto is_playing() const -> bool;
+    auto is_paused() const -> bool;
+
     // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
     auto get_color_gradient() const -> const math::gradient<math::color>&;

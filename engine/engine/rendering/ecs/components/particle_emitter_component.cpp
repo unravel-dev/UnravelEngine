@@ -272,6 +272,52 @@ auto particle_emitter_component::get_blend_multiplier() const -> float
     return uniforms_.m_blendMultiplier;
 }
 
+void particle_emitter_component::play()
+{
+    uniforms_.m_playing = true;
+    uniforms_.m_paused = false;
+}
+
+void particle_emitter_component::stop()
+{
+    uniforms_.m_playing = false;
+    uniforms_.m_paused = false;
+}
+
+void particle_emitter_component::stop_and_reset()
+{
+    uniforms_.m_playing = false;
+    uniforms_.m_paused = false;
+    // Reset the emitter to clear all particles
+    reset_emitter();
+}
+
+void particle_emitter_component::pause()
+{
+    if(uniforms_.m_playing)
+    {
+        uniforms_.m_paused = true;
+    }
+}
+
+void particle_emitter_component::resume()
+{
+    if(uniforms_.m_playing)
+    {
+        uniforms_.m_paused = false;
+    }
+}
+
+auto particle_emitter_component::is_playing() const -> bool
+{
+    return uniforms_.m_playing;
+}
+
+auto particle_emitter_component::is_paused() const -> bool
+{
+    return uniforms_.m_paused;
+}
+
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
     uniforms_.m_colorGradient = gradient;

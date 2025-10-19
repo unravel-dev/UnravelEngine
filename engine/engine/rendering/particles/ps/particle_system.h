@@ -79,6 +79,10 @@ struct EmitterUniforms
 	float m_emissionLifetime; // Duration of one emission cycle
 	float m_blendMultiplier; // Global blend multiplier for all particles (0.0 = fully transparent, 1.0 = no change)
 
+	// Playback control states
+	bool m_playing; // Whether the emitter is currently playing/active
+	bool m_paused;  // Whether the emitter is paused (playing but with dt = 0)
+
 	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 
 	bgfx::TextureHandle m_texture;

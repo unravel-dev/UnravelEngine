@@ -123,6 +123,10 @@ void EmitterUniforms::reset()
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
     m_blendMultiplier = 1.0f;  // Default: no blend modification
 
+    // Initialize playback states
+    m_playing = true;  // Default: playing
+    m_paused = false;  // Default: not paused
+
     m_easePos = bx::Easing::Linear; // Only position easing remains
     // Generate LUTs for all gradients to optimize sampling performance
     m_velocityGradient.generate_lut(256);
@@ -258,19 +262,13 @@ struct Emitter
     void update(EmitterUniforms* _uniforms, float _dt)
     {
 		auto& uniforms_ = *_uniforms;
-        // Pre-calculate per-frame constants to avoid recalculating per particle
-        const float avgSystemScale = (uniforms_.m_scale.x + uniforms_.m_scale.y + uniforms_.m_scale.z) / 3.0f;
-        const bx::EaseFn easePos = bx::getEaseFunc(uniforms_.m_easePos);
-
-        // Pre-calculate speed-based effect conditions
-        const bool hasColorBySpeed =
-            (uniforms_.m_colorBySpeedVelocityRange.max > uniforms_.m_colorBySpeedVelocityRange.min);
-        const bool hasSizeBySpeed =
-            (uniforms_.m_sizeBySpeedVelocityRange.max > uniforms_.m_sizeBySpeedVelocityRange.min &&
-             uniforms_.m_sizeBySpeedRange.min != uniforms_.m_sizeBySpeedRange.max);
-
-
-        uint32_t num = num_particles_;
+		
+		
+		if(uniforms_.m_paused)
+		{
+			// If paused, set delta time to 0 (particles don't advance but remain visible)
+			_dt = 0.0f;
+		}
 
 		math::bbox aabb;
 		aabb.reset();
@@ -278,52 +276,71 @@ struct Emitter
 		aabb.add_point(uniforms_.m_position - math::vec3(0.5f));
 		aabb.add_point(uniforms_.m_position + math::vec3(0.5f));
 
-        for(uint32_t ii = 0; ii < num; ++ii)
-        {
-            Particle& particle = particles_[ii];
-            particle.life += _dt * 1.0f / particle.lifeSpan;
+		uint32_t num = num_particles_;
 
-            if(particle.life > 1.0f)
-            {
-                if(ii != num - 1)
-                {
-                    bx::memCopy(&particle, &particles_[num - 1], sizeof(Particle));
-                    --ii;
-                }
+					
+		// Pre-calculate per-frame constants to avoid recalculating per particle
+		const float avgSystemScale = (uniforms_.m_scale.x + uniforms_.m_scale.y + uniforms_.m_scale.z) / 3.0f;
+		const bx::EaseFn easePos = bx::getEaseFunc(uniforms_.m_easePos);
 
-                --num;
-                continue; // Skip processing for dead particles
-            }
+		// Pre-calculate speed-based effect conditions
+		const bool hasColorBySpeed =
+			(uniforms_.m_colorBySpeedVelocityRange.max > uniforms_.m_colorBySpeedVelocityRange.min);
+		const bool hasSizeBySpeed =
+			(uniforms_.m_sizeBySpeedVelocityRange.max > uniforms_.m_sizeBySpeedVelocityRange.min &&
+			uniforms_.m_sizeBySpeedRange.min != uniforms_.m_sizeBySpeedRange.max);
 
-            // Update cached properties for living particles
-            updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
+
+
+		for(uint32_t ii = 0; ii < num; ++ii)
+		{
+			Particle& particle = particles_[ii];
+			particle.life += _dt * 1.0f / particle.lifeSpan;
+
+			if(particle.life > 1.0f)
+			{
+				if(ii != num - 1)
+				{
+					bx::memCopy(&particle, &particles_[num - 1], sizeof(Particle));
+					--ii;
+				}
+
+				--num;
+				continue; // Skip processing for dead particles
+			}
+
+			// Update cached properties for living particles
+			updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
 			
 			// Add particle position with some padding for scale
 			math::vec3 padding(particle.scale * 0.5f);
 			aabb.add_point(particle.position - padding);
 			aabb.add_point(particle.position + padding);
-        }
+		}   
 
-		aabb_ = aabb;
+		num_particles_ = num;
 
-        num_particles_ = num;
+		if(0.0f < uniforms_.m_emissionLifetime && uniforms_.m_playing)
+		{
+			spawn(uniforms_, aabb,_dt);
+		}
 
-        if(0.0f < uniforms_.m_emissionLifetime)
-        {
-            spawn(uniforms_, _dt);
-        }
-
-        // Safety check: ensure num_particles_ never exceeds max_particles_
-        BX_ASSERT(num_particles_ <= max_particles_, "Particle count exceeded maximum! num_particles_=%d, max_particles_=%d", num_particles_, max_particles_);
-        num_particles_ = math::min(num_particles_, max_particles_);
+		// Safety check: ensure num_particles_ never exceeds max_particles_
+		BX_ASSERT(num_particles_ <= max_particles_, "Particle count exceeded maximum! num_particles_=%d, max_particles_=%d", num_particles_, max_particles_);
+		num_particles_ = math::min(num_particles_, max_particles_);
+	
 
         if(first_update_)
         {
             first_update_ = false;
         }
+
+		
+		aabb_ = aabb;
+
     }
 
-    void spawn(EmitterUniforms& uniforms_, float _dt)
+    void spawn(EmitterUniforms& uniforms_, math::bbox& aabb, float _dt)
     {
         // Skip emission if rate is zero or negative
         if(uniforms_.m_particlesPerSecond <= 0.0f)
@@ -493,8 +510,8 @@ struct Emitter
 
 			// Add particle position with some padding for scale
 			math::vec3 padding(particle->scale * 0.5f);
-			aabb_.add_point(particle->position - padding);
-			aabb_.add_point(particle->position + padding);
+			aabb.add_point(particle->position - padding);
+			aabb.add_point(particle->position + padding);
         }
     }
 

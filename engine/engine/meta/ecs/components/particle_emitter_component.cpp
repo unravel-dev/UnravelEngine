@@ -371,6 +371,20 @@ REFLECT(particle_emitter_component)
             entt::attribute{"step", 0.01f},
             entt::attribute{"group", "Opacity over lifetime"},
         })
+        .data<nullptr, &particle_emitter_component::is_playing>("is_playing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_playing"},
+            entt::attribute{"pretty_name", "Is Playing"},
+            entt::attribute{"tooltip", "Whether the particle emitter is currently playing (read-only). Use Play/Stop/Pause methods to control playback."},
+            entt::attribute{"group", "Playback Control"},
+        })
+        .data<nullptr, &particle_emitter_component::is_paused>("is_paused"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_paused"},
+            entt::attribute{"pretty_name", "Is Paused"},
+            entt::attribute{"tooltip", "Whether the particle emitter is currently paused (read-only). Paused emitters don't advance particle simulation but remain visible."},
+            entt::attribute{"group", "Playback Control"},
+        })
          .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
          .custom<entt::attributes>(entt::attributes{
              entt::attribute{"name", "color_gradient"},
