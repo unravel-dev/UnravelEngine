@@ -294,6 +294,26 @@
                 "CMAKE_CXX_COMPILER": "g++"
             }
         }
+		{
+			"name": "windows-x64-clang-msvc-gnu",
+			"inherits": "windows-base",
+			"architecture": {
+				"value": "x64",
+				"strategy": "external"
+			},
+			"cacheVariables": {
+				"CMAKE_C_COMPILER": "clang",
+				"CMAKE_CXX_COMPILER": "clang++",
+
+				"CMAKE_C_COMPILER_TARGET": "x86_64-pc-windows-msvc",
+				"CMAKE_CXX_COMPILER_TARGET": "x86_64-pc-windows-msvc",
+
+				"CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=lld",
+				"CMAKE_SHARED_LINKER_FLAGS": "-fuse-ld=lld",
+				"CMAKE_MODULE_LINKER_FLAGS": "-fuse-ld=lld"
+			}
+		}
+
     ],
 
     "buildPresets": [
@@ -531,7 +551,17 @@
             "name": "windows-x64-mingw-release",
             "configuration": "Release",
             "configurePreset": "windows-x64-mingw"
-        }
+        },
+		{ 
+			"name": "windows-x64-clang-msvc-gnu-debug",
+			"configuration": "Debug",
+			"configurePreset": "windows-x64-clang-msvc-gnu"
+		},
+		{ 
+			"name": "windows-x64-clang-msvc-gnu-release",
+			"configuration": "Release",
+			"configurePreset": "windows-x64-clang-msvc-gnu"
+		}
     ],
 
     "testPresets": [
@@ -647,6 +677,12 @@
             "name": "windows-x64-mingw-release",
             "inherits": "test-base",
             "configurePreset": "windows-x64-mingw"
-        }
+        },
+		{ 
+			"name": "windows-x64-clang-msvc-gnu-release",
+			"inherits": "test-base", 
+			"configurePreset": "windows-x64-clang-msvc-gnu"
+		}
+
     ]
 }
