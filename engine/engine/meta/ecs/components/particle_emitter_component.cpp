@@ -371,20 +371,6 @@ REFLECT(particle_emitter_component)
             entt::attribute{"step", 0.01f},
             entt::attribute{"group", "Opacity over lifetime"},
         })
-        .data<nullptr, &particle_emitter_component::is_playing>("is_playing"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "is_playing"},
-            entt::attribute{"pretty_name", "Is Playing"},
-            entt::attribute{"tooltip", "Whether the particle emitter is currently playing (read-only). Use Play/Stop/Pause methods to control playback."},
-            entt::attribute{"group", "Playback Control"},
-        })
-        .data<nullptr, &particle_emitter_component::is_paused>("is_paused"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "is_paused"},
-            entt::attribute{"pretty_name", "Is Paused"},
-            entt::attribute{"tooltip", "Whether the particle emitter is currently paused (read-only). Paused emitters don't advance particle simulation but remain visible."},
-            entt::attribute{"group", "Playback Control"},
-        })
          .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
          .custom<entt::attributes>(entt::attributes{
              entt::attribute{"name", "color_gradient"},
@@ -410,6 +396,25 @@ REFLECT(particle_emitter_component)
             entt::attribute{"max", 100.0f},
             entt::attribute{"group", "Color by Speed"},
 
+        })
+        .data<&particle_emitter_component::set_lifetime_by_emitter_speed_gradient, &particle_emitter_component::get_lifetime_by_emitter_speed_gradient>("lifetime_by_emitter_speed_gradient"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lifetime_by_emitter_speed_gradient"},
+            entt::attribute{"pretty_name", "Lifetime by Emitter Speed Gradient"},
+            entt::attribute{"tooltip", "Lifetime multiplier gradient based on emitter movement speed. Allows particles to live longer/shorter based on how fast the emitter is moving."},
+            entt::attribute{"group", "Lifetime by Emitter Speed"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+        })
+        .data<&particle_emitter_component::set_lifetime_by_emitter_speed_range, &particle_emitter_component::get_lifetime_by_emitter_speed_range>("lifetime_by_emitter_speed_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lifetime_by_emitter_speed_range"},
+            entt::attribute{"pretty_name", "Lifetime by Emitter Speed Range"},
+            entt::attribute{"tooltip", "Emitter speed range for lifetime mapping. Emitters moving at min speed get slow gradient value, emitters at max speed get fast gradient value."},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"group", "Lifetime by Emitter Speed"},
         })
         .data<&particle_emitter_component::set_texture, &particle_emitter_component::get_texture>("texture"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -438,6 +443,8 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("size_by_speed_velocity_range", obj.get_size_by_speed_velocity_range()));
     try_save(ar, ser20::make_nvp("color_by_speed_gradient", obj.get_color_by_speed_gradient()));
     try_save(ar, ser20::make_nvp("color_by_speed_velocity_range", obj.get_color_by_speed_velocity_range()));
+    try_save(ar, ser20::make_nvp("lifetime_by_emitter_speed_gradient", obj.get_lifetime_by_emitter_speed_gradient()));
+    try_save(ar, ser20::make_nvp("lifetime_by_emitter_speed_range", obj.get_lifetime_by_emitter_speed_range()));
     
     // Gradient properties
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
@@ -557,6 +564,18 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("color_by_speed_velocity_range", color_by_speed_velocity_range)))
     {
         obj.set_color_by_speed_velocity_range(color_by_speed_velocity_range);
+    }
+    
+    math::gradient<float> lifetime_by_emitter_speed_gradient;
+    if(try_load(ar, ser20::make_nvp("lifetime_by_emitter_speed_gradient", lifetime_by_emitter_speed_gradient)))
+    {
+        obj.set_lifetime_by_emitter_speed_gradient(lifetime_by_emitter_speed_gradient);
+    }
+    
+    frange_t lifetime_by_emitter_speed_range{0.0f, 10.0f};
+    if(try_load(ar, ser20::make_nvp("lifetime_by_emitter_speed_range", lifetime_by_emitter_speed_range)))
+    {
+        obj.set_lifetime_by_emitter_speed_range(lifetime_by_emitter_speed_range);
     }
     
     // Gradient properties

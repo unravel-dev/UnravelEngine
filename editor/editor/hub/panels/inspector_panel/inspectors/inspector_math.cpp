@@ -1,6 +1,7 @@
 #include "inspector_math.h"
 #include "entt/meta/meta.hpp"
 #include "imgui_widgets/tooltips.h"
+#include "inspector_coretypes.h"
 #include "inspector_basetypes.h"
 #include "inspectors.h"
 #include "entt/meta/resolve.hpp"
@@ -131,7 +132,107 @@ namespace
     
         }
     }
+
+
+    template<typename T>
+    void draw_gradient_combined_elements(ImDrawList* drawList,
+                                                 const math::gradient<T>& gradient,
+                                                 const T& default_value,
+                                                 const std::vector<float>& xkeys,
+                                                 ImVec2 barOriginPos,
+                                                 ImVec2 size)
+    {
+        if(gradient.get_interpolation_mode() == math::gradient_interpolation_mode_t::linear)
+        {
+            for(size_t i = 0; i < xkeys.size() - 1; i++)
+            {
+                std::vector<size_t> ind = {i, i+1};
+                draw_gradient_combined_element<T>(drawList,
+                                                           gradient,
+                                                           default_value,
+                                                           xkeys,
+                                                           ind,
+                                                           barOriginPos,
+                                                           size);
+
+            }
+        }
+        else
+        {
+            for(size_t i = 0; i < xkeys.size() - 1; i++)
+            {
+                std::vector<size_t> ind = {i};
+
+                draw_gradient_combined_element<T>(drawList,
+                                                           gradient,
+                                                           default_value,
+                                                           xkeys,
+                                                           ind,
+                                                           barOriginPos,
+                                                           size);
+
+            }
+        }
+    }
     
+    template<>
+    inline void draw_gradient_combined_elements<float>(ImDrawList* drawList,
+                                                 const math::gradient<float>& gradient,
+                                                 const float& deault_value,
+                                                 const std::vector<float>& xkeys,
+                                                 ImVec2 barOriginPos, ImVec2 size)
+    {
+        ImGui::SetCursorScreenPos(barOriginPos);
+
+        size_t sample_count = std::max(size_t(64), xkeys.size());
+        std::vector<float> ykeys;
+        ykeys.reserve(sample_count);
+        float min_y = std::numeric_limits<float>::max();
+        float max_y = std::numeric_limits<float>::min();
+
+        for(size_t i = 0; i < sample_count; i++)
+        {
+            float progress = static_cast<float>(i) / static_cast<float>(sample_count - 1);
+            float y = gradient.sample(progress);
+            ykeys.emplace_back(y);
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+        }
+
+        ImGui::PlotLines("##", ykeys.data(), ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
+        
+    }
+    
+    template<>
+    inline void draw_gradient_combined_elements<frange_t>(ImDrawList* drawList,
+                                                 const math::gradient<frange_t>& gradient,
+                                                 const frange_t& deault_value,
+                                                 const std::vector<float>& xkeys,
+                                                 ImVec2 barOriginPos, ImVec2 size)
+    {
+        ImGui::SetCursorScreenPos(barOriginPos);
+
+        size_t sample_count = std::max(size_t(64), xkeys.size());
+        std::vector<float> ykeys;
+        ykeys.reserve(sample_count);
+        float min_y = std::numeric_limits<float>::max();
+        float max_y = std::numeric_limits<float>::min();
+
+        for(size_t i = 0; i < sample_count; i++)
+        {
+            float progress = static_cast<float>(i) / static_cast<float>(sample_count - 1);
+            frange_t ry = gradient.sample(progress);
+            float y = ry.min +(ry.max - ry.min) * 0.5f;
+            ykeys.emplace_back(y);
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+        }
+
+        ImGui::PlotLines("##", ykeys.data(), ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
+        
+    }
+
+
     template<typename T>
     bool draw_gradient_impl(const std::string& title, math::gradient<T>& gradient,
                                 const std::function<bool(T&)>& edit_element,
@@ -342,7 +443,7 @@ namespace
         auto drawList = ImGui::GetWindowDrawList();
     
         const float width = int(ImGui::CalcItemWidth());
-        const auto barHeight = ImGui::GetFrameHeight();
+        const auto barHeight = ImGui::GetFrameHeight() * 1.5f;
         const auto markerWidth = 16;
         const auto markerHeight = 16;
     
@@ -362,42 +463,18 @@ namespace
             xkeys.emplace_back(0.0f);
             xkeys.emplace_back(1.0f);
     
+            std::sort(xkeys.begin(), xkeys.end());
             auto result = std::unique(xkeys.begin(), xkeys.end());
             xkeys.erase(result, xkeys.end());
     
-            std::sort(xkeys.begin(), xkeys.end());
-    
-            if(gradient.get_interpolation_mode() == math::gradient_interpolation_mode_t::linear)
-            {
-                for(size_t i = 0; i < xkeys.size() - 1; i++)
-                {
-                    std::vector<size_t> ind = {i, i+1};
-                    draw_gradient_combined_element<T>(drawList,
-                                                               gradient,
-                                                               default_value,
-                                                               xkeys,
-                                                               ind,
-                                                               barOriginPos,
-                                                               ImVec2(width, barHeight));
-    
-                }
-            }
-            else
-            {
-                for(size_t i = 0; i < xkeys.size() - 1; i++)
-                {
-                    std::vector<size_t> ind = {i};
-    
-                    draw_gradient_combined_element<T>(drawList,
-                                                               gradient,
-                                                               default_value,
-                                                               xkeys,
-                                                               ind,
-                                                               barOriginPos,
-                                                               ImVec2(width, barHeight));
-    
-                }
-            }
+
+            draw_gradient_combined_elements<T>(drawList,
+                gradient,
+                default_value,
+                xkeys,
+                barOriginPos,
+                ImVec2(width, barHeight));
+           
         }
     
         {
@@ -912,6 +989,40 @@ auto inspector_color::inspect(rtti::context& ctx,
     return result;
 }
 
+auto inspector_gradient_float::inspect(rtti::context& ctx,
+                                 entt::meta_any& var,
+                                 const meta_any_proxy& var_proxy,
+                                 const var_info& info,
+                                 const entt::meta_custom& custom) -> inspect_result
+{
+    auto& data = var.cast<math::gradient<float>&>();
+    inspect_result result{};
+
+
+    std::function<bool(float&)> draw_element = [&](float& c)
+    {
+        inspector_float inspector;
+        entt::meta_any var_proxy_any = entt::forward_as_meta(c);
+        auto var_proxy_proxy = make_proxy(var_proxy_any);
+        return inspector.inspect(ctx, var_proxy_any, var_proxy_proxy, info, custom).changed;
+    };
+
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.7f);
+
+    if(utils::draw_gradient("##", data, draw_element, 0.0f))
+    {
+        result.changed = true;
+
+    }
+    ImGui::PopItemWidth();
+
+    result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
+
+    ImGui::DrawItemActivityOutline();
+
+    return result;
+}
+
 auto inspector_gradient::inspect(rtti::context& ctx,
                                  entt::meta_any& var,
                                  const meta_any_proxy& var_proxy,
@@ -924,16 +1035,14 @@ auto inspector_gradient::inspect(rtti::context& ctx,
 
     std::function<bool(math::color&)> draw_element = [](math::color& c)
     {
-
-        
-        ImColor imColor(c.value.x, c.value.y, c.value.z, c.value.w);
-        if(ImGui::ColorEdit4("##", &imColor.Value.x,
+        ImColor color(c.value.x, c.value.y, c.value.z, c.value.w);
+        if(ImGui::ColorEdit4("##", &color.Value.x,
                             ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
         {
-            c.value.x = imColor.Value.x;
-            c.value.y = imColor.Value.y;
-            c.value.z = imColor.Value.z;
-            c.value.w = imColor.Value.w;
+            c.value.x = color.Value.x;
+            c.value.y = color.Value.y;
+            c.value.z = color.Value.z;
+            c.value.w = color.Value.w;
             return true;
         }
         return false;

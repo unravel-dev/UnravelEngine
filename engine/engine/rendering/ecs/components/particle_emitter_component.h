@@ -124,6 +124,12 @@ public:
     void set_color_by_speed_velocity_range(const frange_t& velocity_range);
     auto get_color_by_speed_velocity_range() const -> const frange_t&;
 
+    void set_lifetime_by_emitter_speed_gradient(const math::gradient<float>& gradient);
+    auto get_lifetime_by_emitter_speed_gradient() const -> const math::gradient<float>&;
+
+    void set_lifetime_by_emitter_speed_range(const frange_t& speed_range);
+    auto get_lifetime_by_emitter_speed_range() const -> const frange_t&;
+
     // Lifetime properties
     void set_lifetime(std::chrono::duration<float> lifetime);
     auto get_lifetime() const -> std::chrono::duration<float>;

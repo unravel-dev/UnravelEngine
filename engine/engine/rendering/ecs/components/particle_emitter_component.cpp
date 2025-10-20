@@ -218,6 +218,27 @@ auto particle_emitter_component::get_color_by_speed_velocity_range() const -> co
     return uniforms_.m_colorBySpeedVelocityRange;
 }
 
+void particle_emitter_component::set_lifetime_by_emitter_speed_gradient(const math::gradient<float>& gradient)
+{
+    uniforms_.m_lifetimeByEmitterSpeedGradient = gradient;
+    // uniforms_.m_lifetimeByEmitterSpeedGradient.generate_lut(256);
+}
+
+auto particle_emitter_component::get_lifetime_by_emitter_speed_gradient() const -> const math::gradient<float>&
+{
+    return uniforms_.m_lifetimeByEmitterSpeedGradient;
+}
+
+void particle_emitter_component::set_lifetime_by_emitter_speed_range(const frange_t& speed_range)
+{
+    uniforms_.m_lifetimeByEmitterSpeedRange = speed_range;
+}
+
+auto particle_emitter_component::get_lifetime_by_emitter_speed_range() const -> const frange_t&
+{
+    return uniforms_.m_lifetimeByEmitterSpeedRange;
+}
+
 void particle_emitter_component::set_lifetime(std::chrono::duration<float> lifetime)
 {
     uniforms_.m_lifetime  = math::max(lifetime.count(), 0.0f);

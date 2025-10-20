@@ -75,6 +75,9 @@ struct EmitterUniforms
 	math::gradient<math::color> m_colorBySpeedGradient; // Color gradient based on speed
 	frange_t m_colorBySpeedVelocityRange; // Velocity range for color mapping [min_speed, max_speed]
 
+	math::gradient<float> m_lifetimeByEmitterSpeedGradient; // Lifetime multiplier gradient based on emitter speed
+	frange_t m_lifetimeByEmitterSpeedRange; // Emitter speed range for lifetime mapping [min_speed, max_speed]
+
 	math::gradient<math::color> m_colorGradient; // Color gradient over particle lifetime
 	float m_emissionLifetime; // Duration of one emission cycle
 	float m_blendMultiplier; // Global blend multiplier for all particles (0.0 = fully transparent, 1.0 = no change)

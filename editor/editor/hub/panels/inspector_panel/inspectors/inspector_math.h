@@ -48,6 +48,12 @@ struct inspector_color : public crtp_meta_type<inspector_color, inspector>
 };
 REFLECT_INSPECTOR_INLINE(inspector_color, math::color)
 
+struct inspector_gradient_float : public crtp_meta_type<inspector_gradient_float, inspector>
+{
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
+};
+REFLECT_INSPECTOR_INLINE(inspector_gradient_float, math::gradient<float>)
+
 struct inspector_gradient : public crtp_meta_type<inspector_gradient, inspector>
 {
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;

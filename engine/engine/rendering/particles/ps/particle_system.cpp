@@ -118,6 +118,13 @@ void EmitterUniforms::reset()
     m_colorBySpeedGradient.add_point(math::color(0xffffffff), 0.0f); // Slow speed: white
     m_colorBySpeedGradient.add_point(math::color(0xffffffff), 1.0f); // Fast speed: white (no color change by default)
     m_colorBySpeedVelocityRange = frange_t(0.0f, 10.0f);             // Default velocity range
+
+    // Initialize lifetime by emitter speed gradient with default 2-point gradient (no change by default)
+    m_lifetimeByEmitterSpeedGradient = math::gradient<float>();
+    m_lifetimeByEmitterSpeedGradient.add_point(1.0f, 0.0f); // Slow emitter: no lifetime change
+    m_lifetimeByEmitterSpeedGradient.add_point(1.0f, 1.0f); // Fast emitter: no lifetime change (default)
+    m_lifetimeByEmitterSpeedRange = frange_t(0.0f, 10.0f);                   // Default emitter speed range
+
     m_scale = math::vec3(1.0f, 1.0f, 1.0f);                          // Default: no scaling
 
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
@@ -134,6 +141,7 @@ void EmitterUniforms::reset()
     m_blendGradient.generate_lut(256);
     m_scaleGradient.generate_lut(256);
     m_colorBySpeedGradient.generate_lut(256);
+    m_lifetimeByEmitterSpeedGradient.generate_lut(256);
 }
 
 namespace ps
@@ -374,6 +382,28 @@ struct Emitter
             (uniforms_.m_sizeBySpeedVelocityRange.max > uniforms_.m_sizeBySpeedVelocityRange.min &&
              uniforms_.m_sizeBySpeedRange.min != uniforms_.m_sizeBySpeedRange.max);
 
+        // Pre-calculate emitter speed for lifetime by emitter speed effect
+        const bool hasLifetimeByEmitterSpeed =
+            (uniforms_.m_lifetimeByEmitterSpeedRange.max > uniforms_.m_lifetimeByEmitterSpeedRange.min);
+        float emitterSpeed = 0.0f;
+        float lifetimeMultiplier = 1.0f;
+        if(hasLifetimeByEmitterSpeed && _dt > 0.0f)
+        {
+            // Calculate motion delta for emitter speed
+            const math::vec3 currentPos = uniforms_.m_position;
+            const math::vec3 prevPos = uniforms_.m_prevPosition;
+            const math::vec3 motionDelta = currentPos - prevPos;
+            emitterSpeed = math::length(motionDelta) / _dt; // Speed in units per second
+
+            // Calculate speed factor and sample gradient
+            const float speedFactor = 
+                bx::clamp((emitterSpeed - uniforms_.m_lifetimeByEmitterSpeedRange.min) /
+                          (uniforms_.m_lifetimeByEmitterSpeedRange.max - uniforms_.m_lifetimeByEmitterSpeedRange.min),
+                          0.0f, 1.0f);
+
+            lifetimeMultiplier = uniforms_.m_lifetimeByEmitterSpeedGradient.sample(speedFactor);
+        }
+
         // Pre-calculate rotation matrix (constant for all particles in this spawn call)
         const math::quat rotationQuat = math::angleAxis(uniforms_.m_angle.z, math::vec3(0, 0, 1)) *
                                         math::angleAxis(uniforms_.m_angle.y, math::vec3(0, 1, 0)) *
@@ -470,7 +500,7 @@ struct Emitter
             const math::vec3 end = tmp1 + start;
 
             particle->life = 0.0f; // Always start at 0 for new particles
-            particle->lifeSpan = lifeSpan; // Use pre-calculated value
+            particle->lifeSpan = lifeSpan * lifetimeMultiplier; // Apply emitter speed-based lifetime modifier
 
             // Calculate interpolated emitter position for temporal emission gap handling
             math::vec3 interpolatedEmitterPos = math::mix(prevPos, currentPos, emissionPhase);
