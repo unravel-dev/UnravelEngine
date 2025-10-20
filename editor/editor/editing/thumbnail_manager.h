@@ -74,23 +74,6 @@ struct thumbnail_manager
         return thumbnails_.file.get();
     }
 
-    #define DECLARE_THUMBNAIL_SPEC(T)\
-    template<>\
-    auto get_thumbnail<T>(const asset_handle<T>& asset) -> gfx::texture::ptr;
-
-    DECLARE_THUMBNAIL_SPEC(gfx::texture);
-    DECLARE_THUMBNAIL_SPEC(gfx::shader);
-    DECLARE_THUMBNAIL_SPEC(material);
-    DECLARE_THUMBNAIL_SPEC(mesh);
-    DECLARE_THUMBNAIL_SPEC(animation_clip);
-    DECLARE_THUMBNAIL_SPEC(prefab);
-    DECLARE_THUMBNAIL_SPEC(scene_prefab);
-    DECLARE_THUMBNAIL_SPEC(physics_material);
-    DECLARE_THUMBNAIL_SPEC(audio_clip);
-    DECLARE_THUMBNAIL_SPEC(font);
-    DECLARE_THUMBNAIL_SPEC(script);
-    DECLARE_THUMBNAIL_SPEC(ui_tree);
-    DECLARE_THUMBNAIL_SPEC(style_sheet);
 
 
     auto get_thumbnail(const fs::path& path) -> gfx::texture::ptr;
@@ -147,4 +130,22 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };
+
+
+#define DECLARE_THUMBNAIL_SPEC(T) template<>\
+auto thumbnail_manager::get_thumbnail<T>(const asset_handle<T>& asset) -> gfx::texture::ptr;
+
+DECLARE_THUMBNAIL_SPEC(gfx::texture);
+DECLARE_THUMBNAIL_SPEC(gfx::shader);
+DECLARE_THUMBNAIL_SPEC(material);
+DECLARE_THUMBNAIL_SPEC(mesh);
+DECLARE_THUMBNAIL_SPEC(animation_clip);
+DECLARE_THUMBNAIL_SPEC(prefab);
+DECLARE_THUMBNAIL_SPEC(scene_prefab);
+DECLARE_THUMBNAIL_SPEC(physics_material);
+DECLARE_THUMBNAIL_SPEC(audio_clip);
+DECLARE_THUMBNAIL_SPEC(font);
+DECLARE_THUMBNAIL_SPEC(script);
+DECLARE_THUMBNAIL_SPEC(ui_tree);
+DECLARE_THUMBNAIL_SPEC(style_sheet);
 } // namespace unravel
