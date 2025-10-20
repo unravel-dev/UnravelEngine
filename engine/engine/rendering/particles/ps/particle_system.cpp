@@ -792,7 +792,7 @@ struct ParticleSystem
                 const math::vec3 tmp0 = _eye - particle.position;
                 const float distSquared = math::dot(tmp0, tmp0);
                 
-                batchedParticles.emplace_back(distSquared, emitterIdx, particleIdx);
+                batchedParticles.emplace_back(BatchedParticle{distSquared, emitterIdx, particleIdx});
             }
         }
         

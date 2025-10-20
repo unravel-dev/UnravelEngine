@@ -339,7 +339,7 @@ private:
 
     struct CompiledTexture
     {
-        asset_handle<gfx::texture> asset_handle;
+        asset_handle<gfx::texture> asset;
         gfx::texture::ptr generated_texture_ptr; // For textures created directly (like SaveLayerAsTexture)
         gfx::frame_buffer::ptr generated_framebuffer_ptr; // Keep framebuffer alive when texture is render target
     };

@@ -539,9 +539,9 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
                 const auto& tex = texture_manager_.get(internal_handle.idx);
                 auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
 
-                if(tex.asset_handle.is_valid())
+                if(tex.asset.is_valid())
                 {
-                    gfx::set_texture(0, texture_uniform, tex.asset_handle.get()->native_handle());
+                    gfx::set_texture(0, texture_uniform, tex.asset.get()->native_handle());
                 }
                 else if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
                 {
@@ -639,7 +639,7 @@ auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
 
     // Set up compiled texture
     CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
-    compiled_texture.asset_handle = texture;
+    compiled_texture.asset = texture;
 
     // Convert internal handle to RmlUi handle
     compiled_texture_handle internal_handle;
