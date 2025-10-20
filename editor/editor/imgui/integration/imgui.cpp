@@ -67,10 +67,10 @@ static void memFree(void* _ptr, void* _userData);
 
 static void ImGui_ImplGFX_DestroyTexture(ImTextureData* tex)
 {
-    auto backendtexture = (gfx::texture_handle)tex->TexID;
-    if (backendtexture.idx == gfx::invalid_handle)
+    auto tex_data = ImGui::FromId(tex->TexID);
+    if (tex_data.s.handle.idx == gfx::invalid_handle)
         return;
-    gfx::destroy(backendtexture);
+    gfx::destroy(tex_data.s.handle);
 
     // Clear identifiers and mark as destroyed (in order to allow e.g. calling InvalidateDeviceObjects while running)
     tex->SetTexID(ImTextureID_Invalid);

@@ -105,6 +105,13 @@ inline ImTextureID ToId(gfx::texture_handle _handle, uint8_t _mip = 0, uint8_t _
     return tex.id;
 }
 
+inline ImTexture FromId(ImTextureID _id)
+{
+    ImTexture tex;
+    tex.id = _id;
+    return tex;
+}
+
 inline ImTextureID ToId(const gfx::texture& _handle, uint8_t _mip = 0, uint8_t _flags = IMGUI_FLAGS_ALPHA_BLEND)
 {
     if(_handle.is_valid() && _handle.is_render_target() && gfx::is_origin_bottom_left())
