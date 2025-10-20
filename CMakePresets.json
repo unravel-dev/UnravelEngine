@@ -293,7 +293,7 @@
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++"
             }
-        }
+        },
 		{
 			"name": "windows-x64-clang-msvc-gnu",
 			"inherits": "windows-base",
