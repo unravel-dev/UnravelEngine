@@ -194,6 +194,22 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "In-Out Bounce"},
         });
 
+    entt::meta_factory<SimulationSpace::Enum>{}
+        .type("SimulationSpace"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "SimulationSpace"},
+            entt::attribute{"pretty_name", "Simulation Space"},
+        })
+        .data<SimulationSpace::World>("World"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "World"},
+            entt::attribute{"pretty_name", "World"},
+        })
+        .data<SimulationSpace::Local>("Local"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Local"},
+            entt::attribute{"pretty_name", "Local"},
+        });
 
     entt::meta_factory<particle_emitter_component>{}
         .type("particle_emitter_component"_hs)
@@ -262,6 +278,8 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "gravity_scale"},
             entt::attribute{"pretty_name", "Gravity Scale"},
             entt::attribute{"tooltip", "Multiplier for gravity effect on particles. 0.0 = no gravity, 1.0 = Earth-like gravity, negative values = upward force."},
+            entt::attribute{"step", 0.01f},
+
         })
 
         .data<nullptr, &particle_emitter_component::get_world_bounds>("world_bounds"_hs)
@@ -270,33 +288,42 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "World Bounds"},
             entt::attribute{"tooltip", "Bounding box containing all particles in world space. Used for culling and optimization (read-only)."},
         })
-        .data<&particle_emitter_component::set_shape, &particle_emitter_component::get_shape>("shape"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "shape"},
-            entt::attribute{"pretty_name", "Emitter Shape"},
-            entt::attribute{"tooltip", "Geometric shape from which particles are spawned. Sphere = 3D ball, Hemisphere = half sphere, Circle = 2D ring, Disc = filled circle, Rect = rectangle."},
-        })
         .data<&particle_emitter_component::set_emission_shape_scale, &particle_emitter_component::get_emission_shape_scale>("emission_shape_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "emission_shape_scale"},
             entt::attribute{"pretty_name", "Emitter Shape Scale"},
             entt::attribute{"tooltip", "Scale of the emission shape. 1.0 = no scaling, 2.0 = double size, 0.5 = half size."},
         })
+        .data<&particle_emitter_component::set_shape, &particle_emitter_component::get_shape>("shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shape"},
+            entt::attribute{"pretty_name", "Emitter Shape"},
+            entt::attribute{"tooltip", "Geometric shape from which particles are spawned. Sphere = 3D ball, Hemisphere = half sphere, Circle = 2D ring, Disc = filled circle, Rect = rectangle."},
+        })
+
         .data<&particle_emitter_component::set_direction, &particle_emitter_component::get_direction>("direction"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "direction"},
             entt::attribute{"pretty_name", "Emitter Direction"},
             entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position."},
         })
-         .data<&particle_emitter_component::set_velocity_gradient, &particle_emitter_component::get_velocity_gradient>("velocity_gradient"_hs)
-         .custom<entt::attributes>(entt::attributes{
-             entt::attribute{"name", "velocity_gradient"},
-             entt::attribute{"pretty_name", "Velocity Gradient"},
-             entt::attribute{"tooltip", "Velocity range gradient over particle lifetime. Controls how particle speed changes from spawn to death."},
-             entt::attribute{"group", "Velocity over lifetime"},
-             entt::attribute{"step", 0.05f},
+        
+        .data<&particle_emitter_component::set_simulation_space, &particle_emitter_component::get_simulation_space>("simulation_space"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "simulation_space"},
+            entt::attribute{"pretty_name", "Simulation Space"},
+            entt::attribute{"tooltip", "Controls whether particles are simulated in world space or local space."},
+        })
 
-         })
+        .data<&particle_emitter_component::set_velocity_gradient, &particle_emitter_component::get_velocity_gradient>("velocity_gradient"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "velocity_gradient"},
+            entt::attribute{"pretty_name", "Velocity Gradient"},
+            entt::attribute{"tooltip", "Velocity range gradient over particle lifetime. Controls how particle speed changes from spawn to death."},
+            entt::attribute{"group", "Velocity over lifetime"},
+            entt::attribute{"step", 0.05f},
+
+        })
         .data<&particle_emitter_component::set_velocity_damping, &particle_emitter_component::get_velocity_damping>("velocity_damping"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_damping"},
@@ -316,7 +343,6 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Position over lifetime"},
 
         })
-
         .data<&particle_emitter_component::set_force_over_lifetime, &particle_emitter_component::get_force_over_lifetime>("force_over_lifetime"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "force_over_lifetime"},
@@ -425,13 +451,15 @@ REFLECT(particle_emitter_component)
 SAVE(particle_emitter_component)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
-    try_save(ar, ser20::make_nvp("shape", static_cast<int>(obj.get_shape())));
-    try_save(ar, ser20::make_nvp("direction", static_cast<int>(obj.get_direction())));
+    try_save(ar, ser20::make_nvp("shape", obj.get_shape()));
+    try_save(ar, ser20::make_nvp("direction", obj.get_direction()));
+    try_save(ar, ser20::make_nvp("simulation_space", obj.get_simulation_space()));
     try_save(ar, ser20::make_nvp("max_particles", obj.get_max_particles()));
     
     
     // Emission properties
     try_save(ar, ser20::make_nvp("emission_lifetime", obj.get_emission_lifetime()));
+    try_save(ar, ser20::make_nvp("emission_shape_scale", obj.get_emission_shape_scale()));
     try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
     try_save(ar, ser20::make_nvp("emission_rate", obj.get_emission_rate()));
     try_save(ar, ser20::make_nvp("temporal_motion", obj.get_temporal_motion()));
@@ -471,14 +499,21 @@ LOAD(particle_emitter_component)
         obj.set_enabled(enabled);
     }
     
-    int shape{0}, direction{0};
+    EmitterShape::Enum shape{EmitterShape::Sphere};
+    EmitterDirection::Enum direction{EmitterDirection::Up};
     if(try_load(ar, ser20::make_nvp("shape", shape)))
     {
-        obj.set_shape(static_cast<EmitterShape::Enum>(shape));
+        obj.set_shape(shape);
     }
     if(try_load(ar, ser20::make_nvp("direction", direction)))
     {
-        obj.set_direction(static_cast<EmitterDirection::Enum>(direction));
+        obj.set_direction(direction);
+    }
+
+    SimulationSpace::Enum simulation_space{SimulationSpace::World};
+    if(try_load(ar, ser20::make_nvp("simulation_space", simulation_space)))
+    {
+        obj.set_simulation_space(simulation_space);
     }
     
     uint32_t max_particles{1024};
@@ -492,6 +527,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("emission_lifetime", emission_lifetime)))
     {
         obj.set_emission_lifetime(emission_lifetime);
+    }
+    
+    math::vec3 emission_shape_scale{1.0f, 1.0f, 1.0f};
+    if(try_load(ar, ser20::make_nvp("emission_shape_scale", emission_shape_scale)))
+    {
+        obj.set_emission_shape_scale(emission_shape_scale);
     }
     
     float gravity_scale{0.0f};

@@ -403,17 +403,10 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
 {
     if(isValid(emitter_handle_) && enabled_)
     {
-        auto prev_position = uniforms_.m_position;
-        // Update position from transform
-        uniforms_.m_position = world_transform.get_position();
-
-        uniforms_.m_prevPosition = prev_position;
-        
-        // Update rotation from transform (convert quaternion to Euler angles)
-        uniforms_.m_angle = world_transform.get_rotation_euler();
-        
-        // Update scale from transform
-        uniforms_.m_scale = world_transform.get_scale();
+        // Store the world transform directly (unified approach for both simulation methods)
+        // This is much more efficient than decomposing and recomposing
+        uniforms_.m_prevTransform = uniforms_.m_transform;
+        uniforms_.m_transform = world_transform;
 
         auto tex = [&]()
         {
@@ -426,7 +419,6 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         uniforms_.m_texture = tex->native_handle();
         
         psUpdateEmitter(emitter_handle_, dt.count(), &uniforms_);
-
     }
 }
 
@@ -462,6 +454,17 @@ void particle_emitter_component::reset_emitter()
     {
         psResetEmitter(emitter_handle_);
     }
+}
+
+void particle_emitter_component::set_simulation_space(SimulationSpace::Enum space)
+{
+    uniforms_.m_simulationSpace = space;
+    reset_emitter();
+}
+
+auto particle_emitter_component::get_simulation_space() const -> SimulationSpace::Enum
+{
+    return uniforms_.m_simulationSpace;
 }
 
 

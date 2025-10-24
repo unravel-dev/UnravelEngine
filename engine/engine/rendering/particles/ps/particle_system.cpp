@@ -77,9 +77,12 @@ static const uint16_t s_quadIndices[6] = {
 
 void EmitterUniforms::reset()
 {
-    m_position = math::vec3(0.0f, 0.0f, 0.0f);
-    m_angle = math::vec3(0.0f, 0.0f, 0.0f);
-    m_prevPosition = math::vec3(0.0f, 0.0f, 0.0f);
+    // Initialize simulation method and transforms
+    m_simulationSpace = SimulationSpace::World; // Default to world simulation
+    m_transform = math::transform(); // Identity transform
+    m_prevTransform = math::transform(); // Identity transform
+    
+    // Initialize emission shape scale
     m_emissionShapeScale = math::vec3(1.0f, 1.0f, 1.0f); // Default: no scaling
 
     // Initialize velocity gradient with default 2-point gradient (start -> end)
@@ -124,8 +127,6 @@ void EmitterUniforms::reset()
     m_lifetimeByEmitterSpeedGradient.add_point(1.0f, 0.0f); // Slow emitter: no lifetime change
     m_lifetimeByEmitterSpeedGradient.add_point(1.0f, 1.0f); // Fast emitter: no lifetime change (default)
     m_lifetimeByEmitterSpeedRange = frange_t(0.0f, 10.0f);                   // Default emitter speed range
-
-    m_scale = math::vec3(1.0f, 1.0f, 1.0f);                          // Default: no scaling
 
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
     m_blendMultiplier = 1.0f;  // Default: no blend modification
@@ -209,7 +210,8 @@ struct Emitter
                                   float avgSystemScale,
                                   bx::EaseFn easePos,
                                   bool hasColorBySpeed,
-                                  bool hasSizeBySpeed)
+                                  bool hasSizeBySpeed,
+                                  const math::mat4& effectiveTransform)
     {
         const float ttPos = easePos(particle.life);
 
@@ -260,11 +262,22 @@ struct Emitter
         // Cache final scale
         particle.scale = scale;
 
-		// Calculate position (this still needs to be done in render for sorting)
+		// Calculate position - apply transform for local simulation
 		const math::vec3 p0 = math::mix(particle.start, particle.end[0], ttPos);
 		const math::vec3 p1 = math::mix(particle.end[0], particle.end[1], ttPos);
-		const math::vec3 pos = math::mix(p0, p1, ttPos);
-		particle.position = pos;
+		const math::vec3 localPos = math::mix(p0, p1, ttPos);
+		
+		if(uniforms_.m_simulationSpace == SimulationSpace::Local)
+		{
+			// Transform local space position to world space
+			const math::vec4 worldPos4 = effectiveTransform * math::vec4(localPos, 1.0f);
+			particle.position = math::vec3(worldPos4.x, worldPos4.y, worldPos4.z);
+		}
+		else
+		{
+			// Already in world space
+			particle.position = localPos;
+		}
     }
 
     void update(EmitterUniforms* _uniforms, float _dt)
@@ -278,17 +291,21 @@ struct Emitter
 			_dt = 0.0f;
 		}
 
+		// Get effective transform properties based on simulation method
+		math::vec3 effectivePosition, effectiveScale, effectiveEmissionShapeScale;
+		math::mat4 effectiveTransform;
+		getEffectiveTransform(uniforms_, effectivePosition, effectiveScale, effectiveEmissionShapeScale, effectiveTransform);
+
 		math::bbox aabb;
 		aabb.reset();
 
-		aabb.add_point(uniforms_.m_position - math::vec3(0.5f));
-		aabb.add_point(uniforms_.m_position + math::vec3(0.5f));
+		aabb.add_point(effectivePosition - math::vec3(0.5f));
+		aabb.add_point(effectivePosition + math::vec3(0.5f));
 
 		uint32_t num = num_particles_;
 
-					
 		// Pre-calculate per-frame constants to avoid recalculating per particle
-		const float avgSystemScale = (uniforms_.m_scale.x + uniforms_.m_scale.y + uniforms_.m_scale.z) / 3.0f;
+		const float avgSystemScale = (effectiveScale.x + effectiveScale.y + effectiveScale.z) / 3.0f;
 		const bx::EaseFn easePos = bx::getEaseFunc(uniforms_.m_easePos);
 
 		// Pre-calculate speed-based effect conditions
@@ -318,7 +335,7 @@ struct Emitter
 			}
 
 			// Update cached properties for living particles
-			updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
+			updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
 			
 			// Add particle position with some padding for scale
 			math::vec3 padding(particle.scale * 0.5f);
@@ -348,6 +365,20 @@ struct Emitter
 
     }
 
+    // Helper function to get effective transform properties (now unified for both simulation methods)
+    void getEffectiveTransform(const EmitterUniforms& uniforms_, 
+                              math::vec3& outPosition, 
+                              math::vec3& outScale, 
+                              math::vec3& outEmissionShapeScale,
+                              math::mat4& outTransformMatrix) const
+    {
+        // Extract transform components directly (efficient for both simulation methods)
+        outPosition = uniforms_.m_transform.get_position();
+        outScale = uniforms_.m_transform.get_scale();
+        outEmissionShapeScale = uniforms_.m_emissionShapeScale * outScale; // Apply transform scale to emission shape
+        outTransformMatrix = uniforms_.m_transform; // Implicit conversion to mat4
+    }
+
     void spawn(EmitterUniforms& uniforms_, math::bbox& aabb, float _dt)
     {
         // Skip emission if rate is zero or negative
@@ -373,8 +404,13 @@ struct Emitter
             return;
         }
 
+        // Get effective transform properties based on simulation method
+        math::vec3 effectivePosition, effectiveScale, effectiveEmissionShapeScale;
+        math::mat4 effectiveTransform;
+        getEffectiveTransform(uniforms_, effectivePosition, effectiveScale, effectiveEmissionShapeScale, effectiveTransform);
+
         // Pre-calculate constants for new particle property calculation
-        const float avgSystemScale = (uniforms_.m_scale.x + uniforms_.m_scale.y + uniforms_.m_scale.z) / 3.0f;
+        const float avgSystemScale = (effectiveScale.x + effectiveScale.y + effectiveScale.z) / 3.0f;
         const bx::EaseFn easePos = bx::getEaseFunc(uniforms_.m_easePos);
         const bool hasColorBySpeed =
             (uniforms_.m_colorBySpeedVelocityRange.max > uniforms_.m_colorBySpeedVelocityRange.min);
@@ -389,9 +425,10 @@ struct Emitter
         float lifetimeMultiplier = 1.0f;
         if(hasLifetimeByEmitterSpeed && _dt > 0.0f)
         {
-            // Calculate motion delta for emitter speed
-            const math::vec3 currentPos = uniforms_.m_position;
-            const math::vec3 prevPos = uniforms_.m_prevPosition;
+            // Calculate motion delta for emitter speed (now unified)
+            const math::vec3 currentPos = uniforms_.m_transform.get_position();
+            const math::vec3 prevPos = uniforms_.m_prevTransform.get_position();
+            
             const math::vec3 motionDelta = currentPos - prevPos;
             emitterSpeed = math::length(motionDelta) / _dt; // Speed in units per second
 
@@ -404,15 +441,12 @@ struct Emitter
             lifetimeMultiplier = uniforms_.m_lifetimeByEmitterSpeedGradient.sample(speedFactor);
         }
 
-        // Pre-calculate rotation matrix (constant for all particles in this spawn call)
-        const math::quat rotationQuat = math::angleAxis(uniforms_.m_angle.z, math::vec3(0, 0, 1)) *
-                                        math::angleAxis(uniforms_.m_angle.y, math::vec3(0, 1, 0)) *
-                                        math::angleAxis(uniforms_.m_angle.x, math::vec3(1, 0, 0));
-        const math::mat3 rotationMatrix = math::mat3_cast(rotationQuat);
+        // Extract rotation matrix from effective transform
+        const math::mat3 rotationMatrix = math::mat3(effectiveTransform);
 
         // Pre-calculate common transformation components (optimization)
-        const math::vec3 systemScale = uniforms_.m_scale;
-        const math::vec3 emissionShapeScale = uniforms_.m_emissionShapeScale;
+        const math::vec3 systemScale = effectiveScale;
+        const math::vec3 emissionShapeScale = effectiveEmissionShapeScale;
         const float lifeSpan = uniforms_.m_lifetime;
         const float lifeSpanSquared = lifeSpan * lifeSpan;
         const math::vec3 gravityVector = math::vec3(0.0f, -9.81f * uniforms_.m_gravityScale * lifeSpanSquared * systemScale.y, 0.0f);
@@ -420,8 +454,8 @@ struct Emitter
         const float velocityDampingFactor = (1.0f - uniforms_.m_velocityDamping);
 
         // Calculate motion delta for temporal emission gap handling
-        const math::vec3 currentPos = uniforms_.m_position;
-        const math::vec3 prevPos = uniforms_.m_prevPosition;
+        const math::vec3 currentPos = effectivePosition;
+        const math::vec3 prevPos = uniforms_.m_prevTransform.get_position();
 
         const math::vec3 up = math::vec3(0.0f, 1.0f, 0.0f);
 
@@ -505,9 +539,19 @@ struct Emitter
             // Calculate interpolated emitter position for temporal emission gap handling
             math::vec3 interpolatedEmitterPos = math::mix(prevPos, currentPos, emissionPhase);
 
-            // Apply rotation first, then translation (more efficient than full matrix)
-            particle->start = rotationMatrix * start + interpolatedEmitterPos;
-            particle->end[0] = rotationMatrix * end + interpolatedEmitterPos;
+            if(uniforms_.m_simulationSpace == SimulationSpace::Local)
+            {
+                // For local simulation, store particles in local space (no transform applied)
+                // The transform will be applied during rendering
+                particle->start = start; // Local space position
+                particle->end[0] = end;  // Local space end position
+            }
+            else
+            {
+                // For world simulation, apply rotation and translation as before
+                particle->start = rotationMatrix * start + interpolatedEmitterPos;
+                particle->end[0] = rotationMatrix * end + interpolatedEmitterPos;
+            }
 
             // Apply damping to the velocity (use pre-calculated damping factor)
             if(uniforms_.m_velocityDamping > 0.0f)
@@ -536,7 +580,7 @@ struct Emitter
             particle->scale_end = math::mix(endScaleRange.min, endScaleRange.max, bx::frnd(&rng_));
 
             // Calculate properties immediately for new particles
-            updateParticleProperties(uniforms_, *particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed);
+            updateParticleProperties(uniforms_, *particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
 
 			// Add particle position with some padding for scale
 			math::vec3 padding(particle->scale * 0.5f);
@@ -890,10 +934,10 @@ struct ParticleSystem
         }
         else
         {
-            if(emitter.first_update_)
-            {
-                _uniforms->m_prevPosition = _uniforms->m_position;
-            }
+        if(emitter.first_update_)
+        {
+            _uniforms->m_prevTransform = _uniforms->m_transform;
+        }
 
 			emitter.update(_uniforms, _dt);
         }

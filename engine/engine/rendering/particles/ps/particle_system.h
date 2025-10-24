@@ -49,17 +49,31 @@ struct EmitterDirection
 	};
 };
 
+struct SimulationSpace
+{
+	enum Enum
+	{
+		World, // Particles are simulated in world space (current behavior)
+		Local, // Particles are simulated in local space and transformed during rendering
+
+		Count
+	};
+};
+
 struct EmitterUniforms
 {
 	void reset();
 
-	math::vec3 m_position;
-	math::vec3 m_angle;
-	math::vec3 m_scale; // 3D scale for the entire particle system (x, y, z)
-	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
+	// Simulation space determines how particles are transformed
+	SimulationSpace::Enum m_simulationSpace;
+	
+	// Transform for both local and world simulation
+	// Using math::transform for better performance - keeps components separate and combines into matrix when needed
+	math::transform m_transform;
+	math::transform m_prevTransform; // Previous transform for motion interpolation (set internally)
 
-	// Previous position for motion interpolation (set internally)
-	math::vec3 m_prevPosition;
+	// Emission shape scale (separate from transform scale for flexibility)
+	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
 
 	math::gradient<frange_t> m_velocityGradient; // Velocity gradient over particle lifetime
 	math::gradient<frange_t> m_blendGradient;    // Blend/opacity gradient over particle lifetime

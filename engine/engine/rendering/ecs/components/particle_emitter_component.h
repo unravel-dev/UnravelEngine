@@ -166,6 +166,9 @@ public:
     void set_position_easing(bx::Easing::Enum easing);
     auto get_position_easing() const -> bx::Easing::Enum;
 
+    // Simulation method properties
+    void set_simulation_space(SimulationSpace::Enum space);
+    auto get_simulation_space() const -> SimulationSpace::Enum;
 
     auto get_num_particles() const -> uint32_t;
     auto get_world_bounds() const -> math::bbox;
