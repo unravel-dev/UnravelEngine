@@ -261,4 +261,12 @@ IMGUI_API void ActiveItemWrapMousePos(const ImVec2& wrap_rect_min, const ImVec2&
 
 
 IMGUI_API bool BeginPopupContextWindowEx(const char* str_id = nullptr, ImGuiPopupFlags popup_flags = 1);
+
+struct IMGUI_API ImRange
+{
+    float min{};
+    float max{};
+};
+
+IMGUI_API int PlotEx(ImGuiPlotType plot_type, const char* label, ImRange (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg);
 } // namespace ImGui

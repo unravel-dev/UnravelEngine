@@ -1702,6 +1702,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     auto& em = ctx.get_cached<editing_manager>();
 
 
+    auto pos = ImGui::GetCursorScreenPos();
     auto camera_entity = get_camera();
     if(!camera_entity)
     {
@@ -1744,35 +1745,35 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     //     const float& ref_font_scale = ImGui::GetCurrentContext()->FontSizeBase;
 
     //     ImGui::ImCoolBarConfig config;
-    //     config.normal_size = 35.0f;
-    //     config.hovered_size = 145.0f;
-    //     config.anchor = ImVec2(0.0f, 0.5f);
-    //     config.anchor_area = ImRect(ImGui::GetWindowPos(),  ImGui::GetWindowPos() + ImGui::GetWindowSize());
+    //     config.normal_size = 50.0f;
+    //     config.hovered_size = 80.0f;
+    //     config.anchor = ImVec2(0.5f, 1.0f);
+    //     config.anchor_area = ImRect(pos,  pos + size);
         
-    //     if (ImGui::BeginCoolBar("CoolBarMainWin", ImCoolBarFlags_Vertical, config))
+    //     if (ImGui::BeginCoolBar("CoolBarMainWin", ImCoolBarFlags_Horizontal, config))
     //     {
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo"})
     //         {
     //             ImVec2 size(item.ctx.width, 0);
-    //             ImGui::Button("Test", size);
+    //             ImGui::Button("Play", size);
     //         }
         
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo1"})
     //         {
     //             ImVec2 size(item.ctx.width, 0);
-    //             ImGui::Button("Test", size);
+    //             ImGui::Button("Pause", size);
     //         }
 
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo2"})
     //         {
     //             ImVec2 size(item.ctx.width, 0);
-    //             ImGui::Button("Test", size);
+    //             ImGui::Button("Stop", size);
     //         }
 
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo3"})
     //         {
     //             ImVec2 size(item.ctx.width, 0);
-    //             ImGui::Button("Test", size);
+    //             ImGui::Button("Stop & Reset", size);
     //         }
     //         ImGui::EndCoolBar();
     //     }

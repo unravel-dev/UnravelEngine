@@ -4,6 +4,7 @@
 #include <engine/ecs/components/basic_component.h>
 #include <engine/physics/physics_material.h>
 #include <engine/layers/layer_mask.h>
+#include <engine/assets/asset_handle.h>
 #include <hpp/variant.hpp>
 #include <math/math.h>
 
@@ -12,6 +13,7 @@
 
 namespace unravel
 {
+class mesh;
 
 /**
  * @struct physics_box_shape
@@ -64,6 +66,29 @@ struct physics_cylinder_shape
 };
 
 /**
+ * @enum mesh_collision_type
+ * @brief Specifies the type of mesh collision shape.
+ */
+enum class mesh_collision_type : uint8_t
+{
+    convex,  ///< Convex mesh collision (can be dynamic, faster)
+    concave  ///< Concave mesh collision (static only, slower but accurate)
+};
+
+/**
+ * @struct physics_mesh_shape
+ * @brief Represents a mesh shape for physics calculations.
+ */
+struct physics_mesh_shape
+{
+    friend auto operator==(const physics_mesh_shape& lhs, const physics_mesh_shape& rhs) -> bool = default;
+
+    math::vec3 center{};                                    ///< Center offset of the mesh.
+    asset_handle<mesh> mesh_asset{};                        ///< Reference to the mesh asset.
+    mesh_collision_type collision_type{mesh_collision_type::concave}; ///< Type of collision shape.
+};
+
+/**
  * @struct physics_compound_shape
  * @brief Represents a compound shape that can contain multiple types of shapes.
  */
@@ -72,7 +97,7 @@ struct physics_compound_shape
     friend auto operator==(const physics_compound_shape& lhs, const physics_compound_shape& rhs) -> bool = default;
 
     using shape_t =
-        hpp::variant<physics_box_shape, physics_sphere_shape, physics_capsule_shape, physics_cylinder_shape>;
+        hpp::variant<physics_box_shape, physics_sphere_shape, physics_capsule_shape, physics_cylinder_shape, physics_mesh_shape>;
 
     shape_t shape; ///< The shape contained in the compound shape.
 };

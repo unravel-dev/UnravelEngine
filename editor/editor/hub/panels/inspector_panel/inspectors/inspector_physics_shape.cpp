@@ -73,6 +73,10 @@ auto inspector_physics_compound_shape::inspect(rtti::context& ctx,
         {
             data.shape = physics_cylinder_shape{};
         }
+        else if(type == entt::resolve<physics_mesh_shape>())
+        {
+            data.shape = physics_mesh_shape{};
+        }
     }
 
     if(hpp::holds_alternative<physics_box_shape>(data.shape))
@@ -93,6 +97,11 @@ auto inspector_physics_compound_shape::inspect(rtti::context& ctx,
     else if(hpp::holds_alternative<physics_cylinder_shape>(data.shape))
     {
         auto& shape = hpp::get<physics_cylinder_shape>(data.shape);
+        result |= ::unravel::inspect(ctx, shape);
+    }
+    else if(hpp::holds_alternative<physics_mesh_shape>(data.shape))
+    {
+        auto& shape = hpp::get<physics_mesh_shape>(data.shape);
         result |= ::unravel::inspect(ctx, shape);
     }
     else

@@ -2,6 +2,7 @@
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/layers/layer_mask.hpp>
+#include <engine/meta/rendering/mesh.hpp>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -192,14 +193,72 @@ LOAD(physics_cylinder_shape)
 LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_binary_t);
 
+REFLECT(mesh_collision_type)
+{
+    entt::meta_factory<mesh_collision_type>{}
+        .type("mesh_collision_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mesh_collision_type"},
+            entt::attribute{"pretty_name", "Mesh Collision Type"},
+        })
+        .data<mesh_collision_type::convex>("convex"_hs)
+        .data<mesh_collision_type::concave>("concave"_hs);
+}
+
+REFLECT(physics_mesh_shape)
+{
+    entt::meta_factory<physics_mesh_shape>{}
+        .type("physics_mesh_shape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "physics_mesh_shape"},
+            entt::attribute{"pretty_name", "Mesh"},
+        })
+        .data<&physics_mesh_shape::center>("center"_hs)
+            .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"pretty_name", "Center"},
+                entt::attribute{"tooltip", "Center offset of the mesh collision shape."},
+            })
+        .data<&physics_mesh_shape::mesh_asset>("mesh_asset"_hs)
+            .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"pretty_name", "Mesh Asset"},
+                entt::attribute{"tooltip", "The mesh asset to use for collision."},
+            })
+        .data<&physics_mesh_shape::collision_type>("collision_type"_hs)
+            .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"pretty_name", "Collision Type"},
+                entt::attribute{"tooltip", "Type of collision shape (convex for dynamic, concave for static)."},
+            });
+}
+
+SAVE(physics_mesh_shape)
+{
+    try_save(ar, ser20::make_nvp("center", obj.center));
+    try_save(ar, ser20::make_nvp("mesh_asset", obj.mesh_asset));
+    try_save(ar, ser20::make_nvp("collision_type", obj.collision_type));
+}
+
+SAVE_INSTANTIATE(physics_mesh_shape, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(physics_mesh_shape, ser20::oarchive_binary_t);
+
+LOAD(physics_mesh_shape)
+{
+    try_load(ar, ser20::make_nvp("center", obj.center));
+    try_load(ar, ser20::make_nvp("mesh_asset", obj.mesh_asset));
+    try_load(ar, ser20::make_nvp("collision_type", obj.collision_type));
+}
+
+LOAD_INSTANTIATE(physics_mesh_shape, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(physics_mesh_shape, ser20::iarchive_binary_t);
+
 REFLECT(physics_compound_shape)
 {
     static const auto& ps = entt::resolve<physics_box_shape>();
     static const auto& ss = entt::resolve<physics_sphere_shape>();
     static const auto& cs = entt::resolve<physics_capsule_shape>();
     static const auto& cys = entt::resolve<physics_cylinder_shape>();
+    static const auto& ms = entt::resolve<physics_mesh_shape>();
 
-    std::vector<entt::meta_type> variant_types{ps, ss, cs, cys};
+    std::vector<entt::meta_type> variant_types{ps, ss, cs, cys, ms};
 
     // Register physics_compound_shape with entt
     entt::meta_factory<physics_compound_shape>{}

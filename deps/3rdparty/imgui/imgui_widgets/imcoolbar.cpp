@@ -24,12 +24,12 @@ SOFTWARE.
 
 #ifndef IMGUI_DEFINE_MATH_OPERATORS
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "imgui/imgui.h"
 #endif
 #include "imcoolbar.h"
 #include <imgui/imgui_internal.h>
 #include <cmath>
-#include <vector>
-#include <array>
+#include <string>
 
 #define ICB_PREFIX "ICB"
 
@@ -78,11 +78,24 @@ static float getChannelInv(const ImVec2& vVec, const ImCoolBarFlags vCBFlags) {
 }
 
 IMGUI_API bool ImGui::BeginCoolBar(const char* vLabel, ImCoolBarFlags vCBFlags, const ImCoolBarConfig& vConfig, ImGuiWindowFlags vFlags) {
+    // Get parent window to store position data
+    ImGuiWindow* pParentWindow = GetCurrentWindow();
+    
+    // Store position calculation data in parent window storage for next frame
+    const auto coolbar_pos_id = pParentWindow->GetID((std::string(ICB_PREFIX) + vLabel + "Pos").c_str());
+    ImVec2 stored_pos = ImVec2(pParentWindow->StateStorage.GetFloat(coolbar_pos_id), 
+                               pParentWindow->StateStorage.GetFloat(coolbar_pos_id + 1));
+    
+    // Use stored position from previous frame for SetNextWindowPos
+    if (stored_pos.x != 0.0f || stored_pos.y != 0.0f) {
+        ImGui::SetNextWindowPos(stored_pos);
+    }
+
     ImGuiWindowFlags flags =                   //
         vFlags                                 //
         | ImGuiWindowFlags_NoTitleBar          //
         | ImGuiWindowFlags_NoScrollbar         //
-        | ImGuiWindowFlags_AlwaysAutoResize    //
+        // | ImGuiWindowFlags_AlwaysAutoResize    //
         | ImGuiWindowFlags_NoCollapse          //
         | ImGuiWindowFlags_NoMove              //
         | ImGuiWindowFlags_NoSavedSettings     //
@@ -90,14 +103,14 @@ IMGUI_API bool ImGui::BeginCoolBar(const char* vLabel, ImCoolBarFlags vCBFlags, 
 #ifndef ENABLE_IMCOOLBAR_DEBUG
         | ImGuiWindowFlags_NoBackground  //
 #endif                                   //
-#ifdef IMGUI_HAS_DOCK
-        | ImGuiWindowFlags_DockNodeHost  //
-        | ImGuiWindowFlags_NoDocking     //
-#endif
         ;
-    bool res = ImGui::Begin(vLabel, nullptr, flags);
+    ImGuiChildFlags child_flags = ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY;
+    
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    bool res = ImGui::BeginChild(vLabel, ImVec2(0, 0), child_flags, flags);
     if (!res) {
-        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::EndChild();
     } else {
         // Can be Horizontal or Vertical, not both
         const bool isVertical = (vCBFlags & ImCoolBarFlags_Vertical);
@@ -131,7 +144,7 @@ IMGUI_API bool ImGui::BeginCoolBar(const char* vLabel, ImCoolBarFlags vCBFlags, 
         anim_scale = ImClamp(anim_scale, 0.0f, 1.0f);
         pWindow->StateStorage.SetFloat(anim_scale_id, anim_scale);
 
-        // --- Position with predicted cross-axis size for THIS frame ---
+        // --- Calculate position for NEXT frame and store in parent ---
         ImVec2 pad = ImGui::GetStyle().WindowPadding * 2.0f;
         ImVec2 bar_size = pWindow->ContentSize + pad;  // along main axis ok
         const float normal_size = pWindow->StateStorage.GetFloat(normal_size_id);
@@ -143,26 +156,29 @@ IMGUI_API bool ImGui::BeginCoolBar(const char* vLabel, ImCoolBarFlags vCBFlags, 
             bar_size.x = cross + pad.x;
         }
 
+        ImVec2 new_pos;
         auto anchor_area_size = vConfig.anchor_area.GetSize();
         if(anchor_area_size.x > 0.0f && anchor_area_size.y > 0.0f)
         {
-            ImVec2 new_pos = ImFloor(vConfig.anchor_area.GetTL() + (anchor_area_size - bar_size) * vConfig.anchor);
-            ImGui::SetWindowPos(new_pos);
+            new_pos = ImFloor(vConfig.anchor_area.GetTL() + (anchor_area_size - bar_size) * vConfig.anchor);
         }
         else
         {
             const ImGuiViewport* pViewport = pWindow->Viewport;
-            ImVec2 new_pos = ImFloor(pViewport->Pos + (pViewport->Size - bar_size) * vConfig.anchor);
-            ImGui::SetWindowPos(new_pos);
+            new_pos = ImFloor(pViewport->Pos + (pViewport->Size - bar_size) * vConfig.anchor);
         }
-
+        
+        // Store calculated position in parent window storage for next frame
+        pParentWindow->StateStorage.SetFloat(coolbar_pos_id, new_pos.x);
+        pParentWindow->StateStorage.SetFloat(coolbar_pos_id + 1, new_pos.y);
     }
 
     return res;
 }
 
 IMGUI_API void ImGui::EndCoolBar() {
-    ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
 }
 
 IMGUI_API bool ImGui::CoolBarItem() {

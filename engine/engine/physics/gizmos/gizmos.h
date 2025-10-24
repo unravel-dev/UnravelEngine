@@ -16,8 +16,7 @@ void draw(DebugDrawEncoder& dde, const physics_capsule_shape& sh);
 
 void draw(DebugDrawEncoder& dde, const physics_box_shape& sh);
 
-// void draw(DebugDrawEncoder& dde, const physics_plane_shape& sh);
-// void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh);
+void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh);
 
 void draw(DebugDrawEncoder& dde, const physics_compound_shape& sh);
 void draw(DebugDrawEncoder& dde, const std::vector<physics_compound_shape>& sh);

@@ -11,13 +11,10 @@
 #include <imgui_widgets/imgradient.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 
-
 namespace unravel
 {
 namespace
-{
-    
-    
+{    
     namespace utils
     {
     
@@ -213,7 +210,25 @@ namespace
         ImGui::SetCursorScreenPos(barOriginPos);
 
         size_t sample_count = std::max(size_t(64), xkeys.size());
-        std::vector<float> ykeys;
+        // std::vector<float> ykeys;
+        // ykeys.reserve(sample_count);
+        // float min_y = std::numeric_limits<float>::max();
+        // float max_y = std::numeric_limits<float>::min();
+
+        // for(size_t i = 0; i < sample_count; i++)
+        // {
+        //     float progress = static_cast<float>(i) / static_cast<float>(sample_count - 1);
+        //     frange_t ry = gradient.sample(progress);
+        //     float y = ry.min +(ry.max - ry.min) * 0.5f;
+        //     ykeys.emplace_back(y);
+        //     min_y = std::min(min_y, y);
+        //     max_y = std::max(max_y, y);
+        // }
+
+        // ImGui::PlotLines("##", ykeys.data(), ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
+        // ImGui::PlotHistogram("##", ykeys.data(), ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
+
+        std::vector<ImGui::ImRange> ykeys;
         ykeys.reserve(sample_count);
         float min_y = std::numeric_limits<float>::max();
         float max_y = std::numeric_limits<float>::min();
@@ -222,14 +237,15 @@ namespace
         {
             float progress = static_cast<float>(i) / static_cast<float>(sample_count - 1);
             frange_t ry = gradient.sample(progress);
-            float y = ry.min +(ry.max - ry.min) * 0.5f;
-            ykeys.emplace_back(y);
-            min_y = std::min(min_y, y);
-            max_y = std::max(max_y, y);
+            ykeys.emplace_back(ImGui::ImRange{ry.min, ry.max});
+            min_y = std::min(min_y, ry.min);
+            max_y = std::max(max_y, ry.max);
         }
 
-        ImGui::PlotLines("##", ykeys.data(), ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
-        
+        ImGui::PlotEx(ImGuiPlotType_Histogram, "##", [](void* data, int idx) -> ImGui::ImRange {
+            auto& ykeys = *static_cast<std::vector<ImGui::ImRange>*>(data);
+            return ykeys[idx];
+        }, &ykeys, ykeys.size(), 0, "", min_y, max_y, ImVec2(size.x, size.y));
     }
 
 

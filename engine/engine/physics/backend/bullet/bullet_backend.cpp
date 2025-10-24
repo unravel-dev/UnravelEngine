@@ -1219,6 +1219,70 @@ void wake_up(bullet::rigidbody& body)
     }
 }
 
+auto create_bullet_mesh_shape(const physics_mesh_shape& shape) -> btCollisionShape*
+{
+    const auto& mesh_ref = shape.mesh_asset.get();
+    
+    // Get vertex and index data from mesh
+    auto* vertex_data = mesh_ref->get_system_vb();
+    auto* index_data = mesh_ref->get_system_ib();
+    auto vertex_count = mesh_ref->get_vertex_count();
+    auto face_count = mesh_ref->get_face_count();
+    const auto& vertex_format = mesh_ref->get_vertex_format();
+    
+    if(!vertex_data || !index_data || vertex_count == 0 || face_count == 0)
+    {
+        return nullptr;
+    }
+    
+    // Find position attribute offset in vertex format
+    auto position_offset = vertex_format.getOffset(bgfx::Attrib::Position);
+    auto vertex_stride = vertex_format.getStride();
+    
+    if(position_offset == UINT16_MAX)
+    {
+        return nullptr; // No position data
+    }
+    
+    // Create Bullet triangle mesh
+    auto* triangle_mesh = new btTriangleMesh(true, false); // 32-bit indices, 3-component vertices
+    
+    // Extract triangles and add to Bullet mesh
+    for(uint32_t i = 0; i < face_count; ++i)
+    {
+        uint32_t i0 = index_data[i * 3 + 0];
+        uint32_t i1 = index_data[i * 3 + 1];
+        uint32_t i2 = index_data[i * 3 + 2];
+        
+        // Get vertex positions
+        auto* v0_ptr = vertex_data + (i0 * vertex_stride) + position_offset;
+        auto* v1_ptr = vertex_data + (i1 * vertex_stride) + position_offset;
+        auto* v2_ptr = vertex_data + (i2 * vertex_stride) + position_offset;
+        
+        auto* v0 = reinterpret_cast<const float*>(v0_ptr);
+        auto* v1 = reinterpret_cast<const float*>(v1_ptr);
+        auto* v2 = reinterpret_cast<const float*>(v2_ptr);
+        
+        btVector3 vertex0(v0[0], v0[1], v0[2]);
+        btVector3 vertex1(v1[0], v1[1], v1[2]);
+        btVector3 vertex2(v2[0], v2[1], v2[2]);
+        
+        triangle_mesh->addTriangle(vertex0, vertex1, vertex2);
+    }
+    
+    // Create appropriate collision shape based on type
+    if(shape.collision_type == mesh_collision_type::convex)
+    {
+        // Create convex hull shape (can be dynamic)
+        return new btConvexTriangleMeshShape(triangle_mesh);
+    }
+    else
+    {
+        // Create concave BVH triangle mesh shape (static only, but accurate)
+        return new btBvhTriangleMeshShape(triangle_mesh, true); // Use quantized AABB compression
+    }
+}
+
 auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompoundShape>
 {
     // use an ownning compound shape. When sharing is implemented we can go back to non owning
@@ -1273,6 +1337,22 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
             btTransform local_transform = btTransform::getIdentity();
             local_transform.setOrigin(bullet::to_bullet(shape.center));
             cp->addChildShape(local_transform, cylinder_shape);
+        }
+        else if(hpp::holds_alternative<physics_mesh_shape>(s.shape))
+        {
+            const auto& shape = hpp::get<physics_mesh_shape>(s.shape);
+            
+            // Only create mesh shape if we have a valid mesh asset
+            if(shape.mesh_asset && shape.mesh_asset.is_ready())
+            {
+                auto mesh_shape = create_bullet_mesh_shape(shape);
+                if(mesh_shape)
+                {
+                    btTransform local_transform = btTransform::getIdentity();
+                    local_transform.setOrigin(bullet::to_bullet(shape.center));
+                    cp->addChildShape(local_transform, mesh_shape);
+                }
+            }
         }
     }
 

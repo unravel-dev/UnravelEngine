@@ -393,7 +393,6 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Color by Speed Velocity Range"},
             entt::attribute{"tooltip", "Velocity range for color mapping. Particles moving at min speed get slow color, particles at max speed get fast color."},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 100.0f},
             entt::attribute{"group", "Color by Speed"},
 
         })
@@ -404,14 +403,13 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "Lifetime multiplier gradient based on emitter movement speed. Allows particles to live longer/shorter based on how fast the emitter is moving."},
             entt::attribute{"group", "Lifetime by Emitter Speed"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"step", 0.1f},
+            entt::attribute{"step", 0.01f},
         })
         .data<&particle_emitter_component::set_lifetime_by_emitter_speed_range, &particle_emitter_component::get_lifetime_by_emitter_speed_range>("lifetime_by_emitter_speed_range"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lifetime_by_emitter_speed_range"},
             entt::attribute{"pretty_name", "Lifetime by Emitter Speed Range"},
             entt::attribute{"tooltip", "Emitter speed range for lifetime mapping. Emitters moving at min speed get slow gradient value, emitters at max speed get fast gradient value."},
-            entt::attribute{"max", 10.0f},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"group", "Lifetime by Emitter Speed"},

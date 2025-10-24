@@ -1053,5 +1053,146 @@ void SetNextWindowViewportToCurrent()
     }
 }
 
+int PlotEx(ImGuiPlotType plot_type, const char* label, ImRange (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = GetCurrentWindow();
+    if (window->SkipItems)
+        return -1;
+
+    const ImGuiStyle& style = g.Style;
+    const ImGuiID id = window->GetID(label);
+
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
+    const ImVec2 frame_size = CalcItemSize(size_arg, CalcItemWidth(), label_size.y + style.FramePadding.y * 2.0f);
+
+    const ImRect frame_bb(window->DC.CursorPos, window->DC.CursorPos + frame_size);
+    const ImRect inner_bb(frame_bb.Min + style.FramePadding, frame_bb.Max - style.FramePadding);
+    const ImRect total_bb(frame_bb.Min, frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0));
+    ItemSize(total_bb, style.FramePadding.y);
+    if (!ItemAdd(total_bb, id, &frame_bb, ImGuiItemFlags_NoNav))
+        return -1;
+    bool hovered;
+    ButtonBehavior(frame_bb, id, &hovered, NULL);
+
+    // Determine scale from values if not specified
+    if (scale_min == FLT_MAX || scale_max == FLT_MAX)
+    {
+        float v_min = FLT_MAX;
+        float v_max = -FLT_MAX;
+        for (int i = 0; i < values_count; i++)
+        {
+            const auto range = values_getter(data, i);
+            // Check for NaN values in both min and max
+            if (range.min != range.min || range.max != range.max)
+                continue;
+            v_min = ImMin(v_min, ImMin(range.min, range.max));
+            v_max = ImMax(v_max, ImMax(range.min, range.max));
+        }
+        if (scale_min == FLT_MAX)
+            scale_min = v_min;
+        if (scale_max == FLT_MAX)
+            scale_max = v_max;
+    }
+
+    RenderFrame(frame_bb.Min, frame_bb.Max, GetColorU32(ImGuiCol_FrameBg), true, style.FrameRounding);
+
+    const int values_count_min = (plot_type == ImGuiPlotType_Lines) ? 2 : 1;
+    int idx_hovered = -1;
+    if (values_count >= values_count_min)
+    {
+        int res_w = ImMin((int)frame_size.x, values_count) + ((plot_type == ImGuiPlotType_Lines) ? -1 : 0);
+        int item_count = values_count + ((plot_type == ImGuiPlotType_Lines) ? -1 : 0);
+
+        // Tooltip on hover
+        if (hovered && inner_bb.Contains(g.IO.MousePos))
+        {
+            const float t = ImClamp((g.IO.MousePos.x - inner_bb.Min.x) / (inner_bb.Max.x - inner_bb.Min.x), 0.0f, 0.9999f);
+            const int v_idx = (int)(t * item_count);
+            IM_ASSERT(v_idx >= 0 && v_idx < values_count);
+
+            const auto range0 = values_getter(data, (v_idx + values_offset) % values_count);
+            if (plot_type == ImGuiPlotType_Lines)
+            {
+                const auto range1 = values_getter(data, (v_idx + 1 + values_offset) % values_count);
+                SetTooltip("%d: [%8.4g, %8.4g]\n%d: [%8.4g, %8.4g]", 
+                            v_idx, range0.min, range0.max, 
+                            v_idx + 1, range1.min, range1.max);
+            }
+            else if (plot_type == ImGuiPlotType_Histogram)
+            {
+                SetTooltip("%d: [%8.4g, %8.4g]", v_idx, range0.min, range0.max);
+            }
+            idx_hovered = v_idx;
+        }
+
+        const float t_step = 1.0f / (float)res_w;
+        const float inv_scale = (scale_min == scale_max) ? 0.0f : (1.0f / (scale_max - scale_min));
+
+        auto range0 = values_getter(data, (0 + values_offset) % values_count);
+        float t0 = 0.0f;
+        // For ranges, we need both min and max positions
+        ImVec2 tp0_min = ImVec2( t0, 1.0f - ImSaturate((range0.min - scale_min) * inv_scale) );
+        ImVec2 tp0_max = ImVec2( t0, 1.0f - ImSaturate((range0.max - scale_min) * inv_scale) );
+        float histogram_zero_line_t = (scale_min * scale_max < 0.0f) ? (1 + scale_min * inv_scale) : (scale_min < 0.0f ? 0.0f : 1.0f);   // Where does the zero line stands
+
+        const ImU32 col_base = GetColorU32((plot_type == ImGuiPlotType_Lines) ? ImGuiCol_PlotLines : ImGuiCol_PlotHistogram);
+        const ImU32 col_hovered = GetColorU32((plot_type == ImGuiPlotType_Lines) ? ImGuiCol_PlotLinesHovered : ImGuiCol_PlotHistogramHovered);
+
+        for (int n = 0; n < res_w; n++)
+        {
+            const float t1 = t0 + t_step;
+            const int v1_idx = (int)(t0 * item_count + 0.5f);
+            IM_ASSERT(v1_idx >= 0 && v1_idx < values_count);
+            const auto range1 = values_getter(data, (v1_idx + values_offset + 1) % values_count);
+            const ImVec2 tp1_min = ImVec2( t1, 1.0f - ImSaturate((range1.min - scale_min) * inv_scale) );
+            const ImVec2 tp1_max = ImVec2( t1, 1.0f - ImSaturate((range1.max - scale_min) * inv_scale) );
+
+            // NB: Draw calls are merged together by the DrawList system. Still, we should render our batch are lower level to save a bit of CPU.
+            if (plot_type == ImGuiPlotType_Lines)
+            {
+                // For lines, draw both min and max lines
+                ImVec2 pos0_min = ImLerp(inner_bb.Min, inner_bb.Max, tp0_min);
+                ImVec2 pos1_min = ImLerp(inner_bb.Min, inner_bb.Max, tp1_min);
+                ImVec2 pos0_max = ImLerp(inner_bb.Min, inner_bb.Max, tp0_max);
+                ImVec2 pos1_max = ImLerp(inner_bb.Min, inner_bb.Max, tp1_max);
+                
+                ImU32 color = idx_hovered == v1_idx ? col_hovered : col_base;
+                window->DrawList->AddLine(pos0_min, pos1_min, color);
+                window->DrawList->AddLine(pos0_max, pos1_max, color);
+            }
+            else if (plot_type == ImGuiPlotType_Histogram)
+            {
+                // For histogram, draw rectangle from min to max of the range
+                ImVec2 pos_min = ImLerp(inner_bb.Min, inner_bb.Max, tp0_min);
+                ImVec2 pos_max = ImLerp(inner_bb.Min, inner_bb.Max, tp0_max);
+                
+                // Create rectangle from min to max of the range
+                ImVec2 rect_min = ImVec2(pos_min.x, ImMax(pos_min.y, pos_max.y));  // Top of rectangle (smaller y value)
+                ImVec2 rect_max = ImVec2(pos_min.x + t_step * (inner_bb.Max.x - inner_bb.Min.x), ImMin(pos_min.y, pos_max.y));  // Bottom of rectangle (larger y value)
+                
+                if (rect_max.x >= rect_min.x + 2.0f)
+                    rect_max.x -= 1.0f;
+                
+                window->DrawList->AddRectFilled(rect_min, rect_max, idx_hovered == v1_idx ? col_hovered : col_base);
+            }
+
+            t0 = t1;
+            tp0_min = tp1_min;
+            tp0_max = tp1_max;
+        }
+    }
+
+    // Text overlay
+    if (overlay_text)
+        RenderTextClipped(ImVec2(frame_bb.Min.x, frame_bb.Min.y + style.FramePadding.y), frame_bb.Max, overlay_text, NULL, NULL, ImVec2(0.5f, 0.0f));
+
+    if (label_size.x > 0.0f)
+        RenderText(ImVec2(frame_bb.Max.x + style.ItemInnerSpacing.x, inner_bb.Min.y), label);
+
+    // Return hovered index or -1 if none are hovered.
+    // This is currently not exposed in the public API because we need a larger redesign of the whole thing, but in the short-term we are making it available in PlotEx().
+    return idx_hovered;
+}
 
 } // namespace ImGui

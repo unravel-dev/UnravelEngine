@@ -1,5 +1,6 @@
 #include "gizmos.h"
 
+#include <engine/rendering/mesh.h>
 #include <bx/math.h>
 namespace unravel
 {
@@ -44,10 +45,25 @@ void draw(DebugDrawEncoder& dde, const physics_box_shape& sh)
     dde.draw(aabb);
 }
 
-// void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
-// {
-
-// }
+void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
+{
+    // Draw a wireframe bounding box representation for mesh shapes
+    // In a full implementation, you could draw the actual mesh wireframe
+    if(sh.mesh_asset && sh.mesh_asset.is_ready())
+    {
+        const auto& mesh_ref = sh.mesh_asset.get();
+        auto bbox = mesh_ref->get_bounds();
+        
+        // Offset by center
+        bbox.min += sh.center;
+        bbox.max += sh.center;
+        
+        dde.setColor(sh.collision_type == mesh_collision_type::convex ? 0xff00ff00 : 0xff0000ff);
+        auto aabb = bx::Aabb{to_bx(bbox.min), to_bx(bbox.max)};
+        dde.draw(aabb);
+        //drawTriangleList
+    }
+}
 
 void draw(DebugDrawEncoder& dde, const physics_compound_shape& sh)
 {
