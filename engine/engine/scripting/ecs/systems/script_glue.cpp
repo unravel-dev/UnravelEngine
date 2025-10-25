@@ -3451,8 +3451,8 @@ auto validate_ui_element_wrapper(std::intptr_t element_ptr, entt::entity owner_e
     return false;
 }
 
-// Helper function to validate document pointer by checking if it matches any UI component
-auto validate_ui_document_wrapper(std::intptr_t document_ptr) -> bool
+// Helper function to validate document pointer by checking if it matches the owner entity's UI component
+auto validate_ui_document_wrapper(std::intptr_t document_ptr, entt::entity owner_entity) -> bool
 {
     if (document_ptr == 0)
     {
@@ -3461,17 +3461,10 @@ auto validate_ui_document_wrapper(std::intptr_t document_ptr) -> bool
     
     auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
     
-    // Check if this document exists in any UI component
-    auto& ctx = engine::context();
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scene = ec.get_scene();
-    auto& registry = *scene.registry;
-    
-    auto view = registry.view<ui_document_component>();
-    for (auto entity : view)
+    // Check if this document exists in the owner entity's UI component
+    if (auto comp = safe_get_component<ui_document_component>(owner_entity))
     {
-        auto& ui_comp = view.get<ui_document_component>(entity);
-        if (ui_comp.document && ui_comp.document == document)
+        if (comp->document && comp->document == document)
         {
             return true;
         }
@@ -3496,28 +3489,30 @@ auto internal_m2n_ui_document_get_wrapper(entt::entity entity_id) -> std::intptr
     return 0;
 }
 
-auto internal_m2n_ui_document_get_element_wrapper_by_id(std::intptr_t document_ptr, const std::string& element_id) -> std::intptr_t
+auto internal_m2n_ui_document_get_element_wrapper_by_id(std::intptr_t document_ptr, entt::entity owner_entity, const std::string& element_id) -> std::intptr_t
 {
-    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
-    if (document)
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
-        auto* element = document->GetElementById(element_id);
-        return reinterpret_cast<std::intptr_t>(element);
+        return 0;
     }
     
-    return 0;
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    auto* element = document->GetElementById(element_id);
+    return reinterpret_cast<std::intptr_t>(element);
 }
 
-auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_ptr, const std::string& selector) -> std::intptr_t
+auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_ptr, entt::entity owner_entity, const std::string& selector) -> std::intptr_t
 {
-    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
-    if (document)
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
-        auto element = document->QuerySelector(selector);
-        if (element)
-        {
-            return reinterpret_cast<std::intptr_t>(element);
-        }
+        return 0;
+    }
+    
+    auto* document = reinterpret_cast<Rml::ElementDocument*>(document_ptr);
+    auto element = document->QuerySelector(selector);
+    if (element)
+    {
+        return reinterpret_cast<std::intptr_t>(element);
     }
     
     return 0;
@@ -3539,14 +3534,14 @@ auto internal_m2n_ui_element_wrapper_get_id(std::intptr_t element_ptr, entt::ent
 // UI Document Wrapper Methods
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_document_wrapper_is_valid(std::intptr_t document_ptr) -> bool
+auto internal_m2n_ui_document_wrapper_is_valid(std::intptr_t document_ptr, entt::entity owner_entity) -> bool
 {
-    return validate_ui_document_wrapper(document_ptr);
+    return validate_ui_document_wrapper(document_ptr, owner_entity);
 }
 
-auto internal_m2n_ui_document_wrapper_get_title(std::intptr_t document_ptr) -> std::string
+auto internal_m2n_ui_document_wrapper_get_title(std::intptr_t document_ptr, entt::entity owner_entity) -> std::string
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return "";
     }
@@ -3555,9 +3550,9 @@ auto internal_m2n_ui_document_wrapper_get_title(std::intptr_t document_ptr) -> s
     return document->GetTitle();
 }
 
-void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_ptr, const std::string& title)
+void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_ptr, entt::entity owner_entity, const std::string& title)
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return;
     }
@@ -3566,9 +3561,9 @@ void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_ptr, cons
     document->SetTitle(title);
 }
 
-auto internal_m2n_ui_document_wrapper_is_visible(std::intptr_t document_ptr) -> bool
+auto internal_m2n_ui_document_wrapper_is_visible(std::intptr_t document_ptr, entt::entity owner_entity) -> bool
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return false;
     }
@@ -3577,9 +3572,9 @@ auto internal_m2n_ui_document_wrapper_is_visible(std::intptr_t document_ptr) -> 
     return document->IsVisible();
 }
 
-void internal_m2n_ui_document_wrapper_show(std::intptr_t document_ptr)
+void internal_m2n_ui_document_wrapper_show(std::intptr_t document_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return;
     }
@@ -3588,9 +3583,9 @@ void internal_m2n_ui_document_wrapper_show(std::intptr_t document_ptr)
     document->Show();
 }
 
-void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_ptr)
+void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return;
     }
@@ -3599,9 +3594,9 @@ void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_ptr)
     document->Hide();
 }
 
-void internal_m2n_ui_document_wrapper_close(std::intptr_t document_ptr)
+void internal_m2n_ui_document_wrapper_close(std::intptr_t document_ptr, entt::entity owner_entity)
 {
-    if (!validate_ui_document_wrapper(document_ptr))
+    if (!validate_ui_document_wrapper(document_ptr, owner_entity))
     {
         return;
     }

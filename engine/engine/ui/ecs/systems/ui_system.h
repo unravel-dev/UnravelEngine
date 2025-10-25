@@ -105,10 +105,13 @@ private:
 
 
     auto is_root_element(rtti::context& ctx, Rml::Element* element) -> bool;
+
+    void load_font(const std::string& path);
     
     Rml::Context* ui_context_ = nullptr;
-    Rml::ElementDocument* test_document_ = nullptr;
     std::shared_ptr<int> sentinel_ = std::make_shared<int>();
+
+    std::set<std::string> fonts_loaded_;
 };
 
 } // namespace unravel

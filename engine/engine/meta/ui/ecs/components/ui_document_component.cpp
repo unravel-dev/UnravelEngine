@@ -37,10 +37,8 @@ REFLECT(ui_document_component)
 
 SAVE(ui_document_component)
 {
-    bool enabled = obj.is_enabled();
-    try_save(ar, ser20::make_nvp("enabled", enabled));
+    try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("asset", obj.asset));
-
 }
 SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_binary_t);
@@ -48,8 +46,10 @@ SAVE_INSTANTIATE(ui_document_component, ser20::oarchive_binary_t);
 LOAD(ui_document_component)
 {
     bool enabled = true;
-    try_load(ar, ser20::make_nvp("enabled", enabled));
-    obj.set_enabled(enabled);
+    if(try_load(ar, ser20::make_nvp("enabled", enabled)))
+    {
+        obj.set_enabled(enabled);
+    }
     try_load(ar, ser20::make_nvp("asset", obj.asset));
 }
 LOAD_INSTANTIATE(ui_document_component, ser20::iarchive_associative_t);

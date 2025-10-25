@@ -69,12 +69,10 @@ namespace Unravel.Core
         {
             get
             {
-                ValidateAndThrow();
                 return internal_m2n_ui_element_wrapper_get_inner_rml(nativePtr, ownerEntity);
             }
             set
             {
-                ValidateAndThrow();
                 internal_m2n_ui_element_wrapper_set_inner_rml(nativePtr, ownerEntity, value ?? "");
             }
         }
@@ -86,12 +84,10 @@ namespace Unravel.Core
         {
             get
             {
-                ValidateAndThrow();
                 return internal_m2n_ui_element_wrapper_is_visible(nativePtr, ownerEntity);
             }
             set
             {
-                ValidateAndThrow();
                 internal_m2n_ui_element_wrapper_set_visible(nativePtr, ownerEntity, value);
             }
         }
@@ -105,7 +101,6 @@ namespace Unravel.Core
         /// <returns>The attribute value, or empty string if not found.</returns>
         public string GetAttribute(string attributeName)
         {
-            ValidateAndThrow();
             return internal_m2n_ui_element_wrapper_get_attribute(nativePtr, ownerEntity, attributeName);
         }
 
@@ -116,7 +111,6 @@ namespace Unravel.Core
         /// <param name="value">The value to set.</param>
         public void SetAttribute(string attributeName, string value)
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_set_attribute(nativePtr, ownerEntity, attributeName, value ?? "");
         }
 
@@ -126,7 +120,6 @@ namespace Unravel.Core
         /// <param name="attributeName">The name of the attribute to remove.</param>
         public void RemoveAttribute(string attributeName)
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_remove_attribute(nativePtr, ownerEntity, attributeName);
         }
 
@@ -137,7 +130,6 @@ namespace Unravel.Core
         /// <returns>True if the attribute exists; otherwise, false.</returns>
         public bool HasAttribute(string attributeName)
         {
-            ValidateAndThrow();
             return internal_m2n_ui_element_wrapper_has_attribute(nativePtr, ownerEntity, attributeName);
         }
 
@@ -148,7 +140,6 @@ namespace Unravel.Core
         /// <param name="activate">True to add the class, false to remove it.</param>
         public void SetClass(string className, bool activate)
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_set_class(nativePtr, ownerEntity, className, activate);
         }
 
@@ -159,7 +150,6 @@ namespace Unravel.Core
         /// <returns>True if the class is set; otherwise, false.</returns>
         public bool IsClassSet(string className)
         {
-            ValidateAndThrow();
             return internal_m2n_ui_element_wrapper_is_class_set(nativePtr, ownerEntity, className);
         }
 
@@ -168,7 +158,6 @@ namespace Unravel.Core
         /// </summary>
         public void Focus()
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_focus(nativePtr, ownerEntity);
         }
 
@@ -177,7 +166,6 @@ namespace Unravel.Core
         /// </summary>
         public void Blur()
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_blur(nativePtr, ownerEntity);
         }
 
@@ -186,7 +174,6 @@ namespace Unravel.Core
         /// </summary>
         public void Click()
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_click(nativePtr, ownerEntity);
         }
 
@@ -196,7 +183,6 @@ namespace Unravel.Core
         /// <param name="alignWithTop">If true, align with the top of the viewport; otherwise, align with the bottom.</param>
         public void ScrollIntoView(bool alignWithTop = true)
         {
-            ValidateAndThrow();
             internal_m2n_ui_element_wrapper_scroll_into_view(nativePtr, ownerEntity, alignWithTop);
         }
 
@@ -209,7 +195,6 @@ namespace Unravel.Core
         /// <param name="callback">The callback to invoke when the event occurs.</param>
         public void RegisterCallback(string eventType, UIEventCallback callback)
         {
-            ValidateAndThrow();
             UIEventManager.Subscribe(this, eventType, callback);
         }
 
@@ -221,7 +206,6 @@ namespace Unravel.Core
         /// <returns>True if the listener was removed successfully.</returns>
         public bool UnregisterCallback(string eventType, UIEventCallback callback)
         {
-            ValidateAndThrow();
             return UIEventManager.Unsubscribe(this, eventType, callback);
         }
 
@@ -233,7 +217,6 @@ namespace Unravel.Core
         /// <param name="callback">The callback to invoke when the event occurs.</param>
         public void RegisterCallback<T>(string eventType, Action<T> callback) where T : UIEventBase
         {
-            ValidateAndThrow();
             UIEventManager.Subscribe<T>(this, eventType, callback);
         }
 
@@ -246,21 +229,7 @@ namespace Unravel.Core
         /// <returns>True if the callback was found and removed.</returns>
         public bool UnregisterCallback<T>(string eventType, Action<T> callback) where T : UIEventBase
         {
-            ValidateAndThrow();
             return UIEventManager.Unsubscribe<T>(this, eventType, callback);
-        }
-
-        // ==== Helper Methods ====
-
-        /// <summary>
-        /// Validates that this wrapper is still valid and throws an exception if not.
-        /// </summary>
-        private void ValidateAndThrow()
-        {
-            if (!IsValid())
-            {
-                throw new InvalidOperationException($"UIElement for '{ElementId}' is no longer valid. The native element has been destroyed.");
-            }
         }
 
         /// <summary>
@@ -268,14 +237,7 @@ namespace Unravel.Core
         /// </summary>
         public override string ToString()
         {
-            if (IsValid())
-            {
-                return $"UIElement('{ElementId}', Entity: {ownerEntity})";
-            }
-            else
-            {
-                return $"UIElement(INVALID)";
-            }
+            return $"UIElement('{ElementId}', Entity: {ownerEntity})";
         }
 
         // ==== Internal Calls ====

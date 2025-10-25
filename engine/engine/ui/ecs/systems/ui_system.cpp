@@ -269,19 +269,19 @@ auto ui_system::is_root_element(rtti::context& ctx, Rml::Element* element) -> bo
     return false;
 }
 
+void ui_system::load_font(const std::string& path)
+{
+    const Rml::String font_path = fs::resolve_protocol(path).string();
+    Rml::LoadFontFace(font_path, false);
+    fonts_loaded_.insert(path);
+}
+
 void ui_system::load_fonts()
 {
     if(!ui_context_)
     {
         return;
     }
-
-
-    auto load_font = [&](const std::string& path) -> void
-    {
-        const Rml::String font_path = fs::resolve_protocol(path).string();
-        Rml::LoadFontFace(font_path, false);
-    };
 
     // Load font
     load_font("engine:/data/fonts/Inter/static/28pt/Inter-Thin.ttf");

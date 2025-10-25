@@ -20,7 +20,7 @@ namespace Unravel.Core
         /// </summary>
         public override bool IsValid()
         {
-            return nativePtr != IntPtr.Zero && internal_m2n_ui_document_wrapper_is_valid(nativePtr);
+            return nativePtr != IntPtr.Zero && internal_m2n_ui_document_wrapper_is_valid(nativePtr, ownerEntity);
         }
         /// <summary>
         /// Gets the entity that owns this UI document.
@@ -53,13 +53,11 @@ namespace Unravel.Core
         {
             get
             {
-                ValidateAndThrow();
-                return internal_m2n_ui_document_wrapper_get_title(nativePtr);
+                return internal_m2n_ui_document_wrapper_get_title(nativePtr, ownerEntity);
             }
             set
             {
-                ValidateAndThrow();
-                internal_m2n_ui_document_wrapper_set_title(nativePtr, value ?? "");
+                internal_m2n_ui_document_wrapper_set_title(nativePtr, ownerEntity, value ?? "");
             }
         }
 
@@ -70,8 +68,7 @@ namespace Unravel.Core
         {
             get
             {
-                ValidateAndThrow();
-                return internal_m2n_ui_document_wrapper_is_visible(nativePtr);
+                return internal_m2n_ui_document_wrapper_is_visible(nativePtr, ownerEntity);
             }
         }
 
@@ -82,8 +79,7 @@ namespace Unravel.Core
         /// </summary>
         public void Show()
         {
-            ValidateAndThrow();
-            internal_m2n_ui_document_wrapper_show(nativePtr);
+            internal_m2n_ui_document_wrapper_show(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -91,8 +87,7 @@ namespace Unravel.Core
         /// </summary>
         public void Hide()
         {
-            ValidateAndThrow();
-            internal_m2n_ui_document_wrapper_hide(nativePtr);
+            internal_m2n_ui_document_wrapper_hide(nativePtr, ownerEntity);
         }
 
         /// <summary>
@@ -101,8 +96,7 @@ namespace Unravel.Core
         /// </summary>
         public void Close()
         {
-            ValidateAndThrow();
-            internal_m2n_ui_document_wrapper_close(nativePtr);
+            internal_m2n_ui_document_wrapper_close(nativePtr, ownerEntity);
             // The C++ side will call Invalidate() after closing
         }
 
@@ -115,8 +109,7 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement GetElementById(string elementId)
         {
-            ValidateAndThrow();
-            var elementPtr = internal_m2n_ui_document_wrapper_get_element_by_id(nativePtr, elementId);
+            var elementPtr = internal_m2n_ui_document_wrapper_get_element_by_id(nativePtr, ownerEntity, elementId);
             if (elementPtr == IntPtr.Zero)
             {
                 return null;
@@ -131,8 +124,7 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement QuerySelector(string selector)
         {
-            ValidateAndThrow();
-            var elementPtr = internal_m2n_ui_document_wrapper_query_selector(nativePtr, selector);
+            var elementPtr = internal_m2n_ui_document_wrapper_query_selector(nativePtr, ownerEntity, selector);
             if (elementPtr == IntPtr.Zero)
             {
                 return null;
@@ -140,61 +132,41 @@ namespace Unravel.Core
             return new UIElement(elementPtr, ownerEntity);
         }
 
-        // ==== Helper Methods ====
-
-        /// <summary>
-        /// Validates that this wrapper is still valid and throws an exception if not.
-        /// </summary>
-        private void ValidateAndThrow()
-        {
-            if (!IsValid())
-            {
-                throw new InvalidOperationException($"UIDocument for entity {ownerEntity} is no longer valid. The native document has been destroyed.");
-            }
-        }
-
         /// <summary>
         /// Returns a string representation of this UI document wrapper.
         /// </summary>
         public override string ToString()
         {
-            if (IsValid())
-            {
-                return $"UIDocument(Entity: {ownerEntity}, Title: '{Title}')";
-            }
-            else
-            {
-                return $"UIDocument(Entity: {ownerEntity}, INVALID)";
-            }
+            return $"UIDocument(Entity: {ownerEntity}, Title: '{Title}')";
         }
 
         // ==== Internal Calls ====
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_document_wrapper_is_valid(IntPtr documentPtr);
+        private static extern bool internal_m2n_ui_document_wrapper_is_valid(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_document_wrapper_get_title(IntPtr documentPtr);
+        private static extern string internal_m2n_ui_document_wrapper_get_title(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_set_title(IntPtr documentPtr, string title);
+        private static extern void internal_m2n_ui_document_wrapper_set_title(IntPtr documentPtr, Entity ownerEntity, string title);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_document_wrapper_is_visible(IntPtr documentPtr);
+        private static extern bool internal_m2n_ui_document_wrapper_is_visible(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_show(IntPtr documentPtr);
+        private static extern void internal_m2n_ui_document_wrapper_show(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_hide(IntPtr documentPtr);
+        private static extern void internal_m2n_ui_document_wrapper_hide(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_close(IntPtr documentPtr);
+        private static extern void internal_m2n_ui_document_wrapper_close(IntPtr documentPtr, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_get_element_by_id(IntPtr documentPtr, string elementId);
+        private static extern IntPtr internal_m2n_ui_document_wrapper_get_element_by_id(IntPtr documentPtr, Entity ownerEntity, string elementId);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_query_selector(IntPtr documentPtr, string selector);
+        private static extern IntPtr internal_m2n_ui_document_wrapper_query_selector(IntPtr documentPtr, Entity ownerEntity, string selector);
     }
 }
