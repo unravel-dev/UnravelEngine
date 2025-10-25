@@ -44,6 +44,7 @@
 - **Cross-Platform** - Windows, Linux, macOS support
 - **Modern C++20** - Latest standards for performance and maintainability
 - **Action-Based Input** - Flexible input mapping for various devices
+- **Undo/Redo System** - Complete editor history management
 
 ### 🎮 **Engine Capabilities**
 - **PBR Deferred Rendering** - Physically-based rendering pipeline
@@ -52,6 +53,8 @@
 - **Physics Integration** - Powered by Bullet Physics
 - **3D Audio** - Spatial audio with OpenAL Soft
 - **Animation System** - Skeletal and keyframe animations
+- **Robust Particle System** - Advanced particle effects and simulations
+- **Game UI** - HTML+CSS based UI system powered by RmlUi
 - **Async Asset Loading** - Non-blocking resource management
 
 ### 📁 **Format Support**
@@ -150,12 +153,6 @@ We welcome contributions! Here's how you can help:
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📋 Roadmap
-
-### Future
-- 📅 Editor Undo/Redo
-- 📅 Game UI
-
 ## 🙏 Third-Party Libraries
 
 Unravel Engine is built upon these excellent open-source libraries:
@@ -166,6 +163,7 @@ Unravel Engine is built upon these excellent open-source libraries:
 | [EnTT](https://github.com/skypjack/entt) | Entity-Component-System | [Link](https://github.com/skypjack/entt) |
 | [Bullet3](https://github.com/bulletphysics/bullet3) | Physics simulation | [Link](https://github.com/bulletphysics/bullet3) |
 | [Dear ImGui](https://github.com/ocornut/imgui) | Immediate mode GUI | [Link](https://github.com/ocornut/imgui) |
+| [RmlUi](https://github.com/mikke89/RmlUi) | HTML+CSS game UI | [Link](https://github.com/mikke89/RmlUi) |
 | [Assimp](https://github.com/assimp/assimp) | 3D model loading | [Link](https://github.com/assimp/assimp) |
 | [OpenAL Soft](https://github.com/kcat/openal-soft) | 3D audio | [Link](https://github.com/kcat/openal-soft) |
 | [GLM](https://github.com/g-truc/glm) | Mathematics library | [Link](https://github.com/g-truc/glm) |
