@@ -472,10 +472,14 @@ void entity_add_script_component_action_t::draw_in_inspector(rtti::context& ctx)
     // Could implement visual representation if needed
 }
 
-entity_remove_script_component_action_t::entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name)
-    : entity(ent), script_type_name(type_name)
+entity_remove_script_component_action_t::entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name, int index)
+    : entity(ent), script_type_name(type_name), script_index(index)
 {
     name = "Remove Script Component " + script_type_name;
+    if (index >= 0)
+    {
+        name += " [" + std::to_string(index) + "]";
+    }
 }
 
 void entity_remove_script_component_action_t::do_action()
@@ -501,20 +505,44 @@ void entity_remove_script_component_action_t::do_action()
             auto script_comp = entity.try_get<script_component>();
             if (script_comp)
             {
-                // Try to get the script object before removing it for restoration
-                auto script_obj = script_comp->get_script_component(script_type);
-                if (script_obj.scoped)
-                {
-                    // Serialize the script object before removing it
-                    removed_script_object_data = {};
-
-                    save_to_stream(removed_script_object_data, entity, script_obj);
-                }
+                const auto& comps = script_comp->get_script_components();
                 
-                do_was_successful = script_comp->remove_script_component(script_type);
-                if (do_was_successful)
+                // If index is specified and valid, remove the specific component at that index
+                if (script_index >= 0 && script_index < static_cast<int>(comps.size()))
                 {
-                    script_comp->process_pending_deletions();
+                    const auto& script_obj = comps[script_index];
+                    
+                    // Verify this is the correct type
+                    if (script_obj.scoped && script_obj.scoped->object.get_type().get_fullname() == script_type_name)
+                    {
+                        // Serialize the script object before removing it
+                        removed_script_object_data = {};
+                        save_to_stream(removed_script_object_data, entity, script_obj);
+                        
+                        // Remove the specific script component instance
+                        do_was_successful = script_comp->remove_script_component(script_obj.scoped->object);
+                        if (do_was_successful)
+                        {
+                            script_comp->process_pending_deletions();
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback to old behavior: remove first component of this type
+                    auto script_obj = script_comp->get_script_component(script_type);
+                    if (script_obj.scoped)
+                    {
+                        // Serialize the script object before removing it
+                        removed_script_object_data = {};
+                        save_to_stream(removed_script_object_data, entity, script_obj);
+                    }
+                    
+                    do_was_successful = script_comp->remove_script_component(script_type);
+                    if (do_was_successful)
+                    {
+                        script_comp->process_pending_deletions();
+                    }
                 }
             }
         }

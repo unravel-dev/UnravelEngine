@@ -150,12 +150,13 @@ struct entity_remove_script_component_action_t : crtp_meta_type<entity_remove_sc
 {
     entt::handle entity{};
     std::string script_type_name{};
+    int script_index{-1}; // Index of the script component to remove
 
     bool do_was_successful{false};
     // Store the script object data for restoration
     std::stringstream removed_script_object_data{};
 
-    entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name);
+    entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name, int index = -1);
 
     void do_action() override;
     void undo_action() override;

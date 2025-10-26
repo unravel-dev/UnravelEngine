@@ -825,7 +825,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 auto& em = ctx.get_cached<editing_manager>();
                 auto script_type_name = type.get_fullname();
-                em.do_action<entity_remove_script_component_action_t>({}, data, script_type_name);
+                em.do_action<entity_remove_script_component_action_t>({}, data, script_type_name, index_to_remove);
 
                 // script_comp->remove_script_component(comp_to_remove.scoped->object);
                 // script_comp->process_pending_deletions();

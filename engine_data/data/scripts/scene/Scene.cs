@@ -158,17 +158,6 @@ namespace Unravel.Core
             return rawEntities.ToStructArray<Entity>();
         }
 
-        /// <summary>
-        /// Finds all entities that have all the specified component types.
-        /// </summary>
-        /// <param name="types">Array of component types to search for.</param>
-        /// <returns>The entities that have all specified components, or empty if no entities match.</returns>
-        public static Entity[] FindEntitiesWithComponents(Type[] types)
-        {
-            byte[] rawEntities = internal_m2n_find_entities_with_components(types);
-            return rawEntities.ToStructArray<Entity>();
-        }
-
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_load_scene(string key);
 

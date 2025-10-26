@@ -174,7 +174,7 @@ public struct Entity : IEquatable<Entity>, IFormattable
 	/// </summary>
 	/// <typeparam name="T">The type of component to retrieve.</typeparam>
 	/// <returns>The component of the specified type.</returns>
-	public T GetComponent<T>() where T : Component, new()
+	public T GetComponent<T>() where T : Component
 	{
 		return internal_m2n_get_component(this, typeof(T)) as T;
 	}
@@ -238,9 +238,14 @@ public Component[] GetComponentsInChildren(Type type)
 	/// </summary>
 	/// <param name="component">The component instance to remove.</param>
 	/// <returns><c>true</c> if the component was successfully removed; otherwise, <c>false</c>.</returns>
-	static public bool RemoveComponent(Component component)
+	static public bool Remove(Component component)
 	{
 		return internal_m2n_remove_component_instance(component.owner, component);
+	}
+	
+	public bool RemoveComponent(Component component)
+	{
+		return internal_m2n_remove_component_instance(this, component);
 	}
 
 	/// <summary>
@@ -248,9 +253,14 @@ public Component[] GetComponentsInChildren(Type type)
 	/// </summary>
 	/// <param name="component">The component instance to remove.</param>
 	/// <returns><c>true</c> if the component was successfully removed; otherwise, <c>false</c>.</returns>
-	static public bool RemoveComponent(Component component, float secondsDelay)
+	static public bool Remove(Component component, float secondsDelay)
 	{
 		return internal_m2n_remove_component_instance_delay(component.owner, component, secondsDelay);
+	}
+	
+	public bool RemoveComponent(Component component, float secondsDelay)
+	{
+		return internal_m2n_remove_component_instance_delay(this, component, secondsDelay);
 	}
 
 	/// <summary>
