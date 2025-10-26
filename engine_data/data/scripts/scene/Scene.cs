@@ -147,6 +147,28 @@ namespace Unravel.Core
             return rawEntities.ToStructArray<Entity>();
         }
 
+        /// <summary>
+        /// Finds all entities that have the specified component type.
+        /// </summary>
+        /// <typeparam name="T">The component type to search for.</typeparam>
+        /// <returns>The entities that have the specified component, or empty if no entities match.</returns>
+        public static Entity[] FindEntitiesWithComponent<T>() where T : Component
+        {
+            byte[] rawEntities = internal_m2n_find_entities_with_component(typeof(T));
+            return rawEntities.ToStructArray<Entity>();
+        }
+
+        /// <summary>
+        /// Finds all entities that have all the specified component types.
+        /// </summary>
+        /// <param name="types">Array of component types to search for.</param>
+        /// <returns>The entities that have all specified components, or empty if no entities match.</returns>
+        public static Entity[] FindEntitiesWithComponents(Type[] types)
+        {
+            byte[] rawEntities = internal_m2n_find_entities_with_components(types);
+            return rawEntities.ToStructArray<Entity>();
+        }
+
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_load_scene(string key);
 
@@ -191,5 +213,11 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern byte[] internal_m2n_find_entities_by_tag(string tag);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_find_entities_with_component(Type componentType);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_find_entities_with_components(Type[] componentTypes);
     }
 }

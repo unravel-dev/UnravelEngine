@@ -158,6 +158,10 @@ public:
     auto is_playing() const -> bool;
     auto is_paused() const -> bool;
 
+    // Loop control
+    void set_loop(bool loop);
+    auto is_loop() const -> bool;
+
     // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
     auto get_color_gradient() const -> const math::gradient<math::color>&;

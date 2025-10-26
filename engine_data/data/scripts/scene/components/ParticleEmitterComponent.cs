@@ -288,6 +288,21 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Gets or sets whether the emitter loops continuously (true) or emits only once (false).
+        /// </summary>
+        public bool loop
+        {
+            get
+            {
+                return internal_m2n_particle_emitter_get_loop(owner);
+            }
+            set
+            {
+                internal_m2n_particle_emitter_set_loop(owner, value);
+            }
+        }
+
+        /// <summary>
         /// Starts particle emission.
         /// </summary>
         public void Play()
@@ -452,5 +467,11 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_reset_emitter(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_loop(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_loop(Entity eid, bool loop);
     }
 }

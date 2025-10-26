@@ -99,6 +99,7 @@ struct EmitterUniforms
 	// Playback control states
 	bool m_playing; // Whether the emitter is currently playing/active
 	bool m_paused;  // Whether the emitter is paused (playing but with dt = 0)
+	bool m_loop;    // Whether the emitter loops continuously (true) or emits only once (false)
 
 	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 

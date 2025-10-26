@@ -496,6 +496,8 @@ void script_system::on_play_begin(rtti::context& ctx)
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
     on_play_begin(registry);
+
+    elapsed_time_ = {};
 }
 
 void script_system::on_play_end(rtti::context& ctx)
@@ -508,24 +510,26 @@ void script_system::on_play_end(rtti::context& ctx)
 
     seq::scope::stop_all("script");
 
-    try
-    {
-        registry.view<script_component>().each(
-            [&](auto e, auto&& comp)
-            {
-                comp.destroy();
-            });
-    }
-    catch(const mono::mono_exception& e)
-    {
-        log_exception(e);
-    }
+    // try
+    // {
+    //     registry.view<script_component>().each(
+    //         [&](auto e, auto&& comp)
+    //         {
+    //             comp.destroy();
+    //         });
+    // }
+    // catch(const mono::mono_exception& e)
+    // {
+    //     log_exception(e);
+    // }
 
     registry.on_construct<active_component>().disconnect<&on_create_active_component>();
     registry.on_destroy<active_component>().disconnect<&on_destroy_active_component>();
 
     registry.on_construct<script_component>().disconnect<&on_create_component>();
     registry.on_destroy<script_component>().disconnect<&on_destroy_component>();
+
+    elapsed_time_ = {};
 }
 
 void script_system::on_pause(rtti::context& ctx)
@@ -577,6 +581,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
         struct update_data
         {
+            float time{};
             float delta_time{};
             float time_scale{};
             uint64_t frame_count{};
@@ -588,12 +593,15 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             auto time_scale = sim.get_time_scale();
 
             update_data data;
+            data.time = elapsed_time_.count();
             data.delta_time = dt.count();
             data.time_scale = time_scale;
             data.frame_count = sim.get_frame();
             auto method_thunk =
                 mono::make_method_invoker<void(update_data)>(cache_.update_manager_type, "internal_n2m_update");
             method_thunk(data);
+
+            elapsed_time_ += dt;
         }
     }
     catch(const mono::mono_exception& e)

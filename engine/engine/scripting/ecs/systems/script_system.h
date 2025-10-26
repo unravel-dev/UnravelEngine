@@ -159,5 +159,7 @@ private:
     std::vector<tpp::future<void>> compilation_jobs_;
 
     bool has_compilation_errors_{};
+
+    delta_t elapsed_time_{};
 };
 } // namespace unravel

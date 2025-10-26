@@ -11,6 +11,7 @@ namespace Core
 [StructLayout(LayoutKind.Sequential)]
 public struct UpdateInfo
 {
+    public float time;
     public float deltaTime;
     public float timeScale;
     public long frameCount;
@@ -24,6 +25,7 @@ public struct FixedUpdateInfo
 
 public static class Time
 {
+    public static float time;
     public static float deltaTime;
     internal static float _timeScale = 1.0f;
 
@@ -296,6 +298,7 @@ public static class SystemManager
     public static ScriptComponentManager ScriptManager = new ScriptComponentManager();
     public static void internal_n2m_update(UpdateInfo info)
     {
+        Time.time = info.time;
         Time.deltaTime = info.deltaTime;
         Time._timeScale = info.timeScale;
         Time.frameCount = info.frameCount;

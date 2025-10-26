@@ -814,6 +814,74 @@ auto internal_m2n_has_component(entt::entity id, const mono::mono_type& type) ->
     return comp.valid();
 }
 
+auto internal_m2n_find_entities_with_component(const mono::mono_type& component_type) -> hpp::small_vector<entt::entity>
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& scn = ec.get_scene();
+    auto& registry = *scn.registry;
+
+    hpp::small_vector<entt::entity> result;
+    
+    // Iterate through all entities using the storage directly
+    for(auto [entity] : registry.storage<entt::entity>().each())
+    {
+        if(registry.valid(entity))
+        {
+            // Check if entity has the component using the same logic as internal_m2n_has_component
+            auto comp = internal_m2n_get_component(entity, component_type);
+            if(comp.valid())
+            {
+                result.emplace_back(entity);
+            }
+        }
+    }
+
+    return result;
+}
+
+auto internal_m2n_find_entities_with_components(const std::vector<mono::mono_type>& component_types) -> hpp::small_vector<entt::entity>
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& scn = ec.get_scene();
+    auto& registry = *scn.registry;
+
+    hpp::small_vector<entt::entity> result;
+    
+    if(component_types.empty())
+    {
+        return result;
+    }
+    
+    // Iterate through all entities using the storage directly
+    for(auto [entity] : registry.storage<entt::entity>().each())
+    {
+        if(registry.valid(entity))
+        {
+            bool has_all_components = true;
+            
+            // Check if entity has all required components
+            for(const auto& component_type : component_types)
+            {
+                auto comp = internal_m2n_get_component(entity, component_type);
+                if(!comp.valid())
+                {
+                    has_all_components = false;
+                    break;
+                }
+            }
+            
+            if(has_all_components)
+            {
+                result.emplace_back(entity);
+            }
+        }
+    }
+
+    return result;
+}
+
 auto internal_m2n_remove_component_instance(entt::entity id, const mono::mono_object& comp) -> bool
 {
     auto e = get_entity_from_id(id);
@@ -1992,6 +2060,23 @@ void internal_m2n_particle_emitter_reset_emitter(entt::entity id)
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
         comp->reset_emitter();
+    }
+}
+
+auto internal_m2n_particle_emitter_get_loop(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->is_loop();
+    }
+    return true; // Default to true
+}
+
+void internal_m2n_particle_emitter_set_loop(entt::entity id, bool loop)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_loop(loop);
     }
 }
 
@@ -3812,6 +3897,8 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_find_entities_by_name", internal_call(internal_m2n_find_entities_by_name));
         reg.add_internal_call("internal_m2n_find_entity_by_tag", internal_call(internal_m2n_find_entity_by_tag));
         reg.add_internal_call("internal_m2n_find_entities_by_tag", internal_call(internal_m2n_find_entities_by_tag));
+        reg.add_internal_call("internal_m2n_find_entities_with_component", internal_call(internal_m2n_find_entities_with_component));
+        reg.add_internal_call("internal_m2n_find_entities_with_components", internal_call(internal_m2n_find_entities_with_components));
     }
 
     {
@@ -4055,6 +4142,10 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               internal_call(internal_m2n_particle_emitter_resume));
         reg.add_internal_call("internal_m2n_particle_emitter_reset_emitter", 
                               internal_call(internal_m2n_particle_emitter_reset_emitter));
+        reg.add_internal_call("internal_m2n_particle_emitter_get_loop", 
+                              internal_call(internal_m2n_particle_emitter_get_loop));
+        reg.add_internal_call("internal_m2n_particle_emitter_set_loop", 
+                              internal_call(internal_m2n_particle_emitter_set_loop));
     }
 
     {

@@ -334,9 +334,19 @@ auto particle_emitter_component::is_playing() const -> bool
     return uniforms_.m_playing;
 }
 
-auto particle_emitter_component::is_paused() const -> bool
+auto particle_emitter_component::is_paused()    const -> bool
 {
     return uniforms_.m_paused;
+}
+
+void particle_emitter_component::set_loop(bool loop)
+{
+    uniforms_.m_loop = loop;
+}
+
+auto particle_emitter_component::is_loop() const -> bool
+{
+    return uniforms_.m_loop;
 }
 
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)

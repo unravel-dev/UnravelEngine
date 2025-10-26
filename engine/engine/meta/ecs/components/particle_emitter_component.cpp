@@ -229,6 +229,12 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Controls whether the particle emitter actively spawns and updates particles. Disabled emitters stop emission but existing particles continue to animate."},
         })
+        .data<&particle_emitter_component::set_loop, &particle_emitter_component::is_loop>("loop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "loop"},
+            entt::attribute{"pretty_name", "Loop"},
+            entt::attribute{"tooltip", "Controls whether the emitter loops continuously (true) or emits only once up to max particles (false). Non-looping emitters stop emitting after reaching max particles."},
+        })
         .data<&particle_emitter_component::set_max_particles, &particle_emitter_component::get_max_particles>("max_particles"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_particles"},
@@ -446,6 +452,7 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Texture"},
             entt::attribute{"tooltip", "Texture asset used to render each particle. Should be a square texture with alpha channel for best results. Common formats: smoke, fire, sparkle, etc."},
         });
+
 }
 
 SAVE(particle_emitter_component)
@@ -487,6 +494,9 @@ SAVE(particle_emitter_component)
     
     // Texture handle
     try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
+    
+    // Loop control
+    try_save(ar, ser20::make_nvp("loop", obj.is_loop()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -673,6 +683,13 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("texture", texture)))
     {
         obj.set_texture(texture);
+    }
+    
+    // Loop control
+    bool loop{true}; // Default to true for backward compatibility
+    if(try_load(ar, ser20::make_nvp("loop", loop)))
+    {
+        obj.set_loop(loop);
     }
 }
 LOAD_INSTANTIATE(particle_emitter_component, ser20::iarchive_associative_t);

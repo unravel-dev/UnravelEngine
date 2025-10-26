@@ -134,6 +134,7 @@ void EmitterUniforms::reset()
     // Initialize playback states
     m_playing = true;  // Default: playing
     m_paused = false;  // Default: not paused
+    m_loop = true;     // Default: loop continuously
 
     m_easePos = bx::Easing::Linear; // Only position easing remains
     // Generate LUTs for all gradients to optimize sampling performance
@@ -183,6 +184,7 @@ struct Emitter
         dt_ = 0.0f;
 
         num_particles_ = 0;
+        total_particles_spawned_ = 0;
         aabb_ = math::bbox(math::vec3(-1.0f), math::vec3(1.0f));
         first_update_ = true;
 
@@ -284,12 +286,34 @@ struct Emitter
     {
 		auto& uniforms_ = *_uniforms;
 		
+
+        if(first_update_)
+        {
+            uniforms_.m_prevTransform = uniforms_.m_transform;
+        }
+
+        bool was_playing = playing_;
+        bool was_loop = loop_;
+        playing_ = uniforms_.m_playing;
+        loop_ = uniforms_.m_loop;
+
+        if(was_playing != playing_ || was_loop != loop_)
+        {
+            total_particles_spawned_ = 0;
+        }
+
 		
 		if(uniforms_.m_paused)
 		{
 			// If paused, set delta time to 0 (particles don't advance but remain visible)
 			_dt = 0.0f;
 		}
+
+        if(!uniforms_.m_loop && total_particles_spawned_ >= max_particles_)
+        {
+            uniforms_.m_playing = false;
+            total_particles_spawned_ = 0;
+        }
 
 		// Get effective transform properties based on simulation method
 		math::vec3 effectivePosition, effectiveScale, effectiveEmissionShapeScale;
@@ -347,7 +371,13 @@ struct Emitter
 
 		if(0.0f < uniforms_.m_emissionLifetime && uniforms_.m_playing)
 		{
-			spawn(uniforms_, aabb,_dt);
+			// For looping emitters, always spawn
+			// For non-looping emitters, only spawn if initial emission hasn't completed
+            bool initial_emission_complete = total_particles_spawned_ >= max_particles_;
+			if(uniforms_.m_loop || !initial_emission_complete)
+			{
+				spawn(uniforms_, aabb,_dt);
+			}
 		}
 
 		// Safety check: ensure num_particles_ never exceeds max_particles_
@@ -470,6 +500,8 @@ struct Emitter
             // Find next available particle slot
             Particle* particle = &particles_[num_particles_];
             num_particles_++;
+            total_particles_spawned_++;
+
 
             math::vec3 pos;
             switch(shape_)
@@ -587,6 +619,7 @@ struct Emitter
 			aabb.add_point(particle->position - padding);
 			aabb.add_point(particle->position + padding);
         }
+
     }
 
     EmitterShape::Enum shape_;
@@ -601,6 +634,10 @@ struct Emitter
     ParticleSort* particle_sort_;
     uint32_t num_particles_;
     uint32_t max_particles_;
+    uint32_t total_particles_spawned_;
+
+    bool playing_;
+    bool loop_;
 
     bool first_update_; // Track if this is the first update to avoid interpolation
 };
@@ -934,10 +971,6 @@ struct ParticleSystem
         }
         else
         {
-        if(emitter.first_update_)
-        {
-            _uniforms->m_prevTransform = _uniforms->m_transform;
-        }
 
 			emitter.update(_uniforms, _dt);
         }
