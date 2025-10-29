@@ -225,13 +225,14 @@ void atomic_write_file(const fs::path& dst,
 
     if(err)
     {
-        APPLOG_ERROR("Failed to remove temporary file: {} with error: {}", temp.string(), err.message());
+        // APPLOG_ERROR("Failed to remove temporary file: {} with error: {}", temp.string(), err.message());
+        fs::remove(temp, err);
     }
 
-    if(fs::exists(dst, err) && err)
-    {
-        APPLOG_ERROR("Failed to remove temporary file: {}", dst.string());
-    }
+    // if(fs::exists(dst, err) && err)
+    // {
+    //     APPLOG_ERROR("Failed to remove temporary file: {}", dst.string());
+    // }
 }
 } // namespace asset_writer
 } // namespace unravel
