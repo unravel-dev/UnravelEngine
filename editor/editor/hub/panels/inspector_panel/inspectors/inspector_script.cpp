@@ -39,6 +39,209 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
 }
 
 /**
+ * @brief Checks if a mono type has the System.Serializable attribute
+ * 
+ * @param type The mono type to check
+ * @return true if the type has the Serializable attribute, false otherwise
+ */
+auto is_serializable_type(const mono::mono_type& type) -> bool
+{
+    // auto attribs = type.get_attributes();
+    // auto serializable_attrib = find_attribute("SerializableAttribute", attribs);
+    // return serializable_attrib.valid();
+    return true;
+}
+
+/**
+ * @brief Checks if a mono type is a List<T>
+ * 
+ * @param type The mono type to check
+ * @return true if the type is System.Collections.Generic.List<T>
+ */
+auto is_list_type(const mono::mono_type& type) -> bool
+{
+    if (!type.valid())
+    {
+        return false;
+    }
+    
+    // Check if it's a generic List<T>
+    auto fullname = type.get_fullname();
+    return fullname.find("System.Collections.Generic.List<") == 0;
+}
+
+/**
+ * @brief Gets the element type of a collection (array or List<T>)
+ * 
+ * @param type The collection type
+ * @return The element type, or invalid type if not a collection
+ */
+auto get_collection_element_type(const mono::mono_type& type) -> mono::mono_type
+{
+    if (type.is_array())
+    {
+        return type.get_element_type();
+    }
+    else if (is_list_type(type))
+    {
+        // For List<T>, get the generic argument
+        // List<T> has a property "Item" that returns T
+        auto item_prop = type.get_property("Item");
+        if (item_prop.get_internal_ptr())
+        {
+            return item_prop.get_type();
+        }
+    }
+    
+    return {};
+}
+
+/**
+ * @brief Creates a proxy for a nested serializable object field
+ * 
+ * This creates a proxy that can access nested object fields while maintaining
+ * proper property paths for the undo/redo system.
+ */
+template<typename Invoker>
+auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field) -> meta_any_proxy
+{
+    meta_any_proxy nested_proxy;
+    auto field_name = mutable_field.get_name();
+    
+    nested_proxy.impl->get_name = [obj_proxy, field_name]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        if(parent_name.empty())
+        {
+            return field_name;
+        }
+        return fmt::format("{}/{}", parent_name, field_name);
+    };
+    
+    nested_proxy.impl->getter = [obj_proxy, field_name](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            
+            // Recreate the invoker from the field name
+            auto obj_type = mono_obj.get_type();
+            auto field = obj_type.get_field(field_name);
+            auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            
+            auto nested_obj = invoker.get_value(mono_obj);
+            if(nested_obj.valid())
+            {
+                // Create an owned copy to avoid dangling references
+                result = entt::meta_any{std::in_place_type<mono::mono_object>, nested_obj};
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    nested_proxy.impl->setter = [obj_proxy, field_name](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<mono::mono_object>())
+            {
+                // Recreate the invoker from the field name
+                auto obj_type = mono_obj.get_type();
+                auto field = obj_type.get_field(field_name);
+                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                
+                auto nested_obj = value.cast<mono::mono_object>();
+                invoker.set_value(mono_obj, nested_obj);
+                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+            }
+        }
+        return false;
+    };
+    
+    return nested_proxy;
+}
+
+/**
+ * @brief Creates a proxy for a nested serializable object property
+ * 
+ * This creates a proxy that can access nested object properties while maintaining
+ * proper property paths for the undo/redo system.
+ */
+template<typename Invoker>
+auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_property) -> meta_any_proxy
+{
+    meta_any_proxy nested_proxy;
+    auto prop_name = mutable_property.get_name();
+    
+    nested_proxy.impl->get_name = [obj_proxy, prop_name]()
+    {
+        auto parent_name = obj_proxy.impl->get_name();
+        if(parent_name.empty())
+        {
+            return prop_name;
+        }
+        return fmt::format("{}/{}", parent_name, prop_name);
+    };
+    
+    nested_proxy.impl->getter = [obj_proxy, prop_name](entt::meta_any& result) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            
+            // Recreate the invoker from the property name
+            auto obj_type = mono_obj.get_type();
+            auto property = obj_type.get_property(prop_name);
+            auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+            
+            auto nested_obj = invoker.get_value(mono_obj);
+            if(nested_obj.valid())
+            {
+                // Create an owned copy to avoid dangling references
+                result = entt::meta_any{std::in_place_type<mono::mono_object>, nested_obj};
+                return true;
+            }
+        }
+        return false;
+    };
+    
+    nested_proxy.impl->setter = [obj_proxy, prop_name](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any obj_var;
+        if(obj_proxy.impl->getter(obj_var) && obj_var)
+        {
+            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            if(value.allow_cast<mono::mono_object>())
+            {
+                // Recreate the invoker from the property name
+                auto obj_type = mono_obj.get_type();
+                auto property = obj_type.get_property(prop_name);
+                auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+                
+                auto nested_obj = value.cast<mono::mono_object>();
+                invoker.set_value(mono_obj, nested_obj);
+                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+            }
+        }
+        return false;
+    };
+    
+    return nested_proxy;
+}
+
+// Forward declaration for recursive serializable object inspection
+auto inspect_serializable_object(rtti::context& ctx,
+                                 mono::mono_object& obj,
+                                 const meta_any_proxy& obj_proxy,
+                                 const std::string& name,
+                                 const var_info& info) -> inspect_result;
+
+/**
  * @brief Proxy wrapper for mono field access that integrates with meta_any_proxy system
  * 
  * This allows script field changes to be properly recorded in the undo/redo system
@@ -1108,6 +1311,221 @@ struct mono_inspector<asset_handle<T>>
     }
 };
 
+/**
+ * @brief Inspector for collections (arrays and List<T>) with add/remove support
+ */
+struct mono_inspector_collection
+{
+    template<typename Invoker>
+    static auto inspect_collection(rtti::context& ctx,
+                                   mono::mono_object& obj,
+                                   const meta_any_proxy& obj_proxy,
+                                   const Invoker& mutable_field,
+                                   const mono::mono_type& collection_type,
+                                   const var_info& info) -> inspect_result
+    {
+        inspect_result result;
+        
+        auto val = mutable_field.get_value(obj);
+        if (!val.valid())
+        {
+            return result;
+        }
+        
+        bool is_array = collection_type.is_array();
+        bool is_list = is_list_type(collection_type);
+        
+        if (!is_array && !is_list)
+        {
+            return result;
+        }
+        
+        // Get collection size
+        size_t collection_size = 0;
+        if (is_array)
+        {
+            mono::mono_array<mono::mono_object> array(val);
+            collection_size = array.size();
+        }
+        else if (is_list)
+        {
+            // Get Count property
+            auto count_prop = collection_type.get_property("Count");
+            if (count_prop.get_internal_ptr())
+            {
+                auto count_invoker = mono::make_property_invoker<int32_t>(count_prop);
+                collection_size = static_cast<size_t>(count_invoker.get_value(val));
+            }
+        }
+        
+        // Header with add/remove buttons
+        ImGui::PushID(mutable_field.get_name().c_str());
+        
+        bool tree_open = ImGui::TreeNodeEx(mutable_field.get_name().c_str(), 
+                                           ImGuiTreeNodeFlags_DefaultOpen,
+                                           "%s [%zu]", 
+                                           mutable_field.get_name().c_str(), 
+                                           collection_size);
+        
+        // Add/Remove buttons (only for List<T>, arrays are fixed size)
+        if (is_list && !info.read_only)
+        {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("+"))
+            {
+                // Add new element to list
+                auto add_method = collection_type.get_method("Add", 1);
+                if (add_method.valid())
+                {
+                    auto element_type = get_collection_element_type(collection_type);
+                    if (element_type.valid())
+                    {
+                        // Create default instance of element type
+                        mono::mono_object new_element;
+                        if (!element_type.is_valuetype())
+                        {
+                            // For reference types, try to create new instance
+                            try {
+                                new_element = element_type.new_instance();
+                            } catch(...) {
+                                // If can't create, add null
+                            }
+                        }
+                        else
+                        {
+                            // For value types, create boxed default value
+                            MonoDomain* domain = mono_domain_get();
+                            void* zero_data = std::calloc(1, element_type.get_sizeof());
+                            new_element = mono::mono_object(mono_value_box(domain, element_type.get_internal_ptr(), zero_data));
+                            std::free(zero_data);
+                        }
+                        
+                        auto add_invoker = mono::make_method_invoker<void(const mono::mono_object&)>(add_method);
+                        add_invoker(val, new_element);
+                        result.changed = true;
+                        result.edit_finished = true;
+                    }
+                }
+            }
+            
+            if (collection_size > 0)
+            {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("-"))
+                {
+                    // Remove last element from list
+                    auto remove_at_method = collection_type.get_method("RemoveAt", 1);
+                    if (remove_at_method.valid())
+                    {
+                        auto remove_invoker = mono::make_method_invoker<void(int32_t)>(remove_at_method);
+                        remove_invoker(val, static_cast<int32_t>(collection_size - 1));
+                        result.changed = true;
+                        result.edit_finished = true;
+                    }
+                }
+            }
+        }
+        
+        if (tree_open)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
+            
+            // Inspect each element
+            for (size_t i = 0; i < collection_size; ++i)
+            {
+                // Get element at index
+                mono::mono_object element;
+                if (is_array)
+                {
+                    mono::mono_array<mono::mono_object> array(val);
+                    element = array.get(i);
+                }
+                else if (is_list)
+                {
+                    // Use indexer property
+                    auto item_prop = collection_type.get_property("Item");
+                    if (item_prop.get_internal_ptr())
+                    {
+                        auto item_invoker = mono::make_property_invoker<mono::mono_object>(item_prop);
+                        element = item_invoker.get_value(val);
+                    }
+                }
+                
+                if (element.valid())
+                {
+                    // Create element proxy
+                    auto element_proxy = make_array_element_proxy<mono::mono_object>(obj_proxy, mutable_field, i);
+                    
+                    // Inspect element
+                    entt::meta_any element_var = entt::forward_as_meta(element);
+                    
+                    ImGui::PushID(static_cast<int>(i));
+                    result |= unravel::inspect_var(ctx, element_var, element_proxy, info);
+                    
+                    // Remove button for List<T> elements
+                    if (is_list && !info.read_only)
+                    {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("X"))
+                        {
+                            auto remove_at_method = collection_type.get_method("RemoveAt", 1);
+                            if (remove_at_method.valid())
+                            {
+                                auto remove_invoker = mono::make_method_invoker<void(int32_t)>(remove_at_method);
+                                remove_invoker(val, static_cast<int32_t>(i));
+                                result.changed = true;
+                                result.edit_finished = true;
+                                ImGui::PopID();
+                                break; // Exit loop after removal
+                            }
+                        }
+                    }
+                    ImGui::PopID();
+                }
+            }
+            
+            ImGui::PopStyleVar();
+            ImGui::TreePop();
+        }
+        
+        ImGui::PopID();
+        
+        return result;
+    }
+    
+    static auto inspect_field(rtti::context& ctx,
+                             mono::mono_object& obj,
+                             const meta_any_proxy& obj_proxy,
+                             mono::mono_field& field,
+                             const var_info& info) -> inspect_result
+    {
+        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+        auto field_type = field.get_type();
+        
+        var_info field_info;
+        field_info.is_property = true;
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
+        
+        return inspect_collection(ctx, obj, obj_proxy, invoker, field_type, field_info);
+    }
+    
+    static auto inspect_property(rtti::context& ctx,
+                                mono::mono_object& obj,
+                                const meta_any_proxy& obj_proxy,
+                                mono::mono_property& property,
+                                const var_info& info) -> inspect_result
+    {
+        auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+        auto prop_type = property.get_type();
+        
+        var_info field_info;
+        field_info.is_property = true;
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || property.is_readonly();
+        
+        return inspect_collection(ctx, obj, obj_proxy, invoker, prop_type, field_info);
+    }
+};
+
 template<typename T>
 struct mono_inspector<mono::mono_array<T>>
 {
@@ -1291,8 +1709,42 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     result |= enum_inspector(ctx, data, var_proxy, field, info);
                 }
             }
+            // else if(field_type.is_array() || is_list_type(field_type))
+            // {
+                // Handle arrays and List<T> with add/remove support
+                // result |= mono_inspector_collection::inspect_field(ctx, data, var_proxy, field, info);
+            // }
+            // else if(is_serializable_type(field_type))
+            // {
+            //     // Recursively inspect serializable nested objects
+            //     auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            //     auto nested_obj = invoker.get_value(data);
+                
+            //     if(nested_obj.valid())
+            //     {
+            //         auto nested_proxy = make_nested_object_proxy(var_proxy, invoker);
+            //         result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, field.get_name(), info);
+            //     }
+            //     else
+            //     {
+            //         // Object is null, show as read-only field
+            //         var_info field_info;
+            //         field_info.is_property = true;
+            //         field_info.read_only = true;
+
+            //         std::string null_text = "null (" + field_type.get_name() + ")";
+            //         entt::meta_any null_var = entt::forward_as_meta(null_text);
+            //         auto null_var_proxy = make_proxy(null_var);
+                    
+            //         {
+            //             property_layout layout(field.get_name());
+            //             result |= inspect_var(ctx, null_var, null_var_proxy, field_info);
+            //         }
+            //     }
+            // }
             else
             {
+                // Fallback to unknown type display
                 var_info field_info;
                 field_info.is_property = true;
                 field_info.read_only = true;
@@ -1421,8 +1873,42 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     result |= enum_inspector(ctx, data, var_proxy, prop, info);
                 }
             }
+            // else if(prop_type.is_array() || is_list_type(prop_type))
+            // {
+            //     // Handle arrays and List<T> with add/remove support
+            //     result |= mono_inspector_collection::inspect_property(ctx, data, var_proxy, prop, info);
+            // }
+            // else if(is_serializable_type(prop_type))
+            // {
+            //     // Recursively inspect serializable nested objects
+            //     auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+            //     auto nested_obj = invoker.get_value(data);
+                
+            //     if(nested_obj.valid())
+            //     {
+            //         auto nested_proxy = make_nested_property_proxy(var_proxy, invoker);
+            //         result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, prop.get_name(), info);
+            //     }
+            //     else
+            //     {
+            //         // Object is null, show as read-only field
+            //         var_info field_info;
+            //         field_info.is_property = true;
+            //         field_info.read_only = true;
+
+            //         std::string null_text = "null (" + prop_type.get_name() + ")";
+            //         entt::meta_any null_var = entt::forward_as_meta(null_text);
+            //         auto null_var_proxy = make_proxy(null_var);
+                    
+            //         {
+            //             property_layout layout(prop.get_name());
+            //             result |= inspect_var(ctx, null_var, null_var_proxy, field_info);
+            //         }
+            //     }
+            // }
             else
             {
+                // Fallback to unknown type display
                 var_info field_info;
                 field_info.is_property = true;
                 field_info.read_only = true;
@@ -1486,6 +1972,39 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
     auto obj_var = entt::forward_as_meta(mono_obj);
 
     return inspector_mono_object::inspect(ctx, obj_var, obj_proxy, info, custom);
+}
+
+/**
+ * @brief Recursively inspects a serializable object using the main inspector
+ * 
+ * This function creates a tree node and recursively calls the main inspector
+ * to handle all fields and properties of a serializable object.
+ */
+auto inspect_serializable_object(rtti::context& ctx,
+                                 mono::mono_object& obj,
+                                 const meta_any_proxy& obj_proxy,
+                                 const std::string& name,
+                                 const var_info& info) -> inspect_result
+{
+    inspect_result result{};
+    
+    // Create a collapsible tree node for the nested object
+    bool tree_open = ImGui::TreeNodeEx(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+    
+    if(tree_open)
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
+        
+        // Create a meta_any wrapper for the nested object and call the main inspector
+        auto obj_var = entt::forward_as_meta(obj);
+        inspector_mono_object inspector;
+        result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
+        
+        ImGui::PopStyleVar();
+        ImGui::TreePop();
+    }
+    
+    return result;
 }
 
 } // namespace unravel

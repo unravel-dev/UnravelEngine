@@ -818,6 +818,7 @@ void init_fonts()
 void deinit_fonts()
 {
     delete ANONYMOUS::s_manager;
+    ANONYMOUS::s_manager = nullptr;
 }
 
 base_font::base_font() = default;
@@ -920,7 +921,7 @@ font::font(const char* path,
 
 font::~font()
 {
-    if(isValid(ttf_handle))
+    if(ANONYMOUS::s_manager && isValid(ttf_handle))
     {
         ANONYMOUS::s_manager->destroy_ttf(ttf_handle);
     }

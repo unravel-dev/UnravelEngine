@@ -13,6 +13,7 @@
 #include <monopp/mono_exception.h>
 #include <monopp/mono_jit.h>
 #include <monort/monort.h>
+#include <monopp/mono_method.h>
 
 namespace unravel
 {
@@ -137,6 +138,11 @@ private:
         mono::mono_type script_system_type;
         mono::mono_type native_component_type;
         mono::mono_type script_component_type;
+        
+        // Cached methods to avoid repeated allocations every frame
+        mono::mono_method update_method;
+        mono::mono_method fixed_update_method;
+        mono::mono_method late_update_method;
     } cache_;
 
     std::unique_ptr<mono::mono_domain> app_domain_;

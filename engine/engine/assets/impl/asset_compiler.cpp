@@ -1252,7 +1252,8 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     params.debug = flags & script_library::compilation_flags::debug;
 
     std::string error;
-    auto cmd = mono::create_compile_command_detailed(params);
+    // auto cmd = mono::create_compile_command_detailed(params);
+    auto cmd = mono::create_compile_command_detailed_rsp(params, temp.string() + ".rsp");
 
     // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 

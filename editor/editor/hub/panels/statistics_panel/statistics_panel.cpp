@@ -1,5 +1,7 @@
 #include "statistics_panel.h"
+#include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
+#include "monopp/mono_gc_handle.h"
 #include "statistics_utils.h"
 
 
@@ -249,7 +251,7 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
         {
             ImGui::Text("%u scene", scene_calls);
         }
-        
+
         ImGui::EndColumns();
         
         ImGui::PopFont();
@@ -378,6 +380,25 @@ auto statistics_panel::draw_memory_info_section(float overlay_width) -> void
     }
     
     ImGui::PushFont(ImGui::Font::Mono);
+
+
+    ImGui::BeginGroup();
+    std::array<char, 64> str_max;
+    bx::prettify(str_max.data(), str_max.size(), static_cast<uint64_t>(mono::gc_get_heap_size()));
+    
+    std::array<char, 64> str_used;
+    bx::prettify(str_used.data(), str_used.size(), mono::gc_get_used_size());
+    
+    ImGui::TextUnformatted(fmt::format("GC Heap Size: {}", str_max.data()).c_str());
+    ImGui::TextUnformatted(fmt::format("GC Used Size: {}", str_used.data()).c_str());
+    ImGui::EndGroup();
+
+    ImGui::SameLine();
+    if(ImGui::Button("Collect GC"))
+    {
+        mono::gc_collect();
+    }
+    
     
     auto stats = gfx::get_stats();
     auto gpu_memory_max = stats->gpuMemoryMax;

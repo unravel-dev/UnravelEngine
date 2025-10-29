@@ -35,19 +35,6 @@ public abstract class NativeObject : IEquatable<NativeObject>
     // Override Equals(object)
     public override bool Equals(object obj)
     {
-        if (ReferenceEquals(obj, null))
-            return false;
-
-        if (!IsValid())
-            return false;
-
-        if (ReferenceEquals(this, obj))
-            return true;
-
-        // Ensure the object is of the same type.
-        if (obj.GetType() != this.GetType())
-            return false;
-
         return Equals(obj as NativeObject);
     }
 
@@ -70,18 +57,19 @@ public abstract class NativeObject : IEquatable<NativeObject>
     }
 
     // Overload operator ==
+    // NOTE: This operator is expensive because it calls IsValid() which may involve native calls.
+    // For performance-critical code (like per-frame checks), use ReferenceEquals(obj, null) instead.
     public static bool operator ==(NativeObject left, NativeObject right)
-    {
-        if (ReferenceEquals(left, right))
-            return true;
+    {        // // Fast path: if either is actually null (reference), treat as null
+        if (!ReferenceEquals(left, null))
+            return left.Equals(right);
+        
+        
+        if (!ReferenceEquals(right, null))
+            return right.Equals(left);
+        
 
-        if (ReferenceEquals(left, null) || !left.IsValid())
-            return ReferenceEquals(right, null) || !right.IsValid();
-
-        if (ReferenceEquals(right, null) || !right.IsValid())
-            return false;
-
-        return left.Equals(right);
+        return true;
     }
 
     // Overload operator !=

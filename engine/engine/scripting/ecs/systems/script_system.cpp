@@ -301,6 +301,11 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     // print_assembly_info(assembly);
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
+    
+    // Cache methods to avoid repeated allocations every frame
+    cache_.update_method = cache_.update_manager_type.get_method("internal_n2m_update", 1);
+    cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
+    cache_.late_update_method = cache_.update_manager_type.get_method("internal_n2m_late_update", 0);
 
     return true;
 }
@@ -556,7 +561,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
     }
 
     is_updating_ = true;
-
+    
     try
     {
         if(!app_domain_ || !domain_)
@@ -597,8 +602,9 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             data.delta_time = dt.count();
             data.time_scale = time_scale;
             data.frame_count = sim.get_frame();
-            auto method_thunk =
-                mono::make_method_invoker<void(update_data)>(cache_.update_manager_type, "internal_n2m_update");
+            
+            // Use cached method to avoid repeated allocations
+            auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.update_method);
             method_thunk(data);
 
             elapsed_time_ += dt;
@@ -646,8 +652,9 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 
             update_data data;
             data.fixed_delta_time = dt.count();
-            auto method_thunk =
-                mono::make_method_invoker<void(update_data)>(cache_.update_manager_type, "internal_n2m_fixed_update");
+            
+            // Use cached method to avoid repeated allocations
+            auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
             method_thunk(data);
         }
     }
@@ -676,8 +683,8 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
 
         if(ev.is_playing && dt > delta_t::zero())
         {
-            auto method_thunk =
-                mono::make_method_invoker<void()>(cache_.update_manager_type, "internal_n2m_late_update");
+            // Use cached method to avoid repeated allocations
+            auto method_thunk = mono::make_method_invoker<void()>(cache_.late_update_method);
             method_thunk();
         }
     }

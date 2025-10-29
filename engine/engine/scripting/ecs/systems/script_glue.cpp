@@ -4390,6 +4390,12 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         auto reg = mono::internal_call_registry("Unravel.Core.Time");
         reg.add_internal_call("internal_m2n_set_time_scale", internal_call(internal_m2n_set_time_scale));
     }
+    
+    {
+        auto reg = mono::internal_call_registry("Unravel.Core.GCMonitor");
+        reg.add_internal_call("internal_m2n_get_mono_heap_size", internal_call(mono::gc_get_heap_size));
+        reg.add_internal_call("internal_m2n_get_mono_used_size", internal_call(mono::gc_get_used_size));
+    }
 
     // mono::managed_interface::init(assembly);
 

@@ -70,6 +70,17 @@ public sealed class ScriptComponentManager
 
     // Type-based priorities
     private Dictionary<Type, int> typePriorities = new Dictionary<Type,int>();
+    
+    // Track components removed during invoke to avoid O(n²) LINQ queries
+    private HashSet<ScriptComponent> removedDuringInvoke = new HashSet<ScriptComponent>();
+    
+    // Cached delegates to avoid lambda allocations every frame
+    private static readonly Action<ScriptComponent> updateAction = c => c.OnUpdate();
+    private static readonly Action<ScriptComponent> fixedUpdateAction = c => c.OnFixedUpdate();
+    private static readonly Action<ScriptComponent> lateUpdateAction = c => c.OnLateUpdate();
+    
+    // Cached key selector for sorting to avoid lambda allocation
+    private static readonly Func<Entry, int> prioritySelector = e => e.Priority;
 
     public ScriptComponentManager(Dictionary<Type,int> typePriorityMap = null)
     {
@@ -89,7 +100,9 @@ public sealed class ScriptComponentManager
     /// </summary>
     public void Add(ScriptComponent comp)
     {
-        if (comp == null) return;
+        if (ReferenceEquals(comp, null)) return;
+        // if (comp == null) return;
+        
         if (isInvoking)
         {
             // Collapse operations to avoid redundant add/remove chains
@@ -111,7 +124,8 @@ public sealed class ScriptComponentManager
     /// </summary>
     public void Remove(ScriptComponent comp)
     {
-        if (comp == null) return;
+        if (ReferenceEquals(comp, null)) return;
+        // if (comp == null) return;
 
         if (isInvoking)
         {
@@ -132,24 +146,28 @@ public sealed class ScriptComponentManager
     {
         entries.Clear();
         pendingOps.Clear();
+        removedDuringInvoke.Clear();
         isInvoking = false;
     }
 
     // If you want more update passes, you can replicate:
-    public void InvokeUpdate() => InvokeInternal(c => c.OnUpdate());
-    public void InvokeFixedUpdate() => InvokeInternal(c => c.OnFixedUpdate());
-    public void InvokeLateUpdate() => InvokeInternal(c => c.OnLateUpdate());
+    public void InvokeUpdate() => InvokeInternal(updateAction);
+    public void InvokeFixedUpdate() => InvokeInternal(fixedUpdateAction);
+    public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction);
 
     // The core logic for iteration in priority order, plus deferred add & remove cleanup
     private void InvokeInternal(Action<ScriptComponent> action)
     {
         isInvoking = true;
+        removedDuringInvoke.Clear(); // Clear at start of invocation
+        
         try
         {
             // Iterate in current sorted order
             foreach (var entry in entries)
             {
-                if (entry.Comp != null && !IsRemoved(entry.Comp))
+                if (!ReferenceEquals(entry.Comp, null) && !removedDuringInvoke.Contains(entry.Comp))
+                // if (entry.Comp != null && !removedDuringInvoke.Contains(entry.Comp))
                 {
                     action(entry.Comp);
                 }
@@ -186,8 +204,8 @@ public sealed class ScriptComponentManager
         // Re-sort
         //entries.Sort((a, b) => a.Priority.CompareTo(b.Priority));
 
-        // Use your stable mergesort extension:
-        entries.StableSort(e => e.Priority);
+        // Use cached key selector and pooling to avoid allocations
+        entries.StableSort(prioritySelector, null, usePooling: true);
     }
 
     /// <summary>
@@ -210,7 +228,14 @@ public sealed class ScriptComponentManager
     }
     private void RemoveComponent(ScriptComponent comp)
     {
-        entries.RemoveAll(e => e.Comp == comp);
+        // Use manual loop instead of RemoveAll to avoid lambda allocation
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            if (entries[i].Comp == comp)
+            {
+                entries.RemoveAt(i);
+            }
+        }
     }
 
     // Retrieve or default a priority for this comp
@@ -220,11 +245,6 @@ public sealed class ScriptComponentManager
         if (typePriorities.TryGetValue(t, out int p))
             return p;
         return 100; // fallback
-    }
-    
-    private bool IsRemoved(ScriptComponent comp)
-    {
-        return pendingOps.Any(op => op.Comp == comp && !op.add);
     }
 
     /// <summary>
@@ -249,6 +269,12 @@ public sealed class ScriptComponentManager
         {
             // No previous operations for this component, just add the new one
             pendingOps.Add(new PendingOp { add = isAdd, Comp = comp });
+            
+            // Track removal for fast lookup during invoke
+            if (!isAdd)
+            {
+                removedDuringInvoke.Add(comp);
+            }
         }
         else
         {
@@ -258,11 +284,13 @@ public sealed class ScriptComponentManager
             {
                 // Last was add, this is remove -> cancel both operations
                 pendingOps.RemoveAt(lastOpIndex);
+                removedDuringInvoke.Add(comp);
             }
             else if (!lastOp.add && isAdd)
             {
                 // Last was remove, this is add -> cancel both operations
                 pendingOps.RemoveAt(lastOpIndex);
+                removedDuringInvoke.Remove(comp);
             }
             else if (lastOp.add && isAdd)
             {
@@ -292,10 +320,64 @@ public sealed class ScriptComponentManager
 }
 
 
-
+public class GCMonitor
+{
+    private int lastGen0Count;
+    private int lastGen1Count;
+    private int lastGen2Count;
+    private long lastMemory;
+    
+    public GCMonitor()
+    {
+        Reset();
+    }
+    
+    public void Reset()
+    {
+        lastGen0Count = GC.CollectionCount(0);
+        lastGen1Count = GC.CollectionCount(1);
+        lastGen2Count = GC.CollectionCount(2);
+        lastMemory = GC.GetTotalMemory(false);
+    }
+    
+    public void CheckAndLog(string context = "")
+    {
+        int gen0 = GC.CollectionCount(0);
+        int gen1 = GC.CollectionCount(1);
+        int gen2 = GC.CollectionCount(2);
+        long memory = GC.GetTotalMemory(false);
+        
+        int gen0Delta = gen0 - lastGen0Count;
+        int gen1Delta = gen1 - lastGen1Count;
+        int gen2Delta = gen2 - lastGen2Count;
+        long memDelta = memory - lastMemory;
+        
+        // Log every time (even if no change) for debugging
+        if (gen0Delta > 0 || gen1Delta > 0 || gen2Delta > 0 || Math.Abs(memDelta) > 1024)
+        {
+            // Get Mono heap size (native memory used by Mono runtime)
+            long monoHeap = internal_m2n_get_mono_heap_size();
+            long monoUsed = internal_m2n_get_mono_used_size();
+            
+            Log.Info($"[GC] {context} - Collections: Gen0={gen0Delta}, Gen1={gen1Delta}, Gen2={gen2Delta} | Managed: {memDelta / 1024.0:F2} KB (Total: {memory / 1024.0:F2} KB) | Mono Heap: {monoHeap / (1024.0 * 1024.0):F2} MB (Used: {monoUsed / (1024.0 * 1024.0):F2} MB)");
+        }
+        
+        lastGen0Count = gen0;
+        lastGen1Count = gen1;
+        lastGen2Count = gen2;
+        lastMemory = memory;
+    }
+    
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern long internal_m2n_get_mono_heap_size();
+    
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern long internal_m2n_get_mono_used_size();
+}
 public static class SystemManager
 {
     public static ScriptComponentManager ScriptManager = new ScriptComponentManager();
+    private static GCMonitor gcMonitor = new GCMonitor();
     public static void internal_n2m_update(UpdateInfo info)
     {
         Time.time = info.time;
@@ -303,8 +385,9 @@ public static class SystemManager
         Time._timeScale = info.timeScale;
         Time.frameCount = info.frameCount;
 
+        // gcMonitor.Reset();
         ScriptManager.InvokeUpdate();
-
+        // gcMonitor.CheckAndLog("Update");
     }
 
 
