@@ -2,6 +2,7 @@
 #include "engine/profiler/profiler.h"
 #include "imgui/imgui.h"
 #include "logging/logging.h"
+#include "simulation/simulation.h"
 #include <chrono>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
@@ -184,6 +185,8 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
     undo_stack.clear();
     pending_actions.clear();
+
+    ctx.get_cached<simulation>().set_time_scale(1.0f);
 }
 
 void editing_manager::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)

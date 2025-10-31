@@ -4,19 +4,20 @@
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
-#include <engine/assets/impl/asset_manifest.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/assets/impl/asset_manifest.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/ecs.h>
 #include <engine/ecs/prefab.h>
 #include <engine/events.h>
 #include <engine/physics/physics_material.h>
+#include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
-#include <engine/rendering/font.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/scripting/script.h>
+
 
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/threading/threader.h>
@@ -53,21 +54,22 @@ auto checking_dependencies_job_name() -> std::string
 auto needs_recompilation(const fs::path& source_file_path, const fs::path& compiled_output_path) -> bool
 {
     fs::error_code err;
-    
+
     // If output doesn't exist, we need to compile
     if(!fs::exists(compiled_output_path, err) || err)
     {
         return true;
     }
-    
+
     // Check if manifest exists
     auto manifest_path = asset_compiler::get_manifest_path(compiled_output_path);
     if(!fs::exists(manifest_path, err) || err)
     {
-        // APPLOG_TRACE("Manifest missing for {}, cannot check if recompilation is needed", compiled_output_path.string());
+        // APPLOG_TRACE("Manifest missing for {}, cannot check if recompilation is needed",
+        // compiled_output_path.string());
         return true;
     }
-    
+
     // Load manifest and check if source has changed
     asset_compiler::asset_manifest manifest;
     if(!asset_compiler::load_manifest(manifest_path, manifest))
@@ -75,14 +77,14 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
         APPLOG_TRACE("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-    
+
     // Check if source file has changed
     if(asset_compiler::is_source_file_changed(source_file_path, manifest))
     {
         APPLOG_TRACE("Source file changed for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-    
+
     // APPLOG_TRACE("Asset {} is up to date, skipping compilation", compiled_output_path.string());
     return false;
 }
@@ -90,9 +92,7 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
 template<typename T>
 void resolve_includes(const fs::path& file_path, std::set<fs::path>& processed_files)
 {
-    
 }
-
 
 template<>
 void resolve_includes<gfx::shader>(const fs::path& file_path, std::set<fs::path>& processed_files)
@@ -162,23 +162,23 @@ auto extract_href_from_link_tag(hpp::string_view link_tag) -> hpp::string_view
     {
         return {};
     }
-    
+
     href_pos += 5; // Move past "href="
-    
+
     // Find the quote character (either " or ')
     char quote_char = link_tag[href_pos];
     if(quote_char != '"' && quote_char != '\'')
     {
         return {};
     }
-    
+
     href_pos++; // Move past the opening quote
     size_t href_end = link_tag.find(quote_char, href_pos);
     if(href_end == std::string::npos)
     {
         return {};
     }
-    
+
     return link_tag.substr(href_pos, href_end - href_pos);
 }
 
@@ -189,7 +189,7 @@ auto resolve_ui_tree_dependency_path(const fs::path& href_value, const fs::path&
         // Handle protocol paths like "engine:/data/ui/rml.rcss"
         return fs::resolve_protocol(href_value);
     }
-    
+
     // Resolve relative path
     return fs::absolute(base_file_path.parent_path() / href_value);
 }
@@ -223,11 +223,11 @@ void resolve_includes<ui_tree>(const fs::path& file_path, std::set<fs::path>& pr
 
         hpp::string_view link_tag = content.substr(pos, tag_end - pos + 1);
         hpp::string_view href_value = extract_href_from_link_tag(link_tag);
-        
+
         if(!href_value.empty())
         {
             fs::path resolved_path = resolve_ui_tree_dependency_path(fs::path(href_value), file_path);
-            
+
             // Recurse into the included file if it's a supported dependency format
             const auto& supported_deps = ex::get_suported_dependencies_formats<ui_tree>();
             auto extension = resolved_path.extension().string();
@@ -236,7 +236,7 @@ void resolve_includes<ui_tree>(const fs::path& file_path, std::set<fs::path>& pr
                 resolve_includes<ui_tree>(resolved_path, processed_files);
             }
         }
-        
+
         pos = tag_end + 1;
     }
 }
@@ -279,7 +279,8 @@ auto get_asset_key(const fs::path& path) -> std::string
 {
     auto p = fs::reduce_trailing_extensions(path);
     auto data_key = fs::convert_to_protocol(p);
-    auto key = fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_data_directory()).generic_string();
+    auto key =
+        fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_data_directory()).generic_string();
     return key;
 }
 
@@ -287,7 +288,8 @@ auto get_meta_key(const fs::path& path) -> std::string
 {
     auto p = fs::reduce_trailing_extensions(path);
     auto data_key = fs::convert_to_protocol(p);
-    auto key = fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_meta_directory()).generic_string();
+    auto key =
+        fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_meta_directory()).generic_string();
     return key + ".meta";
 }
 
@@ -316,7 +318,8 @@ auto check_files_integrity(const std::string& key, const fs::path& entry_path) -
 }
 
 template<typename T>
-auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_filter& filter, bool reload_async) -> uint64_t
+auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_filter& filter, bool reload_async)
+    -> uint64_t
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto& ts = ctx.get_cached<threader>();
@@ -433,20 +436,20 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
                 else // created or modified
                 {
                     auto task = ts.pool->schedule(checking_dependencies_job_name<T>(),
-                        [&am, entry]()
-                        {
-                            auto assets = am.get_assets<T>();
-                            for(const auto& asset : assets)
-                            {
-                                auto meta = am.get_metadata(asset.uid());
-                                auto absolute_path = fs::resolve_protocol(meta.location);
+                                                  [&am, entry]()
+                                                  {
+                                                      auto assets = am.get_assets<T>();
+                                                      for(const auto& asset : assets)
+                                                      {
+                                                          auto meta = am.get_metadata(asset.uid());
+                                                          auto absolute_path = fs::resolve_protocol(meta.location);
 
-                                if(has_depencency<T>(absolute_path, entry.path))
-                                {
-                                    fs::watcher::touch(absolute_path, false);
-                                }
-                            }
-                        });
+                                                          if(has_depencency<T>(absolute_path, entry.path))
+                                                          {
+                                                              fs::watcher::touch(absolute_path, false);
+                                                          }
+                                                      }
+                                                  });
                 }
             }
         }
@@ -476,22 +479,27 @@ static void add_to_syncer(rtti::context& ctx,
             {
                 continue;
             }
-            
+
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
                 auto task = ts.pool->schedule(get_job_name<T>(),
-                    [&am, ref_path, output]()
-                    {
-                        asset_compiler::compile<T>(am, ref_path, output);
-                    });
+                                              [&am, ref_path, output]()
+                                              {
+                                                  asset_compiler::compile<T>(am, ref_path, output);
+                                              });
             }
         }
     };
 
     for(const auto& type : ex::get_suported_formats<T>())
     {
-        syncer.set_mapping(type + ".meta", {".asset"}, on_modified, on_modified, on_removed, on_renamed);
+        syncer.set_mapping(type + ".meta",
+                           {".asset", ".asset.manifest"},
+                           on_modified,
+                           on_modified,
+                           on_removed,
+                           on_renamed);
     }
 }
 
@@ -544,10 +552,10 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
             if(check_files_integrity(key, output))
             {
                 auto task = ts.pool->schedule(get_job_name<gfx::shader>(),
-                    [&am, ref_path, output]()
-                    {
-                        asset_compiler::compile<gfx::shader>(am, ref_path, output);
-                    });
+                                              [&am, ref_path, output]()
+                                              {
+                                                  asset_compiler::compile<gfx::shader>(am, ref_path, output);
+                                              });
             }
         }
     };
@@ -555,7 +563,14 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
     for(const auto& type : ex::get_suported_formats<gfx::shader>())
     {
         syncer.set_mapping(type + ".meta",
-                           {".asset.dx11", ".asset.dx12", ".asset.gl", ".asset.spirv"},
+                           {".asset.dx11",
+                            ".asset.dx11.manifest",
+                            ".asset.dx12",
+                            ".asset.dx12.manifest",
+                            ".asset.gl",
+                            ".asset.gl.manifest",
+                            ".asset.spirv",
+                            ".asset.spirv.manifest"},
                            on_modified,
                            on_modified,
                            on_removed,
@@ -569,11 +584,11 @@ void watch_synced<gfx::shader>(rtti::context& ctx, std::vector<uint64_t>& watche
     const auto& renderer_extension = gfx::get_current_renderer_filename_extension();
     for(const auto& type : ex::get_suported_formats<gfx::shader>())
     {
-        const auto watch_id = watch_assets<gfx::shader>(ctx, dir, fs::pattern_filter("*" + type + ".asset" + renderer_extension), true);
+        const auto watch_id =
+            watch_assets<gfx::shader>(ctx, dir, fs::pattern_filter("*" + type + ".asset" + renderer_extension), true);
         watchers.push_back(watch_id);
     }
 }
-
 
 } // namespace
 
@@ -765,7 +780,6 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
 {
     if(e.type == os::events::window)
     {
-        
         if(e.window.type == os::window_event_id::focus_lost)
         {
             if(!os::window::is_any_focused())
