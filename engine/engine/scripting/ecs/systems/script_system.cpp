@@ -288,7 +288,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         }
     }
 
-    domain_ = std::make_unique<mono::mono_domain>("Ace.Engine");
+    domain_ = std::make_unique<mono::mono_domain>("Unravel.Engine");
     mono::mono_domain::set_current_domain(domain_.get());
 
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
@@ -297,7 +297,6 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     copy_compiled_lib(engine_script_lib_temp, engine_script_lib);
 
     auto assembly = domain_->get_assembly(engine_script_lib.string());
-    domain_->name_assembly(engine_script_lib.string(), "Unravel.Engine");
     // print_assembly_info(assembly);
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
@@ -329,7 +328,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         has_compilation_errors_ = !result;
     }
 
-    app_domain_ = std::make_unique<mono::mono_domain>("Ace.App");
+    app_domain_ = std::make_unique<mono::mono_domain>("Unravel.App");
     mono::mono_domain::set_current_domain(app_domain_.get());
 
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
@@ -351,7 +350,6 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
     try
     {
         auto assembly = app_domain_->get_assembly(app_script_lib.string());
-        app_domain_->name_assembly(app_script_lib.string(), "Ace.App");
         // print_assembly_info(assembly);
 
         auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));

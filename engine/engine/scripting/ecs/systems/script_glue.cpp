@@ -1,3 +1,4 @@
+#include "monopp/mono_array.h"
 #include "script_interop.h"
 #include "script_system.h"
 #include <engine/ecs/ecs.h>
@@ -658,7 +659,8 @@ auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) ->
     return {};
 }
 
-auto internal_m2n_get_components(entt::entity id, const mono::mono_type& type) -> std::vector<mono::mono_object>
+
+auto internal_m2n_get_components_impl(entt::entity id, const mono::mono_type& type) -> std::vector<mono::mono_object>
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -677,8 +679,19 @@ auto internal_m2n_get_components(entt::entity id, const mono::mono_type& type) -
     return script_comp.get_script_components(type);
 }
 
+auto internal_m2n_get_components(entt::entity id, const mono::mono_type& type) -> mono::mono_array<mono::mono_object>
+{
+    auto components = internal_m2n_get_components_impl(id, type);
+    return mono::mono_array<mono::mono_object>(components, type);
+}
+
 auto internal_m2n_get_component_in_children(entt::entity id, const mono::mono_type& type) -> mono::mono_object
 {
+    auto comp = internal_m2n_get_component(id, type);
+    if(comp.valid())
+    {
+        return comp;
+    }
     if(auto comp = safe_get_component<transform_component>(id))
     {
         const auto& children = comp->get_children();
@@ -695,19 +708,19 @@ auto internal_m2n_get_component_in_children(entt::entity id, const mono::mono_ty
 }
 
 auto internal_m2n_get_components_in_children(entt::entity id, const mono::mono_type& type)
-    -> hpp::small_vector<mono::mono_object>
+    -> mono::mono_array<mono::mono_object>
 {
-    hpp::small_vector<mono::mono_object> components;
+    auto components = internal_m2n_get_components_impl(id, type);
     if(auto comp = safe_get_component<transform_component>(id))
     {
         const auto& children = comp->get_children();
         for(const auto& child : children)
         {
-            auto child_components = internal_m2n_get_components(child, type);
+            auto child_components = internal_m2n_get_components_impl(child, type);
             std::move(child_components.begin(), child_components.end(), std::back_inserter(components));
         }
     }
-    return components;
+    return mono::mono_array<mono::mono_object>(components, type);
 }
 
 auto internal_m2n_get_transform_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object

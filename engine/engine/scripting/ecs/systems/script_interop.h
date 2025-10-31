@@ -21,8 +21,7 @@ struct mono_converter<hpp::small_vector<T, StaticCapacity>>
 
     static auto to_mono(const native_type& obj) -> managed_type
     {
-        const auto& domain = mono_domain::get_current_domain();
-        return mono_array<T>(domain, obj).get_internal_ptr();
+        return mono_array<T>(obj).get_internal_ptr();
     }
 
     static auto from_mono(const managed_type& obj) -> native_type
@@ -34,6 +33,31 @@ struct mono_converter<hpp::small_vector<T, StaticCapacity>>
         return mono_array<T>(mono_object(obj)).template to_vector<native_type>();
     }
 };
+
+// template <typename T, size_t StaticCapacity>
+// struct mono_converter<vector_like_wrapper<hpp::small_vector<T, StaticCapacity>>>
+// {
+//     using native_type = vector_like_wrapper<hpp::small_vector<T, StaticCapacity>>;
+//     using managed_type = MonoObject*;
+
+//     static auto to_mono(const native_type& obj) -> managed_type
+//     {
+//         return mono_array<T>(obj.container, obj.type).get_internal_ptr();
+//     }
+
+//     static auto from_mono(const managed_type& obj) -> native_type
+//     {
+//         if(!obj)
+//         {
+//             return {};
+//         }
+//         auto array = mono_array<T>(mono_object(obj));
+//         native_type result;
+//         result.container = array.template to_vector<hpp::small_vector<T, StaticCapacity>>();
+//         result.type = array.get_element_type();
+//         return result;
+//     }
+// };
 
 
 namespace managed_interface
