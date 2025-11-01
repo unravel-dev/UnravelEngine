@@ -360,10 +360,21 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
         [&](auto e, auto&& camera)
         {
             auto viewport = camera.get_viewport_size();
+
+
+            auto& input = ctx.get_cached<input_system>();
+            auto work_zone = input.manager.get_work_zone();
+
             RmlUi_Backend_Engine::set_viewport(viewport.width, viewport.height);
             ui_context_->SetDimensions(Rml::Vector2i(viewport.width, viewport.height));
 
+            
+            // Match UI physical size to window
+            float ratio_x = static_cast<float>( viewport.width) / static_cast<float>(work_zone.w);
+            float ratio_y = static_cast<float>( viewport.height) / static_cast<float>(work_zone.h);
+            ui_context_->SetDensityIndependentPixelRatio((ratio_x + ratio_y) * 0.5f); // usually same ratio both axes
 
+            
         });
 
     // Iterate over all entities with ui_document_component

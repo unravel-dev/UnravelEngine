@@ -30,6 +30,20 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Text style flags for decorations and effects, matching gfx::text_style_flags.
+    /// </summary>
+    [Flags]
+    public enum TextStyleFlags : uint
+    {
+        Normal         = 0,
+        Overline       = 1,
+        Underline      = 1 << 1,
+        StrikeThrough  = 1 << 2,
+        Background     = 1 << 3,
+        Foreground     = 1 << 4,
+    }
+
+    /// <summary>
     /// Mirrors ace::text_component, letting scripts manage text rendering via properties.
     /// </summary>
     public class TextComponent : Component
@@ -163,6 +177,99 @@ namespace Unravel.Core
             get => internal_m2n_text_get_render_bounds(owner);
         }
 
+        // ==== Text Style Properties ====
+
+        /// <summary> Text opacity (0.0 to 1.0). </summary>
+        public float opacity
+        {
+            get => internal_m2n_text_get_opacity(owner);
+            set => internal_m2n_text_set_opacity(owner, value);
+        }
+
+        /// <summary> Main text color. </summary>
+        public Color color
+        {
+            get => internal_m2n_text_get_text_color(owner);
+            set => internal_m2n_text_set_text_color(owner, value);
+        }
+
+        /// <summary> Background color behind text. </summary>
+        public Color backgroundColor
+        {
+            get => internal_m2n_text_get_background_color(owner);
+            set => internal_m2n_text_set_background_color(owner, value);
+        }
+
+        /// <summary> Foreground color overlay. </summary>
+        public Color foregroundColor
+        {
+            get => internal_m2n_text_get_foreground_color(owner);
+            set => internal_m2n_text_set_foreground_color(owner, value);
+        }
+
+        /// <summary> Color of overline decoration. </summary>
+        public Color overlineColor
+        {
+            get => internal_m2n_text_get_overline_color(owner);
+            set => internal_m2n_text_set_overline_color(owner, value);
+        }
+
+        /// <summary> Color of underline decoration. </summary>
+        public Color underlineColor
+        {
+            get => internal_m2n_text_get_underline_color(owner);
+            set => internal_m2n_text_set_underline_color(owner, value);
+        }
+
+        /// <summary> Color of strikethrough decoration. </summary>
+        public Color strikeColor
+        {
+            get => internal_m2n_text_get_strike_color(owner);
+            set => internal_m2n_text_set_strike_color(owner, value);
+        }
+
+        /// <summary> Color of text outline. </summary>
+        public Color outlineColor
+        {
+            get => internal_m2n_text_get_outline_color(owner);
+            set => internal_m2n_text_set_outline_color(owner, value);
+        }
+
+        /// <summary> Width of text outline. </summary>
+        public float outlineWidth
+        {
+            get => internal_m2n_text_get_outline_width(owner);
+            set => internal_m2n_text_set_outline_width(owner, value);
+        }
+
+        /// <summary> Shadow offset (x, y). </summary>
+        public Vector2 shadowOffsets
+        {
+            get => internal_m2n_text_get_shadow_offsets(owner);
+            set => internal_m2n_text_set_shadow_offsets(owner, value);
+        }
+
+        /// <summary> Color of text shadow. </summary>
+        public Color shadowColor
+        {
+            get => internal_m2n_text_get_shadow_color(owner);
+            set => internal_m2n_text_set_shadow_color(owner, value);
+        }
+
+        /// <summary> Shadow softness/blur amount. </summary>
+        public float shadowSoftener
+        {
+            get => internal_m2n_text_get_shadow_softener(owner);
+            set => internal_m2n_text_set_shadow_softener(owner, value);
+        }
+
+        /// <summary> Text style flags for decorations and effects. </summary>
+        public TextStyleFlags styleFlags
+        {
+            get => (TextStyleFlags)internal_m2n_text_get_style_flags(owner);
+            set => internal_m2n_text_set_style_flags(owner, (uint)value);
+        }
+
         // ==== Internal Calls ====
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -238,5 +345,85 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Bounds internal_m2n_text_get_render_bounds(Entity eid);
+
+        // ==== Text Style Internal Calls ====
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_opacity(Entity eid, float opacity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_text_get_opacity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_text_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_text_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_background_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_background_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_foreground_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_foreground_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_overline_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_overline_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_underline_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_underline_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_strike_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_strike_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_outline_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_outline_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_outline_width(Entity eid, float width);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_text_get_outline_width(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_shadow_offsets(Entity eid, Vector2 offsets);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector2 internal_m2n_text_get_shadow_offsets(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_shadow_color(Entity eid, Color color);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_text_get_shadow_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_shadow_softener(Entity eid, float softener);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_text_get_shadow_softener(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_text_set_style_flags(Entity eid, uint flags);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_text_get_style_flags(Entity eid);
     }
 }

@@ -64,6 +64,7 @@ public:
     void set_window_zone(const zone& window_zone);
     void set_work_zone(const zone& work_zone);
     void set_reference_size(const input_reference_size& reference_size);
+    auto get_work_zone() const -> zone;
 
     auto remap_to_work_zone(coord global_pos) -> coord;
     auto is_inside_work_zone(coord global_pos) -> bool;

@@ -104,6 +104,21 @@ void os_input_manager::set_reference_size(const input_reference_size& reference_
     input_reference_size_ = reference_size;
 }
 
+auto os_input_manager::get_work_zone() const -> zone
+{
+
+    if(work_input_zone_)
+    {
+        return *work_input_zone_;
+    }
+    if(window_input_zone_)
+    {
+        return *window_input_zone_;
+    }
+
+    return {0, 0, 1024, 768};
+}
+
 void os_input_manager::on_os_event(const os::event& e)
 {
     switch(e.type)
@@ -260,7 +275,6 @@ auto os_input_manager::is_inside_work_zone(coord pos) -> bool
     auto right = work_zone.w;
     auto top = 0;
     auto bottom = work_zone.h;
-
 
     if(input_reference_size_)
     {

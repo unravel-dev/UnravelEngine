@@ -2319,6 +2319,256 @@ auto internal_m2n_text_get_render_bounds(entt::entity id) -> math::bbox
 
     return math::bbox::empty;
 }
+
+// ==== Text Style Functions ====
+
+void internal_m2n_text_set_opacity(entt::entity id, float opacity)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_opacity(opacity);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_opacity(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_opacity();
+    }
+    return 1.0f;
+}
+
+void internal_m2n_text_set_text_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_text_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_text_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_text_color();
+    }
+    return math::color::white();
+}
+
+void internal_m2n_text_set_background_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_background_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_background_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_background_color();
+    }
+    return math::color::transparent();
+}
+
+void internal_m2n_text_set_foreground_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_foreground_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_foreground_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_foreground_color();
+    }
+    return math::color::transparent();
+}
+
+void internal_m2n_text_set_overline_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_overline_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_overline_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_overline_color();
+    }
+    return math::color::white();
+}
+
+void internal_m2n_text_set_underline_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_underline_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_underline_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_underline_color();
+    }
+    return math::color::white();
+}
+
+void internal_m2n_text_set_strike_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_strike_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_strike_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_strike_color();
+    }
+    return math::color::white();
+}
+
+void internal_m2n_text_set_outline_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_outline_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_outline_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_outline_color();
+    }
+    return math::color::black();
+}
+
+void internal_m2n_text_set_outline_width(entt::entity id, float width)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.outline_width = width;
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_outline_width(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().outline_width;
+    }
+    return 0.0f;
+}
+
+void internal_m2n_text_set_shadow_offsets(entt::entity id, math::vec2 offsets)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.shadow_offsets = offsets;
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_shadow_offsets(entt::entity id) -> math::vec2
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().shadow_offsets;
+    }
+    return {0.0f, 0.0f};
+}
+
+void internal_m2n_text_set_shadow_color(entt::entity id, math::color color)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_shadow_color(color);
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_shadow_color(entt::entity id) -> math::color
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_shadow_color();
+    }
+    return math::color::black();
+}
+
+void internal_m2n_text_set_shadow_softener(entt::entity id, float softener)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.shadow_softener = softener;
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_shadow_softener(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().shadow_softener;
+    }
+    return 1.0f;
+}
+
+void internal_m2n_text_set_style_flags(entt::entity id, uint32_t flags)
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        auto style = comp->get_style();
+        style.set_style_flags({flags});
+        comp->set_style(style);
+    }
+}
+
+auto internal_m2n_text_get_style_flags(entt::entity id) -> uint32_t
+{
+    if(auto comp = safe_get_component<text_component>(id))
+    {
+        return comp->get_style().get_style_flags().flags;
+    }
+    return gfx::style_normal;
+}
+
 //------------------------------
 
 void internal_m2n_light_set_color(entt::entity id, const math::color& color)
@@ -4198,7 +4448,35 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_text_set_alignment", internal_call(internal_m2n_text_set_alignment));
 
         reg.add_internal_call("internal_m2n_text_get_bounds", internal_call(internal_m2n_text_get_bounds));
-        reg.add_internal_call("internal_m2n_text_get_render_bounds", internal_call(internal_m2n_text_get_bounds));
+        reg.add_internal_call("internal_m2n_text_get_render_bounds", internal_call(internal_m2n_text_get_render_bounds));
+
+        // Text Style Functions
+        reg.add_internal_call("internal_m2n_text_set_opacity", internal_call(internal_m2n_text_set_opacity));
+        reg.add_internal_call("internal_m2n_text_get_opacity", internal_call(internal_m2n_text_get_opacity));
+        reg.add_internal_call("internal_m2n_text_set_text_color", internal_call(internal_m2n_text_set_text_color));
+        reg.add_internal_call("internal_m2n_text_get_text_color", internal_call(internal_m2n_text_get_text_color));
+        reg.add_internal_call("internal_m2n_text_set_background_color", internal_call(internal_m2n_text_set_background_color));
+        reg.add_internal_call("internal_m2n_text_get_background_color", internal_call(internal_m2n_text_get_background_color));
+        reg.add_internal_call("internal_m2n_text_set_foreground_color", internal_call(internal_m2n_text_set_foreground_color));
+        reg.add_internal_call("internal_m2n_text_get_foreground_color", internal_call(internal_m2n_text_get_foreground_color));
+        reg.add_internal_call("internal_m2n_text_set_overline_color", internal_call(internal_m2n_text_set_overline_color));
+        reg.add_internal_call("internal_m2n_text_get_overline_color", internal_call(internal_m2n_text_get_overline_color));
+        reg.add_internal_call("internal_m2n_text_set_underline_color", internal_call(internal_m2n_text_set_underline_color));
+        reg.add_internal_call("internal_m2n_text_get_underline_color", internal_call(internal_m2n_text_get_underline_color));
+        reg.add_internal_call("internal_m2n_text_set_strike_color", internal_call(internal_m2n_text_set_strike_color));
+        reg.add_internal_call("internal_m2n_text_get_strike_color", internal_call(internal_m2n_text_get_strike_color));
+        reg.add_internal_call("internal_m2n_text_set_outline_color", internal_call(internal_m2n_text_set_outline_color));
+        reg.add_internal_call("internal_m2n_text_get_outline_color", internal_call(internal_m2n_text_get_outline_color));
+        reg.add_internal_call("internal_m2n_text_set_outline_width", internal_call(internal_m2n_text_set_outline_width));
+        reg.add_internal_call("internal_m2n_text_get_outline_width", internal_call(internal_m2n_text_get_outline_width));
+        reg.add_internal_call("internal_m2n_text_set_shadow_offsets", internal_call(internal_m2n_text_set_shadow_offsets));
+        reg.add_internal_call("internal_m2n_text_get_shadow_offsets", internal_call(internal_m2n_text_get_shadow_offsets));
+        reg.add_internal_call("internal_m2n_text_set_shadow_color", internal_call(internal_m2n_text_set_shadow_color));
+        reg.add_internal_call("internal_m2n_text_get_shadow_color", internal_call(internal_m2n_text_get_shadow_color));
+        reg.add_internal_call("internal_m2n_text_set_shadow_softener", internal_call(internal_m2n_text_set_shadow_softener));
+        reg.add_internal_call("internal_m2n_text_get_shadow_softener", internal_call(internal_m2n_text_get_shadow_softener));
+        reg.add_internal_call("internal_m2n_text_set_style_flags", internal_call(internal_m2n_text_set_style_flags));
+        reg.add_internal_call("internal_m2n_text_get_style_flags", internal_call(internal_m2n_text_get_style_flags));
     }
 
     {
