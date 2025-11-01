@@ -495,7 +495,7 @@ static void add_to_syncer(rtti::context& ctx,
     for(const auto& type : ex::get_suported_formats<T>())
     {
         syncer.set_mapping(type + ".meta",
-                           {".asset", ".asset.manifest"},
+                           {".asset"},
                            on_modified,
                            on_modified,
                            on_removed,
@@ -564,13 +564,9 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
     {
         syncer.set_mapping(type + ".meta",
                            {".asset.dx11",
-                            ".asset.dx11.manifest",
                             ".asset.dx12",
-                            ".asset.dx12.manifest",
                             ".asset.gl",
-                            ".asset.gl.manifest",
-                            ".asset.spirv",
-                            ".asset.spirv.manifest"},
+                            ".asset.spirv"},
                            on_modified,
                            on_modified,
                            on_removed,
@@ -715,7 +711,10 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         for(const auto& synced_path : synced_paths)
         {
             auto synced_asset = remove_meta_tag(synced_path);
+
+            auto manifest_path = asset_compiler::get_manifest_path(synced_asset);
             fs::error_code err;
+            fs::remove_all(manifest_path, err);
             fs::remove_all(synced_asset, err);
         }
     };
@@ -726,7 +725,10 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         {
             auto synced_old_asset = remove_meta_tag(synced_path.first);
             auto synced_new_asset = remove_meta_tag(synced_path.second);
+            auto manifest_old_path = asset_compiler::get_manifest_path(synced_old_asset);
+            auto manifest_new_path = asset_compiler::get_manifest_path(synced_new_asset);
             fs::error_code err;
+            fs::rename(manifest_old_path, manifest_new_path, err);
             fs::rename(synced_old_asset, synced_new_asset, err);
         }
     };

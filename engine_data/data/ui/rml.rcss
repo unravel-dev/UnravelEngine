@@ -111,7 +111,15 @@ progress
     height: 1em;
     width: 10em;
     vertical-align: -0.2em;
+
+	border-radius: 5dp;
+	border: 2dp #555555FF;
 }
+
+progress fill{
+	background-color: #4a90e2;
+}
+
 
 
 /* Forms */
@@ -215,7 +223,6 @@ input.radio {
 input.radio:hover,   input.checkbox:hover   { background-color: #ff3; }
 input.radio:active,  input.checkbox:active  { background-color: #ddd; }
 input.radio:checked, input.checkbox:checked { background-color: #555; }
-
 
 
 button {
