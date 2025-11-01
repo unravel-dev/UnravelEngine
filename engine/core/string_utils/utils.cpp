@@ -46,6 +46,13 @@ auto to_lower(const std::string& str) -> std::string
     return str_modified;
 }
 
+auto capitalize(const std::string& word) -> std::string
+{
+    auto str_modified = word;
+    alterable::capitalize(str_modified);
+    return str_modified;
+}
+
 auto extract_substring(const std::string& str, const std::string& from, const std::string& to) -> std::string
 {
     auto it_from = str.find(from);
@@ -130,6 +137,16 @@ void to_lower(std::string& str)
                    {
                        return std::tolower(c);
                    });
+}
+
+void capitalize(std::string& str)
+{
+    if (str.empty())
+    {
+        return;
+    }
+
+    str[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(str[0])));
 }
 }
 

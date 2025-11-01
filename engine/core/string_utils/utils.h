@@ -22,6 +22,8 @@ auto to_upper(const std::string& str) -> std::string;
 
 auto to_lower(const std::string& str) -> std::string;
 
+auto capitalize(const std::string& word) -> std::string;
+
 // Returns the first substring between "from - to" without trailing spaces
 auto extract_substring(const std::string& str, const std::string& from, const std::string& to) -> std::string;
 
@@ -38,6 +40,9 @@ void replace(std::string& subject, const std::string& search, const std::string&
 void to_upper(std::string& str);
 
 void to_lower(std::string& str);
+
+void capitalize(std::string& str);
+
 } // namespace alterable
 
 } // namespace string_utils

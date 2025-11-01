@@ -5,6 +5,8 @@
 #include <monopp/mono_field_invoker.h>
 #include <monopp/mono_property_invoker.h>
 
+#include <core/string_utils/utils.h>
+
 #include <graphics/texture.h>
 
 #include <engine/layers/layer_mask.h>
@@ -253,7 +255,7 @@ struct mono_field_proxy
     mono::mono_field field;
     std::string field_name;
     
-    mono_field_proxy(mono::mono_field f) : field(f), field_name(f.get_name()) {}
+    mono_field_proxy(mono::mono_field f) : field(f), field_name(string_utils::capitalize(f.get_name())) {}
     
     auto get_name() const -> std::string { return field_name; }
     
@@ -295,7 +297,7 @@ struct mono_property_proxy
     mono::mono_property property;
     std::string property_name;
     
-    mono_property_proxy(mono::mono_property p) : property(p), property_name(p.get_name()) {}
+    mono_property_proxy(mono::mono_property p) : property(p), property_name(string_utils::capitalize(p.get_name())) {}
     
     auto get_name() const -> std::string { return property_name; }
     

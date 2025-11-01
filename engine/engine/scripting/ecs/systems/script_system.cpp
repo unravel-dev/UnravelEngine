@@ -6,15 +6,18 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/profiler/profiler.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/script.h>
-#include <engine/profiler/profiler.h>
+
 
 #include <monopp/mono_exception.h>
 #include <monopp/mono_field_invoker.h>
 #include <monopp/mono_internal_call.h>
+#include <monopp/mono_logger.h>
 #include <monopp/mono_method_invoker.h>
 #include <monopp/mono_property_invoker.h>
+
 
 #include <core/base/platform/config.hpp>
 #include <filesystem/filesystem.h>
@@ -222,6 +225,27 @@ auto script_system::init(rtti::context& ctx) -> bool
 
     debug_config_.enable_debugging = true;
 
+    mono::set_log_handler("info",
+                          [](const std::string& msg)
+                          {
+                              APPLOG_INFO("{}", msg);
+                          });
+    mono::set_log_handler("trace",
+                          [](const std::string& msg)
+                          {
+                              APPLOG_TRACE("{}", msg);
+                          });
+    mono::set_log_handler("warning",
+                          [](const std::string& msg)
+                          {
+                              APPLOG_WARNING("{}", msg);
+                          });
+    mono::set_log_handler("error",
+                          [](const std::string& msg)
+                          {
+                              APPLOG_ERROR("{}", msg);
+                          });
+
     if(mono::init(mono_paths, debug_config_))
     {
         bind_internal_calls(ctx);
@@ -300,7 +324,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     // print_assembly_info(assembly);
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
-    
+
     // Cache methods to avoid repeated allocations every frame
     cache_.update_method = cache_.update_manager_type.get_method("internal_n2m_update", 1);
     cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
@@ -559,7 +583,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
     }
 
     is_updating_ = true;
-    
+
     try
     {
         if(!app_domain_ || !domain_)
@@ -600,7 +624,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             data.delta_time = dt.count();
             data.time_scale = time_scale;
             data.frame_count = sim.get_frame();
-            
+
             // Use cached method to avoid repeated allocations
             auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.update_method);
             method_thunk(data);
@@ -617,7 +641,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
 void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 {
-    //APP_SCOPE_PERF("Script/System Fixed Update");
+    // APP_SCOPE_PERF("Script/System Fixed Update");
 
     auto& ev = ctx.get_cached<events>();
 
@@ -650,7 +674,7 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 
             update_data data;
             data.fixed_delta_time = dt.count();
-            
+
             // Use cached method to avoid repeated allocations
             auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
             method_thunk(data);
@@ -796,8 +820,9 @@ void script_system::wait_for_jobs_to_finish(rtti::context& ctx)
     }
 }
 
-auto script_system::create_compilation_job(rtti::context& ctx, const std::string& protocol, bool debug)
-    -> tpp::job_future<bool>
+auto script_system::create_compilation_job(rtti::context& ctx,
+                                           const std::string& protocol,
+                                           bool debug) -> tpp::job_future<bool>
 {
     uint32_t flags = 0;
     if(debug)
@@ -807,8 +832,6 @@ auto script_system::create_compilation_job(rtti::context& ctx, const std::string
 
     auto& thr = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
-
-
 
     return thr.pool->schedule(
         "Compiling " + ex::get_type<script_library>(),

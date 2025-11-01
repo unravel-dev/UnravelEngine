@@ -1248,8 +1248,10 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
                         auto paths = script_system::find_mono(ctx);
                         fs::path assembly_path = mono::get_core_assembly_path();
-                        fs::path assembly_dir = assembly_path.parent_path().parent_path();
+                        fs::path assembly_dir = assembly_path.parent_path();
                         fs::path lib_version = assembly_dir.filename();
+
+                        fs::path assembly_dir_gac = assembly_dir.parent_path() / "gac";
 
                         fs::error_code ec;
 
@@ -1260,14 +1262,17 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
                             fs::remove_all(cached_data, ec);
 
-                            // cached_data /= lib_version;
+                            fs::path cached_data_lib_version = cached_data / lib_version;
+                            fs::path cached_data_gac = cached_data / "gac";
 
                             fs::create_directories(cached_data, ec);
 
                             APPLOG_TRACE("Copying {} -> {}",
                                          assembly_dir.generic_string(),
                                          cached_data.generic_string());
-                            fs::copy(assembly_dir, cached_data, fs::copy_options::recursive, ec);
+                            fs::copy(assembly_dir, cached_data_lib_version, fs::copy_options::recursive, ec);
+
+                            fs::copy(assembly_dir_gac, cached_data_gac, fs::copy_options::recursive, ec);
                         }
 
                         fs::path config_dir = paths.config_dir;
