@@ -4,11 +4,8 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
-
     /// <summary>
     /// Provides physics functionality for an entity.
     /// </summary>
@@ -154,5 +151,4 @@ namespace Core
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern LayerMask internal_m2n_physics_get_collision_layers(Entity eid);
     }
-}
 }

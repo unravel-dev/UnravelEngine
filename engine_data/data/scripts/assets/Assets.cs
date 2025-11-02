@@ -2,9 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
-{
-namespace Core
+namespace Unravel.Core
 {
 
 public class Assets
@@ -201,8 +199,6 @@ public class AudioClip : Asset<AudioClip>
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern float internal_m2n_audio_clip_get_length(Guid uid);
-}
-
 }
 
 }

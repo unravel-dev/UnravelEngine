@@ -1450,9 +1450,9 @@ auto mesh::get_submeshes_count() const -> size_t
     return mesh_submeshes_.size();
 }
 
-auto mesh::get_submesh(uint32_t submesh_index) const -> const mesh::submesh&
+auto mesh::get_submesh(uint32_t submesh_index) const -> const submesh*
 {
-    return *mesh_submeshes_[submesh_index];
+    return mesh_submeshes_[submesh_index];
 }
 
 auto mesh::get_submesh_index(const submesh* s) const -> int

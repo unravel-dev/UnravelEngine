@@ -623,6 +623,9 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     pass.set_view_proj(view, proj);
     pass.bind(gbuffer.get());
 
+    // Clear batch collector for this frame
+    batch_collector_.clear();
+
     for(const auto& e : visibility_set)
     {
         const auto& transform_comp = e.get<transform_component>();
@@ -644,7 +647,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         if(!base_mesh)
             continue;
 
-        if(false == update_lod_data(lod_runtime_data,
+        if(!update_lod_data(lod_runtime_data,
                                     lod_limits,
                                     lod_count,
                                     transition_time,
@@ -713,30 +716,228 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         };
 
         model_comp.set_last_render_frame(gfx::get_render_frame());
-        model.submit(world_transform,
-                     submesh_transforms,
-                     bone_transforms,
-                     skinning_matrices,
-                     current_lod_index,
-                     callbacks);
-        if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
+
+        // Check if this model can be batched (static mesh, no skinning)
+        const bool is_skinned = !skinning_matrices.empty();
+        const bool can_batch = enable_static_mesh_batching_ && !is_skinned;
+
+        if (can_batch)
         {
-            callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+            // Collect this model for batching with appropriate transforms
+            collect_model_for_batching(model, world_transform, submesh_transforms, current_lod_index, params.x);
+            
+            // Handle LOD transitions for batched models
+            if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
-
-                gfx::set_uniform(prog.u_lod_params, params);
-            };
-
+                collect_model_for_batching(model, world_transform, submesh_transforms, target_lod_index, params_inv.x);
+            }
+        }
+        else
+        {
+            // Render individually (skinned meshes, complex transforms, etc.)
             model.submit(world_transform,
                          submesh_transforms,
                          bone_transforms,
                          skinning_matrices,
-                         target_lod_index,
+                         current_lod_index,
                          callbacks);
+            if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
+            {
+                callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+                {
+                    geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
+
+                    gfx::set_uniform(prog.u_lod_params, params_inv);
+                };
+
+                model.submit(world_transform,
+                             submesh_transforms,
+                             bone_transforms,
+                             skinning_matrices,
+                             target_lod_index,
+                             callbacks);
+            }
         }
     }
+
+    // Submit all collected batches
+    if (enable_static_mesh_batching_)
+    {
+        submit_batched_geometry(pass, camera);
+    }
     gfx::discard();
+}
+
+void deferred::collect_model_for_batching(const model& model_asset, 
+                                         const math::mat4& world_transform,
+                                         const pose_mat4& submesh_transforms,
+                                         uint32_t lod_index, 
+                                         float lod_param)
+{
+    // Get the mesh for the specified LOD
+    const auto& lods = model_asset.get_lods();
+    if (lod_index >= lods.size())
+    {
+        return;
+    }
+
+    const auto& mesh_asset = lods[lod_index];
+    if (!mesh_asset)
+    {
+        return;
+    }
+
+    // Get materials for each submesh
+    const auto submesh_count = mesh_asset.get()->get_data_groups_count();
+
+    // Collect each submesh as a separate batch entry
+    for (uint32_t submesh_index = 0; submesh_index < submesh_count; ++submesh_index)
+    {
+        // Get material for this submesh
+        auto material_ptr = model_asset.get_material_instance(submesh_index);
+        if(!material_ptr)
+        {
+            continue; // Skip submeshes without valid materials
+        }
+
+        // Determine the transform pointer to use for this submesh
+        const math::mat4* transform_ptr = nullptr;
+        if (submesh_index < submesh_transforms.transforms.size())
+        {
+            // Use the specific submesh transform
+            transform_ptr = &submesh_transforms.transforms[submesh_index];
+        }
+        else
+        {
+            // Fall back to world transform if no specific submesh transform
+            transform_ptr = &world_transform;
+        }
+
+        // Create batch key
+        batch_key key(mesh_asset.get(), material_ptr, lod_index, submesh_index);
+        if (!key.is_valid())
+        {
+            continue;
+        }
+
+        // Create batch instance with the appropriate transform pointer
+        batch_instance instance(transform_ptr);
+        instance.lod_params.x = lod_param;
+
+        // Collect for batching
+        batch_collector_.collect_renderable(key, instance);
+    }
+}
+
+void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& camera)
+{
+    APP_SCOPE_PERF("Rendering/Submit Batched Geometry");
+
+    // Prepare batches for rendering
+    submit_context context;
+    context.view_id = pass.id;
+    context.camera_position = camera.get_position();
+    context.enable_distance_sorting = false; // Opaque objects don't need distance sorting
+    context.max_instances_per_batch = 1024;  // BGFX instance limit
+    context.enable_profiling = true;
+
+    batch_collector_.prepare_batches(context);
+
+    const auto& prepared_batches = batch_collector_.get_prepared_batches();
+    if (prepared_batches.empty())
+    {
+        return;
+    }
+
+    // Set up common uniforms
+    const auto camera_pos = camera.get_position();
+    const auto clip_planes = math::vec2(camera.get_near_clip(), camera.get_far_clip());
+
+    geom_program_instanced_.program->begin();
+    gfx::set_uniform(geom_program_instanced_.u_camera_wpos, camera_pos);
+    gfx::set_uniform(geom_program_instanced_.u_camera_clip_planes, clip_planes);
+
+    // Submit each batch
+    for (const auto* batch : prepared_batches)
+    {
+        if (!batch->is_valid() || batch->instances.empty())
+        {
+            continue;
+        }
+
+        stats_.drawn_models++;
+
+        // Get mesh and material from batch key
+        const auto& mesh_ptr = batch->key.mesh_ptr;
+        const auto& material_ptr = batch->key.material_ptr;
+        const auto lod_index = batch->key.lod_index;
+        const auto submesh_index = batch->key.submesh_index;
+
+        if (!mesh_ptr || !material_ptr)
+        {
+            continue;
+        }
+
+        const auto submesh = mesh_ptr->get_submesh(submesh_index);
+        if(!submesh)
+        {
+            continue;
+        }
+
+        // Create instance buffer from batch instances
+        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
+        const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
+        
+        // Allocate instance buffer
+        bgfx::InstanceDataBuffer instance_buffer;
+        bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
+        if (!instance_buffer.data)
+        {
+            continue; // Skip this batch if allocation failed
+        }
+
+        
+        // Submit the mesh with instancing
+        // Bind vertex and index buffers for the specific submesh
+        mesh_ptr->bind_render_buffers_for_submesh(submesh);
+        
+        // Pack instance data into buffer
+        auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);
+        for (size_t i = 0; i < batch->instances.size(); ++i)
+        {
+            buffer_data[i] = instance_vertex_data(batch->instances[i]);
+        }
+
+        // Set instance data buffer
+        bgfx::setInstanceDataBuffer(&instance_buffer);
+
+        // Submit material properties
+        bool material_submitted = material_ptr->submit(geom_program_instanced_.program.get());
+        if (!material_submitted)
+        {
+            if (material_ptr->is<pbr_material>())
+            {
+                const auto& pbr = static_cast<const pbr_material&>(*material_ptr);
+                submit_pbr_material(geom_program_instanced_, pbr);
+            }
+        }
+
+        // Set LOD parameters (using global LOD settings for now)
+        const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
+        gfx::set_uniform(geom_program_instanced_.u_lod_params, lod_params);
+
+        // Submit the instanced draw call
+        gfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, false);
+    }
+
+    geom_program_instanced_.program->end();
+
+    // Update statistics
+    const auto& batch_stats = batch_collector_.get_stats();
+    stats_.add_batch_stats(batch_stats);
+    
+    // Clear batches to invalidate all transform pointers and free memory
+    batch_collector_.clear();
 }
 
 void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
@@ -1271,6 +1472,9 @@ auto deferred::init(rtti::context& ctx) -> bool
     geom_program_skinned_.program = load_program("vs_deferred_geom_skinned", "fs_deferred_geom");
     geom_program_skinned_.cache_uniforms();
 
+    geom_program_instanced_.program = load_program("vs_deferred_geom_instanced", "fs_deferred_geom");
+    geom_program_instanced_.cache_uniforms();
+
     sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
     sphere_ref_probe_program_.cache_uniforms();
 
@@ -1353,5 +1557,19 @@ auto deferred::deinit(rtti::context& ctx) -> bool
 {
     return true;
 }
+
+// Static member definition
+bool deferred::enable_static_mesh_batching_ = true;
+
+auto deferred::is_static_mesh_batching_enabled() -> bool
+{
+    return enable_static_mesh_batching_;
+}
+
+void deferred::set_static_mesh_batching_enabled(bool enabled)
+{
+    enable_static_mesh_batching_ = enabled;
+}
+
 } // namespace rendering
 } // namespace unravel

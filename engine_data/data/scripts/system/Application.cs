@@ -1,10 +1,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Provides application-level functionality and control.
     /// </summary>
@@ -22,5 +21,5 @@ namespace Core
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_application_quit();
     }
-}
+
 }

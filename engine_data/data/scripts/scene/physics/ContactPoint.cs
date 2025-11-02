@@ -4,10 +4,9 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a contact point where a collision occurs.
     /// </summary>
@@ -79,5 +78,4 @@ namespace Core
         }
     };
 
-}
 }

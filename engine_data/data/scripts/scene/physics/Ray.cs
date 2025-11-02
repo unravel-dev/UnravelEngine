@@ -4,10 +4,9 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a ray with an origin and a direction in 3D space.
     /// </summary>
@@ -68,5 +67,4 @@ namespace Core
                 direction.ToString(format, formatProvider));
         }
     }
-}
 }

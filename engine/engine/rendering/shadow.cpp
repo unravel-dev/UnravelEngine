@@ -1,6 +1,7 @@
 #include "shadow.h"
 
 #include <engine/assets/asset_manager.h>
+#include <engine/rendering/pipeline/deferred/pipeline.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
@@ -640,6 +641,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -657,6 +659,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -674,6 +677,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -691,6 +695,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -708,6 +713,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             },
@@ -729,6 +735,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -746,6 +753,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -763,6 +771,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -779,7 +788,8 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , 1.0f, 0.0f, 3.0f, 0.01f          // m_yOffset
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::VSM].get() //m_progPack
-                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_packDepthSkinned
+                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     10.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -797,6 +807,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             }
@@ -822,6 +833,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -839,6 +851,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -856,6 +869,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -873,6 +887,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -890,6 +905,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             },
@@ -911,6 +927,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -928,6 +945,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -945,6 +963,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -961,7 +980,8 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , 0.25f, 0.0f, 2.0f, 0.001f        // m_yOffset
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::VSM].get() //m_progPack
-                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_packDepthSkinned
+                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     12.0f, 9.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -979,6 +999,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             }
@@ -1004,6 +1025,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1021,6 +1043,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1038,6 +1061,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1055,6 +1079,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1072,6 +1097,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             },
@@ -1093,6 +1119,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCF
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1110,6 +1137,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::PCSS
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1127,6 +1155,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 },
                 { //SmImpl::VSM
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1143,7 +1172,8 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , 0.2f, 0.0f, 1.0f, 0.01f          // m_yOffset
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::VSM].get() //m_progPack
-                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_packDepthSkinned
+                    , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM].get() //m_progPackInstanced
                 },
                 { //SmImpl::ESM
                     11.0f, 7.0f, 12.0f, 1.0f         // m_sizePwrTwo
@@ -1161,6 +1191,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                     , true                             // m_doBlur
                     , programs_.m_packDepth[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPack
                     , programs_.m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA].get() //m_packDepthSkinned
+                    , programs_.m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA].get() //m_progPackInstanced
                 }
 
             }
@@ -2258,6 +2289,13 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         drawNum = uint8_t(settings_.m_numSplits);
     }
 
+    // Resize and clear batch collectors for each cascade/view
+    cascade_batch_collectors_.resize(drawNum);
+    for (auto& collector : cascade_batch_collectors_)
+    {
+        collector.clear();
+    }
+
     for(const auto& e : models)
     {
         const auto& transform_comp = e.get<transform_component>();
@@ -2278,6 +2316,8 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         const auto& skinning_matrices = model_comp.get_skinning_transforms();
 
         const auto current_lod_index = 0;
+        const bool is_skinned = !skinning_matrices.empty();
+        
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
             auto query = lightFrustums[ii].classify_obb(local_bounds, world_bounds_transform);
@@ -2297,45 +2337,59 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
             const auto& _renderState = render_states[renderStateIndex];
 
-            model::submit_callbacks callbacks;
-            callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
-            {
-                auto& prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-                prog->begin();
-            };
-            callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
-            {
-                // Set uniforms.
-                uniforms_.submitPerDrawUniforms();
-
-                // Apply render state.
-                gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
-                gfx::set_state(_renderState.m_state, _renderState.m_blendFactorRgba);
-            };
-            callbacks.setup_params_per_submesh =
-                [&](const model::submit_callbacks::params& submit_params, const material& mat)
-            {
-                auto& prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-
-                gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
-            };
-            callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
-            {
-                auto& prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-
-                prog->end();
-            };
-
+            // Always set the last render frame for tracking
             model_comp.set_last_render_frame(gfx::get_render_frame());
-            model.submit(world_transform,
-                         submesh_transforms,
-                         bone_transforms,
-                         skinning_matrices,
-                         current_lod_index,
-                         callbacks);
+            
+            // Check if this model can be batched (static mesh, no skinning)
+            const bool can_batch = rendering::deferred::is_static_mesh_batching_enabled() && !is_skinned;
+            
+            if (can_batch)
+            {
+                // Collect this model for batching in this specific cascade
+                collect_model_for_shadow_batching_cascade(cascade_batch_collectors_[ii], model, world_transform, submesh_transforms, current_lod_index);
+            }
+            else
+            {
+                // Render skinned models individually (original behavior)
+                model::submit_callbacks callbacks;
+                callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+                {
+                    auto& prog =
+                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+                    prog->begin();
+                };
+                callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+                {
+                    // Set uniforms.
+                    uniforms_.submitPerDrawUniforms();
+
+                    // Apply render state.
+                    gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
+                    gfx::set_state(_renderState.m_state, _renderState.m_blendFactorRgba);
+                };
+                callbacks.setup_params_per_submesh =
+                    [&](const model::submit_callbacks::params& submit_params, const material& mat)
+                {
+                    auto& prog =
+                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+
+                    gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
+                };
+                callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
+                {
+                    auto& prog =
+                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+
+                    prog->end();
+                };
+
+                model.submit(world_transform,
+                             submesh_transforms,
+                             bone_transforms,
+                             skinning_matrices,
+                             current_lod_index,
+                             callbacks);
+            }
 
             any_rendered = true;
 
@@ -2346,8 +2400,160 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             }
         }
     }
+    
+    // Submit batched geometry for each cascade
+    if (rendering::deferred::is_static_mesh_batching_enabled())
+    {
+        for(uint8_t ii = 0; ii < drawNum; ++ii)
+        {
+            const uint8_t viewId = shadowmap_1_id + ii;
+            
+            uint8_t renderStateIndex = RenderState::ShadowMap_PackDepth;
+            if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
+            {
+                renderStateIndex =
+                    uint8_t((ii < 2) ? RenderState::ShadowMap_PackDepthHoriz : RenderState::ShadowMap_PackDepthVert);
+            }
+            
+            const auto& renderState = render_states[renderStateIndex];
+            submit_batched_shadow_geometry_cascade(cascade_batch_collectors_[ii], viewId, currentSmSettings, renderState);
+        }
+    }
 
     return any_rendered;
+}
+
+void shadowmap_generator::collect_model_for_shadow_batching_cascade(batch_collector& collector,
+                                                                   const model& model_asset, 
+                                                                   const math::mat4& world_transform,
+                                                                   const pose_mat4& submesh_transforms,
+                                                                   uint32_t lod_index)
+{
+    const auto& lods = model_asset.get_lods();
+    if (lod_index >= lods.size()) { return; }
+
+    const auto& mesh_asset = lods[lod_index];
+    if (!mesh_asset) { return; }
+
+    const auto& materials = model_asset.get_materials();
+    const auto submesh_count = mesh_asset.get()->get_data_groups_count();
+
+    for (uint32_t submesh_index = 0; submesh_index < submesh_count; ++submesh_index)
+    {
+        std::shared_ptr<material> material_ptr;
+        if (submesh_index < materials.size() && materials[submesh_index].is_valid()) {
+            material_ptr = materials[submesh_index].get();
+        } else {
+            // For shadow maps, we can use a null material since we only care about depth
+            material_ptr = nullptr;
+        }
+
+        // Determine the transform pointer to use for this submesh
+        const math::mat4* transform_ptr = nullptr;
+        if (submesh_index < submesh_transforms.transforms.size())
+        {
+            // Use the specific submesh transform
+            transform_ptr = &submesh_transforms.transforms[submesh_index];
+        }
+        else
+        {
+            // Fall back to world transform if no specific submesh transform
+            transform_ptr = &world_transform;
+        }
+
+        batch_key key(mesh_asset.get(), material_ptr, lod_index, submesh_index);
+        if (!key.is_valid()) { continue; }
+
+        // Create batch instance with the appropriate transform pointer
+        batch_instance instance(transform_ptr);
+        collector.collect_renderable(key, instance);
+    }
+}
+
+void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector& collector,
+                                                                uint8_t viewId, 
+                                                                ShadowMapSettings* currentSmSettings,
+                                                                const RenderState& renderState)
+{
+    // Prepare batches for rendering
+    submit_context context;
+    context.view_id = viewId;
+    context.enable_distance_sorting = false; // Shadow maps don't need distance sorting
+    context.max_instances_per_batch = 1024;
+    context.enable_profiling = false;
+    
+    collector.prepare_batches(context);
+    const auto& prepared_batches = collector.get_prepared_batches();
+    
+    if (prepared_batches.empty()) {
+        return;
+    }
+    
+    // Begin instanced program
+    currentSmSettings->m_progPackInstanced->begin();
+    
+    // Submit each batch
+    for (const auto* batch : prepared_batches)
+    {
+        if (!batch->is_valid() || batch->instances.empty())
+        {
+            continue;
+        }
+
+        // Get mesh from batch key
+        const auto& mesh_ptr = batch->key.mesh_ptr;
+        const auto lod_index = batch->key.lod_index;
+        const auto submesh_index = batch->key.submesh_index;
+
+        if (!mesh_ptr)
+        {
+            continue;
+        }
+
+        const auto submesh = mesh_ptr->get_submesh(submesh_index);
+        if(!submesh)
+        {
+            continue;
+        }
+
+        // Create instance buffer from batch instances
+        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
+        const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
+        
+        // Allocate instance buffer
+        bgfx::InstanceDataBuffer instance_buffer;
+        bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
+        if (!instance_buffer.data)
+        {
+            continue; // Skip this batch if allocation failed
+        }
+
+        // Pack instance data into buffer
+        auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);
+        for (size_t i = 0; i < batch->instances.size(); ++i)
+        {
+            buffer_data[i] = instance_vertex_data(batch->instances[i]);
+        }
+
+        // Set instance data buffer
+        bgfx::setInstanceDataBuffer(&instance_buffer);
+        
+        // Bind vertex and index buffers for the specific submesh
+        mesh_ptr->bind_render_buffers_for_submesh(submesh);
+        
+        // Set uniforms and render state
+        uniforms_.submitPerDrawUniforms();
+        gfx::set_stencil(renderState.m_fstencil, renderState.m_bstencil);
+        gfx::set_state(renderState.m_state, renderState.m_blendFactorRgba);
+
+        // Submit the instanced draw call
+        gfx::submit(viewId, currentSmSettings->m_progPackInstanced->native_handle(), 0, false);
+    }
+
+    currentSmSettings->m_progPackInstanced->end();
+    
+    // Clear batches to invalidate all transform pointers and free memory
+    collector.clear();
 }
 
 void Programs::init(rtti::context& ctx)
@@ -2390,6 +2596,13 @@ void Programs::init(rtti::context& ctx)
 
     m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_linear_skinned", "fs_shadowmaps_packdepth_linear");
     m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_linear_skinned", "fs_shadowmaps_packdepth_vsm_linear");
+
+    // Pack depth instanced (for static mesh batching).
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_instanced", "fs_shadowmaps_packdepth");
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_instanced", "fs_shadowmaps_packdepth_vsm");
+
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_linear_instanced", "fs_shadowmaps_packdepth_linear");
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_linear_instanced", "fs_shadowmaps_packdepth_vsm_linear");
 
 }
 

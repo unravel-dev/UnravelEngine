@@ -4,9 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
-{
-namespace Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Specifies how forces are applied to physics components.
@@ -54,5 +52,4 @@ namespace Core
         /// </summary>
         VelocityChange
     }
-}
 }

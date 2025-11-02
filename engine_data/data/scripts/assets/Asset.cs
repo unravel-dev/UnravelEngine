@@ -1,9 +1,8 @@
 using System;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a generic asset with a unique identifier (UID).
     /// </summary>
@@ -88,4 +87,4 @@ namespace Core
         public override int GetHashCode() => uid.GetHashCode();
     }
 }
-}
+

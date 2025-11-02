@@ -4,10 +4,9 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents information about a single hit during a raycasting operation.
     /// </summary>
@@ -81,4 +80,4 @@ namespace Core
         }
     }
 }
-}
+

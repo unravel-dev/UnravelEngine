@@ -3,6 +3,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/layers/layer_mask.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/batch_collector.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 
@@ -54,12 +55,21 @@ struct pipeline_stats
     uint32_t drawn_lights_casting_shadows = 0;
     uint32_t drawn_particles = 0;
     uint32_t drawn_particles_batches = 0;
+    
+    // Static mesh batching statistics
+    batch_stats batching_stats;
 
     auto anything_drawn() const -> bool
     {
         return drawn_models > 0 || drawn_skinned_models > 0 || drawn_lights > 0 ||
                drawn_lights_casting_shadows > 0 || drawn_particles > 0 || drawn_particles_batches > 0;
     }
+    
+    /**
+     * @brief Add batch statistics to the pipeline stats
+     * @param stats Batch statistics to accumulate
+     */
+    void add_batch_stats(const batch_stats& stats);
 };
 /**
  * @class rendering_pipeline

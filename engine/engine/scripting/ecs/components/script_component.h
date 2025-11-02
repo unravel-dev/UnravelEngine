@@ -39,7 +39,7 @@ public:
             scoped = std::make_shared<mono::mono_scoped_object>(obj);
             state = std::make_shared<script_component::script_object_state>();
         }
-
+        
         auto is_marked_for_destroy() const -> bool
         {
             if(!state)

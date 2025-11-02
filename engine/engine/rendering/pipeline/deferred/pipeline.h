@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/light.h>
+#include <engine/rendering/batch_collector.h>
 
 #include <graphics/utils/font/font_manager.h>
 #include <graphics/utils/font/text_buffer_manager.h>
@@ -198,6 +199,7 @@ private:
 
     geom_program geom_program_;
     geom_program geom_program_skinned_;
+    geom_program geom_program_instanced_;
 
     struct color_lighting : uniforms_cache
     {
@@ -250,11 +252,32 @@ private:
     auto get_light_program(const light& l) const -> const color_lighting&;
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;
     void submit_pbr_material(geom_program& program, const pbr_material& mat);
+    void submit_batched_geometry(gfx::render_pass& pass, const camera& camera);
+    void collect_model_for_batching(const model& model_asset, const math::mat4& world_transform, const pose_mat4& submesh_transforms, uint32_t lod_index, float lod_param);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];
 
     asset_handle<gfx::texture> ibl_brdf_lut_;
+
+    // Static mesh batching system
+    batch_collector batch_collector_;
+    static bool enable_static_mesh_batching_;
+
+public:
+    /**
+     * @brief Get static mesh batching enabled state
+     * @return True if static mesh batching is enabled
+     */
+    static auto is_static_mesh_batching_enabled() -> bool;
+    
+    /**
+     * @brief Set static mesh batching enabled state
+     * @param enabled True to enable static mesh batching
+     */
+    static void set_static_mesh_batching_enabled(bool enabled);
+
+private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

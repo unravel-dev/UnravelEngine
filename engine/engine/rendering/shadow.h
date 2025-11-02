@@ -4,6 +4,8 @@
 #include <engine/ecs/ecs.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/light.h>
+#include <engine/rendering/batch_collector.h>
+#include <engine/rendering/model.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -438,6 +440,8 @@ struct Programs
             for(uint8_t jj = 0; jj < PackDepth::Count; ++jj)
             {
                 m_packDepth[ii][jj].reset();
+                m_packDepthInstanced[ii][jj].reset();
+                m_packDepthSkinned[ii][jj].reset();
             }
         }
 
@@ -469,6 +473,7 @@ struct Programs
     gpu_program::ptr m_drawDepth[PackDepth::Count];
     gpu_program::ptr m_packDepth[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinned[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthInstanced[DepthImpl::Count][PackDepth::Count];
 };
 
 struct ShadowMapSettings
@@ -492,6 +497,7 @@ struct ShadowMapSettings
     bool m_doBlur{};
     gpu_program* m_progPack{};
     gpu_program* m_progPackSkinned{};
+    gpu_program* m_progPackInstanced{};
 #undef SHADOW_FLOAT_PARAM
 };
 
@@ -651,6 +657,17 @@ private:
                                      const shadow_map_models_t& models,
                                      const math::frustum frustums[ShadowMapRenderTargets::Count],
                                      ShadowMapSettings* currentSmSettings) -> bool;
+    
+    void collect_model_for_shadow_batching_cascade(batch_collector& collector,
+                                                  const model& model_asset, 
+                                                  const math::mat4& world_transform,
+                                                  const pose_mat4& submesh_transforms,
+                                                  uint32_t lod_index);
+    
+    void submit_batched_shadow_geometry_cascade(batch_collector& collector,
+                                               uint8_t viewId, 
+                                               ShadowMapSettings* currentSmSettings,
+                                               const RenderState& renderState);
 
     ClearValues clear_values_;
 
@@ -683,6 +700,10 @@ private:
     bool valid_{};
 
     uint64_t last_update_ = -1;
+    
+    // Static mesh batching system for shadow maps - one collector per cascade/view
+    std::vector<batch_collector> cascade_batch_collectors_;
+    
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     // New configuration members

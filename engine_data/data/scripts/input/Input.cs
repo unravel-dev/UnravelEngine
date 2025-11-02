@@ -75,7 +75,7 @@ namespace Unravel.Core
             return internal_m2n_input_is_down(action);
         }
 
-      
+
         public static bool IsPressed(KeyCode code)
         {
             return internal_m2n_input_is_key_pressed(code);

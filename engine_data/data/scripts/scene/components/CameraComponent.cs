@@ -1,10 +1,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a camera component that allows interaction with the camera, such as converting screen space positions to rays in 3D space.
     /// </summary>
@@ -28,4 +27,4 @@ namespace Core
         private static extern bool internal_m2n_camera_screen_point_to_ray(Entity eid, Vector2 pos, out Ray ray);
     }
 }
-}
+

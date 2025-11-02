@@ -1,16 +1,12 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
 public class ReflectionProbeComponent : Component
 {
 
 }
 
 }
-}
-
-

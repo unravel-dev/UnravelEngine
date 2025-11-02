@@ -7,6 +7,7 @@
 
 #include <engine/engine.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/pipeline/deferred/pipeline.h>
 #include <engine/ecs/scene.h>
 #include <engine/profiler/profiler.h>
 #include <graphics/graphics.h>
@@ -82,6 +83,17 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
         {
             ImGui::Checkbox("Show Editor Stats", &show_editor_stats_);
             ImGui::SetItemTooltip("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
+            ImGui::EndMenu();
+        }
+        
+        if(ImGui::BeginMenu("Rendering " ICON_MDI_ARROW_DOWN_BOLD))
+        {
+            bool batching_enabled = rendering::deferred::is_static_mesh_batching_enabled();
+            if(ImGui::Checkbox("Static Mesh Batching", &batching_enabled))
+            {
+                rendering::deferred::set_static_mesh_batching_enabled(batching_enabled);
+            }
+            ImGui::SetItemTooltip("Enable/disable static mesh batching for performance comparison");
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -284,7 +296,7 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
 
 auto statistics_panel::draw_pipeline_stats() -> void
 {
-    if(!ImGui::CollapsingHeader(ICON_MDI_CUBE_OUTLINE "\tPipeline Statistics", ImGuiTreeNodeFlags_DefaultOpen))
+    if(ImGui::CollapsingHeader(ICON_MDI_CUBE_OUTLINE "\tPipeline Statistics", ImGuiTreeNodeFlags_DefaultOpen))
     {
         for(auto scn : scene::get_all_scenes())
         {
@@ -303,15 +315,54 @@ auto statistics_panel::draw_pipeline_stats() -> void
                 }
 
                 ImGui::Text("Pipeline Stats for %s:", scn->tag.c_str());
-                ImGui::Text("  Drawn Particles: %u", stats.drawn_particles);
-                ImGui::Text("  Drawn Particles Batches: %u", stats.drawn_particles_batches);
-                ImGui::Text("  Drawn Models: %u", stats.drawn_models);
-                ImGui::Text("  Drawn Skinned Models: %u", stats.drawn_skinned_models);
-                ImGui::Text("  Drawn Lights: %u", stats.drawn_lights);
-                ImGui::Text("  Drawn Lights Casting Shadows: %u", stats.drawn_lights_casting_shadows);
+                ImGui::Indent();
+                
+                ImGui::Text("Drawn Particles: %u", stats.drawn_particles);
+                ImGui::Text("Drawn Particles Batches: %u", stats.drawn_particles_batches);
+                ImGui::Text("Drawn Models: %u", stats.drawn_models);
+                ImGui::Text("Drawn Skinned Models: %u", stats.drawn_skinned_models);
+                ImGui::Text("Drawn Lights: %u", stats.drawn_lights);
+                ImGui::Text("Drawn Lights Casting Shadows: %u", stats.drawn_lights_casting_shadows);
+                
+                // Static Mesh Batching Statistics
+                if(stats.batching_stats.total_batches > 0 || stats.batching_stats.total_instances > 0)
+                {
+                    ImGui::Separator();
+                    ImGui::Text("Static Mesh Batching:");
+                    ImGui::Indent();
+                    
+                    const auto& batch_stats = stats.batching_stats;
+                    ImGui::Text("Total Batches: %u", batch_stats.total_batches);
+                    ImGui::Text("Total Instances: %u", batch_stats.total_instances);
+                    ImGui::Text("Avg Batch Size: %.1f", batch_stats.average_batch_size);
+                    ImGui::Text("Batching Efficiency: %.1f%%", batch_stats.batching_efficiency * 100.0f);
+                    
+                    if(batch_stats.split_batches > 0)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "Split Batches: %u", batch_stats.split_batches);
+                    }
+                    
+                    // Performance timings
+                    if(batch_stats.collection_time_ms > 0.0f || batch_stats.preparation_time_ms > 0.0f)
+                    {
+                        ImGui::Text("Collection Time: %.3f ms", batch_stats.collection_time_ms);
+                        ImGui::Text("Preparation Time: %.3f ms", batch_stats.preparation_time_ms);
+                        ImGui::Text("Submission Time: %.3f ms", batch_stats.submission_time_ms);
+                    }
+                    
+                    // Memory usage
+                    if(batch_stats.instance_buffer_memory_used > 0)
+                    {
+                        float memory_mb = static_cast<float>(batch_stats.instance_buffer_memory_used) / (1024.0f * 1024.0f);
+                        ImGui::Text("Instance Buffer Memory: %.2f MB", memory_mb);
+                    }
+                    
+                    ImGui::Unindent();
+                }
+                
+                ImGui::Unindent();
             });
         }
-        
     }
 }
 

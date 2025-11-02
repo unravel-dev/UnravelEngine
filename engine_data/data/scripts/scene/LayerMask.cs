@@ -4,9 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
-{
-namespace Core
+namespace Unravel.Core
 {
     /// <summary>
     /// Represents a layer mask that can be used to include or exclude layers.
@@ -88,7 +86,7 @@ namespace Core
             a.value &= ~b.value;
             return a;
         }
-        
+
 
         /// <summary>
         /// Given a layer index, returns the name of the layer as defined in either a built-in
@@ -145,6 +143,5 @@ namespace Core
         private static extern int internal_m2n_layers_name_to_layer(string layerName);
     }
 
-}
 }
 

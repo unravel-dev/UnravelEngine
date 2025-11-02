@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include <engine/rendering/batch_collector.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/layer_component.h>
@@ -182,7 +183,7 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
 
 void pipeline::ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
-    APP_SCOPE_PERF("Rendering/UI Pass");
+    APP_SCOPE_PERF("Rendering/3D Text Pass");
 
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
@@ -320,6 +321,21 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
 
         particle_program_instanced_->end();
     }
+}
+
+// pipeline_stats implementation
+void pipeline_stats::add_batch_stats(const batch_stats& stats)
+{
+    batching_stats.total_batches += stats.total_batches;
+    batching_stats.total_instances += stats.total_instances;
+    batching_stats.collection_time_ms += stats.collection_time_ms;
+    batching_stats.preparation_time_ms += stats.preparation_time_ms;
+    batching_stats.submission_time_ms += stats.submission_time_ms;
+    batching_stats.instance_buffer_memory_used += stats.instance_buffer_memory_used;
+    batching_stats.split_batches += stats.split_batches;
+    
+    // Recalculate derived stats
+    batching_stats.calculate_derived_stats();
 }
 
 } // namespace rendering

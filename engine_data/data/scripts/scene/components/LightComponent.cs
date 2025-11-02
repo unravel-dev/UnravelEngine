@@ -1,32 +1,30 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
-public class LightComponent : Component
-{
-    public Color color
+    public class LightComponent : Component
     {
-        get
+        public Color color
         {
-            return internal_m2n_light_get_color(owner);
+            get
+            {
+                return internal_m2n_light_get_color(owner);
+            }
+            set
+            {
+                internal_m2n_light_set_color(owner, value);
+            }
         }
-        set
-        {
-            internal_m2n_light_set_color(owner, value);
-        }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Color internal_m2n_light_get_color(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_light_set_color(Entity eid, Color color);
     }
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Color internal_m2n_light_get_color(Entity eid);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern void internal_m2n_light_set_color(Entity eid, Color color);
 }
 
-}
-}
 
 

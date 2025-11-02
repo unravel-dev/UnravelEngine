@@ -1,9 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
-{
-namespace Core
+namespace Unravel.Core
 {
 public static class Gizmos
 {
@@ -22,8 +20,6 @@ public static class Gizmos
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern void internal_m2n_gizmos_add_ray(Color color, Vector3 position, Vector3 direction, float maxDistance);
-}
-
 }
 
 }

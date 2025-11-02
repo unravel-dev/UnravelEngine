@@ -798,7 +798,7 @@ public:
      * @return const submesh* Pointer to the submesh information.
      */
     auto get_submeshes() const -> const submesh_array_t&;
-    auto get_submesh(uint32_t submesh_index = 0) const -> const mesh::submesh&;
+    auto get_submesh(uint32_t submesh_index = 0) const -> const submesh*;
     /**
      * @brief Gets the local bounding box for this mesh.
      *

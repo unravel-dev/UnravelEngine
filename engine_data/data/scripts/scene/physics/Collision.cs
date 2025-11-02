@@ -5,10 +5,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Buffers;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a collision that occurs between two entities.
     /// </summary>
@@ -73,5 +72,4 @@ namespace Core
 
         }
     }
-}
 }

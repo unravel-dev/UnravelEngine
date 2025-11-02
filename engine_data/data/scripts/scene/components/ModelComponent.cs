@@ -1,10 +1,9 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     /// <summary>
     /// Represents a component that provides model rendering capabilities for an entity.
     /// </summary>
@@ -107,7 +106,7 @@ namespace Core
         /// <param name="index">The index of the material to set.</param>
         public void SetMaterial(Material material, uint index = 0)
         {
-            if(material == null)
+            if (material == null)
             {
                 internal_m2n_model_set_material_instance(owner, new MaterialProperties(), index);
                 return;
@@ -118,10 +117,10 @@ namespace Core
         public void ResetMaterials()
         {
             var count = GetSharedMaterialsCount();
-			for(uint i = 0; i < count; ++i)
-			{
+            for (uint i = 0; i < count; ++i)
+            {
                 SetMaterial(null, i);
-			}
+            }
         }
 
         /// <summary>
@@ -131,12 +130,12 @@ namespace Core
         public void SetColor(Color color)
         {
             var count = GetSharedMaterialsCount();
-			for(uint i = 0; i < count; ++i)
-			{
+            for (uint i = 0; i < count; ++i)
+            {
                 var mat = GetMaterial(i);
                 mat.color = color;
                 SetMaterial(mat, i);
-			}
+            }
         }
 
         /// <summary>
@@ -161,7 +160,7 @@ namespace Core
         public Color GetColor()
         {
             var count = GetSharedMaterialsCount();
-            if(count == 0)
+            if (count == 0)
             {
                 return Color.white;
             }
@@ -207,4 +206,4 @@ namespace Core
 
     }
 }
-}
+

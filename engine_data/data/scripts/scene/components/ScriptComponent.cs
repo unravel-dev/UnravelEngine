@@ -3,10 +3,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Reflection;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
+
     [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
     public sealed class ScriptSourceFileAttribute : Attribute
     {
@@ -219,4 +218,4 @@ namespace Core
         }
     }
 }
-}
+

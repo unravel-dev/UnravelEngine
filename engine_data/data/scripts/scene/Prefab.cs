@@ -2,18 +2,10 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Unravel
+namespace Unravel.Core
 {
-namespace Core
-{
-
-public class Prefab : Asset<Prefab>
-{
+    public class Prefab : Asset<Prefab>
+    {
+    }
 }
-
-
-}
-
-}
-
 

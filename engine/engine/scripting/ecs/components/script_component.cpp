@@ -141,8 +141,17 @@ void script_component::enable(script_object& script_obj, bool check_order)
 
     auto& obj = script_obj.scoped->object;
 
-    auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_enable");
-    method(obj);
+    obj.get_type().get_method("OnCollisionEnter", 1);
+
+    try
+    {
+        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_enable");
+        method(obj);
+    }
+    catch(const mono::mono_exception& e)
+    {
+        script_system::log_exception(e);
+    }
 }
 
 void script_component::disable(script_object& script_obj, bool check_order)
