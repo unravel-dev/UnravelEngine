@@ -262,20 +262,8 @@ private:
 
     // Static mesh batching system
     batch_collector batch_collector_;
-    static bool enable_static_mesh_batching_;
 
 public:
-    /**
-     * @brief Get static mesh batching enabled state
-     * @return True if static mesh batching is enabled
-     */
-    static auto is_static_mesh_batching_enabled() -> bool;
-    
-    /**
-     * @brief Set static mesh batching enabled state
-     * @param enabled True to enable static mesh batching
-     */
-    static void set_static_mesh_batching_enabled(bool enabled);
 
 private:
 

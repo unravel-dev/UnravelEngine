@@ -2341,7 +2341,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             model_comp.set_last_render_frame(gfx::get_render_frame());
             
             // Check if this model can be batched (static mesh, no skinning)
-            const bool can_batch = rendering::deferred::is_static_mesh_batching_enabled() && !is_skinned;
+            const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned;
             
             if (can_batch)
             {
@@ -2402,7 +2402,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     }
     
     // Submit batched geometry for each cascade
-    if (rendering::deferred::is_static_mesh_batching_enabled())
+    if (batch_collector::is_static_mesh_batching_enabled())
     {
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {

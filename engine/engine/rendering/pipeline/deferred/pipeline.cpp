@@ -719,7 +719,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
         // Check if this model can be batched (static mesh, no skinning)
         const bool is_skinned = !skinning_matrices.empty();
-        const bool can_batch = enable_static_mesh_batching_ && !is_skinned;
+        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned;
 
         if (can_batch)
         {
@@ -761,7 +761,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     }
 
     // Submit all collected batches
-    if (enable_static_mesh_batching_)
+    if (batch_collector::is_static_mesh_batching_enabled())
     {
         submit_batched_geometry(pass, camera);
     }
@@ -1558,18 +1558,6 @@ auto deferred::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-// Static member definition
-bool deferred::enable_static_mesh_batching_ = true;
-
-auto deferred::is_static_mesh_batching_enabled() -> bool
-{
-    return enable_static_mesh_batching_;
-}
-
-void deferred::set_static_mesh_batching_enabled(bool enabled)
-{
-    enable_static_mesh_batching_ = enabled;
-}
 
 } // namespace rendering
 } // namespace unravel

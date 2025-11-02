@@ -371,4 +371,17 @@ auto batch_collector::get_or_create_batch_group(const batch_key& key) -> batch_g
     return inserted_it->second;
 }
 
+// Static member definition
+bool batch_collector::enable_static_mesh_batching_ = true;
+
+auto batch_collector::is_static_mesh_batching_enabled() -> bool
+{
+    return enable_static_mesh_batching_;
+}
+
+void batch_collector::set_static_mesh_batching_enabled(bool enabled)
+{
+    enable_static_mesh_batching_ = enabled;
+}
+
 } // namespace unravel

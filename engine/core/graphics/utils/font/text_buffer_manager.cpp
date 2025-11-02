@@ -66,7 +66,7 @@ class text_buffer
 public:
     text_buffer(font_manager* manager) : font_manager_(manager)
     {
-        size_t initial(8192 - 5);
+        size_t initial(21 - 5);
         resize_buffers(initial);
     }
 

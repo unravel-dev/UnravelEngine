@@ -150,6 +150,18 @@ public:
     batch_collector();
     
     /**
+     * @brief Check if static mesh batching is enabled globally
+     * @return True if static mesh batching is enabled
+     */
+    static auto is_static_mesh_batching_enabled() -> bool;
+    
+    /**
+     * @brief Enable or disable static mesh batching globally
+     * @param enabled True to enable batching, false to disable
+     */
+    static void set_static_mesh_batching_enabled(bool enabled);
+    
+    /**
      * @brief Destructor
      */
     ~batch_collector() = default;
@@ -242,6 +254,9 @@ private:
     
     /// Whether profiling is enabled
     bool profiling_enabled_ = true;
+    
+    /// Global static mesh batching enable/disable flag
+    static bool enable_static_mesh_batching_;
     
     /**
      * @brief Sort batches for optimal rendering order

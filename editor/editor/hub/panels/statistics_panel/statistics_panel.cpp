@@ -7,7 +7,7 @@
 
 #include <engine/engine.h>
 #include <engine/rendering/ecs/components/camera_component.h>
-#include <engine/rendering/pipeline/deferred/pipeline.h>
+#include <engine/rendering/batch_collector.h>
 #include <engine/ecs/scene.h>
 #include <engine/profiler/profiler.h>
 #include <graphics/graphics.h>
@@ -88,10 +88,10 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
         
         if(ImGui::BeginMenu("Rendering " ICON_MDI_ARROW_DOWN_BOLD))
         {
-            bool batching_enabled = rendering::deferred::is_static_mesh_batching_enabled();
+            bool batching_enabled = batch_collector::is_static_mesh_batching_enabled();
             if(ImGui::Checkbox("Static Mesh Batching", &batching_enabled))
             {
-                rendering::deferred::set_static_mesh_batching_enabled(batching_enabled);
+                batch_collector::set_static_mesh_batching_enabled(batching_enabled);
             }
             ImGui::SetItemTooltip("Enable/disable static mesh batching for performance comparison");
             ImGui::EndMenu();
