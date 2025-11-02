@@ -1,5 +1,6 @@
 #include "inspector.h"
 #include <imgui/imgui_internal.h>
+#include <string_utils/utils.h>
 
 namespace unravel
 {
@@ -84,7 +85,7 @@ void property_layout::set_data(const entt::meta_data& prop, bool columns)
 
 void property_layout::set_data(const std::string& name, const std::string& tooltip, bool columns)
 {
-    name_ = name;
+    name_ = string_utils::capitalize(name);
     tooltip_ = tooltip;
     columns_ = columns;
 }

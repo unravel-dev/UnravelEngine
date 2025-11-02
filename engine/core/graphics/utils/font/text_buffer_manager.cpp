@@ -432,9 +432,10 @@ void text_buffer::append_atlas_face(font_handle handle, uint16_t face_index)
 {
     if(vertex_count_ / 4 >= get_max_buffered_characters())
     {
+        auto dif = (vertex_count_ / 4) - get_max_buffered_characters();
         //background
         size_t max_quads_per_glyph = 1;
-        size_t capacity_growth = 10;
+        size_t capacity_growth = bx::min<size_t>(10, dif);
         resize_buffers(get_max_buffered_characters() + max_quads_per_glyph * capacity_growth);
     }
 
@@ -509,7 +510,8 @@ void text_buffer::append_glyph(font_handle handle, code_point codepoint, bool sh
     {
         // background, shadow, underline, overline, glyph, foreground
         size_t max_quads_per_glyph = 6;
-        size_t capacity_growth = 100;
+        auto dif = (vertex_count_ / 4) - get_max_buffered_characters();
+        size_t capacity_growth = bx::min<size_t>(10, dif);
         resize_buffers(get_max_buffered_characters() + max_quads_per_glyph * capacity_growth);
     }
 

@@ -68,6 +68,15 @@ struct text_buffer_builder
     ~text_buffer_builder();
 
     void destroy_buffers();
+    auto get_buffer(uint32_t type, gfx::buffer_type::Enum btype, bool create_new = true) -> text_buffer&
+    {
+        if(create_new)
+        {
+            auto buf = manager.create_text_buffer(type, btype);
+            buffers.push_back({buf});
+        }
+        return buffers.back();
+    }
 
     std::vector<text_buffer> buffers;
     gfx::text_buffer_manager manager;

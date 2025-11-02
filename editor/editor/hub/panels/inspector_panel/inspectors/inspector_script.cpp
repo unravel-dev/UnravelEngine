@@ -255,7 +255,7 @@ struct mono_field_proxy
     mono::mono_field field;
     std::string field_name;
     
-    mono_field_proxy(mono::mono_field f) : field(f), field_name(string_utils::capitalize(f.get_name())) {}
+    mono_field_proxy(mono::mono_field f) : field(f), field_name(f.get_name()) {}
     
     auto get_name() const -> std::string { return field_name; }
     
@@ -297,7 +297,7 @@ struct mono_property_proxy
     mono::mono_property property;
     std::string property_name;
     
-    mono_property_proxy(mono::mono_property p) : property(p), property_name(string_utils::capitalize(p.get_name())) {}
+    mono_property_proxy(mono::mono_property p) : property(p), property_name(p.get_name()) {}
     
     auto get_name() const -> std::string { return property_name; }
     
@@ -1429,7 +1429,7 @@ struct mono_inspector_collection
                     collection_proxy.impl->get_name = [obj_proxy, mutable_field]()
                     {
                         auto parent_name = obj_proxy.impl->get_name();
-                        auto field_name = string_utils::capitalize(mutable_field.get_name());
+                        auto field_name = mutable_field.get_name();
                         if(parent_name.empty())
                         {
                             return field_name;
@@ -1559,7 +1559,7 @@ struct mono_inspector<mono::mono_array<T>>
             array_proxy.impl->get_name = [obj_proxy, mutable_field]()
             {
                 auto parent_name = obj_proxy.impl->get_name();
-                auto field_name = string_utils::capitalize(mutable_field.get_name());
+                auto field_name = mutable_field.get_name();
                 if(parent_name.empty())
                 {
                     return field_name;

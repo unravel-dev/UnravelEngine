@@ -180,9 +180,6 @@ auto parse_rich_segments(const hpp::string_view& in, const text_style& main_styl
         return out;
     }
 
-    APP_SCOPE_PERF("Rendering/3D Text Pass/Parse Rich Segments");
-
-
     // Stack of (state, tag_name) so we can pop by name
     text_vector<std::pair<rich_state, hpp::string_view>> open_tags;
     open_tags.reserve(16);
@@ -1087,8 +1084,6 @@ auto text_component::get_builder() const -> text_buffer_builder&
     builder_->destroy_buffers();
     debug_builder_->destroy_buffers();
 
-    APP_SCOPE_PERF("Rendering/3D Text Pass/Compute Layout");
-
     rich_segment* last_segment{};
     for(auto& wl : layout)
     {
@@ -1098,28 +1093,14 @@ auto text_component::get_builder() const -> text_buffer_builder&
         for(auto& seg : wl.segments)
         {
             bool create_new = !(last_segment && can_batch_with(last_segment->state.style, seg.state.style));
-            if(create_new)
-            {
-                APP_SCOPE_PERF("Rendering/3D Text Pass/Compute Layout/Create New Buffer");
-
-                auto buf = builder_->manager.create_text_buffer(FONT_TYPE_DISTANCE_OUTLINE_DROP_SHADOW_IMAGE, buf_type);
-                builder_->buffers.push_back({buf});
-            }
-
-            auto& buf = builder_->buffers.back().handle;
-            {
-                APP_SCOPE_PERF("Rendering/3D Text Pass/Compute Layout/Apply Style");
-
-                apply_style(builder_->manager, buf, seg.state.style);
-            }
+            auto& buffer = builder_->get_buffer(FONT_TYPE_DISTANCE_OUTLINE_DROP_SHADOW_IMAGE, buf_type, create_new);
+            auto buf = buffer.handle;
+            apply_style(builder_->manager, buf, seg.state.style);
+            
             builder_->manager.set_apply_kerning(buf, apply_kerning_);
             builder_->manager.set_pen_origin(buf, offset_x, offset_y);
             builder_->manager.set_pen_position(buf, pen_x, pen_y);
-            {
-                APP_SCOPE_PERF("Rendering/3D Text Pass/Compute Layout/Append Text");
-
-                builder_->manager.append_text(buf, final_font.handle, seg.text.data(), seg.text.data() + seg.text.size());
-            }
+            builder_->manager.append_text(buf, final_font.handle, seg.text.data(), seg.text.data() + seg.text.size());
             builder_->manager.get_pen_position(buf, &pen_x, &pen_y);
 
             last_segment = &seg;
@@ -1395,8 +1376,6 @@ void text_component::submit(gfx::view_id id, const math::transform& world, uint6
     auto& builder = get_builder();
 
     const auto& font = get_scaled_font();
-
-    APP_SCOPE_PERF("Rendering/3D Text Pass/Submit Text Buffers");
 
     for(auto& sb : builder.buffers)
     {
