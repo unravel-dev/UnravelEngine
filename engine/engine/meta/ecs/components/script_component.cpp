@@ -484,7 +484,13 @@ SAVE(script_component::script_object)
     {
         if(field.get_visibility() == mono::visibility::vis_public)
         {
+            if(field.is_static())
+            {
+                continue;
+            }
+
             const auto& field_type = field.get_type();
+            
 
             auto field_serilizer = get_field_serilizer(field_type.get_name());
             if(field_serilizer)
@@ -508,6 +514,10 @@ SAVE(script_component::script_object)
     {
         if(prop.get_visibility() == mono::visibility::vis_public)
         {
+            if(prop.is_static())
+            {
+                continue;
+            }
             const auto& prop_type = prop.get_type();
 
             auto prop_serilizer = get_property_serilizer(prop_type.get_name());
@@ -786,7 +796,7 @@ auto save_to_stream(std::ostream& stream, entt::const_handle e, const script_com
         ar(ser20::make_nvp("script_object", obj));
         was_successful = true;
     }
-    catch(const ser20::Exception& e)
+    catch(const std::exception& e)
     {
         APPLOG_ERROR("Failed to save script component to stream: {}", e.what());
     }
@@ -807,7 +817,7 @@ auto load_from_stream(std::istream& stream, entt::handle e, script_component::sc
         ar(ser20::make_nvp("script_object", obj));
         was_successful = true;
     }
-    catch(const ser20::Exception& e)
+    catch(const std::exception& e)
     {
         APPLOG_ERROR("Failed to load script component from stream: {}", e.what());
     }

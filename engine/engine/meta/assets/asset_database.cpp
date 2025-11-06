@@ -112,7 +112,7 @@ void save_to_file(const std::string& absolute_path, const asset_meta& obj)
             auto ar = ser20::create_oarchive_associative(stream);
             try_save(ar, ser20::make_nvp("meta", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             serialization::log_warning(e.what());
         }
@@ -128,7 +128,7 @@ void save_to_file_bin(const std::string& absolute_path, const asset_meta& obj)
             ser20::oarchive_binary_t ar(stream);
             try_save(ar, ser20::make_nvp("meta", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             serialization::log_warning(e.what());
         }
@@ -144,7 +144,7 @@ auto load_from_file(const std::string& absolute_path, asset_meta& obj) -> bool
             auto ar = ser20::create_iarchive_associative(stream);
             return try_load(ar, ser20::make_nvp("meta", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             serialization::log_warning(e.what());
         }
@@ -161,7 +161,7 @@ auto load_from_file_bin(const std::string& absolute_path, asset_meta& obj) -> bo
             ser20::iarchive_binary_t ar(stream);
             return try_load(ar, ser20::make_nvp("meta", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             serialization::log_warning(e.what());
         }

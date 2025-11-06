@@ -160,7 +160,7 @@ void save_to_file(const std::string& absolute_path, const editor_settings& obj)
             auto ar = ser20::create_oarchive_associative(stream);
             try_save(ar, ser20::make_nvp("settings", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_WARNING("Failed to load config file {}", absolute_path);
         }
@@ -177,7 +177,7 @@ void save_to_file_bin(const std::string& absolute_path, const editor_settings& o
             ser20::oarchive_binary_t ar(stream);
             try_save(ar, ser20::make_nvp("settings", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_WARNING("Failed to load config file {}", absolute_path);
         }
@@ -194,7 +194,7 @@ auto load_from_file(const std::string& absolute_path, editor_settings& obj) -> b
             auto ar = ser20::create_iarchive_associative(stream);
             return try_load(ar, ser20::make_nvp("settings", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_WARNING("Failed to load config file {}", absolute_path);
         }
@@ -213,7 +213,7 @@ auto load_from_file_bin(const std::string& absolute_path, editor_settings& obj) 
             ser20::iarchive_binary_t ar(stream);
             return try_load(ar, ser20::make_nvp("settings", obj));
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_WARNING("Failed to load config file {}", absolute_path);
         }

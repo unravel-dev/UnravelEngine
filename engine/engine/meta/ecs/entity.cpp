@@ -813,7 +813,7 @@ void save_to_stream(std::ostream& stream, entt::const_handle obj)
             auto ar = ser20::create_oarchive_associative(stream);
             save_to_archive(ar, obj);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to save entity to stream: {}", e.what());
         }
@@ -876,7 +876,7 @@ void load_from_view(std::string_view view, entt::handle& obj)
             auto ar = ser20::create_iarchive_associative(view.data(), view.size());
             load_from_archive(ar, obj);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load entity from view: {}", e.what());
         }
@@ -893,7 +893,7 @@ void load_from_stream(std::istream& stream, entt::handle& obj)
             auto ar = ser20::create_iarchive_associative(stream);
             load_from_archive(ar, obj);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load entity from stream: {}", e.what());
         }
@@ -916,7 +916,7 @@ void load_from_stream_bin(std::istream& stream, entt::handle& obj)
             ser20::iarchive_binary_t ar(stream);
             load_from_archive(ar, obj);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load entity from stream: {}", e.what());
         }
@@ -969,7 +969,7 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                 pfb_comp.source = pfb;
             }
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             result = false;
             bool r = reading;
@@ -1008,7 +1008,7 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
                 pfb_comp.source = pfb;
             }
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             bool r = reading;
             bool w = writing;
@@ -1044,7 +1044,7 @@ auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& regis
                 pfb_comp.source = pfb;
             }
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Broken prefab {}", pfb.id());
         }
@@ -1103,7 +1103,7 @@ void save_to_stream(std::ostream& stream, const scene& scn)
             auto ar = ser20::create_oarchive_associative(stream);
             save_to_archive(ar, *scn.registry);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to save scene to stream: {}", e.what());
         }
@@ -1127,7 +1127,7 @@ void save_to_stream_bin(std::ostream& stream, const scene& scn)
             ser20::oarchive_binary_t ar(stream);
             save_to_archive(ar, *scn.registry);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to save scene to stream: {}", e.what());
         }
@@ -1150,7 +1150,7 @@ void load_from_view(std::string_view view, scene& scn)
             auto ar = ser20::create_iarchive_associative(view.data(), view.size());
             load_from_archive(ar, *scn.registry);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load scene from view: {}", e.what());
         }
@@ -1170,7 +1170,7 @@ void load_from_stream(std::istream& stream, scene& scn)
             auto ar = ser20::create_iarchive_associative(stream);
             load_from_archive(ar, *scn.registry);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load scene from stream: {}", e.what());
         }
@@ -1196,7 +1196,7 @@ void load_from_stream_bin(std::istream& stream, scene& scn)
             ser20::iarchive_binary_t ar(stream);
             load_from_archive(ar, *scn.registry);
         }
-        catch(const ser20::Exception& e)
+        catch(const std::exception& e)
         {
             APPLOG_ERROR("Failed to load scene from stream: {}", e.what());
         }
@@ -1219,15 +1219,15 @@ auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
     if(!buffer.empty())
     {
         // APPLOG_INFO_PERF(std::chrono::microseconds);
-        try
-        {
+        // try
+        // {
             auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
             load_from_archive(ar, *scn.registry);
-        }
-        catch(const ser20::Exception& e)
-        {
-            APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
-        }
+        // }
+        // catch(const std::exception& e)
+        // {
+        //     APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
+        // }
     }
 
     return true;

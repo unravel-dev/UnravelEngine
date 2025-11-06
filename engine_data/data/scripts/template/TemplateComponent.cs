@@ -34,9 +34,4 @@ class NewComponentTemplate : ScriptComponent
 	public override void OnUpdate()
 	{
 	}
-
-
-	/// <summary>
-	/// For more functions <see cref="ScriptComponent"/>.
-	/// </summary>
 }

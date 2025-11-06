@@ -140,7 +140,7 @@ inline auto try_serialize_direct(Archive& ar,
     {
         ar(std::forward<ser20::NameValuePair<T>>(t));
     }
-    catch(const ser20::Exception& e)
+    catch(const std::exception& e)
     {
         if constexpr(is_binary_archive<Archive>())
         {
