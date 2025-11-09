@@ -1070,10 +1070,9 @@ auto editor_actions::reload_project(rtti::context& ctx) -> bool
     return pm.open_project(ctx, project_path);
 }
 
-void editor_actions::run_project(const deploy_settings& params)
+void editor_actions::run_project(const fs::path& executable_path)
 {
-    auto call_params = params.deploy_location / (std::string("game") + fs::executable_extension());
-    subprocess::call(call_params.string());
+    subprocess::call(executable_path.string());
 }
 
 auto editor_actions::deploy_project(rtti::context& ctx,
@@ -1090,6 +1089,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
     auto& pm = ctx.get_cached<project_manager>();
     auto project_name = pm.get_name();
+    auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
 
     // am.get_database("engine:/")
 
@@ -1102,7 +1102,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         auto job =
             th.pool
                 ->schedule("Deploying Dependencies",
-                           [params, project_name]()
+                           [params, executable_path]()
                            {
                                APPLOG_INFO("Deploying Dependencies...");
 
@@ -1119,7 +1119,6 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                    fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
                                }
 
-                               auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
 
                                APPLOG_TRACE("Copying {} -> {}",
                                             app_executable.generic_string(),
@@ -1299,11 +1298,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
     tpp::when_all(std::begin(jobs_seq), std::end(jobs_seq))
         .then(tpp::this_thread::get_id(),
-              [params](auto f)
+              [params, executable_path](auto f)
               {
                   if(params.deploy_and_run)
                   {
-                      run_project(params);
+                      run_project(executable_path);
                   }
                   else
                   {

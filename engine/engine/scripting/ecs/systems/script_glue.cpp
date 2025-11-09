@@ -3982,8 +3982,17 @@ void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, en
     }
     
     auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+    auto* element_text = rmlui_dynamic_cast<Rml::ElementText*>(element);
 
-    if(auto* element_text = rmlui_dynamic_cast<Rml::ElementText*>(element))
+    if(!element_text)
+    {
+        if(auto* first_child = element->GetFirstChild())
+        {
+            element_text = rmlui_dynamic_cast<Rml::ElementText*>(first_child);
+        }
+    }
+
+    if(element_text)
     {
         element_text->SetText(rml);
     }
