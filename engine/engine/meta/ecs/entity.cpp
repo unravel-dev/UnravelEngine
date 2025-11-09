@@ -20,6 +20,7 @@
 
 #include <hpp/utility.hpp>
 #include <sstream>
+#include <utility>
 
 namespace unravel
 {
@@ -30,17 +31,6 @@ auto const_handle_cast(entt::const_handle chandle) -> entt::handle
     return handle;
 }
 
-template<typename Entity>
-struct entity_components
-{
-    Entity entity;
-};
-
-template<typename Entity>
-struct entity_data
-{
-    entity_components<Entity> components;
-};
 
 auto as_span(const std::vector<entity_data<entt::handle>>& entities) -> hpp::span<const entt::handle>
 {
@@ -77,8 +67,28 @@ void pop_load_context(bool push_result)
 {
     if(push_result && load_ctx_ptr)
     {
+        auto entities = std::move(load_ctx_ptr->entities);
         delete load_ctx_ptr;
         load_ctx_ptr = {};
+
+
+        if(!entities.empty())
+        {   
+            auto& ctx = engine::context();
+            auto& ev = ctx.get_cached<events>();
+            
+            if(ev.is_playing)
+            {
+                auto& rsys = ctx.get_cached<rendering_system>();
+                auto& ssys = ctx.get_cached<script_system>();
+    
+                delta_t dt(0.016667f);
+                auto span = as_span(entities);
+                rsys.on_play_begin(span, dt);
+                ssys.on_play_begin(span);
+            }  
+        }
+
     }
 }
 
@@ -720,19 +730,9 @@ auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::hand
         result = entities.front().components.entity;
     }
 
-    auto& ctx = engine::context();
-    auto& ev = ctx.get_cached<events>();
-
-    if(ev.is_playing)
-    {
-        auto& rsys = ctx.get_cached<rendering_system>();
-        auto& ssys = ctx.get_cached<script_system>();
-
-        delta_t dt(0.016667f);
-        auto span = as_span(entities);
-        rsys.on_play_begin(span, dt);
-        ssys.on_play_begin(span);
-    }
+    auto& load_ctx = get_load_context();
+    load_ctx.entities.reserve(load_ctx.entities.size() + entities.size());
+    std::move(entities.begin(), entities.end(), std::back_inserter(load_ctx.entities));
 
     return result;
 }
@@ -799,6 +799,7 @@ void load_from_archive(Archive& ar, entt::registry& reg)
     for(size_t i = 0; i < count; ++i)
     {
         entt::handle e(reg, reg.create());
+
         load_from_archive(ar, e);
     }
 

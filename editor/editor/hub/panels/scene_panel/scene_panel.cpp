@@ -1698,7 +1698,7 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
     if(size.x > 0 && size.y > 0)
     {
         camera_comp.get_camera().set_viewport_pos(
-            {static_cast<std::uint32_t>(pos.x), static_cast<std::uint32_t>(pos.y)});
+            {static_cast<int32_t>(pos.x), static_cast<int32_t>(pos.y)});
         camera_comp.set_viewport_size({static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y)});
     }
 }

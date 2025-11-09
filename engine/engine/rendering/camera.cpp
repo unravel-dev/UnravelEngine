@@ -27,7 +27,7 @@ void camera::set_viewport_size(const usize32_t& viewport_size)
     set_aspect_ratio(float(viewport_size.width) / float(viewport_size.height));
 }
 
-void camera::set_viewport_pos(const upoint32_t& viewportPos)
+void camera::set_viewport_pos(const ipoint32_t& viewportPos)
 {
     viewport_pos_ = viewportPos;
 }
@@ -37,7 +37,7 @@ auto camera::get_viewport_size() const -> const usize32_t&
     return viewport_size_;
 }
 
-auto camera::get_viewport_pos() const -> const upoint32_t&
+auto camera::get_viewport_pos() const -> const ipoint32_t&
 {
     return viewport_pos_;
 }

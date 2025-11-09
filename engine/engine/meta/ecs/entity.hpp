@@ -9,6 +9,19 @@
 
 namespace unravel
 {
+
+    
+template<typename Entity>
+struct entity_components
+{
+    Entity entity;
+};
+
+template<typename Entity>
+struct entity_data
+{
+    entity_components<Entity> components;
+};
 enum class clone_mode_t
 {
     none,
@@ -54,6 +67,8 @@ struct load_context
         return !mapping_by_uid.empty();
     }
 
+
+    std::vector<entity_data<entt::handle>> entities;
     clone_mode_t clone_mode{};
     entt::registry* reg{};
 

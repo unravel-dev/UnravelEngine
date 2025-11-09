@@ -405,6 +405,10 @@ void script_system::unload_app_domain()
 void script_system::on_create_component(entt::registry& r, entt::entity e)
 {
 }
+void script_system::on_load_component(entt::registry& r, entt::entity e)
+{
+
+}
 void script_system::on_destroy_component(entt::registry& r, entt::entity e)
 {
     auto& comp = r.get<script_component>(e);
@@ -518,6 +522,7 @@ void script_system::on_play_begin(rtti::context& ctx)
 
     registry.on_construct<script_component>().connect<&on_create_component>();
     registry.on_destroy<script_component>().connect<&on_destroy_component>();
+    on_load<script_component>(registry).connect<&on_load_component>();
 
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
@@ -555,6 +560,7 @@ void script_system::on_play_end(rtti::context& ctx)
 
     registry.on_construct<script_component>().disconnect<&on_create_component>();
     registry.on_destroy<script_component>().disconnect<&on_destroy_component>();
+    on_load<script_component>(registry).disconnect<&on_load_component>();
 
     elapsed_time_ = {};
 }

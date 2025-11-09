@@ -325,7 +325,6 @@ auto statistics_panel::draw_pipeline_stats() -> void
                 ImGui::Text("Drawn Lights Casting Shadows: %u", stats.drawn_lights_casting_shadows);
                 
                 // Static Mesh Batching Statistics
-                if(stats.batching_stats.total_batches > 0 || stats.batching_stats.total_instances > 0)
                 {
                     ImGui::Separator();
                     ImGui::Text("Static Mesh Batching:");
@@ -337,13 +336,11 @@ auto statistics_panel::draw_pipeline_stats() -> void
                     ImGui::Text("Avg Batch Size: %.1f", batch_stats.average_batch_size);
                     ImGui::Text("Batching Efficiency: %.1f%%", batch_stats.batching_efficiency * 100.0f);
                     
-                    if(batch_stats.split_batches > 0)
                     {
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "Split Batches: %u", batch_stats.split_batches);
                     }
                     
                     // Performance timings
-                    if(batch_stats.collection_time_ms > 0.0f || batch_stats.preparation_time_ms > 0.0f)
                     {
                         ImGui::Text("Collection Time: %.3f ms", batch_stats.collection_time_ms);
                         ImGui::Text("Preparation Time: %.3f ms", batch_stats.preparation_time_ms);
@@ -351,7 +348,6 @@ auto statistics_panel::draw_pipeline_stats() -> void
                     }
                     
                     // Memory usage
-                    if(batch_stats.instance_buffer_memory_used > 0)
                     {
                         float memory_mb = static_cast<float>(batch_stats.instance_buffer_memory_used) / (1024.0f * 1024.0f);
                         ImGui::Text("Instance Buffer Memory: %.2f MB", memory_mb);

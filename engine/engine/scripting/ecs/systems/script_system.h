@@ -68,6 +68,13 @@ struct script_system
     static void on_create_active_component(entt::registry& r, entt::entity e);
 
     /**
+     * @brief Called when a script component is loaded.
+     * @param r The registry containing the component.
+     * @param e The entity associated with the component.
+     */
+    static void on_load_component(entt::registry& r, entt::entity e);
+
+    /**
      * @brief Called when a physics component is destroyed.
      * @param r The registry containing the component.
      * @param e The entity associated with the component.

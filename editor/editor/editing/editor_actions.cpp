@@ -1327,11 +1327,14 @@ void editor_actions::generate_script_workspace()
 
     auto formats = ex::get_all_formats();
     formats.emplace_back(std::vector<std::string>{".meta"});
+    formats.emplace_back(std::vector<std::string>{".asset"});
+    formats.emplace_back(std::vector<std::string>{".manifest"});
+    formats.emplace_back(std::vector<std::string>{".temp"});
+
     remove_extensions(formats, ex::get_suported_formats<gfx::shader>());
     remove_extensions(formats, ex::get_suported_formats<script>());
     remove_extensions(formats, ex::get_suported_formats<ui_tree>());
     remove_extensions(formats, ex::get_suported_formats<style_sheet>());
-    remove_extensions(formats, std::vector<std::string>{".asset*"});
 
     auto workspace_file = workspace_folder / fmt::format("{}-workspace.code-workspace", project_name);
     generate_workspace_file(workspace_file.string(), formats, editor_settings);

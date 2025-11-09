@@ -125,14 +125,14 @@ public:
      *
      * @param viewportSize The size of the viewport.
      */
-    void set_viewport_size(const usize32_t& viewportSize);
+    void set_viewport_size(const usize32_t& viewport_size);
 
     /**
      * @brief Sets the position of the viewport.
      *
      * @param viewportPos The position of the viewport.
      */
-    void set_viewport_pos(const upoint32_t& viewportPos);
+    void set_viewport_pos(const ipoint32_t& viewport_pos);
 
     /**
      * @brief Retrieves the size of the viewport.
@@ -146,7 +146,7 @@ public:
      *
      * @return The position of the viewport.
      */
-    auto get_viewport_pos() const -> const upoint32_t&;
+    auto get_viewport_pos() const -> const ipoint32_t&;
 
     /**
      * @brief Sets the aspect ratio to be used for generating the horizontal FOV angle (perspective only).
@@ -244,9 +244,9 @@ public:
      * @param currentSubpixelIndex The current subpixel index.
      * @param temporalAASamples The number of temporal AA samples.
      */
-    void set_aa_data(const usize32_t& viewportSize,
-                     std::uint32_t currentSubpixelIndex,
-                     std::uint32_t temporalAASamples);
+    void set_aa_data(const usize32_t& viewport_size,
+                     std::uint32_t current_subpixel_index,
+                     std::uint32_t temporal_aa_samples);
 
     /**
      * @brief Retrieves the anti-aliasing data.
@@ -422,7 +422,7 @@ public:
      * @param at The target position.
      * @param vUp The up vector.
      */
-    void look_at(const math::vec3& eye, const math::vec3& at, const math::vec3& vUp);
+    void look_at(const math::vec3& eye, const math::vec3& at, const math::vec3& up);
 
     /**
      * @brief Retrieves the current position of the camera.
@@ -508,7 +508,7 @@ protected:
     /// The aspect ratio used to generate the correct horizontal degrees (perspective only)
     float aspect_ratio_ = 1.0f;
     /// Viewport position
-    upoint32_t viewport_pos_ = {0, 0};
+    ipoint32_t viewport_pos_ = {0, 0};
     /// Viewport size
     usize32_t viewport_size_ = {0, 0};
     /// View matrix dirty ?
