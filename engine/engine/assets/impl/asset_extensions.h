@@ -320,6 +320,82 @@ inline auto get_type(const std::string& ex, bool is_directory = false) -> const 
     return result;
 }
 
+inline auto is_binary(const std::string& ex) -> bool
+{
+    // Binary formats (compiled/processed assets)
+    if(is_format<gfx::texture>(ex))
+    {
+        // Most texture formats are binary, except some like .hdr which can be text-based
+        // But for simplicity, we'll consider all texture formats as binary
+        return true;
+    }
+    if(is_format<unravel::mesh>(ex))
+    {
+        // .emesh is binary, but source formats like .obj, .gltf can be text
+        // Check for binary formats specifically
+        return ex == ".emesh" || ex == ".glb" || ex == ".fbx" || ex == ".FBX" || 
+               ex == ".blend" || ex == ".3ds" || ex == ".dae";
+    }
+    if(is_format<unravel::audio_clip>(ex))
+    {
+        // Audio formats are typically binary
+        return true;
+    }
+    if(is_format<gfx::shader>(ex))
+    {
+        // .sc shader files are text-based
+        return false;
+    }
+    if(is_format<unravel::material>(ex))
+    {
+        // .mat and .ematerial are typically text-based (JSON/XML)
+        return false;
+    }
+    if(is_format<unravel::animation_clip>(ex))
+    {
+        // .anim files are typically text-based
+        return false;
+    }
+    if(is_format<unravel::prefab>(ex))
+    {
+        // .pfb files are typically text-based
+        return false;
+    }
+    if(is_format<unravel::scene_prefab>(ex))
+    {
+        // .spfb files are typically text-based
+        return false;
+    }
+    if(is_format<unravel::physics_material>(ex))
+    {
+        // Physics material files are typically text-based
+        return false;
+    }
+    if(is_format<unravel::script>(ex))
+    {
+        // .cs script files are text-based
+        return false;
+    }
+    if(is_format<unravel::font>(ex))
+    {
+        // Font files (.ttf, .otf) are binary
+        return true;
+    }
+    if(is_format<unravel::ui_tree>(ex))
+    {
+        // .rhtml files are text-based
+        return false;
+    }
+    if(is_format<unravel::style_sheet>(ex))
+    {
+        // .rcss files are text-based
+        return false;
+    }
+
+    // Unknown format, assume text-based for safety
+    return false;
+}
+
 template<typename T>
 inline auto get_type() -> const std::string&
 {

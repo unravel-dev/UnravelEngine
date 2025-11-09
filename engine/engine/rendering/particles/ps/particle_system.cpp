@@ -405,7 +405,7 @@ struct Emitter
         // Extract transform components directly (efficient for both simulation methods)
         outPosition = uniforms_.m_transform.get_position();
         outScale = uniforms_.m_transform.get_scale();
-        outEmissionShapeScale = uniforms_.m_emissionShapeScale * outScale; // Apply transform scale to emission shape
+        outEmissionShapeScale = uniforms_.m_emissionShapeScale; // Apply transform scale to emission shape
         outTransformMatrix = uniforms_.m_transform; // Implicit conversion to mat4
     }
 
@@ -479,8 +479,14 @@ struct Emitter
         const math::vec3 emissionShapeScale = effectiveEmissionShapeScale;
         const float lifeSpan = uniforms_.m_lifetime;
         const float lifeSpanSquared = lifeSpan * lifeSpan;
-        const math::vec3 gravityVector = math::vec3(0.0f, -9.81f * uniforms_.m_gravityScale * lifeSpanSquared * systemScale.y, 0.0f);
-        const math::vec3 forceOverLifetimeVector = uniforms_.m_forceOverLifetime * lifeSpanSquared * systemScale;
+        math::vec3 gravityVector = math::vec3(0.0f, -9.81f * uniforms_.m_gravityScale * lifeSpanSquared, 0.0f);
+        math::vec3 forceOverLifetimeVector = uniforms_.m_forceOverLifetime * lifeSpanSquared;
+        
+        if(uniforms_.m_simulationSpace == SimulationSpace::World)
+        {
+            gravityVector.y *= systemScale.y;
+            forceOverLifetimeVector *= systemScale;
+        }
         const float velocityDampingFactor = (1.0f - uniforms_.m_velocityDamping);
 
         // Calculate motion delta for temporal emission gap handling
@@ -555,14 +561,13 @@ struct Emitter
             }
 
             // Use pre-calculated system scale for better performance
-            const math::vec3 scaledPos = systemScale * pos;
-            const math::vec3 start = scaledPos;
+            const math::vec3 start = pos;
 
             // Sample velocity range from gradient at particle end (t=1)
             const frange_t endVelocityRange = uniforms_.m_velocityGradient.sample(1.0f);
             const float endVelocity = math::mix(endVelocityRange.min, endVelocityRange.max, bx::frnd(&rng_));
             const math::vec3 scaledDir = systemScale * dir;
-            const math::vec3 tmp1 = scaledDir * endVelocity;
+            const math::vec3 tmp1 = dir * endVelocity;
             const math::vec3 end = tmp1 + start;
 
             particle->life = 0.0f; // Always start at 0 for new particles

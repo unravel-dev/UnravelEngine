@@ -52,9 +52,9 @@ using all_serializeable_components = std::tuple<
     audio_source_component,
     audio_listener_component,
     text_component,
-    script_component,
     particle_emitter_component,
-    ui_document_component
+    ui_document_component,
+    script_component
     >;
 
 using all_inspectable_components = std::tuple<

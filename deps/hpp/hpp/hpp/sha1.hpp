@@ -312,5 +312,96 @@ public:
 
 		return hasher;
 	}
+
+
+	
+	
+	template<size_t ChunkSize = 64 * 1024>
+	static auto compute_file_sha1_stable(std::ifstream& file, bool is_text) -> sha1
+	{
+		// If you want to mirror Git exactly, keep this false (Git does not strip BOMs).
+		static constexpr bool STRIP_UTF8_BOM = false;
+		sha1 hasher;
+
+		// Always read binary to avoid libstdc++ transforming newlines.
+		// (Assume caller opened with std::ios::binary.)
+
+		std::array<unsigned char, ChunkSize> buf{};
+		bool last_was_cr = false;
+		bool first_chunk = true;
+
+		auto feed = [&](const unsigned char* p, size_t n) {
+			if (n) hasher.add(reinterpret_cast<const char*>(p), n);
+		};
+		auto feed_lf = [&](){
+			static const unsigned char lf = '\n';
+			feed(&lf, 1);
+		};
+
+		// robust read loop
+		for (;;)
+		{
+			file.read(reinterpret_cast<char*>(buf.data()), buf.size());
+			std::streamsize got = file.gcount();
+			if (got <= 0) break;
+
+			const unsigned char* p = buf.data();
+			size_t n = static_cast<size_t>(got);
+
+			if (is_text)
+			{
+				// Optional: strip UTF-8 BOM only at file start
+				if (first_chunk) {
+					first_chunk = false;
+					if (STRIP_UTF8_BOM && n >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) {
+						p += 3; n -= 3;
+					}
+				}
+
+				// Normalize newlines in a streaming-safe way
+				size_t i = 0;
+				while (i < n)
+				{
+					unsigned char c = p[i++];
+
+					if (last_was_cr) {
+						if (c == '\n') {
+							// CRLF across boundary -> single LF
+							feed_lf();
+							last_was_cr = false;
+							continue;
+						} else {
+							// Lone CR -> LF
+							feed_lf();
+							last_was_cr = false;
+							// fall through to handle current c
+						}
+					}
+
+					if (c == '\r') {
+						// Could be CRLF or lone CR; defer decision
+						last_was_cr = true;
+					} else if (c == '\n') {
+						feed_lf();
+					} else {
+						feed(&c, 1);
+					}
+				}
+			}
+			else
+			{
+				// Binary: hash raw bytes
+				feed(p, n);
+			}
+		}
+
+		if (is_text && last_was_cr) {
+			// File ended with dangling CR -> normalize to LF
+			feed_lf();
+		}
+
+		hasher.finalize();
+		return hasher;
+	}
 };
 } //end of namespace hpp

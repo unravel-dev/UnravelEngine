@@ -21,6 +21,13 @@ auto start(seq_action action,
            hpp::source_location location = hpp::source_location::current()) -> seq_id_t;
 
 /**
+ * @brief Queues a new action.
+ * @param action The action to be queued.
+ */
+auto queue(seq_action action, 
+           const seq_scope_policy& scope_policy = {},
+           hpp::source_location location = hpp::source_location::current()) -> seq_id_t;
+/**
  * @brief Stops the action associated with the given ID.
  * @param id The ID of the action to stop.
  */

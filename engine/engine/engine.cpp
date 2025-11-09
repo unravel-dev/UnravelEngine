@@ -483,6 +483,8 @@ auto engine::process() -> int
 
     ev.on_frame_end(ctx, dt);
 
+    seq::update(delta_t::zero());
+
     get_app_profiler()->swap();
 
     return 1;

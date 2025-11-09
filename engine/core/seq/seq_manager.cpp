@@ -6,7 +6,7 @@
 namespace seq
 {
 
-auto seq_manager::start(seq_action action, const seq_scope_policy& scope_policy) -> seq_id_t
+auto seq_manager::start(seq_action action, const seq_scope_policy& scope_policy, bool force_queue) -> seq_id_t
 {
     const auto id = action.get_id();
 
@@ -41,6 +41,13 @@ auto seq_manager::start(seq_action action, const seq_scope_policy& scope_policy)
             }
         }
     };
+
+    if(force_queue)
+    {
+        auto& info = pending_actions_[id];
+        fill_info(info, std::move(action));
+        return id;
+    }
 
     auto iter = actions_.find(id);
     if(iter == actions_.end())

@@ -1256,6 +1256,12 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
     auto& em = ctx.get_cached<editing_manager>();
     auto& path = ctx.get_cached<rendering_system>();
     auto handle = get_camera();
+
+    if(!handle)
+    {
+        return;
+    }
+
     auto& camera_comp = handle.get<camera_component>();
 
     // Use the appropriate scene based on mode

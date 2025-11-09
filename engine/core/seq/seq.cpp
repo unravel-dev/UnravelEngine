@@ -11,6 +11,12 @@ auto start(seq_action action, const seq_scope_policy& scope_policy, hpp::source_
     return detail::get_manager().start(std::move(action), scope_policy);
 }
 
+auto queue(seq_action action, const seq_scope_policy& scope_policy, hpp::source_location location) -> seq_id_t
+{
+    inspector::add_location(action, location);
+    return detail::get_manager().start(std::move(action), scope_policy, true); // Force queue
+}
+
 void stop(seq_id_t id)
 {
     detail::get_manager().stop(id);

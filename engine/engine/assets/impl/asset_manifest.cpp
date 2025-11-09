@@ -1,4 +1,5 @@
 #include "asset_manifest.h"
+#include "asset_extensions.h"
 #include <logging/logging.h>
 #include <fstream>
 #include <array>
@@ -15,6 +16,7 @@ namespace asset_compiler
 
 void asset_manifest::compute_source_sha()
 {
+    auto source_file_path = fs::resolve_protocol(source_key);
     fs::error_code ec;
     if(!fs::exists(source_file_path, ec) || ec)
     {
@@ -33,7 +35,8 @@ void asset_manifest::compute_source_sha()
             return;
         }
         
-        auto hasher = hpp::sha1::compute_file_sha1(file);
+        bool is_text = !ex::is_binary(source_file_path.extension().string());
+        auto hasher = hpp::sha1::compute_file_sha1_stable(file, is_text);
         
         std::array<char, SHA1_HEX_SIZE> hex_buffer{};
         hasher.print_hex(hex_buffer.data(), true, false);
@@ -64,7 +67,7 @@ auto save_manifest(const fs::path& manifest_path, const asset_manifest& manifest
         
         auto archive = ser20::create_oarchive_associative(file);
     
-        archive(ser20::make_nvp("source_path", manifest.source_file_path.generic_string()));
+        archive(ser20::make_nvp("source_key", manifest.source_key.generic_string()));
         archive(ser20::make_nvp("source_sha", manifest.source_sha));
         archive(ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         
@@ -97,8 +100,8 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
         auto archive = ser20::create_iarchive_associative(file);
         
         std::string source_path;
-        archive(ser20::make_nvp("source_path", source_path));
-        manifest.source_file_path = fs::path(source_path);
+        archive(ser20::make_nvp("source_key", source_path));
+        manifest.source_key = fs::path(source_path);
         archive(ser20::make_nvp("source_sha", manifest.source_sha));
         archive(ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         return true;
@@ -114,18 +117,19 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
 {
     auto resolve_input_file = [](const fs::path& key) -> fs::path
     {
-        fs::path absolute_path = fs::convert_to_protocol(key);
-        absolute_path = fs::resolve_protocol(fs::replace(absolute_path, ex::get_meta_directory(), ex::get_data_directory()));
-        if(absolute_path.extension() == ".meta")
+        fs::path source_key = fs::convert_to_protocol(key);
+        source_key = fs::replace(source_key, ex::get_meta_directory(), ex::get_data_directory());
+        // absolute_path = fs::resolve_protocol(fs::replace(absolute_path, ex::get_meta_directory(), ex::get_data_directory()));
+        if(source_key.extension() == ".meta")
         {
-            absolute_path.replace_extension();
+            source_key.replace_extension();
         }
-        return absolute_path;
+        return source_key;
     };
 
-    auto source_file_path = resolve_input_file(source_path);
+    auto source_key = resolve_input_file(source_path);
     // Create a temporary manifest to compute current SHA
-    asset_manifest current_manifest(source_file_path);
+    asset_manifest current_manifest(source_key);
 
     if(current_manifest.source_timestamp == manifest.source_timestamp)
     {

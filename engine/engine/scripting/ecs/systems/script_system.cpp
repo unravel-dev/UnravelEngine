@@ -714,6 +714,12 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
     {
         log_exception(e);
     }
+
+
+    dt = std::max(delta_t::zero(), dt);
+
+    delta_t secs(dt);
+    seq::update(secs);
 }
 
 auto script_system::get_all_scriptable_components() const -> const std::vector<mono::mono_type>&

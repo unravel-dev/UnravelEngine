@@ -28,6 +28,7 @@
 
 // RmlUi includes
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementText.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Variant.h>
 #include <RmlUi/Core/EventListener.h>
@@ -193,7 +194,7 @@ auto safe_get_component(entt::entity id) -> T*
 
 void internal_m2n_load_scene(const std::string& key)
 {
-    auto delay = seq::delay(1ms);
+    auto delay = seq::delay(0ms);
     delay.on_end.connect(
         [key]()
         {
@@ -204,12 +205,12 @@ void internal_m2n_load_scene(const std::string& key)
             ec.get_scene().load_from(am.get_asset<scene_prefab>(key));
         });
 
-    seq::start(delay, "script");
+    seq::queue(delay, "script");
 }
 
 void internal_m2n_load_scene_uid(const hpp::uuid& uid)
 {
-    auto delay = seq::delay(1ms);
+    auto delay = seq::delay(0ms);
     delay.on_end.connect(
         [uid]()
         {
@@ -220,7 +221,7 @@ void internal_m2n_load_scene_uid(const hpp::uuid& uid)
             ec.get_scene().load_from(am.get_asset<scene_prefab>(uid));
         });
 
-    seq::start(delay, "script");
+    seq::queue(delay, "script");
 }
 
 void internal_m2n_create_scene(const mono::mono_object& this_ptr)
@@ -296,7 +297,7 @@ auto internal_m2n_destroy_entity_immediate(entt::entity id) -> bool
 
 auto internal_m2n_destroy_entity(entt::entity id, float seconds) -> bool
 {
-    seconds = std::max(0.0001f, seconds);
+    seconds = std::max(0.0f, seconds);
 
     delta_t secs(seconds);
     auto dur = std::chrono::duration_cast<seq::duration_t>(secs);
@@ -308,7 +309,7 @@ auto internal_m2n_destroy_entity(entt::entity id, float seconds) -> bool
             internal_m2n_destroy_entity_immediate(id);
         });
 
-    seq::start(delay, "script");
+    seq::queue(delay, "script");
 
     return true;
 }
@@ -3981,7 +3982,19 @@ void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_ptr, en
     }
     
     auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
-    element->SetInnerRML(rml);
+
+    if(auto* element_text = rmlui_dynamic_cast<Rml::ElementText*>(element))
+    {
+        element_text->SetText(rml);
+    }
+    else
+    {
+        auto current_rml = element->GetInnerRML();
+        if(current_rml != rml)
+        {
+            element->SetInnerRML(rml);
+        }
+    }
 }
 
 auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_ptr, entt::entity owner_entity) -> bool

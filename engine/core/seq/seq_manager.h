@@ -49,7 +49,7 @@ struct seq_manager
      * @param scope_policy The scoping policy for the action (default is empty).
      * @return The unique ID of the started action.
      */
-    seq_id_t start(seq_action action, const seq_scope_policy& scope_policy = {});
+    seq_id_t start(seq_action action, const seq_scope_policy& scope_policy = {}, bool force_queue = false);
 
     /**
      * @brief Stops the action associated with the specified ID.

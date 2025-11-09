@@ -33,6 +33,7 @@ namespace unravel
 struct ui_system
 {
     static void on_create_component(entt::registry& r, entt::entity e);
+    static void on_load_component(entt::registry& r, entt::entity e);
     static void on_destroy_component(entt::registry& r, entt::entity e);
 
     /**
@@ -100,7 +101,7 @@ private:
      * @param component The ui_document_component to load the document for
      * @return True if loading was successful, false otherwise
      */
-    auto load_ui_document(ui_document_component& component) -> bool;
+    auto load_ui_document(ui_document_component& component, bool reload_stylesheet = false) -> bool;
 
 
 

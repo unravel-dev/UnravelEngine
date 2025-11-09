@@ -6,11 +6,57 @@
 #include <context/context.hpp>
 #include <engine/assets/asset_handle.h>
 #include <entt/entt.hpp>
+#include <entt/signal/sigh.hpp>
 
 using namespace entt::literals;
 
 namespace unravel
 {
+
+template<class T>
+struct on_load_bus
+{
+    using sink_t = typename entt::sink<entt::sigh<void(entt::registry&, entt::entity)>>;
+    entt::sigh<void(entt::registry&, entt::entity)> sig;
+};
+
+template<class T>
+inline auto on_load(entt::registry& reg) -> on_load_bus<T>::sink_t
+{
+    auto& ctx = reg.ctx();
+    if(!ctx.contains<on_load_bus<T>>())
+    {
+        return typename on_load_bus<T>::sink_t(ctx.emplace<on_load_bus<T>>().sig);
+    }
+    return typename on_load_bus<T>::sink_t(ctx.get<on_load_bus<T>>().sig);
+}
+
+template<class T>
+inline auto on_construct(entt::registry& reg) -> decltype(auto)
+{
+    return reg.on_construct<T>();
+}
+
+template<class T>
+inline auto on_update(entt::registry& reg) -> decltype(auto)
+{
+    return reg.on_update<T>();
+}
+
+template<class T>
+inline auto on_destroy(entt::registry& reg) -> decltype(auto)
+{
+    return reg.on_destroy<T>();
+}
+
+template<class T>
+inline void emit_on_load(entt::registry& reg, entt::entity e)
+{
+    if (auto* bus = reg.ctx().find<on_load_bus<T>>())
+    {
+        bus->sig.publish(reg, e);
+    }
+}
 
 #define ENTT_TAG(name) entt::tag<name##_hs>
 /**

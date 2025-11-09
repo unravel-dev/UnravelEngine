@@ -129,38 +129,40 @@ scene::scene(const std::string& tag_name)
     registry = std::make_unique<entt::registry>();
     unload();
 
-    registry->on_construct<root_component>().connect<&root_component::on_create_component>();
-    registry->on_update<root_component>().connect<&root_component::on_update_component>();
-    registry->on_destroy<root_component>().connect<&root_component::on_destroy_component>();
+    on_construct<root_component>(*registry).connect<&root_component::on_create_component>();
+    on_update<root_component>(*registry).connect<&root_component::on_update_component>();
+    on_destroy<root_component>(*registry).connect<&root_component::on_destroy_component>();
 
-    registry->on_construct<transform_component>().connect<&transform_component::on_create_component>();
-    registry->on_destroy<transform_component>().connect<&transform_component::on_destroy_component>();
+    on_construct<transform_component>(*registry).connect<&transform_component::on_create_component>();
+    on_destroy<transform_component>(*registry).connect<&transform_component::on_destroy_component>();
 
-    registry->on_construct<model_component>().connect<&model_component::on_create_component>();
-    registry->on_destroy<model_component>().connect<&model_component::on_destroy_component>();
+    on_construct<model_component>(*registry).connect<&model_component::on_create_component>();
+    on_destroy<model_component>(*registry).connect<&model_component::on_destroy_component>();
 
-    registry->on_construct<animation_component>().connect<&animation_system::on_create_component>();
-    registry->on_destroy<animation_component>().connect<&animation_system::on_destroy_component>();
+    on_construct<animation_component>(*registry).connect<&animation_system::on_create_component>();
+    on_destroy<animation_component>(*registry).connect<&animation_system::on_destroy_component>();
 
-    registry->on_construct<physics_component>().connect<&physics_system::on_create_component>();
-    registry->on_destroy<physics_component>().connect<&physics_system::on_destroy_component>();
-
-
-    registry->on_construct<prefab_component>().connect<&owned_component::on_create_component<prefab_component>>();
-    registry->on_destroy<prefab_component>().connect<&owned_component::on_destroy_component<prefab_component>>();
-
-    registry->on_destroy<prefab_component>().connect<&destroy_dependent_components_recursive<prefab_id_component>>();
+    on_construct<physics_component>(*registry).connect<&physics_system::on_create_component>();
+    on_destroy<physics_component>(*registry).connect<&physics_system::on_destroy_component>();
 
 
-    registry->on_construct<script_component>().connect<&script_component::on_create_component>();
-    registry->on_destroy<script_component>().connect<&script_component::on_destroy_component>();
+    on_construct<prefab_component>(*registry).connect<&owned_component::on_create_component<prefab_component>>();
+    on_destroy<prefab_component>(*registry).connect<&owned_component::on_destroy_component<prefab_component>>();
 
-    registry->on_construct<ui_document_component>().connect<&ui_system::on_create_component>();
-    registry->on_destroy<ui_document_component>().connect<&ui_system::on_destroy_component>();
+    on_destroy<prefab_component>(*registry).connect<&destroy_dependent_components_recursive<prefab_id_component>>();
 
-    registry->on_construct<particle_emitter_component>().connect<&particle_emitter_component::on_create_component>();
-    registry->on_destroy<particle_emitter_component>().connect<&particle_emitter_component::on_destroy_component>();
+
+    on_construct<script_component>(*registry).connect<&script_component::on_create_component>();
+    on_destroy<script_component>(*registry).connect<&script_component::on_destroy_component>();
+
+    on_construct<ui_document_component>(*registry).connect<&ui_system::on_create_component>();
+    on_destroy<ui_document_component>(*registry).connect<&ui_system::on_destroy_component>();
+    on_load<ui_document_component>(*registry).connect<&ui_system::on_load_component>();
+
+    on_construct<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_create_component>();
+    on_destroy<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_destroy_component>();
     
+
 }
 
 scene::~scene()

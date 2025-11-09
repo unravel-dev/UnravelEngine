@@ -13,9 +13,9 @@ namespace asset_compiler
 struct asset_manifest
 {
     /// Path to the source file
-    fs::path source_file_path;
+    fs::path source_key;
     /// Timestamp when the asset was compiled
-    fs::file_time_type::clock::time_point source_timestamp;
+    std::chrono::nanoseconds source_timestamp;
     
     /// SHA1 hash of the source file content
     std::string source_sha;
@@ -23,11 +23,11 @@ struct asset_manifest
     
     asset_manifest() = default;
     
-    asset_manifest(const fs::path& source_path)
-        : source_file_path(source_path)
+    asset_manifest(const fs::path& key)
+        : source_key(key)
     {
         fs::error_code ec;
-        source_timestamp = fs::last_write_time(source_path, ec);
+        source_timestamp = fs::last_write_time(fs::resolve_protocol(key), ec).time_since_epoch();
     }
     
     void compute_source_sha();

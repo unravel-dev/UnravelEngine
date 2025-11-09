@@ -306,7 +306,24 @@ void ui_system::load_fonts()
 }
 
 void ui_system::on_create_component(entt::registry& r, entt::entity e)
+{ 
+
+    
+}
+
+void ui_system::on_load_component(entt::registry& r, entt::entity e)
 {
+    auto& component = r.get<ui_document_component>(e);
+
+    // Load document if not already loaded
+    if(!component.is_loaded())
+    {
+        auto& ctx = engine::context();
+        auto& system = ctx.get_cached<ui_system>();
+
+            // Update RmlUi context
+        system.load_ui_document(component, true);
+    }
 }
 
 void ui_system::on_destroy_component(entt::registry& r, entt::entity e)
@@ -398,21 +415,22 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
             }
         }
 
-        // Skip if no document path is specified
-        if(!ui_comp.asset)
-        {
-            continue;
-        }
-
         // Load document if not already loaded
         if(!ui_comp.is_loaded())
         {
-            load_ui_document(ui_comp);
+            load_ui_document(ui_comp, true);
         }
 
         if(!ui_comp.document)
         {
             continue;
+        }
+
+        // Handle deferred stylesheet reload
+        if(ui_comp.needs_stylesheet_reload && ui_comp.document)
+        {
+            ui_comp.document->ReloadStyleSheet();
+            ui_comp.needs_stylesheet_reload = false;
         }
 
         bool active_and_enabled = active && ui_comp.is_enabled();
@@ -434,11 +452,17 @@ void ui_system::update_ui_document_components(rtti::context& ctx)
     }
 }
 
-auto ui_system::load_ui_document(ui_document_component& component) -> bool
+auto ui_system::load_ui_document(ui_document_component& component, bool reload_stylesheet) -> bool
 {
     if(!ui_context_)
     {
         APPLOG_ERROR("Cannot load UI document: RmlUi context not available");
+        return false;
+    }
+
+    if(!component.asset)
+    {
+        APPLOG_WARNING("Cannot load document: asset is empty");
         return false;
     }
 
@@ -462,7 +486,6 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
         APPLOG_ERROR("Failed to load UI document: {}", component.asset.id());
         return false;
     }
-    raw_document->ReloadStyleSheet();
 
     raw_document->SetId("body");
 
@@ -473,6 +496,14 @@ auto ui_system::load_ui_document(ui_document_component& component) -> bool
     // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
+    
+    // Defer stylesheet reload to next frame when document context is fully established
+    // This prevents the "Unable to open file ." error that occurs during component creation
+    if(reload_stylesheet)
+    {
+        // Schedule stylesheet reload for next update cycle
+        component.needs_stylesheet_reload = true;
+    }
     
     return true;
 }

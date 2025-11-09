@@ -10,6 +10,7 @@
 #include <engine/events.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/meta/core/common/basetypes.hpp>
 
 #include "entt/entity/fwd.hpp"
@@ -585,6 +586,9 @@ LOAD(entity_components<entt::handle>)
                         return try_serialize_direct(ar, ser20::make_nvp(name, component));
                     });
                 }
+
+                emit_on_load<ctype>(*obj.entity.registry(), obj.entity.entity());
+
             }
             
 
@@ -598,6 +602,7 @@ LOAD(entity_components<entt::handle>)
                 auto& comp = obj.entity.get_or_emplace<ctype>();
                 (void)comp;
             }
+
     
         });
 
@@ -1065,13 +1070,6 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     save_ctx.save_source = src_obj;
     save_ctx.to_prefab = false;
     save_ctx.clone_mode = clone_mode;
-
-    //std::stringstream ss;
-    //std::fstream ss("./clone.ecs", std::ios::out | std::ios::in);
-    {
-        std::ofstream ss("./clone.ecs");
-        save_to_stream(ss, src_obj);
-    }
     
     save_ctx.to_prefab = false;
     save_ctx.save_source = {};
@@ -1082,11 +1080,6 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     pushed = push_load_context(*dst_obj.registry());
     auto& load_ctx = get_load_context();
     load_ctx.clone_mode = clone_mode;
-
-    {
-        std::ifstream ss("./clone.ecs");
-        load_from(ss, dst_obj);
-    }
 
     load_ctx.clone_mode = clone_mode_t::none;
     pop_load_context(pushed);

@@ -57,6 +57,10 @@ private:
     
     bool enabled_ = true;
 
+public:
+    /// Flag to indicate that stylesheet reload is needed on next update
+    bool needs_stylesheet_reload = false;
+
 };
 
 } // namespace unravel

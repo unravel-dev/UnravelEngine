@@ -141,6 +141,15 @@ namespace Unravel.Core
 		/// <summary>
 		/// Adds a new component of the specified type to the entity.
 		/// </summary>
+		/// <param name="type">The type of component to add.</param>
+		/// <returns>The newly added component.</returns>
+		public Component AddComponent(Type type)
+		{
+			return internal_m2n_add_component(this, type);
+		}
+		/// <summary>
+		/// Adds a new component of the specified type to the entity.
+		/// </summary>
 		/// <typeparam name="T">The type of component to add.</typeparam>
 		/// <returns>The newly added component.</returns>
 		public T AddComponent<T>() where T : Component, new()
@@ -176,6 +185,17 @@ namespace Unravel.Core
 		public T GetComponent<T>() where T : Component
 		{
 			return internal_m2n_get_component(this, typeof(T)) as T;
+		}
+
+
+		/// <summary>
+		/// Gets the component of the specified type from the entity.
+		/// </summary>
+		/// <param name="type">The type of component to retrieve.</param>
+		/// <returns>The component of the specified type.</returns>
+		public Component GetComponent(Type type)
+		{
+			return internal_m2n_get_component(this, type);
 		}
 
 		/// <summary>
