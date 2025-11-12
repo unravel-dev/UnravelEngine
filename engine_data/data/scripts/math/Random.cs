@@ -5,14 +5,46 @@ using System.Runtime.InteropServices;
 public static class Random
 {
     private static ulong[] s_State;
-
+    private static ulong s_Seed;
     private const double INCR_DOUBLE = 1.0 / (1UL << 53);
     private const float INCR_FLOAT = 1f / (1U << 24);
 
+    // Initialize automatically with a time-based seed
     static Random()
     {
-        ulong seed = 123456UL;
+        SeedWithTime();
+    }
+
+    /// <summary>
+    /// Re-seeds the generator with a specific 64-bit seed.
+    /// </summary>
+    public static void Seed(ulong seed)
+    {
+        s_Seed = seed;
         s_State = xorshift256_init(seed);
+
+        // Ensure non-zero internal state
+        if (s_State[0] == 0 && s_State[1] == 0 && s_State[2] == 0 && s_State[3] == 0)
+            s_State[0] = 0x9E3779B97F4A7C15UL;
+    }
+
+        /// <summary>
+    /// Seeds the generator using the current system time (ticks + process ID).
+    /// </summary>
+    public static void SeedWithTime()
+    {
+        ulong timePart = (ulong)DateTime.UtcNow.Ticks;
+        ulong pidPart  = (ulong)System.Diagnostics.Process.GetCurrentProcess().Id;
+        ulong mixed    = timePart ^ (pidPart << 32);
+
+        // Mix it a bit more to avoid low-entropy time bits
+        mixed ^= (mixed >> 33);
+        mixed *= 0xff51afd7ed558ccdUL;
+        mixed ^= (mixed >> 33);
+        mixed *= 0xc4ceb9fe1a85ec53UL;
+        mixed ^= (mixed >> 33);
+
+        Seed(mixed);
     }
 
     private static ulong splitmix64(ulong state)

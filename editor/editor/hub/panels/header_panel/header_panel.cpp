@@ -367,7 +367,7 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
 
                            play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
 
-                           if(has_errors)
+                           if(has_errors && !ev.is_playing)
                            {
                                play_pressed = false;
                            }
