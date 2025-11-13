@@ -10,7 +10,6 @@ void main()
     float scale = i_data0.w;        // Scale from instance
     vec4 color = i_data1;  // color
     float angle = i_data2.x;        // Rotation angle (unused for now)
-    float blend = i_data2.y;        // Blend factor
     
     // Extract camera right/up vectors from view matrix and scale them
 #if BGFX_SHADER_LANGUAGE_GLSL
@@ -26,7 +25,7 @@ void main()
     
     gl_Position = mul(u_modelViewProj, vec4(vertexWorldPos, 1.0));
     
-    v_texcoord0 = vec4(a_texcoord0.xy, blend, 0.0f);
+    v_texcoord0 = a_texcoord0.xy;
     
     v_color0 = color;
 }

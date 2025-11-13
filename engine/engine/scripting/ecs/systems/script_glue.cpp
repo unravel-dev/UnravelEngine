@@ -1880,20 +1880,20 @@ void internal_m2n_particle_emitter_set_velocity_damping(entt::entity id, float d
     }
 }
 
-auto internal_m2n_particle_emitter_get_blend_multiplier(entt::entity id) -> float
+auto internal_m2n_particle_emitter_get_opacity(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_blend_multiplier();
+        return comp->get_opacity();
     }
     return 1.0f;
 }
 
-void internal_m2n_particle_emitter_set_blend_multiplier(entt::entity id, float multiplier)
+void internal_m2n_particle_emitter_set_opacity(entt::entity id, float opacity)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_blend_multiplier(multiplier);
+        comp->set_opacity(opacity);
     }
 }
 
@@ -4381,10 +4381,10 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               internal_call(internal_m2n_particle_emitter_get_velocity_damping));
         reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_damping", 
                               internal_call(internal_m2n_particle_emitter_set_velocity_damping));
-        reg.add_internal_call("internal_m2n_particle_emitter_get_blend_multiplier", 
-                              internal_call(internal_m2n_particle_emitter_get_blend_multiplier));
-        reg.add_internal_call("internal_m2n_particle_emitter_set_blend_multiplier", 
-                              internal_call(internal_m2n_particle_emitter_set_blend_multiplier));
+        reg.add_internal_call("internal_m2n_particle_emitter_get_opacity", 
+                              internal_call(internal_m2n_particle_emitter_get_opacity));
+        reg.add_internal_call("internal_m2n_particle_emitter_set_opacity", 
+                              internal_call(internal_m2n_particle_emitter_set_opacity));
         reg.add_internal_call("internal_m2n_particle_emitter_get_force_over_lifetime", 
                               internal_call(internal_m2n_particle_emitter_get_force_over_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_set_force_over_lifetime", 

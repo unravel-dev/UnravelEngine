@@ -385,32 +385,24 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Size by Speed"},
 
         })
-         .data<&particle_emitter_component::set_blend_gradient, &particle_emitter_component::get_blend_gradient>("blend_gradient"_hs)
-         .custom<entt::attributes>(entt::attributes{
-             entt::attribute{"name", "blend_gradient"},
-             entt::attribute{"pretty_name", "Blend Gradient"},
-             entt::attribute{"tooltip", "Opacity range gradient over particle lifetime. Controls how particle transparency changes from spawn to death."},
-             entt::attribute{"group", "Opacity over lifetime"},
-
-         })
-        .data<&particle_emitter_component::set_blend_multiplier, &particle_emitter_component::get_blend_multiplier>("blend_multiplier"_hs)
+        .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "blend_multiplier"},
-            entt::attribute{"pretty_name", "Blend Multiplier"},
-            entt::attribute{"tooltip", "Global blend multiplier for all particles regardless of lifetime. 0.0 = fully transparent, 1.0 = no change, values > 1.0 = enhanced opacity."},
+            entt::attribute{"name", "color_gradient"},
+            entt::attribute{"pretty_name", "Color Gradient"},
+            entt::attribute{"tooltip", "Color gradient defining particle color over lifetime. Colors are interpolated smoothly based on gradient keyframes."},
+            entt::attribute{"group", "Color over lifetime"},
+
+        })
+        .data<&particle_emitter_component::set_opacity, &particle_emitter_component::get_opacity>("opacity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "opacity"},
+            entt::attribute{"pretty_name", "Opacity"},
+            entt::attribute{"tooltip", "Global opacity for all particles regardless of lifetime. 0.0 = fully transparent, 1.0 = no change, values > 1.0 = enhanced opacity."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"group", "Opacity over lifetime"},
+            entt::attribute{"group", "Color over lifetime"},
         })
-         .data<&particle_emitter_component::set_color_gradient, &particle_emitter_component::get_color_gradient>("color_gradient"_hs)
-         .custom<entt::attributes>(entt::attributes{
-             entt::attribute{"name", "color_gradient"},
-             entt::attribute{"pretty_name", "Color Gradient"},
-             entt::attribute{"tooltip", "Color gradient defining particle color over lifetime. Colors are interpolated smoothly based on gradient keyframes."},
-             entt::attribute{"group", "Color over lifetime"},
-
-         })
         .data<&particle_emitter_component::set_color_by_speed_gradient, &particle_emitter_component::get_color_by_speed_gradient>("color_by_speed_gradient"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "color_by_speed_gradient"},
@@ -483,8 +475,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
     try_save(ar, ser20::make_nvp("velocity_gradient", obj.get_velocity_gradient()));
     try_save(ar, ser20::make_nvp("scale_gradient", obj.get_scale_gradient()));
-    try_save(ar, ser20::make_nvp("blend_gradient", obj.get_blend_gradient()));
-    try_save(ar, ser20::make_nvp("blend_multiplier", obj.get_blend_multiplier()));
+    try_save(ar, ser20::make_nvp("opacity", obj.get_opacity()));
     
     // Colors
     try_save(ar, ser20::make_nvp("color_gradient", obj.get_color_gradient()));
@@ -645,17 +636,12 @@ LOAD(particle_emitter_component)
     {
         obj.set_scale_gradient(scale_gradient);
     }
+
     
-    math::gradient<frange_t> blend_gradient;
-    if(try_load(ar, ser20::make_nvp("blend_gradient", blend_gradient)))
+    float opacity{1.0f};
+    if(try_load(ar, ser20::make_nvp("opacity", opacity)))
     {
-        obj.set_blend_gradient(blend_gradient);
-    }
-    
-    float blend_multiplier{1.0f};
-    if(try_load(ar, ser20::make_nvp("blend_multiplier", blend_multiplier)))
-    {
-        obj.set_blend_multiplier(blend_multiplier);
+        obj.set_opacity(opacity);
     }
     
     // Colors

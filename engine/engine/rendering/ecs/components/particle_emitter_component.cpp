@@ -272,25 +272,14 @@ auto particle_emitter_component::get_scale_gradient() const -> const math::gradi
     return uniforms_.m_scaleGradient;
 }
 
-void particle_emitter_component::set_blend_gradient(const math::gradient<frange_t>& gradient)
+void particle_emitter_component::set_opacity(float opacity)
 {
-    uniforms_.m_blendGradient = gradient;
-    uniforms_.m_blendGradient.generate_lut(256); // Generate LUT for optimization
+    uniforms_.m_opacity = math::clamp(opacity, 0.0f, 1.0f);
 }
 
-auto particle_emitter_component::get_blend_gradient() const -> const math::gradient<frange_t>&
+auto particle_emitter_component::get_opacity() const -> float
 {
-    return uniforms_.m_blendGradient;
-}
-
-void particle_emitter_component::set_blend_multiplier(float multiplier)
-{
-    uniforms_.m_blendMultiplier = math::clamp(multiplier, 0.0f, 1.0f);
-}
-
-auto particle_emitter_component::get_blend_multiplier() const -> float
-{
-    return uniforms_.m_blendMultiplier;
+    return uniforms_.m_opacity;
 }
 
 void particle_emitter_component::play()

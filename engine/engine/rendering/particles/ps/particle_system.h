@@ -76,7 +76,6 @@ struct EmitterUniforms
 	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
 
 	math::gradient<frange_t> m_velocityGradient; // Velocity gradient over particle lifetime
-	math::gradient<frange_t> m_blendGradient;    // Blend/opacity gradient over particle lifetime
 	math::gradient<frange_t> m_scaleGradient;    // Scale gradient over particle lifetime
 	float m_lifetime;
 	float m_gravityScale;
@@ -94,7 +93,7 @@ struct EmitterUniforms
 
 	math::gradient<math::color> m_colorGradient; // Color gradient over particle lifetime
 	float m_emissionLifetime; // Duration of one emission cycle
-	float m_blendMultiplier; // Global blend multiplier for all particles (0.0 = fully transparent, 1.0 = no change)
+	float m_opacity; // Global opacity for all particles (0.0 = fully transparent, 1.0 = no change)
 
 	// Playback control states
 	bool m_playing; // Whether the emitter is currently playing/active

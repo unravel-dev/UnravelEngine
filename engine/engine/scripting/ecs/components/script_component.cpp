@@ -524,9 +524,13 @@ auto script_component::get_script_component(const mono::mono_type& type) -> scri
                            std::end(script_components_),
                            [&](const auto& component)
                            {
-                               const auto& comp_type = component.scoped->object.get_type();
-                               return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
-                                      comp_type.is_derived_from(type);
+                                if(!component.scoped)
+                                {
+                                    return false;
+                                }
+                                const auto& comp_type = component.scoped->object.get_type();
+                                return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
+                                        comp_type.is_derived_from(type);
                            });
 
     if(it != std::end(script_components_))
@@ -543,9 +547,13 @@ auto script_component::get_native_component(const mono::mono_type& type) -> scri
                            std::end(native_components_),
                            [&](const auto& component)
                            {
-                               const auto& comp_type = component.scoped->object.get_type();
-                               return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
-                                      comp_type.is_derived_from(type);
+                                if(!component.scoped)
+                                {
+                                    return false;
+                                }
+                                const auto& comp_type = component.scoped->object.get_type();
+                                return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
+                                        comp_type.is_derived_from(type);
                            });
 
     if(it != std::end(native_components_))

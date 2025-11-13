@@ -16,31 +16,6 @@
 #include <algorithm>
 #include <engine/profiler/profiler.h>
 
-struct PosColorTexCoord0Vertex
-{
-    float x;
-    float y;
-    float z;
-    uint32_t abgr;
-    float u;
-    float v;
-    float blend;
-    float angle;
-
-    static void init()
-    {
-        ms_layout.begin()
-            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
-            .add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float)
-            .end();
-    }
-
-    static bgfx::VertexLayout ms_layout;
-};
-
-bgfx::VertexLayout PosColorTexCoord0Vertex::ms_layout;
-
 // New instanced particle vertex structure (just position and UV)
 struct ParticleVertex
 {
@@ -98,11 +73,6 @@ void EmitterUniforms::reset()
     m_colorGradient.add_point(math::color(0xffffffff), 0.75f); // Opaque white
     m_colorGradient.add_point(math::color(0x00ffffff), 1.0f);  // Transparent white at end
 
-    // Initialize blend gradient with default 2-point gradient (start -> end)
-    m_blendGradient = math::gradient<frange_t>();
-    m_blendGradient.add_point(frange_t(0.8f, 1.0f), 0.0f); // Start blend range
-    m_blendGradient.add_point(frange_t(0.0f, 0.2f), 1.0f); // End blend range
-
     // Initialize scale gradient with default 2-point gradient (start -> end)
     m_scaleGradient = math::gradient<frange_t>();
     m_scaleGradient.add_point(frange_t(0.1f, 0.2f), 0.0f); // Start scale range
@@ -129,7 +99,7 @@ void EmitterUniforms::reset()
     m_lifetimeByEmitterSpeedRange = frange_t(0.0f, 10.0f);                   // Default emitter speed range
 
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
-    m_blendMultiplier = 1.0f;  // Default: no blend modification
+    m_opacity = 1.0f;  // Default: no opacity modification
 
     // Initialize playback states
     m_playing = true;  // Default: playing
@@ -140,7 +110,6 @@ void EmitterUniforms::reset()
     // Generate LUTs for all gradients to optimize sampling performance
     m_velocityGradient.generate_lut(256);
     m_colorGradient.generate_lut(256);
-    m_blendGradient.generate_lut(256);
     m_scaleGradient.generate_lut(256);
     m_colorBySpeedGradient.generate_lut(256);
     m_lifetimeByEmitterSpeedGradient.generate_lut(256);
@@ -152,8 +121,6 @@ struct Particle
 {
     math::vec3 start;
     math::vec3 end[2];
-    float blend_start;
-    float blend_end;
     float scale_start;
     float scale_end;
 
@@ -161,7 +128,6 @@ struct Particle
     math::color color; // Final color with all effects applied
 	math::vec3 position;
     float scale;    // Final scale with all effects applied
-    float blend;    // Final blend value
     float cached_speed; // Cached particle speed to avoid redundant calculations
 
     float life;
@@ -240,9 +206,7 @@ struct Emitter
 
         // Cache final color
         particle.color = sampledColor;
-
-        // Calculate blend and apply global blend multiplier
-        particle.blend = math::mix(particle.blend_start, particle.blend_end, particle.life) * uniforms_.m_blendMultiplier;
+        particle.color.value.a *= uniforms_.m_opacity;
 
         // Calculate scale with system scaling
         float scale = math::mix(particle.scale_start, particle.scale_end, particle.life) * avgSystemScale;
@@ -604,12 +568,6 @@ struct Emitter
 
             // Color will be sampled from gradient during rendering - no need to copy here
 
-            // Sample blend range from gradient at particle spawn (t=0) and end (t=1)
-            const frange_t startBlendRange = uniforms_.m_blendGradient.sample(0.0f);
-            const frange_t endBlendRange = uniforms_.m_blendGradient.sample(1.0f);
-            particle->blend_start = math::mix(startBlendRange.min, startBlendRange.max, bx::frnd(&rng_));
-            particle->blend_end = math::mix(endBlendRange.min, endBlendRange.max, bx::frnd(&rng_));
-
             // Sample scale range from gradient at particle spawn (t=0) and end (t=1)
             const frange_t startScaleRange = uniforms_.m_scaleGradient.sample(0.0f);
             const frange_t endScaleRange = uniforms_.m_scaleGradient.sample(1.0f);
@@ -670,7 +628,6 @@ struct ParticleSystem
         m_emitter.resize(_maxEmitters);
 
         // Initialize vertex layouts
-        PosColorTexCoord0Vertex::init();
         ParticleVertex::init();
 
         // Create static quad geometry for instanced rendering
@@ -791,7 +748,7 @@ struct ParticleSystem
             // Speed + Padding (8 bytes)
             float* rotationBlend = (float*)&data[32];
 			rotationBlend[0] = 0.0f; // angle (could add rotation later)
-			rotationBlend[1] = particle.blend;
+			rotationBlend[1] = 0.0f;
             rotationBlend[2] = 0.0f; 
             rotationBlend[3] = 0.0f; // padding
             
@@ -945,7 +902,7 @@ struct ParticleSystem
             // Speed + Padding (8 bytes)
             float* rotationBlend = (float*)&data[32];
 			rotationBlend[0] = 0.0f; // angle (could add rotation later)
-			rotationBlend[1] = particle.blend;
+			rotationBlend[1] = 0.0f;
             rotationBlend[2] = 0.0f; 
             rotationBlend[3] = 0.0f; // padding
             data += instanceStride;

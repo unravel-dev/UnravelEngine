@@ -142,12 +142,9 @@ public:
     void set_scale_gradient(const math::gradient<frange_t>& gradient);
     auto get_scale_gradient() const -> const math::gradient<frange_t>&;
 
-    // Blend properties
-    void set_blend_gradient(const math::gradient<frange_t>& gradient);
-    auto get_blend_gradient() const -> const math::gradient<frange_t>&;
 
-    void set_blend_multiplier(float multiplier);
-    auto get_blend_multiplier() const -> float;
+    void set_opacity(float opacity);
+    auto get_opacity() const -> float;
 
     // Playback control
     void play();

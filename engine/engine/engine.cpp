@@ -477,13 +477,13 @@ auto engine::process() -> int
 
     ev.on_frame_update(ctx, dt);
 
+    seq::update(delta_t::zero());
+    
     ev.on_frame_before_render(ctx, dt);
 
     ev.on_frame_render(ctx, dt);
 
     ev.on_frame_end(ctx, dt);
-
-    seq::update(delta_t::zero());
 
     get_app_profiler()->swap();
 

@@ -150,17 +150,17 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets or sets the blend multiplier for particle opacity.
+        /// Gets or sets the opacity for particle opacity.
         /// </summary>
-        public float blendMultiplier
+        public float opacity
         {
             get
             {
-                return internal_m2n_particle_emitter_get_blend_multiplier(owner);
+                return internal_m2n_particle_emitter_get_opacity(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_blend_multiplier(owner, value);
+                internal_m2n_particle_emitter_set_opacity(owner, value);
             }
         }
 
@@ -400,10 +400,10 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_velocity_damping(Entity eid, float damping);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_particle_emitter_get_blend_multiplier(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_opacity(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_blend_multiplier(Entity eid, float multiplier);
+        private static extern void internal_m2n_particle_emitter_set_opacity(Entity eid, float opacity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Vector3 internal_m2n_particle_emitter_get_force_over_lifetime(Entity eid);
