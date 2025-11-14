@@ -353,20 +353,27 @@ void script_component::process_pending_deletions()
     auto& ctx = engine::context();
     auto& ev = ctx.get_cached<events>();
 
-    size_t erased = std::erase_if(script_components_,
-                                  [&](auto& rhs)
-                                  {
-                                      bool marked = rhs.is_marked_for_destroy();
-                                      if(marked && ev.is_playing)
-                                      {
-                                          destroy(rhs);
-                                      }
+    // Call destroy on marked script components before erasing
+    if(ev.is_playing)
+    {
+        for(auto& script : script_components_)
+        {
+            if(script.is_marked_for_destroy())
+            {
+                destroy(script);
+            }
+        }
+    }
 
-                                      return marked;
+    // Now erase the marked components
+    size_t erased = std::erase_if(script_components_,
+                                  [](const auto& rhs)
+                                  {
+                                      return rhs.is_marked_for_destroy();
                                   });
 
     erased += std::erase_if(native_components_,
-                            [&](const auto& rhs)
+                            [](const auto& rhs)
                             {
                                 return rhs.is_marked_for_destroy();
                             });
@@ -524,10 +531,6 @@ auto script_component::get_script_component(const mono::mono_type& type) -> scri
                            std::end(script_components_),
                            [&](const auto& component)
                            {
-                                if(!component.scoped)
-                                {
-                                    return false;
-                                }
                                 const auto& comp_type = component.scoped->object.get_type();
                                 return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
                                         comp_type.is_derived_from(type);
@@ -547,10 +550,6 @@ auto script_component::get_native_component(const mono::mono_type& type) -> scri
                            std::end(native_components_),
                            [&](const auto& component)
                            {
-                                if(!component.scoped)
-                                {
-                                    return false;
-                                }
                                 const auto& comp_type = component.scoped->object.get_type();
                                 return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
                                         comp_type.is_derived_from(type);
