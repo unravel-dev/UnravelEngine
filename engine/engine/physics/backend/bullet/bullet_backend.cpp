@@ -720,11 +720,11 @@ struct world
             {
                 if(manifold.event == event_type::enter)
                 {
-                    scripting.on_sensor_enter(manifold.a, manifold.b);
+                    scripting.on_sensor_enter(manifold.a, manifold.b, manifold.contacts);
                 }
                 else
                 {
-                    scripting.on_sensor_exit(manifold.a, manifold.b);
+                    scripting.on_sensor_exit(manifold.a, manifold.b, manifold.contacts);
                 }
 
                 break;
@@ -787,6 +787,7 @@ struct world
             if(isSensorA || isSensorB)
             {
                 // A->B if A is sensor
+                if(isSensorA)
                 {
                     contact_key key{eA, eB};
                     auto it = contacts_cache.find(key);
@@ -796,7 +797,24 @@ struct world
                     }
                     else
                     {
-                        contact_manifold cm{manifold_type::sensor, event_type::enter, eA, eB, {}};
+                        contact_manifold cm;
+                        cm.type = manifold_type::sensor;
+                        cm.event = event_type::enter;
+                        cm.a = eA;
+                        cm.b = eB;
+                        cm.contacts.reserve(m->getNumContacts());
+                        for(int j = 0; j < m->getNumContacts(); ++j)
+                        {
+                            auto const& p = m->getContactPoint(j);
+                            unravel::manifold_point mp;
+                            mp.a = from_bullet(p.getPositionWorldOnA());
+                            mp.b = from_bullet(p.getPositionWorldOnB());
+                            mp.normal_on_b = from_bullet(p.m_normalWorldOnB);
+                            mp.normal_on_a = -mp.normal_on_b;
+                            mp.impulse = p.getAppliedImpulse();
+                            mp.distance = p.getDistance();
+                            cm.contacts.push_back(mp);
+                        }
                         to_enter.push_back(cm);
                         auto& rec = contacts_cache.emplace(key, contact_record{}).first->second;
                         rec.cm = cm;
@@ -804,6 +822,7 @@ struct world
                     }
                 }
                 // B->A if B is sensor
+                if(isSensorB)
                 {
                     contact_key key{eB, eA};
                     auto it = contacts_cache.find(key);
@@ -813,7 +832,24 @@ struct world
                     }
                     else
                     {
-                        contact_manifold cm{manifold_type::sensor, event_type::enter, eB, eA, {}};
+                        contact_manifold cm;
+                        cm.type = manifold_type::sensor;
+                        cm.event = event_type::enter;
+                        cm.a = eB;
+                        cm.b = eA;
+                        cm.contacts.reserve(m->getNumContacts());
+                        for(int j = 0; j < m->getNumContacts(); ++j)
+                        {
+                            auto const& p = m->getContactPoint(j);
+                            unravel::manifold_point mp;
+                            mp.a = from_bullet(p.getPositionWorldOnB());
+                            mp.b = from_bullet(p.getPositionWorldOnA());
+                            mp.normal_on_a = from_bullet(p.m_normalWorldOnB);
+                            mp.normal_on_b = -mp.normal_on_a;
+                            mp.impulse = p.getAppliedImpulse();
+                            mp.distance = p.getDistance();
+                            cm.contacts.push_back(mp);
+                        }
                         to_enter.push_back(cm);
                         auto& rec = contacts_cache.emplace(key, contact_record{}).first->second;
                         rec.cm = cm;

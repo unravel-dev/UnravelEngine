@@ -1071,7 +1071,11 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     save_ctx.save_source = src_obj;
     save_ctx.to_prefab = false;
     save_ctx.clone_mode = clone_mode;
-    
+    std::stringstream ss;
+    {
+        std::ofstream ss("./clone.ecs");
+        save_to_stream(ss, src_obj);
+    }
     save_ctx.to_prefab = false;
     save_ctx.save_source = {};
     save_ctx.clone_mode = clone_mode_t::none;
@@ -1082,6 +1086,11 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     auto& load_ctx = get_load_context();
     load_ctx.clone_mode = clone_mode;
 
+    {
+        
+        std::ifstream ss("./clone.ecs");
+        load_from(ss, dst_obj);
+    }
     load_ctx.clone_mode = clone_mode_t::none;
     pop_load_context(pushed);
 }

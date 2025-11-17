@@ -146,6 +146,8 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene);
 template<typename Stream, typename T>
 void load_from(Stream& stream, T& scn)
 {
+    stream.seekg(0);
+
     if constexpr(HasView<Stream>)
     {
         load_from_view(stream.view(), scn);

@@ -65,6 +65,11 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "Outward"},
             entt::attribute{"pretty_name", "Outward"},
+        })
+        .data<EmitterDirection::Inward>("Inward"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Inward"},
+            entt::attribute{"pretty_name", "Inward"},
         });
 
     entt::meta_factory<bx::Easing::Enum>{}
@@ -311,7 +316,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "direction"},
             entt::attribute{"pretty_name", "Emitter Direction"},
-            entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position."},
+            entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position, Inward = particles move towards spawn position (only visible in 3D space)."},
         })
         
         .data<&particle_emitter_component::set_simulation_space, &particle_emitter_component::get_simulation_space>("simulation_space"_hs)

@@ -478,8 +478,9 @@ SAVE(script_component::script_object)
 
     try_save(ar, ser20::make_nvp("type", type.get_fullname()));
 
-    auto fields = type.get_fields();
-    auto properties = type.get_properties();
+    bool include_base = true;
+    auto fields = type.get_fields(include_base);
+    auto properties = type.get_properties(include_base);
     for(auto& field : fields)
     {
         if(field.get_visibility() == mono::visibility::vis_public)
@@ -684,8 +685,9 @@ LOAD(script_component::script_object)
         return empty;
     };
 
-    auto fields = script_type.get_fields();
-    auto properties = script_type.get_properties();
+    bool include_base = true;
+    auto fields = script_type.get_fields(include_base);
+    auto properties = script_type.get_properties(true);
 
     for(auto& field : fields)
     {

@@ -470,6 +470,35 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     }
                     break;
                 }
+                case EmitterDirection::Inward:
+                {
+                    // Draw multiple inward arrows
+                    const int num_arrows = 6;
+                    for(int i = 0; i < num_arrows; ++i)
+                    {
+                        const float angle = (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
+                        const float cos_a = math::cos(angle);
+                        const float sin_a = math::sin(angle);
+                        
+                        // Arrow shaft
+                        dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
+                        dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
+                        
+                        // Arrow head
+                        const float head_x = cos_a * arrow_length;
+                        const float head_z = sin_a * arrow_length;
+                        const float back_x = cos_a * (arrow_length - arrow_head_size);
+                        const float back_z = sin_a * (arrow_length - arrow_head_size);
+                        
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f, 0.0f, back_z + cos_a * arrow_head_size * 0.5f);
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f, 0.0f, back_z - cos_a * arrow_head_size * 0.5f);
+                        dd.encoder.moveTo(head_x, 0.0f, head_z);
+                        dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                    }
+                    break;
+                }
                 default:
                     break;
             }

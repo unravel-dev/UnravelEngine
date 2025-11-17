@@ -68,16 +68,16 @@ namespace Unravel.Core
         /// <summary>
         /// Called when another entity enters a sensor attached to this entity.
         /// </summary>
-        /// <param name="e">The entity that entered the sensor.</param>
-        public virtual void OnSensorEnter(Entity e)
+        /// <param name="collision">Details of the collision, including the other entity and contact points.</param>
+        public virtual void OnSensorEnter(Collision collision)
         {
         }
 
         /// <summary>
         /// Called when another entity exits a sensor attached to this entity.
         /// </summary>
-        /// <param name="e">The entity that exited the sensor.</param>
-        public virtual void OnSensorExit(Entity e)
+        /// <param name="collision">Details of the collision, including the other entity and contact points.</param>
+        public virtual void OnSensorExit(Collision collision)
         {
         }
 
@@ -171,18 +171,31 @@ namespace Unravel.Core
         /// Internal method invoked when another entity enters a sensor attached to this entity. Calls <see cref="OnSensorEnter"/>.
         /// </summary>
         /// <param name="entity">The entity that entered the sensor.</param>
-        private void internal_n2m_on_sensor_enter(Entity entity)
+        /// <param name="contactData">The serialized contact data for the sensor.</param>
+        private void internal_n2m_on_sensor_enter(Entity entity, byte[] contactData)
         {
-            OnSensorEnter(entity);
+            Collision collision = new Collision
+            {
+                entity = entity,
+                contacts = contactData.ToStructArray<ContactPoint>()
+            };
+
+            OnSensorEnter(collision);
         }
 
         /// <summary>
         /// Internal method invoked when another entity exits a sensor attached to this entity. Calls <see cref="OnSensorExit"/>.
         /// </summary>
         /// <param name="entity">The entity that exited the sensor.</param>
-        private void internal_n2m_on_sensor_exit(Entity entity)
+        private void internal_n2m_on_sensor_exit(Entity entity, byte[] contactData)
         {
-            OnSensorExit(entity);
+            Collision collision = new Collision
+            {
+                entity = entity,
+                contacts = contactData.ToStructArray<ContactPoint>()
+            };
+
+            OnSensorExit(collision);
         }
 
         /// <summary>

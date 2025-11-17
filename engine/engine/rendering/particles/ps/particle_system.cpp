@@ -7,6 +7,7 @@
 #include <bgfx/embedded_shader.h>
 
 #include "particle_system.h"
+#include "bx/bx.h"
 #include <graphics/utils/bgfx_utils.h>
 
 #include <bx/easing.h>
@@ -522,17 +523,27 @@ struct Emitter
                 case EmitterDirection::Outward:
                     dir = math::normalize(pos);
                     break;
+
+                case EmitterDirection::Inward:
+                    dir = math::normalize(pos);
+                    break;
             }
 
             // Use pre-calculated system scale for better performance
-            const math::vec3 start = pos;
+            math::vec3 start = pos;
 
             // Sample velocity range from gradient at particle end (t=1)
             const frange_t endVelocityRange = uniforms_.m_velocityGradient.sample(1.0f);
             const float endVelocity = math::mix(endVelocityRange.min, endVelocityRange.max, bx::frnd(&rng_));
             const math::vec3 scaledDir = systemScale * dir;
             const math::vec3 tmp1 = dir * endVelocity;
-            const math::vec3 end = tmp1 + start;
+            math::vec3 end = tmp1 + start;
+
+            if(direction_ == EmitterDirection::Inward)
+            {
+                std::swap(start, end);
+                dir *= -1.0f;
+            }
 
             particle->life = 0.0f; // Always start at 0 for new particles
             particle->lifeSpan = lifeSpan * lifetimeMultiplier; // Apply emitter speed-based lifetime modifier

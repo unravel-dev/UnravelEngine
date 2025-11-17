@@ -1727,7 +1727,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         return empty;
     };
 
-    auto fields = type.get_fields();
+    bool include_base = true;
+    auto fields = type.get_fields(      include_base);
     for(auto& field : fields)
     {
         bool inspect_predicate = field.get_visibility() == mono::visibility::vis_public;
@@ -1910,7 +1911,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         return empty;
     };
 
-    auto properties = type.get_properties();
+    auto properties = type.get_properties(include_base);
     for(auto& prop : properties)
     {
         bool inspect_predicate = prop.get_visibility() == mono::visibility::vis_public;

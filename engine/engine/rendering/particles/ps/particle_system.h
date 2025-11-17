@@ -44,6 +44,7 @@ struct EmitterDirection
 	{
 		Up,
 		Outward,
+		Inward,
 
 		Count
 	};

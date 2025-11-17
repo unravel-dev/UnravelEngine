@@ -6,8 +6,8 @@
 #include <engine/physics/ecs/components/physics_component.h>
 
 #include <engine/scripting/script.h>
+#include <engine/scripting/ecs/systems/script_interop.h>
 #include <monort/monort.h>
-
 #include <math/math.h>
 
 namespace unravel
@@ -151,8 +151,8 @@ public:
     void enable();
     void disable();
 
-    void on_sensor_enter(entt::handle other);
-    void on_sensor_exit(entt::handle other);
+    void on_sensor_enter(entt::handle other, const std::vector<manifold_point>& manifolds);
+    void on_sensor_exit(entt::handle other, const std::vector<manifold_point>& manifolds);
 
     void on_collision_enter(entt::handle other, const std::vector<manifold_point>& manifolds, bool use_b);
     void on_collision_exit(entt::handle other, const std::vector<manifold_point>& manifolds, bool use_b);
@@ -164,17 +164,15 @@ private:
     void start(script_object& script_obj);
     void destroy(script_object& script_obj);
     void set_entity(const mono::mono_object& obj, entt::handle e);
-    void on_sensor_enter(const mono::mono_object& obj, entt::handle other);
-    void on_sensor_exit(const mono::mono_object& obj, entt::handle other);
+    void on_sensor_enter(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds);
+    void on_sensor_exit(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds);
 
     void on_collision_enter(const mono::mono_object& obj,
-                            entt::handle other,
-                            const std::vector<manifold_point>& manifolds,
-                            bool use_b);
+                            entt::handle other, 
+                            const std::vector<mono::managed_interface::manifold_point>& manifolds);
     void on_collision_exit(const mono::mono_object& obj,
                            entt::handle other,
-                           const std::vector<manifold_point>& manifolds,
-                           bool use_b);
+                           const std::vector<mono::managed_interface::manifold_point>& manifolds);
 
     template<typename F>
     auto safe_foreach(script_components_t& components, F&& f)

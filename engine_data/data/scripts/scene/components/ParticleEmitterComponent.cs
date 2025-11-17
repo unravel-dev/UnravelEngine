@@ -21,7 +21,8 @@ namespace Unravel.Core
     public enum EmitterDirection
     {
         Up = 0,
-        Outward = 1
+        Outward = 1,
+        Inward = 2
     }
 
     /// <summary>

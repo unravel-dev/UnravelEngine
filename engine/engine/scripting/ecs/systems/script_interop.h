@@ -6,7 +6,6 @@
 #include <monopp/mono_field_invoker.h>
 #include <monopp/mono_domain.h>
 #include <monopp/mono_assembly.h>
-#include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/input/action_map/key.hpp>
 #include <engine/engine.h>
 
@@ -231,7 +230,13 @@ struct ui_change_event : ui_event_base
     std::string value;
 };
 
-
+struct manifold_point
+{
+    vector3 point{};
+    vector3 normal{};
+    float distance{};
+    float impulse{};
+};
 
 } // namespace managed_interface
 
@@ -248,13 +253,8 @@ struct mono_converter<managed_interface::ui_event_base>
     using native_type = managed_interface::ui_event_base;
     using managed_type = MonoObject*;
 
-    static auto create_instance(const std::string& namespace_name, const std::string& type_name) -> mono::mono_object
-    {
-        auto& ctx = unravel::engine::context();
-        auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-        auto type = app_assembly.get_type(namespace_name, type_name);
-        return type.new_instance();
-    }
+    static auto create_instance(const std::string& namespace_name, const std::string& type_name) -> mono::mono_object;
+
     static void to_mono_base(const native_type& obj, mono::mono_object& instance)
     {
         mono::set_field_value(instance, "nativePtr", obj.native_ptr);

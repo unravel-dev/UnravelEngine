@@ -905,7 +905,7 @@ auto script_system::get_lib_compiled_key(const std::string& protocol) -> std::st
     return output;
 }
 
-void script_system::on_sensor_enter(entt::handle sensor, entt::handle other)
+void script_system::on_sensor_enter(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds)
 {
     if(!other || !sensor)
     {
@@ -919,7 +919,7 @@ void script_system::on_sensor_enter(entt::handle sensor, entt::handle other)
 
     try
     {
-        comp->on_sensor_enter(other);
+        comp->on_sensor_enter(other, manifolds);
     }
     catch(const mono::mono_exception& e)
     {
@@ -927,7 +927,7 @@ void script_system::on_sensor_enter(entt::handle sensor, entt::handle other)
     }
 }
 
-void script_system::on_sensor_exit(entt::handle sensor, entt::handle other)
+void script_system::on_sensor_exit(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds)
 {
     if(!other || !sensor)
     {
@@ -942,7 +942,7 @@ void script_system::on_sensor_exit(entt::handle sensor, entt::handle other)
 
     try
     {
-        comp->on_sensor_exit(other);
+        comp->on_sensor_exit(other, manifolds);
     }
     catch(const mono::mono_exception& e)
     {

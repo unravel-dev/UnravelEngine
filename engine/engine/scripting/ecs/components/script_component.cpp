@@ -12,19 +12,37 @@ namespace unravel
 namespace
 {
 
-struct managed_vector3
-{
-    float x, y, z;
-};
 
-struct managed_contact_point
+auto to_managed_contact_point(const manifold_point& manifold, bool use_b = false) -> mono::managed_interface::manifold_point
 {
-    managed_vector3 point{};
-    managed_vector3 normal{};
-    float distance{};
-    float impulse{};
-};
+    mono::managed_interface::manifold_point result;
+    if(use_b)
+    {
+        result.point = {manifold.b.x, manifold.b.y, manifold.b.z};
+        result.normal = {manifold.normal_on_b.x, manifold.normal_on_b.y, manifold.normal_on_b.z};
+        result.distance = manifold.distance;
+        result.impulse = manifold.impulse;
+    }
+    else
+    {
+        result.point = {manifold.a.x, manifold.a.y, manifold.a.z};
+        result.normal = {manifold.normal_on_a.x, manifold.normal_on_a.y, manifold.normal_on_a.z};
+        result.distance = manifold.distance;
+        result.impulse = manifold.impulse;
+    }
+    return result;
+}
 
+auto to_managed_contact_points(const std::vector<manifold_point>& manifolds, bool use_b = false) -> std::vector<mono::managed_interface::manifold_point>
+{
+    std::vector<mono::managed_interface::manifold_point> result;
+    result.reserve(manifolds.size());
+    for(const auto& manifold : manifolds)
+    {
+        result.push_back(to_managed_contact_point(manifold, use_b));
+    }
+    return result;
+}
 } // namespace
 
 void script_component::on_create_component(entt::registry& r, entt::entity e)
@@ -82,43 +100,47 @@ void script_component::disable()
                  });
 }
 
-void script_component::on_sensor_enter(entt::handle other)
+void script_component::on_sensor_enter(entt::handle other, const std::vector<manifold_point>& manifolds)
 {
+    auto managed_manifolds = to_managed_contact_points(manifolds, true);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto& obj = script.scoped->object;
-                     on_sensor_enter(obj, other);
+                     on_sensor_enter(obj, other, managed_manifolds);
                  });
 }
 
-void script_component::on_sensor_exit(entt::handle other)
+void script_component::on_sensor_exit(entt::handle other, const std::vector<manifold_point>& manifolds)
 {
+    auto managed_manifolds = to_managed_contact_points(manifolds, true);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto& obj = script.scoped->object;
-                     on_sensor_exit(obj, other);
+                     on_sensor_exit(obj, other, managed_manifolds);
                  });
 }
 
 void script_component::on_collision_enter(entt::handle b, const std::vector<manifold_point>& manifolds, bool use_b)
 {
+    auto managed_manifolds = to_managed_contact_points(manifolds, use_b);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto& obj = script.scoped->object;
-                     on_collision_enter(obj, b, manifolds, use_b);
+                     on_collision_enter(obj, b, managed_manifolds);
                  });
 }
 
 void script_component::on_collision_exit(entt::handle b, const std::vector<manifold_point>& manifolds, bool use_b)
 {
+    auto managed_manifolds = to_managed_contact_points(manifolds, use_b);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto& obj = script.scoped->object;
-                     on_collision_exit(obj, b, manifolds, use_b);
+                     on_collision_exit(obj, b, managed_manifolds);
                  });
 }
 
@@ -248,12 +270,12 @@ void script_component::set_entity(const mono::mono_object& obj, entt::handle e)
     }
 }
 
-void script_component::on_sensor_enter(const mono::mono_object& obj, entt::handle other)
+void script_component::on_sensor_enter(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_on_sensor_enter");
-        method(obj, other.entity());
+        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_enter");
+        method(obj, other.entity(), manifolds);
     }
     catch(const mono::mono_exception& e)
     {
@@ -261,12 +283,12 @@ void script_component::on_sensor_enter(const mono::mono_object& obj, entt::handl
     }
 }
 
-void script_component::on_sensor_exit(const mono::mono_object& obj, entt::handle other)
+void script_component::on_sensor_exit(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_on_sensor_exit");
-        method(obj, other.entity());
+        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_exit");
+        method(obj, other.entity(), manifolds);
     }
     catch(const mono::mono_exception& e)
     {
@@ -275,35 +297,15 @@ void script_component::on_sensor_exit(const mono::mono_object& obj, entt::handle
 }
 
 void script_component::on_collision_enter(const mono::mono_object& obj,
-                                          entt::handle b,
-                                          const std::vector<manifold_point>& manifolds,
-                                          bool use_b)
+                                          entt::handle other,
+                                          const std::vector<mono::managed_interface::manifold_point>& manifolds)
 {
-    std::vector<managed_contact_point> points;
-    points.reserve(manifolds.size());
-    for(const auto& manifold : manifolds)
-    {
-        auto& point = points.emplace_back();
-        if(use_b)
-        {
-            point.point = {manifold.b.x, manifold.b.y, manifold.b.z};
-            point.normal = {manifold.normal_on_b.x, manifold.normal_on_b.y, manifold.normal_on_b.z};
-        }
-        else
-        {
-            point.point = {manifold.a.x, manifold.a.y, manifold.a.z};
-            point.normal = {manifold.normal_on_a.x, manifold.normal_on_a.y, manifold.normal_on_a.z};
-        }
-        point.distance = manifold.distance;
-        point.impulse = manifold.impulse;
-    }
-
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<managed_contact_point>&)>(
+        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(
             obj,
             "internal_n2m_on_collision_enter");
-        method(obj, b.entity(), points);
+        method(obj, other.entity(), manifolds);
     }
     catch(const mono::mono_exception& e)
     {
@@ -312,35 +314,15 @@ void script_component::on_collision_enter(const mono::mono_object& obj,
 }
 
 void script_component::on_collision_exit(const mono::mono_object& obj,
-                                         entt::handle b,
-                                         const std::vector<manifold_point>& manifolds,
-                                         bool use_b)
+                                         entt::handle other,
+                                         const std::vector<mono::managed_interface::manifold_point>& manifolds)
 {
-    std::vector<managed_contact_point> points;
-    points.reserve(manifolds.size());
-    for(const auto& manifold : manifolds)
-    {
-        auto& point = points.emplace_back();
-        if(use_b)
-        {
-            point.point = {manifold.b.x, manifold.b.y, manifold.b.z};
-            point.normal = {manifold.normal_on_b.x, manifold.normal_on_b.y, manifold.normal_on_b.z};
-        }
-        else
-        {
-            point.point = {manifold.a.x, manifold.a.y, manifold.a.z};
-            point.normal = {manifold.normal_on_a.x, manifold.normal_on_a.y, manifold.normal_on_a.z};
-        }
-        point.distance = manifold.distance;
-        point.impulse = manifold.impulse;
-    }
-
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<managed_contact_point>&)>(
+        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(
             obj,
             "internal_n2m_on_collision_exit");
-        method(obj, b.entity(), points);
+        method(obj, other.entity(), manifolds);
     }
     catch(const mono::mono_exception& e)
     {

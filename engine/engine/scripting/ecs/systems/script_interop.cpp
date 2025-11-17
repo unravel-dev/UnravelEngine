@@ -1,4 +1,5 @@
 #include "script_interop.h"
+#include <engine/scripting/ecs/systems/script_system.h>
 
 namespace mono
 {
@@ -76,5 +77,13 @@ auto converter::convert(const bbox& v) -> math::bbox
 {
     return {{v.min.x, v.min.y, v.min.z}, {v.max.x, v.max.y, v.max.z}};
 }
+}
+
+auto mono_converter<managed_interface::ui_event_base>::create_instance(const std::string& namespace_name, const std::string& type_name) -> mono::mono_object
+{
+    auto& ctx = unravel::engine::context();
+    auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
+    auto type = app_assembly.get_type(namespace_name, type_name);
+    return type.new_instance();
 }
 }

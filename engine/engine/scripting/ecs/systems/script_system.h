@@ -53,8 +53,8 @@ struct script_system
     void wait_for_jobs_to_finish(rtti::context& ctx);
     auto has_compilation_errors() const -> bool;
 
-    void on_sensor_enter(entt::handle sensor, entt::handle other);
-    void on_sensor_exit(entt::handle sensor, entt::handle other);
+    void on_sensor_enter(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
+    void on_sensor_exit(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
 
     void on_collision_enter(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds);
     void on_collision_exit(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds);
