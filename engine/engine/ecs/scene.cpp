@@ -17,6 +17,7 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 
+#include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/events.h>
@@ -114,6 +115,25 @@ void destroy_dependent_components_recursive(entt::registry& r, entt::entity e)
     }
 }
 
+auto on_load_callback(hpp::span<const entt::handle> entities) -> void
+{
+    if(!entities.empty())
+    {   
+        auto& ctx = engine::context();
+        auto& ev = ctx.get_cached<events>();
+
+        if(ev.is_playing)
+        {
+            auto& rsys = ctx.get_cached<rendering_system>();
+            auto& ssys = ctx.get_cached<script_system>();
+
+            delta_t dt(0.016667f);
+            rsys.on_play_begin(entities, dt);
+            ssys.on_play_begin(entities);
+        }  
+    }
+}
+
 } // namespace
 
 auto scene::get_all_scenes() -> const std::vector<scene*>&
@@ -178,35 +198,74 @@ void scene::unload()
     source = {};
 }
 
-auto scene::load_from(const asset_handle<scene_prefab>& pfb) -> bool
+auto scene::load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks) -> bool
 {
-    if(load_from_prefab(pfb, *this))
-    {
-        source = pfb;
-        return true;
+    if(call_callbacks)
+    {   
+        push_on_load_callbacks({on_load_callback});
     }
 
-    return false;
+    bool result = load_from_prefab(pfb, *this);
+
+    if(result)
+    {
+        source = pfb;
+    }
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
+    }
+    return result;
 }
-auto scene::instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e) -> bool
+auto scene::instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e, bool call_callbacks) -> bool
 {
+    if(call_callbacks)
+    {
+        push_on_load_callbacks({on_load_callback});
+    }
     bool result = load_from_prefab_out(pfb, *registry, e);
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
+    }
     return result;
 }
 
-auto scene::instantiate(const asset_handle<prefab>& pfb) -> entt::handle
+auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) -> entt::handle
 {
+    if(call_callbacks)
+    {
+        push_on_load_callbacks({on_load_callback});
+    }
     auto e = load_from_prefab(pfb, *registry);
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
+    }
     return e;
 }
 
-auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent) -> entt::handle
+auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks) -> entt::handle
 {
-    auto e = load_from_prefab(pfb, *registry);;
-    if(parent)
+    auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
-        auto trans_comp = e.get<transform_component>();
-        trans_comp.set_parent(parent, true);
+        if(parent && !entities.empty())
+        {
+            auto trans_comp = entities[0].get<transform_component>();
+            trans_comp.set_parent(parent, true);
+        }
+
+        if(call_callbacks)
+        {
+            on_load_callback(entities);
+        }
+    };
+    push_on_load_callbacks({on_load_callback});
+    auto e = load_from_prefab(pfb, *registry);
+
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
     }
 
     return e;
@@ -232,72 +291,63 @@ auto scene::create_entity(const std::string& tag, entt::handle parent) -> entt::
     return create_entity(*registry, tag, parent);
 }
 
-void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent)
+void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent, bool call_callbacks)
 {
     // APPLOG_TRACE_PERF(std::chrono::microseconds);
 
-    auto* reg = clone_from.registry();
-    clone_entity_from_stream(clone_from, clone_to);
-    if(keep_parent)
+    auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
-        // get cloned from transform
-        auto& clone_from_component = clone_from.get<transform_component>();
-
-        // // get cloned to transform
-        auto& clone_to_component = clone_to.get<transform_component>();
-
-        // set parent from original
-        auto parent = clone_from_component.get_parent();
-        if(parent)
+        if(keep_parent)
         {
-            clone_to_component.set_parent(parent, false);
+            // get cloned from transform
+            auto& clone_from_component = clone_from.get<transform_component>();
+    
+            // // get cloned to transform
+            auto& clone_to_component = clone_to.get<transform_component>();
+    
+            // set parent from original
+            auto parent = clone_from_component.get_parent();
+            if(parent)
+            {
+                clone_to_component.set_parent(parent, false);
+            }
         }
+
+        if(call_callbacks)
+        {
+            on_load_callback(entities);
+        }
+    };
+    push_on_load_callbacks({load_callback_override});
+    clone_entity_from_stream(clone_from, clone_to);
+
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
     }
-
-    // auto clone_to = clone_entity_impl(*registry, clone_from);
-
-    // // get cloned to transform
-    // auto& clone_to_component = clone_to.get<transform_component>();
-
-    // // clear parent and children which were copied.
-    // clone_to_component._clear_relationships();
-
-    // // get cloned from transform
-    // auto& clone_from_component = clone_from.get<transform_component>();
-
-    // // clone children as well
-    // const auto& children = clone_from_component.get_children();
-    // for(const auto& child : children)
-    // {
-    //     auto cloned_child = clone_entity(child, false);
-    //     auto& comp = cloned_child.get<transform_component>();
-    //     comp.set_parent(clone_to);
-    // }
-
-    // if(keep_parent)
-    // {
-    //     // set parent from original
-    //     auto parent = clone_from_component.get_parent();
-    //     if(parent)
-    //     {
-    //         clone_to_component.set_parent(parent);
-    //     }
-    // }
 }
 
-auto scene::clone_entity(entt::handle clone_from, bool keep_parent) -> entt::handle
+auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_callbacks) -> entt::handle
 {
     // APPLOG_TRACE_PERF(std::chrono::microseconds);
 
     auto* reg = clone_from.registry();
     entt::handle clone_to(*reg, reg->create());
-    clone_entity(clone_to, clone_from, keep_parent);
+    clone_entity(clone_to, clone_from, keep_parent, call_callbacks);
     return clone_to;
 }
 
-void scene::clone_scene(const scene& src_scene, scene& dst_scene)
+void scene::clone_scene(const scene& src_scene, scene& dst_scene, bool call_callbacks)
 {
+    if(call_callbacks)
+    {
+        push_on_load_callbacks({on_load_callback});
+    }
     clone_scene_from_stream(src_scene, dst_scene);
+    if(call_callbacks)
+    {
+        pop_on_load_callbacks();
+    }
 }
 
 void scene::clear_entity(entt::handle& handle)

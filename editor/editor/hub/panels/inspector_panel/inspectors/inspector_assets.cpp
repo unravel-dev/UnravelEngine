@@ -888,7 +888,7 @@ auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const 
     if(!instance)
     {
         inspected_scene_.unload();
-        instance = inspected_scene_.instantiate(prefab);
+        instance = inspected_scene_.instantiate(prefab, false);
         inspected_version_ = prefab.version();
     }
 

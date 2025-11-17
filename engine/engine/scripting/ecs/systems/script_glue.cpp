@@ -24,6 +24,7 @@
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/ui/rmlui/RmlUi_SystemInterface.h>
+#include <engine/profiler/profiler.h>
 #include <graphics/debugdraw.h>
 
 // RmlUi includes
@@ -1022,6 +1023,15 @@ void internal_m2n_set_time_scale(float scale)
     auto& ctx = engine::context();
     auto& sim = ctx.get_cached<simulation>();
     sim.set_time_scale(scale);
+}
+
+void internal_m2n_profiler_add_record(const std::string& name, float time_ms)
+{
+    auto profiler = get_app_profiler();
+    if(profiler)
+    {
+        profiler->add_record(name, time_ms);
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -4702,6 +4712,11 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     {
         auto reg = mono::internal_call_registry("Unravel.Core.Time");
         reg.add_internal_call("internal_m2n_set_time_scale", internal_call(internal_m2n_set_time_scale));
+    }
+    
+    {
+        auto reg = mono::internal_call_registry("Unravel.Core.Profiler");
+        reg.add_internal_call("internal_m2n_profiler_add_record", internal_call(internal_m2n_profiler_add_record));
     }
     
     {

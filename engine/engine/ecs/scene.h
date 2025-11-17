@@ -81,7 +81,7 @@ struct scene
      * @param pfb The asset handle to the scene prefab.
      * @return True if the scene was loaded successfully, false otherwise.
      */
-    auto load_from(const asset_handle<scene_prefab>& pfb) -> bool;
+    auto load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks = true) -> bool;
 
     /**
      * @brief Unloads the scene, removing all entities.
@@ -93,9 +93,9 @@ struct scene
      * @param pfb The asset handle to the prefab.
      * @return A handle to the instantiated entity.
      */
-    auto instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e) -> bool;
-    auto instantiate(const asset_handle<prefab>& pfb) -> entt::handle;
-    auto instantiate(const asset_handle<prefab>& pfb, entt::handle parent) -> entt::handle;
+    auto instantiate_out(const asset_handle<prefab>& pfb, entt::handle&, bool call_callbacks = true) -> bool;
+    auto instantiate(const asset_handle<prefab>& pfb, bool call_callbacks = true) -> entt::handle;
+    auto instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks = true) -> entt::handle;
 
     void clear_entity(entt::handle& handle);
     /**
@@ -126,8 +126,8 @@ struct scene
      * @param keep_parent Whether to keep the parent relationship.
      * @return A handle to the cloned entity.
      */
-    auto clone_entity(entt::handle clone_from, bool keep_parent = true) -> entt::handle;
-    void clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent = true);
+    auto clone_entity(entt::handle clone_from, bool keep_parent = true, bool call_callbacks = true) -> entt::handle;
+    void clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent = true, bool call_callbacks = true);
 
     /**
      * @brief Creates an entity in the specified registry with an optional name and parent.
@@ -143,7 +143,7 @@ struct scene
      * @param src_scene The source scene.
      * @param dst_scene The destination scene.
      */
-    static void clone_scene(const scene& src_scene, scene& dst_scene);
+    static void clone_scene(const scene& src_scene, scene& dst_scene, bool call_callbacks = true);
 
     /**
      * @brief Finds an entity by UUID in the scene.

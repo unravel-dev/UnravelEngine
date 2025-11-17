@@ -1810,16 +1810,24 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 std::string unknown_text;
 
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-                auto nested_obj = invoker.get_value(data);
-                if(nested_obj.valid())
+                try
                 {
-                    unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                    auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                    auto nested_obj = invoker.get_value(data);
+                    if(nested_obj.valid())
+                    {
+                        unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                    }
+                    else
+                    {
+                        unknown_text = "null (" + field_type.get_name() + ")";
+                    }
                 }
-                else
+                catch(const std::exception& e)
                 {
-                    unknown_text = "null (" + field_type.get_name() + ")";
+                    unknown_text = fmt::format("Unknown ({})", e.what());
                 }
+
                 
                 entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
                 auto unknown_var_proxy = make_proxy(unknown_var);
@@ -1991,16 +1999,24 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 std::string unknown_text;
 
-                auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
-                auto nested_obj = invoker.get_value(data);
-                if(nested_obj.valid())
+                try
                 {
-                    unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                    auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                    auto nested_obj = invoker.get_value(data);
+                    if(nested_obj.valid())
+                    {
+                        unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                    }
+                    else
+                    {
+                        unknown_text = "null (" + prop.get_type().get_name() + ")";
+                    }
                 }
-                else
+                catch(const std::exception& e)
                 {
-                    unknown_text = "null (" + prop.get_type().get_name() + ")";
+                    unknown_text = fmt::format("Unknown ({})", e.what());
                 }
+
                 
                 entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
                 auto unknown_var_proxy = make_proxy(unknown_var);

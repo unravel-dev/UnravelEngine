@@ -85,6 +85,13 @@ struct load_context
     std::map<hpp::uuid, uid_mapping_t> mapping_by_uid;
 };
 
+struct post_load_callbacks
+{
+    std::function<void(hpp::span<const entt::handle> new_entities)> callback;
+};
+void push_on_load_callbacks(const post_load_callbacks& callbacks);
+void pop_on_load_callbacks();
+auto get_post_load_callbacks() -> const post_load_callbacks*;
 
 auto push_load_context(entt::registry& registry) -> bool;
 void pop_load_context(bool push_result);

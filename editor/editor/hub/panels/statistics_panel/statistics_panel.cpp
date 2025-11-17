@@ -801,11 +801,23 @@ auto statistics_panel::draw_app_profiler_data() -> void
     
     for(const auto& [name, per_frame_data] : data)
     {
-        ImGui::TextUnformatted(
+        if(ImGui::TreeNode(
             fmt::format("{:>7.3f}ms [{:^5}] - {}", 
-                       per_frame_data.time, 
-                       per_frame_data.samples, 
-                       fmt::string_view(name.data(), name.size())).c_str());
+                       per_frame_data.get_time(), 
+                       per_frame_data.get_samples_since_swap(), 
+                       fmt::string_view(name.data(), name.size())).c_str()))
+        {
+                       ImGui::TextUnformatted(
+            fmt::format(" - Avg {:>7.3f}ms", 
+                       per_frame_data.get_avg()).c_str());
+                       ImGui::TextUnformatted(
+            fmt::format(" - Max {:>7.3f}ms", 
+                       per_frame_data.get_max()).c_str());
+                       ImGui::TextUnformatted(
+            fmt::format(" - Min {:>7.3f}ms", 
+                       per_frame_data.get_min()).c_str());
+            ImGui::TreePop();
+        }
     }
 }
 

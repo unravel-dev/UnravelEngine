@@ -49,6 +49,7 @@ auto as_span(const std::vector<entity_data<entt::handle>>& entities) -> hpp::spa
 
 thread_local load_context* load_ctx_ptr{};
 thread_local save_context* save_ctx_ptr{};
+thread_local post_load_callbacks* post_load_callbacks_ptr{};
 std::atomic_bool writing = false;
 std::atomic_bool reading = false;
 
@@ -74,19 +75,11 @@ void pop_load_context(bool push_result)
 
         if(!entities.empty())
         {   
-            auto& ctx = engine::context();
-            auto& ev = ctx.get_cached<events>();
-            
-            if(ev.is_playing)
+            auto callbacks = get_post_load_callbacks();
+            if(callbacks && callbacks->callback)
             {
-                auto& rsys = ctx.get_cached<rendering_system>();
-                auto& ssys = ctx.get_cached<script_system>();
-    
-                delta_t dt(0.016667f);
-                auto span = as_span(entities);
-                rsys.on_play_begin(span, dt);
-                ssys.on_play_begin(span);
-            }  
+                callbacks->callback(as_span(entities));
+            } 
         }
 
     }
@@ -96,6 +89,28 @@ auto get_load_context() -> load_context&
 {
     assert(load_ctx_ptr);
     return *load_ctx_ptr;
+}
+
+void push_on_load_callbacks(const post_load_callbacks& callbacks)
+{
+    if(post_load_callbacks_ptr)
+    {
+        return;
+    }
+    post_load_callbacks_ptr = new post_load_callbacks(callbacks);
+}
+void pop_on_load_callbacks()
+{
+    if(post_load_callbacks_ptr)
+    {
+        delete post_load_callbacks_ptr;
+        post_load_callbacks_ptr = {};
+    }
+}
+
+auto get_post_load_callbacks() -> const post_load_callbacks*
+{
+    return post_load_callbacks_ptr;
 }
 
 auto push_save_context() -> bool
@@ -1073,7 +1088,6 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     save_ctx.clone_mode = clone_mode;
     std::stringstream ss;
     {
-        std::ofstream ss("./clone.ecs");
         save_to_stream(ss, src_obj);
     }
     save_ctx.to_prefab = false;
@@ -1086,9 +1100,7 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     auto& load_ctx = get_load_context();
     load_ctx.clone_mode = clone_mode;
 
-    {
-        
-        std::ifstream ss("./clone.ecs");
+    {  
         load_from(ss, dst_obj);
     }
     load_ctx.clone_mode = clone_mode_t::none;
@@ -1222,15 +1234,15 @@ auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
     if(!buffer.empty())
     {
         // APPLOG_INFO_PERF(std::chrono::microseconds);
-        // try
-        // {
+        try
+        {
             auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
             load_from_archive(ar, *scn.registry);
-        // }
-        // catch(const std::exception& e)
-        // {
-        //     APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
-        // }
+        }
+        catch(const std::exception& e)
+        {
+            APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
+        }
     }
 
     return true;

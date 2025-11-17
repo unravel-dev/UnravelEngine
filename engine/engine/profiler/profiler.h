@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <map>
 #include <array>
+#include <string>
 #include <type_traits>
 #include <concepts>
 #include <hpp/string_view.hpp>
@@ -23,11 +24,14 @@ class performance_profiler
 public:
     struct per_frame_data
     {
-        float time = 0.0f;
-        uint32_t samples = 0;
+        float time = 0.0f;              // Total accumulated time
+        float min = 0.0f;               // Minimum time recorded
+        float max = 0.0f;               // Maximum time recorded
+        uint32_t samples = 0;           // Number of samples
+        uint32_t samples_since_swap = 0; // Number of samples since last swap
 
         per_frame_data() = default;
-        per_frame_data(float t) : time(t)
+        per_frame_data(float t) : time(t), min(t), max(t), samples(1), samples_since_swap(1)
         {
         }
 
@@ -35,32 +39,115 @@ public:
         {
             return time;
         }
+        
         auto operator+=(float t) -> per_frame_data&
         {
             time += t;
             return *this;
         }
+
+
+        auto get_time() const -> float
+        {
+            return time;
+        }
+
+        /// @brief Get average time per sample
+        auto get_avg() const -> float
+        {
+            return samples > 0 ? time / static_cast<float>(samples) : 0.0f;
+        }
+
+        /// @brief Get minimum time
+        auto get_min() const -> float
+        {
+            return min;
+        }
+
+        /// @brief Get maximum time
+        auto get_max() const -> float
+        {
+            return max;
+        }
+
+        /// @brief Get total time
+        auto get_total() const -> float
+        {
+            return time;
+        }
+
+        /// @brief Get total sample count
+        auto get_samples() const -> uint32_t
+        {
+            return samples;
+        }
+
+        /// @brief Get sample count since last swap (current frame)
+        auto get_samples_since_swap() const -> uint32_t
+        {
+            return samples_since_swap;
+        }
+
+        /// @brief Add a new time sample and update statistics
+        void add_sample(float t)
+        {
+            time += t;
+            samples++;
+            samples_since_swap++;
+            
+            // Update min/max
+            if(samples == 1)
+            {
+                min = t;
+                max = t;
+            }
+            else
+            {
+                if(t < min)
+                {
+                    min = t;
+                }
+                if(t > max)
+                {
+                    max = t;
+                }
+            }
+        }
+
+        /// @brief Reset all statistics to zero
+        void reset()
+        {
+            time = 0.0f;
+
+            samples_since_swap = 0;
+        }
     };
 
-    using record_data_t = std::map<hpp::string_view, per_frame_data>;
+    // Use std::string as key with std::less<> for transparent lookup
+    // This allows lookup by string_view without allocation
+    using record_data_t = std::map<std::string, per_frame_data, std::less<>>;
 
-    /// @brief Add performance record using string literal only
-    /// @details Only accepts string literals to ensure lifetime safety since we store non-owning pointers
-    /// @param name String literal name for the performance record
+    /// @brief Add performance record with any string type
+    /// @details Accepts string literals, std::string, string_view, etc.
+    /// Uses transparent lookup to avoid allocations when the key already exists
+    /// @param name Name for the performance record (any string-like type)
     /// @param time Time value in milliseconds
-    template<typename T>
-    void add_record(T&& name, float time)
+    void add_record(hpp::string_view name, float time)
     {
-        static_assert(string_literal<T>, 
-                     "ERROR: add_record() only accepts string literals for memory safety. "
-                     "Use: add_record(\"literal_name\", time) instead of add_record(variable_name, time)");
         add_record_internal(name, time);
     }
 
     void swap()
     {
         current_ = get_next_index();
-        get_per_frame_data_write().clear();
+        
+        // Reset statistics for all entries but keep the keys
+        // This avoids map reallocation and maintains the same profiling entries
+        auto& per_frame = get_per_frame_data_write();
+        for(auto& [name, data] : per_frame)
+        {
+            data.reset();
+        }
     }
 
     auto get_per_frame_data_read() const -> const record_data_t&
@@ -74,15 +161,25 @@ public:
     }
 
 private:
-    /// @brief Internal add_record for use by scope_perf_timer
-    /// @details This is safe to use internally since scope_perf_timer validates string literals at construction
-    void add_record_internal(const char* name, float time)
+    /// @brief Internal add_record implementation
+    /// @details Uses transparent lookup with string_view to avoid allocations when key exists
+    /// Only allocates std::string when inserting a new key
+    void add_record_internal(hpp::string_view name, float time)
     {
         auto& per_frame = get_per_frame_data_write();
 
-        auto& data = per_frame[name];
-        data.time += time;
-        data.samples++;
+        // Use find for transparent lookup (avoids allocation if key exists)
+        auto it = per_frame.find(name);
+        if(it != per_frame.end())
+        {
+            // Key exists, update statistics without allocation
+            it->second.add_sample(time);
+        }
+        else
+        {
+            // Key doesn't exist, insert new entry (allocates std::string)
+            per_frame[std::string(name)] = per_frame_data(time);
+        }
     }
 
     auto get_next_index() const -> int
