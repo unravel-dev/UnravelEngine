@@ -760,7 +760,7 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
     
-    auto object = scn.instantiate(asset);
+    auto object = scn.instantiate(asset, false);
 
     if(object)
     {
