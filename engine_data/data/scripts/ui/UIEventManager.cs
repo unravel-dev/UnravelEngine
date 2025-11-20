@@ -200,20 +200,26 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Remove all event subscriptions for a specific element.
+        /// Unsubscribe all callbacks from a specific UIElement.
+        /// This removes the element from both legacy and typed subscription dictionaries.
         /// </summary>
-        /// <param name="elementWrapper">The UIElement to clean up</param>
-        public static void ClearElement(UIElement elementWrapper)
+        /// <param name="elementWrapper">The UIElement to unsubscribe from</param>
+        /// <returns>True if any subscriptions were removed</returns>
+        public static bool UnsubscribeAll(UIElement elementWrapper)
         {
-            if (elementWrapper == null) return;
+            if (elementWrapper == null) return false;
 
             if (isDispatching)
             {
-                return; // Defer cleanup
+                // Cannot defer this operation safely, so we skip it during dispatch
+                Log.Warning("UnsubscribeAll called during event dispatch - operation ignored");
+                return false;
             }
 
-            legacySubscriptions.Remove(elementWrapper);
-            typedSubscriptions.Remove(elementWrapper);
+            bool hadLegacy = legacySubscriptions.Remove(elementWrapper);
+            bool hadTyped = typedSubscriptions.Remove(elementWrapper);
+
+            return hadLegacy || hadTyped;
         }
 
         /// <summary>
@@ -487,17 +493,25 @@ namespace Unravel.Core
             var callbacks = typedSubscriptions[elementWrapper][eventType][callbackType];
             bool removed = callbacks.Remove(callback);
 
+			Log.Info($"UIEventManager: Unsubscribed from {eventType} event on {elementWrapper.ElementId}");
+
             // Clean up empty collections
             if (callbacks.Count == 0)
             {
                 typedSubscriptions[elementWrapper][eventType].Remove(callbackType);
 
+				Log.Info($"UIEventManager: Removed {callbackType.Name} callback from {eventType} event on {elementWrapper.ElementId}");
+
                 if (typedSubscriptions[elementWrapper][eventType].Count == 0)
                 {
+					Log.Info($"UIEventManager: Removed {eventType} event from {elementWrapper.ElementId}");
+
                     typedSubscriptions[elementWrapper].Remove(eventType);
 
                     if (typedSubscriptions[elementWrapper].Count == 0)
                     {
+						Log.Info($"UIEventManager: Removed {elementWrapper.ElementId} from UIEventManager");
+
                         typedSubscriptions.Remove(elementWrapper);
                     }
                 }

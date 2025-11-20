@@ -84,6 +84,11 @@ struct scene
     auto load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks = true) -> bool;
 
     /**
+     * @brief Reloads the scene from the source prefab asset.
+     * @param call_callbacks Whether to call the load callbacks.
+     */
+    void reload(bool call_callbacks = true);
+    /**
      * @brief Unloads the scene, removing all entities.
      */
     void unload();

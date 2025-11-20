@@ -7,7 +7,7 @@
 #include <array>
 #include <string>
 #include <type_traits>
-#include <concepts>
+#include <algorithm>
 #include <hpp/string_view.hpp>
 
 namespace unravel
@@ -19,107 +19,267 @@ template<typename T>
 concept string_literal = std::is_array_v<std::remove_reference_t<T>> && 
                          std::is_same_v<std::remove_extent_t<std::remove_reference_t<T>>, const char>;
 
+//-----------------------------------------------------------------------------
+/// @brief Class for collecting and managing time-series sample data
+/// @details Maintains a rolling buffer of samples with automatic statistics calculation
+//-----------------------------------------------------------------------------
+class sample_data
+{
+public:
+    static constexpr uint32_t num_samples = 500;
+
+    //-----------------------------------------------------------------------------
+    /// @brief Constructor that initializes all samples to zero
+    //-----------------------------------------------------------------------------
+    sample_data()
+    {
+        reset(0.0f);
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Reset all samples to a specific value
+    /// @param value The value to reset all samples to
+    //-----------------------------------------------------------------------------
+    auto reset(float value) -> void
+    {
+        offset_ = 0;
+        std::fill(values_.begin(), values_.end(), value);
+        min_ = value;
+        max_ = value;
+        average_ = value;
+        sum_ = value * static_cast<float>(num_samples);
+        min_index_ = 0;
+        max_index_ = 0;
+        smart_init_samples_ = smart_init_samples_count;
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Add a new sample to the rolling buffer
+    /// @details Automatically updates min, max, and average statistics using O(1) incremental updates
+    /// Uses index tracking to maintain min/max without scanning
+    /// @param value The new sample value
+    //-----------------------------------------------------------------------------
+    auto push_sample(float value) -> void
+    {
+        if(smart_init_samples_ > 0 && offset_ > smart_init_samples_)
+        {
+            reset(value);
+            smart_init_samples_ = -1;
+            return;
+        }
+        
+        // Get the old value and index that will be replaced
+        const float old_value = values_[offset_];
+        const int32_t current_index = offset_;
+        
+        // Update sum incrementally (remove old, add new)
+        sum_ = sum_ - old_value + value;
+        
+        // Store new value
+        values_[offset_] = value;
+        offset_ = (offset_ + 1) % static_cast<int32_t>(num_samples);
+        
+        // Update average from sum
+        average_ = sum_ / static_cast<float>(num_samples);
+        
+        // Update min tracking
+        if(min_index_ == current_index)
+        {
+            // We're replacing the current min, need to find new min
+            min_index_ = 0;
+            min_ = values_[0];
+            for(int32_t i = 1; i < static_cast<int32_t>(num_samples); ++i)
+            {
+                if(values_[i] < min_)
+                {
+                    min_ = values_[i];
+                    min_index_ = i;
+                }
+            }
+        }
+        else if(value < min_)
+        {
+            // New value is the new minimum
+            min_ = value;
+            min_index_ = current_index;
+        }
+        
+        // Update max tracking
+        if(max_index_ == current_index)
+        {
+            // We're replacing the current max, need to find new max
+            max_index_ = 0;
+            max_ = values_[0];
+            for(int32_t i = 1; i < static_cast<int32_t>(num_samples); ++i)
+            {
+                if(values_[i] > max_)
+                {
+                    max_ = values_[i];
+                    max_index_ = i;
+                }
+            }
+        }
+        else if(value > max_)
+        {
+            // New value is the new maximum
+            max_ = value;
+            max_index_ = current_index;
+        }
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Get the raw sample values array
+    /// @return Pointer to the internal sample array
+    //-----------------------------------------------------------------------------
+    auto get_values() const -> const float*
+    {
+        return values_.data();
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Get the current offset in the rolling buffer
+    /// @return The current offset position
+    //-----------------------------------------------------------------------------
+    auto get_offset() const -> int32_t
+    {
+        return offset_;
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Get the minimum value in the current sample set
+    /// @return The minimum sample value
+    //-----------------------------------------------------------------------------
+    auto get_min() const -> float
+    {
+        return min_;
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Get the maximum value in the current sample set
+    /// @return The maximum sample value
+    //-----------------------------------------------------------------------------
+    auto get_max() const -> float
+    {
+        return max_;
+    }
+
+    //-----------------------------------------------------------------------------
+    /// @brief Get the average value of the current sample set
+    /// @return The average sample value
+    //-----------------------------------------------------------------------------
+    auto get_average() const -> float
+    {
+        return average_;
+    }
+
+private:
+    static constexpr int32_t smart_init_samples_count = 20;
+    
+    int32_t offset_{0};
+    std::array<float, num_samples> values_{};
+    float min_{0.0f};
+    float max_{0.0f};
+    float average_{0.0f};
+    float sum_{0.0f};        // Running sum for O(1) average calculation
+    int32_t min_index_{0};   // Index of current minimum value
+    int32_t max_index_{0};   // Index of current maximum value
+    int32_t smart_init_samples_{-1};
+};
+
 class performance_profiler
 {
 public:
     struct per_frame_data
     {
-        float time = 0.0f;              // Total accumulated time
-        float min = 0.0f;               // Minimum time recorded
-        float max = 0.0f;               // Maximum time recorded
-        uint32_t samples = 0;           // Number of samples
-        uint32_t samples_since_swap = 0; // Number of samples since last swap
+        float time_since_swap = 0.0f;   // Time since last swap (current frame accumulation)
+        uint32_t samples_since_swap = 0; // Number of samples since last swap (current frame)
+        sample_data history;             // Rolling buffer of historical samples
 
         per_frame_data() = default;
-        per_frame_data(float t) : time(t), min(t), max(t), samples(1), samples_since_swap(1)
+        per_frame_data(float t) : time_since_swap(t), samples_since_swap(1)
         {
+            history.push_sample(t);
         }
 
         operator float() const
         {
-            return time;
+            return time_since_swap;
         }
         
         auto operator+=(float t) -> per_frame_data&
         {
-            time += t;
+            time_since_swap += t;
             return *this;
         }
 
-
-        auto get_time() const -> float
+        //-----------------------------------------------------------------------------
+        /// @brief Get time accumulated since last swap (current frame)
+        //-----------------------------------------------------------------------------
+        auto get_time_since_swap() const -> float
         {
-            return time;
+            return time_since_swap;
         }
 
-        /// @brief Get average time per sample
-        auto get_avg() const -> float
-        {
-            return samples > 0 ? time / static_cast<float>(samples) : 0.0f;
-        }
-
-        /// @brief Get minimum time
-        auto get_min() const -> float
-        {
-            return min;
-        }
-
-        /// @brief Get maximum time
-        auto get_max() const -> float
-        {
-            return max;
-        }
-
-        /// @brief Get total time
-        auto get_total() const -> float
-        {
-            return time;
-        }
-
-        /// @brief Get total sample count
-        auto get_samples() const -> uint32_t
-        {
-            return samples;
-        }
-
+        //-----------------------------------------------------------------------------
         /// @brief Get sample count since last swap (current frame)
+        //-----------------------------------------------------------------------------
         auto get_samples_since_swap() const -> uint32_t
         {
             return samples_since_swap;
         }
 
-        /// @brief Add a new time sample and update statistics
-        void add_sample(float t)
+        //-----------------------------------------------------------------------------
+        /// @brief Get average time from historical samples
+        //-----------------------------------------------------------------------------
+        auto get_avg() const -> float
         {
-            time += t;
-            samples++;
-            samples_since_swap++;
-            
-            // Update min/max
-            if(samples == 1)
-            {
-                min = t;
-                max = t;
-            }
-            else
-            {
-                if(t < min)
-                {
-                    min = t;
-                }
-                if(t > max)
-                {
-                    max = t;
-                }
-            }
+            return history.get_average();
         }
 
-        /// @brief Reset all statistics to zero
+        //-----------------------------------------------------------------------------
+        /// @brief Get minimum time from historical samples
+        //-----------------------------------------------------------------------------
+        auto get_min() const -> float
+        {
+            return history.get_min();
+        }
+
+        //-----------------------------------------------------------------------------
+        /// @brief Get maximum time from historical samples
+        //-----------------------------------------------------------------------------
+        auto get_max() const -> float
+        {
+            return history.get_max();
+        }
+
+        //-----------------------------------------------------------------------------
+        /// @brief Get the rolling buffer of historical samples
+        //-----------------------------------------------------------------------------
+        auto get_history() const -> const sample_data&
+        {
+            return history;
+        }
+
+        //-----------------------------------------------------------------------------
+        /// @brief Add a new time sample to current frame accumulation
+        //-----------------------------------------------------------------------------
+        void add_sample(float t)
+        {
+            time_since_swap += t;
+            samples_since_swap++;
+        }
+
+        //-----------------------------------------------------------------------------
+        /// @brief Reset current frame statistics and push accumulated time to history
+        //-----------------------------------------------------------------------------
         void reset()
         {
-            time = 0.0f;
-
+            if(samples_since_swap > 0)
+            {
+                history.push_sample(time_since_swap);
+            }
             samples_since_swap = 0;
+            time_since_swap = 0.0f;
         }
     };
 
@@ -139,7 +299,7 @@ public:
 
     void swap()
     {
-        current_ = get_next_index();
+        // current_ = get_next_index();
         
         // Reset statistics for all entries but keep the keys
         // This avoids map reallocation and maintains the same profiling entries
@@ -152,7 +312,7 @@ public:
 
     auto get_per_frame_data_read() const -> const record_data_t&
     {
-        return per_frame_data_[get_next_index()];
+        return per_frame_data_[current_];
     }
 
     auto get_per_frame_data_write() -> record_data_t&

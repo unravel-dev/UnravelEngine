@@ -27,6 +27,14 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Reloads the current scene from its source prefab asset.
+        /// </summary>
+        public static void ReloadScene()
+        {
+            internal_m2n_reload_scene();
+        }
+
+        /// <summary>
         /// Instantiates an entity from a specified prefab.
         /// </summary>
         /// <param name="prefab">The prefab to instantiate.</param>
@@ -163,6 +171,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_load_scene_uid(Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_reload_scene();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private extern void internal_m2n_create_scene();

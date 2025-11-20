@@ -1,8 +1,5 @@
 #include "statistics_utils.h"
 
-#include <algorithm>
-#include <numeric>
-
 namespace unravel::statistics_utils
 {
 
@@ -10,51 +7,6 @@ namespace unravel::statistics_utils
 namespace
 {
     constexpr float HOVER_COLOR_MULTIPLIER = 0.1f;
-    constexpr int32_t SMART_INIT_SAMPLES = 20;
-}
-
-sample_data::sample_data()
-{
-    reset(0.0f);
-}
-
-auto sample_data::reset(float value) -> void
-{
-    offset_ = 0;
-    std::fill(values_.begin(), values_.end(), value);
-    
-    min_ = value;
-    max_ = value;
-    average_ = value;
-    
-    smart_init_samples_ = SMART_INIT_SAMPLES;
-}
-
-auto sample_data::push_sample(float value) -> void
-{
-    if(smart_init_samples_ > 0 && offset_ > smart_init_samples_)
-    {
-        reset(value);
-        smart_init_samples_ = -1;
-    }
-    
-    values_[offset_] = value;
-    offset_ = (offset_ + 1) % NUM_SAMPLES;
-    
-    float min = std::numeric_limits<float>::max();
-    float max = std::numeric_limits<float>::lowest();
-    float sum = 0.0f;
-    
-    for(const auto& val : values_)
-    {
-        min = std::min(min, val);
-        max = std::max(max, val);
-        sum += val;
-    }
-    
-    min_ = min;
-    max_ = max;
-    average_ = sum / NUM_SAMPLES;
 }
 
 auto draw_progress_bar(float width, float max_width, float height, const ImVec4& color) -> bool

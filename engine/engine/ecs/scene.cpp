@@ -124,7 +124,7 @@ auto on_load_callback(hpp::span<const entt::handle> entities) -> void
 
         if(ev.is_playing)
         {
-            auto& rsys = ctx.get_cached<rendering_system>();
+            auto& rsys = ctx.get_cached<rendering_system>(); 
             auto& ssys = ctx.get_cached<script_system>();
 
             delta_t dt(0.016667f);
@@ -193,9 +193,21 @@ scene::~scene()
 
 void scene::unload()
 {
+    registry->clear<script_component>();
     registry->clear();
     auto reserved_entity = registry->create();
     source = {};
+}
+
+void scene::reload(bool call_callbacks)
+{
+    auto src = source;  
+    if(!src)
+    {
+        return;
+    }
+    unload();   
+    load_from(src, call_callbacks);
 }
 
 auto scene::load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks) -> bool

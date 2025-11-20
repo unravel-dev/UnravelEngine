@@ -233,6 +233,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Unsubscribe all callbacks from this UIElement.
+        /// This removes all event listeners (both legacy and typed) from this element.
+        /// </summary>
+        /// <returns>True if any subscriptions were removed</returns>
+        public bool UnsubscribeAll()
+        {
+            return UIEventManager.UnsubscribeAll(this);
+        }
+
+        /// <summary>
         /// Returns a string representation of this UI element wrapper.
         /// </summary>
         public override string ToString()

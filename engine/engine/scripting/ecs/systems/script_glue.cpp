@@ -225,6 +225,21 @@ void internal_m2n_load_scene_uid(const hpp::uuid& uid)
     seq::queue(delay, "script");
 }
 
+void internal_m2n_reload_scene()
+{
+    auto delay = seq::delay(0ms);
+    delay.on_end.connect(
+        []()
+        {
+            auto& ctx = engine::context();
+            auto& ec = ctx.get_cached<ecs>();
+        
+            ec.get_scene().reload();
+        });
+
+    seq::queue(delay, "script");
+}
+
 void internal_m2n_create_scene(const mono::mono_object& this_ptr)
 {
     mono::ignore(this_ptr);
@@ -4175,6 +4190,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         auto reg = mono::internal_call_registry("Unravel.Core.Scene");
         reg.add_internal_call("internal_m2n_load_scene", internal_call(internal_m2n_load_scene));
         reg.add_internal_call("internal_m2n_load_scene_uid", internal_call(internal_m2n_load_scene_uid));
+        reg.add_internal_call("internal_m2n_reload_scene", internal_call(internal_m2n_reload_scene));
         reg.add_internal_call("internal_m2n_create_scene", internal_call(internal_m2n_create_scene));
         reg.add_internal_call("internal_m2n_destroy_scene", internal_call(internal_m2n_destroy_scene));
         reg.add_internal_call("internal_m2n_create_entity", internal_call(internal_m2n_create_entity));

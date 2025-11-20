@@ -805,7 +805,6 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
 template<typename Archive>
 void load_from_archive(Archive& ar, entt::registry& reg)
 {
-    reg.clear();
     size_t count = 0;
     try_load(ar, ser20::make_nvp("entities_count", count));
 
@@ -1208,6 +1207,7 @@ void load_from_stream_bin(std::istream& stream, scene& scn)
 
         try
         {
+            scn.unload();
             ser20::iarchive_binary_t ar(stream);
             load_from_archive(ar, *scn.registry);
         }
@@ -1236,6 +1236,7 @@ auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
         // APPLOG_INFO_PERF(std::chrono::microseconds);
         try
         {
+            scn.unload();
             auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
             load_from_archive(ar, *scn.registry);
         }

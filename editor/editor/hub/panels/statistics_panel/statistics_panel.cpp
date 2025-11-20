@@ -220,7 +220,7 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
         ImGui::SetNextWindowViewportToCurrent();
         ImGui::PlotLines("##FrameTime",
                          frame_time_samples.get_values(),
-                         statistics_utils::sample_data::NUM_SAMPLES,
+                         statistics_utils::sample_data::num_samples,
                          frame_time_samples.get_offset(),
                          frame_text_overlay.data(),
                          0.0f,
@@ -802,20 +802,24 @@ auto statistics_panel::draw_app_profiler_data() -> void
     for(const auto& [name, per_frame_data] : data)
     {
         if(ImGui::TreeNode(
-            fmt::format("{:>7.3f}ms [{:^5}] - {}", 
-                       per_frame_data.get_time(), 
+            fmt::format("{:>7.3f}ms [{:^5}] - {}###{}", 
+                       per_frame_data.get_time_since_swap(), 
                        per_frame_data.get_samples_since_swap(), 
-                       fmt::string_view(name.data(), name.size())).c_str()))
+                       name,
+                       name).c_str()))
         {
                        ImGui::TextUnformatted(
-            fmt::format(" - Avg {:>7.3f}ms", 
-                       per_frame_data.get_avg()).c_str());
+            fmt::format("- {:>7.3f}ms [{:^5}] - Avg", 
+                       per_frame_data.get_avg(),
+                       sample_data::num_samples).c_str());
                        ImGui::TextUnformatted(
-            fmt::format(" - Max {:>7.3f}ms", 
-                       per_frame_data.get_max()).c_str());
+            fmt::format("- {:>7.3f}ms [{:^5}] - Max", 
+                       per_frame_data.get_max(),
+                       sample_data::num_samples).c_str());
                        ImGui::TextUnformatted(
-            fmt::format(" - Min {:>7.3f}ms", 
-                       per_frame_data.get_min()).c_str());
+            fmt::format("- {:>7.3f}ms [{:^5}] - Min", 
+                       per_frame_data.get_min(),
+                       sample_data::num_samples).c_str());
             ImGui::TreePop();
         }
     }
@@ -855,7 +859,7 @@ auto statistics_panel::draw_gpu_memory_section(const gfx::stats* stats, int64_t&
     ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##GPUMemory",
                      gpu_memory_samples.get_values(),
-                     statistics_utils::sample_data::NUM_SAMPLES,
+                     statistics_utils::sample_data::num_samples,
                      gpu_memory_samples.get_offset(),
                      "GPU Memory Usage Over Time",
                      0.0f,
@@ -898,7 +902,7 @@ auto statistics_panel::draw_render_target_memory_section(const gfx::stats* stats
     ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##RenderTargetMemory",
                      render_target_memory_samples.get_values(),
-                     statistics_utils::sample_data::NUM_SAMPLES,
+                     statistics_utils::sample_data::num_samples,
                      render_target_memory_samples.get_offset(),
                      "Render Target Memory Usage Over Time",
                      0.0f,
@@ -941,7 +945,7 @@ auto statistics_panel::draw_texture_memory_section(const gfx::stats* stats, int6
     ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##TextureMemory",
                      texture_memory_samples.get_values(),
-                     statistics_utils::sample_data::NUM_SAMPLES,
+                     statistics_utils::sample_data::num_samples,
                      texture_memory_samples.get_offset(),
                      "Texture Memory Usage Over Time",
                      0.0f,
