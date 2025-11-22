@@ -13,6 +13,7 @@
 #include <bx/easing.h>
 #include <bx/handlealloc.h>
 #include <math/math.h>
+#include <glm/gtc/random.hpp>
 #include <vector>
 #include <algorithm>
 #include <engine/profiler/profiler.h>
@@ -60,6 +61,9 @@ void EmitterUniforms::reset()
     
     // Initialize emission shape scale
     m_emissionShapeScale = math::vec3(1.0f, 1.0f, 1.0f); // Default: no scaling
+
+    // Initialize spawn location
+    m_spawnLocation = EmitterSpawnLocation::Inside; // Default: spawn inside shape
 
     // Initialize velocity gradient with default 2-point gradient (start -> end)
     m_velocityGradient = math::gradient<frange_t>();
@@ -475,38 +479,137 @@ struct Emitter
 
 
             math::vec3 pos;
-            switch(shape_)
+            if(uniforms_.m_spawnLocation == EmitterSpawnLocation::Surface)
             {
-                default:
-                case EmitterShape::Sphere:
-                    pos = math::ballRand(1.0f);
-                    break;
-
-                case EmitterShape::Hemisphere:
+                // Surface spawning
+                switch(shape_)
                 {
-                    math::vec3 spherePos = math::ballRand(1.0f);
-                    if(math::dot(spherePos, up) < 0.0f)
-                        spherePos = -spherePos;
-                    pos = spherePos;
-                }
-                break;
+                    default:
+                    case EmitterShape::Sphere:
+                    {
+                        // Use sphericalRand for surface of sphere
+                        pos = glm::sphericalRand(1.0f);
+                    }
+                    break;
 
-                case EmitterShape::Circle:
+                    case EmitterShape::Hemisphere:
+                    {
+                        // Use sphericalRand and ensure Y >= 0 for hemisphere surface
+                        math::vec3 spherePos = glm::sphericalRand(1.0f);
+                        if(spherePos.y < 0.0f)
+                            spherePos.y = -spherePos.y;
+                        pos = spherePos;
+                    }
+                    break;
+
+                    case EmitterShape::Circle:
+                    {
+                        // Use circularRand for circle perimeter
+                        math::vec2 circlePos = glm::circularRand(1.0f);
+                        pos = math::vec3(circlePos.x, 0.0f, circlePos.y);
+                    }
+                    break;
+
+                    case EmitterShape::Box:
+                    {
+                        // Spawn on surface of box - randomly select a face and position on that face
+                        const float face = bx::frnd(&rng_) * 6.0f; // 0-5 for 6 faces
+                        const int faceIndex = static_cast<int>(face);
+                        const float u = bx::frnd(&rng_) * 2.0f - 1.0f; // -1 to 1
+                        const float v = bx::frnd(&rng_) * 2.0f - 1.0f; // -1 to 1
+                        
+                        switch(faceIndex)
+                        {
+                            case 0: // +X face
+                                pos = math::vec3(1.0f, u, v);
+                                break;
+                            case 1: // -X face
+                                pos = math::vec3(-1.0f, u, v);
+                                break;
+                            case 2: // +Y face
+                                pos = math::vec3(u, 1.0f, v);
+                                break;
+                            case 3: // -Y face
+                                pos = math::vec3(u, -1.0f, v);
+                                break;
+                            case 4: // +Z face
+                                pos = math::vec3(u, v, 1.0f);
+                                break;
+                            case 5: // -Z face
+                                pos = math::vec3(u, v, -1.0f);
+                                break;
+                            default:
+                                pos = math::vec3(1.0f, u, v);
+                                break;
+                        }
+                    }
+                    break;
+
+                    case EmitterShape::Rect:
+                    {
+                        // Spawn on perimeter of rectangle - randomly select an edge
+                        const float edge = bx::frnd(&rng_) * 4.0f; // 0-3 for 4 edges
+                        const int edgeIndex = static_cast<int>(edge);
+                        const float t = bx::frnd(&rng_) * 2.0f - 1.0f; // -1 to 1 along edge
+                        
+                        switch(edgeIndex)
+                        {
+                            case 0: // Top edge (+Z)
+                                pos = math::vec3(t, 0.0f, 1.0f);
+                                break;
+                            case 1: // Right edge (+X)
+                                pos = math::vec3(1.0f, 0.0f, t);
+                                break;
+                            case 2: // Bottom edge (-Z)
+                                pos = math::vec3(t, 0.0f, -1.0f);
+                                break;
+                            case 3: // Left edge (-X)
+                                pos = math::vec3(-1.0f, 0.0f, t);
+                                break;
+                            default:
+                                pos = math::vec3(t, 0.0f, 1.0f);
+                                break;
+                        }
+                    }
+                    break;
+                }
+            }
+            else
+            {
+                // Inside spawning (current behavior)
+                switch(shape_)
                 {
-                    math::vec2 circlePos = math::diskRand(1.0f);
-                    pos = math::vec3(circlePos.x, 0.0f, circlePos.y);
+                    default:
+                    case EmitterShape::Sphere:
+                        pos = math::ballRand(1.0f);
+                        break;
+
+                    case EmitterShape::Hemisphere:
+                    {
+                        math::vec3 spherePos = math::ballRand(1.0f);
+                        if(math::dot(spherePos, up) < 0.0f)
+                            spherePos = -spherePos;
+                        pos = spherePos;
+                    }
+                    break;
+
+                    case EmitterShape::Circle:
+                    {
+                        math::vec2 circlePos = math::diskRand(1.0f);
+                        pos = math::vec3(circlePos.x, 0.0f, circlePos.y);
+                    }
+                    break;
+
+                    case EmitterShape::Box:
+                        pos = math::vec3(math::linearRand(-1.0f, 1.0f),
+                                         math::linearRand(-1.0f, 1.0f),
+                                         math::linearRand(-1.0f, 1.0f));
+                        break;
+
+                    case EmitterShape::Rect:
+                        pos = math::vec3(math::linearRand(-1.0f, 1.0f), 0.0f, math::linearRand(-1.0f, 1.0f));
+                        break;
                 }
-                break;
-
-                case EmitterShape::Box:
-                    pos = math::vec3(math::linearRand(-1.0f, 1.0f),
-                                     math::linearRand(-1.0f, 1.0f),
-                                     math::linearRand(-1.0f, 1.0f));
-                    break;
-
-                case EmitterShape::Rect:
-                    pos = math::vec3(math::linearRand(-1.0f, 1.0f), 0.0f, math::linearRand(-1.0f, 1.0f));
-                    break;
             }
 
             // Apply emission shape scale (use pre-calculated value)

@@ -50,6 +50,17 @@ struct EmitterDirection
 	};
 };
 
+struct EmitterSpawnLocation
+{
+	enum Enum
+	{
+		Inside,  // Particles spawn inside the shape (current behavior)
+		Surface, // Particles spawn on the surface of the shape
+
+		Count
+	};
+};
+
 struct SimulationSpace
 {
 	enum Enum
@@ -75,6 +86,9 @@ struct EmitterUniforms
 
 	// Emission shape scale (separate from transform scale for flexibility)
 	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
+
+	// Spawn location determines where particles spawn within the emission shape
+	EmitterSpawnLocation::Enum m_spawnLocation; // Inside or Surface
 
 	math::gradient<frange_t> m_velocityGradient; // Velocity gradient over particle lifetime
 	math::gradient<frange_t> m_scaleGradient;    // Scale gradient over particle lifetime

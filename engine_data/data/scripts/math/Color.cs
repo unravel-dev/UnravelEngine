@@ -262,6 +262,23 @@ public struct Color : IEquatable<Color>, IFormattable
         a = 1f;
     }
 
+    public Color(int r, int g, int b, int a)
+    {
+        this.r = r / 255f;
+        this.g = g / 255f;
+        this.b = b / 255f;
+        this.a = a / 255f;
+    }
+
+    public Color(int r, int g, int b)
+    {
+        this.r = r / 255f;
+        this.g = g / 255f;
+        this.b = b / 255f;
+        this.a = 1f;
+    }
+    
+
     //
     // Summary:
     //     Returns a formatted string of this color.

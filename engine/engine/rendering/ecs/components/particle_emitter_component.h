@@ -78,6 +78,18 @@ public:
     auto get_direction() const -> EmitterDirection::Enum;
 
     /**
+     * @brief Sets the emitter spawn location.
+     * @param spawn_location The spawn location (Inside or Surface).
+     */
+    void set_spawn_location(EmitterSpawnLocation::Enum spawn_location);
+
+    /**
+     * @brief Gets the emitter spawn location.
+     * @return The spawn location.
+     */
+    auto get_spawn_location() const -> EmitterSpawnLocation::Enum;
+
+    /**
      * @brief Sets the maximum number of particles.
      * @param max_particles Maximum particles count.
      */

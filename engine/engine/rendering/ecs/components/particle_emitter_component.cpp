@@ -90,6 +90,16 @@ auto particle_emitter_component::get_direction() const -> EmitterDirection::Enum
     return direction_;
 }
 
+void particle_emitter_component::set_spawn_location(EmitterSpawnLocation::Enum spawn_location)
+{
+    uniforms_.m_spawnLocation = spawn_location;
+}
+
+auto particle_emitter_component::get_spawn_location() const -> EmitterSpawnLocation::Enum
+{
+    return uniforms_.m_spawnLocation;
+}
+
 void particle_emitter_component::set_max_particles(uint32_t max_particles)
 {
     if(max_particles_ != max_particles)

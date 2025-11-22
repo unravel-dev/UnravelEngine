@@ -72,6 +72,23 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Inward"},
         });
 
+    entt::meta_factory<EmitterSpawnLocation::Enum>{}
+        .type("EmitterSpawnLocation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "EmitterSpawnLocation"},
+            entt::attribute{"pretty_name", "Emitter Spawn Location"},
+        })
+        .data<EmitterSpawnLocation::Inside>("Inside"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Inside"},
+            entt::attribute{"pretty_name", "Inside"},
+        })
+        .data<EmitterSpawnLocation::Surface>("Surface"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Surface"},
+            entt::attribute{"pretty_name", "Surface"},
+        });
+
     entt::meta_factory<bx::Easing::Enum>{}
         .type("Easing"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -311,21 +328,24 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Emitter Shape"},
             entt::attribute{"tooltip", "Geometric shape from which particles are spawned. Sphere = 3D ball, Hemisphere = half sphere, Circle = 2D ring, Disc = filled circle, Rect = rectangle."},
         })
-
+        .data<&particle_emitter_component::set_spawn_location, &particle_emitter_component::get_spawn_location>("spawn_location"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spawn_location"},
+            entt::attribute{"pretty_name", "Spawn Location"},
+            entt::attribute{"tooltip", "Controls where particles spawn within the emission shape. Inside = particles spawn anywhere inside the shape volume/area, Surface = particles spawn only on the surface/perimeter of the shape."},
+        })
         .data<&particle_emitter_component::set_direction, &particle_emitter_component::get_direction>("direction"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "direction"},
             entt::attribute{"pretty_name", "Emitter Direction"},
             entt::attribute{"tooltip", "Initial direction particles move when spawned. Up = particles move upward, Outward = particles move away from spawn position, Inward = particles move towards spawn position (only visible in 3D space)."},
         })
-        
         .data<&particle_emitter_component::set_simulation_space, &particle_emitter_component::get_simulation_space>("simulation_space"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "simulation_space"},
             entt::attribute{"pretty_name", "Simulation Space"},
             entt::attribute{"tooltip", "Controls whether particles are simulated in world space or local space."},
         })
-
         .data<&particle_emitter_component::set_velocity_gradient, &particle_emitter_component::get_velocity_gradient>("velocity_gradient"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_gradient"},
@@ -457,6 +477,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("shape", obj.get_shape()));
     try_save(ar, ser20::make_nvp("direction", obj.get_direction()));
+    try_save(ar, ser20::make_nvp("spawn_location", obj.get_spawn_location()));
     try_save(ar, ser20::make_nvp("simulation_space", obj.get_simulation_space()));
     try_save(ar, ser20::make_nvp("max_particles", obj.get_max_particles()));
     
@@ -514,6 +535,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("direction", direction)))
     {
         obj.set_direction(direction);
+    }
+
+    EmitterSpawnLocation::Enum spawn_location{EmitterSpawnLocation::Inside};
+    if(try_load(ar, ser20::make_nvp("spawn_location", spawn_location)))
+    {
+        obj.set_spawn_location(spawn_location);
     }
 
     SimulationSpace::Enum simulation_space{SimulationSpace::World};
