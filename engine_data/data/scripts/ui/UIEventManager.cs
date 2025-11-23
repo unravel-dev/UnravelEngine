@@ -67,8 +67,8 @@ namespace Unravel.Core
     /// </summary>
     public static class UIEventManager
     {
-         // Legacy event subscription storage for backward compatibility
-         private static readonly Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>> legacySubscriptions
+         // Base event subscription storage for backward compatibility
+         private static readonly Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>> baseSubscriptions
              = new Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>>();
 
          // Type-specific callback storage: Element -> EventType -> Type -> List<Delegates>
@@ -76,39 +76,27 @@ namespace Unravel.Core
              = new Dictionary<UIElement, Dictionary<string, Dictionary<Type, List<Delegate>>>>();
 
          private static bool isDispatching = false;
-         private static readonly List<PendingSubscription> pendingSubscriptions = new List<PendingSubscription>();
-         private static readonly List<PendingUnsubscription> pendingUnsubscriptions = new List<PendingUnsubscription>();
-         private static readonly List<PendingTypedSubscription> pendingTypedSubscriptions = new List<PendingTypedSubscription>();
-         private static readonly List<PendingTypedUnsubscription> pendingTypedUnsubscriptions = new List<PendingTypedUnsubscription>();
+         
+         // Unified pending operations list to preserve order
+         private static readonly List<PendingOperation> pendingOperations = new List<PendingOperation>();
 
-         private struct PendingSubscription
+         private enum OperationType
          {
-             public UIElement elementWrapper;
-             public string eventType;
-             public UIEventCallback callback;
+             Subscribe,
+             Unsubscribe,
+             SubscribeTyped,
+             UnsubscribeTyped,
+             UnsubscribeAll
          }
 
-         private struct PendingUnsubscription
+         private struct PendingOperation
          {
+             public OperationType type;
              public UIElement elementWrapper;
              public string eventType;
-             public UIEventCallback callback;
-         }
-
-         private struct PendingTypedSubscription
-         {
-             public UIElement elementWrapper;
-             public string eventType;
+             public UIEventCallback baseCallback;
              public Type callbackType;
-             public Delegate callback;
-         }
-
-         private struct PendingTypedUnsubscription
-         {
-             public UIElement elementWrapper;
-             public string eventType;
-             public Type callbackType;
-             public Delegate callback;
+             public Delegate typedCallback;
          }
 
         /// <summary>
@@ -124,28 +112,29 @@ namespace Unravel.Core
             if (isDispatching)
             {
                 // Defer subscription during event dispatch
-                pendingSubscriptions.Add(new PendingSubscription
+                pendingOperations.Add(new PendingOperation
                 {
+                    type = OperationType.Subscribe,
                     elementWrapper = elementWrapper,
                     eventType = eventType,
-                    callback = callback
+                    baseCallback = callback
                 });
                 return;
             }
 
             // Ensure the nested dictionaries exist
-            if (!legacySubscriptions.ContainsKey(elementWrapper))
+            if (!baseSubscriptions.ContainsKey(elementWrapper))
             {
-                legacySubscriptions[elementWrapper] = new Dictionary<string, List<UIEventCallback>>();
+                baseSubscriptions[elementWrapper] = new Dictionary<string, List<UIEventCallback>>();
             }
 
-            if (!legacySubscriptions[elementWrapper].ContainsKey(eventType))
+            if (!baseSubscriptions[elementWrapper].ContainsKey(eventType))
             {
-                legacySubscriptions[elementWrapper][eventType] = new List<UIEventCallback>();
+                baseSubscriptions[elementWrapper][eventType] = new List<UIEventCallback>();
             }
 
             // Add the callback
-            legacySubscriptions[elementWrapper][eventType].Add(callback);
+            baseSubscriptions[elementWrapper][eventType].Add(callback);
 
             // Ensure the C++ side has an event listener attached to this element
             // Pass the wrapper's native pointer directly
@@ -166,33 +155,34 @@ namespace Unravel.Core
             if (isDispatching)
             {
                 // Defer unsubscription during event dispatch
-                pendingUnsubscriptions.Add(new PendingUnsubscription
+                pendingOperations.Add(new PendingOperation
                 {
+                    type = OperationType.Unsubscribe,
                     elementWrapper = elementWrapper,
                     eventType = eventType,
-                    callback = callback
+                    baseCallback = callback
                 });
                 return true; // Assume it will be removed
             }
 
             // Navigate to the callback list
-            if (!legacySubscriptions.ContainsKey(elementWrapper) ||
-                !legacySubscriptions[elementWrapper].ContainsKey(eventType))
+            if (!baseSubscriptions.ContainsKey(elementWrapper) ||
+                !baseSubscriptions[elementWrapper].ContainsKey(eventType))
             {
                 return false;
             }
 
-            var callbacks = legacySubscriptions[elementWrapper][eventType];
+            var callbacks = baseSubscriptions[elementWrapper][eventType];
             bool removed = callbacks.Remove(callback);
 
             // Clean up empty collections
             if (callbacks.Count == 0)
             {
-                legacySubscriptions[elementWrapper].Remove(eventType);
+                baseSubscriptions[elementWrapper].Remove(eventType);
 
-                if (legacySubscriptions[elementWrapper].Count == 0)
+                if (baseSubscriptions[elementWrapper].Count == 0)
                 {
-                    legacySubscriptions.Remove(elementWrapper);
+                    baseSubscriptions.Remove(elementWrapper);
                 }
             }
 
@@ -201,25 +191,29 @@ namespace Unravel.Core
 
         /// <summary>
         /// Unsubscribe all callbacks from a specific UIElement.
-        /// This removes the element from both legacy and typed subscription dictionaries.
+        /// This removes the element from both base and typed subscription dictionaries.
         /// </summary>
         /// <param name="elementWrapper">The UIElement to unsubscribe from</param>
-        /// <returns>True if any subscriptions were removed</returns>
+        /// <returns>True if any subscriptions were removed (or will be removed if deferred)</returns>
         public static bool UnsubscribeAll(UIElement elementWrapper)
         {
             if (elementWrapper == null) return false;
 
             if (isDispatching)
             {
-                // Cannot defer this operation safely, so we skip it during dispatch
-                Log.Warning("UnsubscribeAll called during event dispatch - operation ignored");
-                return false;
+                // Defer the operation until after dispatch completes
+                pendingOperations.Add(new PendingOperation
+                {
+                    type = OperationType.UnsubscribeAll,
+                    elementWrapper = elementWrapper
+                });
+                return true; // Assume it will be removed
             }
 
-            bool hadLegacy = legacySubscriptions.Remove(elementWrapper);
+            bool hadBase = baseSubscriptions.Remove(elementWrapper);
             bool hadTyped = typedSubscriptions.Remove(elementWrapper);
 
-            return hadLegacy || hadTyped;
+            return hadBase || hadTyped;
         }
 
         /// <summary>
@@ -246,8 +240,8 @@ namespace Unravel.Core
                     // Dispatch to typed callbacks first (zero casting!)
                     DispatchTypedCallbacks(targetWrapper, ev);
                     
-                    // Then dispatch to legacy callbacks for backward compatibility
-                    DispatchLegacyCallbacks(targetWrapper, ev);
+                    // Then dispatch to base callbacks for backward compatibility
+                    DispatchBaseCallbacks(targetWrapper, ev);
                 }
             }
             finally
@@ -262,7 +256,7 @@ namespace Unravel.Core
         private static UIElement FindTargetWrapper(UIEventBase ev)
         {
             // Check both subscription dictionaries for the wrapper
-            foreach (var wrapper in legacySubscriptions.Keys)
+            foreach (var wrapper in baseSubscriptions.Keys)
             {
                 if (wrapper.GetNativePointer() == ev.currentElementPtr)
                 {
@@ -311,17 +305,17 @@ namespace Unravel.Core
             }
         }
 
-        private static void DispatchLegacyCallbacks(UIElement targetWrapper, UIEventBase ev)
+        private static void DispatchBaseCallbacks(UIElement targetWrapper, UIEventBase ev)
         {
-            if (!legacySubscriptions.ContainsKey(targetWrapper) ||
-                !legacySubscriptions[targetWrapper].ContainsKey(ev.eventType))
+            if (!baseSubscriptions.ContainsKey(targetWrapper) ||
+                !baseSubscriptions[targetWrapper].ContainsKey(ev.eventType))
             {
                 return;
             }
 
-            var callbacks = legacySubscriptions[targetWrapper][ev.eventType];
+            var callbacks = baseSubscriptions[targetWrapper][ev.eventType];
 
-            // Invoke all legacy callbacks for this event
+            // Invoke all base callbacks for this event
             foreach (var callback in callbacks)
             {
                 try
@@ -330,40 +324,44 @@ namespace Unravel.Core
                 }
                 catch (Exception ex)
                 {
-                    Log.Error($"Error in legacy UI event callback for {ev.eventType} on {ev.currentElementId}: {ex}");
+                    Log.Error($"Error in Base UI event callback for {ev.eventType} on {ev.currentElementId}: {ex}");
                 }
             }
         }
 
         private static void ProcessPendingOperations()
         {
-            // Process pending legacy subscriptions
-            foreach (var pending in pendingSubscriptions)
+            // Process all pending operations in the order they were added
+            for (int i = 0; i < pendingOperations.Count; i++)
             {
-                Subscribe(pending.elementWrapper, pending.eventType, pending.callback);
+                var op = pendingOperations[i];
+                
+                switch (op.type)
+                {
+                    case OperationType.Subscribe:
+                        Subscribe(op.elementWrapper, op.eventType, op.baseCallback);
+                        break;
+                        
+                    case OperationType.Unsubscribe:
+                        Unsubscribe(op.elementWrapper, op.eventType, op.baseCallback);
+                        break;
+                        
+                    case OperationType.SubscribeTyped:
+                        SubscribeTypedInternal(op.elementWrapper, op.eventType, op.callbackType, op.typedCallback);
+                        break;
+                        
+                    case OperationType.UnsubscribeTyped:
+                        UnsubscribeTypedInternal(op.elementWrapper, op.eventType, op.callbackType, op.typedCallback);
+                        break;
+                        
+                    case OperationType.UnsubscribeAll:
+                        baseSubscriptions.Remove(op.elementWrapper);
+                        typedSubscriptions.Remove(op.elementWrapper);
+                        break;
+                }
             }
-            pendingSubscriptions.Clear();
-
-            // Process pending legacy unsubscriptions
-            foreach (var pending in pendingUnsubscriptions)
-            {
-                Unsubscribe(pending.elementWrapper, pending.eventType, pending.callback);
-            }
-            pendingUnsubscriptions.Clear();
-
-            // Process pending typed subscriptions
-            foreach (var pending in pendingTypedSubscriptions)
-            {
-                SubscribeTypedInternal(pending.elementWrapper, pending.eventType, pending.callbackType, pending.callback);
-            }
-            pendingTypedSubscriptions.Clear();
-
-            // Process pending typed unsubscriptions
-            foreach (var pending in pendingTypedUnsubscriptions)
-            {
-                UnsubscribeTypedInternal(pending.elementWrapper, pending.eventType, pending.callbackType, pending.callback);
-            }
-            pendingTypedUnsubscriptions.Clear();
+            
+            pendingOperations.Clear();
         }
 
         /// <summary>
@@ -383,8 +381,8 @@ namespace Unravel.Core
         {
             int count = 0;
             
-            // Count legacy subscriptions
-            foreach (var elementSubs in legacySubscriptions.Values)
+            // Count Base subscriptions
+            foreach (var elementSubs in baseSubscriptions.Values)
             {
                 foreach (var eventCallbacks in elementSubs.Values)
                 {
@@ -417,12 +415,13 @@ namespace Unravel.Core
             if (isDispatching)
             {
                 // Defer subscription during event dispatch
-                pendingTypedSubscriptions.Add(new PendingTypedSubscription
+                pendingOperations.Add(new PendingOperation
                 {
+                    type = OperationType.SubscribeTyped,
                     elementWrapper = elementWrapper,
                     eventType = eventType,
                     callbackType = typeof(T),
-                    callback = callback
+                    typedCallback = callback
                 });
                 return;
             }
@@ -440,12 +439,13 @@ namespace Unravel.Core
             if (isDispatching)
             {
                 // Defer unsubscription during event dispatch
-                pendingTypedUnsubscriptions.Add(new PendingTypedUnsubscription
+                pendingOperations.Add(new PendingOperation
                 {
+                    type = OperationType.UnsubscribeTyped,
                     elementWrapper = elementWrapper,
                     eventType = eventType,
                     callbackType = typeof(T),
-                    callback = callback
+                    typedCallback = callback
                 });
                 return true; // Assume it will be removed
             }
@@ -526,15 +526,15 @@ namespace Unravel.Core
         public static string GetSubscriptionInfo()
         {
             var info = $"Total subscriptions: {GetSubscriptionCount()}\n";
-            info += $"Elements with legacy subscriptions: {legacySubscriptions.Count}\n";
+            info += $"Elements with base subscriptions: {baseSubscriptions.Count}\n";
             info += $"Elements with typed subscriptions: {typedSubscriptions.Count}\n";
 
-            foreach (var elementKvp in legacySubscriptions)
-            {
+            foreach (var elementKvp in baseSubscriptions)
+            {   
                 var elementWrapper = elementKvp.Key;
                 var elementSubs = elementKvp.Value;
                 var elementId = elementWrapper.IsValid() ? elementWrapper.ElementId : "[INVALID]";
-                info += $"  Legacy Element '{elementId}': {elementSubs.Count} event types\n";
+                info += $"  Base Element '{elementId}': {elementSubs.Count} event types\n";
 
                 foreach (var eventKvp in elementSubs)
                 {

@@ -12,6 +12,8 @@ namespace Unravel.Core
     [StructLayout(LayoutKind.Sequential)]
     public struct LayerMask
     {
+        public const int Nothing = 0;
+        public const int Everything = -1;
         /// <summary>
         /// The raw integer value representing the layer mask.
         /// </summary>

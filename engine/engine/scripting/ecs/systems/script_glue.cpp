@@ -2699,6 +2699,43 @@ auto internal_m2n_audio_clip_get_length(const hpp::uuid& uid) -> float
 
     return 0.0f;
 }
+
+auto internal_m2n_animation_clip_get_length(const hpp::uuid& uid) -> float
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto asset = am.get_asset<animation_clip>(uid);
+
+    if(asset.is_valid())
+    {
+        if(auto clip = asset.get())
+        {
+            return clip->duration.count();
+        }
+    }
+
+    return 0.0f;
+}
+
+auto internal_m2n_animation_clip_get_name(const hpp::uuid& uid) -> std::string
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto asset = am.get_asset<animation_clip>(uid);
+
+    if(asset.is_valid())
+    {
+        if(auto clip = asset.get())
+        {
+            return clip->name;
+        }
+    }
+
+    return {};
+}
+
 auto m2n_test_uuid(const hpp::uuid& uid) -> hpp::uuid
 {
     APPLOG_INFO("{}:: From C# {}", __func__, hpp::to_string(uid));
@@ -4544,6 +4581,12 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     {
         auto reg = mono::internal_call_registry("Unravel.Core.AudioClip");
         reg.add_internal_call("internal_m2n_audio_clip_get_length", internal_call(internal_m2n_audio_clip_get_length));
+    }
+
+    {
+        auto reg = mono::internal_call_registry("Unravel.Core.AnimationClip");
+        reg.add_internal_call("internal_m2n_animation_clip_get_length", internal_call(internal_m2n_animation_clip_get_length));
+        reg.add_internal_call("internal_m2n_animation_clip_get_name", internal_call(internal_m2n_animation_clip_get_name));
     }
 
     {

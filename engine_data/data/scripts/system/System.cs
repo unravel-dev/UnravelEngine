@@ -6,6 +6,27 @@ using System.Linq;
 
 namespace Unravel.Core
 {
+    /// <summary>
+    /// Comparer that uses reference equality instead of overridden Equals/GetHashCode.
+    /// This prevents issues when NativeObject's IsValid() state changes after adding to collections.
+    /// </summary>
+    internal sealed class ReferenceEqualityComparer : IEqualityComparer<ScriptComponent>
+    {
+        public static readonly ReferenceEqualityComparer Instance = new ReferenceEqualityComparer();
+
+        private ReferenceEqualityComparer() { }
+
+        public bool Equals(ScriptComponent x, ScriptComponent y)
+        {
+            return ReferenceEquals(x, y);
+        }
+
+        public int GetHashCode(ScriptComponent obj)
+        {
+            return RuntimeHelpers.GetHashCode(obj);
+        }
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct UpdateInfo
     {
@@ -49,36 +70,49 @@ namespace Unravel.Core
     }
 
     /// <summary>
-    /// A manager for ScriptComponents with type-based priority.
-    /// - Deferred additions if added during invocation (stored in pendingAdd).
-    /// - Removals set comp=null if we are in the middle of invocation, 
-    ///   or remove them directly if not in invocation.
-    /// - After invocation, we remove any null comps and also insert any pendingAdd comps,
-    ///   then we re-sort.
+    /// Optimized manager for ScriptComponents with type-based priority.
+    /// - Per-type buckets: Components of same type never sorted against each other
+    /// - Slot reuse: Removed components leave gaps that are reused (no shifting)
+    /// - O(1) removal: Dictionary lookup instead of linear search
+    /// - Minimal allocations: Reuses collections across frames
+    /// - Deferred operations during invocation for thread safety
+    /// - Method override detection: Only adds components that actually override Update/FixedUpdate/LateUpdate
     /// </summary>
     public sealed class ScriptComponentManager
     {
         private bool isInvoking = false;
 
-        // The main list.  (component, priority).
-        private List<Entry> entries = new List<Entry>();
-
-        // List of comps to add after the invocation finishes
-        private List<PendingOp> pendingOps = new List<PendingOp>();
-
-        // Type-based priorities
-        private Dictionary<Type, int> typePriorities = new Dictionary<Type, int>();
-
-        // Track components removed during invoke to avoid O(n²) LINQ queries
-        private HashSet<ScriptComponent> removedDuringInvoke = new HashSet<ScriptComponent>();
-
+        // Per-type buckets, each with its own priority
+        private readonly Dictionary<Type, TypeBucket> bucketsByType = new Dictionary<Type, TypeBucket>();
+        private readonly List<TypeBucket> sortedBuckets = new List<TypeBucket>(); // Sorted by type priority for iteration
+        
+        // Fast component->bucket+index lookup for O(1) removal
+        // Use ReferenceEqualityComparer to avoid issues with overridden Equals/GetHashCode
+        private readonly Dictionary<ScriptComponent, ComponentLocation> locationByComponent = new Dictionary<ScriptComponent, ComponentLocation>(ReferenceEqualityComparer.Instance);
+        
+        // Pending operations during invocation
+        private readonly List<PendingOp> pendingOps = new List<PendingOp>();
+        
+        // Fast lookup for pending operations by component (avoids linear search in CollapseOperations)
+        private readonly Dictionary<ScriptComponent, int> pendingOpIndexByComponent = new Dictionary<ScriptComponent, int>(ReferenceEqualityComparer.Instance);
+        
+        // Track removals during invoke (reused, not recreated each frame)
+        // Use ReferenceEqualityComparer to avoid issues with overridden Equals/GetHashCode
+        private readonly HashSet<ScriptComponent> removedDuringInvoke = new HashSet<ScriptComponent>(ReferenceEqualityComparer.Instance);
+        
+        // Type priorities
+        private readonly Dictionary<Type, int> typePriorities = new Dictionary<Type, int>();
+        
+        // Cache which methods each type overrides (checked once per type)
+        private readonly Dictionary<Type, MethodOverrides> methodOverrideCache = new Dictionary<Type, MethodOverrides>();
+        
         // Cached delegates to avoid lambda allocations every frame
         private static readonly Action<ScriptComponent> updateAction = c => c.OnUpdate();
         private static readonly Action<ScriptComponent> fixedUpdateAction = c => c.OnFixedUpdate();
         private static readonly Action<ScriptComponent> lateUpdateAction = c => c.OnLateUpdate();
-
-        // Cached key selector for sorting to avoid lambda allocation
-        private static readonly Func<Entry, int> prioritySelector = e => e.Priority;
+        
+        // Base ScriptComponent type for override detection
+        private static readonly Type scriptComponentBaseType = typeof(ScriptComponent);
 
         public ScriptComponentManager(Dictionary<Type, int> typePriorityMap = null)
         {
@@ -94,12 +128,11 @@ namespace Unravel.Core
         /// <summary>
         /// Add a ScriptComponent. 
         /// If we're currently invoking, we defer it into 'pendingOps'. 
-        /// Otherwise, we insert it directly.
+        /// Otherwise, we insert it directly into the appropriate type bucket.
         /// </summary>
         public void Add(ScriptComponent comp)
         {
             if (ReferenceEquals(comp, null)) return;
-            // if (comp == null) return;
 
             if (isInvoking)
             {
@@ -108,22 +141,19 @@ namespace Unravel.Core
             }
             else
             {
-                // Insert immediately
+                // Insert immediately - no global sort needed
                 InsertComponent(comp);
-                // Keep it sorted
-                Resort();
             }
         }
 
         /// <summary>
         /// Remove a ScriptComponent. 
-        /// If not currently invoking, remove them directly from 'entries'.
+        /// Uses O(1) dictionary lookup instead of linear search.
         /// If we are invoking, defer the operation and collapse with existing operations.
         /// </summary>
         public void Remove(ScriptComponent comp)
         {
             if (ReferenceEquals(comp, null)) return;
-            // if (comp == null) return;
 
             if (isInvoking)
             {
@@ -132,7 +162,7 @@ namespace Unravel.Core
             }
             else
             {
-                // Direct removal
+                // Direct removal - O(1) via dictionary lookup
                 RemoveComponent(comp);
             }
         }
@@ -142,13 +172,16 @@ namespace Unravel.Core
         /// </summary>
         public void Clear()
         {
-            entries.Clear();
+            bucketsByType.Clear();
+            sortedBuckets.Clear();
+            locationByComponent.Clear();
             pendingOps.Clear();
+            pendingOpIndexByComponent.Clear();
             removedDuringInvoke.Clear();
             isInvoking = false;
         }
 
-        // If you want more update passes, you can replicate:
+        // Public update methods
         public void InvokeUpdate() => InvokeInternal(updateAction);
         public void InvokeFixedUpdate() => InvokeInternal(fixedUpdateAction);
         public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction);
@@ -157,17 +190,36 @@ namespace Unravel.Core
         private void InvokeInternal(Action<ScriptComponent> action)
         {
             isInvoking = true;
-            removedDuringInvoke.Clear(); // Clear at start of invocation
+            // Don't clear removedDuringInvoke - it's already empty or will be cleared at end
+
+            // Determine which method we're calling
+            bool isUpdate = ReferenceEquals(action, updateAction);
+            bool isFixedUpdate = ReferenceEquals(action, fixedUpdateAction);
+            bool isLateUpdate = ReferenceEquals(action, lateUpdateAction);
 
             try
             {
-                // Iterate in current sorted order
-                foreach (var entry in entries)
+                // Iterate through type buckets in priority order
+                for (int i = 0; i < sortedBuckets.Count; i++)
                 {
-                    if (!ReferenceEquals(entry.Comp, null) && !removedDuringInvoke.Contains(entry.Comp))
-                    // if (entry.Comp != null && !removedDuringInvoke.Contains(entry.Comp))
+                    var bucket = sortedBuckets[i];
+
+                    // Skip bucket if it doesn't override the method we're calling
+                    if (isUpdate && !bucket.overrides.hasUpdate) continue;
+                    if (isFixedUpdate && !bucket.overrides.hasFixedUpdate) continue;
+                    if (isLateUpdate && !bucket.overrides.hasLateUpdate) continue;
+
+                    var slots = bucket.slots;
+
+                    // Iterate through slots (including nulls/gaps from removals)
+                    for (int j = 0; j < slots.Count; j++)
                     {
-                        action(entry.Comp);
+                        var comp = slots[j];
+                        // Fast path: skip HashSet lookup if no components were removed during invoke
+                        if (!ReferenceEquals(comp, null) && (removedDuringInvoke.Count == 0 || !removedDuringInvoke.Contains(comp)))
+                        {
+                            action(comp);
+                        }
                     }
                 }
             }
@@ -176,11 +228,15 @@ namespace Unravel.Core
                 isInvoking = false;
             }
 
-            // Insert any pending additions
+            // Process pending operations
             if (pendingOps.Count > 0)
             {
-                foreach (var op in pendingOps)
+                for (int i = 0; i < pendingOps.Count; i++)
                 {
+                    var op = pendingOps[i];
+                    // Skip cancelled operations (Comp is null when operations were collapsed)
+                    if (ReferenceEquals(op.Comp, null)) continue;
+                    
                     if (op.add)
                     {
                         InsertComponent(op.Comp);
@@ -191,55 +247,221 @@ namespace Unravel.Core
                     }
                 }
                 pendingOps.Clear();
-
-                // Re-sort
-                Resort();
+                pendingOpIndexByComponent.Clear();
             }
-        }
 
-        void Resort()
-        {
-            // Re-sort
-            //entries.Sort((a, b) => a.Priority.CompareTo(b.Priority));
-
-            // Use cached key selector and pooling to avoid allocations
-            entries.StableSort(prioritySelector, null, usePooling: true);
+            // Clear removed tracking AFTER processing pending operations (reuse the HashSet)
+            if (removedDuringInvoke.Count > 0)
+            {
+                removedDuringInvoke.Clear();
+            }
         }
 
         /// <summary>
         /// Sets or updates the priority for a given type.
-        /// If you do this after some have been inserted, 
-        /// you may need to re-sort or re-insert them.
+        /// If the type already has components, the bucket priority is updated and buckets are re-sorted.
         /// </summary>
         public void SetTypePriority(Type t, int priority)
         {
+            bool needsResort = typePriorities.TryGetValue(t, out int oldPriority) && oldPriority != priority;
             typePriorities[t] = priority;
-            // optionally re-sort existing if you want them to reflect the new priority
-            // but you'd have to recalc all. Typically you'd do that carefully.
-        }
 
-        // Actually inserts into 'entries' with the right priority
-        private void InsertComponent(ScriptComponent comp)
-        {
-            int p = GetPriorityFor(comp);
-            entries.Add(new Entry { Comp = comp, Priority = p });
-        }
-        private void RemoveComponent(ScriptComponent comp)
-        {
-            // Use manual loop instead of RemoveAll to avoid lambda allocation
-            for (int i = entries.Count - 1; i >= 0; i--)
+            if (needsResort && bucketsByType.TryGetValue(t, out var bucket))
             {
-                if (entries[i].Comp == comp)
-                {
-                    entries.RemoveAt(i);
-                }
+                bucket.priority = priority;
+                ResortBuckets();
             }
         }
 
-        // Retrieve or default a priority for this comp
-        private int GetPriorityFor(ScriptComponent comp)
+        // Inserts component into appropriate type bucket, only if it overrides at least one update method
+        private void InsertComponent(ScriptComponent comp)
         {
             Type t = comp.GetType();
+            
+            // Check which methods this type overrides (cached per type)
+            MethodOverrides overrides = GetMethodOverrides(t);
+            
+            // Skip components that don't override any update methods
+            if (!overrides.hasUpdate && !overrides.hasFixedUpdate && !overrides.hasLateUpdate)
+            {
+                return;
+            }
+
+            int priority = GetPriorityFor(t); // Pass Type directly to avoid redundant GetType() call
+
+            // Get or create bucket for this type
+            if (!bucketsByType.TryGetValue(t, out var bucket))
+            {
+                bucket = new TypeBucket { type = t, priority = priority, overrides = overrides };
+                bucketsByType[t] = bucket;
+                
+                // Insert bucket in sorted position (binary search)
+                InsertBucketSorted(bucket);
+            }
+
+            // Try to reuse a free slot first (from previous removals)
+            int slotIndex;
+            if (bucket.freeSlots.Count > 0)
+            {
+                // Reuse last free slot (O(1) removal from end of list)
+                slotIndex = bucket.freeSlots[bucket.freeSlots.Count - 1];
+                bucket.freeSlots.RemoveAt(bucket.freeSlots.Count - 1);
+                bucket.slots[slotIndex] = comp;
+            }
+            else
+            {
+                // No free slots, append new slot
+                slotIndex = bucket.slots.Count;
+                bucket.slots.Add(comp);
+            }
+
+            // Cache location for O(1) removal
+            locationByComponent[comp] = new ComponentLocation { bucket = bucket, slotIndex = slotIndex };
+        }
+
+        // Gets or caches which methods a type overrides
+        private MethodOverrides GetMethodOverrides(Type t)
+        {
+            if (methodOverrideCache.TryGetValue(t, out var cached))
+            {
+                return cached;
+            }
+
+            // Check if type overrides each method (check once per type, then cache)
+            var overrides = new MethodOverrides
+            {
+                hasUpdate = IsMethodOverridden(t, "OnUpdate"),
+                hasFixedUpdate = IsMethodOverridden(t, "OnFixedUpdate"),
+                hasLateUpdate = IsMethodOverridden(t, "OnLateUpdate")
+            };
+
+            methodOverrideCache[t] = overrides;
+            return overrides;
+        }
+
+        // Checks if a type overrides a specific method from ScriptComponent
+        private static bool IsMethodOverridden(Type derivedType, string methodName)
+        {
+            var method = derivedType.GetMethod(methodName, 
+                System.Reflection.BindingFlags.Public | 
+                System.Reflection.BindingFlags.Instance | 
+                System.Reflection.BindingFlags.DeclaredOnly);
+            
+            // If method is declared in derived type, it's overridden
+            if (method != null && method.DeclaringType == derivedType)
+            {
+                return true;
+            }
+
+            // Check base types up to (but not including) ScriptComponent
+            Type currentType = derivedType.BaseType;
+            while (currentType != null && currentType != scriptComponentBaseType)
+            {
+                method = currentType.GetMethod(methodName,
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.DeclaredOnly);
+
+                if (method != null && method.DeclaringType == currentType)
+                {
+                    return true;
+                }
+
+                currentType = currentType.BaseType;
+            }
+
+            return false;
+        }
+
+        // O(1) removal using cached location lookup
+        private void RemoveComponent(ScriptComponent comp)
+        {
+            // O(1) lookup instead of linear search
+            if (!locationByComponent.TryGetValue(comp, out var location))
+            {
+                // Component not found - this can happen if:
+                // 1. Component was never added (didn't override any methods)
+                // 2. Component was already removed
+                // 3. Component was added during invocation and immediately removed (operations collapsed)
+                // In all cases, we should ensure it's not in removedDuringInvoke for next frame
+                removedDuringInvoke.Remove(comp);
+                return;
+            }
+
+            // Mark slot as free (null) instead of removing - no element shifting needed
+            location.bucket.slots[location.slotIndex] = null;
+            location.bucket.freeSlots.Add(location.slotIndex);
+            
+            locationByComponent.Remove(comp);
+
+            // Compact bucket if it has too many gaps (tunable threshold)
+            // This prevents unbounded memory growth while keeping removals fast
+            if (location.bucket.freeSlots.Count > 16 && 
+                location.bucket.freeSlots.Count > location.bucket.slots.Count / 2)
+            {
+                CompactBucket(location.bucket);
+            }
+        }
+
+        // Compacts a bucket by removing null slots and rebuilding the free list
+        private void CompactBucket(TypeBucket bucket)
+        {
+            int writeIndex = 0;
+            for (int readIndex = 0; readIndex < bucket.slots.Count; readIndex++)
+            {
+                var comp = bucket.slots[readIndex];
+                if (!ReferenceEquals(comp, null))
+                {
+                    if (writeIndex != readIndex)
+                    {
+                        bucket.slots[writeIndex] = comp;
+                        // Update cached location - must write back to dictionary since ComponentLocation is a struct
+                        locationByComponent[comp] = new ComponentLocation { bucket = bucket, slotIndex = writeIndex };
+                    }
+                    writeIndex++;
+                }
+            }
+
+            // Trim excess slots
+            if (writeIndex < bucket.slots.Count)
+            {
+                bucket.slots.RemoveRange(writeIndex, bucket.slots.Count - writeIndex);
+            }
+
+            bucket.freeSlots.Clear();
+        }
+
+        // Binary search insertion to keep buckets sorted by priority
+        private void InsertBucketSorted(TypeBucket bucket)
+        {
+            int left = 0;
+            int right = sortedBuckets.Count;
+
+            while (left < right)
+            {
+                int mid = (left + right) / 2;
+                if (sortedBuckets[mid].priority <= bucket.priority)
+                {
+                    left = mid + 1;
+                }
+                else
+                {
+                    right = mid;
+                }
+            }
+
+            sortedBuckets.Insert(left, bucket);
+        }
+
+        // Re-sorts all buckets by priority (rare operation, only when SetTypePriority changes existing type)
+        private void ResortBuckets()
+        {
+            sortedBuckets.Sort((a, b) => a.priority.CompareTo(b.priority));
+        }
+
+        // Retrieve or default a priority for a given type
+        private int GetPriorityFor(Type t)
+        {
             if (typePriorities.TryGetValue(t, out int p))
                 return p;
             return 100; // fallback
@@ -247,26 +469,19 @@ namespace Unravel.Core
 
         /// <summary>
         /// Collapses operations for a component to avoid redundant add/remove chains.
+        /// Uses O(1) dictionary lookup instead of O(n) linear search.
         /// </summary>
         /// <param name="comp">The component to process operations for.</param>
         /// <param name="isAdd">True if this is an add operation, false if remove.</param>
         private void CollapseOperations(ScriptComponent comp, bool isAdd)
         {
-            // Find the last operation for this component
-            int lastOpIndex = -1;
-            for (int i = pendingOps.Count - 1; i >= 0; i--)
-            {
-                if (pendingOps[i].Comp == comp)
-                {
-                    lastOpIndex = i;
-                    break;
-                }
-            }
-
-            if (lastOpIndex == -1)
+            // O(1) lookup for last operation index
+            if (!pendingOpIndexByComponent.TryGetValue(comp, out int lastOpIndex))
             {
                 // No previous operations for this component, just add the new one
+                int newIndex = pendingOps.Count;
                 pendingOps.Add(new PendingOp { add = isAdd, Comp = comp });
+                pendingOpIndexByComponent[comp] = newIndex;
 
                 // Track removal for fast lookup during invoke
                 if (!isAdd)
@@ -281,13 +496,17 @@ namespace Unravel.Core
                 if (lastOp.add && !isAdd)
                 {
                     // Last was add, this is remove -> cancel both operations
-                    pendingOps.RemoveAt(lastOpIndex);
+                    // Mark the operation as cancelled (set Comp to null) instead of removing from list
+                    // to avoid invalidating indices in pendingOpIndexByComponent
+                    pendingOps[lastOpIndex] = new PendingOp { add = false, Comp = null };
+                    pendingOpIndexByComponent.Remove(comp);
                     removedDuringInvoke.Add(comp);
                 }
                 else if (!lastOp.add && isAdd)
                 {
                     // Last was remove, this is add -> cancel both operations
-                    pendingOps.RemoveAt(lastOpIndex);
+                    pendingOps[lastOpIndex] = new PendingOp { add = false, Comp = null };
+                    pendingOpIndexByComponent.Remove(comp);
                     removedDuringInvoke.Remove(comp);
                 }
                 else if (lastOp.add && isAdd)
@@ -303,11 +522,39 @@ namespace Unravel.Core
             }
         }
 
-        // Internal data
-        private struct Entry
+        // Internal data structures
+        
+        /// <summary>
+        /// Bucket containing all components of a single type.
+        /// Maintains slots with gaps (nulls) for efficient removal and reuse.
+        /// </summary>
+        private class TypeBucket
         {
-            public ScriptComponent Comp;
-            public int Priority;
+            public Type type;
+            public int priority;
+            public MethodOverrides overrides; // Which methods this type overrides
+            public List<ScriptComponent> slots = new List<ScriptComponent>(); // Contains nulls for removed components
+            public List<int> freeSlots = new List<int>(); // Indices of null slots that can be reused
+        }
+
+        /// <summary>
+        /// Cached location of a component for O(1) removal.
+        /// Using struct to avoid heap allocations.
+        /// </summary>
+        private struct ComponentLocation
+        {
+            public TypeBucket bucket;
+            public int slotIndex;
+        }
+
+        /// <summary>
+        /// Cached information about which methods a type overrides.
+        /// </summary>
+        private struct MethodOverrides
+        {
+            public bool hasUpdate;
+            public bool hasFixedUpdate;
+            public bool hasLateUpdate;
         }
 
         private struct PendingOp
@@ -414,5 +661,6 @@ namespace Unravel.Core
     }
 
 }
+
 
 

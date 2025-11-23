@@ -138,6 +138,33 @@ public class Mesh : Asset<Mesh>
 
 public class AnimationClip : Asset<AnimationClip>
 {
+    //
+    // Summary:
+    //     The length of the animation clip in seconds. (Read Only)
+    public float length
+    {
+        get
+        {
+            return internal_m2n_animation_clip_get_length(uid);
+        }
+    }
+
+    //
+    // Summary:
+    //     The name of the animation clip. (Read Only)
+    public string name
+    {
+        get
+        {
+            return internal_m2n_animation_clip_get_name(uid);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern float internal_m2n_animation_clip_get_length(Guid uid);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern string internal_m2n_animation_clip_get_name(Guid uid);
 }
 
 

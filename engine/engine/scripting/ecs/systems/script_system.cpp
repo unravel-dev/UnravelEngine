@@ -694,38 +694,45 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 
 void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
 {
-    APP_SCOPE_PERF("Script/System Late Update");
-
-    auto& ev = ctx.get_cached<events>();
-
-    try
     {
-        if(!app_domain_ || !domain_)
-        {
-            return;
-        }
+        APP_SCOPE_PERF("Script/System Late Update");
 
-        auto& ec = ctx.get_cached<ecs>();
-        auto& scn = ec.get_scene();
-        auto& registry = *scn.registry;
-
-        if(ev.is_playing && dt > delta_t::zero())
+        auto& ev = ctx.get_cached<events>();
+    
+        try
         {
-            // Use cached method to avoid repeated allocations
-            auto method_thunk = mono::make_method_invoker<void()>(cache_.late_update_method);
-            method_thunk();
+            if(!app_domain_ || !domain_)
+            {
+                return;
+            }
+    
+            auto& ec = ctx.get_cached<ecs>();
+            auto& scn = ec.get_scene();
+            auto& registry = *scn.registry;
+    
+            if(ev.is_playing && dt > delta_t::zero())
+            {
+                // Use cached method to avoid repeated allocations
+                auto method_thunk = mono::make_method_invoker<void()>(cache_.late_update_method);
+                method_thunk();
+            }
         }
+        catch(const mono::mono_exception& e)
+        {
+            log_exception(e);
+        }
+    
     }
-    catch(const mono::mono_exception& e)
+    
     {
-        log_exception(e);
+        APP_SCOPE_PERF("Script/System Clenup");
+        dt = std::max(delta_t::zero(), dt);
+
+        delta_t secs(dt);
+        seq::update(secs);
     }
 
-
-    dt = std::max(delta_t::zero(), dt);
-
-    delta_t secs(dt);
-    seq::update(secs);
+    
 }
 
 auto script_system::get_all_scriptable_components() const -> const std::vector<mono::mono_type>&

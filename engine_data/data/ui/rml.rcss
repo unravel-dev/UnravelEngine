@@ -110,7 +110,6 @@ progress
     display: inline-block;
     height: 1em;
     width: 10em;
-    vertical-align: -0.2em;
 
 	border-radius: 5dp;
 	border: 2dp #555555FF;
