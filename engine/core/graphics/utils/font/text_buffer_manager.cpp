@@ -430,13 +430,13 @@ void text_buffer::append_text(font_handle handle, const wchar_t* str, const wcha
 
 void text_buffer::append_atlas_face(font_handle handle, uint16_t face_index)
 {
-    if(vertex_count_ / 4 >= get_max_buffered_characters())
+    size_t current_quads = vertex_count_ / 4;
+    size_t max_quads = get_max_buffered_characters();
+    size_t quads_needed = 1;
+    if(current_quads + quads_needed > max_quads)
     {
-        auto dif = (vertex_count_ / 4) - get_max_buffered_characters();
-        //background
-        size_t max_quads_per_glyph = 1;
-        size_t capacity_growth = bx::min<size_t>(10, dif);
-        resize_buffers(get_max_buffered_characters() + max_quads_per_glyph * capacity_growth);
+        size_t capacity_growth = bx::max<size_t>(quads_needed, 10);
+        resize_buffers(max_quads + capacity_growth);
     }
 
     const Atlas* atlas = font_manager_->get_atlas(handle);
@@ -506,13 +506,13 @@ void text_buffer::append_glyph(font_handle handle, code_point codepoint, bool sh
         return;
     }
 
-    if(vertex_count_ / 4 >= get_max_buffered_characters())
+    size_t current_quads = vertex_count_ / 4;
+    size_t max_quads = get_max_buffered_characters();
+    size_t max_quads_per_glyph = 7;
+    if(current_quads + max_quads_per_glyph > max_quads)
     {
-        // background, shadow, underline, overline, glyph, foreground
-        size_t max_quads_per_glyph = 6;
-        auto dif = (vertex_count_ / 4) - get_max_buffered_characters();
-        size_t capacity_growth = bx::min<size_t>(10, dif);
-        resize_buffers(get_max_buffered_characters() + max_quads_per_glyph * capacity_growth);
+        size_t capacity_growth = bx::max<size_t>(max_quads_per_glyph * 10, 70);
+        resize_buffers(max_quads + capacity_growth);
     }
 
     const font_info& font = font_manager_->get_font_info(handle);
