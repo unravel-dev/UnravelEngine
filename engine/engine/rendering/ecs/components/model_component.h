@@ -132,6 +132,7 @@ public:
     auto get_local_bounds() const -> const math::bbox&;
 
     void set_last_render_frame(uint64_t frame);
+    auto is_newly_created() const noexcept -> bool;
     auto get_last_render_frame() const noexcept -> uint64_t;
     auto was_used_last_frame() const noexcept -> bool;
 

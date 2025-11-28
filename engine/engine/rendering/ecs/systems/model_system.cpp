@@ -673,16 +673,27 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                   view.end(),
                   [&](entt::entity entity)
                   {
-                      auto& transform_comp = view.get<transform_component>(entity);
                       auto& model_comp = view.get<model_component>(entity);
 
-                      if(model_comp.was_used_last_frame())
+                      // Early exit if model wasn't used
+                      if(!model_comp.was_used_last_frame())
                       {
-                          model_comp.update_armature();
+                          return;
                       }
 
+                      if(model_comp.is_newly_created())
+                      {
+
+                          model_comp.set_last_render_frame(gfx::get_render_frame());
+                      }
+
+                      model_comp.update_armature();
+
+                      // Only get transform after we know we need it
+                      auto& transform_comp = view.get<transform_component>(entity);
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
                   });
+
 }
 
 void model_system::on_play_begin(hpp::span<const entt::handle> entities, delta_t dt)

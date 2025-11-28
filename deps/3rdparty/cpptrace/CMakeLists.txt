@@ -1,5 +1,5 @@
 
-set(CMAKE_SKIP_INSTALL_RULES ON)
+set(CMAKE_SKIP_INSTALL_RULES OFF)
 
 add_subdirectory(cpptrace)
 

@@ -55,7 +55,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
 auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, visibility_flags query, const layer_mask& render_mask)
     -> visibility_set_models_t
 {
-    APP_SCOPE_PERF("Cull Models Legacy");
+    APP_SCOPE_PERF("Rendering/Cull Models");
 
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     

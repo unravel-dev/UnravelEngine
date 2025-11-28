@@ -116,8 +116,6 @@ void get_transforms_for_entities(const std::vector<entt::handle>& entities,
                                  size_t bone_count,
                                  pose_mat4& bone_pose)
 {
-    size_t entities_count = entities.size();
-
     submesh_pose.transforms.clear();
     submesh_pose.transforms.reserve(submesh_count);
     bone_pose.transforms.resize(bone_count);
@@ -188,6 +186,7 @@ auto model_component::create_armature(bool force) -> bool
 
 auto model_component::update_armature() -> bool
 {
+    // APPLOG_TRACE_PERF_NAMED(std::chrono::microseconds, "Model/Update Armature");
     auto lod = model_.get_lod(0);
     if(!lod)
     {
@@ -208,12 +207,24 @@ auto model_component::update_armature() -> bool
     if(skin_data.has_bones())
     {
         const auto& palettes = mesh->get_bone_palettes();
-        skinning_pose_.resize(palettes.size());
-        for(size_t i = 0; i < palettes.size(); ++i)
+        const size_t palette_count = palettes.size();
+        
+        // Early exit if no palettes
+        if(palette_count == 0)
+        {
+            return true;
+        }
+        
+        skinning_pose_.resize(palette_count);
+        
+        // Cache bone transforms reference to avoid repeated lookups
+        const auto& bone_transforms = bone_pose_.transforms;
+        
+        for(size_t i = 0; i < palette_count; ++i)
         {
             const auto& palette = palettes[i];
             // Apply the bone palette.
-            skinning_pose_[i].transforms = palette.get_skinning_matrices(bone_pose_.transforms, skin_data);
+            skinning_pose_[i].transforms = palette.get_skinning_matrices(bone_transforms, skin_data);
         }
     }
 
@@ -302,12 +313,17 @@ auto model_component::get_last_render_frame() const noexcept -> uint64_t
     return last_render_frame_;
 }
 
+auto model_component::is_newly_created() const noexcept -> bool
+{
+    return last_render_frame_ == 0;
+}
+
 auto model_component::was_used_last_frame() const noexcept -> bool
 {
     auto current_frame = gfx::get_render_frame();
-    bool is_newly_created = last_render_frame_ == 0;
+    bool is_new = is_newly_created();
     bool was_used_recently = current_frame - last_render_frame_ <= 1;
-    return is_newly_created || was_used_recently;
+    return is_new || was_used_recently;
 }
 
 auto model_component::is_skinned() const -> bool

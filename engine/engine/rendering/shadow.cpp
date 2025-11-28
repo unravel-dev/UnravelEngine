@@ -1935,7 +1935,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     }
 }
 
-void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models)
+void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models, const camera& cam, ::unravel::rendering::pipeline_stats* stats)
 {
     auto& lightView = light_view_;
     auto& lightProj = light_proj_;
@@ -2222,7 +2222,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models)
         }
 
         anythingDrawn =
-            render_scene_into_shadowmap(RENDERVIEW_SHADOWMAP_1_ID, models, lightFrustums, currentSmSettings);
+            render_scene_into_shadowmap(RENDERVIEW_SHADOWMAP_1_ID, models, lightFrustums, currentSmSettings, &cam, stats);
     }
 
     if(anythingDrawn)
@@ -2271,7 +2271,9 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models)
 auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                                                       const shadow_map_models_t& models,
                                                       const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
-                                                      ShadowMapSettings* currentSmSettings) -> bool
+                                                      ShadowMapSettings* currentSmSettings,
+                                                      const camera* cam,
+                                                      ::unravel::rendering::pipeline_stats* stats) -> bool
 {
     bool any_rendered = false;
     // Draw scene into shadowmap.
@@ -2318,6 +2320,34 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         const auto current_lod_index = 0;
         const bool is_skinned = !skinning_matrices.empty();
         
+        // For directional lights, perform additional swept sphere test using camera frustum
+        bool should_render = true;
+        if(LightType::DirectionalLight == settings_.m_lightType && cam != nullptr)
+        {
+            const auto& camera_frustum = cam->get_frustum();
+            
+            // Convert world bounds to bounding sphere
+            const auto& bounds_center = world_bounds.get_center();
+            const auto& bounds_extents = world_bounds.get_extents();
+            const float bounds_radius = math::length(bounds_extents);
+            math::bsphere bounds_sphere(bounds_center, bounds_radius);
+            
+            // Get light direction (stored in directional_light_.m_position)
+            math::vec3 light_direction(
+                directional_light_.m_position.m_x,
+                directional_light_.m_position.m_y,
+                directional_light_.m_position.m_z
+            );
+            
+            // Test swept sphere against camera frustum
+            should_render = camera_frustum.test_swept_sphere(bounds_sphere, light_direction);
+        }
+        
+        if(!should_render)
+        {
+            continue;
+        }
+        
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
             auto query = lightFrustums[ii].classify_obb(local_bounds, world_bounds_transform);
@@ -2354,6 +2384,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                 model::submit_callbacks callbacks;
                 callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
                 {
+                    if(stats != nullptr)
+                    {
+                        stats->drawn_models_for_shadows++;
+                        stats->drawn_skinned_models_for_shadows += uint32_t(submit_params.skinned);
+                    }
+                    
                     auto& prog =
                         submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
                     prog->begin();
@@ -2416,7 +2452,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             }
             
             const auto& renderState = render_states[renderStateIndex];
-            submit_batched_shadow_geometry_cascade(cascade_batch_collectors_[ii], viewId, currentSmSettings, renderState);
+            submit_batched_shadow_geometry_cascade(cascade_batch_collectors_[ii], viewId, currentSmSettings, renderState, stats);
         }
     }
 
@@ -2473,7 +2509,8 @@ void shadowmap_generator::collect_model_for_shadow_batching_cascade(batch_collec
 void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector& collector,
                                                                 uint8_t viewId, 
                                                                 ShadowMapSettings* currentSmSettings,
-                                                                const RenderState& renderState)
+                                                                const RenderState& renderState,
+                                                                ::unravel::rendering::pipeline_stats* stats)
 {
     // Prepare batches for rendering
     submit_context context;
@@ -2498,6 +2535,11 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         if (!batch->is_valid() || batch->instances.empty())
         {
             continue;
+        }
+
+        if(stats != nullptr)
+        {
+            stats->drawn_models_for_shadows++;
         }
 
         // Get mesh from batch key
@@ -2551,6 +2593,13 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
     }
 
     currentSmSettings->m_progPackInstanced->end();
+
+        // Update statistics
+    if(stats != nullptr)
+    {
+        const auto& batch_stats = collector.get_stats();
+        stats->add_batch_stats(batch_stats);
+    }
     
     // Clear batches to invalidate all transform pointers and free memory
     collector.clear();

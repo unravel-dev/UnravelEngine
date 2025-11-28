@@ -2528,18 +2528,32 @@ auto bone_palette::get_skinning_matrices(const std::vector<math::transform>& nod
     const auto& bind_list = bind_data.get_bones();
 
     // Compute transformation matrix for each bone in the palette
-    auto count = std::min(bones_.size(), node_transforms.size());
+    const size_t bones_size = bones_.size();
+    const size_t count = std::min(bones_size, node_transforms.size());
+    
     thread_local static std::vector<math::mat4> skinning_transforms_;
-    skinning_transforms_.resize(bones_.size(), math::identity<math::mat4>());
+    skinning_transforms_.resize(bones_size, math::identity<math::mat4>());
+    
+    // Optimize: cache bind list size check
+    const size_t bind_list_size = bind_list.size();
+    
     for(size_t i = 0; i < count; ++i)
     {
-        auto bone = bones_[i];
+        const auto bone = bones_[i];
+        
+        // Bounds check to avoid out-of-range access
+        if(bone >= node_transforms.size() || bone >= bind_list_size)
+        {
+            continue;
+        }
+        
         const auto& bone_transform = node_transforms[bone];
         const auto& bone_data = bind_list[bone];
-        auto& transform = skinning_transforms_[i];
-        transform = bone_transform.get_matrix() * bone_data.bind_pose_transform.get_matrix();
-
-    } // Next Bone
+        
+        // Direct matrix multiplication - cache the bind pose matrix
+        const auto& bind_pose_matrix = bone_data.bind_pose_transform.get_matrix();
+        skinning_transforms_[i] = bone_transform.get_matrix() * bind_pose_matrix;
+    }
 
     return skinning_transforms_;
 }
@@ -2552,19 +2566,32 @@ auto bone_palette::get_skinning_matrices(const std::vector<math::mat4>& node_tra
     const auto& bind_list = bind_data.get_bones();
 
     // Compute transformation matrix for each bone in the palette
-    auto count = std::min(bones_.size(), node_transforms.size());
+    const size_t bones_size = bones_.size();
+    const size_t count = std::min(bones_size, node_transforms.size());
+    
     thread_local static std::vector<math::mat4> skinning_transforms_;
-    skinning_transforms_.resize(bones_.size(), math::identity<math::mat4>());
+    skinning_transforms_.resize(bones_size, math::identity<math::mat4>());
 
+    // Optimize: cache bind list size check
+    const size_t bind_list_size = bind_list.size();
+    
     for(size_t i = 0; i < count; ++i)
     {
-        auto bone = bones_[i];
+        const auto bone = bones_[i];
+        
+        // Bounds check to avoid out-of-range access
+        if(bone >= node_transforms.size() || bone >= bind_list_size)
+        {
+            continue;
+        }
+        
         const auto& bone_transform = node_transforms[bone];
         const auto& bone_data = bind_list[bone];
-        auto& transform = skinning_transforms_[i];
-        transform = bone_transform * bone_data.bind_pose_transform.get_matrix();
-
-    } // Next Bone
+        
+        // Direct matrix multiplication - cache the bind pose matrix
+        const auto& bind_pose_matrix = bone_data.bind_pose_transform.get_matrix();
+        skinning_transforms_[i] = bone_transform * bind_pose_matrix;
+    }
 
     return skinning_transforms_;
 }

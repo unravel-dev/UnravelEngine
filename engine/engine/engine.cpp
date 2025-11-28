@@ -302,10 +302,6 @@ auto engine::deinit() -> bool
         return false;
     }
 
-    if(!ctx.get_cached<particle_system>().deinit(ctx))
-    {
-        return false;
-    }
 
     if(!ctx.get_cached<input_system>().deinit(ctx))
     {
@@ -348,6 +344,12 @@ auto engine::deinit() -> bool
     }
 
     if(!ctx.get_cached<ecs>().deinit(ctx))
+    {
+        return false;
+    }
+
+    
+    if(!ctx.get_cached<particle_system>().deinit(ctx))
     {
         return false;
     }

@@ -487,7 +487,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
 
             APP_SCOPE_PERF("Rendering/Shadow Generation Pass Per Light After Cull");
 
-            generator.generate_shadowmaps(dirty_models);
+            generator.generate_shadowmaps(dirty_models, camera, &stats_);
         });
 }
 

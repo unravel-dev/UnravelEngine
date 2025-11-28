@@ -321,6 +321,8 @@ auto statistics_panel::draw_pipeline_stats() -> void
                 ImGui::Text("Drawn Particles Batches: %u", stats.drawn_particles_batches);
                 ImGui::Text("Drawn Models: %u", stats.drawn_models);
                 ImGui::Text("Drawn Skinned Models: %u", stats.drawn_skinned_models);
+                ImGui::Text("Drawn Models for Shadows: %u", stats.drawn_models_for_shadows);
+                ImGui::Text("Drawn Skinned Models for Shadows: %u", stats.drawn_skinned_models_for_shadows);
                 ImGui::Text("Drawn Lights: %u", stats.drawn_lights);
                 ImGui::Text("Drawn Lights Casting Shadows: %u", stats.drawn_lights_casting_shadows);
                 

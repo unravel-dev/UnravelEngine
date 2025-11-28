@@ -577,10 +577,10 @@ LOAD(entity_components<entt::handle>)
             {
                 bool success_has_component = false;
 
-                success_has_component |= serialize_check(has_name, [&]() -> bool
-                {
-                    return try_serialize_direct(ar, ser20::make_nvp(pretty_has_name, has_component));
-                });
+                // success_has_component |= serialize_check(has_name, [&]() -> bool
+                // {
+                //     return try_serialize_direct(ar, ser20::make_nvp(pretty_has_name, has_component));
+                // });
 
                 if(!success_has_component)
                 {
@@ -598,10 +598,10 @@ LOAD(entity_components<entt::handle>)
                 bool success_component = false;
                 {
                     // Legacy support with pretty name
-                    success_component |= serialize_check(name, [&]() -> bool
-                    {
-                        return try_serialize_direct(ar, ser20::make_nvp(pretty_name, component));
-                    });
+                    // success_component |= serialize_check(name, [&]() -> bool
+                    // {
+                    //     return try_serialize_direct(ar, ser20::make_nvp(pretty_name, component));
+                    // });
                 }
              
                 if(!success_component)

@@ -51,6 +51,9 @@ struct pipeline_stats
 {
     uint32_t drawn_models = 0;
     uint32_t drawn_skinned_models = 0;
+    uint32_t drawn_models_for_shadows = 0;
+    uint32_t drawn_skinned_models_for_shadows = 0;
+
     uint32_t drawn_lights = 0;
     uint32_t drawn_lights_casting_shadows = 0;
     uint32_t drawn_particles = 0;
@@ -61,7 +64,7 @@ struct pipeline_stats
 
     auto anything_drawn() const -> bool
     {
-        return drawn_models > 0 || drawn_skinned_models > 0 || drawn_lights > 0 ||
+        return drawn_models > 0 || drawn_skinned_models > 0 || drawn_models_for_shadows > 0 || drawn_skinned_models_for_shadows > 0 || drawn_lights > 0 ||
                drawn_lights_casting_shadows > 0 || drawn_particles > 0 || drawn_particles_batches > 0;
     }
     

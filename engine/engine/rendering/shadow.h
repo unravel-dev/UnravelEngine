@@ -6,6 +6,7 @@
 #include <engine/rendering/light.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/pipeline/pipeline.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -613,7 +614,7 @@ public:
     void update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active);
     auto already_updated() const -> bool;
 
-    void generate_shadowmaps(const shadow_map_models_t& model);
+    void generate_shadowmaps(const shadow_map_models_t& model, const camera& cam, ::unravel::rendering::pipeline_stats* stats = nullptr);
 
     auto get_depth_type() const -> PackDepth::Enum;
     auto get_rt_texture(uint8_t split) const -> bgfx::TextureHandle;
@@ -656,7 +657,9 @@ private:
     auto render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                                      const shadow_map_models_t& models,
                                      const math::frustum frustums[ShadowMapRenderTargets::Count],
-                                     ShadowMapSettings* currentSmSettings) -> bool;
+                                     ShadowMapSettings* currentSmSettings,
+                                     const camera* cam,
+                                     ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
     
     void collect_model_for_shadow_batching_cascade(batch_collector& collector,
                                                   const model& model_asset, 
@@ -667,7 +670,8 @@ private:
     void submit_batched_shadow_geometry_cascade(batch_collector& collector,
                                                uint8_t viewId, 
                                                ShadowMapSettings* currentSmSettings,
-                                               const RenderState& renderState);
+                                               const RenderState& renderState,
+                                               ::unravel::rendering::pipeline_stats* stats = nullptr);
 
     ClearValues clear_values_;
 
