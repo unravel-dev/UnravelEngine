@@ -423,6 +423,7 @@ public:
      */
     void dispose();
 
+    auto get_info() const -> info;
     /**
      * @brief Binds the mesh data for rendering the selected batch of primitives.
      *

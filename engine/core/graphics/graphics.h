@@ -23,6 +23,7 @@ using backbuffer_ratio = bgfx::BackbufferRatio::Enum;
 using memory_view = bgfx::Memory;
 using texture_info = bgfx::TextureInfo;
 using uniform_type = bgfx::UniformType::Enum;
+using uniform_freq = bgfx::UniformFreq::Enum;
 using uniform_info = bgfx::UniformInfo;
 using attachment = bgfx::Attachment;
 using platform_data = bgfx::PlatformData;
@@ -36,6 +37,7 @@ using topology_sort = bgfx::TopologySort::Enum;
 using topology = bgfx::Topology;
 using release_fn = bgfx::ReleaseFn;
 using encoder = bgfx::Encoder;
+using shading_rate = bgfx::ShadingRate::Enum;
 
 using transform = bgfx::Transform;
 using dynamic_index_buffer_handle = bgfx::DynamicIndexBufferHandle;
@@ -395,6 +397,8 @@ void destroy(frame_buffer_handle _handle);
 /**/
 uniform_handle create_uniform(const char* _name, uniform_type _type, uint16_t _num = 1);
 
+uniform_handle create_uniform(const char* _name, uniform_freq _freq, uniform_type _type, uint16_t _num = 1);
+
 /**/
 void destroy(uniform_handle _handle);
 
@@ -458,6 +462,9 @@ void set_view_transform(view_id _id, const void* _view, const void* _proj);
 void set_view_order(view_id _id = 0, uint16_t _num = UINT16_MAX, const view_id* _order = nullptr);
 
 /**/
+void set_view_shading_rate(view_id _id, shading_rate _shadingRate = shading_rate::Rate1x1);
+
+/**/
 void reset_view(view_id _id);
 
 /**/
@@ -489,6 +496,10 @@ void set_transform(uint32_t _cache, uint16_t _num = 1);
 
 /**/
 void set_uniform(uniform_handle _handle, const void* _value, uint16_t _num = 1);
+
+void set_view_uniform(view_id _id, uniform_handle _handle, const void* _value, uint16_t _num = 1);
+
+void set_frame_uniform(uniform_handle _handle, const void* _value, uint16_t _num = 1);
 
 /**/
 void set_index_buffer(index_buffer_handle _handle);

@@ -751,6 +751,11 @@ void set_view_order(view_id _id, uint16_t _num, const view_id* _order)
     bgfx::setViewOrder(_id, _num, _order);
 }
 
+void set_view_shading_rate(view_id _id, shading_rate _shadingRate)
+{
+    bgfx::setViewShadingRate(_id, _shadingRate);
+}
+
 void reset_view(view_id _id)
 {
     bgfx::resetView(_id);
@@ -804,6 +809,16 @@ void set_transform(uint32_t _cache, uint16_t _num)
 void set_uniform(uniform_handle _handle, const void* _value, uint16_t _num)
 {
     bgfx::setUniform(_handle, _value, _num);
+}
+
+void set_view_uniform(view_id _id, uniform_handle _handle, const void* _value, uint16_t _num)
+{
+    bgfx::setViewUniform(_id, _handle, _value, _num);
+}
+
+void set_frame_uniform(uniform_handle _handle, const void* _value, uint16_t _num)
+{
+    bgfx::setFrameUniform(_handle, _value, _num);
 }
 
 void set_index_buffer(index_buffer_handle _handle)

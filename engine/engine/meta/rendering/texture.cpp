@@ -70,6 +70,26 @@ REFLECT(texture_info)
             entt::attribute{"name", "ETC2A1"},
             entt::attribute{"pretty_name", "ETC2A1 (ETC2 RGB8A1)"},
         })
+        .data<texture_format::EACR11>("EACR11"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "EACR11"},
+            entt::attribute{"pretty_name", "EACR11 (EAC R11 UNORM)"},
+        })
+        .data<texture_format::EACR11S>("EACR11S"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "EACR11S"},
+            entt::attribute{"pretty_name", "EACR11S (EAC R11 SNORM)"},
+        })
+        .data<texture_format::EACRG11>("EACRG11"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "EACRG11"},
+            entt::attribute{"pretty_name", "EACRG11 (EAC RG11 UNORM)"},
+        })
+        .data<texture_format::EACRG11S>("EACRG11S"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "EACRG11S"},
+            entt::attribute{"pretty_name", "EACRG11S (EAC RG11 SNORM)"},
+        })
         .data<texture_format::PTC12>("PTC12"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "PTC12"},

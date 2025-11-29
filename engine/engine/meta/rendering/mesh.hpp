@@ -8,7 +8,7 @@
 namespace unravel
 {
 REFLECT_EXTERN(mesh::info);
-
+REFLECT_EXTERN(mesh);
 
 SAVE_EXTERN(mesh::triangle);
 LOAD_EXTERN(mesh::triangle);

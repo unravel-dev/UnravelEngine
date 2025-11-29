@@ -2338,9 +2338,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                 directional_light_.m_position.m_y,
                 directional_light_.m_position.m_z
             );
-            
+            float max_distance = currentSmSettings->m_far - currentSmSettings->m_near;
             // Test swept sphere against camera frustum
-            should_render = camera_frustum.test_swept_sphere(bounds_sphere, light_direction);
+            should_render = camera_frustum.test_swept_sphere(bounds_sphere, light_direction, max_distance);
         }
         
         if(!should_render)

@@ -177,9 +177,10 @@ public:
      *
      * @param sphere The sphere to test.
      * @param sweepDirection The direction to sweep the sphere.
+     * @param max_distance Maximum distance to sweep. If negative, no limit is applied.
      * @return True if the swept sphere intersects the frustum, false otherwise.
      */
-    auto test_swept_sphere(const bsphere& sphere, const vec3& sweepDirection) const -> bool;
+    auto test_swept_sphere(const bsphere& sphere, const vec3& sweepDirection, float max_distance = -1.0f) const -> bool;
 
     /**
      * @brief Tests if another frustum intersects this frustum.

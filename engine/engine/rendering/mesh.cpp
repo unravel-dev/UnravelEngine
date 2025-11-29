@@ -185,6 +185,15 @@ void mesh::dispose()
     bbox_.reset();
 }
 
+auto mesh::get_info() const -> info
+{
+    return info{
+        .vertices = vertex_count_,
+        .primitives = face_count_,
+        .submeshes = uint32_t(mesh_submeshes_.size()),
+        .data_groups = uint32_t(data_groups_.size())
+    };
+}
 auto mesh::prepare_mesh(const gfx::vertex_layout& format) -> bool
 {
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);

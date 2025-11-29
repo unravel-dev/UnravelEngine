@@ -69,6 +69,20 @@ REFLECT(mesh::info)
         });
 }
 
+REFLECT(mesh)
+{
+    entt::meta_factory<mesh>{}
+        .type("mesh"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mesh"},
+        })
+        .data<nullptr, &mesh::get_info>("info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "info"},
+            entt::attribute{"pretty_name", "Info"},
+            entt::attribute{"tooltip", "Info about the mesh."},
+        });
+}
 SAVE(mesh::submesh)
 {
     try_save(ar, ser20::make_nvp("data_group_id", obj.data_group_id));
