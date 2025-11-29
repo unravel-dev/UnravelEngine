@@ -229,7 +229,7 @@ namespace Unravel.Core
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="position">The world position where the audio will be played.</param>
         /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
-        public static Entity PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f)
+        public static AudioSourceComponent PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f)
         {
             var entity = Scene.CreateEntity("One shot audio");
             entity.transform.position = position;
@@ -238,7 +238,7 @@ namespace Unravel.Core
             audioSource.volume = volume;
             audioSource.Play();
             Scene.DestroyEntity(entity, clip.length * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
-            return entity;
+            return audioSource;
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]

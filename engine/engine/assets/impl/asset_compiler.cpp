@@ -1106,6 +1106,10 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
         {
             clip.convert_to_mono();
         }
+        else
+        {
+            clip.convert_to_stereo();
+        }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
         {
