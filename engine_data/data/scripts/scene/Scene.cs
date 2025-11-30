@@ -55,6 +55,100 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Instantiates an entity from a specified prefab with a parent entity.
+        /// </summary>
+        /// <param name="prefab">The prefab to instantiate.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(Prefab prefab, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_uid_with_parent(prefab.uid, parent);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a prefab identified by a key with a parent entity.
+        /// </summary>
+        /// <param name="key">The key identifying the prefab to instantiate.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(string key, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_key_with_parent(key, parent);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a specified prefab at a specific position.
+        /// </summary>
+        /// <param name="prefab">The prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(Prefab prefab, Vector3 position)
+        {
+            return internal_m2n_create_entity_from_prefab_uid_with_position(prefab.uid, position);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a prefab identified by a key at a specific position.
+        /// </summary>
+        /// <param name="key">The key identifying the prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(string key, Vector3 position)
+        {
+            return internal_m2n_create_entity_from_prefab_key_with_position(key, position);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a specified prefab at a specific position with a parent entity.
+        /// </summary>
+        /// <param name="prefab">The prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(Prefab prefab, Vector3 position, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_uid_with_position_parent(prefab.uid, position, parent);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a prefab identified by a key at a specific position with a parent entity.
+        /// </summary>
+        /// <param name="key">The key identifying the prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(string key, Vector3 position, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_key_with_position_parent(key, position, parent);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a specified prefab at a specific position and rotation with a parent entity.
+        /// </summary>
+        /// <param name="prefab">The prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <param name="rotation">The world rotation of the entity.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(Prefab prefab, Vector3 position, Quaternion rotation, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent(prefab.uid, position, rotation, parent);
+        }
+
+        /// <summary>
+        /// Instantiates an entity from a prefab identified by a key at a specific position and rotation with a parent entity.
+        /// </summary>
+        /// <param name="key">The key identifying the prefab to instantiate.</param>
+        /// <param name="position">The world position where the entity will be instantiated.</param>
+        /// <param name="rotation">The world rotation of the entity.</param>
+        /// <param name="parent">The parent entity to attach the instantiated entity to.</param>
+        /// <returns>The instantiated entity.</returns>
+        public static Entity Instantiate(string key, Vector3 position, Quaternion rotation, Entity parent)
+        {
+            return internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent(key, position, rotation, parent);
+        }
+
+        /// <summary>
         /// Clones an existing entity.
         /// </summary>
         /// <param name="e">The entity to clone.</param>
@@ -186,6 +280,30 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Entity internal_m2n_create_entity_from_prefab_key(string key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_uid_with_parent(Guid uid, Entity parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_key_with_parent(string key, Entity parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_uid_with_position(Guid uid, Vector3 position);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_key_with_position(string key, Vector3 position);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_uid_with_position_parent(Guid uid, Vector3 position, Entity parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_key_with_position_parent(string key, Vector3 position, Entity parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent(Guid uid, Vector3 position, Quaternion rotation, Entity parent);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Entity internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent(string key, Vector3 position, Quaternion rotation, Entity parent);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Entity internal_m2n_create_entity(string name);

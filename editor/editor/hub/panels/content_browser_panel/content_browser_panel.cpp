@@ -217,6 +217,7 @@ auto draw_item(const content_browser_item& item)
         double_clicked,
         renamed,
         deleted,
+        canceled,
         duplicate,
     };
 
@@ -432,7 +433,7 @@ auto draw_item(const content_browser_item& item)
 
         if(is_editing_label_after_create && ImGui::IsItemKeyPressed(shortcuts::item_cancel))
         {
-            action = entry_action::deleted;
+            action = entry_action::canceled;
         }
 
         ImGui::PopItemWidth();
@@ -513,6 +514,15 @@ auto draw_item(const content_browser_item& item)
         }
         break;
 
+        case entry_action::canceled:
+        {
+            pending_rename.clear();
+            if(item.on_cancel)
+            {
+                item.on_cancel();
+            }
+        }
+        break;
         default:
             break;
     }
@@ -1179,6 +1189,13 @@ void content_browser_panel::setup_delete_handler(content_browser_item& item, con
         };
         
         this->prompt_delete_asset(relative, delete_impl);
+    };
+
+    item.on_cancel = [this, relative, absolute_path, &em, entry]()
+    {
+        fs::error_code err;
+        fs::remove_all(absolute_path, err);
+        em.unselect(entry);  // Works for both asset handles and fs::path
     };
 }
 

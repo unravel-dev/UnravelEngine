@@ -113,4 +113,26 @@ namespace Unravel.Core
             this.tooltip = tooltip;
         }
     }
+
+
+    /// <summary>
+    /// Adds a header to a field, providing a brief description or hint.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field, Inherited = true, AllowMultiple = true)]
+    public sealed class HeaderAttribute : Attribute
+    {
+        /// <summary>
+        /// The text of the header.
+        /// </summary>
+        public readonly string header;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="HeaderAttribute"/> class.
+        /// </summary>
+        /// <param name="header">The text of the header.</param>
+        public HeaderAttribute(string header)
+        {
+            this.header = header;
+        }
+    }
 }

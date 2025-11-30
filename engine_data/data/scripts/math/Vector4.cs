@@ -6,24 +6,24 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)]
 public struct Vector4 : IEquatable<Vector4>, IFormattable
 {
-    //
-    // Summary:
-    //     X component of the vector.
+    /// <summary>
+    /// X component of the vector.
+    /// </summary>
     public float x;
 
-    //
-    // Summary:
-    //     Y component of the vector.
+    /// <summary>
+    /// Y component of the vector.
+    /// </summary>
     public float y;
 
-    //
-    // Summary:
-    //     Z component of the vector.
+    /// <summary>
+    /// Z component of the vector.
+    /// </summary>
     public float z;
 
-    //
-    // Summary:
-    //     W component of the vector.
+    /// <summary>
+    /// W component of the vector.
+    /// </summary>
     public float w;
 
     private static readonly Vector4 zeroVector = new Vector4(0f, 0f, 0f, 0f);
@@ -34,6 +34,12 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
 
     private static readonly Vector4 negativeInfinityVector = new Vector4(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
 
+    /// <summary>
+    /// Gets or sets the component at the specified index.
+    /// </summary>
+    /// <param name="index">The index of the component (0 = x, 1 = y, 2 = z, 3 = w).</param>
+    /// <returns>The component value at the specified index.</returns>
+    /// <exception cref="IndexOutOfRangeException">Thrown when index is out of range [0, 3].</exception>
     public float this[int index]
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,9 +82,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns this vector with a magnitude of 1 (Read Only).
+    /// <summary>
+    /// Returns this vector with a magnitude of 1 (Read Only).
+    /// </summary>
     public Vector4 normalized
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -88,9 +94,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns the length of this vector (Read Only).
+    /// <summary>
+    /// Returns the length of this vector (Read Only).
+    /// </summary>
     public float magnitude
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -100,9 +106,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns the squared length of this vector (Read Only).
+    /// <summary>
+    /// Returns the squared length of this vector (Read Only).
+    /// </summary>
     public float sqrMagnitude
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,9 +118,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector4(0,0,0,0).
+    /// <summary>
+    /// Shorthand for writing Vector4(0,0,0,0).
+    /// </summary>
     public static Vector4 zero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -124,9 +130,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector4(1,1,1,1).
+    /// <summary>
+    /// Shorthand for writing Vector4(1,1,1,1).
+    /// </summary>
     public static Vector4 one
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -136,10 +142,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector4(float.PositiveInfinity, float.PositiveInfinity,
-    //     float.PositiveInfinity, float.PositiveInfinity).
+    /// <summary>
+    /// Shorthand for writing Vector4(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity).
+    /// </summary>
     public static Vector4 positiveInfinity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -149,10 +154,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector4(float.NegativeInfinity, float.NegativeInfinity,
-    //     float.NegativeInfinity, float.NegativeInfinity).
+    /// <summary>
+    /// Shorthand for writing Vector4(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity).
+    /// </summary>
     public static Vector4 negativeInfinity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -162,18 +166,13 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Creates a new vector with given x, y, z, w components.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
-    //
-    //   z:
-    //
-    //   w:
+    /// <summary>
+    /// Creates a new vector with given x, y, z, w components.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
+    /// <param name="z">The z component.</param>
+    /// <param name="w">The w component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector4(float x, float y, float z, float w)
     {
@@ -183,16 +182,12 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         this.w = w;
     }
 
-    //
-    // Summary:
-    //     Creates a new vector with given x, y, z components and sets w to zero.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
-    //
-    //   z:
+    /// <summary>
+    /// Creates a new vector with given x, y, z components and sets w to zero.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
+    /// <param name="z">The z component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector4(float x, float y, float z)
     {
@@ -202,14 +197,11 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         w = 0f;
     }
 
-    //
-    // Summary:
-    //     Creates a new vector with given x, y components and sets z and w to zero.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
+    /// <summary>
+    /// Creates a new vector with given x, y components and sets z and w to zero.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector4(float x, float y)
     {
@@ -219,18 +211,13 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         w = 0f;
     }
 
-    //
-    // Summary:
-    //     Set x, y, z and w components of an existing Vector4.
-    //
-    // Parameters:
-    //   newX:
-    //
-    //   newY:
-    //
-    //   newZ:
-    //
-    //   newW:
+    /// <summary>
+    /// Set x, y, z and w components of an existing Vector4.
+    /// </summary>
+    /// <param name="newX">The new x component.</param>
+    /// <param name="newY">The new y component.</param>
+    /// <param name="newZ">The new z component.</param>
+    /// <param name="newW">The new w component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set(float newX, float newY, float newZ, float newW)
     {
@@ -240,16 +227,13 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         w = newW;
     }
 
-    //
-    // Summary:
-    //     Linearly interpolates between two vectors.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
+    /// <summary>
+    /// Linearly interpolates between two vectors.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <param name="t">The interpolation parameter.</param>
+    /// <returns>The interpolated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Lerp(Vector4 a, Vector4 b, float t)
     {
@@ -257,32 +241,26 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return new Vector4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
     }
 
-    //
-    // Summary:
-    //     Linearly interpolates between two vectors.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
+    /// <summary>
+    /// Linearly interpolates between two vectors without clamping the interpolation parameter.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <param name="t">The interpolation parameter (not clamped).</param>
+    /// <returns>The interpolated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 LerpUnclamped(Vector4 a, Vector4 b, float t)
     {
         return new Vector4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t);
     }
 
-    //
-    // Summary:
-    //     Moves a point current towards target.
-    //
-    // Parameters:
-    //   current:
-    //
-    //   target:
-    //
-    //   maxDistanceDelta:
+    /// <summary>
+    /// Moves a point current towards target.
+    /// </summary>
+    /// <param name="current">The current position.</param>
+    /// <param name="target">The target position.</param>
+    /// <param name="maxDistanceDelta">The maximum distance to move.</param>
+    /// <returns>The new position.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 MoveTowards(Vector4 current, Vector4 target, float maxDistanceDelta)
     {
@@ -300,26 +278,22 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return new Vector4(current.x + num / num6 * maxDistanceDelta, current.y + num2 / num6 * maxDistanceDelta, current.z + num3 / num6 * maxDistanceDelta, current.w + num4 / num6 * maxDistanceDelta);
     }
 
-    //
-    // Summary:
-    //     Multiplies two vectors component-wise.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Multiplies two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>A new vector with components multiplied.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Scale(Vector4 a, Vector4 b)
     {
         return new Vector4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w);
     }
 
-    //
-    // Summary:
-    //     Multiplies every component of this vector by the same component of scale.
-    //
-    // Parameters:
-    //   scale:
+    /// <summary>
+    /// Multiplies every component of this vector by the same component of scale.
+    /// </summary>
+    /// <param name="scale">The scale vector.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Scale(Vector4 scale)
     {
@@ -329,18 +303,21 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         w *= scale.w;
     }
 
+    /// <summary>
+    /// Returns the hash code for this instance.
+    /// </summary>
+    /// <returns>A 32-bit signed integer that is the hash code for this instance.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode()
     {
         return x.GetHashCode() ^ (y.GetHashCode() << 2) ^ (z.GetHashCode() >> 2) ^ (w.GetHashCode() >> 1);
     }
 
-    //
-    // Summary:
-    //     Returns true if the given vector is exactly equal to this vector.
-    //
-    // Parameters:
-    //   other:
+    /// <summary>
+    /// Returns true if the given vector is exactly equal to this vector.
+    /// </summary>
+    /// <param name="other">The object to compare with the current instance.</param>
+    /// <returns>True if the given vector is exactly equal to this vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool Equals(object other)
     {
@@ -352,15 +329,22 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return Equals((Vector4)other);
     }
 
+    /// <summary>
+    /// Returns true if the given vector is exactly equal to this vector.
+    /// </summary>
+    /// <param name="other">The vector to compare with the current instance.</param>
+    /// <returns>True if the given vector is exactly equal to this vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Vector4 other)
     {
         return x == other.x && y == other.y && z == other.z && w == other.w;
     }
 
-    //
-    // Parameters:
-    //   a:
+    /// <summary>
+    /// Makes this vector have a magnitude of 1.
+    /// </summary>
+    /// <param name="a">The vector to normalize.</param>
+    /// <returns>The normalized vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Normalize(Vector4 a)
     {
@@ -373,9 +357,9 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return zero;
     }
 
-    //
-    // Summary:
-    //     Makes this vector have a magnitude of 1.
+    /// <summary>
+    /// Makes this vector have a magnitude of 1.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Normalize()
     {
@@ -390,118 +374,154 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Dot Product of two vectors.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Dot Product of two vectors.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The dot product of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Dot(Vector4 a, Vector4 b)
     {
         return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     }
 
-    //
-    // Summary:
-    //     Projects a vector onto another vector.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Projects a vector onto another vector.
+    /// </summary>
+    /// <param name="a">The vector to project.</param>
+    /// <param name="b">The normal vector to project onto.</param>
+    /// <returns>The projected vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Project(Vector4 a, Vector4 b)
     {
         return b * (Dot(a, b) / Dot(b, b));
     }
 
-    //
-    // Summary:
-    //     Returns the distance between a and b.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Returns the distance between a and b.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The distance between the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Distance(Vector4 a, Vector4 b)
     {
         return Magnitude(a - b);
     }
 
+    /// <summary>
+    /// Returns the length of the vector.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <returns>The length of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Magnitude(Vector4 a)
     {
         return (float)Math.Sqrt(Dot(a, a));
     }
 
-    //
-    // Summary:
-    //     Returns a vector that is made from the smallest components of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Returns a vector that is made from the smallest components of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>A vector with the minimum components.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Min(Vector4 lhs, Vector4 rhs)
     {
         return new Vector4(Mathf.Min(lhs.x, rhs.x), Mathf.Min(lhs.y, rhs.y), Mathf.Min(lhs.z, rhs.z), Mathf.Min(lhs.w, rhs.w));
     }
 
-    //
-    // Summary:
-    //     Returns a vector that is made from the largest components of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Returns a vector that is made from the largest components of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>A vector with the maximum components.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 Max(Vector4 lhs, Vector4 rhs)
     {
         return new Vector4(Mathf.Max(lhs.x, rhs.x), Mathf.Max(lhs.y, rhs.y), Mathf.Max(lhs.z, rhs.z), Mathf.Max(lhs.w, rhs.w));
     }
 
+    /// <summary>
+    /// Adds two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The sum of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator +(Vector4 a, Vector4 b)
     {
         return new Vector4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
     }
 
+    /// <summary>
+    /// Subtracts two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The difference of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator -(Vector4 a, Vector4 b)
     {
         return new Vector4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
     }
 
+    /// <summary>
+    /// Negates a vector.
+    /// </summary>
+    /// <param name="a">The vector to negate.</param>
+    /// <returns>The negated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator -(Vector4 a)
     {
         return new Vector4(0f - a.x, 0f - a.y, 0f - a.z, 0f - a.w);
     }
 
+    /// <summary>
+    /// Multiplies a vector by a scalar.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <param name="d">The scalar value.</param>
+    /// <returns>The scaled vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator *(Vector4 a, float d)
     {
         return new Vector4(a.x * d, a.y * d, a.z * d, a.w * d);
     }
 
+    /// <summary>
+    /// Multiplies a scalar by a vector.
+    /// </summary>
+    /// <param name="d">The scalar value.</param>
+    /// <param name="a">The vector.</param>
+    /// <returns>The scaled vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator *(float d, Vector4 a)
     {
         return new Vector4(a.x * d, a.y * d, a.z * d, a.w * d);
     }
 
+    /// <summary>
+    /// Divides a vector by a scalar.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <param name="d">The scalar value.</param>
+    /// <returns>The divided vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector4 operator /(Vector4 a, float d)
     {
         return new Vector4(a.x / d, a.y / d, a.z / d, a.w / d);
     }
 
+    /// <summary>
+    /// Determines whether two vectors are approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>True if the vectors are approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Vector4 lhs, Vector4 rhs)
     {
@@ -513,78 +533,89 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return num5 < 9.99999944E-11f;
     }
 
+    /// <summary>
+    /// Determines whether two vectors are not approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>True if the vectors are not approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Vector4 lhs, Vector4 rhs)
     {
         return !(lhs == rhs);
     }
 
+    /// <summary>
+    /// Implicitly converts a Vector3 to a Vector4 by adding a w component of 0.
+    /// </summary>
+    /// <param name="v">The Vector3 to convert.</param>
+    /// <returns>A Vector4 with x, y, z from Vector3 and w = 0.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator Vector4(Vector3 v)
     {
         return new Vector4(v.x, v.y, v.z, 0f);
     }
 
+    /// <summary>
+    /// Implicitly converts a Vector4 to a Vector3 by taking the x, y, z components.
+    /// </summary>
+    /// <param name="v">The Vector4 to convert.</param>
+    /// <returns>A Vector3 with x, y, z components from the Vector4.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator Vector3(Vector4 v)
     {
         return new Vector3(v.x, v.y, v.z);
     }
 
+    /// <summary>
+    /// Implicitly converts a Vector2 to a Vector4 by adding z and w components of 0.
+    /// </summary>
+    /// <param name="v">The Vector2 to convert.</param>
+    /// <returns>A Vector4 with x, y from Vector2 and z = w = 0.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator Vector4(Vector2 v)
     {
         return new Vector4(v.x, v.y, 0f, 0f);
     }
 
+    /// <summary>
+    /// Implicitly converts a Vector4 to a Vector2 by taking the x and y components.
+    /// </summary>
+    /// <param name="v">The Vector4 to convert.</param>
+    /// <returns>A Vector2 with x and y components from the Vector4.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator Vector2(Vector4 v)
     {
         return new Vector2(v.x, v.y);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString()
     {
         return ToString(null, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format)
     {
         return ToString(format, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <param name="formatProvider">An object that specifies culture-specific formatting.</param>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format, IFormatProvider formatProvider)
     {
@@ -601,12 +632,21 @@ public struct Vector4 : IEquatable<Vector4>, IFormattable
         return string.Format("({0}, {1}, {2}, {3})", x.ToString(format, formatProvider), y.ToString(format, formatProvider), z.ToString(format, formatProvider), w.ToString(format, formatProvider));
     }
 
+    /// <summary>
+    /// Returns the squared length of the vector.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <returns>The squared length of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float SqrMagnitude(Vector4 a)
     {
         return Dot(a, a);
     }
 
+    /// <summary>
+    /// Returns the squared length of this vector.
+    /// </summary>
+    /// <returns>The squared length of this vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public float SqrMagnitude()
     {

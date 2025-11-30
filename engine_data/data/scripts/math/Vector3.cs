@@ -6,19 +6,19 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)]
 public struct Vector3 : IEquatable<Vector3>, IFormattable
 {
-    //
-    // Summary:
-    //     X component of the vector.
+    /// <summary>
+    /// X component of the vector.
+    /// </summary>
     public float x;
 
-    //
-    // Summary:
-    //     Y component of the vector.
+    /// <summary>
+    /// Y component of the vector.
+    /// </summary>
     public float y;
 
-    //
-    // Summary:
-    //     Z component of the vector.
+    /// <summary>
+    /// Z component of the vector.
+    /// </summary>
     public float z;
 
 
@@ -42,6 +42,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
 
     private static readonly Vector3 negativeInfinityVector = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
 
+    /// <summary>
+    /// Gets or sets the component at the specified index.
+    /// </summary>
+    /// <param name="index">The index of the component (0 = x, 1 = y, 2 = z).</param>
+    /// <returns>The component value at the specified index.</returns>
+    /// <exception cref="IndexOutOfRangeException">Thrown when index is out of range [0, 2].</exception>
     public float this[int index]
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -79,9 +85,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns this vector with a magnitude of 1 (Read Only).
+    /// <summary>
+    /// Returns this vector with a magnitude of 1 (Read Only).
+    /// </summary>
     public Vector3 normalized
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -91,9 +97,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns the length of this vector (Read Only).
+    /// <summary>
+    /// Returns the length of this vector (Read Only).
+    /// </summary>
     public float magnitude
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -103,9 +109,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns the squared length of this vector (Read Only).
+    /// <summary>
+    /// Returns the squared length of this vector (Read Only).
+    /// </summary>
     public float sqrMagnitude
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -115,9 +121,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(0, 0, 0).
+    /// <summary>
+    /// Shorthand for writing Vector3(0, 0, 0).
+    /// </summary>
     public static Vector3 zero
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -127,9 +133,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(1, 1, 1).
+    /// <summary>
+    /// Shorthand for writing Vector3(1, 1, 1).
+    /// </summary>
     public static Vector3 one
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -139,9 +145,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(0, 0, 1).
+    /// <summary>
+    /// Shorthand for writing Vector3(0, 0, 1).
+    /// </summary>
     public static Vector3 forward
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -151,9 +157,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(0, 0, -1).
+    /// <summary>
+    /// Shorthand for writing Vector3(0, 0, -1).
+    /// </summary>
     public static Vector3 back
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -163,9 +169,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(0, 1, 0).
+    /// <summary>
+    /// Shorthand for writing Vector3(0, 1, 0).
+    /// </summary>
     public static Vector3 up
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -175,9 +181,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(0, -1, 0).
+    /// <summary>
+    /// Shorthand for writing Vector3(0, -1, 0).
+    /// </summary>
     public static Vector3 down
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -187,9 +193,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(-1, 0, 0).
+    /// <summary>
+    /// Shorthand for writing Vector3(-1, 0, 0).
+    /// </summary>
     public static Vector3 left
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -199,9 +205,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(1, 0, 0).
+    /// <summary>
+    /// Shorthand for writing Vector3(1, 0, 0).
+    /// </summary>
     public static Vector3 right
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -211,10 +217,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(float.PositiveInfinity, float.PositiveInfinity,
-    //     float.PositiveInfinity).
+    /// <summary>
+    /// Shorthand for writing Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity).
+    /// </summary>
     public static Vector3 positiveInfinity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -224,10 +229,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Shorthand for writing Vector3(float.NegativeInfinity, float.NegativeInfinity,
-    //     float.NegativeInfinity).
+    /// <summary>
+    /// Shorthand for writing Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity).
+    /// </summary>
     public static Vector3 negativeInfinity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -237,16 +241,13 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Spherically interpolates between two vectors.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
+    /// <summary>
+    /// Spherically interpolates between two vectors.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <param name="t">The interpolation parameter.</param>
+    /// <returns>The spherically interpolated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Slerp(Vector3 a, Vector3 b, float t)
     {
@@ -264,6 +265,13 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
 		return a * t1 + b * t2;
     }
 
+    /// <summary>
+    /// Spherically interpolates between two vectors, clamping the interpolation parameter to [0, 1].
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <param name="t">The interpolation parameter, clamped to [0, 1].</param>
+    /// <returns>The spherically interpolated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 SlerpClamped(Vector3 a, Vector3 b, float t)
     {
@@ -271,22 +279,13 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return Slerp(a, b, t);
     }
 
-    //
-    // Summary:
-    //     Linearly interpolates between two points.
-    //
-    // Parameters:
-    //   a:
-    //     Start value, returned when t = 0.
-    //
-    //   b:
-    //     End value, returned when t = 1.
-    //
-    //   t:
-    //     Value used to interpolate between a and b.
-    //
-    // Returns:
-    //     Interpolated value, equals to a + (b - a) * t.
+    /// <summary>
+    /// Linearly interpolates between two points.
+    /// </summary>
+    /// <param name="a">Start value, returned when t = 0.</param>
+    /// <param name="b">End value, returned when t = 1.</param>
+    /// <param name="t">Value used to interpolate between a and b.</param>
+    /// <returns>Interpolated value, equals to a + (b - a) * t.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Lerp(Vector3 a, Vector3 b, float t)
     {
@@ -294,39 +293,26 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return new Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
     }
 
-    //
-    // Summary:
-    //     Linearly interpolates between two vectors.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
+    /// <summary>
+    /// Linearly interpolates between two vectors without clamping the interpolation parameter.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <param name="t">The interpolation parameter (not clamped).</param>
+    /// <returns>The linearly interpolated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 LerpUnclamped(Vector3 a, Vector3 b, float t)
     {
         return new Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
     }
 
-    //
-    // Summary:
-    //     Calculate a position between the points specified by current and target, moving
-    //     no farther than the distance specified by maxDistanceDelta.
-    //
-    // Parameters:
-    //   current:
-    //     The position to move from.
-    //
-    //   target:
-    //     The position to move towards.
-    //
-    //   maxDistanceDelta:
-    //     Distance to move current per call.
-    //
-    // Returns:
-    //     The new position.
+    /// <summary>
+    /// Calculate a position between the points specified by current and target, moving no farther than the distance specified by maxDistanceDelta.
+    /// </summary>
+    /// <param name="current">The position to move from.</param>
+    /// <param name="target">The position to move towards.</param>
+    /// <param name="maxDistanceDelta">Distance to move current per call.</param>
+    /// <returns>The new position.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 MoveTowards(Vector3 current, Vector3 target, float maxDistanceDelta)
     {
@@ -344,6 +330,16 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
     }
 
 
+    /// <summary>
+    /// Gradually changes a vector towards a desired goal over time.
+    /// </summary>
+    /// <param name="current">The current position.</param>
+    /// <param name="target">The position we are trying to reach.</param>
+    /// <param name="currentVelocity">The current velocity, this value is modified by the function every time you call it.</param>
+    /// <param name="smoothTime">Approximately the time it will take to reach the target. A smaller value will reach the target faster.</param>
+    /// <param name="maxSpeed">Optionally allows you to clamp the maximum speed.</param>
+    /// <param name="deltaTime">The time since the last call to this function.</param>
+    /// <returns>The smoothed vector.</returns>
     public static Vector3 SmoothDamp(Vector3 current, Vector3 target, ref Vector3 currentVelocity, float smoothTime, float maxSpeed, float deltaTime)
     {
         float num = 0f;
@@ -399,16 +395,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return new Vector3(num, num2, num3);
     }
 
-    //
-    // Summary:
-    //     Creates a new vector with given x, y, z components.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
-    //
-    //   z:
+    /// <summary>
+    /// Creates a new vector with given x, y, z components.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
+    /// <param name="z">The z component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector3(float x, float y, float z)
     {
@@ -418,14 +410,11 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         //this._ = 0.0f;
     }
 
-    //
-    // Summary:
-    //     Creates a new vector with given x, y components and sets z to zero.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
+    /// <summary>
+    /// Creates a new vector with given x, y components and sets z to zero.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector3(float x, float y)
     {
@@ -436,16 +425,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
 
     }
 
-    //
-    // Summary:
-    //     Set x, y and z components of an existing Vector3.
-    //
-    // Parameters:
-    //   newX:
-    //
-    //   newY:
-    //
-    //   newZ:
+    /// <summary>
+    /// Set x, y and z components of an existing Vector3.
+    /// </summary>
+    /// <param name="newX">The new x component.</param>
+    /// <param name="newY">The new y component.</param>
+    /// <param name="newZ">The new z component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set(float newX, float newY, float newZ)
     {
@@ -454,26 +439,22 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         z = newZ;
     }
 
-    //
-    // Summary:
-    //     Multiplies two vectors component-wise.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Multiplies two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>A new vector with components multiplied.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Scale(Vector3 a, Vector3 b)
     {
         return new Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
     }
 
-    //
-    // Summary:
-    //     Multiplies every component of this vector by the same component of scale.
-    //
-    // Parameters:
-    //   scale:
+    /// <summary>
+    /// Multiplies every component of this vector by the same component of scale.
+    /// </summary>
+    /// <param name="scale">The scale vector.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Scale(Vector3 scale)
     {
@@ -482,32 +463,33 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         z *= scale.z;
     }
 
-    //
-    // Summary:
-    //     Cross Product of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Cross Product of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>The cross product of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Cross(Vector3 lhs, Vector3 rhs)
     {
         return new Vector3(lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x);
     }
 
+    /// <summary>
+    /// Returns the hash code for this instance.
+    /// </summary>
+    /// <returns>A 32-bit signed integer that is the hash code for this instance.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode()
     {
         return x.GetHashCode() ^ (y.GetHashCode() << 2) ^ (z.GetHashCode() >> 2);
     }
 
-    //
-    // Summary:
-    //     Returns true if the given vector is exactly equal to this vector.
-    //
-    // Parameters:
-    //   other:
+    /// <summary>
+    /// Returns true if the given vector is exactly equal to this vector.
+    /// </summary>
+    /// <param name="other">The object to compare with the current instance.</param>
+    /// <returns>True if the given vector is exactly equal to this vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool Equals(object other)
     {
@@ -519,20 +501,23 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return Equals((Vector3)other);
     }
 
+    /// <summary>
+    /// Returns true if the given vector is exactly equal to this vector.
+    /// </summary>
+    /// <param name="other">The vector to compare with the current instance.</param>
+    /// <returns>True if the given vector is exactly equal to this vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Vector3 other)
     {
         return x == other.x && y == other.y && z == other.z;
     }
 
-    //
-    // Summary:
-    //     Reflects a vector off the plane defined by a normal.
-    //
-    // Parameters:
-    //   inDirection:
-    //
-    //   inNormal:
+    /// <summary>
+    /// Reflects a vector off the plane defined by a normal.
+    /// </summary>
+    /// <param name="inDirection">The direction vector to reflect.</param>
+    /// <param name="inNormal">The normal of the plane.</param>
+    /// <returns>The reflected vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Reflect(Vector3 inDirection, Vector3 inNormal)
     {
@@ -540,12 +525,11 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return new Vector3(num * inNormal.x + inDirection.x, num * inNormal.y + inDirection.y, num * inNormal.z + inDirection.z);
     }
 
-    //
-    // Summary:
-    //     Makes this vector have a magnitude of 1.
-    //
-    // Parameters:
-    //   value:
+    /// <summary>
+    /// Makes this vector have a magnitude of 1.
+    /// </summary>
+    /// <param name="value">The vector to normalize.</param>
+    /// <returns>The normalized vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Normalize(Vector3 value)
     {
@@ -558,6 +542,9 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return zero;
     }
 
+    /// <summary>
+    /// Makes this vector have a magnitude of 1.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Normalize()
     {
@@ -572,28 +559,24 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Dot Product of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Dot Product of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>The dot product of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Dot(Vector3 lhs, Vector3 rhs)
     {
         return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
     }
 
-    //
-    // Summary:
-    //     Projects a vector onto another vector.
-    //
-    // Parameters:
-    //   vector:
-    //
-    //   onNormal:
+    /// <summary>
+    /// Projects a vector onto another vector.
+    /// </summary>
+    /// <param name="vector">The vector to project.</param>
+    /// <param name="onNormal">The normal vector to project onto.</param>
+    /// <returns>The projected vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Project(Vector3 vector, Vector3 onNormal)
     {
@@ -607,19 +590,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return new Vector3(onNormal.x * num2 / num, onNormal.y * num2 / num, onNormal.z * num2 / num);
     }
 
-    //
-    // Summary:
-    //     Projects a vector onto a plane defined by a normal orthogonal to the plane.
-    //
-    // Parameters:
-    //   planeNormal:
-    //     The direction from the vector towards the plane.
-    //
-    //   vector:
-    //     The location of the vector above the plane.
-    //
-    // Returns:
-    //     The location of the vector on the plane.
+    /// <summary>
+    /// Projects a vector onto a plane defined by a normal orthogonal to the plane.
+    /// </summary>
+    /// <param name="vector">The location of the vector above the plane.</param>
+    /// <param name="planeNormal">The direction from the vector towards the plane.</param>
+    /// <returns>The location of the vector on the plane.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 ProjectOnPlane(Vector3 vector, Vector3 planeNormal)
     {
@@ -633,19 +609,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return new Vector3(vector.x - planeNormal.x * num2 / num, vector.y - planeNormal.y * num2 / num, vector.z - planeNormal.z * num2 / num);
     }
 
-    //
-    // Summary:
-    //     Calculates the angle between vectors from and.
-    //
-    // Parameters:
-    //   from:
-    //     The vector from which the angular difference is measured.
-    //
-    //   to:
-    //     The vector to which the angular difference is measured.
-    //
-    // Returns:
-    //     The angle in degrees between the two vectors.
+    /// <summary>
+    /// Calculates the angle between vectors from and to.
+    /// </summary>
+    /// <param name="from">The vector from which the angular difference is measured.</param>
+    /// <param name="to">The vector to which the angular difference is measured.</param>
+    /// <returns>The angle in degrees between the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Angle(Vector3 from, Vector3 to)
     {
@@ -659,23 +628,13 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return (float)Math.Acos(num2) * 57.29578f;
     }
 
-    //
-    // Summary:
-    //     Calculates the signed angle between vectors from and to in relation to axis.
-    //
-    //
-    // Parameters:
-    //   from:
-    //     The vector from which the angular difference is measured.
-    //
-    //   to:
-    //     The vector to which the angular difference is measured.
-    //
-    //   axis:
-    //     A vector around which the other vectors are rotated.
-    //
-    // Returns:
-    //     Returns the signed angle between from and to in degrees.
+    /// <summary>
+    /// Calculates the signed angle between vectors from and to in relation to axis.
+    /// </summary>
+    /// <param name="from">The vector from which the angular difference is measured.</param>
+    /// <param name="to">The vector to which the angular difference is measured.</param>
+    /// <param name="axis">A vector around which the other vectors are rotated.</param>
+    /// <returns>Returns the signed angle between from and to in degrees.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float SignedAngle(Vector3 from, Vector3 to, Vector3 axis)
     {
@@ -687,14 +646,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return num * num5;
     }
 
-    //
-    // Summary:
-    //     Returns the distance between a and b.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Returns the distance between a and b.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The distance between the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Distance(Vector3 a, Vector3 b)
     {
@@ -704,14 +661,12 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return (float)Math.Sqrt(num * num + num2 * num2 + num3 * num3);
     }
 
-    //
-    // Summary:
-    //     Returns a copy of vector with its magnitude clamped to maxLength.
-    //
-    // Parameters:
-    //   vector:
-    //
-    //   maxLength:
+    /// <summary>
+    /// Returns a copy of vector with its magnitude clamped to maxLength.
+    /// </summary>
+    /// <param name="vector">The vector to clamp.</param>
+    /// <param name="maxLength">The maximum length.</param>
+    /// <returns>A copy of the vector with magnitude clamped to maxLength.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 ClampMagnitude(Vector3 vector, float maxLength)
     {
@@ -728,82 +683,129 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return vector;
     }
 
+    /// <summary>
+    /// Returns the length of the vector.
+    /// </summary>
+    /// <param name="vector">The vector.</param>
+    /// <returns>The length of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Magnitude(Vector3 vector)
     {
         return (float)Math.Sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z);
     }
 
+    /// <summary>
+    /// Returns the squared length of the vector.
+    /// </summary>
+    /// <param name="vector">The vector.</param>
+    /// <returns>The squared length of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float SqrMagnitude(Vector3 vector)
     {
         return vector.x * vector.x + vector.y * vector.y + vector.z * vector.z;
     }
 
-    //
-    // Summary:
-    //     Returns a vector that is made from the smallest components of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Returns a vector that is made from the smallest components of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>A vector with the minimum components.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Min(Vector3 lhs, Vector3 rhs)
     {
         return new Vector3(Mathf.Min(lhs.x, rhs.x), Mathf.Min(lhs.y, rhs.y), Mathf.Min(lhs.z, rhs.z));
     }
 
-    //
-    // Summary:
-    //     Returns a vector that is made from the largest components of two vectors.
-    //
-    // Parameters:
-    //   lhs:
-    //
-    //   rhs:
+    /// <summary>
+    /// Returns a vector that is made from the largest components of two vectors.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>A vector with the maximum components.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Max(Vector3 lhs, Vector3 rhs)
     {
         return new Vector3(Mathf.Max(lhs.x, rhs.x), Mathf.Max(lhs.y, rhs.y), Mathf.Max(lhs.z, rhs.z));
     }
 
+    /// <summary>
+    /// Adds two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The sum of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator +(Vector3 a, Vector3 b)
     {
         return new Vector3(a.x + b.x, a.y + b.y, a.z + b.z);
     }
 
+    /// <summary>
+    /// Subtracts two vectors component-wise.
+    /// </summary>
+    /// <param name="a">The first vector.</param>
+    /// <param name="b">The second vector.</param>
+    /// <returns>The difference of the two vectors.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator -(Vector3 a, Vector3 b)
     {
         return new Vector3(a.x - b.x, a.y - b.y, a.z - b.z);
     }
 
+    /// <summary>
+    /// Negates a vector.
+    /// </summary>
+    /// <param name="a">The vector to negate.</param>
+    /// <returns>The negated vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator -(Vector3 a)
     {
         return new Vector3(0f - a.x, 0f - a.y, 0f - a.z);
     }
 
+    /// <summary>
+    /// Multiplies a vector by a scalar.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <param name="d">The scalar value.</param>
+    /// <returns>The scaled vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator *(Vector3 a, float d)
     {
         return new Vector3(a.x * d, a.y * d, a.z * d);
     }
 
+    /// <summary>
+    /// Multiplies a scalar by a vector.
+    /// </summary>
+    /// <param name="d">The scalar value.</param>
+    /// <param name="a">The vector.</param>
+    /// <returns>The scaled vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator *(float d, Vector3 a)
     {
         return new Vector3(a.x * d, a.y * d, a.z * d);
     }
 
+    /// <summary>
+    /// Divides a vector by a scalar.
+    /// </summary>
+    /// <param name="a">The vector.</param>
+    /// <param name="d">The scalar value.</param>
+    /// <returns>The divided vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 operator /(Vector3 a, float d)
     {
         return new Vector3(a.x / d, a.y / d, a.z / d);
     }
 
+    /// <summary>
+    /// Determines whether two vectors are approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>True if the vectors are approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Vector3 lhs, Vector3 rhs)
     {
@@ -814,54 +816,45 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         return num4 < 9.99999944E-11f;
     }
 
+    /// <summary>
+    /// Determines whether two vectors are not approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side vector.</param>
+    /// <param name="rhs">The right-hand side vector.</param>
+    /// <returns>True if the vectors are not approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Vector3 lhs, Vector3 rhs)
     {
         return !(lhs == rhs);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString()
     {
         return ToString(null, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format)
     {
         return ToString(format, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this vector.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this vector.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <param name="formatProvider">An object that specifies culture-specific formatting.</param>
+    /// <returns>A formatted string representation of the vector.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format, IFormatProvider formatProvider)
     {

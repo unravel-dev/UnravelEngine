@@ -191,12 +191,6 @@ struct defaults
      */
     static void create_default_3d_scene(rtti::context& ctx, scene& scn);
 
-    /**
-     * @brief Focuses a camera on a specified entity.
-     * @param camera The camera to focus.
-     * @param entity The entity to focus on.
-     */
-    static void focus_camera_on_entities(entt::handle camera, hpp::span<const entt::handle> entities);
 
     /**
      * @brief Focuses a camera on a specified entity with a timed transition.
@@ -206,7 +200,7 @@ struct defaults
      */
     static void focus_camera_on_entities(entt::handle camera, 
                                         hpp::span<const entt::handle> entities,
-                                        float duration);
+                                        float duration = 0.0f);
 
     /**
      * @brief Focuses a camera on bounds with a timed transition.
@@ -217,7 +211,7 @@ struct defaults
      */
     static void focus_camera_on_bounds(entt::handle camera, 
                                       const math::bsphere& bounds,
-                                      float duration);
+                                      float duration = 0.0f);
 
     /**
      * @brief Focuses a camera on bounds with a timed transition.
@@ -228,7 +222,7 @@ struct defaults
      */
     static void focus_camera_on_bounds(entt::handle camera, 
                                       const math::bbox& bounds,
-                                      float duration);
+                                      float duration = 0.0f);
 
     /**
      * @brief Creates a default 3D scene for asset preview.
@@ -282,12 +276,6 @@ private:
     static auto create_default_3d_scene_for_preview(rtti::context& ctx, scene& scn, const usize32_t& size)
         -> entt::handle;
 
-            // Internal helper for timed focus transitions (shared between bbox and bsphere variants)
-    static void run_camera_focus_transition(entt::handle camera,
-                                            const math::vec3& target_center,
-                                            float radius,
-                                            bool keep_rotation,
-                                            float duration);
 };
 
 } // namespace unravel

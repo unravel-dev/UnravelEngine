@@ -29,7 +29,7 @@ auto imgui_interface::init(rtti::context& ctx) -> bool
 
     const auto& rend = ctx.get_cached<renderer>();
     const auto& main_window = rend.get_main_window();
-    imguiCreate(main_window, 15.0f);
+    imguiCreate(main_window, 14.0f);
 
     inited_ = true;
     return true;

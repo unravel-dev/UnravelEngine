@@ -24,6 +24,7 @@ struct content_browser_item
     on_action_t on_click;
     on_action_t on_double_click;
     on_action_t on_delete;
+    on_action_t on_cancel;
     on_rename_t on_rename;
 
     gfx::texture::ptr icon;

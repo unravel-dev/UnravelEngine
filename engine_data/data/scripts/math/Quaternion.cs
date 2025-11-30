@@ -6,34 +6,31 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)]
 public struct Quaternion : IEquatable<Quaternion>, IFormattable
 {
-    //
-    // Summary:
-    //     X component of the Quaternion. Don't modify this directly unless you know quaternions
-    //     inside out.
+    /// <summary>
+    /// X component of the Quaternion. Don't modify this directly unless you know quaternions inside out.
+    /// </summary>
     public float x;
 
-    //
-    // Summary:
-    //     Y component of the Quaternion. Don't modify this directly unless you know quaternions
-    //     inside out.
+    /// <summary>
+    /// Y component of the Quaternion. Don't modify this directly unless you know quaternions inside out.
+    /// </summary>
     public float y;
 
-    //
-    // Summary:
-    //     Z component of the Quaternion. Don't modify this directly unless you know quaternions
-    //     inside out.
+    /// <summary>
+    /// Z component of the Quaternion. Don't modify this directly unless you know quaternions inside out.
+    /// </summary>
     public float z;
 
-    //
-    // Summary:
-    //     W component of the Quaternion. Do not directly modify quaternions.
+    /// <summary>
+    /// W component of the Quaternion. Do not directly modify quaternions.
+    /// </summary>
     public float w;
 
     private static readonly Quaternion identityQuaternion = new Quaternion(0f, 0f, 0f, 1f);
 
-    //
-    // Summary:
-    //     The identity rotation (Read Only).
+    /// <summary>
+    /// The identity rotation (Read Only).
+    /// </summary>
     public static Quaternion identity
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -43,9 +40,9 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns or sets the euler angle representation of the rotation.
+    /// <summary>
+    /// Returns or sets the euler angle representation of the rotation.
+    /// </summary>
     public Vector3 eulerAngles
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -60,9 +57,9 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Returns this quaternion with a magnitude of 1 (Read Only).
+    /// <summary>
+    /// Returns this quaternion with a magnitude of 1 (Read Only).
+    /// </summary>
     public Quaternion normalized
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -72,55 +69,44 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         }
     }
 
-    //
-    // Summary:
-    //     Creates a rotation which rotates from fromDirection to toDirection.
-    //
-    // Parameters:
-    //   fromDirection:
-    //
-    //   toDirection:
-    //[FreeFunction("FromToQuaternionSafe", IsThreadSafe = true)]
+    /// <summary>
+    /// Creates a rotation which rotates from fromDirection to toDirection.
+    /// </summary>
+    /// <param name="fromDirection">The starting direction.</param>
+    /// <param name="toDirection">The target direction.</param>
+    /// <returns>A quaternion representing the rotation from fromDirection to toDirection.</returns>
     public static Quaternion FromToRotation(Vector3 fromDirection, Vector3 toDirection)
     {
         return internal_m2n_from_to_rotation(fromDirection, toDirection);
     }
 
+    /// <summary>
+    /// Returns the conjugate of a quaternion.
+    /// </summary>
+    /// <param name="q">The quaternion.</param>
+    /// <returns>The conjugate of the quaternion.</returns>
     public static Quaternion Conjugate(Quaternion q)
     {
         Quaternion result = new Quaternion(-q.x, -q.y, -q.z, q.w);
         return result;
     }
-    //
-    // Summary:
-    //     Returns the Inverse of rotation.
-    //
-    // Parameters:
-    //   rotation:
-    //[FreeFunction(IsThreadSafe = true)]
+    /// <summary>
+    /// Returns the Inverse of rotation.
+    /// </summary>
+    /// <param name="q">The quaternion.</param>
+    /// <returns>The inverse quaternion.</returns>
     public static Quaternion Inverse(Quaternion q)
     {
         return Conjugate(q) / Dot(q, q);
     }
 
-    //
-    // Summary:
-    //     Spherically interpolates between quaternions a and b by ratio t. The parameter
-    //     t is clamped to the range [0, 1].
-    //
-    // Parameters:
-    //   a:
-    //     Start value, returned when t = 0.
-    //
-    //   b:
-    //     End value, returned when t = 1.
-    //
-    //   t:
-    //     Interpolation ratio.
-    //
-    // Returns:
-    //     A quaternion spherically interpolated between quaternions a and b.
-    //[FreeFunction("QuaternionScripting::Slerp", IsThreadSafe = true)]
+    /// <summary>
+    /// Spherically interpolates between quaternions a and b by ratio t. The parameter t is clamped to the range [0, 1].
+    /// </summary>
+    /// <param name="a">Start value, returned when t = 0.</param>
+    /// <param name="b">End value, returned when t = 1.</param>
+    /// <param name="t">Interpolation ratio.</param>
+    /// <returns>A quaternion spherically interpolated between quaternions a and b.</returns>
     public static Quaternion Slerp(Quaternion a, Quaternion b, float t)
     {
         t = Mathf.Clamp01(t);
@@ -128,18 +114,13 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
 		
     }
 
-    //
-    // Summary:
-    //     Spherically interpolates between a and b by t. The parameter t is not clamped.
-    //
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
-    //[FreeFunction("QuaternionScripting::SlerpUnclamped", IsThreadSafe = true)]
+    /// <summary>
+    /// Spherically interpolates between a and b by t. The parameter t is not clamped.
+    /// </summary>
+    /// <param name="x">Start value, returned when t = 0.</param>
+    /// <param name="y">End value, returned when t = 1.</param>
+    /// <param name="a">Interpolation ratio (not clamped).</param>
+    /// <returns>A quaternion spherically interpolated between quaternions x and y.</returns>
     public static Quaternion SlerpUnclamped(Quaternion x, Quaternion y, float a)
     {
         Quaternion z = y;
@@ -174,119 +155,92 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     }
 
 
-    //
-    // Summary:
-    //     Interpolates between a and b by t and normalizes the result afterwards. The parameter
-    //     t is clamped to the range [0, 1].
-    //
-    // Parameters:
-    //   a:
-    //     Start value, returned when t = 0.
-    //
-    //   b:
-    //     End value, returned when t = 1.
-    //
-    //   t:
-    //     Interpolation ratio.
-    //
-    // Returns:
-    //     A quaternion interpolated between quaternions a and b.
-    //[FreeFunction("QuaternionScripting::Lerp", IsThreadSafe = true)]
+    /// <summary>
+    /// Interpolates between a and b by t and normalizes the result afterwards. The parameter t is clamped to the range [0, 1].
+    /// </summary>
+    /// <param name="a">Start value, returned when t = 0.</param>
+    /// <param name="b">End value, returned when t = 1.</param>
+    /// <param name="t">Interpolation ratio.</param>
+    /// <returns>A quaternion interpolated between quaternions a and b.</returns>
     public static Quaternion Lerp(Quaternion a, Quaternion b, float t)
     {        
         t = Mathf.Clamp01(t);
         return LerpUnclamped(a, b, t);
     }
 
-    //
-    // Summary:
-    //     Interpolates between a and b by t and normalizes the result afterwards. The parameter
-    //     t is not clamped.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
-    //
-    //   t:
-    //[FreeFunction("QuaternionScripting::LerpUnclamped", IsThreadSafe = true)]
+    /// <summary>
+    /// Interpolates between a and b by t and normalizes the result afterwards. The parameter t is not clamped.
+    /// </summary>
+    /// <param name="a">Start value, returned when t = 0.</param>
+    /// <param name="b">End value, returned when t = 1.</param>
+    /// <param name="t">Interpolation ratio (not clamped).</param>
+    /// <returns>A quaternion interpolated between quaternions a and b.</returns>
     public static Quaternion LerpUnclamped(Quaternion a, Quaternion b, float t)
     {
         return a * (1.0f - t) + (b * t);
     }
 
-    //[FreeFunction("EulerToQuaternion", IsThreadSafe = true)]
+    /// <summary>
+    /// Creates a quaternion from Euler angles in radians.
+    /// </summary>
+    /// <param name="euler">The Euler angles in radians.</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     private static Quaternion Internal_FromEulerRad(Vector3 euler)
     {
         return internal_m2n_from_euler_rad(euler);
     }
 
-    //[FreeFunction("QuaternionScripting::ToEuler", IsThreadSafe = true)]
+    /// <summary>
+    /// Converts a quaternion to Euler angles in radians.
+    /// </summary>
+    /// <param name="rotation">The quaternion.</param>
+    /// <returns>The Euler angles in radians.</returns>
     private static Vector3 Internal_ToEulerRad(Quaternion rotation)
     {
         return internal_m2n_to_euler_rad(rotation);
     }
 
 
-    //
-    // Summary:
-    //     Creates a rotation which rotates angle degrees around axis.
-    //
-    // Parameters:
-    //   angle:
-    //
-    //   axis:
-    //[FreeFunction("QuaternionScripting::AngleAxis", IsThreadSafe = true)]
+    /// <summary>
+    /// Creates a rotation which rotates angle degrees around axis.
+    /// </summary>
+    /// <param name="angle">The angle in degrees.</param>
+    /// <param name="axis">The axis of rotation.</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     public static Quaternion AngleAxis(float angle, Vector3 axis)
     {
         float rad = angle * (MathF.PI / 180f);
         return internal_m2n_angle_axis(rad, axis);
     }
 
-    //
-    // Summary:
-    //     Creates a rotation with the specified forward and upwards directions.
-    //
-    // Parameters:
-    //   forward:
-    //     The direction to look in.
-    //
-    //   upwards:
-    //     The vector that defines in which direction up is.
-    //[FreeFunction("QuaternionScripting::LookRotation", IsThreadSafe = true)]
+    /// <summary>
+    /// Creates a rotation with the specified forward and upwards directions.
+    /// </summary>
+    /// <param name="forward">The direction to look in.</param>
+    /// <param name="upwards">The vector that defines in which direction up is.</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     public static Quaternion LookRotation(Vector3 forward, Vector3 upwards)
     {
         return internal_m2n_look_rotation(forward, upwards);
     }
 
-    //
-    // Summary:
-    //     Creates a rotation with the specified forward and upwards directions.
-    //
-    // Parameters:
-    //   forward:
-    //     The direction to look in.
-    //
-    //   upwards:
-    //     The vector that defines in which direction up is.
-    //[ExcludeFromDocs]
+    /// <summary>
+    /// Creates a rotation with the specified forward direction, using Vector3.up as the up direction.
+    /// </summary>
+    /// <param name="forward">The direction to look in.</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     public static Quaternion LookRotation(Vector3 forward)
     {
         return LookRotation(forward, Vector3.up);
     }
 
-    //
-    // Summary:
-    //     Constructs new Quaternion with given x,y,z,w components.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
-    //
-    //   z:
-    //
-    //   w:
+    /// <summary>
+    /// Constructs new Quaternion with given x,y,z,w components.
+    /// </summary>
+    /// <param name="x">The x component.</param>
+    /// <param name="y">The y component.</param>
+    /// <param name="z">The z component.</param>
+    /// <param name="w">The w component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Quaternion(float x, float y, float z, float w)
     {
@@ -296,18 +250,13 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         this.w = w;
     }
 
-    //
-    // Summary:
-    //     Set x, y, z and w components of an existing Quaternion.
-    //
-    // Parameters:
-    //   newX:
-    //
-    //   newY:
-    //
-    //   newZ:
-    //
-    //   newW:
+    /// <summary>
+    /// Set x, y, z and w components of an existing Quaternion.
+    /// </summary>
+    /// <param name="newX">The new x component.</param>
+    /// <param name="newY">The new y component.</param>
+    /// <param name="newZ">The new z component.</param>
+    /// <param name="newW">The new w component.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set(float newX, float newY, float newZ, float newW)
     {
@@ -317,36 +266,72 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         w = newW;
     }
 
+    /// <summary>
+    /// Divides a quaternion by a scalar.
+    /// </summary>
+    /// <param name="lhs">The quaternion.</param>
+    /// <param name="rhs">The scalar value.</param>
+    /// <returns>The divided quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator /(Quaternion lhs, float rhs)
     {
         return new Quaternion(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs, lhs.w / rhs);
     }
 
+    /// <summary>
+    /// Multiplies a quaternion by a scalar.
+    /// </summary>
+    /// <param name="lhs">The quaternion.</param>
+    /// <param name="rhs">The scalar value.</param>
+    /// <returns>The scaled quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator *(Quaternion lhs, float rhs)
     {
         return new Quaternion(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs, lhs.w * rhs);
     }
 
+    /// <summary>
+    /// Multiplies a scalar by a quaternion.
+    /// </summary>
+    /// <param name="lhs">The scalar value.</param>
+    /// <param name="rhs">The quaternion.</param>
+    /// <returns>The scaled quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator *(float lhs, Quaternion rhs)
     {
         return new Quaternion(lhs * rhs.x, lhs * rhs.y, lhs * rhs.z, lhs * rhs.w);
     }
 
+    /// <summary>
+    /// Adds two quaternions component-wise.
+    /// </summary>
+    /// <param name="lhs">The left-hand side quaternion.</param>
+    /// <param name="rhs">The right-hand side quaternion.</param>
+    /// <returns>The sum of the two quaternions.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator +(Quaternion lhs, Quaternion rhs)
     {
         return new Quaternion(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w);
     }
 
+    /// <summary>
+    /// Multiplies two quaternions.
+    /// </summary>
+    /// <param name="lhs">The left-hand side quaternion.</param>
+    /// <param name="rhs">The right-hand side quaternion.</param>
+    /// <returns>The product of the two quaternions.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator *(Quaternion lhs, Quaternion rhs)
     {
         return new Quaternion(lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y, lhs.w * rhs.y + lhs.y * rhs.w + lhs.z * rhs.x - lhs.x * rhs.z, lhs.w * rhs.z + lhs.z * rhs.w + lhs.x * rhs.y - lhs.y * rhs.x, lhs.w * rhs.w - lhs.x * rhs.x - lhs.y * rhs.y - lhs.z * rhs.z);
     }
 
+    /// <summary>
+    /// Rotates a point by a quaternion.
+    /// </summary>
+    /// <param name="rotation">The rotation quaternion.</param>
+    /// <param name="point">The point to rotate.</param>
+    /// <returns>The rotated point.</returns>
     public static Vector3 operator *(Quaternion rotation, Vector3 point)
     {
         float num = rotation.x * 2f;
@@ -368,6 +353,11 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return result;
     }
 
+    /// <summary>
+    /// Negates a quaternion.
+    /// </summary>
+    /// <param name="a">The quaternion to negate.</param>
+    /// <returns>The negated quaternion.</returns>
     public static Quaternion operator -(Quaternion a)
     {
         return new Quaternion(-a.x, -a.y, -a.z, -a.w);
@@ -380,74 +370,70 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return dot > 0.999999f;
     }
 
+    /// <summary>
+    /// Determines whether two quaternions are approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side quaternion.</param>
+    /// <param name="rhs">The right-hand side quaternion.</param>
+    /// <returns>True if the quaternions are approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator ==(Quaternion lhs, Quaternion rhs)
     {
         return IsEqualUsingDot(Dot(lhs, rhs));
     }
 
+    /// <summary>
+    /// Determines whether two quaternions are not approximately equal.
+    /// </summary>
+    /// <param name="lhs">The left-hand side quaternion.</param>
+    /// <param name="rhs">The right-hand side quaternion.</param>
+    /// <returns>True if the quaternions are not approximately equal; otherwise, false.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(Quaternion lhs, Quaternion rhs)
     {
         return !(lhs == rhs);
     }
 
-    //
-    // Summary:
-    //     The dot product between two rotations.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// The dot product between two rotations.
+    /// </summary>
+    /// <param name="a">The first quaternion.</param>
+    /// <param name="b">The second quaternion.</param>
+    /// <returns>The dot product of the two quaternions.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Dot(Quaternion a, Quaternion b)
     {
         return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     }
 
-    //
-    // Summary:
-    //     Creates a rotation with the specified forward and upwards directions.
-    //
-    // Parameters:
-    //   view:
-    //     The direction to look in.
-    //
-    //   up:
-    //     The vector that defines in which direction up is.
+    /// <summary>
+    /// Creates a rotation with the specified forward direction, using Vector3.up as the up direction.
+    /// </summary>
+    /// <param name="view">The direction to look in.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    //[ExcludeFromDocs]
     public void SetLookRotation(Vector3 view)
     {
         Vector3 up = Vector3.up;
         SetLookRotation(view, up);
     }
 
-    //
-    // Summary:
-    //     Creates a rotation with the specified forward and upwards directions.
-    //
-    // Parameters:
-    //   view:
-    //     The direction to look in.
-    //
-    //   up:
-    //     The vector that defines in which direction up is.
+    /// <summary>
+    /// Creates a rotation with the specified forward and upwards directions.
+    /// </summary>
+    /// <param name="view">The direction to look in.</param>
+    /// <param name="up">The vector that defines in which direction up is.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetLookRotation(Vector3 view, Vector3 up)
     {
         this = LookRotation(view, up);
     }
 
-    //
-    // Summary:
-    //     Returns the angle in degrees between two rotations a and b.
-    //
-    // Parameters:
-    //   a:
-    //
-    //   b:
+    /// <summary>
+    /// Returns the angle in degrees between two rotations a and b.
+    /// </summary>
+    /// <param name="a">The first quaternion.</param>
+    /// <param name="b">The second quaternion.</param>
+    /// <returns>The angle in degrees between the two rotations.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Angle(Quaternion a, Quaternion b)
     {
@@ -489,30 +475,24 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return euler;
     }
 
-    //
-    // Summary:
-    //     Returns a rotation that rotates z degrees around the z axis, x degrees around
-    //     the x axis, and y degrees around the y axis; applied in that order.
-    //
-    // Parameters:
-    //   x:
-    //
-    //   y:
-    //
-    //   z:
+    /// <summary>
+    /// Returns a rotation that rotates z degrees around the z axis, x degrees around the x axis, and y degrees around the y axis; applied in that order.
+    /// </summary>
+    /// <param name="x">Rotation around the x axis in degrees.</param>
+    /// <param name="y">Rotation around the y axis in degrees.</param>
+    /// <param name="z">Rotation around the z axis in degrees.</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion Euler(float x, float y, float z)
     {
         return Internal_FromEulerRad(new Vector3(x, y, z) * (MathF.PI / 180f));
     }
 
-    //
-    // Summary:
-    //     Returns a rotation that rotates z degrees around the z axis, x degrees around
-    //     the x axis, and y degrees around the y axis.
-    //
-    // Parameters:
-    //   euler:
+    /// <summary>
+    /// Returns a rotation that rotates z degrees around the z axis, x degrees around the x axis, and y degrees around the y axis.
+    /// </summary>
+    /// <param name="euler">The Euler angles in degrees (x, y, z).</param>
+    /// <returns>A quaternion representing the rotation.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion Euler(Vector3 euler)
     {
@@ -520,30 +500,24 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     }
 
 
-    //
-    // Summary:
-    //     Creates a rotation which rotates from fromDirection to toDirection.
-    //
-    // Parameters:
-    //   fromDirection:
-    //
-    //   toDirection:
+    /// <summary>
+    /// Creates a rotation which rotates from fromDirection to toDirection.
+    /// </summary>
+    /// <param name="fromDirection">The starting direction.</param>
+    /// <param name="toDirection">The target direction.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetFromToRotation(Vector3 fromDirection, Vector3 toDirection)
     {
         this = FromToRotation(fromDirection, toDirection);
     }
 
-    //
-    // Summary:
-    //     Rotates a rotation from towards to.
-    //
-    // Parameters:
-    //   from:
-    //
-    //   to:
-    //
-    //   maxDegreesDelta:
+    /// <summary>
+    /// Rotates a rotation from towards to.
+    /// </summary>
+    /// <param name="from">The starting rotation.</param>
+    /// <param name="to">The target rotation.</param>
+    /// <param name="maxDegreesDelta">The maximum angle in degrees to rotate.</param>
+    /// <returns>The rotated quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion RotateTowards(Quaternion from, Quaternion to, float maxDegreesDelta)
     {
@@ -556,13 +530,11 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return SlerpUnclamped(from, to, Mathf.Min(1f, maxDegreesDelta / num));
     }
 
-    //
-    // Summary:
-    //     Converts this quaternion to one with the same orientation but with a magnitude
-    //     of 1.
-    //
-    // Parameters:
-    //   q:
+    /// <summary>
+    /// Converts this quaternion to one with the same orientation but with a magnitude of 1.
+    /// </summary>
+    /// <param name="q">The quaternion to normalize.</param>
+    /// <returns>The normalized quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion Normalize(Quaternion q)
     {
@@ -575,18 +547,30 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return new Quaternion(q.x / num, q.y / num, q.z / num, q.w / num);
     }
 
+    /// <summary>
+    /// Normalizes this quaternion to have a magnitude of 1.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Normalize()
     {
         this = Normalize(this);
     }
 
+    /// <summary>
+    /// Returns the hash code for this instance.
+    /// </summary>
+    /// <returns>A 32-bit signed integer that is the hash code for this instance.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode()
     {
         return x.GetHashCode() ^ (y.GetHashCode() << 2) ^ (z.GetHashCode() >> 2) ^ (w.GetHashCode() >> 1);
     }
 
+    /// <summary>
+    /// Returns true if the given quaternion is exactly equal to this quaternion.
+    /// </summary>
+    /// <param name="other">The object to compare with the current instance.</param>
+    /// <returns>True if the given quaternion is exactly equal to this quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override bool Equals(object other)
     {
@@ -598,54 +582,44 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return Equals((Quaternion)other);
     }
 
+    /// <summary>
+    /// Returns true if the given quaternion is exactly equal to this quaternion.
+    /// </summary>
+    /// <param name="other">The quaternion to compare with the current instance.</param>
+    /// <returns>True if the given quaternion is exactly equal to this quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Quaternion other)
     {
         return x.Equals(other.x) && y.Equals(other.y) && z.Equals(other.z) && w.Equals(other.w);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this quaternion.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this quaternion.
+    /// </summary>
+    /// <returns>A formatted string representation of the quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString()
     {
         return ToString(null, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this quaternion.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this quaternion.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <returns>A formatted string representation of the quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format)
     {
         return ToString(format, null);
     }
 
-    //
-    // Summary:
-    //     Returns a formatted string for this quaternion.
-    //
-    // Parameters:
-    //   format:
-    //     A numeric format string.
-    //
-    //   formatProvider:
-    //     An object that specifies culture-specific formatting.
+    /// <summary>
+    /// Returns a formatted string for this quaternion.
+    /// </summary>
+    /// <param name="format">A numeric format string.</param>
+    /// <param name="formatProvider">An object that specifies culture-specific formatting.</param>
+    /// <returns>A formatted string representation of the quaternion.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string ToString(string format, IFormatProvider formatProvider)
     {

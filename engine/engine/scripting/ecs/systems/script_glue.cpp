@@ -284,6 +284,150 @@ auto internal_m2n_create_entity_from_prefab_key(const std::string& key) -> entt:
     return e.entity();
 }
 
+auto internal_m2n_create_entity_from_prefab_uid_with_parent(const hpp::uuid& uid, entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(uid);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_key_with_parent(const std::string& key, entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(key);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_uid_with_position(const hpp::uuid& uid, const math::vec3& position) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(uid);
+    auto e = ec.get_scene().instantiate(pfb);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+    }
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_key_with_position(const std::string& key, const math::vec3& position) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(key);
+    auto e = ec.get_scene().instantiate(pfb);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+    }
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_uid_with_position_parent(const hpp::uuid& uid,
+                                                                      const math::vec3& position,
+                                                                      entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(uid);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+    }
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_key_with_position_parent(const std::string& key,
+                                                                       const math::vec3& position,
+                                                                       entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(key);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+    }
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent(const hpp::uuid& uid,
+                                                                               const math::vec3& position,
+                                                                               const math::quat& rotation,
+                                                                               entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(uid);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+        comp->set_rotation_global(rotation);
+    }
+
+    return e.entity();
+}
+
+auto internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent(const std::string& key,
+                                                                                const math::vec3& position,
+                                                                                const math::quat& rotation,
+                                                                                entt::entity parent) -> entt::entity
+{
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto pfb = am.get_asset<prefab>(key);
+    auto parent_handle = get_entity_from_id(parent);
+    auto e = ec.get_scene().instantiate(pfb, parent_handle);
+
+    if(auto comp = e.try_get<transform_component>())
+    {
+        comp->set_position_global(position);
+        comp->set_rotation_global(rotation);
+    }
+
+    return e.entity();
+}
+
 auto internal_m2n_clone_entity(entt::entity id) -> entt::entity
 {
     auto e = get_entity_from_id(id);
@@ -4235,6 +4379,22 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               internal_call(internal_m2n_create_entity_from_prefab_uid));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key",
                               internal_call(internal_m2n_create_entity_from_prefab_key));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_parent));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_key_with_parent));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position",
+                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position",
+                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_parent));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position_parent));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent));
+        reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent",
+                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent));
         reg.add_internal_call("internal_m2n_clone_entity", internal_call(internal_m2n_clone_entity));
         reg.add_internal_call("internal_m2n_destroy_entity", internal_call(internal_m2n_destroy_entity));
         reg.add_internal_call("internal_m2n_destroy_entity_immediate",

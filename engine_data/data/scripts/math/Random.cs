@@ -28,7 +28,7 @@ public static class Random
             s_State[0] = 0x9E3779B97F4A7C15UL;
     }
 
-        /// <summary>
+    /// <summary>
     /// Seeds the generator using the current system time (ticks + process ID).
     /// </summary>
     public static void SeedWithTime()
@@ -88,36 +88,68 @@ public static class Random
         return result;
     }
 
+    /// <summary>
+    /// Returns a random 64-bit unsigned integer.
+    /// </summary>
+    /// <returns>A random 64-bit unsigned integer.</returns>
     public static ulong UInt64()
     {
         return xoshiro256p();
     }
 
+    /// <summary>
+    /// Returns a random float value between 0.0 and 1.0.
+    /// </summary>
+    /// <returns>A random float value in the range [0.0, 1.0).</returns>
     public static float Float()
     {
         return (UInt64() >> 40) * INCR_FLOAT;
     }
 
+    /// <summary>
+    /// Returns a random Vector3 with components in the range [0.0, 1.0).
+    /// </summary>
+    /// <returns>A random Vector3.</returns>
 	public static Vector3 Vec3()
 	{
 		return new Vector3(Float(), Float(), Float());
 	}
 
+    /// <summary>
+    /// Returns a random double value between 0.0 and 1.0.
+    /// </summary>
+    /// <returns>A random double value in the range [0.0, 1.0).</returns>
     public static double Double()
     {
         return (UInt64() >> 11) * INCR_DOUBLE;
     }
 
+    /// <summary>
+    /// Returns a random sign value: either 1.0f or -1.0f.
+    /// </summary>
+    /// <returns>1.0f or -1.0f.</returns>
 	public static float SignF()
 	{
 		return UInt64() % 2 == 0 ? 1.0f : -1.0f;
 	}
 
+    /// <summary>
+    /// Returns a random float value between minValue (inclusive) and maxValue (exclusive).
+    /// </summary>
+    /// <param name="minValue">The minimum value (inclusive).</param>
+    /// <param name="maxValue">The maximum value (exclusive).</param>
+    /// <returns>A random float value in the range [minValue, maxValue).</returns>
 	public static float Range(float minValue, float maxValue)
 	{
 		return Float() * (maxValue - minValue) + minValue;
 	}
 
+    /// <summary>
+    /// Returns a random integer value between minValue (inclusive) and maxValue (exclusive).
+    /// </summary>
+    /// <param name="minValue">The minimum value (inclusive).</param>
+    /// <param name="maxValue">The maximum value (exclusive).</param>
+    /// <returns>A random integer value in the range [minValue, maxValue).</returns>
 	public static int Range(int minValue, int maxValue)
     {
         return ((int)(UInt64()>>33) % (maxValue - minValue)) + minValue;
@@ -130,6 +162,9 @@ public static class Random
         return (int)(NextInner(range) + minValue);*/
     }
 
+    /// <summary>
+    /// Returns a random color with RGB components in the range [0.0, 1.0).
+    /// </summary>
     public static Color color
     {
         get
@@ -139,7 +174,9 @@ public static class Random
         
     }
 
-
+    /// <summary>
+    /// Returns a random point on the surface of a unit sphere.
+    /// </summary>
     public static Vector3 onUnitSphere
     {
         get
@@ -158,6 +195,9 @@ public static class Random
         
     }
 
+    /// <summary>
+    /// Returns a random point inside a unit sphere.
+    /// </summary>
     public static Vector3 insideUnitSphere
     {
         get
@@ -178,6 +218,9 @@ public static class Random
         
     }
 
+    /// <summary>
+    /// Returns a random point inside a unit circle.
+    /// </summary>
     public static Vector2 insideUnitCircle
     {
         get

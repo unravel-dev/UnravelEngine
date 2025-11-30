@@ -31,56 +31,6 @@ namespace unravel
 namespace
 {
 
-void focus_camera_on_bounds(entt::handle camera, const math::bsphere& bounds)
-{
-    auto& trans_comp = camera.get<transform_component>();
-    auto& camera_comp = camera.get<camera_component>();
-    const auto& cam = camera_comp.get_camera();
-
-    math::vec3 cen = bounds.position;
-
-    float aspect = cam.get_aspect_ratio();
-    float fov = cam.get_fov();
-    // Get the radius of a sphere circumscribing the bounds
-    float radius = bounds.radius;
-    // Get the horizontal FOV, since it may be the limiting of the two FOVs to properly
-    // encapsulate the objects
-    float hfov = math::degrees(2.0f * math::atan(math::tan(math::radians(fov) / 2.0f) * aspect));
-    // Use the smaller FOV as it limits what would get cut off by the frustum
-    float mfov = math::min(fov, hfov);
-    float dist = radius / (math::sin(math::radians(mfov) / 2.0f));
-
-    trans_comp.look_at(cen);
-    trans_comp.set_position_global(cen - dist * trans_comp.get_z_axis_global());
-    camera_comp.set_ortho_size(radius);
-    camera_comp.update(trans_comp.get_transform_global());
-}
-
-void focus_camera_on_bounds(entt::handle camera, const math::bbox& bounds)
-{
-    auto& trans_comp = camera.get<transform_component>();
-    auto& camera_comp = camera.get<camera_component>();
-    const auto& cam = camera_comp.get_camera();
-
-    math::vec3 cen = bounds.get_center();
-    math::vec3 size = bounds.get_dimensions();
-
-    float aspect = cam.get_aspect_ratio();
-    float fov = cam.get_fov();
-    // Get the radius of a sphere circumscribing the bounds
-    float radius = math::length(size) / 2.0f;
-    // Get the horizontal FOV, since it may be the limiting of the two FOVs to properly
-    // encapsulate the objects
-    float horizontal_fov = math::degrees(2.0f * math::atan(math::tan(math::radians(fov) / 2.0f) * aspect));
-    // Use the smaller FOV as it limits what would get cut off by the frustum
-    float mfov = math::min(fov, horizontal_fov);
-    float dist = radius / (math::sin(math::radians(mfov) / 2.0f));
-
-    trans_comp.look_at(cen);
-    trans_comp.set_position_global(cen - dist * trans_comp.get_z_axis_global());
-    camera_comp.set_ortho_size(radius);
-    camera_comp.update(trans_comp.get_transform_global());
-}
 
 // Add a shared helper to drive the timed camera focus transition
 void run_camera_focus_transition(entt::handle camera,
@@ -89,12 +39,8 @@ void run_camera_focus_transition(entt::handle camera,
                                  bool keep_rotation,
                                  float duration)
 {
-    if(duration <= 0.0f || !camera.all_of<transform_component, camera_component>())
+    if(!camera.all_of<transform_component, camera_component>())
     {
-        math::bsphere bs{};
-        bs.position = target_center;
-        bs.radius = radius;
-        ::unravel::focus_camera_on_bounds(camera, bs);
         return;
     }
 
@@ -184,7 +130,7 @@ void run_camera_focus_transition(entt::handle camera,
     auto ortho_action = seq::change_to(state->current_ortho_size, radius, seq_duration, state, ease);
 
     auto combined_action = seq::together(position_action, ortho_action);
-    combined_action.on_update.connect([camera, state, keep_rotation, target_center]()
+    combined_action.on_step.connect([camera, state, keep_rotation, target_center]()
     {
         if(camera.valid())
         {
@@ -201,20 +147,9 @@ void run_camera_focus_transition(entt::handle camera,
     });
 
     seq::scope::stop_all("camera_focus");
-    seq::start(combined_action, "camera_focus");
+    auto action_id = seq::start(combined_action, "camera_focus");
 }
 
-void focus_camera_on_bounds(entt::handle camera, const math::bsphere& bounds, float duration)
-{
-    run_camera_focus_transition(camera, bounds.position, bounds.radius, /*keep_rotation=*/true, duration);
-}
-
-void focus_camera_on_bounds(entt::handle camera, const math::bbox& bounds, float duration)
-{
-    const math::vec3 center = bounds.get_center();
-    const float radius = math::length(bounds.get_dimensions()) / 2.0f;
-    run_camera_focus_transition(camera, center, radius, /*keep_rotation=*/true, duration);
-}
 
 // Private recursive helper; never emits the 1-unit fallback
 void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
@@ -430,6 +365,17 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
     return true;
 }
 
+void defaults::focus_camera_on_bounds(entt::handle camera, const math::bsphere& bounds, float duration)
+{
+    run_camera_focus_transition(camera, bounds.position, bounds.radius, /*keep_rotation=*/true, duration);
+}
+
+void defaults::focus_camera_on_bounds(entt::handle camera, const math::bbox& bounds, float duration)
+{
+    const math::vec3 center = bounds.get_center();
+    const float radius = math::length(bounds.get_dimensions()) / 2.0f;
+    run_camera_focus_transition(camera, center, radius, /*keep_rotation=*/true, duration);
+}
 auto defaults::create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -694,14 +640,18 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
     
     {
         auto& transf_comp = camera.get<transform_component>();
-        transf_comp.set_position_local({10.0f, 6.6f, 10.0f});
-        transf_comp.rotate_by_euler_local({0.0f, 180.0f, 0.0f});
+        transf_comp.set_position_local({0.0f, 6.6f, 10.0f});
+        transf_comp.set_rotation_euler_local({20.0f, 180.0f, 0.0f});
         auto& camera_comp = camera.get<camera_component>();
         camera_comp.set_viewport_size(size);
     }
 
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
+
+        
+        auto& transf_comp = object.get<transform_component>();
+        transf_comp.set_rotation_euler_local({110.0f,  -10.0f, -35.0f});
 
         auto& light_comp = object.get_or_emplace<light_component>();
         auto light = light_comp.get_light();
@@ -743,7 +693,7 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
 
     if(focus_camera)
     {
-        ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object, false));
+        focus_camera_on_bounds(camera, calc_bounds_sphere_global(object, false), 0.0f);
     }
 
 
@@ -779,7 +729,7 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
 
         if(focus_camera)
         {
-            ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object));
+            focus_camera_on_bounds(camera, calc_bounds_sphere_global(object), 0.0f);
         }
     }
     
@@ -812,38 +762,12 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
 
     if(focus_camera)
     {
-        ::unravel::focus_camera_on_bounds(camera, calc_bounds_sphere_global(object));
+        focus_camera_on_bounds(camera, calc_bounds_sphere_global(object), 0.0f);
     }
 
     return asset_preview_result{object, camera};
 }
 
-
-void defaults::focus_camera_on_entities(entt::handle camera, hpp::span<const entt::handle> entities)
-{
-    if(camera.all_of<transform_component, camera_component>())
-    {
-        math::bbox bounds;
-
-        bool valid = false;
-        for(const auto& entity : entities)
-        {
-            if(!entity.valid())
-            {
-                return;
-            }
-            auto ebounds = calc_bounds_global(entity);
-            bounds.add_point(ebounds.min);
-            bounds.add_point(ebounds.max);
-
-            valid = true;
-        }
-        if(valid)
-        {
-            ::unravel::focus_camera_on_bounds(camera, bounds);
-        }
-    }
-}
 
 void defaults::focus_camera_on_entities(entt::handle camera, 
                                         hpp::span<const entt::handle> entities,
@@ -868,7 +792,7 @@ void defaults::focus_camera_on_entities(entt::handle camera,
         }
         if(valid)
         {
-            ::unravel::focus_camera_on_bounds(camera, bounds, duration);
+            focus_camera_on_bounds(camera, bounds, duration);
         }
     }
 }
