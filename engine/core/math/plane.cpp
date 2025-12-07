@@ -102,4 +102,19 @@ plane::plane(const vec4& p) : data(p)
 plane::plane(float _a, float _b, float _c, float _d) : data(_a, _b, _c, _d)
 {
 }
+
+auto plane::xy_plane() -> plane
+{
+    return plane(0.0f, 0.0f, 1.0f, 0.0f);
+}
+
+auto plane::xz_plane() -> plane
+{
+    return plane(0.0f, 1.0f, 0.0f, 0.0f);
+}
+
+auto plane::yz_plane() -> plane
+{
+    return plane(1.0f, 0.0f, 0.0f, 0.0f);
+}
 } // namespace math

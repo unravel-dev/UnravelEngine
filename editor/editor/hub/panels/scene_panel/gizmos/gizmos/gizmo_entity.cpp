@@ -297,6 +297,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             
             const auto shape = particle_emitter_comp.get_shape();
             const auto scale = particle_emitter_comp.get_emission_shape_scale();
+            const auto position = particle_emitter_comp.get_emission_shape_position();
             const auto direction = particle_emitter_comp.get_direction();
             const float shape_size = 1.0f; // Base size for visualization
             
@@ -304,7 +305,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             {
                 case EmitterShape::Sphere:
                 {
-                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
 
                     // Draw a wireframe sphere
@@ -318,7 +319,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 }
                 case EmitterShape::Hemisphere:
                 {
-                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
 
                     // Draw hemisphere (half sphere facing up)
@@ -384,7 +385,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 }
                 case EmitterShape::Circle:
                 {
-                    auto transform = math::scale(math::mat4(1.0f), scale);
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
 
                     // Draw a circle in the XZ plane
@@ -399,8 +400,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     // Draw a box
                     const float half_size = shape_size;
                     bx::Aabb box_aabb;
-                    box_aabb.min = {-half_size * scale.x, -half_size * scale.y, -half_size * scale.z};
-                    box_aabb.max = {half_size * scale.x, half_size * scale.y, half_size * scale.z};
+                    box_aabb.min = {-half_size * scale.x + position.x, -half_size * scale.y + position.y, -half_size * scale.z + position.z};
+                    box_aabb.max = {half_size * scale.x + position.x, half_size * scale.y + position.y, half_size * scale.z + position.z};
                     dd.encoder.draw(box_aabb);
                     break;
                 }
@@ -409,8 +410,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     // Draw a rectangle in the XZ plane
                     const float half_size = shape_size;
                     bx::Aabb rect_aabb;
-                    rect_aabb.min = {-half_size * scale.x, -0.01f, -half_size * scale.z};
-                    rect_aabb.max = {half_size * scale.x, 0.01f, half_size * scale.z};
+                    rect_aabb.min = {-half_size * scale.x + position.x, -0.01f, -half_size * scale.z + position.z};
+                    rect_aabb.max = {half_size * scale.x + position.x, 0.01f, half_size * scale.z + position.z};
                     dd.encoder.draw(rect_aabb);
                     break;
                 }

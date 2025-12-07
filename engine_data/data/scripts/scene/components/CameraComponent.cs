@@ -22,9 +22,25 @@ namespace Unravel.Core
             return internal_m2n_camera_screen_point_to_ray(owner, pos, out ray);
         }
 
+        public Vector3 ScreenPointToWorld(Vector2 pos)
+        {
+            return internal_m2n_camera_screen_point_to_world_2d(owner, pos);
+        }
+
+        public Vector3 ScreenPointToWorld(Vector3 pos)
+        {
+            return internal_m2n_camera_screen_point_to_world(owner, pos);
+        }
+
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_camera_screen_point_to_ray(Entity eid, Vector2 pos, out Ray ray);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_camera_screen_point_to_world_2d(Entity eid, Vector2 pos);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_camera_screen_point_to_world(Entity eid, Vector3 pos);
     }
 }
 

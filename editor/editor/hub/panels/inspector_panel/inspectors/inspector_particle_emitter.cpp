@@ -113,6 +113,88 @@ auto inspector_particle_emitter_component::inspect(rtti::context& ctx,
         ImGui::EndDisabled();
     }
 
+
+
+
+    if(!is_playing || is_paused)
+    {
+        if(ImGui::Button("Play(S)"))
+        {
+            data.play();
+            data.play_sub_emitters();
+            result.changed = true;
+        }
+
+        ImGui::SetItemTooltip("Start particle emission and simulation (with sub emitters)");
+    }
+    else
+    {
+        ImGui::BeginDisabled();
+        ImGui::Button("Play(S)");
+        ImGui::EndDisabled();
+    }
+    
+    ImGui::SameLine();
+    
+    // Pause/Resume button
+    if(is_playing && !is_paused)
+    {
+        if(ImGui::Button("Pause(S)"))
+        {
+            data.pause();
+            data.pause_sub_emitters();
+            result.changed = true;
+        }
+        ImGui::SetItemTooltip("Pause particle simulation (particles remain visible) (with sub emitters)");
+    }
+    else if(is_playing && is_paused)
+    {
+        if(ImGui::Button("Resume(S)"))
+        {
+            data.resume();
+            data.resume_sub_emitters();
+            result.changed = true;
+        }
+        ImGui::SetItemTooltip("Resume particle simulation from paused state (with sub emitters)");
+    }
+    else
+    {
+        ImGui::BeginDisabled();
+        ImGui::Button("Pause(S)");
+        ImGui::EndDisabled();
+    }
+    
+    ImGui::SameLine();
+    
+    // Stop button
+    if(is_playing)
+    {
+        if(ImGui::Button("Stop(S)"))
+        {
+            data.stop();
+            data.stop_sub_emitters();
+            result.changed = true;
+        }
+        ImGui::SetItemTooltip("Stop emission and clear all particles (with sub emitters)");
+
+        ImGui::SameLine();
+        if(ImGui::Button("Stop and Reset(S)"))
+        {
+            data.stop_and_reset();
+            data.stop_and_reset_sub_emitters();
+            result.changed = true;
+        }
+        ImGui::SetItemTooltip("Stop emission and clear all particles (with sub emitters)");
+    }
+    else
+    {
+        ImGui::BeginDisabled();
+        ImGui::Button("Stop(S)");
+        ImGui::SameLine();
+        ImGui::Button("Stop and Reset(S)");
+        ImGui::EndDisabled();
+    }
+
     result |= inspect_var_properties(ctx, var, var_proxy, info, custom);
     return result;
 }

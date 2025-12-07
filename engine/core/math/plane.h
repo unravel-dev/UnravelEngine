@@ -34,6 +34,26 @@ struct plane
      */
     friend auto operator*(float s, const plane& p) -> plane;
 
+    /**
+     * @brief XY plane.
+     *
+     * @return A new plane with the XY plane.
+     */
+    static auto xy_plane() -> plane;
+
+    /**
+     * @brief XZ plane.
+     *
+     * @return A new plane with the XZ plane.
+     */
+    static auto xz_plane() -> plane;
+    
+    /**
+     * @brief YZ plane.
+     *
+     * @return A new plane with the YZ plane.
+     */
+    static auto yz_plane() -> plane;
     //-------------------------------------------------------------------------
     // Constructors & Destructors
     //-------------------------------------------------------------------------

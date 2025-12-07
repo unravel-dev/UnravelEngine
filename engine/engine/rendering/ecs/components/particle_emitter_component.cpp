@@ -1,7 +1,7 @@
 #include "particle_emitter_component.h"
 #include "engine/rendering/particles/ps/particle_system.h"
 #include "math/transform.hpp"
-#include <engine/ecs/components/transform_component.h>
+#include <engine/ecs/ecs_utils.h>
 #include <logging/logging.h>
 #include <engine/rendering/material.h>
 
@@ -177,6 +177,16 @@ auto particle_emitter_component::get_force_over_lifetime() const -> math::vec3
     return uniforms_.m_forceOverLifetime;
 }
 
+void particle_emitter_component::set_emission_shape_position(const math::vec3& position)
+{
+    uniforms_.m_emissionShapePosition = position;
+}
+
+auto particle_emitter_component::get_emission_shape_position() const -> math::vec3
+{
+    return uniforms_.m_emissionShapePosition;
+}
+
 void particle_emitter_component::set_emission_shape_scale(const math::vec3& scale)
 {
     uniforms_.m_emissionShapeScale = scale;
@@ -282,6 +292,16 @@ auto particle_emitter_component::get_scale_gradient() const -> const math::gradi
     return uniforms_.m_scaleGradient;
 }
 
+void particle_emitter_component::set_initial_scale_3d(const math::vec3& scale)
+{
+    uniforms_.m_initialScale3D = scale;
+}
+
+auto particle_emitter_component::get_initial_scale_3d() const -> math::vec3
+{
+    return uniforms_.m_initialScale3D;
+}
+
 void particle_emitter_component::set_opacity(float opacity)
 {
     uniforms_.m_opacity = math::clamp(opacity, 0.0f, 1.0f);
@@ -328,6 +348,66 @@ void particle_emitter_component::resume()
     }
 }
 
+void particle_emitter_component::play_sub_emitters()
+{
+    auto owner = get_owner();
+    if(owner.valid())
+    {
+        for_each_component_in_children<particle_emitter_component>(owner, [](particle_emitter_component& emitter)
+        {
+            emitter.play();
+        });
+    }
+}
+
+void particle_emitter_component::stop_sub_emitters()
+{
+    auto owner = get_owner();
+    if(owner.valid())
+    {
+        for_each_component_in_children<particle_emitter_component>(owner, [](particle_emitter_component& emitter)
+        {
+            emitter.stop();
+        });
+    }
+}
+
+void particle_emitter_component::stop_and_reset_sub_emitters()
+{
+    auto owner = get_owner();
+    if(owner.valid())
+    {
+        for_each_component_in_children<particle_emitter_component>(owner, [](particle_emitter_component& emitter)
+        {
+            emitter.stop_and_reset();
+        });
+    }
+}
+
+void particle_emitter_component::pause_sub_emitters()
+{
+    auto owner = get_owner();
+    if(owner.valid())
+    {
+        for_each_component_in_children<particle_emitter_component>(owner, [](particle_emitter_component& emitter)
+        {
+            emitter.pause();
+        });
+    }
+}
+
+void particle_emitter_component::resume_sub_emitters()
+{
+    auto owner = get_owner();
+    if(owner.valid())
+    {
+        for_each_component_in_children<particle_emitter_component>(owner, [](particle_emitter_component& emitter)
+        {
+            emitter.resume();
+        });
+    }
+}
+
 auto particle_emitter_component::is_playing() const -> bool
 {
     return uniforms_.m_playing;
@@ -346,6 +426,17 @@ void particle_emitter_component::set_loop(bool loop)
 auto particle_emitter_component::is_loop() const -> bool
 {
     return uniforms_.m_loop;
+}
+
+void particle_emitter_component::set_start_delay(std::chrono::duration<float> delay)
+{
+    uniforms_.m_startDelay = math::max(0.0f, delay.count());
+    reset_emitter();
+}
+
+auto particle_emitter_component::get_start_delay() const -> std::chrono::duration<float>
+{
+    return std::chrono::duration<float>(uniforms_.m_startDelay);
 }
 
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
@@ -405,6 +496,56 @@ auto particle_emitter_component::get_texture() const -> const asset_handle<gfx::
         return texture_;
     }
     return material::default_color_map();
+}
+
+void particle_emitter_component::set_texture_mode(TextureMode::Enum mode)
+{
+    uniforms_.m_textureMode = mode;
+}
+
+auto particle_emitter_component::get_texture_mode() const -> TextureMode::Enum
+{
+    return uniforms_.m_textureMode;
+}
+
+void particle_emitter_component::set_render_mode(RenderMode::Enum mode)
+{
+    uniforms_.m_renderMode = mode;
+}
+
+auto particle_emitter_component::get_render_mode() const -> RenderMode::Enum
+{
+    return uniforms_.m_renderMode;
+}
+
+void particle_emitter_component::set_texture_sheet_tiles(math::vec2 tiles)
+{
+    uniforms_.m_texSheetTiles = math::vec2(math::max(tiles.x, 1.0f), math::max(tiles.y, 1.0f));
+}
+
+auto particle_emitter_component::get_texture_sheet_tiles() const -> math::vec2
+{
+    return uniforms_.m_texSheetTiles;
+}
+
+void particle_emitter_component::set_texture_sheet_cycles(float cycles)
+{
+    uniforms_.m_texSheetCycles = math::max(cycles, 0.0f);
+}
+
+auto particle_emitter_component::get_texture_sheet_cycles() const -> float
+{
+    return uniforms_.m_texSheetCycles;
+}
+
+void particle_emitter_component::set_texture_sheet_randomize(bool randomize)
+{
+    uniforms_.m_texSheetRandomize = randomize;
+}
+
+auto particle_emitter_component::get_texture_sheet_randomize() const -> bool
+{
+    return uniforms_.m_texSheetRandomize;
 }
 
 

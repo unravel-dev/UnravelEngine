@@ -263,8 +263,17 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bo
     {
         if(parent && !entities.empty())
         {
-            auto trans_comp = entities[0].get<transform_component>();
-            trans_comp.set_parent(parent, true);
+            auto e = entities[0];
+            if(e)
+            {
+                auto trans_comp = e.get<transform_component>();
+                trans_comp.set_parent(parent, false);
+            }
+            else
+            {
+                APPLOG_ERROR("Entity not found in instantiate callback");
+            }
+            
         }
 
         if(call_callbacks)
@@ -272,7 +281,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bo
             on_load_callback(entities);
         }
     };
-    push_on_load_callbacks({on_load_callback});
+    push_on_load_callbacks({load_callback_override});
     auto e = load_from_prefab(pfb, *registry);
 
     if(call_callbacks)

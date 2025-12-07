@@ -7,6 +7,7 @@
 #include <engine/assets/asset_handle.h>
 #include <entt/entt.hpp>
 #include <entt/signal/sigh.hpp>
+#include <functional>
 
 using namespace entt::literals;
 

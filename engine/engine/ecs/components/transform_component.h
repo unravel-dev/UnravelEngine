@@ -548,9 +548,6 @@ private:
      */
     auto remove_child(const entt::handle& child, transform_component& child_transform) -> bool;
 
-    /// The sort index for sorting children.
-    int32_t sort_index_{-1};
-
     /// The parent entity handle.
     entt::handle parent_{};
     /// The vector of child entity handles.

@@ -47,7 +47,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
 
     particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
-
+    particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
 
     return true;
 }
@@ -229,7 +229,7 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
     stats_.drawn_particles = 0;
     stats_.drawn_particles_batches = 0;
 
-    if(particle_program_instanced_ && particle_program_instanced_->begin())
+    if(particle_program_instanced_ && particle_program_instanced_mask_ && particle_program_instanced_->begin() && particle_program_instanced_mask_->begin())
     {
         // Render particles using the particle system
         auto cam_pos = camera.get_position();
@@ -287,7 +287,7 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
                     {
                         auto texture = current_texture.get()->native_handle();
                         stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
-                                        pass.id, particle_program_instanced_->native_handle(), 
+                                        pass.id, particle_program_instanced_->native_handle(), particle_program_instanced_mask_->native_handle(), 
                                         cam_view, cam_pos, texture);
                         stats_.drawn_particles_batches++;
                     }
@@ -313,13 +313,14 @@ void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view&
             {
                 auto texture = current_texture.get()->native_handle();
                 stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
-                                pass.id, particle_program_instanced_->native_handle(), 
+                                pass.id, particle_program_instanced_->native_handle(), particle_program_instanced_mask_->native_handle(), 
                                 cam_view, cam_pos, texture);
                 stats_.drawn_particles_batches++;
             }
         }
 
         particle_program_instanced_->end();
+        particle_program_instanced_mask_->end();
     }
 }
 

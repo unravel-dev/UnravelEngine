@@ -72,6 +72,29 @@ struct SimulationSpace
 	};
 };
 
+struct TextureMode
+{
+	enum Enum
+	{
+		MultiChannel, // Standard RGBA texture (default)
+		Mask,         // Black/white mask texture (black = transparent, white = opaque)
+
+		Count
+	};
+};
+
+struct RenderMode
+{
+	enum Enum
+	{
+		Billboard,        // Always faces camera (default)
+		HorizontalBillboard,       // Rotates around Y axis only, stays horizontal (parallel to ground)
+		VerticalBillboard,         // Rotates around X/Z axis, stays vertical (perpendicular to ground)
+
+		Count
+	};
+};
+
 struct EmitterUniforms
 {
 	void reset();
@@ -84,14 +107,16 @@ struct EmitterUniforms
 	math::transform m_transform;
 	math::transform m_prevTransform; // Previous transform for motion interpolation (set internally)
 
-	// Emission shape scale (separate from transform scale for flexibility)
-	math::vec3 m_emissionShapeScale; // 3D scale for the emission shape (x, y, z)
+	// Emission shape properties (separate from transform for flexibility)
+	math::vec3 m_emissionShapePosition; // Position offset for the emission shape (relative to transform)
+	math::vec3 m_emissionShapeScale;    // 3D scale for the emission shape (x, y, z)
 
 	// Spawn location determines where particles spawn within the emission shape
 	EmitterSpawnLocation::Enum m_spawnLocation; // Inside or Surface
 
 	math::gradient<frange_t> m_velocityGradient; // Velocity gradient over particle lifetime
 	math::gradient<frange_t> m_scaleGradient;    // Scale gradient over particle lifetime
+	math::vec3 m_initialScale3D; // 3D particle scale (allows rectangular particles, default: 1,1,1)
 	float m_lifetime;
 	float m_gravityScale;
 	float m_particlesPerSecond; // Emission rate in particles per second
@@ -114,10 +139,22 @@ struct EmitterUniforms
 	bool m_playing; // Whether the emitter is currently playing/active
 	bool m_paused;  // Whether the emitter is paused (playing but with dt = 0)
 	bool m_loop;    // Whether the emitter loops continuously (true) or emits only once (false)
+	float m_startDelay; // Delay before particle emission starts (in seconds, similar to Unity's start delay)
 
 	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 
 	bgfx::TextureHandle m_texture;
+	TextureMode::Enum m_textureMode; // Texture mode (MultiChannel or Mask)
+	RenderMode::Enum m_renderMode; // Render mode (Billboard, Horizontal, or Vertical)
+	
+	// Billboard vectors (calculated from render mode and camera)
+	math::vec3 m_billboardRight; // Right vector for billboarding
+	math::vec3 m_billboardUp;    // Up vector for billboarding
+	
+	// Texture sheet animation parameters
+	math::vec2 m_texSheetTiles; // Number of tiles in the texture sheet grid (X columns, Y rows)
+	float m_texSheetCycles;    // Number of times the animation loops over particle lifetime (0 = disabled)
+	bool m_texSheetRandomize;  // Start each particle at a random frame in the animation
 };
 
 ///
@@ -148,18 +185,18 @@ uint32_t psGetNumParticles(EmitterHandle _handle);
 void psDestroyEmitter(EmitterHandle _handle);
 
 ///
-void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
+void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _programMultiChannel, bgfx::ProgramHandle _programMask, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
 
 ///
-/// Render multiple emitters in a single batched draw call (all must use the same texture)
+/// Render multiple emitters in batched draw calls grouped by texture mode
 /// This is much more efficient than calling psRenderEmitter multiple times as it:
-/// - Combines all particles into a single instance buffer
+/// - Combines particles with the same texture mode into batches
 /// - Sorts all particles globally for proper alpha blending
-/// - Uses only one draw call instead of multiple
+/// - Uses minimal draw calls (one per texture mode)
 /// 
 /// Example usage:
 ///   EmitterHandle handles[] = {fire_emitter, smoke_emitter, spark_emitter};
-///   psRenderEmitterBatch(handles, 3, view, program, viewMatrix, cameraPos, fireTexture);
-uint32_t psRenderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, uint8_t _view, bgfx::ProgramHandle _program, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
+///   psRenderEmitterBatch(handles, 3, view, programMulti, programMask, viewMatrix, cameraPos, fireTexture);
+uint32_t psRenderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, uint8_t _view, bgfx::ProgramHandle _programMultiChannel, bgfx::ProgramHandle _programMask, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
 
 #endif // PARTICLE_SYSTEM_H_HEADER_GUARD

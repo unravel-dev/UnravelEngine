@@ -620,7 +620,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             uint64_t frame_count{};
         };
 
-        if(ev.is_playing)
+        if(ev.is_playing && !ev.is_paused)
         {
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();

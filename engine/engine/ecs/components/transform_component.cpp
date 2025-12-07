@@ -4,6 +4,7 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <vector>
 
 namespace unravel
 {
@@ -701,54 +702,16 @@ auto transform_component::get_parent() const noexcept -> entt::handle
 
 void transform_component::attach_child(const entt::handle& child, transform_component& child_transform)
 {
-    child_transform.sort_index_ = int32_t(children_.size());
-    children_.push_back(child);
-    sort_children();
+    children_.emplace_back(child);
     set_dirty(is_dirty());
 }
 
 auto transform_component::remove_child(const entt::handle& child, transform_component& child_transform) -> bool
 {
-    auto iter = std::remove_if(std::begin(children_),
-                               std::end(children_),
-                               [&child](const auto& other)
+    return std::erase_if(children_, [&child](const auto& other)
                                {
                                    return child == other;
-                               });
-    if(iter == std::end(children_))
-    {
-        return false;
-    }
-
-    assert(std::distance(iter, std::end(children_)) == 1);
-
-    auto removed_idx = child_transform.sort_index_;
-
-    children_.erase(iter, std::end(children_));
-
-    // shift all bigger sort indices
-    for(auto& c : children_)
-    {
-        auto& sort_idx = c.get<transform_component>().sort_index_;
-        if(sort_idx > removed_idx)
-        {
-            sort_idx--;
-        }
-    }
-    child_transform.sort_index_ = {-1};
-
-    return true;
-}
-
-void transform_component::sort_children() noexcept
-{
-    std::sort(children_.begin(),
-              children_.end(),
-              [](const auto& lhs, const auto& rhs)
-              {
-                  return lhs.template get<transform_component>().sort_index_ <
-                         rhs.template get<transform_component>().sort_index_;
-              });
+                               }) > 0;
 }
 
 void transform_component::apply_transform(const math::transform& tr) noexcept

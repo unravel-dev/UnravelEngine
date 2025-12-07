@@ -17,7 +17,7 @@
 #include <vector>
 #include <algorithm>
 #include <engine/profiler/profiler.h>
-
+#include <core/logging/logging.h>
 // New instanced particle vertex structure (just position and UV)
 struct ParticleVertex
 {
@@ -59,8 +59,9 @@ void EmitterUniforms::reset()
     m_transform = math::transform(); // Identity transform
     m_prevTransform = math::transform(); // Identity transform
     
-    // Initialize emission shape scale
-    m_emissionShapeScale = math::vec3(1.0f, 1.0f, 1.0f); // Default: no scaling
+    // Initialize emission shape properties
+    m_emissionShapePosition = math::vec3(0.0f, 0.0f, 0.0f); // Default: no offset
+    m_emissionShapeScale = math::vec3(1.0f, 1.0f, 1.0f);    // Default: no scaling
 
     // Initialize spawn location
     m_spawnLocation = EmitterSpawnLocation::Inside; // Default: spawn inside shape
@@ -82,6 +83,8 @@ void EmitterUniforms::reset()
     m_scaleGradient = math::gradient<frange_t>();
     m_scaleGradient.add_point(frange_t(0.1f, 0.2f), 0.0f); // Start scale range
     m_scaleGradient.add_point(frange_t(0.3f, 0.4f), 1.0f); // End scale range
+    
+    m_initialScale3D = math::vec3(1.0f, 1.0f, 1.0f); // Default: uniform scale (square particles)
 
     m_lifetime = 1.0f;
 
@@ -110,14 +113,28 @@ void EmitterUniforms::reset()
     m_playing = true;  // Default: playing
     m_paused = false;  // Default: not paused
     m_loop = true;     // Default: loop continuously
+    m_startDelay = 0.0f; // Default: no start delay
 
     m_easePos = bx::Easing::Linear; // Only position easing remains
+    
+    // Initialize texture mode
+    m_textureMode = TextureMode::MultiChannel; // Default: standard RGBA texture
+    
+    // Initialize texture sheet animation
+    m_texSheetTiles = math::vec2(1.0f, 1.0f); // Default: 1x1 grid (no animation)
+    m_texSheetCycles = 0.0f;   // Default: 0 (disabled)
+    m_texSheetRandomize = false; // Default: all particles start at frame 0
+    
+    m_renderMode = RenderMode::Billboard; // Default: always face camera
+    m_billboardRight = math::vec3(1.0f, 0.0f, 0.0f); // Will be updated from camera
+    m_billboardUp = math::vec3(0.0f, 1.0f, 0.0f);    // Will be updated from camera
+    
     // Generate LUTs for all gradients to optimize sampling performance
     m_velocityGradient.generate_lut(256);
     m_colorGradient.generate_lut(256);
     m_scaleGradient.generate_lut(256);
     m_colorBySpeedGradient.generate_lut(256);
-    m_lifetimeByEmitterSpeedGradient.generate_lut(256);
+    m_lifetimeByEmitterSpeedGradient.generate_lut(1024);
 }
 
 namespace ps
@@ -132,11 +149,16 @@ struct Particle
     // Cached computed properties (updated during update, used during render)
     math::color color; // Final color with all effects applied
 	math::vec3 position;
-    float scale;    // Final scale with all effects applied
+    float scale;    // Final uniform scale with all effects applied
     float cached_speed; // Cached particle speed to avoid redundant calculations
 
     float life;
     float lifeSpan;
+    
+    // Texture sheet animation UV data (calculated during update)
+    math::vec2 uv_offset;
+    math::vec2 uv_scale;
+    float texsheet_random_offset; // Random offset [0-1] for texture sheet animation start frame
 };
 
 struct ParticleSort
@@ -158,8 +180,65 @@ struct Emitter
         total_particles_spawned_ = 0;
         aabb_ = math::bbox(math::vec3(-1.0f), math::vec3(1.0f));
         first_update_ = true;
+        start_delay_elapsed_ = 0.0f;
 
         rng_.reset();
+        
+        // Reset temporal position buffer
+        temporal_position_buffer_.clear();
+        temporal_time_buffer_.clear();
+        
+        texture_mode_ = TextureMode::MultiChannel;
+        render_mode_ = RenderMode::Billboard;
+        billboard_right_ = math::vec3(1.0f, 0.0f, 0.0f);
+        billboard_up_ = math::vec3(0.0f, 1.0f, 0.0f);
+        particle_scale_3d_ = math::vec3(1.0f, 1.0f, 1.0f);
+    }
+    
+    // Temporal position buffer for smooth emitter speed calculation
+    // This handles physics fixed timestep discontinuities
+    static constexpr size_t TEMPORAL_BUFFER_SIZE = 8;
+    
+    void update_temporal_buffer(const math::vec3& position, float dt)
+    {
+        // Add new position and time to the buffer
+        temporal_position_buffer_.push_back(position);
+        temporal_time_buffer_.push_back(dt);
+        
+        // Keep buffer size limited
+        if(temporal_position_buffer_.size() > TEMPORAL_BUFFER_SIZE)
+        {
+            temporal_position_buffer_.erase(temporal_position_buffer_.begin());
+            temporal_time_buffer_.erase(temporal_time_buffer_.begin());
+        }
+    }
+    
+    float calculate_smoothed_emitter_speed(float max_speed) const
+    {
+        // If buffer isn't filled yet, assume max speed to prevent lifetime inconsistencies
+        // This ensures particles spawned early have shorter lifetimes matching later frames
+        if(temporal_position_buffer_.size() < TEMPORAL_BUFFER_SIZE)
+        {
+            return max_speed;
+        }
+        
+        // Calculate total distance and time over the buffer
+        float total_distance = 0.0f;
+        float total_time = 0.0f;
+        
+        for(size_t i = 1; i < temporal_position_buffer_.size(); ++i)
+        {
+            const math::vec3 delta = temporal_position_buffer_[i] - temporal_position_buffer_[i - 1];
+            total_distance += math::length(delta);
+            total_time += temporal_time_buffer_[i];
+        }
+        
+        if(total_time > 0.0f)
+        {
+            return total_distance / total_time;
+        }
+        
+        return 0.0f;
     }
 
     // Helper function to calculate approximate particle speed
@@ -213,7 +292,7 @@ struct Emitter
         particle.color = sampledColor;
         particle.color.value.a *= uniforms_.m_opacity;
 
-        // Calculate scale with system scaling
+        // Calculate uniform scale with system scaling
         float scale = math::mix(particle.scale_start, particle.scale_end, particle.life) * avgSystemScale;
 
         // Apply size by speed if enabled
@@ -249,12 +328,50 @@ struct Emitter
 			// Already in world space
 			particle.position = localPos;
 		}
+		
+		// Calculate texture sheet animation UV offset and scale
+		if(uniforms_.m_texSheetCycles > 0.0f && uniforms_.m_texSheetTiles.x > 0 && uniforms_.m_texSheetTiles.y > 0)
+		{
+			const float uvScaleX = 1.0f / float(uniforms_.m_texSheetTiles.x);
+			const float uvScaleY = 1.0f / float(uniforms_.m_texSheetTiles.y);
+			const uint32_t totalFrames = uniforms_.m_texSheetTiles.x * uniforms_.m_texSheetTiles.y;
+			
+			// Calculate current frame based on particle life and cycles
+			float animProgress = particle.life * uniforms_.m_texSheetCycles;
+			
+			// Add random offset if randomization is enabled
+			if(uniforms_.m_texSheetRandomize)
+			{
+				animProgress += particle.texsheet_random_offset;
+			}
+			
+			animProgress = math::fmod(animProgress, 1.0f);
+			const uint32_t currentFrame = uint32_t(animProgress * float(totalFrames)) % totalFrames;
+			
+			// Calculate tile position in grid (row-major order)
+			const uint32_t tileX = currentFrame % uint32_t(uniforms_.m_texSheetTiles.x);
+			const uint32_t tileY = currentFrame / uint32_t(uniforms_.m_texSheetTiles.x);
+			
+			// Store UV offset and scale
+			particle.uv_offset = math::vec2(float(tileX) * uvScaleX, float(tileY) * uvScaleY);
+			particle.uv_scale = math::vec2(uvScaleX, uvScaleY);
+		}
+		else
+		{
+			// No animation - use full texture
+			particle.uv_offset = math::vec2(0.0f, 0.0f);
+			particle.uv_scale = math::vec2(1.0f, 1.0f);
+		}
     }
 
     void update(EmitterUniforms* _uniforms, float _dt)
     {
 		auto& uniforms_ = *_uniforms;
 		
+		// Cache texture mode, render mode, and 3D scale for rendering
+		texture_mode_ = uniforms_.m_textureMode;
+		render_mode_ = uniforms_.m_renderMode;
+		particle_scale_3d_ = uniforms_.m_initialScale3D;
 
         if(first_update_)
         {
@@ -269,6 +386,17 @@ struct Emitter
         if(was_playing != playing_ || was_loop != loop_)
         {
             total_particles_spawned_ = 0;
+            // Reset start delay when emitter starts playing
+            if(playing_ && !was_playing)
+            {
+                start_delay_elapsed_ = 0.0f;
+            }
+        }
+        
+        // Update start delay elapsed time if playing and not paused
+        if(playing_ && !uniforms_.m_paused)
+        {
+            start_delay_elapsed_ += _dt;
         }
 
 		
@@ -277,6 +405,10 @@ struct Emitter
 			// If paused, set delta time to 0 (particles don't advance but remain visible)
 			_dt = 0.0f;
 		}
+		
+		// Update temporal position buffer for smooth emitter speed calculation
+		const math::vec3 currentPos = uniforms_.m_transform.get_position();
+		update_temporal_buffer(currentPos, _dt);
 
         if(!uniforms_.m_loop && total_particles_spawned_ >= max_particles_)
         {
@@ -331,7 +463,7 @@ struct Emitter
 			updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
 			
 			// Add particle position with some padding for scale
-			math::vec3 padding(particle.scale * 0.5f);
+			math::vec3 padding( particle_scale_3d_ * particle.scale * 0.5f);
 			aabb.add_point(particle.position - padding);
 			aabb.add_point(particle.position + padding);
 		}   
@@ -340,10 +472,13 @@ struct Emitter
 
 		if(0.0f < uniforms_.m_emissionLifetime && uniforms_.m_playing)
 		{
-			// For looping emitters, always spawn
-			// For non-looping emitters, only spawn if initial emission hasn't completed
+			// Check if start delay has elapsed
+			bool start_delay_elapsed = start_delay_elapsed_ >= uniforms_.m_startDelay;
+			
+			// For looping emitters, always spawn (after start delay)
+			// For non-looping emitters, only spawn if initial emission hasn't completed (after start delay)
             bool initial_emission_complete = total_particles_spawned_ >= max_particles_;
-			if(uniforms_.m_loop || !initial_emission_complete)
+			if(start_delay_elapsed && (uniforms_.m_loop || !initial_emission_complete))
 			{
 				spawn(uniforms_, aabb,_dt);
 			}
@@ -422,14 +557,12 @@ struct Emitter
             (uniforms_.m_lifetimeByEmitterSpeedRange.max > uniforms_.m_lifetimeByEmitterSpeedRange.min);
         float emitterSpeed = 0.0f;
         float lifetimeMultiplier = 1.0f;
-        if(hasLifetimeByEmitterSpeed && _dt > 0.0f)
+        if(hasLifetimeByEmitterSpeed)
         {
-            // Calculate motion delta for emitter speed (now unified)
-            const math::vec3 currentPos = uniforms_.m_transform.get_position();
-            const math::vec3 prevPos = uniforms_.m_prevTransform.get_position();
-            
-            const math::vec3 motionDelta = currentPos - prevPos;
-            emitterSpeed = math::length(motionDelta) / _dt; // Speed in units per second
+            // Use smoothed emitter speed from temporal buffer
+            // This handles physics fixed timestep discontinuities gracefully
+            // Pass max speed so buffer assumes max speed until filled, preventing lifetime inconsistencies at spawn
+            emitterSpeed = calculate_smoothed_emitter_speed(uniforms_.m_lifetimeByEmitterSpeedRange.max);
 
             // Calculate speed factor and sample gradient
             const float speedFactor = 
@@ -446,7 +579,7 @@ struct Emitter
         // Pre-calculate common transformation components (optimization)
         const math::vec3 systemScale = effectiveScale;
         const math::vec3 emissionShapeScale = effectiveEmissionShapeScale;
-        const float lifeSpan = uniforms_.m_lifetime;
+        const float lifeSpan = uniforms_.m_lifetime * lifetimeMultiplier;
         const float lifeSpanSquared = lifeSpan * lifeSpan;
         math::vec3 gravityVector = math::vec3(0.0f, -9.81f * uniforms_.m_gravityScale * lifeSpanSquared, 0.0f);
         math::vec3 forceOverLifetimeVector = uniforms_.m_forceOverLifetime * lifeSpanSquared;
@@ -458,9 +591,18 @@ struct Emitter
         }
         const float velocityDampingFactor = (1.0f - uniforms_.m_velocityDamping);
 
-        // Calculate motion delta for temporal emission gap handling
+        // Calculate motion delta for temporal emission gap handling using temporal buffer
         const math::vec3 currentPos = effectivePosition;
-        const math::vec3 prevPos = uniforms_.m_prevTransform.get_position();
+        math::vec3 prevPos = uniforms_.m_prevTransform.get_position();
+        
+        // Use temporal buffer to get a better previous position estimate
+        // This helps when physics doesn't update every frame
+        if(temporal_position_buffer_.size() >= 2)
+        {
+            // Use the position from 2 frames ago for better interpolation
+            const size_t prevIndex = temporal_position_buffer_.size() - 2;
+            prevPos = temporal_position_buffer_[prevIndex];
+        }
 
         const math::vec3 up = math::vec3(0.0f, 1.0f, 0.0f);
 
@@ -613,7 +755,8 @@ struct Emitter
             }
 
             // Apply emission shape scale (use pre-calculated value)
-            pos = pos * emissionShapeScale;
+            pos = (uniforms_.m_emissionShapePosition + pos) * emissionShapeScale;
+            
 
             math::vec3 dir;
             switch(direction_)
@@ -648,9 +791,15 @@ struct Emitter
                 dir *= -1.0f;
             }
 
-            particle->life = 0.0f; // Always start at 0 for new particles
-            particle->lifeSpan = lifeSpan * lifetimeMultiplier; // Apply emitter speed-based lifetime modifier
+            particle->lifeSpan = lifeSpan;
+            particle->life = 0.0f;
 
+            // Fast-forward life so the particle starts at the time it would have been
+            // emitted within this frame. This keeps temporal interpolation smooth
+            // even when lifetime is scaled by emitter speed.
+            // const float spawnTimeOffset = emissionPhase * _dt;
+            // const float invLifeSpan = particle->lifeSpan > 0.0f ? 1.0f / particle->lifeSpan : 0.0f;
+            // particle->life = bx::clamp(spawnTimeOffset * invLifeSpan, 0.0f, 1.0f);
             // Calculate interpolated emitter position for temporal emission gap handling
             math::vec3 interpolatedEmitterPos = math::mix(prevPos, currentPos, emissionPhase);
 
@@ -687,12 +836,15 @@ struct Emitter
             const frange_t endScaleRange = uniforms_.m_scaleGradient.sample(1.0f);
             particle->scale_start = math::mix(startScaleRange.min, startScaleRange.max, bx::frnd(&rng_));
             particle->scale_end = math::mix(endScaleRange.min, endScaleRange.max, bx::frnd(&rng_));
+            
+            // Initialize texture sheet animation random offset
+            particle->texsheet_random_offset = bx::frnd(&rng_);
 
             // Calculate properties immediately for new particles
             updateParticleProperties(uniforms_, *particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
 
 			// Add particle position with some padding for scale
-			math::vec3 padding(particle->scale * 0.5f);
+			math::vec3 padding((particle->scale * particle_scale_3d_) * 0.5f);
 			aabb.add_point(particle->position - padding);
 			aabb.add_point(particle->position + padding);
         }
@@ -715,8 +867,26 @@ struct Emitter
 
     bool playing_;
     bool loop_;
+    float start_delay_elapsed_; // Elapsed time since emitter started playing (for start delay)
 
     bool first_update_; // Track if this is the first update to avoid interpolation
+    
+    // Temporal position buffer for smooth emitter speed calculation
+    std::vector<math::vec3> temporal_position_buffer_;
+    std::vector<float> temporal_time_buffer_;
+    
+    // Cached texture mode for rendering (determines which shader to use)
+    TextureMode::Enum texture_mode_;
+    
+    // Cached render mode for rendering
+    RenderMode::Enum render_mode_;
+    
+    // Cached billboard vectors (calculated from render mode and camera)
+    math::vec3 billboard_right_;
+    math::vec3 billboard_up_;
+    
+    // Cached 3D particle scale (from uniforms, applied to all particles)
+    math::vec3 particle_scale_3d_;
 };
 
 static int32_t particleSortFn(const void* _lhs, const void* _rhs)
@@ -755,11 +925,15 @@ struct ParticleSystem
         );
 
         s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+        u_billboardRight = bgfx::createUniform("u_billboardRight", bgfx::UniformType::Vec4);
+        u_billboardUp = bgfx::createUniform("u_billboardUp", bgfx::UniformType::Vec4);
     }
 
     void shutdown()
     {
         bgfx::destroy(s_texColor);
+        bgfx::destroy(u_billboardRight);
+        bgfx::destroy(u_billboardUp);
         bgfx::destroy(m_quadVBH);
         bgfx::destroy(m_quadIBH);
 
@@ -768,11 +942,51 @@ struct ParticleSystem
 
         m_allocator = nullptr;
     }
+    
+    // Calculate billboard vectors based on render mode and view matrix
+    void calculateBillboardVectors(RenderMode::Enum renderMode, const float* mtxView, math::vec3& outRight, math::vec3& outUp)
+    {
+
+        // Extract camera vectors from view matrix (column-major order)
+        // View matrix columns represent right, up, forward, position
+        math::vec3 cameraRight(mtxView[0], mtxView[4], mtxView[8]);
+        math::vec3 cameraUp(mtxView[1], mtxView[5], mtxView[9]);
+        math::vec3 cameraForward(mtxView[2], mtxView[6], mtxView[10]);
+        
+        if(renderMode == RenderMode::HorizontalBillboard)
+        {
+            // Horizontal billboard: rotate around Y axis only, stay horizontal (parallel to ground)
+            // Remove Y component from camera right and normalize, use world up for vertical
+            math::vec3 worldUp(0.0f, 0.0f, 1.0f);
+            math::vec3 rightNoY(1.0f, 0.0f, 0.0f);
+
+            outRight = rightNoY;
+            outUp = worldUp;
+        }
+        else if(renderMode == RenderMode::VerticalBillboard)
+        {
+            // Vertical billboard: particles stay vertical (upright), rotate around Y axis to face camera
+            // This is what the current "horizontal" implementation does - it's correct for vertical
+            // Right vector: camera right projected to XZ plane (removes Y component)
+            // Up vector: always world up (0, 1, 0) to keep particles vertical/upright
+            math::vec3 worldUp(0.0f, 1.0f, 0.0f);
+            math::vec3 rightNoY = math::normalize(math::vec3(cameraRight.x, 0.0f, cameraRight.z));
+            outRight = rightNoY;
+            outUp = worldUp;
+        }
+        else // RenderMode::Billboard (default)
+        {
+            // Standard billboard: always face camera (full 3D rotation)
+            outRight = math::normalize(cameraRight);
+            outUp = math::normalize(cameraUp);
+        }
+    }
 
 
     void renderEmitterById(EmitterHandle _handle,
                            uint8_t _view,
-                           bgfx::ProgramHandle _program,
+                           bgfx::ProgramHandle _programMultiChannel,
+                           bgfx::ProgramHandle _programMask,
                            const float* _mtxView,
                            const math::vec3& _eye,
 						   bgfx::TextureHandle _texture)
@@ -785,9 +999,17 @@ struct ParticleSystem
         {
             return; // Skip emitters with no particles or invalid texture
         }
+        
+        // Select appropriate program based on cached texture mode
+        const bgfx::ProgramHandle program = (emitter.texture_mode_ == TextureMode::Mask) ? _programMask : _programMultiChannel;
 
         // Use instanced rendering - much more efficient!
-        const uint16_t instanceStride = 32; // 32 bytes per instance
+        // Instance data layout (64 bytes total):
+        // i_data0: vec4 (position.xyz, unused)    - 16 bytes
+        // i_data1: vec4 (color.rgba)              - 16 bytes
+        // i_data2: vec4 (uvOffset.xy, uvScale.xy) - 16 bytes
+        // i_data3: vec4 (scale3d.xyz, unused)     - 16 bytes
+        const uint16_t instanceStride = 64; // 64 bytes per instance
         
         // Get available instance buffer space
         uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(emitter.num_particles_, instanceStride);
@@ -803,7 +1025,7 @@ struct ParticleSystem
         bgfx::allocInstanceDataBuffer(&idb, maxInstances, instanceStride);
         
         // Generate instance data
-        generateInstanceData(emitter, idb, maxInstances, instanceStride, _eye);
+        generateInstanceData(emitter, idb, maxInstances, instanceStride, _eye, _handle);
         
         // Set static quad geometry
         bgfx::setVertexBuffer(0, m_quadVBH);
@@ -812,17 +1034,27 @@ struct ParticleSystem
         // Set instance data
         bgfx::setInstanceDataBuffer(&idb);
         
+        // Calculate billboard vectors based on render mode
+        math::vec3 billboardRight, billboardUp;
+        calculateBillboardVectors(emitter.render_mode_, _mtxView, billboardRight, billboardUp);
+        
         // Set render state and texture
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
                        BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        BGFX_STATE_BLEND_NORMAL);
         bgfx::setTexture(0, s_texColor, _texture);
         
+        // Set billboard vectors as uniforms (vec4 for alignment)
+        float billboardRightVec4[4] = { billboardRight.x, billboardRight.y, billboardRight.z, 0.0f };
+        float billboardUpVec4[4] = { billboardUp.x, billboardUp.y, billboardUp.z, 0.0f };
+        bgfx::setUniform(u_billboardRight, billboardRightVec4);
+        bgfx::setUniform(u_billboardUp, billboardUpVec4);
+        
         // Single draw call for all particles!
-        bgfx::submit(_view, _program);
+        bgfx::submit(_view, program);
     }
 
-    void generateInstanceData(Emitter& emitter, bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, uint16_t instanceStride, const math::vec3& _eye)
+    void generateInstanceData(Emitter& emitter, bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, uint16_t instanceStride, const math::vec3& _eye, EmitterHandle _handle)
     {
         uint8_t* data = idb.data;
         
@@ -845,26 +1077,34 @@ struct ParticleSystem
             const ParticleSort& sort = emitter.particle_sort_[i];
             const Particle& particle = emitter.particles_[sort.idx];
             
-            // Position + Scale (16 bytes)
-            float* posScale = (float*)data;
-            posScale[0] = particle.position.x;
-            posScale[1] = particle.position.y;
-            posScale[2] = particle.position.z;
-            posScale[3] = particle.scale;
+            // Position (16 bytes) - i_data0
+            float* pos = (float*)data;
+            pos[0] = particle.position.x;
+            pos[1] = particle.position.y;
+            pos[2] = particle.position.z;
+            pos[3] = 0.0f; // unused
             
-            // Color + Blend + Angle + Padding (16 bytes)
-            float* colorBlend = (float*)&data[16];
-            colorBlend[0] = particle.color.value.r;
-            colorBlend[1] = particle.color.value.g;
-            colorBlend[2] = particle.color.value.b;
-            colorBlend[3] = particle.color.value.a;
+            // Color (16 bytes) - i_data1
+            float* color = (float*)&data[16];
+            color[0] = particle.color.value.r;
+            color[1] = particle.color.value.g;
+            color[2] = particle.color.value.b;
+            color[3] = particle.color.value.a;
             
-            // Speed + Padding (8 bytes)
-            float* rotationBlend = (float*)&data[32];
-			rotationBlend[0] = 0.0f; // angle (could add rotation later)
-			rotationBlend[1] = 0.0f;
-            rotationBlend[2] = 0.0f; 
-            rotationBlend[3] = 0.0f; // padding
+            // UV Offset + UV Scale (16 bytes) - i_data2
+            float* uvData = (float*)&data[32];
+            uvData[0] = particle.uv_offset.x; // UV offset X
+            uvData[1] = particle.uv_offset.y; // UV offset Y
+            uvData[2] = particle.uv_scale.x;  // UV scale X
+            uvData[3] = particle.uv_scale.y;  // UV scale Y
+            
+            // 3D Scale (16 bytes) - i_data3
+            // Multiply uniform scale by cached 3D scale from emitter
+            float* scale3d = (float*)&data[48];
+            scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
+            scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
+            scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
+            scale3d[3] = 0.0f; // unused
             
             data += instanceStride;
         }
@@ -887,7 +1127,8 @@ struct ParticleSystem
     }
 
     uint32_t renderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, 
-                           uint8_t _view, bgfx::ProgramHandle _program, 
+                           uint8_t _view, bgfx::ProgramHandle _programMultiChannel,
+                           bgfx::ProgramHandle _programMask,
                            const float* _mtxView, const math::vec3& _eye, 
                            bgfx::TextureHandle _texture)
     {
@@ -898,9 +1139,12 @@ struct ParticleSystem
 
 		APP_SCOPE_PERF("Rendering/Particle Pass/Render Batched Emitters");
 
-
-        // Count total particles across all emitters
+        // Separate emitters by texture mode for batching
+        std::vector<EmitterHandle> multiChannelEmitters;
+        std::vector<EmitterHandle> maskEmitters;
+        
         uint32_t totalParticles = 0;
+        
         for(uint32_t i = 0; i < _count; ++i)
         {
             if(!isValid(_handles[i]))
@@ -909,6 +1153,17 @@ struct ParticleSystem
             }
             
             const Emitter& emitter = m_emitter[_handles[i].idx];
+            
+            // Use cached texture mode to group emitters
+            if(emitter.texture_mode_ == TextureMode::Mask)
+            {
+                maskEmitters.push_back(_handles[i]);
+            }
+            else
+            {
+                multiChannelEmitters.push_back(_handles[i]);
+            }
+            
             totalParticles += emitter.num_particles_;
         }
 
@@ -917,8 +1172,56 @@ struct ParticleSystem
             return 0; // No particles to render
         }
 
+        uint32_t renderedParticles = 0;
+        
+        // Render MultiChannel emitters
+        if(!multiChannelEmitters.empty())
+        {
+            renderedParticles += renderEmitterBatchByMode(
+                multiChannelEmitters.data(), 
+                static_cast<uint32_t>(multiChannelEmitters.size()),
+                _view, _programMultiChannel, _mtxView, _eye, _texture
+            );
+        }
+        
+        // Render Mask emitters
+        if(!maskEmitters.empty())
+        {
+            renderedParticles += renderEmitterBatchByMode(
+                maskEmitters.data(), 
+                static_cast<uint32_t>(maskEmitters.size()),
+                _view, _programMask, _mtxView, _eye, _texture
+            );
+        }
+
+		return renderedParticles;
+    }
+    
+    uint32_t renderEmitterBatchByMode(const EmitterHandle* _handles, uint32_t _count, 
+                           uint8_t _view, bgfx::ProgramHandle _program, 
+                           const float* _mtxView, const math::vec3& _eye, 
+                           bgfx::TextureHandle _texture)
+    {
+        // Count total particles for this batch
+        uint32_t totalParticles = 0;
+        for(uint32_t i = 0; i < _count; ++i)
+        {
+            const Emitter& emitter = m_emitter[_handles[i].idx];
+            totalParticles += emitter.num_particles_;
+        }
+
+        if(totalParticles == 0)
+        {
+            return 0;
+        }
+
         // Use instanced rendering for the batch
-        const uint16_t instanceStride = 48; // 48 bytes per instance
+        // Instance data layout (64 bytes total):
+        // i_data0: vec4 (position.xyz, unused)    - 16 bytes
+        // i_data1: vec4 (color.rgba)              - 16 bytes
+        // i_data2: vec4 (uvOffset.xy, uvScale.xy) - 16 bytes
+        // i_data3: vec4 (scale3d.xyz, unused)     - 16 bytes
+        const uint16_t instanceStride = 64; // 64 bytes per instance
         
         // Get available instance buffer space
         uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(totalParticles, instanceStride);
@@ -943,11 +1246,31 @@ struct ParticleSystem
         // Set instance data
         bgfx::setInstanceDataBuffer(&idb);
         
+        // Calculate billboard vectors based on first emitter's render mode (for batch)
+        math::vec3 billboardRight, billboardUp;
+        if(_count > 0)
+        {
+            const Emitter& firstEmitter = m_emitter[_handles[0].idx];
+            calculateBillboardVectors(firstEmitter.render_mode_, _mtxView, billboardRight, billboardUp);
+        }
+        else
+        {
+            // Fallback to standard billboard
+            billboardRight = math::vec3(1.0f, 0.0f, 0.0f);
+            billboardUp = math::vec3(0.0f, 1.0f, 0.0f);
+        }
+        
         // Set render state and texture
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
                        BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        BGFX_STATE_BLEND_NORMAL);
         bgfx::setTexture(0, s_texColor, _texture);
+        
+        // Set billboard vectors as uniforms (vec4 for alignment)
+        float billboardRightVec4[4] = { billboardRight.x, billboardRight.y, billboardRight.z, 0.0f };
+        float billboardUpVec4[4] = { billboardUp.x, billboardUp.y, billboardUp.z, 0.0f };
+        bgfx::setUniform(u_billboardRight, billboardRightVec4);
+        bgfx::setUniform(u_billboardUp, billboardUpVec4);
         
         // Single draw call for all particles from all emitters!
         bgfx::submit(_view, _program);
@@ -999,26 +1322,35 @@ struct ParticleSystem
             const Emitter& emitter = m_emitter[_handles[batchedParticle.emitter_idx].idx];
             const Particle& particle = emitter.particles_[batchedParticle.particle_idx];
             
-            // Position + Scale (16 bytes)
-            float* posScale = (float*)data;
-            posScale[0] = particle.position.x;
-            posScale[1] = particle.position.y;
-            posScale[2] = particle.position.z;
-            posScale[3] = particle.scale;
+            // Position (16 bytes) - i_data0
+            float* pos = (float*)data;
+            pos[0] = particle.position.x;
+            pos[1] = particle.position.y;
+            pos[2] = particle.position.z;
+            pos[3] = 0.0f; // unused
             
-            // Color + Blend + Angle + Padding (16 bytes)
-            float* colorBlend = (float*)&data[16];
-            colorBlend[0] = particle.color.value.r;
-            colorBlend[1] = particle.color.value.g;
-            colorBlend[2] = particle.color.value.b;
-            colorBlend[3] = particle.color.value.a;
+            // Color (16 bytes) - i_data1
+            float* color = (float*)&data[16];
+            color[0] = particle.color.value.r;
+            color[1] = particle.color.value.g;
+            color[2] = particle.color.value.b;
+            color[3] = particle.color.value.a;
             
-            // Speed + Padding (8 bytes)
-            float* rotationBlend = (float*)&data[32];
-			rotationBlend[0] = 0.0f; // angle (could add rotation later)
-			rotationBlend[1] = 0.0f;
-            rotationBlend[2] = 0.0f; 
-            rotationBlend[3] = 0.0f; // padding
+            // UV Offset + UV Scale (16 bytes) - i_data2
+            float* uvData = (float*)&data[32];
+            uvData[0] = particle.uv_offset.x; // UV offset X
+            uvData[1] = particle.uv_offset.y; // UV offset Y
+            uvData[2] = particle.uv_scale.x;  // UV scale X
+            uvData[3] = particle.uv_scale.y;  // UV scale Y
+            
+            // 3D Scale (16 bytes) - i_data3
+            // Multiply uniform scale by cached 3D scale from emitter
+            float* scale3d = (float*)&data[48];
+            scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
+            scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
+            scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
+            scale3d[3] = 0.0f; // unused
+            
             data += instanceStride;
         }
     }
@@ -1087,6 +1419,8 @@ struct ParticleSystem
     bgfx::IndexBufferHandle m_quadIBH;
 
     bgfx::UniformHandle s_texColor;
+    bgfx::UniformHandle u_billboardRight;
+    bgfx::UniformHandle u_billboardUp;
 };
 
 static ParticleSystem s_ctx;
@@ -1165,21 +1499,23 @@ void psDestroyEmitter(EmitterHandle _handle)
 
 void psRenderEmitter(EmitterHandle _handle,
                      uint8_t _view,
-                     bgfx::ProgramHandle _program,
+                     bgfx::ProgramHandle _programMultiChannel,
+                     bgfx::ProgramHandle _programMask,
                      const float* _mtxView,
                      const math::vec3& _eye,
                      bgfx::TextureHandle _texture)
 {
-    s_ctx.renderEmitterById(_handle, _view, _program, _mtxView, _eye, _texture);
+    s_ctx.renderEmitterById(_handle, _view, _programMultiChannel, _programMask, _mtxView, _eye, _texture);
 }
 
 uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
                          uint32_t _count,
                          uint8_t _view,
-                         bgfx::ProgramHandle _program,
+                         bgfx::ProgramHandle _programMultiChannel,
+                         bgfx::ProgramHandle _programMask,
                          const float* _mtxView,
                          const math::vec3& _eye,
                          bgfx::TextureHandle _texture)
 {
-    return s_ctx.renderEmitterBatch(_handles, _count, _view, _program, _mtxView, _eye, _texture);
+    return s_ctx.renderEmitterBatch(_handles, _count, _view, _programMultiChannel, _programMask, _mtxView, _eye, _texture);
 }

@@ -233,6 +233,45 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Local"},
         });
 
+    entt::meta_factory<TextureMode::Enum>{}
+        .type("TextureMode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "TextureMode"},
+            entt::attribute{"pretty_name", "Texture Mode"},
+        })
+        .data<TextureMode::MultiChannel>("MultiChannel"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "MultiChannel"},
+            entt::attribute{"pretty_name", "Multi Channel"},
+        })
+        .data<TextureMode::Mask>("Mask"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Mask"},
+            entt::attribute{"pretty_name", "Mask"},
+        });
+
+    entt::meta_factory<RenderMode::Enum>{}
+        .type("RenderMode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "RenderMode"},
+            entt::attribute{"pretty_name", "Render Mode"},
+        })
+        .data<RenderMode::Billboard>("Billboard"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Billboard"},
+            entt::attribute{"pretty_name", "Billboard"},
+        })
+        .data<RenderMode::HorizontalBillboard>("HorizontalBillboard"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "HorizontalBillboard"},
+            entt::attribute{"pretty_name", "Horizontal Billboard"},
+        })
+        .data<RenderMode::VerticalBillboard>("VerticalBillboard"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "VerticalBillboard"},
+            entt::attribute{"pretty_name", "Vertical Billboard"},
+        });
+
     entt::meta_factory<particle_emitter_component>{}
         .type("particle_emitter_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -256,6 +295,14 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "loop"},
             entt::attribute{"pretty_name", "Loop"},
             entt::attribute{"tooltip", "Controls whether the emitter loops continuously (true) or emits only once up to max particles (false). Non-looping emitters stop emitting after reaching max particles."},
+        })
+        .data<&particle_emitter_component::set_start_delay, &particle_emitter_component::get_start_delay>("start_delay"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "start_delay"},
+            entt::attribute{"pretty_name", "Start Delay"},
+            entt::attribute{"tooltip", "Delay in seconds before particle emission starts. Particles will begin spawning after this delay period."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
         })
         .data<&particle_emitter_component::set_max_particles, &particle_emitter_component::get_max_particles>("max_particles"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -315,6 +362,12 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "world_bounds"},
             entt::attribute{"pretty_name", "World Bounds"},
             entt::attribute{"tooltip", "Bounding box containing all particles in world space. Used for culling and optimization (read-only)."},
+        })
+        .data<&particle_emitter_component::set_emission_shape_position, &particle_emitter_component::get_emission_shape_position>("emission_shape_position"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "emission_shape_position"},
+            entt::attribute{"pretty_name", "Emitter Shape Position"},
+            entt::attribute{"tooltip", "Position offset of the emission shape relative to the emitter transform. Allows offsetting where particles spawn."},
         })
         .data<&particle_emitter_component::set_emission_shape_scale, &particle_emitter_component::get_emission_shape_scale>("emission_shape_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -390,6 +443,13 @@ REFLECT(particle_emitter_component)
              entt::attribute{"group", "Size over lifetime"},
 
          })
+        .data<&particle_emitter_component::set_initial_scale_3d, &particle_emitter_component::get_initial_scale_3d>("initial_scale_3d"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "initial_scale_3d"},
+            entt::attribute{"pretty_name", "Initial 3D Scale"},
+            entt::attribute{"tooltip", "3D scale for particles. Allows creating rectangular particles (e.g., 2,1,1 for wide particles, 1,2,1 for tall particles). Default: 1,1,1 (square)."},
+            entt::attribute{"group", "Size over lifetime"},
+        })
         .data<&particle_emitter_component::set_size_by_speed_range, &particle_emitter_component::get_size_by_speed_range>("size_by_speed_range"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size_by_speed_range"},
@@ -468,6 +528,47 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "texture"},
             entt::attribute{"pretty_name", "Texture"},
             entt::attribute{"tooltip", "Texture asset used to render each particle. Should be a square texture with alpha channel for best results. Common formats: smoke, fire, sparkle, etc."},
+            entt::attribute{"group", "Texture"},
+        })
+        .data<&particle_emitter_component::set_texture_mode, &particle_emitter_component::get_texture_mode>("texture_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_mode"},
+            entt::attribute{"pretty_name", "Texture Mode"},
+            entt::attribute{"tooltip", "Texture mode determines how the texture is interpreted. MultiChannel = standard RGBA texture, Mask = black/white mask where black = transparent, white = opaque (particle color used)."},
+            entt::attribute{"group", "Texture"},
+        })
+        .data<&particle_emitter_component::set_render_mode, &particle_emitter_component::get_render_mode>("render_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "render_mode"},
+            entt::attribute{"pretty_name", "Render Mode"},
+            entt::attribute{"tooltip", "Render orientation mode. Billboard = always face camera, Horizontal = rotate around Y axis only (stay horizontal), Vertical = stay vertical (perpendicular to ground)."},
+            entt::attribute{"group", "Rendering"},
+        })
+        .data<&particle_emitter_component::set_texture_sheet_tiles, &particle_emitter_component::get_texture_sheet_tiles>("texture_sheet_tiles"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_sheet_tiles"},
+            entt::attribute{"pretty_name", "Texture Sheet Tiles"},
+            entt::attribute{"tooltip", "Number of tiles in the texture sheet grid (X columns, Y rows). For example, a 4x4 grid contains 16 animation frames. Set to 1x1 to disable."},
+            entt::attribute{"group", "Texture"},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"min", 1.0f},
+
+        })
+        .data<&particle_emitter_component::set_texture_sheet_cycles, &particle_emitter_component::get_texture_sheet_cycles>("texture_sheet_cycles"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_sheet_cycles"},
+            entt::attribute{"pretty_name", "Animation Cycles"},
+            entt::attribute{"tooltip", "Number of times the animation loops over particle lifetime. 0 = disabled, 1 = play once, 2 = play twice, etc. Higher values make the animation play faster."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"group", "Texture"},
+        })
+        .data<&particle_emitter_component::set_texture_sheet_randomize, &particle_emitter_component::get_texture_sheet_randomize>("texture_sheet_randomize"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_sheet_randomize"},
+            entt::attribute{"pretty_name", "Randomize Start Frame"},
+            entt::attribute{"tooltip", "When enabled, each particle starts at a random frame in the texture sheet animation instead of frame 0. Creates visual variety."},
+            entt::attribute{"group", "Texture"},
         });
 
 }
@@ -484,6 +585,7 @@ SAVE(particle_emitter_component)
     
     // Emission properties
     try_save(ar, ser20::make_nvp("emission_lifetime", obj.get_emission_lifetime()));
+    try_save(ar, ser20::make_nvp("emission_shape_position", obj.get_emission_shape_position()));
     try_save(ar, ser20::make_nvp("emission_shape_scale", obj.get_emission_shape_scale()));
     try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
     try_save(ar, ser20::make_nvp("emission_rate", obj.get_emission_rate()));
@@ -501,6 +603,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("lifetime", obj.get_lifetime()));
     try_save(ar, ser20::make_nvp("velocity_gradient", obj.get_velocity_gradient()));
     try_save(ar, ser20::make_nvp("scale_gradient", obj.get_scale_gradient()));
+    try_save(ar, ser20::make_nvp("initial_scale_3d", obj.get_initial_scale_3d()));
     try_save(ar, ser20::make_nvp("opacity", obj.get_opacity()));
     
     // Colors
@@ -511,9 +614,17 @@ SAVE(particle_emitter_component)
     
     // Texture handle
     try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
+    try_save(ar, ser20::make_nvp("texture_mode", obj.get_texture_mode()));
+    try_save(ar, ser20::make_nvp("render_mode", obj.get_render_mode()));
+    
+    // Texture sheet animation
+    try_save(ar, ser20::make_nvp("texture_sheet_tiles", obj.get_texture_sheet_tiles()));
+    try_save(ar, ser20::make_nvp("texture_sheet_cycles", obj.get_texture_sheet_cycles()));
+    try_save(ar, ser20::make_nvp("texture_sheet_randomize", obj.get_texture_sheet_randomize()));
     
     // Loop control
     try_save(ar, ser20::make_nvp("loop", obj.is_loop()));
+    try_save(ar, ser20::make_nvp("start_delay", obj.get_start_delay()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -560,6 +671,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("emission_lifetime", emission_lifetime)))
     {
         obj.set_emission_lifetime(emission_lifetime);
+    }
+    
+    math::vec3 emission_shape_position{0.0f, 0.0f, 0.0f};
+    if(try_load(ar, ser20::make_nvp("emission_shape_position", emission_shape_position)))
+    {
+        obj.set_emission_shape_position(emission_shape_position);
     }
     
     math::vec3 emission_shape_scale{1.0f, 1.0f, 1.0f};
@@ -668,6 +785,17 @@ LOAD(particle_emitter_component)
     {
         obj.set_scale_gradient(scale_gradient);
     }
+    
+    math::vec3 initial_scale_3d{1.0f, 1.0f, 1.0f};
+    if(try_load(ar, ser20::make_nvp("initial_scale_3d", initial_scale_3d)))
+    {
+        obj.set_initial_scale_3d(initial_scale_3d);
+    }
+    // Backward compatibility: try loading old name
+    else if(try_load(ar, ser20::make_nvp("particle_scale_3d", initial_scale_3d)))
+    {
+        obj.set_initial_scale_3d(initial_scale_3d);
+    }
 
     
     float opacity{1.0f};
@@ -703,11 +831,54 @@ LOAD(particle_emitter_component)
         obj.set_texture(texture);
     }
     
+    TextureMode::Enum texture_mode{TextureMode::MultiChannel};
+    if(try_load(ar, ser20::make_nvp("texture_mode", texture_mode)))
+    {
+        obj.set_texture_mode(texture_mode);
+    }
+    
+    RenderMode::Enum render_mode{RenderMode::Billboard};
+    if(try_load(ar, ser20::make_nvp("render_mode", render_mode)))
+    {
+        obj.set_render_mode(render_mode);
+    }
+    // Backward compatibility: also check for old "billboard_mode" name
+    RenderMode::Enum billboard_mode{RenderMode::Billboard};
+    if(try_load(ar, ser20::make_nvp("billboard_mode", billboard_mode)))
+    {
+        obj.set_render_mode(billboard_mode);
+    }
+    
+    // Texture sheet animation
+    math::vec2 texture_sheet_tiles{1.0f, 1.0f};
+    if(try_load(ar, ser20::make_nvp("texture_sheet_tiles", texture_sheet_tiles)))
+    {
+        obj.set_texture_sheet_tiles(texture_sheet_tiles);
+    }
+    
+    float texture_sheet_cycles{0.0f};
+    if(try_load(ar, ser20::make_nvp("texture_sheet_cycles", texture_sheet_cycles)))
+    {
+        obj.set_texture_sheet_cycles(texture_sheet_cycles);
+    }
+    
+    bool texture_sheet_randomize{false};
+    if(try_load(ar, ser20::make_nvp("texture_sheet_randomize", texture_sheet_randomize)))
+    {
+        obj.set_texture_sheet_randomize(texture_sheet_randomize);
+    }
+    
     // Loop control
     bool loop{true}; // Default to true for backward compatibility
     if(try_load(ar, ser20::make_nvp("loop", loop)))
     {
         obj.set_loop(loop);
+    }
+    
+    std::chrono::duration<float> start_delay{0.0f}; // Default to 0 for backward compatibility
+    if(try_load(ar, ser20::make_nvp("start_delay", start_delay)))
+    {
+        obj.set_start_delay(start_delay);
     }
 }
 LOAD_INSTANTIATE(particle_emitter_component, ser20::iarchive_associative_t);

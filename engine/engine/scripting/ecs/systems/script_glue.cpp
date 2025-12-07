@@ -1810,6 +1810,45 @@ auto internal_m2n_camera_screen_point_to_ray(entt::entity id,
 
     return false;
 }
+
+auto internal_m2n_camera_screen_point_to_world_2d(entt::entity id, const math::vec2& origin) -> math::vec3
+{
+    if(auto comp = safe_get_component<camera_component>(id))
+    {
+        math::vec3 world_pos{};
+        
+        const auto& frustum = comp->get_camera().get_frustum();
+
+        bool result = comp->get_camera().viewport_to_world(origin, frustum.planes[math::volume_plane::near_plane], world_pos, false);
+        if(!result)
+        {
+            return {};
+        }
+        return world_pos;
+    }
+    return {};
+}
+
+auto internal_m2n_camera_screen_point_to_world(entt::entity id, const math::vec3& origin) -> math::vec3
+{
+    if(auto comp = safe_get_component<camera_component>(id))
+    {
+        math::vec2 screen_point(origin.x, origin.y);
+        float distance_from_camera = origin.z;
+        
+        math::vec3 ray_origin{};
+        math::vec3 ray_dir{};
+        
+        if(!comp->get_camera().viewport_to_ray(screen_point, ray_origin, ray_dir))
+        {
+            return {};
+        }
+        
+        math::vec3 world_pos = ray_origin + (ray_dir * distance_from_camera);
+        return world_pos;
+    }
+    return {};
+}
 //------------------------------
 auto internal_m2n_model_get_enabled(entt::entity id) -> bool
 {
@@ -4307,6 +4346,39 @@ auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_ptr, ent
     return element->IsClassSet(class_name);
 }
 
+void internal_m2n_ui_element_wrapper_sync_transform_to_entity(std::intptr_t element_ptr, entt::entity owner_entity, entt::entity transform_entity)
+{
+    auto transform = get_entity_from_id(transform_entity);
+    if (!transform)
+    {
+        return;
+    }
+    
+    auto* transform_comp = transform.try_get<transform_component>();
+    if (!transform_comp)
+    {
+        return;
+    }
+
+    if (!validate_ui_element_wrapper(element_ptr, owner_entity))
+    {
+        return;
+    }
+    
+    auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+
+    const auto& matrix = transform_comp->get_transform_global().get_matrix();
+    std::stringstream s;
+
+    float perspective = transform_comp->get_perspective_global().w;
+    if (perspective > 0)
+    {
+        s << "perspective(" << perspective << "dp) ";
+    }
+    s << "matrix3d(" << matrix[0][0] << ", " << matrix[0][1] << ", " << matrix[0][2] << ", " << matrix[0][3] << ", " << matrix[1][0] << ", " << matrix[1][1] << ", " << matrix[1][2] << ", " << matrix[1][3] << ", " << matrix[2][0] << ", " << matrix[2][1] << ", " << matrix[2][2] << ", " << matrix[2][3] << ", " << matrix[3][0] << ", " << matrix[3][1] << ", " << matrix[3][2] << ", " << matrix[3][3] << ")";
+    element->SetProperty("transform", s.str());
+}
+
 void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_ptr, entt::entity owner_entity)
 {
     if (!validate_ui_element_wrapper(element_ptr, owner_entity))
@@ -4550,6 +4622,10 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         auto reg = mono::internal_call_registry("Unravel.Core.CameraComponent");
         reg.add_internal_call("internal_m2n_camera_screen_point_to_ray",
                               internal_call(internal_m2n_camera_screen_point_to_ray));
+        reg.add_internal_call("internal_m2n_camera_screen_point_to_world_2d",
+                              internal_call(internal_m2n_camera_screen_point_to_world_2d));
+        reg.add_internal_call("internal_m2n_camera_screen_point_to_world",
+                              internal_call(internal_m2n_camera_screen_point_to_world));
     }
 
     {
@@ -4905,6 +4981,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", internal_call(internal_m2n_ui_element_wrapper_has_attribute));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", internal_call(internal_m2n_ui_element_wrapper_set_class));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", internal_call(internal_m2n_ui_element_wrapper_is_class_set));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_sync_transform_to_entity", internal_call(internal_m2n_ui_element_wrapper_sync_transform_to_entity));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", internal_call(internal_m2n_ui_element_wrapper_focus));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", internal_call(internal_m2n_ui_element_wrapper_blur));
         reg.add_internal_call("internal_m2n_ui_element_wrapper_click", internal_call(internal_m2n_ui_element_wrapper_click));

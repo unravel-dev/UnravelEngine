@@ -121,6 +121,9 @@ public:
     void set_force_over_lifetime(const math::vec3& force);
     auto get_force_over_lifetime() const -> math::vec3;
 
+    void set_emission_shape_position(const math::vec3& position);
+    auto get_emission_shape_position() const -> math::vec3;
+
     void set_emission_shape_scale(const math::vec3& scale);
     auto get_emission_shape_scale() const -> math::vec3;
 
@@ -153,6 +156,9 @@ public:
     // Scale properties
     void set_scale_gradient(const math::gradient<frange_t>& gradient);
     auto get_scale_gradient() const -> const math::gradient<frange_t>&;
+    
+    void set_initial_scale_3d(const math::vec3& scale);
+    auto get_initial_scale_3d() const -> math::vec3;
 
 
     void set_opacity(float opacity);
@@ -160,16 +166,25 @@ public:
 
     // Playback control
     void play();
+    void play_sub_emitters();
     void stop();
+    void stop_sub_emitters();
     void stop_and_reset();
+    void stop_and_reset_sub_emitters();
     void pause();
+    void pause_sub_emitters();
     void resume();
+    void resume_sub_emitters();
     auto is_playing() const -> bool;
     auto is_paused() const -> bool;
+    auto is_stopped() const -> bool;
 
     // Loop control
     void set_loop(bool loop);
     auto is_loop() const -> bool;
+
+    void set_start_delay(std::chrono::duration<float> delay);
+    auto get_start_delay() const -> std::chrono::duration<float>;
 
     // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
@@ -190,6 +205,24 @@ public:
     // Sprite handle
     void set_texture(const asset_handle<gfx::texture>& texture);
     auto get_texture() const -> const asset_handle<gfx::texture>&;
+    
+    // Texture mode
+    void set_texture_mode(TextureMode::Enum mode);
+    auto get_texture_mode() const -> TextureMode::Enum;
+    
+    // Render mode
+    void set_render_mode(RenderMode::Enum mode);
+    auto get_render_mode() const -> RenderMode::Enum;
+
+    // Texture sheet animation properties
+    void set_texture_sheet_tiles(math::vec2 tiles);
+    auto get_texture_sheet_tiles() const -> math::vec2;
+    
+    void set_texture_sheet_cycles(float cycles);
+    auto get_texture_sheet_cycles() const -> float;
+    
+    void set_texture_sheet_randomize(bool randomize);
+    auto get_texture_sheet_randomize() const -> bool;    
 
     /**
      * @brief Updates the emitter with external transform data.

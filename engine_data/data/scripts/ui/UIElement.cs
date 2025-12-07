@@ -153,6 +153,11 @@ namespace Unravel.Core
             return internal_m2n_ui_element_wrapper_is_class_set(nativePtr, ownerEntity, className);
         }
 
+
+        public void SyncTransformToEntity(Entity transformEntity)
+        {
+            internal_m2n_ui_element_wrapper_sync_transform_to_entity(nativePtr, ownerEntity, transformEntity);
+        }
         /// <summary>
         /// Gives focus to this element.
         /// </summary>
@@ -285,6 +290,9 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_ui_element_wrapper_is_class_set(IntPtr elementPtr, Entity ownerEntity, string className);
 
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_ui_element_wrapper_sync_transform_to_entity(IntPtr elementPtr, Entity ownerEntity, Entity transformEntity);
+        
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_element_wrapper_focus(IntPtr elementPtr, Entity ownerEntity);
 
