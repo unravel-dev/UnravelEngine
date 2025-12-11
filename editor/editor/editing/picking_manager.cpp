@@ -14,6 +14,8 @@
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
+#include <engine/animation/ecs/components/animation_component.h>
+#include <engine/ecs/components/prefab_component.h>
 namespace unravel
 {
 
@@ -113,6 +115,242 @@ bool are_global_bounds_in_selection_area(const math::bbox& world_bounds,
 
     return are_corners_in_selection_area(corners, pick_camera, pick_position, pick_area);
 }
+} // namespace
+
+namespace
+{
+/**
+ * @brief Finds the model component that owns the given armature entity.
+ * @param registry The registry to search in.
+ * @param armature_entity The entity that might be part of an armature.
+ * @return Handle to the entity with model_component that owns this armature, or empty handle if not found.
+ */
+auto find_model_owner(entt::registry& registry, entt::handle armature_entity) -> entt::handle
+{
+    if(!armature_entity)
+    {
+        return {};
+    }
+    auto view = registry.view<model_component>();
+    for(auto e : view)
+    {
+        entt::handle model_entity(registry, e);
+        auto& model_comp = view.get<model_component>(e);
+        const auto& armature_entities = model_comp.get_armature_entities();
+        for(const auto& arm_ent : armature_entities)
+        {
+            if(arm_ent == armature_entity)
+            {
+                return model_entity;
+            }
+        }
+    }
+    return {};
+}
+
+/**
+ * @brief Checks if two entities belong to the same imported model (armature).
+ * @param registry The registry to search in.
+ * @param entity1 First entity to check.
+ * @param entity2 Second entity to check.
+ * @return True if both entities belong to the same model's armature, false otherwise.
+ */
+auto are_in_same_model(entt::registry& registry, entt::handle entity1, entt::handle entity2) -> bool
+{
+    if(!entity1 || !entity2)
+    {
+        return false;
+    }
+    auto model_owner1 = find_model_owner(registry, entity1);
+    auto model_owner2 = find_model_owner(registry, entity2);
+    if(!model_owner1 || !model_owner2)
+    {
+        return false;
+    }
+    return model_owner1 == model_owner2;
+}
+
+/**
+ * @brief Gets the logical top-level entity following Unity's selection logic.
+ * Walks up the entire parent hierarchy to the root, records depths of markers,
+ * then selects based on priority:
+ * 1. First priority: Prefab root (prefab_component) - closest to root wins
+ * 2. Second priority: Animation (animation_component) - closest to root wins
+ * 3. Third priority: Root with no parent inside the same imported model (armature nodes)
+ * @param registry The registry to search in.
+ * @param entity The entity to start from.
+ * @return The logical top-level entity handle.
+ */
+auto get_logical_top_level_entity(entt::registry& registry, entt::handle entity) -> entt::handle
+{
+    if(!entity)
+    {
+        return {};
+    }
+    entt::handle starting_model_owner = {};
+    bool is_starting_in_armature = false;
+    auto starting_model = find_model_owner(registry, entity);
+    if(starting_model)
+    {
+        starting_model_owner = starting_model;
+        is_starting_in_armature = true;
+    }
+    struct marker_info
+    {
+        entt::handle entity;
+        int depth;
+    };
+    hpp::optional<marker_info> prefab_marker;
+    hpp::optional<marker_info> animation_marker;
+    hpp::optional<marker_info> model_root_marker;
+    entt::handle last_in_same_model = entity;
+    auto current = entity;
+    int depth = 0;
+    while(current)
+    {
+        if(current.try_get<prefab_component>())
+        {
+            if(!prefab_marker || prefab_marker->depth > depth)
+            {
+                prefab_marker = {current, depth};
+            }
+        }
+        if(current.try_get<animation_component>())
+        {
+            if(!animation_marker || animation_marker->depth > depth)
+            {
+                animation_marker = {current, depth};
+            }
+        }
+        auto* transform = current.try_get<transform_component>();
+        if(!transform)
+        {
+            break;
+        }
+        auto parent = transform->get_parent();
+        if(!parent)
+        {
+            if(is_starting_in_armature)
+            {
+                auto current_model = find_model_owner(registry, current);
+                if(current_model == starting_model_owner)
+                {
+                    if(!model_root_marker || model_root_marker->depth > depth)
+                    {
+                        model_root_marker = {current, depth};
+                    }
+                }
+            }
+            else
+            {
+                if(!model_root_marker || model_root_marker->depth > depth)
+                {
+                    model_root_marker = {current, depth};
+                }
+            }
+            break;
+        }
+        if(is_starting_in_armature)
+        {
+            if(are_in_same_model(registry, current, parent))
+            {
+                last_in_same_model = current;
+            }
+            else
+            {
+                if(!model_root_marker || model_root_marker->depth > depth)
+                {
+                    model_root_marker = {last_in_same_model, depth};
+                }
+                is_starting_in_armature = false;
+            }
+        }
+        current = parent;
+        depth++;
+    }
+    if(prefab_marker)
+    {
+        return prefab_marker->entity;
+    }
+    if(animation_marker)
+    {
+        return animation_marker->entity;
+    }
+    if(model_root_marker)
+    {
+        return model_root_marker->entity;
+    }
+    return entity;
+}
+
+/**
+ * @brief Checks if a potential ancestor is an ancestor (direct or indirect parent) of a child entity.
+ * @param potential_ancestor The entity that might be an ancestor.
+ * @param child The entity to check ancestry for.
+ * @return True if potential_ancestor is an ancestor of child, false otherwise.
+ */
+auto is_ancestor_of(entt::handle potential_ancestor, entt::handle child) -> bool
+{
+    if(!child || !potential_ancestor)
+    {
+        return false;
+    }
+    auto* transform = child.try_get<transform_component>();
+    if(!transform)
+    {
+        return false;
+    }
+    entt::handle current = transform->get_parent();
+    while(current)
+    {
+        if(current == potential_ancestor)
+        {
+            return true;
+        }
+        auto* current_transform = current.try_get<transform_component>();
+        if(!current_transform)
+        {
+            break;
+        }
+        current = current_transform->get_parent();
+    }
+    return false;
+}
+
+/**
+ * @brief Checks if selection should be skipped because a parent/ancestor is already selected in additive mode.
+ * @param em The editing manager to check current selections from.
+ * @param pick_mode The current pick mode (normal, ctrl, or shift).
+ * @param picked_entity The entity that was picked.
+ * @return True if selection should be skipped, false otherwise.
+ */
+auto should_skip_selection_for_additive_pick(const editing_manager& em,
+                                             editing_manager::select_mode pick_mode,
+                                             entt::handle picked_entity) -> bool
+{
+    if(!picked_entity)
+    {
+        return false;
+    }
+    if(pick_mode != editing_manager::select_mode::shift && pick_mode != editing_manager::select_mode::ctrl)
+    {
+        return false;
+    }
+    auto selections = em.get_selections();
+    for(const auto& selected_obj : selections)
+    {
+        if(selected_obj.type() == entt::resolve<entt::handle>())
+        {
+            auto selected_entity = selected_obj.cast<const entt::handle&>();
+            if(is_ancestor_of(selected_entity, picked_entity))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 constexpr int picking_manager::tex_id_dim;
@@ -506,6 +744,10 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     if(id_key != 0)
     {
         picked_entity = target_scene->create_handle(entity);
+        if(picked_entity)
+        {
+            picked_entity = get_logical_top_level_entity(*target_scene->registry, picked_entity);
+        }
     }
 
     if(pick_callback_)
@@ -521,7 +763,10 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
         auto& em = ctx.get_cached<editing_manager>();
         if(picked_entity)
         {
-            em.select(picked_entity, pick_mode_);
+            if(!should_skip_selection_for_additive_pick(em, pick_mode_, picked_entity))
+            {
+                em.select(picked_entity, pick_mode_);
+            }
         }
         else
         {

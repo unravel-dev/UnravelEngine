@@ -439,6 +439,26 @@ auto particle_emitter_component::get_start_delay() const -> std::chrono::duratio
     return std::chrono::duration<float>(uniforms_.m_startDelay);
 }
 
+void particle_emitter_component::set_align_to_direction(bool align)
+{
+    uniforms_.m_alignToDirection = align;
+}
+
+auto particle_emitter_component::get_align_to_direction() const -> bool
+{
+    return uniforms_.m_alignToDirection;
+}
+
+void particle_emitter_component::set_pivot(const math::vec2& pivot)
+{
+    uniforms_.m_pivot = pivot;
+}
+
+auto particle_emitter_component::get_pivot() const -> math::vec2
+{
+    return uniforms_.m_pivot;
+}
+
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
     uniforms_.m_colorGradient = gradient;

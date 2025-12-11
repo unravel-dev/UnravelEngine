@@ -186,6 +186,13 @@ public:
     void set_start_delay(std::chrono::duration<float> delay);
     auto get_start_delay() const -> std::chrono::duration<float>;
 
+    void set_align_to_direction(bool align);
+    auto get_align_to_direction() const -> bool;
+    
+    // Pivot control
+    void set_pivot(const math::vec2& pivot);
+    auto get_pivot() const -> math::vec2;
+
     // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
     auto get_color_gradient() const -> const math::gradient<math::color>&;

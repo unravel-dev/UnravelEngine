@@ -129,6 +129,9 @@ void EmitterUniforms::reset()
     m_billboardRight = math::vec3(1.0f, 0.0f, 0.0f); // Will be updated from camera
     m_billboardUp = math::vec3(0.0f, 1.0f, 0.0f);    // Will be updated from camera
     
+    m_alignToDirection = false; // Default: particles don't rotate to align with direction
+    m_pivot = math::vec2(0.5f, 0.5f); // Default: center pivot
+    
     // Generate LUTs for all gradients to optimize sampling performance
     m_velocityGradient.generate_lut(256);
     m_colorGradient.generate_lut(256);
@@ -159,6 +162,9 @@ struct Particle
     math::vec2 uv_offset;
     math::vec2 uv_scale;
     float texsheet_random_offset; // Random offset [0-1] for texture sheet animation start frame
+    
+    // Rotation quaternion (calculated when align_to_direction is enabled)
+    math::quat rotation; // Quaternion representing particle rotation
 };
 
 struct ParticleSort
@@ -193,6 +199,7 @@ struct Emitter
         billboard_right_ = math::vec3(1.0f, 0.0f, 0.0f);
         billboard_up_ = math::vec3(0.0f, 1.0f, 0.0f);
         particle_scale_3d_ = math::vec3(1.0f, 1.0f, 1.0f);
+        pivot_ = math::vec2(0.5f, 0.5f);
     }
     
     // Temporal position buffer for smooth emitter speed calculation
@@ -255,6 +262,53 @@ struct Emitter
         const math::vec3 velocityPerSecond = currentVelocity * (1.0f / particle.lifeSpan);
 
         return math::length(velocityPerSecond);
+    }
+
+    // Calculate AABB bounds for a rotated particle with pivot offset
+    // Returns the min and max offsets from particle position
+    void calculateRotatedAABBBounds(const math::quat& rotation, const math::vec3& half_extents, const math::vec2& pivot,
+                                     math::vec3& out_min, math::vec3& out_max) const
+    {
+        // Calculate pivot offset in local space
+        // pivot (0,0) = bottom-left, (0.5,0.5) = center, (1,1) = top-right
+        // Convert to offset: (0,0) -> (+0.5,+0.5), (0.5,0.5) -> (0,0), (1,1) -> (-0.5,-0.5)
+        const math::vec2 pivot_offset = pivot - math::vec2(0.5f, 0.5f);
+        const math::vec3 pivot_shift_local = math::vec3(
+            pivot_offset.x * half_extents.x * 2.0f,
+            pivot_offset.y * half_extents.y * 2.0f,
+            0.0f
+        );
+        
+        // For an identity quaternion, calculate AABB without rotation
+        const float rot_len_sq = math::dot(rotation, rotation);
+        if(rot_len_sq < 0.01f)
+        {
+            // AABB that contains both the extents and the pivot-shifted center
+            out_min = pivot_shift_local - half_extents;
+            out_max = pivot_shift_local + half_extents;
+            return;
+        }
+        
+        // Convert quaternion to rotation matrix
+        const math::mat3 rot_matrix = math::mat3_cast(rotation);
+        
+        // Rotate the pivot shift
+        const math::vec3 pivot_shift_rotated = rot_matrix * pivot_shift_local;
+        
+        // Calculate the AABB of the rotated box by taking absolute values
+        // of the rotated basis vectors scaled by half-extents
+        math::vec3 aabb_half_extents(0.0f);
+        for(int i = 0; i < 3; ++i)
+        {
+            aabb_half_extents.x += math::abs(rot_matrix[i].x) * half_extents[i];
+            aabb_half_extents.y += math::abs(rot_matrix[i].y) * half_extents[i];
+            aabb_half_extents.z += math::abs(rot_matrix[i].z) * half_extents[i];
+        }
+        
+        // Combine rotated extents with rotated pivot offset
+        // The AABB needs to contain the pivot-shifted and rotated particle
+        out_min = pivot_shift_rotated - aabb_half_extents;
+        out_max = pivot_shift_rotated + aabb_half_extents;
     }
 
     // Update particle properties that were previously calculated in render
@@ -329,6 +383,43 @@ struct Emitter
 			particle.position = localPos;
 		}
 		
+		// Calculate rotation if align to direction is enabled
+		if(uniforms_.m_alignToDirection)
+		{
+			// Calculate particle velocity direction from trajectory
+			// Use the derivative of the bezier curve at current position
+			const math::vec3 velocity0 = particle.end[0] - particle.start;
+			const math::vec3 velocity1 = particle.end[1] - particle.end[0];
+			const math::vec3 current_velocity = math::mix(velocity0, velocity1, ttPos);
+			
+			const float velocity_len_sq = math::dot(current_velocity, current_velocity);
+			if(velocity_len_sq > 0.0001f)
+			{
+				// Normalize velocity to get direction
+				const math::vec3 direction = math::normalize(current_velocity);
+				
+				// Create rotation that aligns particle's forward (+Z) with velocity direction
+				// Use world up as reference, but fall back to world right if velocity is nearly vertical
+				math::vec3 up_ref(0.0f, 1.0f, 0.0f);
+				if(math::abs(math::dot(direction, up_ref)) > 0.99f)
+				{
+					up_ref = math::vec3(1.0f, 0.0f, 0.0f);
+				}
+				
+				particle.rotation = math::look_rotation(direction, up_ref);
+			}
+			else
+			{
+				// No meaningful velocity - use emitter rotation
+				particle.rotation = uniforms_.m_transform.get_rotation();
+			}
+		}
+		else
+		{
+			// No rotation - use identity
+			particle.rotation = math::identity<math::quat>();
+		}
+		
 		// Calculate texture sheet animation UV offset and scale
 		if(uniforms_.m_texSheetCycles > 0.0f && uniforms_.m_texSheetTiles.x > 0 && uniforms_.m_texSheetTiles.y > 0)
 		{
@@ -368,10 +459,11 @@ struct Emitter
     {
 		auto& uniforms_ = *_uniforms;
 		
-		// Cache texture mode, render mode, and 3D scale for rendering
+		// Cache texture mode, render mode, 3D scale, and pivot for rendering
 		texture_mode_ = uniforms_.m_textureMode;
 		render_mode_ = uniforms_.m_renderMode;
 		particle_scale_3d_ = uniforms_.m_initialScale3D;
+		pivot_ = uniforms_.m_pivot;
 
         if(first_update_)
         {
@@ -459,13 +551,16 @@ struct Emitter
 				continue; // Skip processing for dead particles
 			}
 
-			// Update cached properties for living particles
-			updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
-			
-			// Add particle position with some padding for scale
-			math::vec3 padding( particle_scale_3d_ * particle.scale * 0.5f);
-			aabb.add_point(particle.position - padding);
-			aabb.add_point(particle.position + padding);
+		// Update cached properties for living particles
+		updateParticleProperties(uniforms_, particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
+		
+		// Add particle position with bounds that account for rotation and pivot
+		const math::vec3 local_half_extents = particle_scale_3d_ * particle.scale * 0.5f;
+		math::vec3 aabb_min, aabb_max;
+		calculateRotatedAABBBounds(particle.rotation, local_half_extents, pivot_, aabb_min, aabb_max);
+		
+		aabb.add_point(particle.position + aabb_min);
+		aabb.add_point(particle.position + aabb_max);
 		}   
 
 		num_particles_ = num;
@@ -843,10 +938,13 @@ struct Emitter
             // Calculate properties immediately for new particles
             updateParticleProperties(uniforms_, *particle, avgSystemScale, easePos, hasColorBySpeed, hasSizeBySpeed, effectiveTransform);
 
-			// Add particle position with some padding for scale
-			math::vec3 padding((particle->scale * particle_scale_3d_) * 0.5f);
-			aabb.add_point(particle->position - padding);
-			aabb.add_point(particle->position + padding);
+		// Add particle position with bounds that account for rotation and pivot
+		const math::vec3 local_half_extents = particle_scale_3d_ * particle->scale * 0.5f;
+		math::vec3 aabb_min, aabb_max;
+		calculateRotatedAABBBounds(particle->rotation, local_half_extents, pivot_, aabb_min, aabb_max);
+		
+		aabb.add_point(particle->position + aabb_min);
+		aabb.add_point(particle->position + aabb_max);
         }
 
     }
@@ -887,6 +985,9 @@ struct Emitter
     
     // Cached 3D particle scale (from uniforms, applied to all particles)
     math::vec3 particle_scale_3d_;
+    
+    // Cached pivot point (from uniforms, applied to all particles)
+    math::vec2 pivot_;
 };
 
 static int32_t particleSortFn(const void* _lhs, const void* _rhs)
@@ -927,6 +1028,7 @@ struct ParticleSystem
         s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
         u_billboardRight = bgfx::createUniform("u_billboardRight", bgfx::UniformType::Vec4);
         u_billboardUp = bgfx::createUniform("u_billboardUp", bgfx::UniformType::Vec4);
+        u_eyePos = bgfx::createUniform("u_eyePos", bgfx::UniformType::Vec4);
     }
 
     void shutdown()
@@ -934,6 +1036,7 @@ struct ParticleSystem
         bgfx::destroy(s_texColor);
         bgfx::destroy(u_billboardRight);
         bgfx::destroy(u_billboardUp);
+        bgfx::destroy(u_eyePos);
         bgfx::destroy(m_quadVBH);
         bgfx::destroy(m_quadIBH);
 
@@ -979,134 +1082,6 @@ struct ParticleSystem
             // Standard billboard: always face camera (full 3D rotation)
             outRight = math::normalize(cameraRight);
             outUp = math::normalize(cameraUp);
-        }
-    }
-
-
-    void renderEmitterById(EmitterHandle _handle,
-                           uint8_t _view,
-                           bgfx::ProgramHandle _programMultiChannel,
-                           bgfx::ProgramHandle _programMask,
-                           const float* _mtxView,
-                           const math::vec3& _eye,
-						   bgfx::TextureHandle _texture)
-    {
-        BX_ASSERT(isValid(_handle), "renderEmitterById handle %d is not valid.", _handle.idx);
-
-        Emitter& emitter = m_emitter[_handle.idx];
-
-        if(0 == emitter.num_particles_ || !bgfx::isValid(_texture))
-        {
-            return; // Skip emitters with no particles or invalid texture
-        }
-        
-        // Select appropriate program based on cached texture mode
-        const bgfx::ProgramHandle program = (emitter.texture_mode_ == TextureMode::Mask) ? _programMask : _programMultiChannel;
-
-        // Use instanced rendering - much more efficient!
-        // Instance data layout (64 bytes total):
-        // i_data0: vec4 (position.xyz, unused)    - 16 bytes
-        // i_data1: vec4 (color.rgba)              - 16 bytes
-        // i_data2: vec4 (uvOffset.xy, uvScale.xy) - 16 bytes
-        // i_data3: vec4 (scale3d.xyz, unused)     - 16 bytes
-        const uint16_t instanceStride = 64; // 64 bytes per instance
-        
-        // Get available instance buffer space
-        uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(emitter.num_particles_, instanceStride);
-        
-        if(maxInstances == 0)
-        {
-            BX_WARN(false, "No instance buffer space available.");
-            return;
-        }
-        
-        // Allocate instance data buffer
-        bgfx::InstanceDataBuffer idb;
-        bgfx::allocInstanceDataBuffer(&idb, maxInstances, instanceStride);
-        
-        // Generate instance data
-        generateInstanceData(emitter, idb, maxInstances, instanceStride, _eye, _handle);
-        
-        // Set static quad geometry
-        bgfx::setVertexBuffer(0, m_quadVBH);
-        bgfx::setIndexBuffer(m_quadIBH);
-        
-        // Set instance data
-        bgfx::setInstanceDataBuffer(&idb);
-        
-        // Calculate billboard vectors based on render mode
-        math::vec3 billboardRight, billboardUp;
-        calculateBillboardVectors(emitter.render_mode_, _mtxView, billboardRight, billboardUp);
-        
-        // Set render state and texture
-        bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
-                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
-                       BGFX_STATE_BLEND_NORMAL);
-        bgfx::setTexture(0, s_texColor, _texture);
-        
-        // Set billboard vectors as uniforms (vec4 for alignment)
-        float billboardRightVec4[4] = { billboardRight.x, billboardRight.y, billboardRight.z, 0.0f };
-        float billboardUpVec4[4] = { billboardUp.x, billboardUp.y, billboardUp.z, 0.0f };
-        bgfx::setUniform(u_billboardRight, billboardRightVec4);
-        bgfx::setUniform(u_billboardUp, billboardUpVec4);
-        
-        // Single draw call for all particles!
-        bgfx::submit(_view, program);
-    }
-
-    void generateInstanceData(Emitter& emitter, bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, uint16_t instanceStride, const math::vec3& _eye, EmitterHandle _handle)
-    {
-        uint8_t* data = idb.data;
-        
-        // Sort particles for proper alpha blending (simplified - just by distance)
-        for(uint32_t i = 0; i < emitter.num_particles_; ++i)
-        {
-            const Particle& particle = emitter.particles_[i];
-            const math::vec3 tmp0 = _eye - particle.position;
-            emitter.particle_sort_[i].dist = math::dot(tmp0, tmp0);
-            emitter.particle_sort_[i].idx = i;
-        }
-        
-        // Sort by distance (back to front for alpha blending)
-        qsort(emitter.particle_sort_, emitter.num_particles_, sizeof(ParticleSort), particleSortFn);
-        
-        // Generate instance data for sorted particles
-        uint32_t numToRender = math::min(emitter.num_particles_, maxInstances);
-        for(uint32_t i = 0; i < numToRender; ++i)
-        {
-            const ParticleSort& sort = emitter.particle_sort_[i];
-            const Particle& particle = emitter.particles_[sort.idx];
-            
-            // Position (16 bytes) - i_data0
-            float* pos = (float*)data;
-            pos[0] = particle.position.x;
-            pos[1] = particle.position.y;
-            pos[2] = particle.position.z;
-            pos[3] = 0.0f; // unused
-            
-            // Color (16 bytes) - i_data1
-            float* color = (float*)&data[16];
-            color[0] = particle.color.value.r;
-            color[1] = particle.color.value.g;
-            color[2] = particle.color.value.b;
-            color[3] = particle.color.value.a;
-            
-            // UV Offset + UV Scale (16 bytes) - i_data2
-            float* uvData = (float*)&data[32];
-            uvData[0] = particle.uv_offset.x; // UV offset X
-            uvData[1] = particle.uv_offset.y; // UV offset Y
-            uvData[2] = particle.uv_scale.x;  // UV scale X
-            uvData[3] = particle.uv_scale.y;  // UV scale Y
-            
-            // 3D Scale (16 bytes) - i_data3
-            // Multiply uniform scale by cached 3D scale from emitter
-            float* scale3d = (float*)&data[48];
-            scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
-            scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
-            scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
-            scale3d[3] = 0.0f; // unused
-            
-            data += instanceStride;
         }
     }
 
@@ -1216,12 +1191,13 @@ struct ParticleSystem
         }
 
         // Use instanced rendering for the batch
-        // Instance data layout (64 bytes total):
-        // i_data0: vec4 (position.xyz, unused)    - 16 bytes
-        // i_data1: vec4 (color.rgba)              - 16 bytes
-        // i_data2: vec4 (uvOffset.xy, uvScale.xy) - 16 bytes
-        // i_data3: vec4 (scale3d.xyz, unused)     - 16 bytes
-        const uint16_t instanceStride = 64; // 64 bytes per instance
+        // Instance data layout (80 bytes total):
+        // i_data0: vec4 (position.xyz, unused)           - 16 bytes
+        // i_data1: vec4 (rotation quaternion xyzw)        - 16 bytes
+        // i_data2: vec4 (scale3d.xyz, unused)              - 16 bytes
+        // i_data3: vec4 (uvOffset.xy, uvScale.xy)         - 16 bytes
+        // i_data4: vec4 (color.rgba)                       - 16 bytes
+        const uint16_t instanceStride = 80; // 80 bytes per instance (5 * 16 bytes)
         
         // Get available instance buffer space
         uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(totalParticles, instanceStride);
@@ -1271,6 +1247,16 @@ struct ParticleSystem
         float billboardUpVec4[4] = { billboardUp.x, billboardUp.y, billboardUp.z, 0.0f };
         bgfx::setUniform(u_billboardRight, billboardRightVec4);
         bgfx::setUniform(u_billboardUp, billboardUpVec4);
+        
+        // Set eye position with render mode in w component
+        // w = 0: Billboard, w = 1: HorizontalBillboard, w = 2: VerticalBillboard
+        RenderMode::Enum renderMode = RenderMode::Billboard;
+        if(_count > 0)
+        {
+            renderMode = m_emitter[_handles[0].idx].render_mode_;
+        }
+        float eyePosVec4[4] = { _eye.x, _eye.y, _eye.z, float(renderMode) };
+        bgfx::setUniform(u_eyePos, eyePosVec4);
         
         // Single draw call for all particles from all emitters!
         bgfx::submit(_view, _program);
@@ -1327,29 +1313,36 @@ struct ParticleSystem
             pos[0] = particle.position.x;
             pos[1] = particle.position.y;
             pos[2] = particle.position.z;
-            pos[3] = 0.0f; // unused
+            pos[3] = emitter.pivot_.x; // Pivot X
             
-            // Color (16 bytes) - i_data1
-            float* color = (float*)&data[16];
-            color[0] = particle.color.value.r;
-            color[1] = particle.color.value.g;
-            color[2] = particle.color.value.b;
-            color[3] = particle.color.value.a;
+            // Rotation quaternion (16 bytes) - i_data1
+            float* rot = (float*)&data[16];
+            rot[0] = particle.rotation.x;
+            rot[1] = particle.rotation.y;
+            rot[2] = particle.rotation.z;
+            rot[3] = particle.rotation.w;
             
-            // UV Offset + UV Scale (16 bytes) - i_data2
-            float* uvData = (float*)&data[32];
+            // 3D Scale (16 bytes) - i_data2
+            // Multiply uniform scale by cached 3D scale from emitter
+            float* scale3d = (float*)&data[32];
+            scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
+            scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
+            scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
+            scale3d[3] = emitter.pivot_.y; // Pivot Y
+            
+            // UV Offset + UV Scale (16 bytes) - i_data3
+            float* uvData = (float*)&data[48];
             uvData[0] = particle.uv_offset.x; // UV offset X
             uvData[1] = particle.uv_offset.y; // UV offset Y
             uvData[2] = particle.uv_scale.x;  // UV scale X
             uvData[3] = particle.uv_scale.y;  // UV scale Y
             
-            // 3D Scale (16 bytes) - i_data3
-            // Multiply uniform scale by cached 3D scale from emitter
-            float* scale3d = (float*)&data[48];
-            scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
-            scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
-            scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
-            scale3d[3] = 0.0f; // unused
+            // Color (16 bytes) - i_data4
+            float* color = (float*)&data[64];
+            color[0] = particle.color.value.r;
+            color[1] = particle.color.value.g;
+            color[2] = particle.color.value.b;
+            color[3] = particle.color.value.a;
             
             data += instanceStride;
         }
@@ -1421,6 +1414,7 @@ struct ParticleSystem
     bgfx::UniformHandle s_texColor;
     bgfx::UniformHandle u_billboardRight;
     bgfx::UniformHandle u_billboardUp;
+    bgfx::UniformHandle u_eyePos;
 };
 
 static ParticleSystem s_ctx;
@@ -1495,17 +1489,6 @@ bool psHasUpdated(EmitterHandle _handle)
 void psDestroyEmitter(EmitterHandle _handle)
 {
     s_ctx.destroyEmitter(_handle);
-}
-
-void psRenderEmitter(EmitterHandle _handle,
-                     uint8_t _view,
-                     bgfx::ProgramHandle _programMultiChannel,
-                     bgfx::ProgramHandle _programMask,
-                     const float* _mtxView,
-                     const math::vec3& _eye,
-                     bgfx::TextureHandle _texture)
-{
-    s_ctx.renderEmitterById(_handle, _view, _programMultiChannel, _programMask, _mtxView, _eye, _texture);
 }
 
 uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,

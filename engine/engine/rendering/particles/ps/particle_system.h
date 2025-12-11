@@ -155,6 +155,12 @@ struct EmitterUniforms
 	math::vec2 m_texSheetTiles; // Number of tiles in the texture sheet grid (X columns, Y rows)
 	float m_texSheetCycles;    // Number of times the animation loops over particle lifetime (0 = disabled)
 	bool m_texSheetRandomize;  // Start each particle at a random frame in the animation
+	
+	// Rotation control
+	bool m_alignToDirection; // If true, particles rotate to align with their velocity direction
+	
+	// Pivot control (0,0 = bottom-left, 0.5,0.5 = center, 1,1 = top-right)
+	math::vec2 m_pivot; // Pivot point for particle rotation and positioning (default: 0.5, 0.5 = center)
 };
 
 ///
@@ -184,8 +190,6 @@ uint32_t psGetNumParticles(EmitterHandle _handle);
 ///
 void psDestroyEmitter(EmitterHandle _handle);
 
-///
-void psRenderEmitter(EmitterHandle _handle, uint8_t _view, bgfx::ProgramHandle _programMultiChannel, bgfx::ProgramHandle _programMask, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
 
 ///
 /// Render multiple emitters in batched draw calls grouped by texture mode

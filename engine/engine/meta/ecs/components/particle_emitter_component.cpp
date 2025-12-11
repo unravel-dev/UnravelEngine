@@ -304,6 +304,21 @@ REFLECT(particle_emitter_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
         })
+        .data<&particle_emitter_component::set_align_to_direction, &particle_emitter_component::get_align_to_direction>("align_to_direction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "align_to_direction"},
+            entt::attribute{"pretty_name", "Align To Direction"},
+            entt::attribute{"tooltip", "If enabled, particles rotate to align with their velocity direction. Useful for directional particles like arrows or sparks."},
+        })
+        .data<&particle_emitter_component::set_pivot, &particle_emitter_component::get_pivot>("pivot"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pivot"},
+            entt::attribute{"pretty_name", "Pivot"},
+            entt::attribute{"tooltip", "Pivot point for particle rotation and positioning. (0,0) = bottom-left, (0.5,0.5) = center (default), (1,1) = top-right. Affects both rotation and where the particle is anchored."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.05f},
+        })
         .data<&particle_emitter_component::set_max_particles, &particle_emitter_component::get_max_particles>("max_particles"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_particles"},
@@ -625,6 +640,10 @@ SAVE(particle_emitter_component)
     // Loop control
     try_save(ar, ser20::make_nvp("loop", obj.is_loop()));
     try_save(ar, ser20::make_nvp("start_delay", obj.get_start_delay()));
+    try_save(ar, ser20::make_nvp("align_to_direction", obj.get_align_to_direction()));
+    
+    // Pivot
+    try_save(ar, ser20::make_nvp("pivot", obj.get_pivot()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -879,6 +898,18 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("start_delay", start_delay)))
     {
         obj.set_start_delay(start_delay);
+    }
+    
+    bool align_to_direction{false}; // Default to false for backward compatibility
+    if(try_load(ar, ser20::make_nvp("align_to_direction", align_to_direction)))
+    {
+        obj.set_align_to_direction(align_to_direction);
+    }
+    
+    math::vec2 pivot{0.5f, 0.5f}; // Default to center for backward compatibility
+    if(try_load(ar, ser20::make_nvp("pivot", pivot)))
+    {
+        obj.set_pivot(pivot);
     }
 }
 LOAD_INSTANTIATE(particle_emitter_component, ser20::iarchive_associative_t);
