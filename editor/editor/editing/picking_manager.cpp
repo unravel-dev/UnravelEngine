@@ -326,8 +326,16 @@ auto is_ancestor_of(entt::handle potential_ancestor, entt::handle child) -> bool
  */
 auto should_skip_selection_for_additive_pick(const editing_manager& em,
                                              editing_manager::select_mode pick_mode,
+                                             const math::vec2& pick_area,
                                              entt::handle picked_entity) -> bool
 {
+    bool is_area_picking = pick_area.x > 0.0f && pick_area.y > 0.0f;
+
+
+    if(!is_area_picking)
+    {
+        return false;
+    }
     if(!picked_entity)
     {
         return false;
@@ -739,6 +747,7 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     // Create entity handle (may be invalid if id_key is 0)
     auto entity = entt::entity(id_key);
     entt::handle picked_entity;
+    auto& em = ctx.get_cached<editing_manager>();
 
     // Only try to create a handle if the entity ID is valid
     if(id_key != 0)
@@ -746,7 +755,12 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
         picked_entity = target_scene->create_handle(entity);
         if(picked_entity)
         {
-            picked_entity = get_logical_top_level_entity(*target_scene->registry, picked_entity);
+            auto logical_pick = get_logical_top_level_entity(*target_scene->registry, picked_entity);
+
+            if(!em.is_selected(logical_pick))
+            {
+                picked_entity = logical_pick;
+            }
         }
     }
 
@@ -760,10 +774,9 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
     else
     {
         // Use the traditional selection mechanism
-        auto& em = ctx.get_cached<editing_manager>();
         if(picked_entity)
         {
-            if(!should_skip_selection_for_additive_pick(em, pick_mode_, picked_entity))
+            if(!should_skip_selection_for_additive_pick(em, pick_mode_, pick_area_, picked_entity))
             {
                 em.select(picked_entity, pick_mode_);
             }

@@ -112,6 +112,29 @@ ImVec2 fit_item(float item_w, float item_h, float area_w, float area_h, size_fit
     return {xscale, yscale};
 }
 
+// Draw a small "grip" icon inside rect (unstyled handle)
+void draw_grip(ImDrawList* dl, ImRect r, ImU32 col)
+{
+    // draw 2 columns * 3 rows of dots
+    const float w = r.GetWidth();
+    const float h = r.GetHeight();
+    const float cx = r.Min.x + w * 0.5f;
+    const float cy = r.Min.y + h * 0.5f;
+
+    const float dx = w * 0.18f;
+    const float dy = h * 0.18f;
+    const float rad = (r.GetHeight()) * 0.07f;
+
+    for(int row = -1; row <= 1; ++row)
+    {
+        for(int colx = -1; colx <= 1; colx += 2)
+        {
+            ImVec2 p(cx + colx * dx, cy + row * dy);
+            dl->AddCircleFilled(p, rad, col);
+        }
+    }
+}
+
 bool IsItemDisabled()
 {
     return ImGui::GetItemFlags() & ImGuiItemFlags_Disabled;
@@ -1195,4 +1218,207 @@ int PlotEx(ImGuiPlotType plot_type, const char* label, ImRange (*values_getter)(
     return idx_hovered;
 }
 
+bool ReorderableList(
+    const char* label,
+    int item_count,
+    const std::function<void(int index)>& draw_item,
+    const std::function<void(int from, int insert_before)>& on_reorder)
+{
+    bool changed = false;
+    const char* kPayload = "REORDER_LIST_ITEM_IDX";
+
+    ImGui::TextUnformatted(label);
+    ImGui::BeginChild(label, ImVec2(0, 240), true);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float row_h  = ImGui::GetFrameHeight();
+    const float grip_w = row_h;
+
+    int pending_from = -1;
+    int pending_insert_before = -1;
+
+    // ---- Single insertion preview state (chosen winner) ----
+    bool  have_preview = false;
+    float preview_x0 = 0.f, preview_x1 = 0.f, preview_y = 0.f;
+    int   preview_insert_before = -1;
+    int   preview_from = -1;
+    float best_dist = FLT_MAX;
+
+    const float mouseY = ImGui::GetIO().MousePos.y;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    // Create a drop zone above the first item
+    if(item_count > 0)
+    {
+        ImVec2 first_row_start = ImGui::GetCursorScreenPos();
+        
+        // Create a drop zone above the first item
+        ImRect firstDropRect;
+        firstDropRect.Min = first_row_start;
+        firstDropRect.Min.y -= style.ItemSpacing.y * 0.5f; // Half spacing above
+        firstDropRect.Max = ImVec2(first_row_start.x + ImGui::GetContentRegionAvail().x, first_row_start.y + style.ItemSpacing.y * 0.5f);
+        
+        ImGui::SetCursorScreenPos(firstDropRect.Min);
+        ImGui::InvisibleButton("##dropzone_first", firstDropRect.GetSize());
+        ImGui::SetCursorScreenPos(first_row_start); // Restore cursor
+        
+        if(ImGui::BeginDragDropTarget())
+        {
+            if(const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(kPayload, ImGuiDragDropFlags_AcceptPeekOnly))
+            {
+                IM_ASSERT(payload->DataSize == sizeof(int));
+                int from = *(const int*)payload->Data;
+                
+                // Insert before first item (index 0)
+                const int insert_before = 0;
+                const float y = first_row_start.y - style.ItemSpacing.y * 0.5f;
+                
+                const float dist = fabsf(mouseY - y);
+                if(dist < best_dist && preview_insert_before != insert_before)
+                {
+                    best_dist = dist;
+                    have_preview = true;
+                    preview_from = from;
+                    preview_insert_before = insert_before;
+                    preview_x0 = firstDropRect.Min.x;
+                    preview_x1 = firstDropRect.Max.x;
+                    preview_y = y;
+                }
+                
+                if(payload->IsDelivery())
+                {
+                    pending_from = from;
+                    pending_insert_before = insert_before;
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+    }
+
+    for(int i = 0; i < item_count; ++i)
+    {
+        ImGui::PushID(i);
+
+        // Save the row start position in SCREEN coordinates
+        ImVec2 row_start = ImGui::GetCursorScreenPos();
+
+        // --- Draw your row UI (unchanged) ---
+        ImVec2 start = row_start;
+
+        ImGui::BeginGroup();
+        ImGui::InvisibleButton("##grip", ImVec2(grip_w, row_h));
+        // ImRect gripRect(start, ImVec2(start.x + grip_w, start.y + row_h));
+        ImRect gripRect;
+        gripRect.Min = GetItemRectMin();
+        gripRect.Max = GetItemRectMax();
+
+        {
+            ImU32 col = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            if(ImGui::IsItemHovered()) col = ImGui::GetColorU32(ImGuiCol_Text);
+            draw_grip(dl, gripRect, col);
+        }
+
+        if(ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+        {
+            ImGui::SetDragDropPayload(kPayload, &i, sizeof(int));
+            ImGui::Text("Item %d", i);
+            ImGui::EndDragDropSource();
+        }
+
+        ImGui::SameLine();
+
+        // Draw the item using the callback
+        draw_item(i);
+        ImGui::EndGroup();
+
+        // Rect of the drawn UI (selectable is last item => gives good width)
+        ImRect uiRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+
+        // ---- Create a drop zone that includes the vertical spacing gap ----
+        // Expand down by ItemSpacing.y so the gap is not a dead zone.
+        ImRect dropRect = uiRect;
+        dropRect.Min.x = row_start.x;                  // ensure it covers from row start
+        dropRect.Min.y = row_start.y;
+        dropRect.Max.y += style.ItemSpacing.y;         // include the gap below
+
+        // Place an InvisibleButton exactly over that dropRect.
+        // We must set cursor to dropRect.Min before calling it.
+        ImGui::SetCursorScreenPos(dropRect.Min);
+        ImGui::InvisibleButton("##dropzone", dropRect.GetSize());
+
+        // Restore cursor: continue layout below the row + spacing
+        // (InvisibleButton moved cursor; put it back to where it should be)
+        ImGui::SetCursorScreenPos(ImVec2(row_start.x, dropRect.Max.y));
+
+        // Now use the dropzone as the target + rect reference
+        if(ImGui::BeginDragDropTarget())
+        {
+            if(const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(kPayload, ImGuiDragDropFlags_AcceptPeekOnly))
+            {
+                IM_ASSERT(payload->DataSize == sizeof(int));
+                int from = *(const int*)payload->Data;
+
+                float halfGap = style.ItemSpacing.y * 0.5f;
+
+                if(i == 0 || i == item_count - 1)
+                {
+                    halfGap = 0.0f;
+                }
+                // Decide insert position (same as before)
+                const float midY = (dropRect.Min.y + dropRect.Max.y) * 0.5f;
+                const bool  topHalf = (mouseY < midY);
+                const int   insert_before = topHalf ? i : (i + 1);
+
+                // NEW: stable line Y centered in the gap
+                const float y = topHalf ? (uiRect.Min.y - halfGap) : (uiRect.Max.y + halfGap);
+
+                const float dist = fabsf(mouseY - y);
+                if(dist < best_dist && preview_insert_before != insert_before)
+                {
+                    best_dist = dist;
+                    have_preview = true;
+                    preview_from = from;
+                    preview_insert_before = insert_before;
+                    preview_x0 = uiRect.Min.x;
+                    preview_x1 = uiRect.Max.x;
+                    preview_y  = y;
+                }
+
+                if(payload->IsDelivery())
+                {
+                    pending_from = from;
+                    pending_insert_before = insert_before;
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        ImGui::PopID();
+    }
+
+    // Draw exactly ONE preview line (winner)
+    if(have_preview)
+    {
+        const float pad = 6.0f;
+        dl->AddLine(
+            ImVec2(preview_x0 + pad, preview_y),
+            ImVec2(preview_x1 - pad, preview_y),
+            ImGui::GetColorU32(ImGuiCol_DragDropTarget),
+            2.0f
+        );
+    }
+
+    // Execute pending move after loop
+    if(pending_from != -1 && pending_insert_before != -1)
+    {
+        on_reorder(pending_from, pending_insert_before);
+        changed = true;
+    }
+
+    ImGui::EndChild();
+    return changed;
+}
 } // namespace ImGui

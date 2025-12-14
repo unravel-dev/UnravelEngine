@@ -73,8 +73,11 @@ void script_component::destroy()
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.scoped->object;
-                     remove_script_component(obj);
+                     if(script.scoped)
+                     {
+                         auto& obj = script.scoped->object;
+                         remove_script_component(obj);
+                     }
                  });
 
     process_pending_deletions();
@@ -259,6 +262,10 @@ void script_component::destroy(script_object& script_obj)
 
 void script_component::set_entity(const mono::mono_object& obj, entt::handle e)
 {
+    if(!obj.valid())
+    {
+        return;
+    }
     try
     {
         auto method = mono::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_set_entity");
@@ -561,10 +568,21 @@ auto script_component::remove_script_component(const mono::mono_object& obj) -> 
     {
         auto& script_obj = *it;
 
-        set_entity(obj, {});
-
-        script_obj.state->marked_for_destroy = true;
-        return true;
+        if(script_obj.state)
+        {
+            
+            // already queued for destruction
+            if(script_obj.state->marked_for_destroy)
+            {
+                APPLOG_WARNING("Script component already queued for destruction");
+                return true;
+            }
+            set_entity(obj, {});
+            
+            script_obj.state->marked_for_destroy = true;
+            return true;
+        }
+        return false;
     }
 
     return false;
@@ -585,11 +603,24 @@ auto script_component::remove_script_component(const mono::mono_type& type) -> b
     if(it != std::end(script_components_))
     {
         auto& script_obj = *it;
-        auto& obj = script_obj.scoped->object;
-        set_entity(obj, {});
 
-        script_obj.state->marked_for_destroy = true;
-        return true;
+        if(script_obj.state)
+        {
+            // already queued for destruction
+            if(script_obj.state->marked_for_destroy)
+            {
+                APPLOG_WARNING("Script component already queued for destruction");
+                return true;
+            }
+            auto& obj = script_obj.scoped->object;
+            set_entity(obj, {});
+
+            script_obj.state->marked_for_destroy = true;
+            return true;
+        }
+
+        return false;
+       
     }
 
     return false;

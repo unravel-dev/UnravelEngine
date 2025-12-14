@@ -1,4 +1,6 @@
 #include "inspector_script.h"
+#include "editor/imgui/integration/imgui.h"
+#include "entt/core/any.hpp"
 #include "inspectors.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/scripting/ecs/systems/script_interop.h>
@@ -7,6 +9,7 @@
 #include <monopp/mono_type_conversion.h>
 #include <monopp/mono_list.h>
 #include <type_traits>
+#include <functional>
 
 #include <core/string_utils/utils.h>
 
@@ -25,6 +28,7 @@
 
 namespace unravel
 {
+
 
 auto find_attribute(const std::string& name, const std::vector<mono::mono_object>& attribs) -> mono::mono_object
 {
@@ -51,10 +55,33 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
  */
 auto is_serializable_type(const mono::mono_type& type) -> bool
 {
-    // auto attribs = type.get_attributes();
-    // auto serializable_attrib = find_attribute("SerializableAttribute", attribs);
-    // return serializable_attrib.valid();
-    return true;
+    auto attribs = type.get_attributes();
+    auto serializable_attrib = find_attribute("SerializableAttribute", attribs);
+    return serializable_attrib.valid();
+    // return true;
+}
+
+auto get_header(const mono::mono_field& field) -> std::string
+{
+    auto attribs = field.get_attributes();
+    auto header_attrib = find_attribute("HeaderAttribute", attribs);
+    if(header_attrib.valid())
+    {
+        auto invoker = mono::make_field_invoker<std::string>(header_attrib.get_type(), "header");
+        return invoker.get_value(header_attrib);
+    }
+    return "";
+}
+auto get_header(const mono::mono_property& property) -> std::string
+{
+    auto attribs = property.get_attributes();
+    auto header_attrib = find_attribute("HeaderAttribute", attribs);
+    if(header_attrib.valid())
+    {
+        auto invoker = mono::make_property_invoker<std::string>(header_attrib.get_type(), "header");
+        return invoker.get_value(header_attrib);
+    }
+    return "";
 }
 
 /**
@@ -73,32 +100,6 @@ auto is_list_type(const mono::mono_type& type) -> bool
     // Check if it's a generic List<T>
     auto fullname = type.get_fullname();
     return fullname.find("System.Collections.Generic.List<") == 0;
-}
-
-/**
- * @brief Gets the element type of a collection (array or List<T>)
- * 
- * @param type The collection type
- * @return The element type, or invalid type if not a collection
- */
-auto get_collection_element_type(const mono::mono_type& type) -> mono::mono_type
-{
-    if (type.is_array())
-    {
-        return type.get_element_type();
-    }
-    else if (is_list_type(type))
-    {
-        // For List<T>, get the generic argument
-        // List<T> has a property "Item" that returns T
-        auto item_prop = type.get_property("Item");
-        if (item_prop.get_internal_ptr())
-        {
-            return item_prop.get_type();
-        }
-    }
-    
-    return {};
 }
 
 /**
@@ -566,314 +567,6 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
     return asset_proxy;
 }
 
-/**
- * @brief Creates a specialized proxy for individual array elements in script objects
- * 
- * This handles access to specific array indices while maintaining proper property paths.
- * Now receives the array proxy directly instead of the owner object proxy.
- */
-template<typename T>
-auto make_array_element_proxy(const meta_any_proxy& array_proxy, size_t index, const std::string& element_name) -> meta_any_proxy
-{
-    meta_any_proxy element_proxy;
-    
-    element_proxy.impl->get_name = [array_proxy, element_name]()
-    {
-        auto parent_name = array_proxy.impl->get_name();
-        if(parent_name.empty())
-        {
-            return element_name;
-        }
-        return fmt::format("{}/{}", parent_name, element_name);
-    };
-    
-    element_proxy.impl->getter = [array_proxy, index](entt::meta_any& result) mutable
-    {
-        entt::meta_any array_var;
-        if(array_proxy.impl->getter(array_var) && array_var)
-        {
-            auto& array_obj = array_var.cast<mono::mono_object&>();
-            mono::mono_array<T> array(array_obj);
-            
-            if(index < array.size())
-            {
-                auto element_value = array.get(index);
-                // Create an owned copy to avoid dangling references
-                result = entt::meta_any{std::in_place_type<T>, element_value};
-                return true;
-            }
-        }
-        return false;
-    };
-    
-    element_proxy.impl->setter = [array_proxy, index](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-    {
-        entt::meta_any array_var;
-        if(array_proxy.impl->getter(array_var) && array_var)
-        {
-            auto& array_obj = array_var.cast<mono::mono_object&>();
-            if(value.try_cast<T>())
-            {
-                mono::mono_array<T> array(array_obj);
-                
-                if(index < array.size())
-                {
-                    array.set(index, value.cast<T>());
-                    // Note: mono arrays are reference types, so the change is already applied
-                    // Create a mutable copy of array_proxy for the setter call
-                    //auto mutable_array_proxy = array_proxy;
-                    //return mutable_array_proxy.impl->setter(mutable_array_proxy, array_var, execution_count); 
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-    
-    return element_proxy;
-}
-
-/**
- * @brief Creates a specialized proxy for individual List<T> elements in script objects
- * 
- * This handles access to specific list indices while maintaining proper property paths.
- * Similar to make_array_element_proxy but uses mono_list<T> instead of mono_array<T>.
- * 
- * For mono_object specialization, handles conversion from primitive types to boxed mono_objects.
- */
-template<typename T>
-auto make_list_element_proxy(const meta_any_proxy& list_proxy, size_t index, const std::string& element_name) -> meta_any_proxy
-{
-    meta_any_proxy element_proxy;
-    
-    element_proxy.impl->get_name = [list_proxy, element_name]()
-    {
-        auto parent_name = list_proxy.impl->get_name();
-        if(parent_name.empty())
-        {
-            return element_name;
-        }
-        return fmt::format("{}/{}", parent_name, element_name);
-    };
-    
-    element_proxy.impl->getter = [list_proxy, index](entt::meta_any& result) mutable
-    {
-        entt::meta_any list_var;
-        if(list_proxy.impl->getter(list_var) && list_var)
-        {
-            auto& list_obj = list_var.cast<mono::mono_object&>();
-            mono::mono_list<T> list(list_obj);
-            
-            if(index < list.size())
-            {
-                auto element_value = list.get(index);
-                // Create an owned copy to avoid dangling references
-                result = entt::meta_any{std::in_place_type<T>, element_value};
-                return true;
-            }
-        }
-        return false;
-    };
-    
-    element_proxy.impl->setter = [list_proxy, index](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-    {
-        entt::meta_any list_var;
-        if(list_proxy.impl->getter(list_var) && list_var)
-        {
-            auto& list_obj = list_var.cast<mono::mono_object&>();
-            mono::mono_list<T> list(list_obj);
-            
-            if(index < list.size())
-            {
-                if(value.try_cast<T>())
-                {
-                    list.set(index, value.cast<T>());
-                    // Note: mono lists are reference types, so the change is already applied
-                    // Propagate the change up through the proxy chain
-                    auto mutable_list_proxy = list_proxy;
-                    return mutable_list_proxy.impl->setter(mutable_list_proxy, list_var, execution_count);
-                }
-            }
-        }
-        return false;
-    };
-    
-    return element_proxy;
-}
-
-/**
- * @brief Specialization for mono_object elements that handles primitive type conversion
- * 
- * When a list contains mono_object elements but the actual element type might be a primitive,
- * this specialization handles converting primitive values to boxed mono_objects.
- */
-template<>
-auto make_list_element_proxy<mono::mono_object>(const meta_any_proxy& list_proxy, size_t index, const std::string& element_name) -> meta_any_proxy
-{
-    meta_any_proxy element_proxy;
-    
-    element_proxy.impl->get_name = [list_proxy, element_name]()
-    {
-        auto parent_name = list_proxy.impl->get_name();
-        if(parent_name.empty())
-        {
-            return element_name;
-        }
-        return fmt::format("{}/{}", parent_name, element_name);
-    };
-    
-    element_proxy.impl->getter = [list_proxy, index](entt::meta_any& result) mutable
-    {
-        entt::meta_any list_var;
-        if(list_proxy.impl->getter(list_var) && list_var)
-        {
-            auto& list_obj = list_var.cast<mono::mono_object&>();
-            mono::mono_list<mono::mono_object> list(list_obj);
-            
-            if(index < list.size())
-            {
-                auto element_value = list.get(index);
-                // Create an owned copy to avoid dangling references
-                result = entt::meta_any{std::in_place_type<mono::mono_object>, element_value};
-                return true;
-            }
-        }
-        return false;
-    };
-    
-    element_proxy.impl->setter = [list_proxy, index](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-    {
-        entt::meta_any list_var;
-        if(list_proxy.impl->getter(list_var) && list_var)
-        {
-            auto& list_obj = list_var.cast<mono::mono_object&>();
-            mono::mono_list<mono::mono_object> list(list_obj);
-            
-            if(index < list.size())
-            {
-                mono::mono_object element_to_set;
-                
-                // Try to cast directly to mono_object first (already boxed)
-                if(value.try_cast<mono::mono_object>())
-                {
-                    element_to_set = value.cast<mono::mono_object>();
-                }
-                else
-                {
-                    // Value is a primitive type, need to box it
-                    // Get the element type from the list to know how to box
-                    auto element = list.get(index);
-                    if(element.valid())
-                    {
-                        const auto& element_type = element.get_type();
-                        
-                        // Try common primitive types and box them
-                        if(value.try_cast<int32_t>())
-                        {
-                            int32_t val = value.cast<int32_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<float>())
-                        {
-                            float val = value.cast<float>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<double>())
-                        {
-                            double val = value.cast<double>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<bool>())
-                        {
-                            bool val = value.cast<bool>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<int64_t>())
-                        {
-                            int64_t val = value.cast<int64_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<uint32_t>())
-                        {
-                            uint32_t val = value.cast<uint32_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<uint64_t>())
-                        {
-                            uint64_t val = value.cast<uint64_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<int16_t>())
-                        {
-                            int16_t val = value.cast<int16_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<uint16_t>())
-                        {
-                            uint16_t val = value.cast<uint16_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<int8_t>())
-                        {
-                            int8_t val = value.cast<int8_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else if(value.try_cast<uint8_t>())
-                        {
-                            uint8_t val = value.cast<uint8_t>();
-                            MonoDomain* domain = mono_domain_get();
-                            MonoObject* boxed = mono_value_box(domain, element_type.get_internal_ptr(), &val);
-                            element_to_set = mono::mono_object(boxed);
-                        }
-                        else
-                        {
-                            // Unknown type, can't convert
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        // Can't determine element type, can't convert
-                        return false;
-                    }
-                }
-                
-                if(element_to_set.valid())
-                {
-                    list.set(index, element_to_set);
-                    // Propagate the change up through the proxy chain
-                    // auto mutable_list_proxy = list_proxy;
-                    // return mutable_list_proxy.impl->setter(mutable_list_proxy, list_var, execution_count);
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-    
-    return element_proxy;
-}
-
 template<typename T>
 struct mono_inspector
 {
@@ -898,12 +591,12 @@ struct mono_inspector
         
         // Extract the value from the mono_object
         // For value types, we need to unbox the object
-        const auto& obj_type = obj.get_type();
-        if(!obj_type.is_valuetype())
-        {
-            // Not a value type, can't inspect directly
-            return result;
-        }
+        // const auto& obj_type = obj.get_type();
+        // if(!obj_type.is_valuetype())
+        // {
+        //     // Not a value type, can't inspect directly
+        //     return result;
+        // }
         
         // Use mono_converter to extract the value
         // T value = mono::mono_converter<T>::from_mono(obj.get_internal_ptr());
@@ -933,17 +626,13 @@ struct mono_inspector
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto mono_obj = obj_var.cast<mono::mono_object&>();
                 if(value.try_cast<T>())
                 {
-                    T new_value = value.cast<T>();
-                    // Update the mono_object by creating a new boxed object with the new value
-                    const auto& obj_type = mono_obj.get_type();
-                    // Create a new boxed object with the new value
-                    MonoDomain* domain = mono_domain_get();
-                    MonoObject* boxed = mono_value_box(domain, obj_type.get_internal_ptr(), &new_value);
-                    mono_obj = mono::mono_object(boxed);
-                    return obj_proxy.impl->setter(proxy, obj_var, execution_count);
+                    auto mono_value = mono::mono_converter<T>::to_mono(value.cast<T>());
+                    mono_obj.box_value(mono_value, mono_obj.get_type());
+                    obj_var = mono_obj;
+                    return obj_proxy.impl->setter(const_cast<meta_any_proxy&>(obj_proxy), obj_var, execution_count);
                 }
             }
             return false;
@@ -1508,6 +1197,86 @@ struct mono_inspector_enum
 template<>
 struct mono_inspector<entt::handle>
 {
+    static auto inspect_object(rtti::context& ctx,
+                               mono::mono_object& obj,
+                               const meta_any_proxy& obj_proxy,
+                               const var_info& info) -> inspect_result
+    {
+        inspect_result result;
+        
+        // Create a proxy that can get/set the handle value directly from/to the mono_object
+        meta_any_proxy handle_proxy;
+        handle_proxy.impl->get_name = [obj_proxy]()
+        {
+            return obj_proxy.impl->get_name();
+        };
+        
+        handle_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
+        {
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
+            {
+                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                
+                // Unbox the Entity value from the mono_object
+                // Entity is a value type in C#, so we need to unbox it
+                auto obj_type = mono_obj.get_type();
+                if(!obj_type.is_valuetype())
+                {
+                    return false;
+                }
+                
+                // Unbox the entity value
+                entt::entity entity = mono_obj.unbox_value<entt::entity>();
+                
+                // Convert entity to handle using the scene
+                auto& ec = ctx.get_cached<ecs>();
+                auto& scene = ec.get_scene();
+                auto handle = scene.create_handle(entity);
+                
+                result = entt::meta_any{std::in_place_type<entt::handle>, handle};
+                return true;
+            }
+            return false;
+        };
+        
+        handle_proxy.impl->setter = [obj_proxy, &ctx](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+        {
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
+            {
+                auto mono_obj = obj_var.cast<mono::mono_object&>();
+                if(value.try_cast<entt::handle>())
+                {
+                    auto handle = value.cast<entt::handle>();
+                    entt::entity entity = handle ? handle.entity() : entt::null;
+                    
+                    // Box the entity value back into the mono_object
+                    auto obj_type = mono_obj.get_type();
+                    if(obj_type.is_valuetype())
+                    {
+                        mono_obj.box_value(entity, obj_type);
+                        obj_var = mono_obj;
+                        return obj_proxy.impl->setter(const_cast<meta_any_proxy&>(obj_proxy), obj_var, execution_count);
+                    }
+                }
+            }
+            return false;
+        };
+        
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!handle_proxy.impl->getter(var))
+        {
+            return result;
+        }
+        
+        // Use the existing inspection infrastructure
+        result |= inspect_var(ctx, var, handle_proxy, info);
+        
+        return result;
+    }
+
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
@@ -1579,6 +1348,96 @@ struct mono_inspector<entt::handle>
 template<typename T>
 struct mono_inspector<asset_handle<T>>
 {
+    static auto inspect_object(rtti::context& ctx,
+                               mono::mono_object& obj,
+                               const meta_any_proxy& obj_proxy,
+                               const var_info& info) -> inspect_result
+    {
+        inspect_result result;
+        
+        // Create a proxy that can get/set the asset handle value directly from/to the mono_object
+        meta_any_proxy asset_proxy;
+        asset_proxy.impl->get_name = [obj_proxy]()
+        {
+            return obj_proxy.impl->get_name();
+        };
+        
+        asset_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
+        {
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
+            {
+                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                
+                // The mono_object itself represents an asset handle (reference type)
+                // Get the UID property from the asset handle object
+                asset_handle<T> asset;
+                if(mono_obj.valid())
+                {
+                    auto obj_type = mono_obj.get_type();
+                    auto prop = obj_type.get_property("uid");
+                    if(prop.get_internal_ptr())
+                    {
+                        auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                        auto uid = uid_prop.get_value(mono_obj);
+                        
+                        auto& am = ctx.get_cached<asset_manager>();
+                        asset = am.get_asset<T>(uid);
+                    }
+                }
+                
+                result = entt::meta_any{std::in_place_type<asset_handle<T>>, asset};
+                return true;
+            }
+            return false;
+        };
+        
+        asset_proxy.impl->setter = [obj_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+        {
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
+            {
+                auto mono_obj = obj_var.cast<mono::mono_object&>();
+                if(value.try_cast<asset_handle<T>>())
+                {
+                    auto asset = value.cast<asset_handle<T>>();
+                    auto obj_type = mono_obj.get_type();
+
+                    // Set the UID property on the asset handle object
+                    if(!mono_obj.valid() && obj_type.valid())
+                    {  
+                        mono_obj = obj_type.new_instance();
+                    }
+                    
+                    if(mono_obj.valid())
+                    {
+                        auto prop = obj_type.get_property("uid");
+                        if(prop.get_internal_ptr())
+                        {
+                            auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                            uid_prop.set_value(mono_obj, asset ? asset.uid() : hpp::uuid{});
+                            obj_var = mono_obj;
+                            return obj_proxy.impl->setter(const_cast<meta_any_proxy&>(obj_proxy), obj_var, execution_count);
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+        
+        // Get current value through the proxy for inspection
+        entt::meta_any var;
+        if(!asset_proxy.impl->getter(var))
+        {
+            return result;
+        }
+        
+        // Use the existing inspection infrastructure
+        result |= inspect_var(ctx, var, asset_proxy, info);
+        
+        return result;
+    }
+
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
                                 mono::mono_object& obj,
@@ -1676,166 +1535,107 @@ struct mono_inspector_collection
             return result;
         }
         
-        // Get collection size
-        size_t collection_size = 0;
+        std::vector<mono::mono_object> vec;
+
         if (is_array)
         {
             mono::mono_array<mono::mono_object> array(val);
-            collection_size = array.size();
+            vec = array.to_vector();
         }
         else if (is_list)
         {
             mono::mono_list<mono::mono_object> list(val);
-            collection_size = list.size();
+            vec = list.to_vector();
+        }
+        meta_any_proxy collection_proxy;
+        collection_proxy.impl->get_name = [obj_proxy, mutable_field]()
+        {
+            auto parent_name = obj_proxy.impl->get_name();
+            auto field_name = mutable_field.get_name();
+            if(parent_name.empty())
+            {
+                return field_name;
+            }
+            return fmt::format("{}/{}", parent_name, field_name);
+        };
+        collection_proxy.impl->getter = [obj_proxy, mutable_field, is_array, is_list](entt::meta_any& result) mutable
+        {
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
+            {
+                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto collection_obj = mutable_field.get_value(mono_obj);
 
-        }
-        
-        // Header with add/remove buttons
-        ImGui::PushID(mutable_field.get_name().c_str());
-        
-        bool tree_open = ImGui::TreeNodeEx(mutable_field.get_name().c_str(), 
-                                           ImGuiTreeNodeFlags_DefaultOpen,
-                                           "%s [%zu]", 
-                                           mutable_field.get_name().c_str(), 
-                                           collection_size);
-        
-        // Add/Remove buttons (only for List<T>, arrays are fixed size)
-        if (is_list && !info.read_only)
+
+                if(is_array)
+                {
+                    auto array = mono::mono_array<mono::mono_object>(collection_obj).to_vector();
+                    result = array;
+                    return true;
+                }
+                if(is_list)
+                {
+                    auto list = mono::mono_list<mono::mono_object>(collection_obj).to_vector();
+                    result = list;
+                    return true;
+                }
+
+            }
+            return false;
+        };
+        collection_proxy.impl->setter = [obj_proxy, mutable_field, is_array, is_list](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
         {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("+"))
+            entt::meta_any obj_var;
+            if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                mono::mono_list<mono::mono_object> list(val);
-                list.add(collection_type.new_instance());
-                result.changed = true;
-                result.edit_finished = true;
-            }
-            
-            if (collection_size > 0)
-            {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("-"))
+                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                if(value.try_cast<std::vector<mono::mono_object>>())
                 {
-                    // Remove last element from list
-                    auto remove_at_method = collection_type.get_method("RemoveAt", 1);
-                    if (remove_at_method.valid())
+                    if(is_array)
                     {
-                        auto remove_invoker = mono::make_method_invoker<void(int32_t)>(remove_at_method);
-                        remove_invoker(val, static_cast<int32_t>(collection_size - 1));
-                        result.changed = true;
-                        result.edit_finished = true;
+                        
+                        auto element_type = mutable_field.get_type().get_element_type();
+                        auto vec = value.cast<std::vector<mono::mono_object>>();
+                        mono::mono_array<mono::mono_object> array(vec, element_type);
+                        mutable_field.set_value(mono_obj, array);
                     }
+                    if(is_list)
+                    {
+                        auto collection_obj = mutable_field.get_value(mono_obj);
+                        auto collection = mono::mono_list<mono::mono_object>(collection_obj);
+                        auto element_type = collection.get_element_type();
+                        auto vec = value.cast<std::vector<mono::mono_object>>();
+                        collection.set(vec, element_type);
+                        mutable_field.set_value(mono_obj, collection);
+                    }
+                    return obj_proxy.impl->setter(proxy, obj_var, execution_count);
                 }
             }
-        }
-        
-        if (tree_open)
+            return false;
+        };
+
+        entt::meta_any vec_var = entt::forward_as_meta(vec);
+
+        auto attribs = mutable_field.get_attributes();
+        auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
+
+        entt::attributes meta_attribs;
+        meta_attribs["name"] = mutable_field.get_name();
+        meta_attribs["pretty_name"] = mutable_field.get_name();
+        std::string tooltip;
+        if(tooltip_attrib.valid())
         {
-            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
-            
-            // Inspect each element
-            for (size_t i = 0; i < collection_size; ++i)
-            {
-                // Get element at index
-                mono::mono_object element;
-                if (is_array)
-                {
-                    mono::mono_array<mono::mono_object> array(val);
-                    element = array.get(i);
-                }
-                else if (is_list)
-                {
-                    mono::mono_list<mono::mono_object> list(val);
-                    element = list.get(i);
-                }
-                
-                if (element.valid())
-                {
-                    // Create array/collection proxy first - create a proxy that points to the collection field
-                    meta_any_proxy collection_proxy;
-                    collection_proxy.impl->get_name = [obj_proxy, mutable_field]()
-                    {
-                        auto parent_name = obj_proxy.impl->get_name();
-                        auto field_name = mutable_field.get_name();
-                        if(parent_name.empty())
-                        {
-                            return field_name;
-                        }
-                        return fmt::format("{}/{}", parent_name, field_name);
-                    };
-                    collection_proxy.impl->getter = [obj_proxy, mutable_field](entt::meta_any& result) mutable
-                    {
-                        entt::meta_any obj_var;
-                        if(obj_proxy.impl->getter(obj_var) && obj_var)
-                        {
-                            auto& mono_obj = obj_var.cast<mono::mono_object&>();
-                            auto collection_obj = mutable_field.get_value(mono_obj);
-                            result = entt::meta_any{std::in_place_type<mono::mono_object>, collection_obj};
-                            return true;
-                        }
-                        return false;
-                    };
-                    collection_proxy.impl->setter = [obj_proxy, mutable_field](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-                    {
-                        entt::meta_any obj_var;
-                        if(obj_proxy.impl->getter(obj_var) && obj_var)
-                        {
-                            auto& mono_obj = obj_var.cast<mono::mono_object&>();
-                            if(value.try_cast<mono::mono_object>())
-                            {
-                                mutable_field.set_value(mono_obj, value.cast<mono::mono_object>());
-                                return obj_proxy.impl->setter(proxy, obj_var, execution_count);
-                            }
-                        }
-                        return false;
-                    };
-                    
-                    // Create element proxy using the collection proxy
-                    std::string element_name = fmt::format("Element {}", i);
-                    meta_any_proxy element_proxy;
-                    if (is_array)
-                    {
-                        element_proxy = make_array_element_proxy<mono::mono_object>(collection_proxy, i, element_name);
-                    }
-                    else if (is_list)
-                    {
-                        element_proxy = make_list_element_proxy<mono::mono_object>(collection_proxy, i, element_name);
-                    }
-                    
-                    // Inspect element
-                    entt::meta_any element_var = entt::forward_as_meta(element);
-                    
-                    ImGui::PushID(static_cast<int>(i));
-                    result |= unravel::inspect_var(ctx, element_var, element_proxy, info);
-                    
-                    // Remove button for List<T> elements
-                    if (is_list && !info.read_only)
-                    {
-                        ImGui::SameLine();
-                        if (ImGui::SmallButton("X"))
-                        {
-                            auto remove_at_method = collection_type.get_method("RemoveAt", 1);
-                            if (remove_at_method.valid())
-                            {
-                                auto remove_invoker = mono::make_method_invoker<void(int32_t)>(remove_at_method);
-                                remove_invoker(val, static_cast<int32_t>(i));
-                                result.changed = true;
-                                result.edit_finished = true;
-                                ImGui::PopID();
-                                break; // Exit loop after removal
-                            }
-                        }
-                    }
-                    ImGui::PopID();
-                }
-            }
-            
-            ImGui::PopStyleVar();
-            ImGui::TreePop();
+            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            tooltip = invoker.get_value(tooltip_attrib);
+            meta_attribs["tooltip"] = tooltip;
         }
-        
-        ImGui::PopID();
-        
+        auto custom = entt::make_custom<entt::attributes>(meta_attribs);
+        {
+            ImGui::PushID(mutable_field.get_name().c_str());
+            result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
+            ImGui::PopID();
+        }
+
         return result;
     }
     
@@ -1872,107 +1672,6 @@ struct mono_inspector_collection
     }
 };
 
-template<typename T>
-struct mono_inspector<mono::mono_array<T>>
-{
-    template<typename Invoker>
-    static auto inspect_invoker(rtti::context& ctx,
-                                mono::mono_object& obj,
-                                const meta_any_proxy& obj_proxy,
-                                const Invoker& mutable_field,
-                                const var_info& info) -> inspect_result
-    {
-        inspect_result result;
-
-        auto val = mutable_field.get_value(obj);
-        mono::mono_array<T> array(val);
-
-        for(size_t i = 0; i < array.size(); ++i)
-        {
-            // Create array proxy first - create a proxy that points to the array field
-            meta_any_proxy array_proxy;
-            array_proxy.impl->get_name = [obj_proxy, mutable_field]()
-            {
-                auto parent_name = obj_proxy.impl->get_name();
-                auto field_name = mutable_field.get_name();
-                if(parent_name.empty())
-                {
-                    return field_name;
-                }
-                return fmt::format("{}/{}", parent_name, field_name);
-            };
-            array_proxy.impl->getter = [obj_proxy, mutable_field](entt::meta_any& result) mutable
-            {
-                entt::meta_any obj_var;
-                if(obj_proxy.impl->getter(obj_var) && obj_var)
-                {
-                    auto& mono_obj = obj_var.cast<mono::mono_object&>();
-                    auto array_obj = mutable_field.get_value(mono_obj);
-                    result = entt::meta_any{std::in_place_type<mono::mono_object>, array_obj};
-                    return true;
-                }
-                return false;
-            };
-            array_proxy.impl->setter = [obj_proxy, mutable_field](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-            {
-                entt::meta_any obj_var;
-                if(obj_proxy.impl->getter(obj_var) && obj_var)
-                {
-                    auto& mono_obj = obj_var.cast<mono::mono_object&>();
-                    if(value.try_cast<mono::mono_object>())
-                    {
-                        mutable_field.set_value(mono_obj, value.cast<mono::mono_object>());
-                        return obj_proxy.impl->setter(proxy, obj_var, execution_count);
-                    }
-                }
-                return false;
-            };
-            
-            // Create element proxy using the array proxy
-            std::string element_name = fmt::format("Element {}", i);
-            auto element_proxy = make_array_element_proxy<T>(array_proxy, i, element_name);
-
-            // Get current value through the proxy for inspection
-            entt::meta_any element;
-            if(element_proxy.impl->getter(element))
-            {
-                result |= unravel::inspect_var(ctx, element, element_proxy, info);
-            }
-        }
-        return result;
-    }
-
-    static auto inspect_field(rtti::context& ctx,
-                              mono::mono_object& obj,
-                              const meta_any_proxy& obj_proxy,
-                              mono::mono_field& field,
-                              const var_info& info) -> inspect_result
-    {
-        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-
-        var_info field_info;
-        field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
-
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, field_info);
-    }
-
-    static auto inspect_property(rtti::context& ctx,
-                                 mono::mono_object& obj,
-                                 const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& field,
-                                 const var_info& info) -> inspect_result
-    {
-        auto invoker = mono::make_property_invoker<mono::mono_object>(field);
-
-        var_info field_info;
-        field_info.is_property = true;
-        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly();
-
-        return inspect_invoker(ctx, obj, obj_proxy, invoker, field_info);
-    }
-};
-
 auto inspector_mono_object::inspect(rtti::context& ctx,
                                     entt::meta_any& var,
                                     const meta_any_proxy& var_proxy,
@@ -1982,6 +1681,23 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     auto& data = var.cast<mono::mono_object&>();
 
     inspect_result result{};
+
+    if(!data.valid() && !data.get_type().valid())
+    {
+        // Fallback to unknown type display
+        var_info field_info;
+        field_info.is_property = true;
+        field_info.read_only = true;
+        std::string unknown_text;
+        unknown_text = "null(object)";
+        entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
+        auto unknown_var_proxy = make_proxy(unknown_var);
+        {
+            property_layout layout(unknown_var_proxy.impl->get_name());
+            result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
+        }
+        return result;
+    }
 
     const auto& type = data.get_type();
     using mono_object_inspector = std::function<inspect_result(rtti::context& ctx,
@@ -2006,23 +1722,22 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             {"Double",  &mono_inspector<double>::inspect_object},
             {"Char",    &mono_inspector<char16_t>::inspect_object},
             {"String",  &mono_inspector<std::string>::inspect_object},
-            // {"Entity",  &mono_inspector<entt::handle>::inspect_object},
+            {"Entity",  &mono_inspector<entt::handle>::inspect_object},
             {"Vector2", &mono_inspector<math::vec2>::inspect_object},
             {"Vector3", &mono_inspector<math::vec3>::inspect_object},
             {"Vector4", &mono_inspector<math::vec4>::inspect_object},
             {"Quaternion", &mono_inspector<math::quat>::inspect_object},
             {"Color", &mono_inspector<math::color>::inspect_object},
             {"LayerMask", &mono_inspector<layer_mask>::inspect_object},
-            // {"Texture",         &mono_inspector<asset_handle<gfx::texture>>::inspect_object},
-            // {"Material",        &mono_inspector<asset_handle<material>>::inspect_object},
-            // {"Mesh",            &mono_inspector<asset_handle<mesh>>::inspect_object},
-            // {"AnimationClip",   &mono_inspector<asset_handle<animation_clip>>::inspect_object},
-            // {"Prefab",          &mono_inspector<asset_handle<prefab>>::inspect_object},
-            // {"Scene",           &mono_inspector<asset_handle<scene_prefab>>::inspect_object},
-            // {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_object},
-            // {"AudioClip",       &mono_inspector<asset_handle<audio_clip>>::inspect_object},
-            // {"Font",            &mono_inspector<asset_handle<font>>::inspect_object},
-            // {"Color[]",       &mono_inspector<mono::mono_array<math::color>>::inspect_object},
+            {"Texture",         &mono_inspector<asset_handle<gfx::texture>>::inspect_object},
+            {"Material",        &mono_inspector<asset_handle<material>>::inspect_object},
+            {"Mesh",            &mono_inspector<asset_handle<mesh>>::inspect_object},
+            {"AnimationClip",   &mono_inspector<asset_handle<animation_clip>>::inspect_object},
+            {"Prefab",          &mono_inspector<asset_handle<prefab>>::inspect_object},
+            {"Scene",           &mono_inspector<asset_handle<scene_prefab>>::inspect_object},
+            {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_object},
+            {"AudioClip",       &mono_inspector<asset_handle<audio_clip>>::inspect_object},
+            {"Font",            &mono_inspector<asset_handle<font>>::inspect_object},
         };
         // clang-format on
 
@@ -2119,7 +1834,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     {
         result |= object_inspector(ctx, data, var_proxy, info);
     }
-    else
+    else if(data.valid())
     {
 
         bool include_base = true;
@@ -2135,7 +1850,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 inspect_predicate = !field.is_backing_field();
             }
 
-            if(field.is_static())
+            if(field.is_static() || field.has_attribute("HideAttribute"))
             {
                 inspect_predicate = false;
             }
@@ -2143,6 +1858,19 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
             if(inspect_predicate)
             {
+                std::string header = get_header(field);
+                if(!header.empty())
+                {
+                    ImGui::PushFont(ImGui::Font::Bold);
+                    {
+                        ImGui::NewLine();
+                        ImGui::Text("%s", header.c_str());
+                        ImGui::Spacing();
+                    }
+                    ImGui::PopFont();
+                }
+                
+
                 const auto& field_type = field.get_type();
 
                 auto field_inspector = get_field_inspector(field_type.get_name());
@@ -2168,34 +1896,34 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 //     //Handle arrays and List<T> with add/remove support
                 //     result |= mono_inspector_collection::inspect_field(ctx, data, var_proxy, field, info);
                 // }
-                else if(is_serializable_type(field_type))
-                {
-                    // Recursively inspect serializable nested objects
-                    // auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-                    // auto nested_obj = invoker.get_value(data);
+                // else if(is_serializable_type(field_type))
+                // {
+                //     // Recursively inspect serializable nested objects
+                //     // auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                //     // auto nested_obj = invoker.get_value(data);
                     
-                    // if(nested_obj.valid())
-                    // {
-                    //     auto nested_proxy = make_nested_object_proxy(var_proxy, invoker);
-                    //     result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, field.get_name(), info);
-                    // }
-                    // else
-                    {
-                        // Object is null, show as read-only field
-                        var_info field_info;
-                        field_info.is_property = true;
-                        field_info.read_only = true;
+                //     // if(nested_obj.valid())
+                //     // {
+                //     //     auto nested_proxy = make_nested_object_proxy(var_proxy, invoker);
+                //     //     result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, field.get_name(), info);
+                //     // }
+                //     // else
+                //     {
+                //         // Object is null, show as read-only field
+                //         var_info field_info;
+                //         field_info.is_property = true;
+                //         field_info.read_only = true;
 
-                        std::string null_text = "null (" + field_type.get_name() + ")";
-                        entt::meta_any null_var = entt::forward_as_meta(null_text);
-                        auto null_var_proxy = make_proxy(null_var);
+                //         std::string null_text = "null (" + field_type.get_name() + ")";
+                //         entt::meta_any null_var = entt::forward_as_meta(null_text);
+                //         auto null_var_proxy = make_proxy(null_var);
                         
-                        {
-                            property_layout layout(field.get_name());
-                            result |= inspect_var(ctx, null_var, null_var_proxy, field_info);
-                        }
-                    }
-                }
+                //         {
+                //             property_layout layout(field.get_name());
+                //             result |= inspect_var(ctx, null_var, null_var_proxy, field_info);
+                //         }
+                //     }
+                // }
                 else
                 {
                     // Fallback to unknown type display
@@ -2325,13 +2053,24 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 inspect_predicate = true;
             }
 
-            if(prop.is_static())
+            if(prop.is_static() || prop.has_attribute("HideAttribute"))
             {
                 inspect_predicate = false;
             }
 
             if(inspect_predicate)
             {
+                std::string header = get_header(prop);
+                if(!header.empty())
+                {
+                    ImGui::PushFont(ImGui::Font::Bold);
+                    {
+                        ImGui::NewLine();
+                        ImGui::Text("%s", header.c_str());
+                        ImGui::Spacing();
+                    }
+                    ImGui::PopFont();
+                }
                 const auto& prop_type = prop.get_type();
 
                 auto property_inspector = get_property_inspector(prop_type.get_name());
@@ -2359,16 +2098,16 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 // }
                 // else if(is_serializable_type(prop_type))
                 // {
-                //     // Recursively inspect serializable nested objects
-                //     auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
-                //     auto nested_obj = invoker.get_value(data);
+                // //     // Recursively inspect serializable nested objects
+                // //     auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                // //     auto nested_obj = invoker.get_value(data);
                     
-                //     if(nested_obj.valid())
-                //     {
-                //         auto nested_proxy = make_nested_property_proxy(var_proxy, invoker);
-                //         result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, prop.get_name(), info);
-                //     }
-                //     else
+                // //     if(nested_obj.valid())
+                // //     {
+                // //         auto nested_proxy = make_nested_property_proxy(var_proxy, invoker);
+                // //         result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, prop.get_name(), info);
+                // //     }
+                //     // else
                 //     {
                 //         // Object is null, show as read-only field
                 //         var_info field_info;
@@ -2426,6 +2165,34 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             }
             ImGui::PopReadonly();
         }
+    }
+    else
+    {
+        if(ImGui::Button("New Instance"))
+        {
+            auto obj_type = data.get_type();
+            if(obj_type.valid())
+            {
+                data = obj_type.new_instance();
+                if(var_proxy.impl->setter(const_cast<meta_any_proxy&>(var_proxy), data, 1))
+                {
+                    result.changed = true;
+                    result.edit_finished = true;
+                }
+            }
+        }
+        // // Object is null, show as read-only field
+        // var_info field_info;
+        // field_info.is_property = true;
+        // field_info.read_only = true;
+
+        // std::string null_text = "null (" + data.get_type().get_name() + ")";
+        // entt::meta_any null_var = entt::forward_as_meta(null_text);
+        // auto null_var_proxy = make_proxy(null_var);
+        
+        // {
+        //     result |= inspect_var(ctx, null_var, null_var_proxy, field_info);
+        // }
     }
 
     return result;

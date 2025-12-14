@@ -11,6 +11,7 @@ namespace Unravel.Core
         /// <summary>
         /// Gets the entity that owns this component.
         /// </summary>
+        [Hide]
         public Entity owner { get; internal set; }
 
         private bool cacheDirty = true;
@@ -23,6 +24,7 @@ namespace Unravel.Core
         /// The transform is lazily loaded and cached for performance. The cache is updated
         /// if the owner entity is reassigned.
         /// </remarks>
+        [Hide]
         public TransformComponent transform
         {
             get

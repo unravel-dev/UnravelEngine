@@ -1153,7 +1153,18 @@ void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std:
             {
                 fs::error_code err;
                 fs::path dir = target_path / filename;
-                asset_writer::atomic_copy_file(path, dir, err);
+                if(fs::is_directory(path, err))
+                {
+                    fs::copy(path, dir, err);
+                    if(err)
+                    {
+                        APPLOG_ERROR("Failed to import directory {}, error: {}", path.string(), err.message());
+                    }
+                }
+                else 
+                {
+                    asset_writer::atomic_copy_file(path, dir, err);
+                }
             },
             p,
             filename);

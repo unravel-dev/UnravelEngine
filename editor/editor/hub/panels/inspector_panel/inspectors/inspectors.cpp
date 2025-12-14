@@ -703,6 +703,7 @@ auto inspect_array(rtti::context& ctx,
     return inspect_array(ctx, var, var_proxy, name, tooltip, info, custom);
 }
 
+
 auto inspect_array(rtti::context& ctx,
                    entt::meta_any& var,
                    const meta_any_proxy& var_proxy,
@@ -758,6 +759,15 @@ auto inspect_array(rtti::context& ctx,
     if(open)
     {
         layout.pop_layout();
+
+        // struct element_t
+        // {
+        //     entt::meta_any value;
+        //     std::string name;
+        //     meta_any_proxy proxy;
+        //     var_info info;
+        // };
+        // std::vector<element_t> elements;
 
         ImGui::TreePush("array");
 
@@ -842,6 +852,7 @@ auto inspect_array(rtti::context& ctx,
                     return false;
                 };
 
+                // elements.emplace_back(element_t{value, element, value_proxy, item_info});
                 result |= inspect_var(ctx, value, value_proxy, item_info, custom);
 
                 // Pop array index from property path
@@ -860,7 +871,7 @@ auto inspect_array(rtti::context& ctx,
             //     view[i] = value;
             // }
 
-            if(!item_info.read_only && !resizeable)
+            if(!item_info.read_only && resizeable)
             {
                 ImGui::SetCursorPos(pos_before);
 
@@ -876,6 +887,20 @@ auto inspect_array(rtti::context& ctx,
                 ImGui::Dummy({});
             }
         }
+
+        // ImGui::ReorderableList(name.c_str(), static_cast<int>(elements.size()), [&](int index) {
+        //     auto& element = elements[index];
+        //     property_layout layout;
+        //     layout.set_data(element.name, {}, true);
+        //     layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
+        //     ImGui::PushReadonly(element.info.read_only);
+        //     result |= inspect_var(ctx, element.value, element.proxy, element.info, custom);
+        //     ImGui::PopReadonly();
+        // }, [&](int from, int insert_before) {
+        //     ImGui::VectorMoveInsert(view, from, insert_before);
+        //     result.changed = true;
+        //     result.edit_finished = true;
+        // });
 
         if(index_to_remove != -1)
         {
@@ -1182,7 +1207,9 @@ auto inspect_var_properties_impl(rtti::context& ctx,
 
         if(type.is_sequence_container())
         {
-            result |= inspect_array(ctx, var, var_proxy, "", "", info, custom);
+            auto name = entt::get_pretty_name(custom);
+            auto tooltip = entt::get_attribute_as<std::string>(custom, "tooltip");
+            result |= inspect_array(ctx, var, var_proxy, name, tooltip, info, custom);
         }
     }
     else

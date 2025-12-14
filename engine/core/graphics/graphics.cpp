@@ -923,7 +923,7 @@ void submit(view_id _id,
             int32_t _depth,
             bool _preserveState)
 {
-    bgfx::submit(_id, _program, _occlusionQuery, _depth, _preserveState);
+    bgfx::submit(_id, _program, _occlusionQuery, _depth, _preserveState ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
 }
 
 void submit(view_id _id,
@@ -934,7 +934,7 @@ void submit(view_id _id,
             int32_t _depth,
             bool _preserveState)
 {
-    bgfx::submit(_id, _handle, _indirectHandle, _start, _num, _depth, _preserveState);
+    bgfx::submit(_id, _handle, _indirectHandle, _start, _num, _depth, _preserveState ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
 }
 
 void set_image(uint8_t _stage, texture_handle _handle, uint8_t _mip, access _access, texture_format _format)

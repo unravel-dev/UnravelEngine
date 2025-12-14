@@ -269,4 +269,39 @@ struct IMGUI_API ImRange
 };
 
 IMGUI_API int PlotEx(ImGuiPlotType plot_type, const char* label, ImRange (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg);
+
+
+IMGUI_API bool ReorderableList(
+    const char* label,
+    int item_count,
+    const std::function<void(int index)>& draw_item,
+    const std::function<void(int from, int insert_before)>& on_reorder);
+
+
+template <class VectorLike>
+IMGUI_API inline void VectorMoveInsert(VectorLike& v, int from, int insert_before)
+{
+    const int n = (int)v.size();
+    if(from < 0 || from >= n) return;
+
+    if(insert_before < 0) insert_before = 0;
+    if(insert_before > n) insert_before = n;
+
+    // NOTE: after removing 'from', inserting at 'from' or 'from+1' yields same ordering
+    if(insert_before == from || insert_before == from + 1) return;
+
+    auto it_from = std::next(v.begin(), from);
+
+    // Move out the element (works for move-only types)
+    auto tmp = std::move(*it_from);
+
+    // Erase the original
+    v.erase(it_from);
+
+    // Erase shifts indices; if destination was after the removed element, shift it back
+    if(insert_before > from) --insert_before;
+
+    auto it_to = std::next(v.begin(), insert_before);
+    v.insert(it_to, std::move(tmp));
+}
 } // namespace ImGui

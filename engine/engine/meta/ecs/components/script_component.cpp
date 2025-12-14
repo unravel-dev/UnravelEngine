@@ -47,6 +47,7 @@ namespace
     };
 
     thread_local script_component_loader_context* script_component_loader_ctx{};
+
 }
 
 REFLECT(script_component)
@@ -367,6 +368,7 @@ struct mono_loader<Archive, asset_handle<T>>
     }
 };
 
+
 SAVE(script_component::script_object)
 {
     using mono_field_serializer =
@@ -485,7 +487,7 @@ SAVE(script_component::script_object)
     {
         if(field.get_visibility() == mono::visibility::vis_public)
         {
-            if(field.is_static())
+            if(field.is_static() || field.has_attribute("HideAttribute"))
             {
                 continue;
             }
@@ -515,7 +517,7 @@ SAVE(script_component::script_object)
     {
         if(prop.get_visibility() == mono::visibility::vis_public)
         {
-            if(prop.is_static())
+            if(prop.is_static() || prop.has_attribute("HideAttribute"))
             {
                 continue;
             }

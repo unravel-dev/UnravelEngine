@@ -118,7 +118,7 @@ namespace Unravel.Core
     /// <summary>
     /// Adds a header to a field, providing a brief description or hint.
     /// </summary>
-    [AttributeUsage(AttributeTargets.Field, Inherited = true, AllowMultiple = true)]
+    [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = true, AllowMultiple = true)]
     public sealed class HeaderAttribute : Attribute
     {
         /// <summary>
@@ -133,6 +133,20 @@ namespace Unravel.Core
         public HeaderAttribute(string header)
         {
             this.header = header;
+        }
+    }
+
+    /// <summary>
+    /// Hides a field from the inspector, preventing it from being displayed or edited.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = true, AllowMultiple = false)]
+    public sealed class HideAttribute : Attribute
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="HideAttribute"/> class.
+        /// </summary>
+        public HideAttribute()
+        {
         }
     }
 }
