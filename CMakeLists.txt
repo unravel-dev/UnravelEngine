@@ -386,7 +386,7 @@ endif()
 
 # For Linux DEB or RPM:
 if(UNIX AND NOT APPLE)
-    set(CPACK_GENERATOR "ZIP;DEB;RPM")
+    set(CPACK_GENERATOR "ZIP;DEB;")
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/unravel-engine")
 endif()
 # Include CPack
