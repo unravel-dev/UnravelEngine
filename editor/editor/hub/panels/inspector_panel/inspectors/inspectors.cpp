@@ -724,7 +724,9 @@ auto inspect_array(rtti::context& ctx,
     bool open = layout.push_tree_layout();
 
     int readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
-    bool resizeable = view.resize(size);
+    bool is_fixed_size_array = entt::get_attribute_as<bool>(custom, "is_fixed_size_array");
+
+    bool resizeable = !is_fixed_size_array && view.resize(size);
     {
 
         ImGuiInputTextFlags flags = 0;
@@ -802,6 +804,7 @@ auto inspect_array(rtti::context& ctx,
                 // }
 
                 meta_any_proxy value_proxy;
+                value_proxy.impl->type_name = entt::get_pretty_name(value.type());
                 value_proxy.impl->get_name = [var_proxy, element]()
                 {
                     auto name = var_proxy.impl->get_name();
@@ -1127,6 +1130,7 @@ auto inspect_var(rtti::context& ctx,
     auto type = var.type();
 
     meta_any_proxy derived_var_proxy;
+    derived_var_proxy.impl->type_name = entt::get_pretty_name(var.type());
     derived_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
     {
         return parent_proxy.impl->get_name();

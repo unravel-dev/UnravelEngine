@@ -602,6 +602,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy comp_var_proxy;
+                    comp_var_proxy.impl->type_name = entt::get_pretty_name(type);
                     comp_var_proxy.impl->get_name = [parent_proxy = var_proxy, pretty_name]()
                     {
                         auto name = parent_proxy.impl->get_name();
@@ -769,6 +770,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     // entt::meta_any obj_var;
                     // call_var_getter(obj_var, obj_getter);
                     auto obj_var = entt::forward_as_meta(*script.scoped);
+                    obj_proxy.impl->type_name = entt::get_pretty_name(obj_var.type());
 
                     var_info obj_info;
                     obj_info.is_copyable = false;

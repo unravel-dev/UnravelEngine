@@ -376,15 +376,10 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         auto assembly = app_domain_->get_assembly(app_script_lib.string());
         // print_assembly_info(assembly);
 
-        auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
-        auto engine_assembly = domain_->get_assembly(engine_script_lib.string());
-
-        auto comp_type = engine_assembly.get_type("Unravel.Core", "ScriptComponent");
-
         app_cache_.scriptable_component_types.clear();
         if(!has_compilation_errors_)
         {
-            app_cache_.scriptable_component_types = assembly.get_types_derived_from(comp_type);
+            app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
         }
     }
     catch(const mono::mono_exception& e)
@@ -740,6 +735,12 @@ auto script_system::get_all_scriptable_components() const -> const std::vector<m
     return app_cache_.scriptable_component_types;
 }
 
+auto script_system::get_scriptable_component_base_type() const -> mono::mono_type
+{
+    auto comp_type = get_engine_assembly().get_type("Unravel.Core", "ScriptComponent");
+    return comp_type;
+}
+
 auto script_system::get_engine_assembly() const -> mono::mono_assembly
 {
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
@@ -750,6 +751,27 @@ auto script_system::get_app_assembly() const -> mono::mono_assembly
 {
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
     return app_domain_->get_assembly(app_script_lib.string());
+}
+
+auto script_system::get_type_by_fullname(const std::string& fullname) const -> mono::mono_type
+{
+    auto type = domain_->get_type_by_fullname(fullname);
+    if(!type.valid())
+    {
+        type = app_domain_->get_type_by_fullname(fullname);
+    }
+    
+    return type;
+}
+
+auto script_system::get_type(const std::string& name_space, const std::string& name) const -> mono::mono_type
+{
+    auto type = domain_->get_type(name_space, name);
+    if(!type.valid())
+    {
+        type = app_domain_->get_type(name_space, name);
+    }
+    return type;
 }
 
 auto script_system::is_create_called() const -> bool

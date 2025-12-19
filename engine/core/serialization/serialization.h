@@ -199,3 +199,35 @@ inline auto try_load(Archive& ar,
     return try_serialize(ar, std::forward<ser20::NameValuePair<T>>(t), loc);
 }
 
+
+template<typename Archive, typename F>
+inline auto try_serialize(Archive& ar,
+                     const char* name,
+                     F&& serialize_callback,
+                     const hpp::source_location& loc = hpp::source_location::current()) -> bool
+{
+    if constexpr(!is_binary_archive<Archive>())
+    {
+        ar.setNextName(name);
+    }
+    return serialize_callback();
+}
+
+template<typename Archive, typename F>
+inline auto try_load(Archive& ar,
+                     const char* name,
+                     F&& load_callback,
+                     const hpp::source_location& loc = hpp::source_location::current()) -> bool
+{
+    return try_serialize(ar, name, std::forward<F>(load_callback), loc);
+}
+
+template<typename Archive, typename F>
+inline auto try_save(Archive& ar,
+                     const char* name,
+                     F&& save_callback,
+                     const hpp::source_location& loc = hpp::source_location::current()) -> bool
+{
+    return try_serialize(ar, name, std::forward<F>(save_callback), loc);
+}
+

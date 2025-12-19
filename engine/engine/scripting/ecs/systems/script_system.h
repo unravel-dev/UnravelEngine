@@ -45,8 +45,12 @@ struct script_system
     void unload_app_domain();
 
     auto get_all_scriptable_components() const -> const std::vector<mono::mono_type>&;
+    auto get_scriptable_component_base_type() const -> mono::mono_type;
     auto get_engine_assembly() const -> mono::mono_assembly;
     auto get_app_assembly() const -> mono::mono_assembly;
+
+    auto get_type_by_fullname(const std::string& fullname) const -> mono::mono_type;
+    auto get_type(const std::string& name_space, const std::string& name) const -> mono::mono_type;
 
     auto is_create_called() const -> bool;
     auto is_update_called() const -> bool;

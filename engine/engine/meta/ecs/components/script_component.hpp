@@ -3,6 +3,12 @@
 #include <reflection/reflection.h>
 #include <serialization/serialization.h>
 
+namespace ser20
+{
+    SAVE_EXTERN(mono::mono_object);
+    LOAD_EXTERN(mono::mono_object);
+}
+
 namespace unravel
 {
 SAVE_EXTERN(script_component);
