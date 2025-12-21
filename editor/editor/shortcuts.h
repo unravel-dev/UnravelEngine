@@ -57,6 +57,7 @@ inline constexpr ImGuiKey bounds_tool = ImGuiKey_T;
 // IK operations
 inline constexpr ImGuiKey ik_ccd = ImGuiKey_K;
 inline constexpr ImGuiKey ik_fabrik = ImGuiKey_L;
+inline constexpr ImGuiKey ik_two_bone = ImGuiKey_M;
 
 // View operations
 inline constexpr ImGuiKey focus_selected = ImGuiKey_F;

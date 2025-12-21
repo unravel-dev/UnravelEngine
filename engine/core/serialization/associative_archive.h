@@ -1,7 +1,12 @@
 #pragma once
 #include "cereal_optional_nvp.h"
 
-#define ASSOC_ARCHIVE 1
+
+#define SER20_ASSOCIATIVE_ARCHIVE_XML 0
+#define SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON 1
+#define SER20_ASSOCIATIVE_ARCHIVE_YAML 2
+
+#define SER20_ASSOCIATIVE_ARCHIVE SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON
 
 namespace ser20
 {
@@ -22,7 +27,7 @@ public:
 };
 }
 
-#if ASSOC_ARCHIVE == 0
+#if SER20_ASSOCIATIVE_ARCHIVE == SER20_ASSOCIATIVE_ARCHIVE_XML
 
 #include <ser20/archives/xml.hpp>
 namespace ser20
@@ -53,8 +58,9 @@ inline auto create_iarchive_associative(const char* buf, size_t len)
     std::istream stream(&mbuf);
     return create_iarchive_associative(stream);
 }
+
 } // namespace ser20
-#elif ASSOC_ARCHIVE == 1
+#elif SER20_ASSOCIATIVE_ARCHIVE == SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON
 #include <ser20/archives/simdjson.hpp>
 namespace ser20
 {
@@ -82,7 +88,7 @@ inline auto create_iarchive_associative(const char* buf, size_t len)
 }
 
 } // namespace ser20
-#elif ASSOC_ARCHIVE == 2
+#elif SER20_ASSOCIATIVE_ARCHIVE == SER20_ASSOCIATIVE_ARCHIVE_YAML
 #include "archives/yaml.hpp"
 namespace ser20
 {

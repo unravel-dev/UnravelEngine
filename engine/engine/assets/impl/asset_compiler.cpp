@@ -94,7 +94,7 @@ auto run_process(const std::string& process,
     return result.retcode == 0;
 }
 
-void copy_compiled_file(const fs::path& from, const fs::path& to, const std::string& str_input)
+void copy_compiled_file(const fs::path& from, const fs::path& to)
 {
     fs::error_code err;
     asset_writer::atomic_copy_file(from, to, err);
@@ -105,7 +105,7 @@ void copy_compiled_file(const fs::path& from, const fs::path& to, const std::str
     }
     else
     {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, to.filename().string(), err.message());
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", from.string(), to.filename().string(), err.message());
     }
 }
 
@@ -535,6 +535,44 @@ auto write_manifest_file(const fs::path& input_path, const fs::path& output_path
     return !err && success;
 }
 
+auto write_minified_file(const fs::path& input_path, const fs::path& output_path) -> bool
+{
+    
+#if SER20_ASSOCIATIVE_ARCHIVE == SER20_ASSOCIATIVE_ARCHIVE_SIMDJSON
+    
+    std::string str_input = input_path.string();
+    simdjson::dom::parser parser;
+    auto doc = parser.load(str_input);
+    if(doc.error())
+    {
+        APPLOG_ERROR("Failed to parse {0}: {1}", input_path.string(), simdjson::error_message(doc.error()));
+        return false;
+    }
+
+    auto minified = simdjson::minify(doc);
+
+
+    fs::error_code err;
+    bool success = true;
+    asset_writer::atomic_write_file(output_path, [&](const fs::path& temp_manifest_path) 
+    {
+        std::ofstream file(temp_manifest_path);
+        if(file.is_open())
+        {
+            file << minified;
+            file.close();
+        }
+    }, err);
+    return !err;
+#else
+
+    copy_compiled_file(input_path, output_path);
+
+    return true;
+#endif
+
+}
+
 } // namespace
 
 template<>
@@ -884,9 +922,8 @@ template<>
 auto compile<font>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     auto absolute_path = resolve_input_file(key);
-    std::string str_input = absolute_path.string();
 
-    copy_compiled_file(absolute_path, output, str_input);
+    copy_compiled_file(absolute_path, output);
 
     if(!write_manifest_file(absolute_path, output))
     {
@@ -901,9 +938,12 @@ template<>
 auto compile<prefab>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     auto absolute_path = resolve_input_file(key);
-    std::string str_input = absolute_path.string();
 
-    copy_compiled_file(absolute_path, output, str_input);
+    if(!write_minified_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write minified file for compiled prefab: {0}", output.string());
+        return false;
+    }
 
     if(!write_manifest_file(absolute_path, output))
     {
@@ -918,9 +958,12 @@ template<>
 auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     auto absolute_path = resolve_input_file(key);
-    std::string str_input = absolute_path.string();
-
-    copy_compiled_file(absolute_path, output, str_input);
+   
+    if(!write_minified_file(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write minified file for compiled scene: {0}", output.string());
+        return false;
+    }
 
     if(!write_manifest_file(absolute_path, output))
     {

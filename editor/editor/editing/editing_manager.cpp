@@ -457,12 +457,41 @@ void editing_manager::focus_path(const fs::path& object)
 
 void editing_manager::unselect(bool clear_selection_tools)
 {
+    // Capture the old selection state before clearing
+    std::vector<entt::meta_any> old_selection = selection_data.objects;
+
+    // Perform the unselect operation
     selection_data = {};
 
     if(clear_selection_tools)
     {
         ImGuizmo::Enable(false);
         ImGuizmo::Enable(true);
+    }
+
+    // Capture the new selection state and create action
+    std::vector<entt::meta_any> new_selection = selection_data.objects;
+    
+    // Only create action if selection actually changed
+    bool selection_changed = old_selection.size() != new_selection.size();
+    if (!selection_changed && !old_selection.empty())
+    {
+        // Check if contents are different
+        for (size_t i = 0; i < old_selection.size() && !selection_changed; ++i)
+        {
+            if (i >= new_selection.size() || old_selection[i] != new_selection[i])
+            {
+                selection_changed = true;
+                break;
+            }
+        }
+    }
+
+    if (selection_changed)
+    {
+        push_undo_stack_enabled(true);
+        queue_action("Unselect", std::make_shared<selection_action_t>(this, old_selection, new_selection, false));
+        pop_undo_stack_enabled();
     }
 }
 
@@ -761,26 +790,29 @@ void editing_manager::pop_undo_stack_enabled()
 
 void editing_manager::execute_actions()
 {
-    // Process all pending actions
-    for (auto& action : pending_actions)
+    while(!pending_actions.empty())
     {
-        if (action)
+        auto actions = std::move(pending_actions);
+        // Process all pending actions
+        for (auto& action : actions)
         {
-            // Execute the action
-            action->execution_count++;
-            action->do_action();
-            // Add to undo stack if the action is undoable
-            // Note: We need to handle merging here since the action is now executed
-            if (action->is_undoable())
+            if (action)
             {
-                // Move the action to the undo stack
-                undo_stack.push_if_undoable(std::move(action));
+                // Execute the action
+                action->execution_count++;
+                action->do_action();
+                // Add to undo stack if the action is undoable
+                // Note: We need to handle merging here since the action is now executed
+                if (action->is_undoable())
+                {
+                    // Move the action to the undo stack
+                    undo_stack.push_if_undoable(std::move(action));
+                }
             }
         }
+
     }
-    
-    // Clear the pending actions queue
-    pending_actions.clear();
+
 }
 
 void editing_manager::undo()

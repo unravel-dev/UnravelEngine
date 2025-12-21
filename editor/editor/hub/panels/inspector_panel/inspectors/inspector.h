@@ -201,7 +201,7 @@ struct meta_any_proxy
      * 
      * These functions are evaluated fresh on each property access, ensuring
      * the property path is validated and navigated safely every time.
-     */
+    */
     struct meta_any_proxy_impl
     {
         std::string type_name;

@@ -644,23 +644,32 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
     return false;
 }
 
-void handle_inverse_kinematics(entt::handle selection, entt::handle center, editing_manager& em)
+auto handle_inverse_kinematics(entt::handle selection, entt::handle center, editing_manager& em) -> bool
 {
-    if(ImGui::IsAnyItemActive())
+    // Allow IK when gizmo is being used, but block for other ImGui items (like text inputs, sliders, etc.)
+    bool is_gizmo_active = ImGuizmo::IsUsing();
+    bool is_other_item_active = ImGui::IsAnyItemActive() && !is_gizmo_active;
+    
+    if(is_other_item_active)
     {
-        return;
+        return false;
     }
 
     auto& center_transform_comp = center.get<transform_component>();
 
     if(ImGui::IsKeyDown(shortcuts::ik_ccd))
     {
-        ik_set_position_ccd(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes);
+        return ik_set_position_ccd(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes, 0.001f, 100);
     }
-    else if(ImGui::IsKeyDown(shortcuts::ik_fabrik))
+    if(ImGui::IsKeyDown(shortcuts::ik_fabrik))
     {
-        ik_set_position_fabrik(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes);
+        return ik_set_position_fabrik(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes, 0.001f, 100);
     }
+    if(ImGui::IsKeyDown(shortcuts::ik_two_bone))
+    {
+        return ik_set_position_two_bone(selection, center_transform_comp.get_position_global(), center_transform_comp.get_z_axis_global(), 1.0f, 1.0f, 100);
+    }
+    return false;
 }
 
 void apply_transform_delta_to_selections(const std::vector<entt::handle>& top_level_selections,
@@ -842,14 +851,18 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
         auto& sel = top_level_selections[i];
         if(sel)
         {
-            handle_inverse_kinematics(sel, center, em);
-            if(ImGui::IsKeyDown(shortcuts::ik_ccd) || ImGui::IsKeyDown(shortcuts::ik_fabrik))
+            bool ik_keys_down = ImGui::IsKeyDown(shortcuts::ik_ccd) || ImGui::IsKeyDown(shortcuts::ik_fabrik) || ImGui::IsKeyDown(shortcuts::ik_two_bone);
+            
+            if(ik_keys_down)
             {
-                // Skip standard transform if using IK
+                // When IK is active, only the center entity (gizmo target) is moved by the gizmo.
+                // IK algorithm adjusts parent bones to make the end effector reach the target.
+                // Do NOT apply any direct transform to the selection - let IK handle it.
+                handle_inverse_kinematics(sel, center, em);
                 continue;
             }
             
-            // Apply transform delta to each selection
+            // Apply transform delta to each selection (normal case when IK is not active)
             auto& sel_transform_comp = sel.get<transform_component>();
             math::mat4 old_global = sel_transform_comp.get_transform_global();
             math::mat4 new_global = center_delta * old_global;
@@ -874,7 +887,6 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
             
             // Apply the new transform
             sel_transform_comp.set_transform_local(new_local_transform);
-            
             // Create undoable action if there was a manipulation
             if(movetype != ImGuizmo::MT_NONE)
             {

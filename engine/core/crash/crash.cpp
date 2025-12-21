@@ -15,7 +15,7 @@
 #include <exception>
 #include <typeinfo>
 
-
+#include <cassert>
 
 namespace unravel::crash
 {
@@ -209,7 +209,9 @@ auto signal_handler(int sig) -> void
             {
                 try { g_interrupt_handler(sig_info); } catch(...) {}
             }
-            break;
+            // Reset handling flag for interrupts (they might be handled gracefully)
+            g_handling.store(false, std::memory_order_release);
+            return;
         }
         
         case signal_type::termination:
@@ -218,7 +220,9 @@ auto signal_handler(int sig) -> void
             {
                 try { g_termination_handler(sig_info); } catch(...) {}
             }
-            break;
+            // Reset handling flag for termination (they might be handled gracefully)
+            g_handling.store(false, std::memory_order_release);
+            return;
         }
         
         case signal_type::crash:
@@ -230,10 +234,11 @@ auto signal_handler(int sig) -> void
                 trace_info trace = generate_stack_trace();
                 try { g_crash_handler(sig_info, trace); } catch(...) {}
             }
-            break;
+
+            std::abort();
+            return;
         }
     }
-
 }
 
 

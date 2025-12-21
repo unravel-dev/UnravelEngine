@@ -1608,6 +1608,7 @@ struct mono_inspector_collection
 
                         auto collection_obj = mutable_field.get_value(mono_obj);
                         auto collection = mono::mono_list<mono::mono_object>(collection_obj);
+                        auto old_vec = collection.to_vector<std::vector<mono::mono_object>>();
                         collection.set(*vec, element_type);
                         mutable_field.set_value(mono_obj, collection);
                     }
@@ -1859,7 +1860,6 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_field},
             {"AudioClip",       &mono_inspector<asset_handle<audio_clip>>::inspect_field},
             {"Font",            &mono_inspector<asset_handle<font>>::inspect_field},
-            // {"Color[]",       &mono_inspector<mono::mono_array<math::color>>::inspect_field},
 
         };
         // clang-format on
@@ -1920,7 +1920,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             // }
             
             // ImGui::SameLine();
-            // // Object is null, show as read-only field
+            // Object is null, show as read-only field
             var_info field_info;
             field_info.is_property = true;
             field_info.read_only = true;
@@ -1938,10 +1938,9 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
         // if(ImGui::Button("Null"))
         // {
-        //     mono::mono_object new_data(nullptr, type);
-        //     vdata = new_data;
-        //     result.changed = var_proxy.impl->setter(obj_proxy, vdata, 1);
-        //     result.edit_finished = result.changed;
+        //     data.set_data(nullptr, type);
+        //     result.changed = true;
+        //     result.edit_finished = true;
         //     return result;
         // }
 

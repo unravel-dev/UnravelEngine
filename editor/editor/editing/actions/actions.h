@@ -9,6 +9,7 @@
 #include "transform_actions.h"
 #include "property_actions.h"
 #include "entity_actions.h"
+#include "selection_action.h"
 
 namespace unravel
 {

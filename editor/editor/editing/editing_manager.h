@@ -304,79 +304,71 @@ struct editing_manager
     template<typename T>
     void unselect(const T& entry)
     {
-        std::erase_if(selection_data.objects,
-                      [&](const auto& el)
-                      {
-                          return is_selected_impl(entry, el);
-                      });
-        sanity_check_selection_data();
+        // Capture the old selection state before making changes
+        std::vector<entt::meta_any> old_selection = selection_data.objects;
+        
+        // Perform the unselect operation
+        unselect_impl(entry);
+        
+        // Capture the new selection state and create action
+        std::vector<entt::meta_any> new_selection = selection_data.objects;
+        
+        // Only create action if selection actually changed
+        bool selection_changed = old_selection.size() != new_selection.size();
+        if (!selection_changed && !old_selection.empty())
+        {
+            // Check if contents are different
+            for (size_t i = 0; i < old_selection.size() && !selection_changed; ++i)
+            {
+                if (i >= new_selection.size() || old_selection[i] != new_selection[i])
+                {
+                    selection_changed = true;
+                    break;
+                }
+            }
+        }
 
+        if (selection_changed)
+        {
+            push_undo_stack_enabled(true);
+            queue_action("Unselect", std::make_shared<selection_action_t>(this, old_selection, new_selection, false));
+            pop_undo_stack_enabled();
+        }
     }
 
     template<typename T>
     void select(const T& entry, select_mode mode = select_mode::normal)
     {
-        focus(entry);
-        switch(mode)
+        // Capture the old selection state before making changes
+        std::vector<entt::meta_any> old_selection = selection_data.objects;
+        
+        // Perform the select operation
+        select_impl(entry, mode);
+        
+        // Capture the new selection state and create action
+        std::vector<entt::meta_any> new_selection = selection_data.objects;
+        
+        // Only create action if selection actually changed
+        bool selection_changed = old_selection.size() != new_selection.size();
+        if (!selection_changed)
         {
-            case select_mode::normal:
+            // Check if contents are different
+            for (size_t i = 0; i < old_selection.size() && !selection_changed; ++i)
             {
-                selection_data.objects.clear();
-                selection_data.objects.emplace_back(entry);
-                break;
+                if (i >= new_selection.size() || old_selection[i] != new_selection[i])
+                {
+                    selection_changed = true;
+                    break;
+                }
             }
-            case select_mode::ctrl:
-            {
-                if(!selection_data.objects.empty())
-                {
-                    if(!selection_data.objects.back())
-                    {
-                        selection_data.objects.clear();
-                    }
-                }
-
-                if(!is_selected(entry))
-                {
-                    selection_data.objects.emplace_back(entry);
-                }
-                else
-                {
-                    unselect(entry);
-                }
-                break;
-            }
-            case select_mode::shift:
-            {
-                if(!selection_data.objects.empty())
-                {
-                    if(!selection_data.objects.back())
-                    {
-                        selection_data.objects.clear();
-                    }
-                }
-
-                if(!is_selected(entry))
-                {
-                    selection_data.objects.emplace_back(entry);
-                }
-                else
-                {
-                    // make it active
-                    unselect(entry);
-
-                    if(!selection_data.objects.back())
-                    {
-                        selection_data.objects.clear();
-                    }
-                    selection_data.objects.emplace_back(entry);
-                }
-                break;
-            }
-            default:
-                break;
         }
 
-        sanity_check_selection_data();
+        if (selection_changed)
+        {
+            push_undo_stack_enabled(true);  
+            queue_action("Select", std::make_shared<selection_action_t>(this, old_selection, new_selection, true));
+            pop_undo_stack_enabled();
+        }
 
         // auto& ctx = engine::context();
         // auto& ui_ev = ctx.get_cached<ui_events>();
@@ -492,6 +484,42 @@ struct editing_manager
     scene prefab_scene{"prefab_scene"};
 
 
+    void sanity_check_selection_data()
+    {
+        if(selection_data.objects.empty())
+        {
+            selection_data = {};
+        }
+    }
+
+    // Helper method to restore selection from a snapshot (used by actions)
+    void restore_selection_impl(const std::vector<entt::meta_any>& selection_snapshot)
+    {
+        selection_data.objects.clear();
+        for (const auto& obj : selection_snapshot)
+        {
+            // Only add valid selections
+            if (obj)
+            {
+                // Check if it's an entity handle and if it's still valid
+                if (obj.type() == entt::resolve<entt::handle>())
+                {
+                    auto handle = obj.cast<const entt::handle&>();
+                    if (handle && handle.valid())
+                    {
+                        selection_data.objects.emplace_back(obj);
+                    }
+                }
+                else
+                {
+                    // For non-entity selections (like asset handles), just add them
+                    selection_data.objects.emplace_back(obj);
+                }
+            }
+        }
+        sanity_check_selection_data();
+    }
+
     private:
     template<typename T>
     auto is_selected_impl(const T& entry, const entt::meta_any& selected) -> bool
@@ -504,13 +532,84 @@ struct editing_manager
         return selected.cast<const T&>() == entry;
     }
 
-    void sanity_check_selection_data()
+    // Internal implementation methods that perform selection without creating actions
+    template<typename T>
+    void select_impl(const T& entry, select_mode mode = select_mode::normal)
     {
-        if(selection_data.objects.empty())
+        focus(entry);
+        switch(mode)
         {
-            selection_data = {};
+            case select_mode::normal:
+            {
+                selection_data.objects.clear();
+                selection_data.objects.emplace_back(entry);
+                break;
+            }
+            case select_mode::ctrl:
+            {
+                if(!selection_data.objects.empty())
+                {
+                    if(!selection_data.objects.back())
+                    {
+                        selection_data.objects.clear();
+                    }
+                }
+
+                if(!is_selected(entry))
+                {
+                    selection_data.objects.emplace_back(entry);
+                }
+                else
+                {
+                    unselect_impl(entry);
+                }
+                break;
+            }
+            case select_mode::shift:
+            {
+                if(!selection_data.objects.empty())
+                {
+                    if(!selection_data.objects.back())
+                    {
+                        selection_data.objects.clear();
+                    }
+                }
+
+                if(!is_selected(entry))
+                {
+                    selection_data.objects.emplace_back(entry);
+                }
+                else
+                {
+                    // make it active
+                    unselect_impl(entry);
+
+                    if(!selection_data.objects.back())
+                    {
+                        selection_data.objects.clear();
+                    }
+                    selection_data.objects.emplace_back(entry);
+                }
+                break;
+            }
+            default:
+                break;
         }
+
+        sanity_check_selection_data();
     }
+
+    template<typename T>
+    void unselect_impl(const T& entry)
+    {
+        std::erase_if(selection_data.objects,
+                      [&](const auto& el)
+                      {
+                          return is_selected_impl(entry, el);
+                      });
+        sanity_check_selection_data();
+    }
+
     struct scene_cache
     {
         scene* scn = nullptr;
