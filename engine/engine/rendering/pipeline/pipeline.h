@@ -3,6 +3,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/layers/layer_mask.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/model.h>
 #include <engine/rendering/batch_collector.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
@@ -33,19 +34,13 @@ namespace unravel
 {
 namespace rendering
 {
-/**
- * @struct lod_data
- * @brief Contains level of detail (LOD) data for an entity.
- */
-struct lod_data
+struct visibility_data
 {
-    std::uint32_t current_lod_index = 0; ///< Current LOD index.
-    std::uint32_t target_lod_index = 0;  ///< Target LOD index.
-    float current_time = 0.0f;           ///< Current time for LOD transition.
+    entt::handle entity;
+    lod_data lod_data;
 };
 
-using lod_data_container = std::map<entt::handle, lod_data>;
-using visibility_set_models_t = hpp::small_vector<entt::handle>;
+using visibility_set_models_t = hpp::small_vector<visibility_data>;
 
 struct pipeline_stats
 {
@@ -118,15 +113,16 @@ public:
     /**
      * @brief Gathers visible models from the scene based on the given query.
      * @param scn The scene to gather models from.
-     * @param frustum The frustum used for visibility determination.
+     * @param cam The camera used for visibility determination.
      * @param query The visibility query flags.
      * @param render_mask Render mask to filter entities by layers.
      * @return A vector of handles to the visible models.
      */
-    virtual auto gather_visible_models(scene& scn,
-                                       const math::frustum* frustum,
+    virtual void gather_visible_models(scene& scn,
+                                       const camera* cam,
                                        visibility_flags query,
-                                       const layer_mask& render_mask) -> visibility_set_models_t;
+                                       const layer_mask& render_mask,
+                                       const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback);
 
     /**
      * @brief Renders the entire scene from the camera's perspective.

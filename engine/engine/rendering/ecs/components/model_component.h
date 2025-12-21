@@ -129,7 +129,7 @@ public:
     auto get_world_bounds_transform() const -> const math::transform&;
 
     void update_world_bounds(const math::transform& bounds);
-    auto get_local_bounds() const -> const math::bbox&;
+    auto get_local_bounds(uint32_t lod_index) const -> const math::bbox&;
 
     void set_last_render_frame(uint64_t frame);
     auto is_newly_created() const noexcept -> bool;

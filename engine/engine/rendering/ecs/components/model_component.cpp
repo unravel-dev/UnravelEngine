@@ -286,9 +286,9 @@ auto model_component::get_world_bounds_transform() const -> const math::transfor
     return world_bounds_transform_;
 }
 
-auto model_component::get_local_bounds() const -> const math::bbox&
+auto model_component::get_local_bounds(uint32_t lod_index) const -> const math::bbox&
 {
-    auto lod = model_.get_lod(0);
+    auto lod = model_.get_lod(lod_index);
     if(!lod)
     {
         return math::bbox::empty;

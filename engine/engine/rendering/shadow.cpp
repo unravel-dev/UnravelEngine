@@ -2298,10 +2298,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         collector.clear();
     }
 
-    for(const auto& e : models)
+    for(const auto& element : models)
     {
-        const auto& transform_comp = e.get<transform_component>();
-        auto& model_comp = e.get<model_component>();
+        const auto& entity = element.entity;
+        const auto& lod_data = element.lod_data;
+        const auto& transform_comp = entity.get<transform_component>();
+        auto& model_comp = entity.get<model_component>();
 
         const auto& model = model_comp.get_model();
         if(!model.is_valid())
@@ -2311,13 +2313,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
         const auto& world_bounds_transform = model_comp.get_world_bounds_transform();
         const auto& world_bounds = model_comp.get_world_bounds();
-        const auto& local_bounds = model_comp.get_local_bounds();
+        const auto& local_bounds = model_comp.get_local_bounds(lod_data.current_lod_index);
 
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
         const auto& bone_transforms = model_comp.get_bone_transforms();
         const auto& skinning_matrices = model_comp.get_skinning_transforms();
 
-        const auto current_lod_index = 0;
         const bool is_skinned = !skinning_matrices.empty();
         
         // For directional lights, perform additional swept sphere test using camera frustum
@@ -2376,7 +2377,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             if (can_batch)
             {
                 // Collect this model for batching in this specific cascade
-                collect_model_for_shadow_batching_cascade(cascade_batch_collectors_[ii], model, world_transform, submesh_transforms, current_lod_index);
+                collect_model_for_shadow_batching_cascade(cascade_batch_collectors_[ii], model, world_transform, submesh_transforms, lod_data.current_lod_index);
             }
             else
             {
@@ -2423,7 +2424,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                              submesh_transforms,
                              bone_transforms,
                              skinning_matrices,
-                             current_lod_index,
+                             lod_data.current_lod_index,
                              callbacks);
             }
 

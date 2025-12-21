@@ -205,56 +205,7 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     return fbo;
 }
 
-auto update_lod_data(lod_data& data,
-                     const std::vector<urange32_t>& lod_limits,
-                     std::size_t total_lods,
-                     float transition_time,
-                     float dt,
-                     const asset_handle<mesh>& mesh,
-                     const math::transform& world,
-                     const camera& cam) -> bool
-{
-    if(!mesh)
-        return false;
-
-    if(total_lods <= 1)
-        return true;
-
-    const auto& viewport = cam.get_viewport_size();
-    auto rect = mesh.get()->calculate_screen_rect(world, cam);
-
-    float percent = math::clamp((float(rect.height()) / float(viewport.height)) * 100.0f, 0.0f, 100.0f);
-
-    std::size_t lod = 0;
-    for(size_t i = 0; i < lod_limits.size(); ++i)
-    {
-        const auto& range = lod_limits[i];
-        if(range.contains(urange32_t::value_type(percent)))
-        {
-            lod = i;
-        }
-    }
-
-    lod = math::clamp<std::size_t>(lod, 0, total_lods - 1);
-    if(data.target_lod_index != lod && data.target_lod_index == data.current_lod_index)
-        data.target_lod_index = static_cast<std::uint32_t>(lod);
-
-    if(data.current_lod_index != data.target_lod_index)
-        data.current_time += dt;
-
-    if(data.current_time >= transition_time)
-    {
-        data.current_lod_index = data.target_lod_index;
-        data.current_time = 0.0f;
-    }
-
-    if(percent < 1.0f)
-        return false;
-
-    return true;
-}
-
-auto should_rebuild_shadows(const visibility_set_models_t& visibility_set,
+auto should_rebuild_shadows(const shadow::shadow_map_models_t& visibility_set,
                             const light& light,
                             const math::bbox& light_bounds,
                             const math::transform& light_transform) -> bool
@@ -264,8 +215,10 @@ auto should_rebuild_shadows(const visibility_set_models_t& visibility_set,
     auto light_world_bounds = math::bbox::mul(light_bounds, light_transform);
     for(const auto& element : visibility_set)
     {
-        const auto& transform_comp_ref = element.get<transform_component>();
-        const auto& model_comp_ref = element.get<model_component>();
+        const auto& entity = element.entity;
+        const auto& lod_data = element.lod_data;
+        const auto& transform_comp_ref = entity.get<transform_component>();
+        const auto& model_comp_ref = entity.get<model_component>();
         const auto& model_world_bounds = model_comp_ref.get_world_bounds();
 
         bool result = light_world_bounds.intersect(model_world_bounds);
@@ -425,7 +378,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
     query |= visibility_query::is_dirty | visibility_query::is_shadow_caster;
 
     bool queried = false;
-    visibility_set_models_t dirty_models;
+    shadow::shadow_map_models_t dirty_models;
 
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
@@ -475,7 +428,10 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
 
             if(!queried)
             {
-                dirty_models = gather_visible_models(scn, nullptr, query, render_mask);
+                gather_visible_models(scn, nullptr, query, render_mask, [&](entt::handle entity, const lod_data& lod_data)
+                {
+                    dirty_models.emplace_back(entity, lod_data);
+                });
                 queried = true;
             }
 
@@ -567,7 +523,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(pflags & pipeline_steps::geometry_pass)
     {
-        visibility_set = gather_visible_models(scn, &camera.get_frustum(), params.vflags, render_mask);
+        gather_visible_models(scn, &camera, params.vflags, render_mask, [&](entt::handle entity, const lod_data& lod_data)
+        {
+            visibility_set.emplace_back(entity, lod_data);
+        });
     }
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
@@ -626,44 +585,29 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     // Clear batch collector for this frame
     batch_collector_.clear();
 
-    for(const auto& e : visibility_set)
+    for(const auto& element : visibility_set)
     {
-        const auto& transform_comp = e.get<transform_component>();
-        auto& model_comp = e.get<model_component>();
+        const auto& entity = element.entity;
+        const auto& lod_data = element.lod_data;
+        const auto& transform_comp = entity.get<transform_component>();
+        auto& model_comp = entity.get<model_component>();
 
         const auto& model = model_comp.get_model();
         if(!model.is_valid())
+        {
             continue;
+        }
 
         const auto& world_transform = transform_comp.get_transform_global();
         const auto clip_planes = math::vec2(camera.get_near_clip(), camera.get_far_clip());
 
-        lod_data lod_runtime_data{}; // camera_lods[e];
-        const auto transition_time = 0.0f;
-        const auto lod_count = model.get_lods().size();
-        const auto& lod_limits = model.get_lod_limits();
+        const auto current_time = lod_data.current_time;
+        const auto current_lod_index = lod_data.current_lod_index;
+        const auto target_lod_index = lod_data.target_lod_index;
 
-        const auto base_mesh = model.get_lod(0);
-        if(!base_mesh)
-            continue;
+        const auto params = math::vec3{0.0f, -1.0f, (lod_data.transition_time - current_time) / lod_data.transition_time};
 
-        if(!update_lod_data(lod_runtime_data,
-                                    lod_limits,
-                                    lod_count,
-                                    transition_time,
-                                    dt.count(),
-                                    base_mesh,
-                                    world_transform,
-                                    camera))
-            continue;
-
-        const auto current_time = lod_runtime_data.current_time;
-        const auto current_lod_index = lod_runtime_data.current_lod_index;
-        const auto target_lod_index = lod_runtime_data.target_lod_index;
-
-        const auto params = math::vec3{0.0f, -1.0f, (transition_time - current_time) / transition_time};
-
-        const auto params_inv = math::vec3{1.0f, 1.0f, current_time / transition_time};
+        const auto params_inv = math::vec3{1.0f, 1.0f, current_time / lod_data.transition_time};
 
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
         const auto& bone_transforms = model_comp.get_bone_transforms();

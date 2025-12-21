@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "engine/rendering/camera.h"
 #include <engine/rendering/batch_collector.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
@@ -52,18 +53,16 @@ auto pipeline::init(rtti::context& ctx) -> bool
     return true;
 }
 
-auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, visibility_flags query, const layer_mask& render_mask)
-    -> visibility_set_models_t
+void pipeline::gather_visible_models(scene& scn,
+    const camera* cam, 
+    visibility_flags query, 
+    const layer_mask& render_mask, 
+    const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback)
 {
     APP_SCOPE_PERF("Rendering/Cull Models");
 
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
-    // Pre-allocate with estimated size
-    visibility_set_models_t result;
-    
-    // Thread-safe collection using mutex
-    //std::mutex result_mutex;
     
     // Use parallel execution for visibility testing
     std::for_each(/*std::execution::par_unseq,*/ view.begin(), view.end(),
@@ -99,26 +98,38 @@ auto pipeline::gather_visible_models(scene& scn, const math::frustum* frustum, v
             }
             
             bool is_visible = true;
-            
-            if(frustum)
+            lod_data current_lod_data{};
+            const auto& world_transform = transform_comp.get_transform_global();
+
+            if(cam)
             {
-                const auto& world_transform = transform_comp.get_transform_global();
-                const auto& local_bounds = model_comp.get_local_bounds();
+                const auto& model = model_comp.get_model();
+
+  
+                if(!model.is_valid())
+                {
+                    return;
+                }
+                if(!model.calculate_lod_data(current_lod_data, 0.0f, world_transform, *cam, 0.0f))
+                {
+                    return;
+                }
                 
+                const auto& local_bounds = model_comp.get_local_bounds(current_lod_data.current_lod_index);
+
                 // Test the bounding box of the mesh
-                is_visible = frustum->test_obb(local_bounds, world_transform);
-                // Alternative: is_visible = frustum->test_aabb(model_comp.get_world_bounds());
+                is_visible = cam->test_obb(local_bounds, world_transform);
+                 // Alternative: is_visible = frustum->test_aabb(model_comp.get_world_bounds());
             }
-            
+
+
             if(is_visible)
             {
-                // Thread-safe insertion
-                //std::lock_guard<std::mutex> lock(result_mutex);
-                result.emplace_back(scn.create_handle(entity));
+
+                lod_data_callback(scn.create_handle(entity), current_lod_data);
             }
+            
         });
-    
-    return result;
 }
 
 

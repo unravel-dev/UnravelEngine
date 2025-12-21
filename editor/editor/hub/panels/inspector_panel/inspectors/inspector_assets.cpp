@@ -114,7 +114,7 @@ auto pick_asset(ImGuiTextFilter& filter,
     inspect_result result{};
 
     auto fh = ImGui::GetFrameHeight();
-    ImVec2 item_size = ImVec2(fh, fh) * 4.0f;
+    ImVec2 item_size = ImVec2(fh, fh) * 2.0f;
     ImGui::BeginGroup();
     if(data)
     {

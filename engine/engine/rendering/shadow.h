@@ -571,7 +571,12 @@ struct adaptive_shadow_params
     float split_weight_bias = 0.1f;         // Bias for dynamic split weight adjustment
 };
 
-using shadow_map_models_t = hpp::small_vector<entt::handle>;
+struct shadow_visibility_data
+{
+    entt::handle entity;
+    lod_data lod_data;
+};
+using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 
 /**
  * @brief Shadow mapping generator with improved algorithms for high-altitude cameras

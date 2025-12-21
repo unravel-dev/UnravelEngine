@@ -3,6 +3,7 @@
 #include "graphics/graphics.h"
 #include "material.h"
 #include "mesh.h"
+#include "camera.h"
 
 namespace unravel
 {
@@ -179,6 +180,73 @@ auto model::get_or_emplace_material_instance(uint32_t index) -> material::sptr
     return instance;
 }
 
+
+auto model::calculate_lod_data(lod_data& data, float transition_time, const math::transform& world_transform, const camera& cam, float dt) const -> bool
+{
+    
+    const auto lod_count = get_lods().size();
+
+    
+    if(lod_count <= 1)
+    {
+        data.current_lod_index = 0;
+        data.target_lod_index = 0;
+        return true;
+    }
+
+    const auto& lod_limits = get_lod_limits();
+
+    const auto base_mesh = get_lod(0);
+
+    data.transition_time = transition_time;
+    if(!base_mesh)
+    {
+        return false;
+    }
+
+
+    const auto& viewport = cam.get_viewport_size();
+    auto rect = base_mesh.get()->calculate_screen_rect(world_transform, cam);
+    data.rect = rect;
+
+    float percent = math::clamp((float(rect.height()) / float(viewport.height)) * 100.0f, 0.0f, 100.0f);
+    data.percent = percent;
+
+    std::size_t lod = 0;
+    for(size_t i = 0; i < lod_limits.size(); ++i)
+    {
+        const auto& range = lod_limits[i];
+        if(range.contains(urange32_t::value_type(percent)))
+        {
+            lod = i;
+        }
+    }
+
+    lod = math::clamp<std::size_t>(lod, 0, lod_count - 1);
+    if(data.target_lod_index != lod && data.target_lod_index == data.current_lod_index)
+    {
+        data.target_lod_index = static_cast<std::uint32_t>(lod);
+    }
+
+    if(data.current_lod_index != data.target_lod_index)
+    {
+        data.current_time += dt;
+    }
+
+    if(data.current_time >= transition_time)
+    {
+        data.current_lod_index = data.target_lod_index;
+        data.current_time = 0.0f;
+    }
+
+    // Camera
+    const float camera_cull_threshold = 0.005f; // 0.005%
+
+    // Shadows
+    // const float shadow_cull_threshold = 0.0005f; // 0.0005%
+
+    return percent >= camera_cull_threshold;
+}
 
 auto model::get_lod_limits() const -> const std::vector<urange32_t>&
 {

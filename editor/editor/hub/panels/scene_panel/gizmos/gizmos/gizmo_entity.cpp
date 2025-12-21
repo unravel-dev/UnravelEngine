@@ -165,86 +165,134 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
-    // if(e.all_of<model_component>())
-    // {
-    //     const auto& frustum = cam.get_frustum();
-    //     const auto& model_comp = e.get<model_component>();
+    if(e.all_of<model_component>())
+    {
+        // const auto& frustum = cam.get_frustum();
+        // const auto& model_comp = e.get<model_component>();
 
-    //     // world bounds
-    //     {
-    //         auto world_bounds = model_comp.get_world_bounds();
+        // world bounds
+        {
+            // auto world_bounds = model_comp.get_world_bounds();
 
-    //         if(frustum.test_aabb(world_bounds))
-    //         {
-    //             DebugDrawEncoderScopePush scope(dd.encoder);
-    //             dd.encoder.setColor(0xff00ffff);
-    //             dd.encoder.setWireframe(true);
-    //             bx::Aabb aabb;
-    //             aabb.min = to_bx(world_bounds.min);
-    //             aabb.max = to_bx(world_bounds.max);
-    //             dd.encoder.draw(aabb);
-    //         }
-    //     }
+            // if(frustum.test_aabb(world_bounds))
+            // {
+            //     DebugDrawEncoderScopePush scope(dd.encoder);
+            //     dd.encoder.setColor(0xff00ffff);
+            //     dd.encoder.setWireframe(true);
+            //     bx::Aabb aabb;
+            //     aabb.min = to_bx(world_bounds.min);
+            //     aabb.max = to_bx(world_bounds.max);
+            //     dd.encoder.draw(aabb);
+            // }
+        }
 
-    //     // local bounds
-    //     {
-    //         const auto& model = model_comp.get_model();
-    //         if(!model.is_valid())
-    //         {
-    //             return;
-    //         }
+        // local bounds
+        {
+            // const auto& model = model_comp.get_model();
+            // if(!model.is_valid())
+            // {
+            //     return;
+            // }
 
-    //         const auto lod = model.get_lod(0);
-    //         if(!lod)
-    //         {
-    //             return;
-    //         }
-    //         const auto& mesh = lod.get();
-    //         const auto& bounds = mesh->get_bounds();
-    //         // Test the bounding box of the mesh
-    //         if(frustum.test_obb(bounds, world_transform))
-    //         {
-    //             DebugDrawEncoderScopePush scope(dd.encoder);
-    //             dd.encoder.setColor(0xffffffff);
-    //             dd.encoder.setWireframe(true);
-    //             dd.encoder.pushTransform((const float*)world_transform);
-    //             bx::Aabb aabb;
-    //             aabb.min = to_bx(bounds.min);
-    //             aabb.max = to_bx(bounds.max);
-    //             dd.encoder.draw(aabb);
-    //             dd.encoder.popTransform();
-    //         }
+            // lod_data lod_runtime_data{};
+            // if(!model.calculate_lod_data(lod_runtime_data, 0.0f, world_transform, cam, 0.0f))
+            // {
+            //     return;
+            // }
 
-    //         const auto& submeshes = model_comp.get_armature_entities();
-    //         for(const auto& submesh : submeshes)
-    //         {
-    //             const auto& submesh_comp = submesh.try_get<submesh_component>();
-    //             if(!submesh_comp)
-    //             {
-    //                 continue;
-    //             }
-    //             const auto& submesh_transform_comp = submesh.get<transform_component>();
-    //             const auto& submesh_transform = submesh_transform_comp.get_transform_global();
-    //             DebugDrawEncoderScopePush scope(dd.encoder);
-    //             dd.encoder.setColor(0xffaaaaaa);
-    //             dd.encoder.setWireframe(true);
-    //             for(const auto submesh_id : submesh_comp->submeshes)
-    //             {
-    //                 const auto& submesh = mesh->get_submesh(submesh_id);
+            // const auto lod = model.get_lod(lod_runtime_data.current_lod_index);
+            // if(!lod)
+            // {
+            //     return;
+            // }
+            // const auto& mesh = lod.get();
+            // const auto& bounds = mesh->get_bounds();
+            // // Test the bounding box of the mesh
+            // if(frustum.test_obb(bounds, world_transform))
+            // {
+            //     // DebugDrawEncoderScopePush scope(dd.encoder);
+            //     // dd.encoder.setColor(0xffffffff);
+            //     // dd.encoder.setWireframe(true);
+            //     // dd.encoder.pushTransform((const float*)world_transform);
+            //     // bx::Aabb aabb;
+            //     // aabb.min = to_bx(bounds.min);
+            //     // aabb.max = to_bx(bounds.max);
+            //     // dd.encoder.draw(aabb);
+            //     // dd.encoder.popTransform();
+            // }
 
-    //                 if(frustum.test_obb(submesh.bbox, submesh_transform))
-    //                 {
-    //                     dd.encoder.pushTransform((const float*)submesh_transform);
-    //                     bx::Aabb aabb;
-    //                     aabb.min = to_bx(submesh.bbox.min);
-    //                     aabb.max = to_bx(submesh.bbox.max);
-    //                     dd.encoder.draw(aabb);
-    //                     dd.encoder.popTransform();
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+            
+            // const auto& rect = lod_runtime_data.rect;
+            // if(rect.width() > 0 && rect.height() > 0)
+            // {
+            //     for(int i = -1; i <= 1; i++)
+            //     {
+            //         auto r = irect32_t::inflate(rect, i, i);
+            //         DebugDrawEncoderScopePush scope(dd.encoder);
+            //         dd.encoder.setColor(0xff00ffff);
+            //         dd.encoder.setWireframe(true);
+                    
+            //         // Use the model's world position as the billboard center
+            //         const auto& model_world_pos = world_transform.get_position();
+                    
+            //         // Calculate direction from camera to model (for billboard orientation)
+            //         const auto& camera_pos = cam.get_position();
+            //         const auto camera_to_model = math::normalize(model_world_pos - camera_pos);
+                    
+            //         // Calculate distance from camera to model for size calculation
+            //         const float distance_to_camera = math::distance(camera_pos, model_world_pos);
+                    
+            //         // Calculate world-space size based on screen rect dimensions and camera distance
+            //         // For perspective projection, size scales with distance
+            //         const auto& viewport_size = cam.get_viewport_size();
+            //         float world_width = 0.0f;
+            //         float world_height = 0.0f;
+    
+            //         const auto& near_plane = frustum.planes[math::volume_plane::near_plane];
+            //         std::array<math::vec3, 4> world_pos;
+            //         cam.viewport_to_world(math::vec2(float(r.left), float(r.top)), near_plane, world_pos[0], false);
+            //         cam.viewport_to_world(math::vec2(float(r.right), float(r.top)), near_plane, world_pos[1], false);
+            //         cam.viewport_to_world(math::vec2(float(r.right), float(r.bottom)), near_plane, world_pos[2], false);
+            //         cam.viewport_to_world(math::vec2(float(r.left), float(r.bottom)), near_plane, world_pos[3], false);
+    
+            //         dd.encoder.moveTo(to_bx(world_pos[0]));
+            //         dd.encoder.lineTo(to_bx(world_pos[1]));
+            //         dd.encoder.lineTo(to_bx(world_pos[2]));
+            //         dd.encoder.lineTo(to_bx(world_pos[3]));
+            //         dd.encoder.close();
+            //     }
+            // }
+
+            // const auto& submeshes = model_comp.get_armature_entities();
+            // for(const auto& submesh : submeshes)
+            // {
+            //     const auto& submesh_comp = submesh.try_get<submesh_component>();
+            //     if(!submesh_comp)
+            //     {
+            //         continue;
+            //     }
+            //     const auto& submesh_transform_comp = submesh.get<transform_component>();
+            //     const auto& submesh_transform = submesh_transform_comp.get_transform_global();
+            //     DebugDrawEncoderScopePush scope(dd.encoder);
+            //     dd.encoder.setColor(0xffaaaaaa);
+            //     dd.encoder.setWireframe(true);
+            //     for(const auto submesh_id : submesh_comp->submeshes)
+            //     {
+            //         const auto& submesh = mesh->get_submesh(submesh_id);
+
+            //         if(frustum.test_obb(submesh->bbox, submesh_transform))
+            //         {
+            //             dd.encoder.pushTransform((const float*)submesh_transform);
+            //             bx::Aabb aabb;
+            //             aabb.min = to_bx(submesh->bbox.min);
+            //             aabb.max = to_bx(submesh->bbox.max);
+            //             dd.encoder.draw(aabb);
+            //             dd.encoder.popTransform();
+            //         }
+            //     }
+            // }
+        }
+    }
 
     if(e.all_of<text_component>())
     {

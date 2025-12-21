@@ -19,6 +19,21 @@
 namespace unravel
 {
 
+/**
+ * @struct lod_data
+ * @brief Contains level of detail (LOD) data for an entity.
+ */
+
+struct lod_data
+{
+    std::uint32_t current_lod_index = 0; ///< Current LOD index.
+    std::uint32_t target_lod_index = 0;  ///< Target LOD index.
+    float current_time = 0.0f;           ///< Current time for LOD transition.
+    float percent = 0.0f;                ///< Percentage of the model visible.
+    float transition_time = 0.0f;        ///< Transition time for the LOD.
+    irect32_t rect;                      ///< Screen rectangle of the model.
+};
+
 struct pose_mat4
 {
     /**
@@ -111,6 +126,18 @@ public:
      * @return A constant reference to the vector of LOD limits.
      */
     auto get_lod_limits() const -> const std::vector<urange32_t>&;
+
+
+    /**
+     * @brief Calculates the LOD data for the model.
+     * @param data The LOD data to calculate.
+     * @param transition_time The transition time for the LOD.
+     * @param world_transform The world transform of the model.
+     * @param cam The camera.
+     * @param dt The delta time.
+     * @return True if the LOD data was calculated successfully, false otherwise.
+     */
+    auto calculate_lod_data(lod_data& data, float transition_time, const math::transform& world_transform, const camera& cam, float dt) const -> bool;
 
     /**
      * @brief Sets the LOD limits.
