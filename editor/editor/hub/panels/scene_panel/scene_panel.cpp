@@ -1521,6 +1521,7 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
     ImGui::PushID("Billboard Gizmos");
     ImGui::SetNextWindowViewportToCurrent();
 
+    
     if(ImGui::BeginMenu(ICON_MDI_ARROW_DOWN_BOLD, em.show_icon_gizmos))
     {
         ImGui::PushItemWidth(100.0f);
@@ -1906,6 +1907,11 @@ void scene_panel::draw_menubar(rtti::context& ctx)
 
     if(ImGui::BeginMenuBar())
     {
+        // Apply Unity-like styling - more prominent, tab-like appearance
+        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+
         draw_prefab_mode_header(ctx);
         draw_transform_tools(em);
         draw_gizmo_pivot_mode_menu(gizmo_at_center_);
@@ -1917,6 +1923,8 @@ void scene_panel::draw_menubar(rtti::context& ctx)
         draw_inverse_kinematics_menu(em);
         draw_camera_settings_menu(ctx);
         draw_framerate_display();
+        
+        ImGui::PopStyleColor(3);
 
         ImGui::EndMenuBar();
     }

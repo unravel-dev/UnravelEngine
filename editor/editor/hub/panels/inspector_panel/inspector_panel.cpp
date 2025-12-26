@@ -104,6 +104,11 @@ void inspector_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
 
         if(ImGui::BeginMenuBar())
         {
+            ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+        
+            
             bool locked = !!locked_object_;
 
             if(ImGui::MenuItem(locked ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT, nullptr, locked))
@@ -129,6 +134,8 @@ void inspector_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
 
             ImGui::SetItemTooltipEx("%s", "Debug View");
 
+            ImGui::PopStyleColor(3);
+            
             ImGui::EndMenuBar();
         }
 

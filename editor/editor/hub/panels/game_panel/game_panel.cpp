@@ -213,23 +213,11 @@ void game_panel::draw_menubar(rtti::context& ctx)
     current_resolution_index_ = settings.resolution.get_current_resolution_index();
     if(ImGui::BeginMenuBar())
     {
-        if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
-        {
-            ImGui::RadioButton("Full", &visualize_passes_, -1);
-            ImGui::RadioButton("Base Color", &visualize_passes_, 0);
-            ImGui::RadioButton("Diffuse Color", &visualize_passes_, 1);
-            ImGui::RadioButton("Specular Color", &visualize_passes_, 2);
-            ImGui::RadioButton("Indirect Specular Color", &visualize_passes_, 3);
-            ImGui::RadioButton("Ambient Occlusion", &visualize_passes_, 4);
-            ImGui::RadioButton("Normals (World Space)", &visualize_passes_, 5);
-            ImGui::RadioButton("Roughness", &visualize_passes_, 6);
-            ImGui::RadioButton("Metalness", &visualize_passes_, 7);
-            ImGui::RadioButton("Emissive Color", &visualize_passes_, 8);
-            ImGui::RadioButton("Subsurface Color", &visualize_passes_, 9);
-            ImGui::RadioButton("Depth", &visualize_passes_, 10);
-            ImGui::EndMenu();
-        }
-        ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");
+        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+        
+        
         if(ImGui::BeginMenu(fmt::format("{} {}", resolutions[std::clamp(current_resolution_index_, 0, (int)resolutions.size()-1)].name, ICON_MDI_ARROW_DOWN_BOLD).c_str()))
         {
             for(int i = 0; i < (int)resolutions.size(); ++i)
@@ -249,6 +237,24 @@ void game_panel::draw_menubar(rtti::context& ctx)
         }
         ImGui::SetItemTooltipEx("%s", "Resolution Presets");
 
+        if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
+        {
+            ImGui::RadioButton("Full", &visualize_passes_, -1);
+            ImGui::RadioButton("Base Color", &visualize_passes_, 0);
+            ImGui::RadioButton("Diffuse Color", &visualize_passes_, 1);
+            ImGui::RadioButton("Specular Color", &visualize_passes_, 2);
+            ImGui::RadioButton("Indirect Specular Color", &visualize_passes_, 3);
+            ImGui::RadioButton("Ambient Occlusion", &visualize_passes_, 4);
+            ImGui::RadioButton("Normals (World Space)", &visualize_passes_, 5);
+            ImGui::RadioButton("Roughness", &visualize_passes_, 6);
+            ImGui::RadioButton("Metalness", &visualize_passes_, 7);
+            ImGui::RadioButton("Emissive Color", &visualize_passes_, 8);
+            ImGui::RadioButton("Subsurface Color", &visualize_passes_, 9);
+            ImGui::RadioButton("Depth", &visualize_passes_, 10);
+            ImGui::EndMenu();
+        }
+        ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");
+
         ImGui::PushFont(ImGui::Font::Mono);
         auto& io = ImGui::GetIO();
 
@@ -266,6 +272,9 @@ void game_panel::draw_menubar(rtti::context& ctx)
                                ImGui::Text("%.1f", io.Framerate);
                                ImGui::PopFont();
                            });
+
+
+        ImGui::PopStyleColor(3);
 
         ImGui::EndMenuBar();
     }

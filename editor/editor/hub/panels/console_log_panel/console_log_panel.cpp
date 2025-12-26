@@ -229,6 +229,10 @@ void console_log_panel::draw()
 
     if(ImGui::BeginMenuBar())
     {
+        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+        
         ImGui::DrawFilterWithHint(filter_, ICON_MDI_TEXT_BOX_SEARCH " Search...", 200.0f);
         ImGui::DrawItemActivityOutline();
         ImGui::SameLine();
@@ -255,6 +259,8 @@ void console_log_panel::draw()
         draw_filter_button(level::info);
         draw_filter_button(level::trace);
         draw_filter_button(level::debug);
+
+        ImGui::PopStyleColor(3);
 
         ImGui::EndMenuBar();
     }

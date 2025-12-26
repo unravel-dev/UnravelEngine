@@ -79,6 +79,10 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
 {
     if(ImGui::BeginMenuBar())
     {
+        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+        
         if(ImGui::BeginMenu("View " ICON_MDI_ARROW_DOWN_BOLD))
         {
             ImGui::Checkbox("Show Editor Stats", &show_editor_stats_);
@@ -96,6 +100,7 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
             ImGui::SetItemTooltip("Enable/disable static mesh batching for performance comparison");
             ImGui::EndMenu();
         }
+        ImGui::PopStyleColor(3);
         ImGui::EndMenuBar();
     }
 }
