@@ -16,13 +16,13 @@ REFLECT(text_component)
     using OT = text_component::overflow_type;
 
      // predicates for conditional GUI
-    auto auto_size_pred_entt = entt::property_predicate(
+    auto auto_size_pred_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& i)
         {
             return i.try_cast<text_component>()->get_auto_size();
         });
 
-    auto font_size_read_only_entt = entt::property_predicate(
+    auto font_size_read_only_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& i)
         {
             return i.try_cast<text_component>()->get_auto_size();

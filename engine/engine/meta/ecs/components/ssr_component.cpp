@@ -13,13 +13,13 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     using cone_tracing_settings = ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings;
     using temporal_settings = ssr_pass::fidelityfx_ssr_settings::temporal_settings;
 
-    auto cone_tracing_predicate_entt = entt::property_predicate([](const entt::meta_any& obj)
+    auto cone_tracing_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
         auto data = obj.try_cast<fidelityfx_settings>();
         return data->enable_cone_tracing;
     });
 
-    auto temporal_predicate_entt = entt::property_predicate([](const entt::meta_any& obj) -> bool
+    auto temporal_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
         if(auto data = obj.try_cast<fidelityfx_settings>())
         {

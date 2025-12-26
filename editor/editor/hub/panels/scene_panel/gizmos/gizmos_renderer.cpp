@@ -50,7 +50,7 @@ void gizmos_renderer::draw_grid(uint32_t pass_id, const camera& cam, const editi
     grid_program_->end();
 }
 
-void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity)
+void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity, dd_2d_raii& dd_2d)
 {
     if(!camera_entity)
         return;
@@ -65,6 +65,8 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     auto size = obuffer->get_size();
 
     bool selection_mask_drawn = false;
+
+    if(em.gizmos.show_selection_outline)
     {
         // Pass 1: Selection mask
         resize_selection_mask_rt(size.width, size.height);
@@ -81,7 +83,7 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     
         bullet_backend::draw_system_gizmos(ctx, camera, dd);
     
-        draw_selection_gizmos(ctx, camera, dd);
+        draw_selection_gizmos(ctx, camera, dd, dd_2d);
     
         if(selection_mask_drawn)
         {
@@ -138,13 +140,13 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     return true;
 }
 
-void gizmos_renderer::draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd)
+void gizmos_renderer::draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd, dd_2d_raii& dd_2d)
 {
     auto& em = ctx.get_cached<editing_manager>();
 
     for(auto& s : em.get_selections())
     {
-        draw_gizmo_var(ctx, s, camera, dd);
+        draw_gizmo_var(ctx, s, camera, dd, dd_2d);
     }
 }
 
@@ -192,7 +194,11 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                     continue;
                 }
 
-                auto lod = model.get_lod(0);
+                lod_data current_lod_data;
+                model.calculate_lod_data(current_lod_data, world_transform, camera, 0.0f, 0.0f);
+
+
+                auto lod = model.get_lod(current_lod_data.current_lod_index);
                 if(!lod)
                 {
                     continue;
@@ -235,7 +241,7 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                     prog->end();
                 };
 
-                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, 0, callbacks);
+                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, current_lod_data.current_lod_index, callbacks);
 
                 any_drawn = true;
             }

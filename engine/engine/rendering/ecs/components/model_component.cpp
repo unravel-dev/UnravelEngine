@@ -112,12 +112,12 @@ auto process_armature(const mesh& render_mesh,
 
 void get_transforms_for_entities(const std::vector<entt::handle>& entities,
                                  size_t submesh_count,
-                                 pose_mat4& submesh_pose,
+                                 submesh_pose_mat4& submesh_pose,
                                  size_t bone_count,
                                  pose_mat4& bone_pose)
 {
-    submesh_pose.transforms.clear();
-    submesh_pose.transforms.reserve(submesh_count);
+    submesh_pose.clear();
+    submesh_pose.reserve(submesh_count);
     bone_pose.transforms.resize(bone_count);
 
     // Use std::for_each with the view's iterators
@@ -131,9 +131,10 @@ void get_transforms_for_entities(const std::vector<entt::handle>& entities,
                       {
                           const auto& transform_global = transform_comp->get_transform_global().get_matrix();
 
-                          if(submesh_comp)
+                          if(submesh_comp && !submesh_comp->submeshes.empty())
                           {
-                              submesh_pose.transforms.emplace_back(transform_global);
+                              // Add the transform once and map all submesh indices to it
+                              submesh_pose.add_transform(submesh_comp->submeshes, transform_global);
                           }
 
                           if(bone_comp)
@@ -199,7 +200,7 @@ auto model_component::update_armature() -> bool
     const auto& skin_data = mesh->get_skin_bind_data();
 
     auto bones_count = skin_data.get_bones().size();
-    auto submeshes_count = mesh->get_submeshes_count();
+    auto submeshes_count = mesh->get_submeshes_count(0);
 
     get_transforms_for_entities(armature_entities, submeshes_count, submesh_pose_, bones_count, bone_pose_);
 
@@ -244,7 +245,7 @@ auto model_component::init_armature(bool force) -> bool
     const auto& armature = mesh->get_armature();
 
     bool recreate_armature = force;
-    recreate_armature |= armature && submesh_pose_.transforms.empty();
+    recreate_armature |= armature && submesh_pose_.submesh_to_transform_indices.empty();
     recreate_armature |= skin_data.has_bones() && skinning_pose_.empty();
 
     if(recreate_armature)
@@ -452,7 +453,7 @@ auto model_component::get_skinning_transforms() const -> const std::vector<pose_
     return skinning_pose_;
 }
 
-auto model_component::get_submesh_transforms() const -> const pose_mat4&
+auto model_component::get_submesh_transforms() const -> const submesh_pose_mat4&
 {
     return submesh_pose_;
 }

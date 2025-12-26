@@ -84,6 +84,7 @@ private:
     float acceleration_{};
     math::vec3 move_dir_{};
 
+    dd_2d_raii dd_2d_{};
     gizmos_renderer gizmos_{};
 
     // Track prefab mode state

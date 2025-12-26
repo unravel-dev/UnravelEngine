@@ -72,6 +72,8 @@ SAVE(audio::sound_data)
 {
     try_save(ar, ser20::make_nvp("info", obj.info));
     try_save(ar, ser20::make_nvp("data", obj.data));
+    
+    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
 }
 // SAVE_INSTANTIATE(sound_data, ser20::oarchive_binary_t);
 
@@ -79,6 +81,8 @@ LOAD(audio::sound_data)
 {
     try_load(ar, ser20::make_nvp("info", obj.info));
     try_load(ar, ser20::make_nvp("data", obj.data));
+    
+    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
 }
 // LOAD_INSTANTIATE(sound_data, ser20::iarchive_binary_t);
 

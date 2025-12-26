@@ -75,6 +75,7 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
+    hpp::optional<camera> original_camera_{};
     hpp::optional<camera> pick_camera_{};
 
     editing_manager::select_mode pick_mode_{};

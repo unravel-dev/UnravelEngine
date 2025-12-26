@@ -52,6 +52,8 @@ REFLECT(material)
 SAVE(material)
 {
     try_save(ar, ser20::make_nvp("cull_type", obj.cull_type_));
+    
+    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
 }
 SAVE_INSTANTIATE(material, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(material, ser20::oarchive_binary_t);
@@ -59,6 +61,8 @@ SAVE_INSTANTIATE(material, ser20::oarchive_binary_t);
 LOAD(material)
 {
     try_load(ar, ser20::make_nvp("cull_type", obj.cull_type_));
+    
+    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
 }
 LOAD_INSTANTIATE(material, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(material, ser20::iarchive_binary_t);

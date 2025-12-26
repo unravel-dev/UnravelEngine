@@ -1227,6 +1227,12 @@ LOAD(script_component::script_object)
     try_load_mono_type(ar, "type", script_type);
 
 
+    if(!script_type.valid())
+    {
+        return;
+    }
+
+
     serialization::path_segment_guard guard(script_type.get_fullname());
 
     auto* existing_obj = script_component_loader_ctx

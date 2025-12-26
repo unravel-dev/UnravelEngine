@@ -66,12 +66,13 @@ auto save_manifest(const fs::path& manifest_path, const asset_manifest& manifest
         }
         
         auto archive = ser20::create_oarchive_associative(file);
-    
-        archive(ser20::make_nvp("source_key", manifest.source_key.generic_string()));
-        archive(ser20::make_nvp("source_sha", manifest.source_sha));
-        archive(ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         
-        return true;
+        bool success = true;
+        success &= try_save(archive, ser20::make_nvp("source_key", manifest.source_key.generic_string()));
+        success &= try_save(archive, ser20::make_nvp("source_sha", manifest.source_sha));
+        success &= try_save(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
+        success &= try_save(archive, ser20::make_nvp("format_version", manifest.format_version));
+        return success;
     }
     catch(const std::exception& e)
     {
@@ -100,11 +101,14 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
         auto archive = ser20::create_iarchive_associative(file);
         
         std::string source_path;
-        archive(ser20::make_nvp("source_key", source_path));
+        
+        bool success = true;
+        success &= try_load(archive, ser20::make_nvp("source_key", source_path));
         manifest.source_key = fs::path(source_path);
-        archive(ser20::make_nvp("source_sha", manifest.source_sha));
-        archive(ser20::make_nvp("source_timestamp", manifest.source_timestamp));
-        return true;
+        success &= try_load(archive, ser20::make_nvp("source_sha", manifest.source_sha));
+        success &= try_load(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
+        success &= try_load(archive, ser20::make_nvp("format_version", manifest.format_version));
+        return success;
     }
     catch(const std::exception& e)
     {
@@ -141,5 +145,12 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
     return current_manifest.source_sha != manifest.source_sha;
 }
 
+auto is_compiled_format_changed(const fs::path& compiled_asset_path, const asset_manifest& manifest) -> bool
+{
+    auto extension = manifest.source_key.extension().string();
+    auto current_version = ex::get_format_version(extension);
+    
+    return manifest.format_version != current_version;
+}
 } // namespace asset_compiler
 } // namespace unravel

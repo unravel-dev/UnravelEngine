@@ -8,13 +8,13 @@ namespace unravel
 {
 REFLECT(reflection_probe)
 {
-    auto box_predicate_entt = entt::property_predicate(
+    auto box_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<reflection_probe>();
             return data->type == probe_type::box;
         });
-    auto sphere_predicate_entt = entt::property_predicate(
+    auto sphere_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<reflection_probe>();

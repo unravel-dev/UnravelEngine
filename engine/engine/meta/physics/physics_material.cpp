@@ -98,6 +98,8 @@ SAVE(physics_material)
     try_save(ar, ser20::make_nvp("damping", obj.damping));
     try_save(ar, ser20::make_nvp("restitution_combine", obj.restitution_combine));
     try_save(ar, ser20::make_nvp("friction_combine", obj.friction_combine));
+    
+    // Changes here should be reflected in ex::get_format_version<physics_material>() in asset_extensions.h
 }
 SAVE_INSTANTIATE(physics_material, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_material, ser20::oarchive_binary_t);
@@ -110,6 +112,8 @@ LOAD(physics_material)
     try_load(ar, ser20::make_nvp("damping", obj.damping));
     try_load(ar, ser20::make_nvp("restitution_combine", obj.restitution_combine));
     try_load(ar, ser20::make_nvp("friction_combine", obj.friction_combine));
+    
+    // Changes here should be reflected in ex::get_format_version<physics_material>() in asset_extensions.h
 }
 LOAD_INSTANTIATE(physics_material, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(physics_material, ser20::iarchive_binary_t);

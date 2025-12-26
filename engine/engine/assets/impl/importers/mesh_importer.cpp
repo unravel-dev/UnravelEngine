@@ -700,20 +700,33 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
         }
 
         // tex coords
-        if(mesh->HasTextureCoords(0) && has_texcoord0)
-        {
-            float textureCoords[4];
-            std::memcpy(textureCoords, &mesh->mTextureCoords[0][i], sizeof(aiVector2D));
 
-            gfx::vertex_pack(textureCoords,
-                             true,
-                             gfx::attribute::TexCoord0,
-                             load_data.vertex_format,
-                             current_vertex_ptr);
+        if(has_texcoord0)
+        {
+            float textureCoords[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            if(mesh->HasTextureCoords(0))
+            {
+                std::memcpy(textureCoords, &mesh->mTextureCoords[0][i], sizeof(aiVector2D));
+
+                gfx::vertex_pack(textureCoords,
+                                 true,
+                                 gfx::attribute::TexCoord0,
+                                 load_data.vertex_format,
+                                 current_vertex_ptr);
+            }
+            else
+            {
+                gfx::vertex_pack(textureCoords,
+                                 true,
+                                 gfx::attribute::TexCoord0,
+                                 load_data.vertex_format,
+                                 current_vertex_ptr);
+            }
         }
 
+
         ////normals
-        math::vec4 normal;
+        math::vec4 normal{};
         if(mesh->HasNormals() && has_normal)
         {
             std::memcpy(math::value_ptr(normal), &mesh->mNormals[i], sizeof(aiVector3D));
@@ -725,28 +738,45 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
                              current_vertex_ptr);
         }
 
-        math::vec4 tangent;
+        math::vec4 tangent{};
         // tangents
-        if(mesh->HasTangentsAndBitangents() && has_tangent)
+        if(has_tangent)
         {
-            std::memcpy(math::value_ptr(tangent), &mesh->mTangents[i], sizeof(aiVector3D));
-            tangent.w = 1.0f;
+            if(mesh->HasTangentsAndBitangents())
+            {
+                std::memcpy(math::value_ptr(tangent), &mesh->mTangents[i], sizeof(aiVector3D));
+                tangent.w = 1.0f;
 
+            }
+            else
+            {
+                tangent = math::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+                
             gfx::vertex_pack(math::value_ptr(tangent),
-                             true,
-                             gfx::attribute::Tangent,
-                             load_data.vertex_format,
-                             current_vertex_ptr);
+            true,
+            gfx::attribute::Tangent,
+            load_data.vertex_format,
+            current_vertex_ptr);
         }
+       
 
         // binormals
-        math::vec4 bitangent;
-        if(mesh->HasTangentsAndBitangents() && has_bitangent)
+        math::vec4 bitangent{};
+        if(has_bitangent)
         {
-            std::memcpy(math::value_ptr(bitangent), &mesh->mBitangents[i], sizeof(aiVector3D));
-            float handedness =
-                math::dot(math::vec3(bitangent), math::normalize(math::cross(math::vec3(normal), math::vec3(tangent))));
-            tangent.w = handedness;
+            if(mesh->HasTangentsAndBitangents())
+            {
+                std::memcpy(math::value_ptr(bitangent), &mesh->mBitangents[i], sizeof(aiVector3D));
+            }
+            else
+            {
+                bitangent = math::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+            }
+
+                  // float handedness =
+            //     math::dot(math::vec3(bitangent), math::normalize(math::cross(math::vec3(normal), math::vec3(tangent))));
+            // tangent.w = handedness;
 
             gfx::vertex_pack(math::value_ptr(bitangent),
                              true,
@@ -875,7 +905,6 @@ void process_node(const aiScene* scene,
         armature_node->submeshes.emplace_back(submesh_index);
 
         auto& submesh = load_data.submeshes[submesh_index];
-        submesh.node_id = node->mName.C_Str();
 
         auto transformed_bbox = math::bbox::mul(submesh.bbox, resolved_transform);
         load_data.bbox.add_point(transformed_bbox.min);

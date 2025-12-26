@@ -160,6 +160,8 @@ SAVE(animation_clip)
     try_save(ar, ser20::make_nvp("duration", obj.duration));
     try_save(ar, ser20::make_nvp("channels", obj.channels));
     try_save(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    
+    // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }
 SAVE_INSTANTIATE(animation_clip, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(animation_clip, ser20::oarchive_binary_t);
@@ -170,6 +172,8 @@ LOAD(animation_clip)
     try_load(ar, ser20::make_nvp("duration", obj.duration));
     try_load(ar, ser20::make_nvp("channels", obj.channels));
     try_load(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    
+    // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }
 LOAD_INSTANTIATE(animation_clip, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(animation_clip, ser20::iarchive_binary_t);

@@ -326,8 +326,6 @@ public:
         ///< Number of faces to render in this batch.
         uint32_t face_count{0};
 
-        std::string node_id{};
-
         math::bbox bbox{};
 
         bool skinned{};
@@ -335,14 +333,25 @@ public:
 
     struct info
     {
+        ///< Structure describing LOD level information.
+        struct lod_info
+        {
+            ///< Number of triangles in this LOD.
+            uint32_t triangles = 0;
+            ///< Percentage of triangles in this LOD.
+            float percent = 0.0f;
+        };
+
         ///< Total number of vertices.
         uint32_t vertices = 0;
-        ///< Total number of primitives.
-        uint32_t primitives = 0;
+        ///< Total number of triangles.
+        uint32_t triangles = 0;
         ///< Total number of submeshes.
         uint32_t submeshes = 0;
         ///< Total number of data groups(materials).
         uint32_t data_groups = 0;
+        ///< Information about each LOD level.
+        std::vector<lod_info> lods;
     };
 
     /**
@@ -367,6 +376,27 @@ public:
     using data_group_submesh_map_t = std::map<uint32_t, submesh_array_t>;
     using byte_array_t = std::vector<uint8_t>;
 
+    /**
+     * @brief Structure describing a LOD level with its own index buffer and submeshes.
+     */
+    struct lod_level
+    {
+        ///< System memory index buffer for this LOD
+        uint32_t* system_ib_{nullptr};
+        ///< Hardware index buffer for this LOD
+        std::shared_ptr<void> hardware_ib_;
+        ///< Number of faces in this LOD
+        uint32_t face_count_{0};
+        ///< Submeshes for this LOD (face ranges may differ from base LOD)
+        submesh_array_t submeshes_;
+        ///< Cached skinned submesh indices per data group
+        submesh_array_map_t skinned_submesh_indices_;
+        ///< Cached non-skinned submesh indices per data group
+        submesh_array_map_t non_skinned_submesh_indices_;
+        ///< Error metric for this LOD (from meshoptimizer)
+        float simplification_error_{0.0f};
+    };
+
     struct armature_node
     {
         ///< Name of the armature node.
@@ -379,6 +409,21 @@ public:
         std::vector<uint32_t> submeshes;
 
         int index{-1};
+    };
+
+    /**
+     * @brief Structure describing a LOD level in load_data (for serialization).
+     */
+    struct lod_load_data
+    {
+        ///< Index buffer data for this LOD (as uint32_t array)
+        std::vector<uint32_t> index_data;
+        ///< Number of faces in this LOD
+        uint32_t face_count = 0;
+        ///< Submeshes for this LOD (face ranges may differ from base LOD)
+        std::vector<mesh::submesh> submeshes;
+        ///< Error metric for this LOD (from meshoptimizer)
+        float simplification_error = 0.0f;
     };
 
     /**
@@ -402,10 +447,17 @@ public:
         uint32_t material_count = 0;
         ///< Skin data for this mesh.
         skin_bind_data skin_data;
+        ///< True if skinning was baked into topology (vertex duplication + palette index encoding) during compilation.
+        bool skin_is_prepared = false;
+        ///< Bone palette bones per palette/submesh index. Used to restore palettes without running bind_skin.
+        std::vector<std::vector<uint32_t>> bone_palette_bones;
         ///< Root node of the armature.
         std::unique_ptr<armature_node> root_node = nullptr;
 
         math::bbox bbox{};
+
+        ///< Additional LOD levels (LOD 1, 2, 3, ...) with simplified index buffers
+        std::vector<lod_load_data> lods;
     };
 
     /**
@@ -432,7 +484,7 @@ public:
      * @param vertex_start The starting vertex index.
      * @param vertex_count The number of vertices to render.
      */
-    void bind_render_buffers_for_submesh(const submesh* submesh);
+    void bind_render_buffers_for_submesh(const submesh* submesh, uint32_t lod_index = 0);
 
     /**
      * @brief Prepares the mesh with the specified vertex format.
@@ -785,6 +837,8 @@ public:
 
     /**
      * @brief Calculates the screen rectangle of the mesh based on its world transform and the camera.
+     * This version uses a conservative approach - if any corners are behind the camera, it returns
+     * the full viewport as the screen rect. Fast but may overestimate coverage.
      *
      * @param world The world transform of the mesh.
      * @param cam The camera.
@@ -793,13 +847,24 @@ public:
     auto calculate_screen_rect(const math::transform& world, const camera& cam) const -> irect32_t;
 
     /**
+     * @brief Calculates the screen rectangle of the mesh with precise near-plane clipping.
+     * This version properly clips edges that cross the near plane for accurate screen coverage.
+     * More accurate but slightly more expensive than calculate_screen_rect.
+     *
+     * @param world The world transform of the mesh.
+     * @param cam The camera.
+     * @return irect32_t The screen rectangle.
+     */
+    auto calculate_screen_rect_precise(const math::transform& world, const camera& cam) const -> irect32_t;
+
+    /**
      * @brief Retrieves information about the submesh of the mesh associated with the specified data group identifier.
      *
      * @param data_group_id The data group identifier.
      * @return const submesh* Pointer to the submesh information.
      */
-    auto get_submeshes() const -> const submesh_array_t&;
-    auto get_submesh(uint32_t submesh_index = 0) const -> const submesh*;
+    auto get_submeshes(uint32_t lod_index = 0) const -> const submesh_array_t&;
+    auto get_submesh(uint32_t submesh_index = 0, uint32_t lod_index = 0) const -> const submesh*;
     /**
      * @brief Gets the local bounding box for this mesh.
      *
@@ -823,19 +888,116 @@ public:
 
     /**
      * @brief Gets the number of submeshes for this mesh.
-     *
-     * @return size_t The number of data groups.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return size_t The number of submeshes.
      */
-    auto get_submeshes_count() const -> size_t;
-    auto get_skinned_submeshes_count() const -> size_t;
-    auto get_skinned_submeshes_indices(uint32_t data_group_id) const -> const submesh_array_indices_t&;
+    auto get_submeshes_count(uint32_t lod_index = 0) const -> size_t;
+    /**
+     * @brief Gets the number of skinned submeshes for this mesh.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return size_t The number of skinned submeshes.
+     */
+    auto get_skinned_submeshes_count(uint32_t lod_index = 0) const -> size_t;
+    /**
+     * @brief Gets the indices of skinned submeshes for a specific data group.
+     * @param data_group_id The data group identifier.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return const submesh_array_indices_t& The indices of skinned submeshes.
+     */
+    auto get_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index = 0) const -> const submesh_array_indices_t&;
+
+    /**
+     * @brief Gets the number of non-skinned submeshes for this mesh.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return size_t The number of non-skinned submeshes.
+     */
+    auto get_non_skinned_submeshes_count(uint32_t lod_index = 0) const -> size_t;
+    /**
+     * @brief Gets the indices of non-skinned submeshes for a specific data group.
+     * @param data_group_id The data group identifier.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return const submesh_array_indices_t& The indices of non-skinned submeshes.
+     */
+    auto get_non_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index = 0) const -> const submesh_array_indices_t&;
+
+    /**
+     * @brief Gets the index of a submesh within the submesh array.
+     * @param s Pointer to the submesh to find.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return Index of the submesh, or -1 if not found.
+     */
+    auto get_submesh_index(const submesh* s, uint32_t lod_index = 0) const -> int;
+
+    /**
+     * @brief Gets the number of LOD levels available.
+     * @return Number of LODs (including base LOD 0)
+     */
+    auto get_lod_count() const -> uint32_t;
+
+    /**
+     * @brief Gets submeshes for a specific LOD level.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return Pointer to submesh array, or nullptr if LOD doesn't exist
+     */
+    auto get_lod_submeshes(uint32_t lod_index) const -> const submesh_array_t*;
+
+    /**
+     * @brief Gets the face count for a specific LOD level.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return Face count, or 0 if LOD doesn't exist
+     */
+    auto get_lod_face_count(uint32_t lod_index) const -> uint32_t;
+
+    /**
+     * @brief Gets index buffer data for a specific LOD level (for serialization).
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @param out_indices Output vector to store index data
+     * @param out_error Output simplification error
+     * @return true if LOD data was retrieved successfully
+     */
+    auto get_lod_index_data(uint32_t lod_index, std::vector<uint32_t>& out_indices, float& out_error) const -> bool;
 
 
-    auto get_non_skinned_submeshes_count() const -> size_t;
-    auto get_non_skinned_submeshes_indices(uint32_t data_group_id) const -> const submesh_array_indices_t&;
+    /**
+     * @brief Gets the maximum number of LODs that can be used for this mesh including base LOD.
+     * @return The maximum number of LODs that can be used.
+     */
+    static auto get_max_lod_count() -> uint32_t;
+    /**
+     * @brief Gets the maximum number of LODs that can be generated for a mesh.
+     * @return The maximum number of LODs that can be generated.
+     */
+    static auto get_max_generated_lod_count() -> uint32_t;
+    /**
+     * @brief Generates default LOD configurations based on mesh triangle count.
+     * @param data The load_data to generate LOD configs for
+     * @param target_error Base target error for LOD generation (default: 0.01)
+     * @return Vector of LOD configurations: {target_triangle_count, target_error}
+     */
+    static auto generate_default_lod_configs(const load_data& data, float target_error = 0.01f) -> std::vector<std::pair<size_t, float>>;
 
+    /**
+     * @brief Applies skinning vertex duplication to load_data (for offline LOD generation).
+     * @param data The load_data to apply skinning to (will be modified)
+     * @return true if skinning was applied successfully
+     */
+    static auto apply_skin_to_load_data(load_data& data) -> bool;
 
-    auto get_submesh_index(const submesh* s) const -> int;
+    /**
+     * @brief Generates LOD levels directly in load_data without creating GPU buffers.
+     * @param data The load_data to generate LODs for (will be modified)
+     * @param lod_configs Vector of LOD configurations: {target_triangle_count, target_error}
+     * @param options meshoptimizer simplification options (default: 0)
+     * @return true if LODs were generated successfully
+     */
+    static auto generate_lods_for_load_data(load_data& data, const std::vector<std::pair<size_t, float>>& lod_configs) -> bool;
+
+    /**
+     * @brief Restores LOD levels from load_data into the mesh.
+     * @param data The load_data containing LOD information
+     * @return true if LODs were restored successfully
+     */
+    auto restore_lods_from_load_data(const load_data& data) -> bool;
 
     struct preparation_data
     {
@@ -1005,28 +1167,6 @@ protected:
      */
     auto sort_mesh_data() -> bool;
 
-    /**
-     * @brief Calculates the best order for triangle data, optimizing for efficient use of the hardware vertex cache.
-     *
-     * @param submesh The submesh to optimize.
-     * @param source_buffer_ptr Pointer to the source index buffer.
-     * @param destination_buffer_ptr Pointer to the destination index buffer.
-     * @param minimum_vertex The minimum vertex index.
-     * @param maximum_vertex The maximum vertex index.
-     */
-    static void build_optimized_index_buffer(const submesh* submesh,
-                                             uint32_t* source_buffer_ptr,
-                                             uint32_t* destination_buffer_ptr,
-                                             uint32_t minimum_vertex,
-                                             uint32_t maximum_vertex);
-
-    /**
-     * @brief Generates scores used to identify important vertices when ordering triangle data.
-     *
-     * @param vertex_info_ptr Pointer to the vertex information.
-     * @return float The vertex score.
-     */
-    static auto find_vertex_optimizer_score(const optimizer_vertex_info* vertex_info_ptr) -> float;
 
 protected:
     ///< Whether to force the generation of tangent space vectors.
@@ -1042,14 +1182,19 @@ protected:
     uint8_t* system_vb_ = nullptr;
     ///< The vertex format used for the mesh internal vertex data.
     gfx::vertex_layout vertex_format_;
-    ///< The final system memory copy of the index buffer.
+    ///< The final system memory copy of the index buffer (LOD 0 - base mesh).
     uint32_t* system_ib_ = nullptr;
     ///< Material and data group information for each triangle.
     submesh_key_array_t triangle_data_;
-    ///< The actual hardware vertex buffer resource.
+    ///< The actual hardware vertex buffer resource (shared by all LODs).
     std::shared_ptr<void> hardware_vb_;
-    ///< The actual hardware index buffer resource.
+    ///< The actual hardware index buffer resource (LOD 0 - base mesh).
     std::shared_ptr<void> hardware_ib_;
+
+    ///< Additional LOD levels (LOD 1, 2, 3, ...) with simplified index buffers.
+    std::vector<lod_level> lods_;
+    ///< Current LOD count (including base LOD 0).
+    uint32_t lod_count_ = 1;
 
     ///< The actual list of submeshes maintained by this mesh.
     submesh_array_t mesh_submeshes_;

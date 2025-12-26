@@ -78,6 +78,11 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
         bool split_large_meshes{true};
         bool find_degenerates{true};
         bool find_invalid_data{true};
+        
+        ///< Enable automatic LOD generation during compilation
+        bool generate_lods{true};
+        ///< Target error for LOD generation (lower = higher quality, higher = more aggressive)
+        float lod_target_error{0.01f};
     } model;
 
     struct rig_meta

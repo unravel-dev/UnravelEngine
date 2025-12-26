@@ -775,6 +775,32 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     }
     if(!data.vertex_data.empty())
     {
+        // IMPORTANT:
+        // For skinned meshes, the skin binding step can duplicate vertices and rewrite triangle indices
+        // to ensure a consistent bone palette per submesh. LODs must be generated AFTER this rewrite,
+        // otherwise the stored LOD index buffers will reference the wrong vertices at runtime.
+        if(data.skin_data.has_bones())
+        {
+            if(!mesh::apply_skin_to_load_data(data))
+            {
+                APPLOG_ERROR("Failed to apply skinning data before generating LODs for {0}", str_input);
+                return false;
+            }
+        }
+
+        // Generate LODs offline during compilation (no GPU buffers created)
+        if(importer->model.generate_lods)
+        {
+            // Use custom LOD configs if provided, otherwise use defaults
+            auto lod_configs = mesh::generate_default_lod_configs(data, importer->model.lod_target_error);
+            
+            
+            if(!lod_configs.empty())
+            {
+                mesh::generate_lods_for_load_data(data, lod_configs);
+            }
+        }
+        
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
         {
             save_to_file_bin(temp.string(), data);

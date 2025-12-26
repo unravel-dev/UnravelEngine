@@ -11,11 +11,16 @@ namespace unravel
 {
 class camera;
 
+struct dd_2d_raii
+{
+    std::vector<std::function<void()>> callbacks;
+};
+
 struct gizmo : crtp_meta_type<gizmo>
 {
     virtual ~gizmo() = default;
 
-    virtual void draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd) = 0;
+    virtual void draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd, dd_2d_raii& dd_2d) = 0;
     virtual void draw_billboard(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd) = 0;
 
     template<typename T>

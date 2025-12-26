@@ -380,24 +380,12 @@ auto defaults::create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const
 {
     auto& am = ctx.get_cached<asset_manager>();
     const auto id = "engine:/embedded/" + string_utils::replace(string_utils::to_lower(name), " ", "_");
+    auto asset = am.get_asset<mesh>(id);
+    auto mesh_asset = asset.get();
+    auto bounds = mesh_asset->get_bounds();
+    math::vec3 position = {0.0f, bounds.get_extents().y, 0.0f};
 
-    auto lod = am.get_asset<mesh>(id);
-    model model;
-    model.set_lod(lod, 0);
-    model.set_material(am.get_asset<material>("engine:/embedded/standard"), 0);
-    auto object = scn.create_entity(name);
-
-    auto& transf_comp = object.get_or_emplace<transform_component>();
-
-    auto bounds = lod.get()->get_bounds();
-    transf_comp.set_position_local({0.0f, bounds.get_extents().y, 0.0f});
-
-    auto& model_comp = object.get_or_emplace<model_component>();
-    model_comp.set_casts_shadow(true);
-    model_comp.set_casts_reflection(false);
-    model_comp.set_model(model);
-
-    return object;
+    return create_mesh_entity_at(ctx, scn, id, position);
 }
 
 auto defaults::create_prefab_at(rtti::context& ctx, scene& scn, const std::string& key) -> entt::handle
@@ -443,8 +431,12 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::
     auto& am = ctx.get_cached<asset_manager>();
     auto asset = am.get_asset<mesh>(key);
 
+    auto mesh_asset = asset.get();
+
     model mdl;
+
     mdl.set_lod(asset, 0);
+  
 
     std::string name = fs::path(key).stem().string();
     auto object = scn.create_entity(name);

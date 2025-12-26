@@ -18,13 +18,13 @@ struct gizmo_registry
     std::unordered_map<entt::id_type, std::shared_ptr<gizmo>> type_map;
 };
 
-void draw_gizmo_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd);
+void draw_gizmo_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd, dd_2d_raii& dd_2d);
 
 template<typename T>
-void draw_gizmo(rtti::context& ctx, T& obj, const camera& cam, gfx::dd_raii& dd)
+void draw_gizmo(rtti::context& ctx, T& obj, const camera& cam, gfx::dd_raii& dd, dd_2d_raii& dd_2d)
 {
     entt::meta_any var = entt::forward_as_meta(obj);
-    draw_gizmo_var(ctx, var, cam, dd);
+    draw_gizmo_var(ctx, var, cam, dd, dd_2d);
 }
 
 void draw_gizmo_billboard_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd);

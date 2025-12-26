@@ -474,6 +474,11 @@ auto frustum::swept_sphere_intersect_plane(float& t0,
 
 auto frustum::test_swept_sphere(const bsphere& sphere, const vec3& vecSweepDirection, float max_distance) const -> bool
 {
+    if(test_sphere(sphere))
+    {
+        return true;
+    }
+
     unsigned int i, nCount = 0;
     float t0, t1, fDisplacedRadius;
     float pDisplacements[12];

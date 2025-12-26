@@ -57,6 +57,30 @@ struct editing_manager
         float opacity = 0.75f;
         float size = 0.5f;
         bool depth_aware {false};
+        bool show_camera {true};
+        bool show_light {true};
+        bool show_reflection_probe {true};
+        bool show_audio_source {true};
+        bool show_particle_emitter {true};
+    };
+
+    struct gizmos_data
+    {
+        bool show_selection_outline {true};
+        bool show_camera {true};
+        bool show_light {true};
+        bool show_reflection_probe {true};
+        bool show_model {true};
+        bool show_model_bounds {false};
+        bool show_model_local_bounds {false};
+        bool show_model_submesh_local_bounds {false};
+        bool show_model_lod {false};
+        bool show_text {true};
+        bool show_particle_emitter {true};
+        bool show_component_gizmos {true};
+        bool show_particle_emitter_bounds {true};
+        bool show_particle_emitter_shape {true};
+        bool show_particle_emitter_direction {true};
     };
 
     struct inverse_kinematics
@@ -468,6 +492,7 @@ struct editing_manager
     snap snap_data;
     grid grid_data;
     billboard_gizmos billboard_data;
+    gizmos_data gizmos;
 
     inverse_kinematics ik_data;
     

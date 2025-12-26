@@ -712,64 +712,91 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     gfx::discard();
 }
 
-void deferred::collect_model_for_batching(const model& model_asset, 
+void deferred::collect_model_for_batching(const model& m, 
                                          const math::mat4& world_transform,
-                                         const pose_mat4& submesh_transforms,
+                                         const submesh_pose_mat4& submesh_transforms,
                                          uint32_t lod_index, 
                                          float lod_param)
 {
-    // Get the mesh for the specified LOD
-    const auto& lods = model_asset.get_lods();
-    if (lod_index >= lods.size())
+
+    auto mesh_asset = m.get_lod(lod_index);
+    if(!mesh_asset)
     {
         return;
     }
 
-    const auto& mesh_asset = lods[lod_index];
-    if (!mesh_asset)
+    auto mesh = mesh_asset.get();
+    if(!mesh)
     {
         return;
     }
 
-    // Get materials for each submesh
-    const auto submesh_count = mesh_asset.get()->get_data_groups_count();
+    // Iterate over data groups (material groups)
+    const auto data_group_count = mesh->get_data_groups_count();
 
-    // Collect each submesh as a separate batch entry
-    for (uint32_t submesh_index = 0; submesh_index < submesh_count; ++submesh_index)
+    for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
-        // Get material for this submesh
-        auto material_ptr = model_asset.get_material_instance(submesh_index);
+        // Get material for this data group
+        auto material_ptr = m.get_material_instance(data_group_id);
         if(!material_ptr)
         {
-            continue; // Skip submeshes without valid materials
+            continue; // Skip data groups without valid materials
         }
 
-        // Determine the transform pointer to use for this submesh
-        const math::mat4* transform_ptr = nullptr;
-        if (submesh_index < submesh_transforms.transforms.size())
+        // Get all non-skinned submeshes for this data group
+        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
+        
+        // Collect each submesh in this data group as a separate batch entry
+        for (size_t submesh_idx : submesh_indices)
         {
-            // Use the specific submesh transform
-            transform_ptr = &submesh_transforms.transforms[submesh_index];
-        }
-        else
-        {
-            // Fall back to world transform if no specific submesh transform
-            transform_ptr = &world_transform;
-        }
+            uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
 
-        // Create batch key
-        batch_key key(mesh_asset.get(), material_ptr, lod_index, submesh_index);
-        if (!key.is_valid())
-        {
-            continue;
+            // Check if this submesh has specific transforms
+            if (submesh_transforms.has_transforms(submesh_index))
+            {
+                // This submesh has one or more node transforms - create an instance for each
+                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
+                
+                for (size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
+                {
+                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
+                    if (!transform_ptr)
+                    {
+                        continue;
+                    }
+                    
+                    // Create batch key
+                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                    if (!key.is_valid())
+                    {
+                        continue;
+                    }
+
+                    // Create batch instance with the specific transform
+                    batch_instance instance(transform_ptr);
+                    instance.lod_params.x = lod_param;
+
+                    // Collect for batching
+                    batch_collector_.collect_renderable(key, instance);
+                }
+            }
+            else
+            {
+                // No specific transform for this submesh - use world transform
+                batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                if (!key.is_valid())
+                {
+                    continue;
+                }
+
+                // Create batch instance with world transform
+                batch_instance instance(&world_transform);
+                instance.lod_params.x = lod_param;
+
+                // Collect for batching
+                batch_collector_.collect_renderable(key, instance);
+            }
         }
-
-        // Create batch instance with the appropriate transform pointer
-        batch_instance instance(transform_ptr);
-        instance.lod_params.x = lod_param;
-
-        // Collect for batching
-        batch_collector_.collect_renderable(key, instance);
     }
 }
 
@@ -822,7 +849,7 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
             continue;
         }
 
-        const auto submesh = mesh_ptr->get_submesh(submesh_index);
+        const auto submesh = mesh_ptr->get_submesh(submesh_index, lod_index);
         if(!submesh)
         {
             continue;
@@ -843,7 +870,7 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
         
         // Submit the mesh with instancing
         // Bind vertex and index buffers for the specific submesh
-        mesh_ptr->bind_render_buffers_for_submesh(submesh);
+        mesh_ptr->bind_render_buffers_for_submesh(submesh, lod_index);
         
         // Pack instance data into buffer
         auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);

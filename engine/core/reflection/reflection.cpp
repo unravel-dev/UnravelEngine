@@ -164,9 +164,57 @@ auto get_pretty_name(const meta_data& prop) -> std::string
     return name;
 }
 
-auto property_predicate(property_predicate_t predicate) -> property_predicate_t
+
+auto is_property_visible(const entt::meta_any& object, const entt::meta_data& prop) -> bool
 {
-    return std::move(predicate);
+    return is_property_visible(object, prop.custom());
+}
+
+auto is_property_readonly(const entt::meta_any& object, const entt::meta_data& prop) -> bool
+{
+    return is_property_readonly(object, prop.custom());
+}
+
+auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& prop) -> bool
+{
+    return is_property_flattable(object, prop.custom());
+}
+
+
+auto is_property_visible(const entt::meta_any& object, const entt::meta_custom& custom) -> bool
+{
+    auto predicate_meta = entt::get_attribute(custom, "predicate");
+    if(predicate_meta.try_cast<entt::property_predicate_t<bool>>())
+    {
+        auto pred = predicate_meta.cast<entt::property_predicate_t<bool>>();
+        return pred(object);
+    }
+
+    return true;
+}
+
+auto is_property_readonly(const entt::meta_any& object, const entt::meta_custom& custom) -> bool
+{
+    auto predicate_meta = entt::get_attribute(custom, "readonly_predicate");
+    if(predicate_meta.try_cast<entt::property_predicate_t<bool>>())
+    {
+        auto pred = predicate_meta.cast<entt::property_predicate_t<bool>>();
+        return pred(object);
+    }
+
+    return false;
+}
+
+auto is_property_flattable(const entt::meta_any& object, const entt::meta_custom& custom) -> bool
+{
+    auto predicate_meta = entt::get_attribute(custom, "flattable");
+    if(predicate_meta.try_cast<bool>())
+    {
+        auto pred = predicate_meta.cast<bool>();
+        return pred;
+    }
+
+    return false;
 }
 
 }

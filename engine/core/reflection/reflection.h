@@ -82,16 +82,31 @@ REFLECTION_EXPORT auto get_name(const meta_data& prop) -> std::string;
 REFLECTION_EXPORT auto get_pretty_name(const meta_custom& prop) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_custom& prop) -> std::string;
 
-using property_predicate_t = std::function<bool(const meta_any&)>;
-REFLECTION_EXPORT auto property_predicate(property_predicate_t predicate)
-    -> property_predicate_t;
+template<typename T>
+using property_predicate_t = std::function<T(const meta_any&)>;
 
+template<typename T>
+auto property_predicate(property_predicate_t<T> predicate)
+-> property_predicate_t<T>
+{
+    return std::move(predicate);
+
+}
     
 template<typename Value, typename... Args>
 auto make_custom(Args &&...args) -> entt::meta_custom
 {
     return {entt::internal::meta_custom_node{type_id<Value>().hash(), std::make_shared<Value>(std::forward<Args>(args)...)}};
 }
+
+
+auto is_property_visible(const entt::meta_any& object, const entt::meta_data& prop) -> bool;
+auto is_property_readonly(const entt::meta_any& object, const entt::meta_data& prop) -> bool;
+auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& prop) -> bool;
+auto is_property_visible(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
+auto is_property_readonly(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
+auto is_property_flattable(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
+
 
 } // namespace entt
 

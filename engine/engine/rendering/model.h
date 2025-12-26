@@ -9,6 +9,8 @@
 #include "material.h"
 #include "mesh.h"
 
+#include <hpp/small_vector.hpp>
+
 #include <graphics/graphics.h>
 #include <math/math.h>
 #include <reflection/registration.h>
@@ -32,6 +34,122 @@ struct lod_data
     float percent = 0.0f;                ///< Percentage of the model visible.
     float transition_time = 0.0f;        ///< Transition time for the LOD.
     irect32_t rect;                      ///< Screen rectangle of the model.
+};
+
+struct submesh_pose_mat4
+{
+    /**
+     * @brief Shared pool of unique transforms.
+     * Multiple submeshes can reference the same transform by index.
+     */
+    std::vector<math::mat4> transforms;
+    
+    /**
+     * @brief Maps submesh index to a list of transform indices.
+     * Key: submesh_index, Value: list of indices into the transforms array
+     */
+    hpp::small_vector<hpp::small_vector<uint32_t>> submesh_to_transform_indices;
+    
+    /**
+     * @brief Clears all data.
+     */
+    void clear()
+    {
+        transforms.clear();
+        submesh_to_transform_indices.clear();
+    }
+    
+    /**
+     * @brief Reserves space for submeshes.
+     * @param count Number of submeshes to reserve space for.
+     */
+    void reserve(size_t count)
+    {
+        submesh_to_transform_indices.resize(count);
+    }
+    
+    /**
+     * @brief Adds a transform and maps multiple submesh indices to it.
+     * All submesh indices in the vector will reference the same transform.
+     * @param submesh_indices Vector of submesh indices that should use this transform.
+     * @param transform The transform to add.
+     * @return The index of the transform in the transforms array.
+     */
+    auto add_transform(const std::vector<uint32_t>& submesh_indices, const math::mat4& transform) -> uint32_t
+    {
+        // Add the transform to the pool
+        uint32_t transform_index = static_cast<uint32_t>(transforms.size());
+        transforms.emplace_back(transform);
+        
+        // Find the maximum submesh index to ensure we have enough space
+        uint32_t max_submesh_index = 0;
+        for(uint32_t submesh_index : submesh_indices)
+        {
+            max_submesh_index = std::max(max_submesh_index, submesh_index);
+        }
+        
+        // Resize if needed
+        if(max_submesh_index >= submesh_to_transform_indices.size())
+        {
+            submesh_to_transform_indices.resize(max_submesh_index + 1);
+        }
+        
+        // Map all submesh indices to this transform
+        for(uint32_t submesh_index : submesh_indices)
+        {
+            submesh_to_transform_indices[submesh_index].emplace_back(transform_index);
+        }
+        
+        return transform_index;
+    }
+    
+    /**
+     * @brief Gets the number of transform instances for a specific submesh.
+     * @param submesh_index The index of the submesh.
+     * @return The number of transforms for this submesh.
+     */
+    auto get_transform_count(uint32_t submesh_index) const -> size_t
+    {
+        if(submesh_index < submesh_to_transform_indices.size())
+        {
+            return submesh_to_transform_indices[submesh_index].size();
+        }
+        return 0;
+    }
+    
+    /**
+     * @brief Gets a specific transform for a submesh by its instance index.
+     * @param submesh_index The index of the submesh.
+     * @param instance_index The instance index (0 to get_transform_count()-1).
+     * @return Pointer to the transform, or nullptr if invalid.
+     */
+    auto get_transform(uint32_t submesh_index, size_t instance_index) const -> const math::mat4*
+    {
+        if(submesh_index < submesh_to_transform_indices.size())
+        {
+            const auto& indices = submesh_to_transform_indices[submesh_index];
+            if(instance_index < indices.size())
+            {
+                uint32_t transform_index = indices[instance_index];
+                if(transform_index < transforms.size())
+                {
+                    return &transforms[transform_index];
+                }
+            }
+        }
+        return nullptr;
+    }
+    
+    /**
+     * @brief Checks if a submesh has any transforms.
+     * @param submesh_index The index of the submesh.
+     * @return True if the submesh has transforms, false otherwise.
+     */
+    auto has_transforms(uint32_t submesh_index) const -> bool
+    {
+        return submesh_index < submesh_to_transform_indices.size() && 
+               !submesh_to_transform_indices[submesh_index].empty();
+    }
 };
 
 struct pose_mat4
@@ -93,6 +211,14 @@ public:
     auto get_lods() const -> const std::vector<asset_handle<mesh>>&;
 
     /**
+     * @brief Gets the number of LOD levels available.
+     * If there is only one explicit mesh, returns the internal LOD count of that mesh.
+     * Otherwise, returns the number of mesh LODs.
+     * @return Number of LOD levels available.
+     */
+    auto get_lods_count() const -> uint32_t;
+
+    /**
      * @brief Sets the LOD meshes.
      * @param lods The vector of LOD meshes to set.
      */
@@ -122,28 +248,52 @@ public:
     auto get_or_emplace_material_instance(uint32_t index) -> material::sptr;
 
     /**
-     * @brief Gets the LOD limits.
-     * @return A constant reference to the vector of LOD limits.
+     * @brief Gets whether LOD override is enabled.
+     * @return True if LOD override is enabled, false otherwise.
      */
-    auto get_lod_limits() const -> const std::vector<urange32_t>&;
+    auto get_lod_override_enabled() const -> bool;
 
+    /**
+     * @brief Sets whether LOD override is enabled.
+     * @param enabled True to enable LOD override, false to disable.
+     */
+    void set_lod_override_enabled(bool enabled);
+
+    /**
+     * @brief Gets the LOD override level.
+     * @return The LOD level to use when override is enabled.
+     */
+    auto get_lod_override_level() const -> uint32_t;
+
+    /**
+     * @brief Sets the LOD override level.
+     * @param level The LOD level to use when override is enabled.
+     */
+    void set_lod_override_level(uint32_t level);
+
+    /**
+     * @brief Gets the LOD selection bias.
+     * @return The bias value added to the calculated LOD index.
+     */
+    auto get_lod_selection_bias() const -> float;
+
+    /**
+     * @brief Sets the LOD selection bias.
+     * @param bias The bias value to add to the calculated LOD index.
+     *              Positive values select less detailed LODs, negative values select more detailed LODs.
+     */
+    void set_lod_selection_bias(float bias);
 
     /**
      * @brief Calculates the LOD data for the model.
      * @param data The LOD data to calculate.
-     * @param transition_time The transition time for the LOD.
      * @param world_transform The world transform of the model.
      * @param cam The camera.
+     * @param transition_time The transition time for the LOD.
      * @param dt The delta time.
      * @return True if the LOD data was calculated successfully, false otherwise.
      */
-    auto calculate_lod_data(lod_data& data, float transition_time, const math::transform& world_transform, const camera& cam, float dt) const -> bool;
-
-    /**
-     * @brief Sets the LOD limits.
-     * @param limits The vector of LOD limits to set.
-     */
-    void set_lod_limits(const std::vector<urange32_t>& limits);
+    auto calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float transition_time, float dt) const -> bool;
 
     /**
      * @struct submit_callbacks
@@ -175,12 +325,14 @@ public:
     /**
      * @brief Submits the model for rendering.
      * @param world_transform The world transform of the model.
+     * @param submesh_transforms The submesh transforms (many-to-many mapping).
      * @param bone_transforms The bone transforms for skinned models.
+     * @param skinning_matrices The skinning matrices per palette.
      * @param lod The level of detail to render.
      * @param callbacks The submit callbacks.
      */
     void submit(const math::mat4& world_transform,
-                const pose_mat4& submesh_transforms,
+                const submesh_pose_mat4& submesh_transforms,
                 const pose_mat4& bone_transforms,
                 const std::vector<pose_mat4>& skinning_matrices,
                 unsigned int lod,
@@ -200,9 +352,23 @@ public:
 
 private:
     /**
-     * @brief Recalculates the LOD limits.
+     * @brief Gets the LOD limits.
+     * @return A constant reference to the vector of LOD limits.
      */
-    void recalulate_lod_limits();
+    auto get_lod_limits() const -> const std::vector<urange32_t>&;
+
+    /**
+     * @brief Sets the LOD limits.
+     * @param limits The vector of LOD limits to set.
+     */
+    void set_lod_limits(const std::vector<urange32_t>& limits);
+
+    /**
+     * @brief Recalculates the LOD limits based on the number of LOD levels.
+     * Uses a Unity-style exponential decay heuristic where each LOD halves the screen height threshold.
+     * @param lod_count Number of LOD levels to calculate limits for.
+     */
+    void recalulate_lod_limits(uint32_t lod_count);
 
     /**
      * @brief Resizes the materials based on the mesh.
@@ -219,6 +385,13 @@ private:
     std::vector<asset_handle<mesh>> mesh_lods_;
     /// LOD limits for this model.
     std::vector<urange32_t> lod_limits_;
+
+    /// Whether LOD override is enabled.
+    bool lod_override_enabled_{false};
+    /// LOD level to use when override is enabled.
+    uint32_t lod_override_level_{0};
+    /// Bias value added to calculated LOD index (positive = less detailed, negative = more detailed).
+    float lod_selection_bias_{0.0f};
 };
 
 } // namespace unravel

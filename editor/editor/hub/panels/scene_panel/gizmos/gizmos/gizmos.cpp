@@ -3,6 +3,7 @@
 #include "gizmo_physics_component.h"
 #include "reflection/reflection.h"
 #include <engine/rendering/camera.h>
+#include "../gizmos_renderer.h"
 
 
 namespace unravel
@@ -36,7 +37,7 @@ auto get_gizmo(rtti::context& ctx, const entt::meta_type& type) -> std::shared_p
     return it->second;
 }
 
-void draw_gizmo_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd)
+void draw_gizmo_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd, dd_2d_raii& dd_2d)
 {
     entt::as_derived(var);
     auto type = var.type();
@@ -44,7 +45,7 @@ void draw_gizmo_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, 
     auto giz = get_gizmo(ctx, type);
     if(giz)
     {
-        giz->draw(ctx, var, cam, dd);
+        giz->draw(ctx, var, cam, dd, dd_2d);
     }
 }
 void draw_gizmo_billboard_var(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd)

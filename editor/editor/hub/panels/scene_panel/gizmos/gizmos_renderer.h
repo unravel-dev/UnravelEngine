@@ -17,11 +17,11 @@ public:
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
-    void on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity);
+    void on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity, dd_2d_raii& dd_2d);
 
 private:
     void draw_grid(uint32_t pass_id, const camera& cam, const editing_manager::grid& grid);
-    void draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd);
+    void draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd, dd_2d_raii& dd_2d);
     void draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd);
     auto draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool;
     void draw_outline_pass(const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer, gfx::dd_raii& dd);

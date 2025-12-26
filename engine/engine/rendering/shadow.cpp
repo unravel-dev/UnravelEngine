@@ -2339,7 +2339,10 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                 directional_light_.m_position.m_y,
                 directional_light_.m_position.m_z
             );
-            float max_distance = currentSmSettings->m_far - currentSmSettings->m_near;
+            // Conservative sweep distance: allow the caster to project into the camera frustum
+            // across the full shadow range, including its bounding radius.
+            const float max_distance = currentSmSettings->m_far + bounds_radius;
+
             // Test swept sphere against camera frustum
             should_render = camera_frustum.test_swept_sphere(bounds_sphere, light_direction, max_distance);
         }
@@ -2463,47 +2466,76 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 void shadowmap_generator::collect_model_for_shadow_batching_cascade(batch_collector& collector,
                                                                    const model& model_asset, 
                                                                    const math::mat4& world_transform,
-                                                                   const pose_mat4& submesh_transforms,
+                                                                   const submesh_pose_mat4& submesh_transforms,
                                                                    uint32_t lod_index)
 {
-    const auto& lods = model_asset.get_lods();
-    if (lod_index >= lods.size()) { return; }
+    auto mesh_asset = model_asset.get_lod(lod_index);
+    if(!mesh_asset)
+    {
+        return;
+    }
 
-    const auto& mesh_asset = lods[lod_index];
-    if (!mesh_asset) { return; }
+    auto mesh = mesh_asset.get();
+    if(!mesh)
+    {
+        return;
+    }
 
     const auto& materials = model_asset.get_materials();
-    const auto submesh_count = mesh_asset.get()->get_data_groups_count();
+    const auto data_group_count = mesh->get_data_groups_count();
 
-    for (uint32_t submesh_index = 0; submesh_index < submesh_count; ++submesh_index)
+    // Iterate over data groups (material groups)
+    for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
         std::shared_ptr<material> material_ptr;
-        if (submesh_index < materials.size() && materials[submesh_index].is_valid()) {
-            material_ptr = materials[submesh_index].get();
+        if (data_group_id < materials.size() && materials[data_group_id].is_valid()) {
+            material_ptr = materials[data_group_id].get();
         } else {
             // For shadow maps, we can use a null material since we only care about depth
             material_ptr = nullptr;
         }
 
-        // Determine the transform pointer to use for this submesh
-        const math::mat4* transform_ptr = nullptr;
-        if (submesh_index < submesh_transforms.transforms.size())
+        // Get all non-skinned submeshes for this data group
+        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
+        
+        // Collect each submesh in this data group as a separate batch entry
+        for (size_t submesh_idx : submesh_indices)
         {
-            // Use the specific submesh transform
-            transform_ptr = &submesh_transforms.transforms[submesh_index];
-        }
-        else
-        {
-            // Fall back to world transform if no specific submesh transform
-            transform_ptr = &world_transform;
-        }
+            uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
 
-        batch_key key(mesh_asset.get(), material_ptr, lod_index, submesh_index);
-        if (!key.is_valid()) { continue; }
+            // Check if this submesh has specific transforms
+            if (submesh_transforms.has_transforms(submesh_index))
+            {
+                // This submesh has one or more node transforms - create an instance for each
+                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
+                
+                for (size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
+                {
+                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
+                    if (!transform_ptr)
+                    {
+                        continue;
+                    }
+                    
+                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                    if (!key.is_valid()) { continue; }
 
-        // Create batch instance with the appropriate transform pointer
-        batch_instance instance(transform_ptr);
-        collector.collect_renderable(key, instance);
+                    // Create batch instance with the specific transform
+                    batch_instance instance(transform_ptr);
+                    collector.collect_renderable(key, instance);
+                }
+            }
+            else
+            {
+                // No specific transform for this submesh - use world transform
+                batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                if (!key.is_valid()) { continue; }
+
+                // Create batch instance with world transform
+                batch_instance instance(&world_transform);
+                collector.collect_renderable(key, instance);
+            }
+        }
     }
 }
 
@@ -2553,7 +2585,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
             continue;
         }
 
-        const auto submesh = mesh_ptr->get_submesh(submesh_index);
+        const auto submesh = mesh_ptr->get_submesh(submesh_index, lod_index);
         if(!submesh)
         {
             continue;
@@ -2582,7 +2614,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         bgfx::setInstanceDataBuffer(&instance_buffer);
         
         // Bind vertex and index buffers for the specific submesh
-        mesh_ptr->bind_render_buffers_for_submesh(submesh);
+        mesh_ptr->bind_render_buffers_for_submesh(submesh, lod_index);
         
         // Set uniforms and render state
         uniforms_.submitPerDrawUniforms();

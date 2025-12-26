@@ -10,7 +10,7 @@ REFLECT(light)
 {
     
     
-    auto directional_predicate_entt = entt::property_predicate(
+    auto directional_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<light>();
@@ -20,7 +20,7 @@ REFLECT(light)
             }
             return data->type == light_type::directional;
         });   
-    auto point_predicate_entt = entt::property_predicate(
+    auto point_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<light>();
@@ -30,7 +30,7 @@ REFLECT(light)
             }
             return data->type == light_type::point;
         });
-    auto spot_predicate_entt = entt::property_predicate(
+    auto spot_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<light>();
@@ -41,7 +41,7 @@ REFLECT(light)
             return data->type == light_type::spot;
         });
 
-    auto casts_shadows_predicate_entt = entt::property_predicate(
+    auto casts_shadows_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<light>();
@@ -51,7 +51,7 @@ REFLECT(light)
             }
             return data->casts_shadows;
         });
-    auto casts_shadows_and_is_directional_predicate_entt = entt::property_predicate(
+    auto casts_shadows_and_is_directional_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
         {
             auto data = obj.try_cast<light>();
@@ -62,7 +62,7 @@ REFLECT(light)
             return data->casts_shadows && data->type == light_type::directional;
         });
 
-        auto casts_shadows_and_is_point_predicate_entt = entt::property_predicate(
+        auto casts_shadows_and_is_point_predicate_entt = entt::property_predicate<bool>(
             [](const entt::meta_any& obj)
             {
                 auto data = obj.try_cast<light>();
@@ -73,7 +73,7 @@ REFLECT(light)
                 return data->casts_shadows && data->type == light_type::point;
             });
 
-        auto casts_shadows_and_is_spot_predicate_entt = entt::property_predicate(
+        auto casts_shadows_and_is_spot_predicate_entt = entt::property_predicate<bool>(
             [](const entt::meta_any& obj)
             {
                 auto data = obj.try_cast<light>();

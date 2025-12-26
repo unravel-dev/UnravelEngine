@@ -1,11 +1,13 @@
 #include "mesh.h"
 #include "camera.h"
 #include "generator/generator.hpp"
+#include "glm/gtc/epsilon.hpp"
 
 #include <graphics/index_buffer.h>
 #include <graphics/vertex_buffer.h>
 #include <logging/logging.h>
 #include <memory/checked_delete.h>
+#include <meshoptimizer/src/meshoptimizer.h>
 
 #include <algorithm>
 #include <cmath>
@@ -19,15 +21,7 @@ namespace
 //-----------------------------------------------------------------------------
 // Local Module Level Namespaces.
 //-----------------------------------------------------------------------------
-// Settings for the mesh optimizer.
-namespace mesh_optimizer
-{
-const float CacheDecayPower = 1.5f;
-const float LastTriScore = 0.75f;
-const float ValenceBoostScale = 2.0f;
-const float ValenceBoostPower = 0.5f;
-const int32_t MaxVertexCacheSize = 32;
-}; // namespace mesh_optimizer
+
 
 void create_mesh(const gfx::vertex_layout& format,
                  const generator::any_mesh& mesh,
@@ -156,6 +150,22 @@ void mesh::dispose()
     checked_array_delete(system_vb_);
     checked_array_delete(system_ib_);
 
+    // Clean up LOD data
+    for(auto& lod : lods_)
+    {
+        // Clean up submeshes
+        for(auto* submesh : lod.submeshes_)
+        {
+            checked_delete(submesh);
+        }
+        lod.submeshes_.clear();
+        // Clean up index buffer
+        checked_array_delete(lod.system_ib_);
+        lod.hardware_ib_.reset();
+    }
+    lods_.clear();
+    lod_count_ = 1;
+
     triangle_data_.clear();
 
     // Release resources
@@ -187,12 +197,25 @@ void mesh::dispose()
 
 auto mesh::get_info() const -> info
 {
-    return info{
+    info result{
         .vertices = vertex_count_,
-        .primitives = face_count_,
+        .triangles = face_count_,
         .submeshes = uint32_t(mesh_submeshes_.size()),
-        .data_groups = uint32_t(data_groups_.size())
+        .data_groups = uint32_t(data_groups_.size()),
+        .lods = {}
     };
+
+    // Add simplified LODs
+    for(size_t i = 0; i < lods_.size(); ++i)
+    {
+        const auto& lod = lods_[i];
+        result.lods.push_back(info::lod_info{
+            .triangles = lod.face_count_,
+            .percent = (static_cast<float>(lod.face_count_) / static_cast<float>(face_count_)) * 100.0f,
+        });
+    }
+
+    return result;
 }
 auto mesh::prepare_mesh(const gfx::vertex_layout& format) -> bool
 {
@@ -284,6 +307,25 @@ auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const
     if(!source_format.has(gfx::attribute::Tangent) && vertex_format_.has(gfx::attribute::Tangent))
     {
         preparation_data_.compute_tangents = true;
+    }
+
+    math::vec4 normal{};
+    math::vec4 tangent{};
+    math::vec4 bitangent{};
+    gfx::vertex_unpack(math::value_ptr(normal), gfx::attribute::Normal, vertex_format_, preparation_data_.vertex_source, 0);
+    gfx::vertex_unpack(math::value_ptr(tangent), gfx::attribute::Tangent, vertex_format_, preparation_data_.vertex_source, 0);
+    gfx::vertex_unpack(math::value_ptr(bitangent), gfx::attribute::Bitangent, vertex_format_, preparation_data_.vertex_source, 0);
+    if(math::epsilonEqual(math::length(normal), 0.0f, math::epsilon<float>()))
+    {
+        preparation_data_.compute_normals = true;
+    }
+    if(math::epsilonEqual(math::length(tangent), 0.0f, math::epsilon<float>()))
+    {
+        preparation_data_.compute_tangents = true;
+    }
+    if(math::epsilonEqual(math::length(bitangent), 0.0f, math::epsilon<float>()))
+    {
+        preparation_data_.compute_binormals = true;
     }
 
 #ifdef SET_VERTICES_WHEN_SETTING_PRIMITIVES
@@ -733,15 +775,51 @@ auto mesh::load_mesh(load_data&& data) -> bool
 {
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
+    const bool has_skin_data = data.skin_data.has_bones();
+    const bool skin_is_prepared = data.skin_is_prepared;
+    auto bone_palette_bones = std::move(data.bone_palette_bones);
+
     bool result = true;
     result &= prepare_mesh(data.vertex_format);
     result &= set_bounding_box(data.bbox);
     result &= set_vertex_source(std::move(data.vertex_data), data.vertex_count, data.vertex_format);
     result &= set_primitives(std::move(data.triangle_data));
     result &= set_submeshes(data.submeshes);
-    result &= bind_skin(data.skin_data);
+    if(has_skin_data && skin_is_prepared)
+    {
+        skin_bind_data_.clear();
+        skin_bind_data_ = data.skin_data;
+    }
+    else
+    {
+        result &= bind_skin(data.skin_data);
+    }
     result &= bind_armature(data.root_node);
     result &= end_prepare();
+
+    // Restore bone palettes for pre-skinned meshes (compiled assets) without re-running bind_skin.
+    if(result && has_skin_data && skin_is_prepared)
+    {
+        bone_palettes_.clear();
+        const uint32_t palette_size = gfx::get_max_blend_transforms();
+        bone_palettes_.reserve(data.submeshes.size());
+        for(size_t palette_id = 0; palette_id < data.submeshes.size(); ++palette_id)
+        {
+            bone_palette palette(palette_size);
+            palette.set_data_group(data.submeshes[palette_id].data_group_id);
+            if(palette_id < bone_palette_bones.size())
+            {
+                palette.assign_bones(bone_palette_bones[palette_id]);
+            }
+            bone_palettes_.push_back(std::move(palette));
+        }
+    }
+
+    // Restore LODs from load_data if they exist
+    if(result)
+    {
+        result &= restore_lods_from_load_data(data);
+    }
 
     return result;
 }
@@ -1420,54 +1498,237 @@ auto mesh::get_armature() const -> const std::unique_ptr<mesh::armature_node>&
     return root_;
 }
 
-auto mesh::calculate_screen_rect(const math::transform& world, const camera& cam) const -> irect32_t
+auto mesh::calculate_screen_rect_precise(const math::transform& world, const camera& cam) const -> irect32_t
 {
     auto bounds = math::bbox::mul(get_bounds(), world);
     math::vec3 cen = bounds.get_center();
     math::vec3 ext = bounds.get_extents();
-    std::array<math::vec2, 8> extent_points = {{
-        cam.world_to_viewport(math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z - ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z - ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z + ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z + ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z - ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z - ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z + ext.z)),
-        cam.world_to_viewport(math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z + ext.z)),
+    
+    const auto view_proj = cam.get_view_projection();
+    const auto& viewport_size = cam.get_viewport_size();
+    const auto& viewport_pos = cam.get_viewport_pos();
+    const float near_plane_epsilon = 0.001f;
+    
+    std::array<math::vec3, 8> corners = {{
+        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z - ext.z),
+        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z - ext.z),
+        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z + ext.z),
+        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z + ext.z),
+        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z - ext.z),
+        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z - ext.z),
+        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z + ext.z),
+        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z + ext.z),
     }};
-
-    math::vec2 min = extent_points[0];
-    math::vec2 max = extent_points[0];
-    for(const auto& v : extent_points)
+    
+    // Bounding box edges (pairs of corner indices)
+    constexpr std::array<std::pair<int, int>, 12> edges = {{
+        {0, 1}, {2, 3}, {4, 5}, {6, 7},  // X-aligned edges
+        {0, 2}, {1, 3}, {4, 6}, {5, 7},  // Z-aligned edges
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}   // Y-aligned edges
+    }};
+    
+    math::vec2 min = math::vec2(std::numeric_limits<float>::max());
+    math::vec2 max = math::vec2(std::numeric_limits<float>::lowest());
+    bool has_valid_point = false;
+    
+    // Project corners and clip edges
+    std::array<math::vec4, 8> clip_coords;
+    std::array<bool, 8> is_visible;
+    
+    for(int i = 0; i < 8; ++i)
     {
-        min = math::min(min, v);
-        max = math::max(max, v);
+        clip_coords[i] = view_proj * math::vec4{corners[i].x, corners[i].y, corners[i].z, 1.0f};
+        is_visible[i] = clip_coords[i].w > near_plane_epsilon;
+        
+        if(is_visible[i])
+        {
+            const float recip_w = 1.0f / clip_coords[i].w;
+            const float ndc_x = clip_coords[i].x * recip_w;
+            const float ndc_y = clip_coords[i].y * recip_w;
+            
+            math::vec2 screen_point;
+            screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
+            screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
+            
+            min = math::min(min, screen_point);
+            max = math::max(max, screen_point);
+            has_valid_point = true;
+        }
     }
+    
+    // Clip edges that cross the near plane
+    for(const auto& edge : edges)
+    {
+        const int idx0 = edge.first;
+        const int idx1 = edge.second;
+        
+        const bool v0_visible = is_visible[idx0];
+        const bool v1_visible = is_visible[idx1];
+        
+        if(v0_visible == v1_visible)
+        {
+            continue;
+        }
+        
+        const math::vec4& clip0 = clip_coords[idx0];
+        const math::vec4& clip1 = clip_coords[idx1];
+        
+        const float w0 = clip0.w;
+        const float w1 = clip1.w;
+        
+        const float t = (near_plane_epsilon - w0) / (w1 - w0);
+        
+        if(t >= 0.0f && t <= 1.0f)
+        {
+            const math::vec4 clipped_clip = clip0 + t * (clip1 - clip0);
+            
+            const float recip_w = 1.0f / clipped_clip.w;
+            const float ndc_x = clipped_clip.x * recip_w;
+            const float ndc_y = clipped_clip.y * recip_w;
+            
+            math::vec2 screen_point;
+            screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
+            screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
+            
+            min = math::min(min, screen_point);
+            max = math::max(max, screen_point);
+            has_valid_point = true;
+        }
+    }
+    
+    if(!has_valid_point)
+    {
+        min = math::vec2(float(viewport_pos.x), float(viewport_pos.y));
+        max = math::vec2(float(viewport_pos.x + viewport_size.width), float(viewport_pos.y + viewport_size.height));
+    }
+    
     return irect32_t(irect32_t::value_type(min.x),
                      irect32_t::value_type(min.y),
                      irect32_t::value_type(max.x),
                      irect32_t::value_type(max.y));
 }
 
-auto mesh::get_submeshes() const -> const submesh_array_t&
+auto mesh::calculate_screen_rect(const math::transform& world, const camera& cam) const -> irect32_t
 {
+    auto bounds = math::bbox::mul(get_bounds(), world);
+    math::vec3 cen = bounds.get_center();
+    math::vec3 ext = bounds.get_extents();
+    
+    const auto view_proj = cam.get_view_projection();
+    const auto& viewport_size = cam.get_viewport_size();
+    const auto& viewport_pos = cam.get_viewport_pos();
+    
+    std::array<math::vec3, 8> corners = {{
+        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z - ext.z),
+        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z - ext.z),
+        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z + ext.z),
+        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z + ext.z),
+        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z - ext.z),
+        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z - ext.z),
+        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z + ext.z),
+        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z + ext.z),
+    }};
+    
+    math::vec2 min = math::vec2(std::numeric_limits<float>::max());
+    math::vec2 max = math::vec2(std::numeric_limits<float>::lowest());
+    int valid_count = 0;
+    int behind_count = 0;
+    
+    for(const auto& corner : corners)
+    {
+        math::vec4 clip = view_proj * math::vec4{corner.x, corner.y, corner.z, 1.0f};
+        
+        // Check if point is behind or very close to the camera (near plane)
+        if(clip.w <= 0.001f)
+        {
+            behind_count++;
+            continue;
+        }
+        
+        // Project to normalized device coordinates
+        const float recip_w = 1.0f / clip.w;
+        const float ndc_x = clip.x * recip_w;
+        const float ndc_y = clip.y * recip_w;
+        
+        // Transform to screen space
+        math::vec2 screen_point;
+        screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
+        screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
+        
+        min = math::min(min, screen_point);
+        max = math::max(max, screen_point);
+        valid_count++;
+    }
+    
+    // If some points are behind camera, the bounds cross the near plane
+    // This means the object extends beyond the viewport edges - clamp to full screen
+    if(behind_count > 0 && valid_count > 0)
+    {
+        min.x = float(viewport_pos.x);
+        min.y = float(viewport_pos.y);
+        max.x = float(viewport_pos.x + viewport_size.width);
+        max.y = float(viewport_pos.y + viewport_size.height);
+    }
+    else if(valid_count == 0)
+    {
+        // All points behind camera - object encompasses the entire screen
+        min = math::vec2(float(viewport_pos.x), float(viewport_pos.y));
+        max = math::vec2(float(viewport_pos.x + viewport_size.width), float(viewport_pos.y + viewport_size.height));
+    }
+    
+    return irect32_t(irect32_t::value_type(min.x),
+                     irect32_t::value_type(min.y),
+                     irect32_t::value_type(max.x),
+                     irect32_t::value_type(max.y));
+}
+
+auto mesh::get_submeshes(uint32_t lod_index) const -> const submesh_array_t&
+{
+    if(lod_index == 0)
+    {
+        return mesh_submeshes_;
+    }
+
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        return lods_[lod_index - 1].submeshes_;
+    }
+
+    // Invalid LOD index, return base
     return mesh_submeshes_;
 }
 
-auto mesh::get_submeshes_count() const -> size_t
+auto mesh::get_submeshes_count(uint32_t lod_index) const -> size_t
 {
+    if(lod_index == 0)
+    {
+        return mesh_submeshes_.size();
+    }
+
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        return lods_[lod_index - 1].submeshes_.size();
+    }
+
+    // Invalid LOD index, return base
     return mesh_submeshes_.size();
 }
 
-auto mesh::get_submesh(uint32_t submesh_index) const -> const submesh*
+auto mesh::get_submesh(uint32_t submesh_index, uint32_t lod_index) const -> const submesh*
 {
-    return mesh_submeshes_[submesh_index];
+    const auto& submeshes = get_submeshes(lod_index);
+    if(submesh_index < submeshes.size())
+    {
+        return submeshes[submesh_index];
+    }
+    return nullptr;
 }
 
-auto mesh::get_submesh_index(const submesh* s) const -> int
+auto mesh::get_submesh_index(const submesh* s, uint32_t lod_index) const -> int
 {
+    const auto& submeshes = get_submeshes(lod_index);
     int index = -1;
-    for(const auto& submesh : mesh_submeshes_)
+    for(const auto& submesh : submeshes)
     {
         index++;
         if(submesh == s)
@@ -1479,34 +1740,750 @@ auto mesh::get_submesh_index(const submesh* s) const -> int
     return -1;
 }
 
-auto mesh::get_skinned_submeshes_count() const -> size_t
+
+auto mesh::get_lod_count() const -> uint32_t
 {
-    return skinned_submesh_count_;
+    return lod_count_;
 }
 
-auto mesh::get_skinned_submeshes_indices(uint32_t data_group_id) const -> const submesh_array_indices_t&
+auto mesh::get_lod_submeshes(uint32_t lod_index) const -> const submesh_array_t*
 {
-    auto it = skinned_submesh_indices_.find(data_group_id);
-    if(it != skinned_submesh_indices_.end())
+    if(lod_index == 0)
     {
-        return it->second;
+        return &mesh_submeshes_;
+    }
+
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        return &lods_[lod_index - 1].submeshes_;
+    }
+
+    return nullptr;
+}
+
+auto mesh::get_lod_face_count(uint32_t lod_index) const -> uint32_t
+{
+    if(lod_index == 0)
+    {
+        return face_count_;
+    }
+
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        return lods_[lod_index - 1].face_count_;
+    }
+
+    return 0;
+}
+
+auto mesh::get_lod_index_data(uint32_t lod_index, std::vector<uint32_t>& out_indices, float& out_error) const -> bool
+{
+    if(lod_index == 0)
+    {
+        // Base LOD - return original index buffer
+        if(!system_ib_ || face_count_ == 0)
+        {
+            return false;
+        }
+        out_indices.resize(face_count_ * 3);
+        std::memcpy(out_indices.data(), system_ib_, face_count_ * 3 * sizeof(uint32_t));
+        out_error = 0.0f;
+        return true;
+    }
+
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        const auto& lod = lods_[lod_index - 1];
+        if(!lod.system_ib_ || lod.face_count_ == 0)
+        {
+            return false;
+        }
+        out_indices.resize(lod.face_count_ * 3);
+        std::memcpy(out_indices.data(), lod.system_ib_, lod.face_count_ * 3 * sizeof(uint32_t));
+        out_error = lod.simplification_error_;
+        return true;
+    }
+
+    return false;
+}
+
+auto mesh::get_max_lod_count() -> uint32_t
+{
+    return 1 + get_max_generated_lod_count();
+}
+
+auto mesh::get_max_generated_lod_count() -> uint32_t
+{
+    return 5;
+}
+
+auto mesh::generate_default_lod_configs(const load_data& data, float target_error) -> std::vector<std::pair<size_t, float>>
+{
+    std::vector<std::pair<size_t, float>> lod_configs;
+    
+    auto max_lod_count = get_max_generated_lod_count();
+    for(uint32_t i = 1; i <= max_lod_count; ++i)
+    {
+        // Only generate LODs for meshes with enough triangles
+        size_t base_tri_count = data.triangle_count;
+        lod_configs.push_back({base_tri_count / (1 << i), target_error * i});
+    }
+    
+    return lod_configs;
+}
+
+auto mesh::apply_skin_to_load_data(load_data& data) -> bool
+{
+    if(!data.skin_data.has_bones())
+    {
+        return true; // No skinning needed
+    }
+
+    // Build vertex table with bone influences
+    skin_bind_data::vertex_data_array_t vertex_table;
+    data.skin_data.build_vertex_table(data.vertex_count, {}, vertex_table);
+
+    uint32_t palette_size = gfx::get_max_blend_transforms();
+    std::vector<bone_palette> bone_palettes;
+    bone_palettes.reserve(data.submeshes.size());
+
+    // Iterate over each submesh to generate palettes and duplicate vertices
+    for(size_t palette_id = 0; palette_id < data.submeshes.size(); ++palette_id)
+    {
+        auto& submesh = data.submeshes[palette_id];
+        
+        std::vector<bool> used_bones(gfx::get_max_blend_transforms(), false);
+        std::vector<uint32_t> faces;
+        faces.reserve(submesh.face_count);
+
+        // Collect all unique bone indices influencing this submesh
+        for(uint32_t i = submesh.face_start; i < submesh.face_start + submesh.face_count; ++i)
+        {
+            faces.push_back(i);
+            for(uint32_t vertex_index : data.triangle_data[i].indices)
+            {
+                const auto& vdata = vertex_table[vertex_index];
+                for(const auto& influence : vdata.influences)
+                {
+                    used_bones[static_cast<uint32_t>(influence)] = true;
+                }
+            }
+        }
+
+        // Create bone palette for this submesh
+        bone_palette new_palette(palette_size);
+        new_palette.set_data_group(submesh.data_group_id);
+        new_palette.assign_bones(used_bones, faces);
+        bone_palettes.push_back(new_palette);
+
+        // Assign palette ID to each vertex and duplicate shared vertices
+        auto face_start = submesh.face_start;
+        auto face_end = submesh.face_start + submesh.face_count;
+        for(uint32_t i = face_start; i < face_end; ++i)
+        {
+            for(uint32_t k = 0; k < 3; ++k)
+            {
+                uint32_t vertex_index = data.triangle_data[i].indices[k];
+                auto& vdata = vertex_table[vertex_index];
+
+                if(vdata.palette == -1)
+                {
+                    vdata.palette = static_cast<int32_t>(palette_id);
+                    if(submesh.vertex_start == -1 || vertex_index < submesh.vertex_start)
+                    {
+                        submesh.vertex_start = vertex_index;
+                    }
+                    if(vertex_index >= submesh.vertex_start + submesh.vertex_count)
+                    {
+                        submesh.vertex_count = (vertex_index - submesh.vertex_start) + 1;
+                    }
+                }
+                else if(vdata.palette != static_cast<int32_t>(palette_id))
+                {
+                    // Vertex is shared between submeshes, need to duplicate it
+                    uint32_t new_index = static_cast<uint32_t>(vertex_table.size());
+
+                    skin_bind_data::vertex_data new_vertex(vdata);
+                    new_vertex.original_vertex = vertex_index;
+                    new_vertex.palette = static_cast<int32_t>(palette_id);
+                    vertex_table.push_back(new_vertex);
+
+                    if(submesh.vertex_start == -1 || new_index < submesh.vertex_start)
+                    {
+                        submesh.vertex_start = new_index;
+                    }
+                    if(new_index >= submesh.vertex_start + submesh.vertex_count)
+                    {
+                        submesh.vertex_count = (new_index - submesh.vertex_start) + 1;
+                    }
+
+                    // Update triangle index to point to new vertex
+                    data.triangle_data[i].indices[k] = new_index;
+                }
+            }
+        }
+    }
+
+    // Adjust vertex format to include blend weights and indices
+    gfx::vertex_layout new_format(data.vertex_format);
+    gfx::vertex_layout original_format = data.vertex_format;
+    bool has_weights = new_format.has(gfx::attribute::Weight);
+    bool has_indices = new_format.has(gfx::attribute::Indices);
+    
+    if(!has_weights || !has_indices)
+    {
+        new_format.m_hash = 0;
+        if(!has_weights)
+        {
+            new_format.add(gfx::attribute::Weight, 4, gfx::attribute_type::Float);
+        }
+        if(!has_indices)
+        {
+            new_format.add(gfx::attribute::Indices, 4, gfx::attribute_type::Float, false, true);
+        }
+        new_format.end();
+        data.vertex_format = new_format;
+    }
+
+    uint16_t vertex_stride = data.vertex_format.getStride();
+    uint32_t original_vertex_count = data.vertex_count;
+
+    // Resize vertex buffer to accommodate duplicated vertices
+    if(data.vertex_format.m_hash != original_format.m_hash)
+    {
+        // Format changed, need to convert
+        byte_array_t original_buffer(data.vertex_data);
+        data.vertex_data.clear();
+        data.vertex_data.resize(vertex_table.size() * vertex_stride);
+
+        gfx::vertex_convert(data.vertex_format,
+                            data.vertex_data.data(),
+                            original_format,
+                            original_buffer.data(),
+                            original_vertex_count);
+    }
+    else
+    {
+        // No conversion, just resize
+        data.vertex_data.resize(vertex_table.size() * vertex_stride);
+    }
+
+    // Update vertex data with bone indices and weights, and duplicate vertices
+    uint8_t* src_vertices_ptr = data.vertex_data.data();
+    for(size_t i = 0; i < vertex_table.size(); ++i)
+    {
+        auto& vdata = vertex_table[i];
+        int32_t palette_id = vdata.palette;
+
+        if(palette_id < 0)
+        {
+            continue;
+        }
+
+        const auto& palette = bone_palettes[static_cast<size_t>(palette_id)];
+
+        // If this is a duplicated vertex, copy data from original
+        if(i >= original_vertex_count)
+        {
+            std::memcpy(src_vertices_ptr + (i * vertex_stride),
+                        src_vertices_ptr + (vdata.original_vertex * vertex_stride),
+                        vertex_stride);
+        }
+
+        uint32_t max_bones = std::min<uint32_t>(4, uint32_t(vdata.influences.size()));
+        if(max_bones > 0)
+        {
+            math::vec4 blend_weights(0.0f, 0.0f, 0.0f, 0.0f);
+            math::vec4 blend_indices(0.0f, 0.0f, 0.0f, 0.0f);
+
+            for(uint32_t j = 0; j < max_bones; ++j)
+            {
+                uint32_t palette_bone_index =
+                    palette.translate_bone_to_palette(static_cast<uint32_t>(vdata.influences[j]));
+
+                blend_indices[static_cast<math::vec4::length_type>(j)] = static_cast<float>(palette_bone_index);
+                blend_weights[static_cast<math::vec4::length_type>(j)] = vdata.weights[j];
+            }
+
+            gfx::vertex_pack(math::value_ptr(blend_weights),
+                             false,
+                             gfx::attribute::Weight,
+                             data.vertex_format,
+                             src_vertices_ptr,
+                             uint32_t(i));
+
+            gfx::vertex_pack(math::value_ptr(blend_indices),
+                             false,
+                             gfx::attribute::Indices,
+                             data.vertex_format,
+                             src_vertices_ptr,
+                             uint32_t(i));
+        }
+    }
+
+    // Update vertex count
+    data.vertex_count = static_cast<uint32_t>(vertex_table.size());
+
+    // Mark topology as baked and store palette bones so runtime can restore palettes without running bind_skin.
+    data.skin_is_prepared = true;
+    data.bone_palette_bones.clear();
+    data.bone_palette_bones.reserve(bone_palettes.size());
+    for(const auto& palette : bone_palettes)
+    {
+        data.bone_palette_bones.push_back(palette.get_bones());
+    }
+    for(auto& submesh : data.submeshes)
+    {
+        submesh.skinned = true;
+    }
+
+    return true;
+}
+
+auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::pair<size_t, float>>& lod_configs) -> bool
+{
+    if(data.vertex_data.empty() || data.triangle_count == 0 || data.vertex_count == 0)
+    {
+        APPLOG_ERROR("Cannot generate LODs for empty mesh data\n");
+        return false;
+    }
+
+    if(!data.vertex_format.has(gfx::attribute::Position))
+    {
+        APPLOG_ERROR("Mesh must have position data to generate LODs\n");
+        return false;
+    }
+
+    if(data.submeshes.empty())
+    {
+        APPLOG_ERROR("Cannot generate LODs for mesh with no submeshes\n");
+        return false;
+    }
+
+    // Get position offset and stride for meshoptimizer
+    uint16_t position_offset = data.vertex_format.getOffset(gfx::attribute::Position);
+    uint16_t vertex_stride = data.vertex_format.getStride();
+    const uint8_t* vertex_data_ptr = data.vertex_data.data();
+    
+    // Point directly to position data in vertex buffer (cast to float*)
+    const float* vertex_positions = reinterpret_cast<const float*>(vertex_data_ptr + position_offset);
+
+    // Build index buffer from triangle data
+    std::vector<uint32_t> base_indices(data.triangle_count * 3);
+    for(uint32_t i = 0; i < data.triangle_count; ++i)
+    {
+        base_indices[i * 3 + 0] = data.triangle_data[i].indices[0];
+        base_indices[i * 3 + 1] = data.triangle_data[i].indices[1];
+        base_indices[i * 3 + 2] = data.triangle_data[i].indices[2];
+    }
+
+    // Clear existing LODs
+    data.lods.clear();
+
+    // Prepare attribute packing data (shared across all submeshes and LODs)
+    bool use_attribute_simplify = false;
+    std::vector<float> packed_attributes;
+    const float* attribute_ptr = nullptr;
+    size_t attribute_stride = 0;
+    std::vector<float> attribute_weights;
+    uint32_t attribute_component_count = 0;
+    uint32_t total_components = 0;
+    
+    // Check for available attributes and pack them into a single interleaved buffer
+    bool has_normal = data.vertex_format.has(gfx::attribute::Normal);
+    bool has_texcoord = data.vertex_format.has(gfx::attribute::TexCoord0);
+    bool has_tangent = data.vertex_format.has(gfx::attribute::Tangent);
+    
+    if(has_normal || has_texcoord || has_tangent)
+    {
+        // Calculate total components needed: normal(3) + uv(2) + tangent(3) + bitangent(3) + weight(4) + indices(4) = 19 max
+        if(has_normal) total_components += 3;
+        if(has_texcoord) total_components += 2;
+        if(has_tangent) total_components += 3;
+        
+        packed_attributes.resize(data.vertex_count * total_components);
+        attribute_weights.resize(total_components);
+        
+        // Setup attribute weights
+        uint32_t weight_offset = 0;
+        if(has_normal)
+        {
+            attribute_weights[weight_offset + 0] = 1.5f;
+            attribute_weights[weight_offset + 1] = 1.5f;
+            attribute_weights[weight_offset + 2] = 1.5f;
+            weight_offset += 3;
+        }
+        if(has_texcoord)
+        {
+            attribute_weights[weight_offset + 0] = 1.0f;
+            attribute_weights[weight_offset + 1] = 1.0f;
+            weight_offset += 2;
+        }
+        if(has_tangent)
+        {
+            attribute_weights[weight_offset + 0] = 0.75f;
+            attribute_weights[weight_offset + 1] = 0.75f;
+            attribute_weights[weight_offset + 2] = 0.75f;
+            weight_offset += 3;
+        }
+
+
+        // Extract and pack all attributes in a single pass over vertices
+        for(uint32_t i = 0; i < data.vertex_count; ++i)
+        {
+            float* dst = &packed_attributes[i * total_components];
+            uint32_t component_offset = 0;
+            
+            if(has_normal)
+            {
+                float attr[4];
+                gfx::vertex_unpack(attr, gfx::attribute::Normal, data.vertex_format, vertex_data_ptr, i);
+                dst[component_offset + 0] = attr[0];
+                dst[component_offset + 1] = attr[1];
+                dst[component_offset + 2] = attr[2];
+                component_offset += 3;
+            }
+            
+            if(has_texcoord)
+            {
+                float attr[4];
+                gfx::vertex_unpack(attr, gfx::attribute::TexCoord0, data.vertex_format, vertex_data_ptr, i);
+                dst[component_offset + 0] = attr[0];
+                dst[component_offset + 1] = attr[1];
+                component_offset += 2;
+            }
+            
+            if(has_tangent)
+            {
+                float attr[4];
+                gfx::vertex_unpack(attr, gfx::attribute::Tangent, data.vertex_format, vertex_data_ptr, i);
+                dst[component_offset + 0] = attr[0];
+                dst[component_offset + 1] = attr[1];
+                dst[component_offset + 2] = attr[2];
+                component_offset += 3;
+            }
+
+            
+        }
+        
+        if(total_components > 0)
+        {
+            attribute_ptr = packed_attributes.data();
+            attribute_stride = total_components * sizeof(float);
+            attribute_component_count = total_components;
+            use_attribute_simplify = true;
+        }
+    }
+    
+
+    // Generate each LOD level
+    for(const auto& config : lod_configs)
+    {
+        size_t target_tri_count = config.first;
+        float target_error = config.second;
+
+        // Clamp target triangle count
+        target_tri_count = std::min(target_tri_count, static_cast<size_t>(data.triangle_count));
+        if(target_tri_count < 1)
+        {
+            continue;
+        }
+
+        // Create LOD load data for this level
+        lod_load_data lod_data;
+        lod_data.face_count = 0;
+        lod_data.simplification_error = 0.0f;
+        
+        uint32_t current_face_start = 0;
+
+            
+        unsigned int options = meshopt_SimplifyLockBorder;
+
+        if(data.submeshes.size() > 1)
+        {
+            options |= meshopt_SimplifySparse;
+        }
+
+        
+        // Process each submesh independently
+        for(const auto& base_submesh : data.submeshes)
+        {
+            // Skip empty submeshes
+            if(base_submesh.face_count == 0)
+            {
+                submesh lod_submesh = base_submesh;
+                lod_submesh.face_start = static_cast<int32_t>(current_face_start);
+                lod_data.submeshes.push_back(lod_submesh);
+                continue;
+            }
+            
+            // Calculate target triangle count for this submesh based on ratio
+            float submesh_ratio = static_cast<float>(base_submesh.face_count) / static_cast<float>(data.triangle_count);
+            size_t submesh_target_tri_count = static_cast<size_t>(std::max(1.0f, static_cast<float>(target_tri_count) * submesh_ratio));
+            submesh_target_tri_count = std::min(submesh_target_tri_count, static_cast<size_t>(base_submesh.face_count));
+            
+            // Extract indices for this submesh
+            std::vector<uint32_t> submesh_indices(base_submesh.face_count * 3);
+            for(uint32_t i = 0; i < base_submesh.face_count; ++i)
+            {
+                uint32_t tri_idx = base_submesh.face_start + i;
+                submesh_indices[i * 3 + 0] = base_indices[tri_idx * 3 + 0];
+                submesh_indices[i * 3 + 1] = base_indices[tri_idx * 3 + 1];
+                submesh_indices[i * 3 + 2] = base_indices[tri_idx * 3 + 2];
+            }
+            
+            // Convert triangle count to index count
+            size_t submesh_target_index_count = submesh_target_tri_count * 3;
+            
+            // Allocate destination index buffer
+            std::vector<uint32_t> submesh_lod_indices(base_submesh.face_count * 3);
+            
+            // Simplify this submesh
+            float submesh_result_error = 0.0f;
+            size_t submesh_lod_index_count = 0;
+        
+            
+            // Use attribute-preserving simplification if available, otherwise fall back to position-only
+            if(use_attribute_simplify)
+            {
+                submesh_lod_index_count = meshopt_simplifyWithAttributes(
+                    submesh_lod_indices.data(),
+                    submesh_indices.data(),
+                    base_submesh.face_count * 3,
+                    vertex_positions,
+                    data.vertex_count,
+                    vertex_stride,
+                    attribute_ptr,
+                    attribute_stride,
+                    attribute_weights.data(),
+                    attribute_component_count,
+                    nullptr,
+                    submesh_target_index_count,
+                    target_error,
+                    options,
+                    &submesh_result_error);
+            }
+            else
+            {
+                submesh_lod_index_count = meshopt_simplify(
+                    submesh_lod_indices.data(),
+                    submesh_indices.data(),
+                    base_submesh.face_count * 3,
+                    vertex_positions,
+                    data.vertex_count,
+                    vertex_stride,
+                    submesh_target_index_count,
+                    target_error,
+                    options,
+                    &submesh_result_error);
+            }
+            
+            // Convert index count back to triangle count
+            size_t submesh_lod_tri_count = submesh_lod_index_count / 3;
+            if(submesh_lod_tri_count == 0)
+            {
+                APPLOG_WARNING("Failed to generate LOD for submesh with target {} triangles (error: {})\n", submesh_target_tri_count, target_error);
+                // Use original submesh as fallback
+                submesh lod_submesh = base_submesh;
+                lod_submesh.face_start = static_cast<int32_t>(current_face_start);
+                lod_data.submeshes.push_back(lod_submesh);
+                
+                // Append original indices
+                for(uint32_t i = 0; i < base_submesh.face_count * 3; ++i)
+                {
+                    lod_data.index_data.push_back(submesh_indices[i]);
+                }
+                current_face_start += base_submesh.face_count;
+                lod_data.face_count += base_submesh.face_count;
+                continue;
+            }
+            
+            // Create submesh descriptor for this LOD
+            submesh lod_submesh = base_submesh;
+            lod_submesh.face_count = static_cast<uint32_t>(submesh_lod_tri_count);
+            lod_submesh.face_start = static_cast<int32_t>(current_face_start);
+            lod_data.submeshes.push_back(lod_submesh);
+            
+            // Append simplified indices to LOD index buffer
+            for(size_t i = 0; i < submesh_lod_index_count; ++i)
+            {
+                lod_data.index_data.push_back(submesh_lod_indices[i]);
+            }
+            
+            // Update counters
+            current_face_start += static_cast<uint32_t>(submesh_lod_tri_count);
+            lod_data.face_count += static_cast<uint32_t>(submesh_lod_tri_count);
+            lod_data.simplification_error = std::max(lod_data.simplification_error, submesh_result_error);
+        }
+        
+        // Check if LOD generation was successful
+        if(lod_data.face_count == 0)
+        {
+            APPLOG_WARNING("Failed to generate LOD with target {} triangles (error: {})\n", target_tri_count, target_error);
+            break;
+        }
+        
+        if(lod_data.face_count >= data.triangle_count)
+        {
+            APPLOG_WARNING("Could not simplify mesh. Not enough triangles to simplify.\n");
+            break;
+        }
+        
+        data.lods.push_back(std::move(lod_data));
+    }
+
+    APPLOG_INFO("Generated {} LOD levels\n", data.lods.size());
+    return true;
+}
+
+auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
+{
+    if(data.lods.empty())
+    {
+        return true; // No LODs to restore, not an error
+    }
+
+    // Clear any existing LODs
+    for(auto& lod : lods_)
+    {
+        for(auto* submesh : lod.submeshes_)
+        {
+            checked_delete(submesh);
+        }
+        lod.submeshes_.clear();
+        checked_array_delete(lod.system_ib_);
+        lod.hardware_ib_.reset();
+    }
+    lods_.clear();
+    lod_count_ = 1;
+
+    // Restore each LOD level
+    for(const auto& lod_data : data.lods)
+    {
+        mesh::lod_level lod;
+        lod.face_count_ = lod_data.face_count;
+        lod.simplification_error_ = lod_data.simplification_error;
+
+        // Copy index buffer
+        if(!lod_data.index_data.empty())
+        {
+            lod.system_ib_ = new uint32_t[lod_data.index_data.size()];
+            std::memcpy(lod.system_ib_, lod_data.index_data.data(), lod_data.index_data.size() * sizeof(uint32_t));
+        }
+
+        // Copy submeshes and build cached indices maps
+        for(size_t i = 0; i < lod_data.submeshes.size(); ++i)
+        {
+            const auto& submesh_data = lod_data.submeshes[i];
+            auto* lod_submesh = new submesh(submesh_data);
+            lod.submeshes_.push_back(lod_submesh);
+
+            // Cache submesh indices by data group
+            if(lod_submesh->skinned)
+            {
+                lod.skinned_submesh_indices_[lod_submesh->data_group_id].emplace_back(i);
+            }
+            else
+            {
+                lod.non_skinned_submesh_indices_[lod_submesh->data_group_id].emplace_back(i);
+            }
+        }
+
+        // Build hardware buffer for this LOD if needed
+        if(hardware_mesh_ && lod.system_ib_ && lod.face_count_ > 0)
+        {
+            auto buffer_size = static_cast<uint32_t>(lod.face_count_ * 3 * sizeof(uint32_t));
+            const gfx::memory_view* mem = gfx::make_ref(lod.system_ib_, buffer_size);
+            lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, BGFX_BUFFER_INDEX32);
+        }
+
+        lods_.push_back(std::move(lod));
+        lod_count_++;
+    }
+
+    return true;
+}
+
+auto mesh::get_skinned_submeshes_count(uint32_t lod_index) const -> size_t
+{
+    const auto& submeshes = get_submeshes(lod_index);
+    size_t count = 0;
+    for(const auto* submesh : submeshes)
+    {
+        if(submesh && submesh->skinned)
+        {
+            count++;
+        }
+    }
+    return count;
+}
+
+auto mesh::get_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
+{
+    // For base LOD (lod_index == 0), use cached map for performance
+    if(lod_index == 0)
+    {
+        auto it = skinned_submesh_indices_.find(data_group_id);
+        if(it != skinned_submesh_indices_.end())
+        {
+            return it->second;
+        }
+        static const submesh_array_indices_t empty;
+        return empty;
+    }
+
+    // For LOD levels, use cached map
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        const auto& lod = lods_[lod_index - 1];
+        auto it = lod.skinned_submesh_indices_.find(data_group_id);
+        if(it != lod.skinned_submesh_indices_.end())
+        {
+            return it->second;
+        }
     }
 
     static const submesh_array_indices_t empty;
     return empty;
 }
 
-auto mesh::get_non_skinned_submeshes_count() const -> size_t
+auto mesh::get_non_skinned_submeshes_count(uint32_t lod_index) const -> size_t
 {
-    return non_skinned_submesh_count_;
+    const auto& submeshes = get_submeshes(lod_index);
+    size_t count = 0;
+    for(const auto* submesh : submeshes)
+    {
+        if(submesh && !submesh->skinned)
+        {
+            count++;
+        }
+    }
+    return count;
 }
 
-auto mesh::get_non_skinned_submeshes_indices(uint32_t data_group_id) const -> const submesh_array_indices_t&
+auto mesh::get_non_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
 {
-    auto it = non_skinned_submesh_indices_.find(data_group_id);
-    if(it != non_skinned_submesh_indices_.end())
+    // For base LOD (lod_index == 0), use cached map for performance
+    if(lod_index == 0)
     {
-        return it->second;
+        auto it = non_skinned_submesh_indices_.find(data_group_id);
+        if(it != non_skinned_submesh_indices_.end())
+        {
+            return it->second;
+        }
+        static const submesh_array_indices_t empty;
+        return empty;
+    }
+
+    // For LOD levels, use cached map
+    if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        const auto& lod = lods_[lod_index - 1];
+        auto it = lod.non_skinned_submesh_indices_.find(data_group_id);
+        if(it != lod.non_skinned_submesh_indices_.end())
+        {
+            return it->second;
+        }
     }
 
     static const submesh_array_indices_t empty;
@@ -2204,8 +3181,14 @@ auto mesh::generate_vertex_tangents() -> bool
     {
         // Skip if the original imported data already provided a bitangent /
         // tangent.
-        bool has_bitangent = ((preparation_data_.vertex_flags[i] & preparation_data::source_contains_binormal) != 0);
-        bool has_tangent = ((preparation_data_.vertex_flags[i] & preparation_data::source_contains_tangent) != 0);
+        bool has_bitangent = false;
+        bool has_tangent = false;
+
+        if(!preparation_data_.vertex_flags.empty())
+        {
+            has_bitangent = ((preparation_data_.vertex_flags[i] & preparation_data::source_contains_binormal) != 0);
+            has_tangent = ((preparation_data_.vertex_flags[i] & preparation_data::source_contains_tangent) != 0);
+        }
         if(!force_tangent_generation_ && has_bitangent && has_tangent)
         {
             continue;
@@ -2844,16 +3827,45 @@ auto mesh::sort_mesh_data() -> bool
     return true;
 }
 
-void mesh::bind_render_buffers_for_submesh(const submesh* submesh)
+void mesh::bind_render_buffers_for_submesh(const submesh* submesh, uint32_t lod_index)
 {
+    // Select appropriate index buffer based on LOD
+    uint32_t* ib_data = nullptr;
+    std::shared_ptr<void> ib_hardware = nullptr;
+    uint32_t lod_face_count = 0;
+
+    if(lod_index == 0)
+    {
+        // Use base LOD (LOD 0)
+        ib_data = system_ib_;
+        ib_hardware = hardware_ib_;
+        lod_face_count = face_count_;
+    }
+    else if(lod_index > 0 && lod_index <= lods_.size())
+    {
+        // Use simplified LOD
+        const auto& lod = lods_[lod_index - 1];
+        ib_data = lod.system_ib_;
+        ib_hardware = lod.hardware_ib_;
+        lod_face_count = lod.face_count_;
+    }
+    else
+    {
+        // Invalid LOD index, fall back to base
+        ib_data = system_ib_;
+        ib_hardware = hardware_ib_;
+        lod_face_count = face_count_;
+    }
+
     uint32_t index_start = submesh->face_start * 3;
     uint32_t index_count = submesh->face_count * 3;
+
     // Hardware or software rendering?
     if(hardware_mesh_)
     {
         // Render using hardware streams
         auto vb = std::static_pointer_cast<gfx::vertex_buffer>(hardware_vb_);
-        auto ib = std::static_pointer_cast<gfx::index_buffer>(hardware_ib_);
+        auto ib = std::static_pointer_cast<gfx::index_buffer>(ib_hardware);
 
         gfx::set_vertex_buffer(0, vb->native_handle()); // submesh->vertex_start, submesh->vertex_count);
         gfx::set_index_buffer(ib->native_handle(), index_start, index_count);
@@ -2876,298 +3888,12 @@ void mesh::bind_render_buffers_for_submesh(const submesh* submesh)
             gfx::transient_index_buffer ib;
             gfx::alloc_transient_index_buffer(&ib, index_count, true);
             std::memcpy(ib.data,
-                        system_ib_ + index_start * sizeof(uint32_t),
-                        ib.size); // Adjust the pointer to start at the correct index
+                        ib_data + index_start,
+                        index_count * sizeof(uint32_t)); // Adjust the pointer to start at the correct index
             gfx::set_index_buffer(&ib, 0, index_count);
         }
 
     } // End if software only copy
 }
 
-void mesh::build_optimized_index_buffer(const submesh* submesh,
-                                        uint32_t* src_buffer_ptr,
-                                        uint32_t* dest_buffer_ptr,
-                                        uint32_t min_vertex,
-                                        uint32_t max_vertex)
-{
-    float best_score = 0.0f, score;
-    int32_t best_triangle = -1;
-    uint32_t vertex_cache_size = 0;
-    uint32_t index, triangle_index, temp;
-
-    // Declare vertex cache storage (plus one to allow them to drop "off the end")
-    uint32_t vertex_cache_ptr[mesh_optimizer::MaxVertexCacheSize + 1];
-    std::memset(vertex_cache_ptr, 0, sizeof(vertex_cache_ptr));
-    // First allocate enough room for the optimization information for each vertex
-    // and triangle
-    uint32_t vertex_count = (max_vertex - min_vertex) + 1;
-    auto vertex_info_ptr = new optimizer_vertex_info[vertex_count];
-    auto triangle_info_ptr = new optimizer_triangle_info[submesh->face_count];
-
-    // The first pass is to initialize the vertex information with information
-    // about the
-    // faces which reference them.
-    for(uint32_t i = 0; i < submesh->face_count; ++i)
-    {
-        index = src_buffer_ptr[i * 3] - min_vertex;
-        vertex_info_ptr[index].unused_triangle_references++;
-        vertex_info_ptr[index].triangle_references.push_back(i);
-        index = src_buffer_ptr[(i * 3) + 1] - min_vertex;
-        vertex_info_ptr[index].unused_triangle_references++;
-        vertex_info_ptr[index].triangle_references.push_back(i);
-        index = src_buffer_ptr[(i * 3) + 2] - min_vertex;
-        vertex_info_ptr[index].unused_triangle_references++;
-        vertex_info_ptr[index].triangle_references.push_back(i);
-
-    } // Next triangle
-
-    // Initialize vertex scores
-    for(uint32_t i = 0; i < vertex_count; ++i)
-    {
-        vertex_info_ptr[i].vertex_score = find_vertex_optimizer_score(&vertex_info_ptr[i]);
-    }
-
-    // Compute the score for each triangle, and record the triangle with the best
-    // score
-    for(uint32_t i = 0; i < submesh->face_count; ++i)
-    {
-        // The triangle score is the sum of the scores of each of
-        // its three vertices.
-        index = src_buffer_ptr[i * 3] - min_vertex;
-        score = vertex_info_ptr[index].vertex_score;
-        index = src_buffer_ptr[(i * 3) + 1] - min_vertex;
-        score += vertex_info_ptr[index].vertex_score;
-        index = src_buffer_ptr[(i * 3) + 2] - min_vertex;
-        score += vertex_info_ptr[index].vertex_score;
-        triangle_info_ptr[i].triangle_score = score;
-
-        // Record the triangle with the highest score
-        if(score > best_score)
-        {
-            best_score = score;
-            best_triangle = static_cast<int32_t>(i);
-
-        } // End if better than previous score
-
-    } // Next triangle
-
-    // Now we can start adding triangles, beginning with the previous highest
-    // scoring triangle.
-    for(uint32_t i = 0; i < submesh->face_count; ++i)
-    {
-        // If we don't know the best triangle, for whatever reason, find it
-        if(best_triangle < 0)
-        {
-            best_triangle = -1;
-            best_score = 0.0f;
-
-            // Iterate through the entire list of un-added faces
-            for(uint32_t j = 0; j < submesh->face_count; ++j)
-            {
-                if(!triangle_info_ptr[j].added)
-                {
-                    score = triangle_info_ptr[j].triangle_score;
-
-                    // Record the triangle with the highest score
-                    if(score > best_score)
-                    {
-                        best_score = score;
-                        best_triangle = static_cast<int32_t>(j);
-
-                    } // End if better than previous score
-
-                } // End if not added
-
-            } // Next triangle
-
-        } // End if best triangle is not known
-
-        // Use the best scoring triangle from last pass and reset score keeping
-        triangle_index = static_cast<uint32_t>(best_triangle);
-        optimizer_triangle_info* tri_ptr = &triangle_info_ptr[triangle_index];
-        best_triangle = -1;
-        best_score = 0.0f;
-
-        // This triangle can be added to the 'draw' list, and each
-        // of the vertices it references should be updated.
-        tri_ptr->added = true;
-        for(uint32_t j = 0; j < 3; ++j)
-        {
-            // Extract the vertex index and store in the index buffer
-            index = src_buffer_ptr[(triangle_index * 3) + j];
-            *dest_buffer_ptr++ = index;
-
-            // Adjust the index so that it points into our info buffer
-            // rather than the actual source vertex itself.
-            index = index - min_vertex;
-
-            // Retrieve the referenced vertex information
-            optimizer_vertex_info* vert_ptr = &vertex_info_ptr[index];
-
-            // Reduce the 'valence' of this vertex (one less triangle is now
-            // referencing)
-            vert_ptr->unused_triangle_references--;
-
-            // Remove this triangle from the list of references in the vertex
-            auto it_reference =
-                std::find(vert_ptr->triangle_references.begin(), vert_ptr->triangle_references.end(), triangle_index);
-            if(it_reference != vert_ptr->triangle_references.end())
-            {
-                vert_ptr->triangle_references.erase(it_reference);
-            }
-
-            // Now we must update the vertex cache to include this vertex. If it was
-            // already in the cache, it should be moved to the head, otherwise it
-            // should
-            // be inserted (pushing one off the end).
-            if(vert_ptr->cache_position == -1)
-            {
-                // Not in the vertex cache, insert it at the head.
-                if(vertex_cache_size > 0)
-                {
-                    // First shuffle EVERYONE up by one position in the cache.
-                    memmove(&vertex_cache_ptr[1], &vertex_cache_ptr[0], vertex_cache_size * sizeof(uint32_t));
-
-                } // End if any vertices exist in the cache
-
-                // Grow the cache if applicable
-                if(vertex_cache_size < mesh_optimizer::MaxVertexCacheSize)
-                {
-                    vertex_cache_size++;
-                }
-                else
-                {
-                    // Set the associated index of the vertex which dropped "off the end"
-                    // of the cache.
-                    vertex_info_ptr[vertex_cache_ptr[vertex_cache_size]].cache_position = -1;
-
-                } // End if no more room
-
-                // Overwrite the first entry
-                vertex_cache_ptr[0] = index;
-
-            } // End if not in cache
-            else if(vert_ptr->cache_position > 0)
-            {
-                // Already in the vertex cache, move it to the head.
-                // Note : If the cache position is already 0, we just ignore
-                // it... hence the above 'else if' rather than just 'else'.
-                if(vert_ptr->cache_position == 1)
-                {
-                    // We were in the second slot, just swap the two
-                    temp = vertex_cache_ptr[0];
-                    vertex_cache_ptr[0] = index;
-                    vertex_cache_ptr[1] = temp;
-
-                } // End if simple swap
-                else
-                {
-                    // Shuffle EVERYONE up who came before us.
-                    memmove(&vertex_cache_ptr[1],
-                            &vertex_cache_ptr[0],
-                            static_cast<size_t>(vert_ptr->cache_position) * sizeof(uint32_t));
-
-                    // Insert this vertex at the head
-                    vertex_cache_ptr[0] = index;
-
-                } // End if memory move required
-
-            } // End if already in cache
-
-            // Update the cache position records for all vertices in the cache
-            for(uint32_t k = 0; k < vertex_cache_size; ++k)
-            {
-                vertex_info_ptr[vertex_cache_ptr[k]].cache_position = static_cast<int32_t>(k);
-            }
-
-        } // Next Index
-
-        // Recalculate the of all vertices contained in the cache
-        for(uint32_t j = 0; j < vertex_cache_size; ++j)
-        {
-            optimizer_vertex_info* vert_ptr = &vertex_info_ptr[vertex_cache_ptr[j]];
-            vert_ptr->vertex_score = find_vertex_optimizer_score(vert_ptr);
-
-        } // Next entry in the vertex cache
-
-        // Update the score of the triangles which reference this vertex
-        // and record the highest scoring.
-        for(uint32_t j = 0; j < vertex_cache_size; ++j)
-        {
-            optimizer_vertex_info* vert_ptr = &vertex_info_ptr[vertex_cache_ptr[j]];
-
-            // For each triangle referenced
-            for(uint32_t k = 0; k < vert_ptr->unused_triangle_references; ++k)
-            {
-                triangle_index = vert_ptr->triangle_references[k];
-                tri_ptr = &triangle_info_ptr[triangle_index];
-                score = vertex_info_ptr[src_buffer_ptr[(triangle_index * 3)] - min_vertex].vertex_score;
-                score += vertex_info_ptr[src_buffer_ptr[(triangle_index * 3) + 1] - min_vertex].vertex_score;
-                score += vertex_info_ptr[src_buffer_ptr[(triangle_index * 3) + 2] - min_vertex].vertex_score;
-                tri_ptr->triangle_score = score;
-
-                // Highest scoring so far?
-                if(score > best_score)
-                {
-                    best_score = score;
-                    best_triangle = static_cast<int32_t>(triangle_index);
-
-                } // End if better than previous score
-
-            } // Next triangle
-
-        } // Next entry in the vertex cache
-
-    } // Next triangle to Add
-
-    // Destroy the temporary arrays
-    checked_array_delete(vertex_info_ptr);
-    checked_array_delete(triangle_info_ptr);
-}
-
-auto mesh::find_vertex_optimizer_score(const optimizer_vertex_info* vertex_info_ptr) -> float
-{
-    float score = 0.0f;
-
-    // Do any remaining triangles use this vertex?
-    if(vertex_info_ptr->unused_triangle_references == 0)
-    {
-        return -1.0f;
-    }
-
-    int32_t cache_position = vertex_info_ptr->cache_position;
-    if(cache_position < 0)
-    {
-        // Vertex is not in FIFO cache - no score.
-    }
-    else
-    {
-        if(cache_position < 3)
-        {
-            // This vertex was used in the last triangle,
-            // so it has a fixed score, whichever of the three
-            // it's in. Otherwise, you can get very different
-            // answers depending on whether you add
-            // the triangle 1,2,3 or 3,1,2 - which is silly.
-            score = mesh_optimizer::LastTriScore;
-        }
-        else
-        {
-            // Points for being high in the cache.
-            const float scaler = 1.0f / (mesh_optimizer::MaxVertexCacheSize - 3);
-            score = 1.0f - (cache_position - 3) * scaler;
-            score = math::pow(score, mesh_optimizer::CacheDecayPower);
-        }
-
-    } // End if already in vertex cache
-
-    // Bonus points for having a low number of tris still to
-    // use the vert, so we get rid of lone verts quickly.
-    float valence_boost =
-        math::pow(static_cast<float>(vertex_info_ptr->unused_triangle_references), -mesh_optimizer::ValenceBoostPower);
-    score += mesh_optimizer::ValenceBoostScale * valence_boost;
-
-    // Return the final score
-    return score;
-}
 } // namespace unravel

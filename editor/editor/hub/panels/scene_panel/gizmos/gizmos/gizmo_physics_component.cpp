@@ -4,7 +4,7 @@
 namespace unravel
 {
 
-void gizmo_physics_component::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd)
+void gizmo_physics_component::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd, dd_2d_raii& dd_2d)
 {
     entt::as_derived(var);
     auto& data = var.cast<physics_component&>();

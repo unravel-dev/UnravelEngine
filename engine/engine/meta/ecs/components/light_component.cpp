@@ -48,14 +48,14 @@ LOAD_INSTANTIATE(light_component, ser20::iarchive_binary_t);
 
 REFLECT(skylight_component)
 {            
-    auto skybox_predicate_entt = entt::property_predicate([](const entt::meta_any& obj)
+    auto skybox_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
         auto data = obj.try_cast<skylight_component>();
         return data->get_mode() == skylight_component::sky_mode::skybox;
     });
 
 
-    auto dynamic_sky_predicate_entt = entt::property_predicate([](const entt::meta_any& obj)
+    auto dynamic_sky_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
         auto data = obj.try_cast<skylight_component>();
         return data->get_mode() != skylight_component::sky_mode::skybox;

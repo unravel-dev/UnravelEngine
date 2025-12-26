@@ -1282,7 +1282,7 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
     if(target_scene)
     {
         path.render_scene(handle, camera_comp, *target_scene, dt);
-        gizmos_.on_frame_render(ctx, *target_scene, handle);
+        gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }
 }
 
@@ -1531,6 +1531,38 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
 
         ImGui::Checkbox("Depth Aware", &em.billboard_data.depth_aware);
         ImGui::SetItemTooltipEx("%s", "Gizmos are depth aware.");
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Billboard Filters");
+        ImGui::Checkbox("Camera", &em.billboard_data.show_camera);
+        ImGui::Checkbox("Light", &em.billboard_data.show_light);
+        ImGui::Checkbox("Reflection Probe", &em.billboard_data.show_reflection_probe);
+        ImGui::Checkbox("Audio Source", &em.billboard_data.show_audio_source);
+        ImGui::Checkbox("Particle Emitter", &em.billboard_data.show_particle_emitter);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Selection Gizmos");
+        ImGui::Checkbox("Selection Outline", &em.gizmos.show_selection_outline);
+        ImGui::Checkbox("Camera Gizmos", &em.gizmos.show_camera);
+        ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
+        ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);
+        ImGui::Checkbox("Reflection Probe Gizmos", &em.gizmos.show_reflection_probe);
+        ImGui::Checkbox("Text Gizmos", &em.gizmos.show_text);
+        ImGui::Checkbox("Particle Emitter Gizmos", &em.gizmos.show_particle_emitter);
+        ImGui::Checkbox("Component Gizmos", &em.gizmos.show_component_gizmos);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Model Details");
+        ImGui::Checkbox("World Bounds", &em.gizmos.show_model_bounds);
+        ImGui::Checkbox("Local Bounds", &em.gizmos.show_model_local_bounds);
+        ImGui::Checkbox("Submesh Local Bounds", &em.gizmos.show_model_submesh_local_bounds);
+        ImGui::Checkbox("LOD", &em.gizmos.show_model_lod);
+
+        ImGui::Separator();
+        ImGui::TextUnformatted("Particle Emitter Details");
+        ImGui::Checkbox("Bounds", &em.gizmos.show_particle_emitter_bounds);
+        ImGui::Checkbox("Shape", &em.gizmos.show_particle_emitter_shape);
+        ImGui::Checkbox("Direction", &em.gizmos.show_particle_emitter_direction);
 
         ImGui::PopItemWidth();
 
@@ -1803,6 +1835,21 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     }
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
+
+                        
+    auto window = ImGui::GetCurrentWindow();
+    auto draw_list = window->DrawList;
+    auto clip_rect = window->ClipRect;
+    clip_rect.Expand(-ImGui::GetStyle().FramePadding);
+    draw_list->PushClipRect(clip_rect.Min, clip_rect.Max);
+
+    auto callbacks = std::move(dd_2d_.callbacks);
+    for(const auto& callback : callbacks)
+    {
+        callback();
+    }
+
+    draw_list->PopClipRect();
 }
 
 void scene_panel::draw_ui(rtti::context& ctx)

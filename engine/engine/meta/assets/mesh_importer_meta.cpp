@@ -73,6 +73,24 @@ REFLECT(mesh_importer_meta)
                 "This step searches all meshes for invalid data, such as zeroed\n"
                 "normal vectors or invalid UV coords and removes/fixes them. This is\n"
                 "intended to get rid of some common exporter errors."},
+        })
+        .data<&mesh_importer_meta::model_meta::generate_lods>("generate_lods"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "generate_lods"},
+            entt::attribute{"pretty_name", "Generate LODs"},
+            entt::attribute{"tooltip",
+                            "Enable automatic Level of Detail (LOD) generation during mesh compilation.\n"
+                            "LODs are simplified versions of the mesh with fewer triangles for better\n"
+                            "performance at distance. If disabled, only the base mesh will be available."},
+        })
+        .data<&mesh_importer_meta::model_meta::lod_target_error>("lod_target_error"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_target_error"},
+            entt::attribute{"pretty_name", "LOD Target Error"},
+            entt::attribute{"tooltip", "Target error for LOD generation (lower = higher quality, higher = more aggressive)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.001f},
         });
 
     // Register mesh_importer_meta::rig_meta with entt
@@ -150,6 +168,8 @@ SAVE(mesh_importer_meta::model_meta)
     try_save(ar, ser20::make_nvp("split_large_meshes", obj.split_large_meshes));
     try_save(ar, ser20::make_nvp("find_degenerates", obj.find_degenerates));
     try_save(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
+    try_save(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
+    try_save(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
 }
 SAVE_INSTANTIATE(mesh_importer_meta::model_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(mesh_importer_meta::model_meta, ser20::oarchive_binary_t);
@@ -161,6 +181,8 @@ LOAD(mesh_importer_meta::model_meta)
     try_load(ar, ser20::make_nvp("split_large_meshes", obj.split_large_meshes));
     try_load(ar, ser20::make_nvp("find_degenerates", obj.find_degenerates));
     try_load(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
+    try_load(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
+    try_load(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
 }
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_binary_t);

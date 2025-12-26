@@ -10,13 +10,13 @@ namespace unravel
 {
 REFLECT(camera_component)
 {
-    auto is_ortho_predicate = entt::property_predicate(
+    auto is_ortho_predicate = entt::property_predicate<bool>(
         [](const entt::meta_any& i)    
         {
             return i.try_cast<camera_component>()->get_projection_mode() == projection_mode::orthographic;
         });
 
-    auto is_perspective_predicate = entt::property_predicate(
+    auto is_perspective_predicate = entt::property_predicate<bool>(
         [](const entt::meta_any& i)
         {
             return i.try_cast<camera_component>()->get_projection_mode() == projection_mode::perspective;

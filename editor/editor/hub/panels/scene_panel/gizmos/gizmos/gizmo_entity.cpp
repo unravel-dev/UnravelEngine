@@ -1,6 +1,8 @@
 #include "gizmo_entity.h"
 #include "gizmos.h"
+#include "../gizmos_renderer.h"
 #include "glm/ext.hpp"
+#include "imgui/imgui_internal.h"
 
 #include <engine/meta/ecs/components/all_components.h>
 
@@ -32,18 +34,19 @@ auto from_bx(const bx::Vec3& data) -> math::vec3
 
 } // namespace
 
-void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd1)
+void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd1, dd_2d_raii& dd_2d)
 {
     auto e = var.cast<entt::handle>();
 
     if(!e || !e.all_of<transform_component>())
         return;
 
+    auto& em = ctx.get_cached<editing_manager>();
     auto& transform_comp = e.get<transform_component>();
     const auto& world_transform = transform_comp.get_transform_global();
 
     gfx::dd_raii dd(dd1.view);
-    if(e.all_of<camera_component>())
+    if(e.all_of<camera_component>() && em.gizmos.show_camera)
     {
         auto& selected_camera_comp = e.get<camera_component>();
         auto& selected_camera = selected_camera_comp.get_camera();
@@ -55,6 +58,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         if(selected_camera.get_projection_mode() == projection_mode::perspective)
         {
             dd.encoder.drawFrustum(&view_proj);
+            
         }
         else
         {
@@ -64,10 +68,11 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.pushTransform((const float*)world_transform);
             dd.encoder.draw(aabb);
             dd.encoder.popTransform();
+            
         }
     }
 
-    if(e.all_of<light_component>())
+    if(e.all_of<light_component>() && em.gizmos.show_light)
     {
         const auto& light_comp = e.get<light_component>();
         const auto& light = light_comp.get_light();
@@ -131,12 +136,13 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
-    if(e.all_of<reflection_probe_component>())
+    if(e.all_of<reflection_probe_component>() && em.gizmos.show_reflection_probe)
     {
         const auto& probe_comp = e.get<reflection_probe_component>();
         const auto& probe = probe_comp.get_probe();
         if(probe.type == probe_type::box)
         {
+     
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xff00ff00);
             dd.encoder.setWireframe(true);
@@ -144,16 +150,16 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             bx::Aabb aabb;
             aabb.min = to_bx(-probe.box_data.extents);
             aabb.max = to_bx(probe.box_data.extents);
-
             dd.encoder.draw(aabb);
             dd.encoder.popTransform();
+            
         }
         else
         {
+          
             auto radius = probe.get_face_extents(0, world_transform);
             auto transform = world_transform;
             transform.reset_scale();
-
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xff00ff00);
             dd.encoder.setWireframe(true);
@@ -162,181 +168,172 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.drawCircle(Axis::X, center.x, center.y, center.z, radius);
             dd.encoder.drawCircle(Axis::Y, center.x, center.y, center.z, radius);
             dd.encoder.drawCircle(Axis::Z, center.x, center.y, center.z, radius);
+        
         }
     }
 
-    if(e.all_of<model_component>())
-    {
-        // const auto& frustum = cam.get_frustum();
-        // const auto& model_comp = e.get<model_component>();
-
-        // world bounds
-        {
-            // auto world_bounds = model_comp.get_world_bounds();
-
-            // if(frustum.test_aabb(world_bounds))
-            // {
-            //     DebugDrawEncoderScopePush scope(dd.encoder);
-            //     dd.encoder.setColor(0xff00ffff);
-            //     dd.encoder.setWireframe(true);
-            //     bx::Aabb aabb;
-            //     aabb.min = to_bx(world_bounds.min);
-            //     aabb.max = to_bx(world_bounds.max);
-            //     dd.encoder.draw(aabb);
-            // }
-        }
-
-        // local bounds
-        {
-            // const auto& model = model_comp.get_model();
-            // if(!model.is_valid())
-            // {
-            //     return;
-            // }
-
-            // lod_data lod_runtime_data{};
-            // if(!model.calculate_lod_data(lod_runtime_data, 0.0f, world_transform, cam, 0.0f))
-            // {
-            //     return;
-            // }
-
-            // const auto lod = model.get_lod(lod_runtime_data.current_lod_index);
-            // if(!lod)
-            // {
-            //     return;
-            // }
-            // const auto& mesh = lod.get();
-            // const auto& bounds = mesh->get_bounds();
-            // // Test the bounding box of the mesh
-            // if(frustum.test_obb(bounds, world_transform))
-            // {
-            //     // DebugDrawEncoderScopePush scope(dd.encoder);
-            //     // dd.encoder.setColor(0xffffffff);
-            //     // dd.encoder.setWireframe(true);
-            //     // dd.encoder.pushTransform((const float*)world_transform);
-            //     // bx::Aabb aabb;
-            //     // aabb.min = to_bx(bounds.min);
-            //     // aabb.max = to_bx(bounds.max);
-            //     // dd.encoder.draw(aabb);
-            //     // dd.encoder.popTransform();
-            // }
-
-            
-            // const auto& rect = lod_runtime_data.rect;
-            // if(rect.width() > 0 && rect.height() > 0)
-            // {
-            //     for(int i = -1; i <= 1; i++)
-            //     {
-            //         auto r = irect32_t::inflate(rect, i, i);
-            //         DebugDrawEncoderScopePush scope(dd.encoder);
-            //         dd.encoder.setColor(0xff00ffff);
-            //         dd.encoder.setWireframe(true);
-                    
-            //         // Use the model's world position as the billboard center
-            //         const auto& model_world_pos = world_transform.get_position();
-                    
-            //         // Calculate direction from camera to model (for billboard orientation)
-            //         const auto& camera_pos = cam.get_position();
-            //         const auto camera_to_model = math::normalize(model_world_pos - camera_pos);
-                    
-            //         // Calculate distance from camera to model for size calculation
-            //         const float distance_to_camera = math::distance(camera_pos, model_world_pos);
-                    
-            //         // Calculate world-space size based on screen rect dimensions and camera distance
-            //         // For perspective projection, size scales with distance
-            //         const auto& viewport_size = cam.get_viewport_size();
-            //         float world_width = 0.0f;
-            //         float world_height = 0.0f;
-    
-            //         const auto& near_plane = frustum.planes[math::volume_plane::near_plane];
-            //         std::array<math::vec3, 4> world_pos;
-            //         cam.viewport_to_world(math::vec2(float(r.left), float(r.top)), near_plane, world_pos[0], false);
-            //         cam.viewport_to_world(math::vec2(float(r.right), float(r.top)), near_plane, world_pos[1], false);
-            //         cam.viewport_to_world(math::vec2(float(r.right), float(r.bottom)), near_plane, world_pos[2], false);
-            //         cam.viewport_to_world(math::vec2(float(r.left), float(r.bottom)), near_plane, world_pos[3], false);
-    
-            //         dd.encoder.moveTo(to_bx(world_pos[0]));
-            //         dd.encoder.lineTo(to_bx(world_pos[1]));
-            //         dd.encoder.lineTo(to_bx(world_pos[2]));
-            //         dd.encoder.lineTo(to_bx(world_pos[3]));
-            //         dd.encoder.close();
-            //     }
-            // }
-
-            // const auto& submeshes = model_comp.get_armature_entities();
-            // for(const auto& submesh : submeshes)
-            // {
-            //     const auto& submesh_comp = submesh.try_get<submesh_component>();
-            //     if(!submesh_comp)
-            //     {
-            //         continue;
-            //     }
-            //     const auto& submesh_transform_comp = submesh.get<transform_component>();
-            //     const auto& submesh_transform = submesh_transform_comp.get_transform_global();
-            //     DebugDrawEncoderScopePush scope(dd.encoder);
-            //     dd.encoder.setColor(0xffaaaaaa);
-            //     dd.encoder.setWireframe(true);
-            //     for(const auto submesh_id : submesh_comp->submeshes)
-            //     {
-            //         const auto& submesh = mesh->get_submesh(submesh_id);
-
-            //         if(frustum.test_obb(submesh->bbox, submesh_transform))
-            //         {
-            //             dd.encoder.pushTransform((const float*)submesh_transform);
-            //             bx::Aabb aabb;
-            //             aabb.min = to_bx(submesh->bbox.min);
-            //             aabb.max = to_bx(submesh->bbox.max);
-            //             dd.encoder.draw(aabb);
-            //             dd.encoder.popTransform();
-            //         }
-            //     }
-            // }
-        }
-    }
-
-    if(e.all_of<text_component>())
+    if(e.all_of<model_component>() && em.gizmos.show_model)
     {
         const auto& frustum = cam.get_frustum();
-        const auto& text_comp = e.get<text_component>();
+        const auto& model_comp = e.get<model_component>();
+        const auto& model = model_comp.get_model();
+        if(!model.is_valid())
+        {
+            return;
+        }
 
         // world bounds
+        if(em.gizmos.show_model_bounds)
         {
-            auto bbox = text_comp.get_bounds();
+            auto world_bounds = model_comp.get_world_bounds();
 
-            if(frustum.test_obb(bbox, world_transform))
+            if(frustum.test_aabb(world_bounds))
             {
                 DebugDrawEncoderScopePush scope(dd.encoder);
                 dd.encoder.setColor(0xff00ffff);
                 dd.encoder.setWireframe(true);
+                bx::Aabb aabb;
+                aabb.min = to_bx(world_bounds.min);
+                aabb.max = to_bx(world_bounds.max);
+                dd.encoder.draw(aabb);
+            }
+        }
+        lod_data lod_runtime_data{};
+
+        if(!model.calculate_lod_data(lod_runtime_data, world_transform, cam, 0.0f, 0.0f))
+        {
+            return;
+        }
+        // local bounds
+        if(em.gizmos.show_model_local_bounds)
+        {
+
+
+            const auto lod = model.get_lod(lod_runtime_data.current_lod_index);
+            if(!lod)
+            {
+                return;
+            }
+            const auto& mesh = lod.get();
+            const auto& bounds = mesh->get_bounds();
+            // Test the bounding box of the mesh
+            if(frustum.test_obb(bounds, world_transform))
+            {
+                DebugDrawEncoderScopePush scope(dd.encoder);
+                dd.encoder.setColor(0xffffffff);
+                dd.encoder.setWireframe(true);
                 dd.encoder.pushTransform((const float*)world_transform);
                 bx::Aabb aabb;
-                aabb.min = to_bx(bbox.min);
-                aabb.max = to_bx(bbox.max);
+                aabb.min = to_bx(bounds.min);
+                aabb.max = to_bx(bounds.max);
                 dd.encoder.draw(aabb);
                 dd.encoder.popTransform();
             }
+
+            if(em.gizmos.show_model_submesh_local_bounds)
+            {
+                const auto& submeshes = model_comp.get_armature_entities();
+                for(const auto& submesh : submeshes)
+                {
+                    const auto& submesh_comp = submesh.try_get<submesh_component>();
+                    if(!submesh_comp)
+                    {
+                        continue;
+                    }
+                    const auto& submesh_transform_comp = submesh.get<transform_component>();
+                    const auto& submesh_transform = submesh_transform_comp.get_transform_global();
+                    DebugDrawEncoderScopePush scope(dd.encoder);
+                    dd.encoder.setColor(0xffaaaaaa);
+                    dd.encoder.setWireframe(true);
+                    for(const auto submesh_id : submesh_comp->submeshes)
+                    {
+                        const auto& submesh = mesh->get_submesh(submesh_id);
+    
+                        if(frustum.test_obb(submesh->bbox, submesh_transform))
+                        {
+                            dd.encoder.pushTransform((const float*)submesh_transform);
+                            bx::Aabb aabb;
+                            aabb.min = to_bx(submesh->bbox.min);
+                            aabb.max = to_bx(submesh->bbox.max);
+                            dd.encoder.draw(aabb);
+                            dd.encoder.popTransform();
+                        }
+                    }
+                }
+            }
+        }
+
+
+        //lods
+        if(em.gizmos.show_model_lod)
+        {   
+            const auto& rect = lod_runtime_data.rect;
+            if(rect.width() > 0 && rect.height() > 0)
+            {
+
+                dd_2d.callbacks.push_back([rect, lod_runtime_data]()
+                {
+                    auto window = ImGui::GetCurrentWindow();
+                    auto draw_list = window->DrawList;
+        
+                    draw_list->AddRect(ImVec2(rect.left, rect.top), ImVec2(rect.right, rect.bottom), IM_COL32(255, 255, 255, 255));
+                    auto draw_aligned_text = [&](ImVec2 pos, float align,const std::string& text)
+                    {
+                        auto text_size = ImGui::CalcTextSize(text.c_str());
+                        pos.x += (rect.width() - text_size.x) * align;
+                        draw_list->AddText(pos, IM_COL32(255, 255, 255, 255), text.c_str());
+                    };
+                    draw_aligned_text(ImVec2(rect.left, rect.bottom), 0.5f, fmt::format("LOD: {}", lod_runtime_data.current_lod_index));
+                });
+            }
+
+        }
+
+        
+    }
+
+    if(e.all_of<text_component>() && em.gizmos.show_text)
+    {
+        const auto& frustum = cam.get_frustum();
+        const auto& text_comp = e.get<text_component>();
+        auto bbox = text_comp.get_bounds();
+        if(frustum.test_obb(bbox, world_transform))
+        {
+            DebugDrawEncoderScopePush scope(dd.encoder);
+            dd.encoder.setColor(0xff00ffff);
+            dd.encoder.setWireframe(true);
+            dd.encoder.pushTransform((const float*)world_transform);
+            bx::Aabb aabb;
+            aabb.min = to_bx(bbox.min);
+            aabb.max = to_bx(bbox.max);
+            dd.encoder.draw(aabb);
+            dd.encoder.popTransform();
         }
     }
 
-    if(e.all_of<particle_emitter_component>())
+    if(e.all_of<particle_emitter_component>() && em.gizmos.show_particle_emitter)
     {
         const auto& frustum = cam.get_frustum();
         const auto& particle_emitter_comp = e.get<particle_emitter_component>();
         
         // Draw world bounds
-        const auto& bounds = particle_emitter_comp.get_world_bounds();
-        if(frustum.test_aabb(bounds))
+        if(em.gizmos.show_particle_emitter_bounds)
         {
-            DebugDrawEncoderScopePush scope(dd.encoder);
-            dd.encoder.setColor(0xff00ffff);
-            dd.encoder.setWireframe(true);
-            bx::Aabb aabb;
-            aabb.min = to_bx(bounds.min);
-            aabb.max = to_bx(bounds.max);
-            dd.encoder.draw(aabb);
+            const auto& bounds = particle_emitter_comp.get_world_bounds();
+            if(frustum.test_aabb(bounds))
+            {
+                DebugDrawEncoderScopePush scope(dd.encoder);
+                dd.encoder.setColor(0xff00ffff);
+                dd.encoder.setWireframe(true);
+                bx::Aabb aabb;
+                aabb.min = to_bx(bounds.min);
+                aabb.max = to_bx(bounds.max);
+                dd.encoder.draw(aabb);
+            }
         }
 
         // Draw emission shape
+        if(em.gizmos.show_particle_emitter_shape)
         {
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(0xffff8000); // Orange color for emission shape
@@ -467,109 +464,123 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     break;
             }
             
-            // Draw direction indicators
-            dd.encoder.setColor(0xff00ff00); // Green color for direction
-            const float arrow_length = shape_size * 0.5f;
-            const float arrow_head_size = arrow_length * 0.2f;
-            
-            switch(direction)
+            if(em.gizmos.show_particle_emitter_direction)
             {
-                case EmitterDirection::Up:
+                // Draw direction indicators
+                dd.encoder.setColor(0xff00ff00); // Green color for direction
+                const float arrow_length = shape_size * 0.5f;
+                const float arrow_head_size = arrow_length * 0.2f;
+                
+                switch(direction)
                 {
-                    // Draw upward arrows
-                    dd.encoder.moveTo(0.0f, 0.0f, 0.0f);
-                    dd.encoder.lineTo(0.0f, arrow_length, 0.0f);
-                    // Arrow head
-                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
-                    dd.encoder.lineTo(-arrow_head_size, arrow_length - arrow_head_size, 0.0f);
-                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
-                    dd.encoder.lineTo(arrow_head_size, arrow_length - arrow_head_size, 0.0f);
-                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
-                    dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, -arrow_head_size);
-                    dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
-                    dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, arrow_head_size);
-                    break;
-                }
-                case EmitterDirection::Outward:
-                {
-                    // Draw multiple outward arrows
-                    const int num_arrows = 6;
-                    for(int i = 0; i < num_arrows; ++i)
+                    case EmitterDirection::Up:
                     {
-                        const float angle = (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
-                        const float cos_a = math::cos(angle);
-                        const float sin_a = math::sin(angle);
-                        
-                        // Arrow shaft
-                        dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
-                        dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
-                        
+                        // Draw upward arrows
+                        dd.encoder.moveTo(0.0f, 0.0f, 0.0f);
+                        dd.encoder.lineTo(0.0f, arrow_length, 0.0f);
                         // Arrow head
-                        const float head_x = cos_a * arrow_length;
-                        const float head_z = sin_a * arrow_length;
-                        const float back_x = cos_a * (arrow_length - arrow_head_size);
-                        const float back_z = sin_a * (arrow_length - arrow_head_size);
-                        
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f, 0.0f, back_z + cos_a * arrow_head_size * 0.5f);
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f, 0.0f, back_z - cos_a * arrow_head_size * 0.5f);
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                        dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                        dd.encoder.lineTo(-arrow_head_size, arrow_length - arrow_head_size, 0.0f);
+                        dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                        dd.encoder.lineTo(arrow_head_size, arrow_length - arrow_head_size, 0.0f);
+                        dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                        dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, -arrow_head_size);
+                        dd.encoder.moveTo(0.0f, arrow_length, 0.0f);
+                        dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, arrow_head_size);
+                        break;
                     }
-                    break;
-                }
-                case EmitterDirection::Inward:
-                {
-                    // Draw multiple inward arrows
-                    const int num_arrows = 6;
-                    for(int i = 0; i < num_arrows; ++i)
+                    case EmitterDirection::Outward:
                     {
-                        const float angle = (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
-                        const float cos_a = math::cos(angle);
-                        const float sin_a = math::sin(angle);
-                        
-                        // Arrow shaft
-                        dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
-                        dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
-                        
-                        // Arrow head
-                        const float head_x = cos_a * arrow_length;
-                        const float head_z = sin_a * arrow_length;
-                        const float back_x = cos_a * (arrow_length - arrow_head_size);
-                        const float back_z = sin_a * (arrow_length - arrow_head_size);
-                        
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f, 0.0f, back_z + cos_a * arrow_head_size * 0.5f);
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f, 0.0f, back_z - cos_a * arrow_head_size * 0.5f);
-                        dd.encoder.moveTo(head_x, 0.0f, head_z);
-                        dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                        // Draw multiple outward arrows
+                        const int num_arrows = 6;
+                        for(int i = 0; i < num_arrows; ++i)
+                        {
+                            const float angle =
+                                (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
+                            const float cos_a = math::cos(angle);
+                            const float sin_a = math::sin(angle);
+                            
+                            // Arrow shaft
+                            dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
+                            dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
+                            
+                            // Arrow head
+                            const float head_x = cos_a * arrow_length;
+                            const float head_z = sin_a * arrow_length;
+                            const float back_x = cos_a * (arrow_length - arrow_head_size);
+                            const float back_z = sin_a * (arrow_length - arrow_head_size);
+                            
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f,
+                                              0.0f,
+                                              back_z + cos_a * arrow_head_size * 0.5f);
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f,
+                                              0.0f,
+                                              back_z - cos_a * arrow_head_size * 0.5f);
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                        }
+                        break;
                     }
-                    break;
+                    case EmitterDirection::Inward:
+                    {
+                        // Draw multiple inward arrows
+                        const int num_arrows = 6;
+                        for(int i = 0; i < num_arrows; ++i)
+                        {
+                            const float angle =
+                                (2.0f * 3.14159265f * static_cast<float>(i)) / static_cast<float>(num_arrows);
+                            const float cos_a = math::cos(angle);
+                            const float sin_a = math::sin(angle);
+                            
+                            // Arrow shaft
+                            dd.encoder.moveTo(cos_a * shape_size * 0.3f, 0.0f, sin_a * shape_size * 0.3f);
+                            dd.encoder.lineTo(cos_a * arrow_length, 0.0f, sin_a * arrow_length);
+                            
+                            // Arrow head
+                            const float head_x = cos_a * arrow_length;
+                            const float head_z = sin_a * arrow_length;
+                            const float back_x = cos_a * (arrow_length - arrow_head_size);
+                            const float back_z = sin_a * (arrow_length - arrow_head_size);
+                            
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x - sin_a * arrow_head_size * 0.5f,
+                                              0.0f,
+                                              back_z + cos_a * arrow_head_size * 0.5f);
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x + sin_a * arrow_head_size * 0.5f,
+                                              0.0f,
+                                              back_z - cos_a * arrow_head_size * 0.5f);
+                            dd.encoder.moveTo(head_x, 0.0f, head_z);
+                            dd.encoder.lineTo(back_x, arrow_head_size * 0.5f, back_z);
+                        }
+                        break;
+                    }
+                    default:
+                        break;
                 }
-                default:
-                    break;
             }
             
             dd.encoder.popTransform();
         }
     }
 
-    hpp::for_each_tuple_type<all_inspectable_components>(
-        [&](auto index)
-        {
-            using ctype = std::tuple_element_t<decltype(index)::value, all_inspectable_components>;
-            auto component = e.try_get<ctype>();
-
-            if(!component)
+    if(em.gizmos.show_component_gizmos)
+    {
+        hpp::for_each_tuple_type<all_inspectable_components>(
+            [&](auto index)
             {
-                return;
-            }
-
-            auto var_comp = entt::forward_as_meta(*component);
-            ::unravel::draw_gizmo_var(ctx, var_comp, cam, dd);
-        });
+                using ctype = std::tuple_element_t<decltype(index)::value, all_inspectable_components>;
+                auto component = e.try_get<ctype>();
+                if(!component)
+                {
+                    return;
+                }
+                auto var_comp = entt::forward_as_meta(*component);
+                ::unravel::draw_gizmo_var(ctx, var_comp, cam, dd, dd_2d);
+            });
+    }
 }
 
 

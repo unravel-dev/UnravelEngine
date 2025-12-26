@@ -403,52 +403,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 const auto& world_transform = transform_comp.get_transform_global();
                 const auto& world_position = world_transform.get_position();
 
-                // if(auto model_comp = target_scene->registry->try_get<model_component>(e))
-                // {
-                //     auto& model = model_comp->get_model();
-                //     if(!model.is_valid())
-                //     {
-                //         return;
-                //     }
-
-                //     auto lod = model.get_lod(0);
-                //     if(!lod)
-                //     {
-                //         return;
-                //     }
-
-                //     const auto& mesh = lod.get();
-                //     const auto& bounds = mesh->get_bounds();
-
-                //     if(!pick_camera.test_obb(bounds, world_transform))
-                //     {
-                //         on_pick_failed(e);
-                //         return;
-                //     }
-
-                //     if(!are_local_bounds_in_selection_area(bounds, world_transform, pick_camera, pick_position_,
-                //     pick_area_))
-                //     {
-                //         on_pick_failed(e);
-                //         return;
-                //     }
-                // }
-
-                // if(auto particle_comp = target_scene->registry->try_get<particle_emitter_component>(e))
-                // {
-                //     const auto& world_bounds = particle_comp->get_world_bounds();
-                //     if(!pick_camera.test_aabb(world_bounds))
-                //     {
-                //         on_pick_failed(e);
-                //         return;
-                //     }
-
-                //     if(!are_global_bounds_in_selection_area(world_bounds, pick_camera, pick_position_, pick_area_))
-                //     {
-                //         on_pick_failed(e);
-                //         return;
-                //     }
-                // }
+               
 
                 if(!pick_camera.get_frustum().test_point(world_position))
                 {
@@ -467,6 +422,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
             });
 
         pick_camera_.reset();
+        original_camera_.reset();
         pick_position_ = {};
         pick_area_ = {};
 
@@ -475,9 +431,10 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 
     const auto render_frame = gfx::get_render_frame();
 
-    if(pick_camera_)
+    if(pick_camera_ && original_camera_)
     {
         const auto& pick_camera = *pick_camera_;
+        const auto& original_camera = *original_camera_;
 
         const auto& pick_view = pick_camera.get_view();
         const auto& pick_proj = pick_camera.get_projection();
@@ -504,7 +461,10 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 
                 const auto& world_transform = transform_comp.get_transform_global();
 
-                auto lod = model.get_lod(0);
+                lod_data current_lod_data;
+                model.calculate_lod_data(current_lod_data, world_transform, original_camera, 0.0f, 0.0f);
+
+                auto lod = model.get_lod(current_lod_data.current_lod_index);
                 if(!lod)
                 {
                     return;
@@ -558,7 +518,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     prog->end();
                 };
 
-                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, 0, callbacks);
+                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, current_lod_data.current_lod_index, callbacks);
             });
 
         gfx::discard();
@@ -614,6 +574,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                         scn.registry->view<type_t>().each(
                             [&](auto e, auto&& comp)
                             {
+
                                 auto entity = scn.create_handle(e);
 
                                 auto& tm = ctx.get_cached<thumbnail_manager>();
@@ -627,6 +588,49 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                                 dd.encoder.setState(true, true, false, true);
                                 auto& transform_comp = entity.template get<transform_component>();
                                 const auto& world_transform = transform_comp.get_transform_global();
+
+                                if constexpr(std::is_same<type_t, particle_emitter_component>())
+                                {
+                                    if(!em.billboard_data.show_particle_emitter)
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                if constexpr(std::is_same<type_t, audio_source_component>())
+                                {
+                                    if(!em.billboard_data.show_audio_source)
+                                    {
+                                        return;
+                                    }
+                                }
+                                
+                                if constexpr(std::is_same<type_t, reflection_probe_component>())
+                                {
+                                    if(!em.billboard_data.show_reflection_probe)
+                                    {
+                                        return;
+                                    }
+                                }
+                                
+                                
+                                if constexpr(std::is_same<type_t, light_component>())
+                                {
+                                    if(!em.billboard_data.show_light)
+                                    {
+                                        return;
+                                    }
+                                }
+                                
+                                if constexpr(std::is_same<type_t, camera_component>())
+                                {
+                                    if(!em.billboard_data.show_camera)
+                                    {
+                                        return;
+                                    }
+                                }
+                                
+                                
 
                                 auto icon = tm.get_gizmo_icon(entity);
                                 if(icon)
@@ -650,6 +654,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         }
 
         pick_camera_.reset();
+        original_camera_.reset();
         start_readback_ = anything_picked;
 
         if(!anything_picked && !pick_callback_)
@@ -860,7 +865,6 @@ auto picking_manager::deinit(rtti::context& ctx) -> bool
 void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math::vec2 area)
 {
     camera pick_camera;
-
     if(area.x > 0.0f && area.y > 0.0f)
     {
         // Area picking: copy the passed camera and adjust for the selection area
@@ -889,7 +893,7 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
         pick_camera.set_far_clip(far_clip);
         pick_camera.look_at(pick_eye, pick_at, pick_up);
     }
-
+    original_camera_ = cam;
     pick_camera_ = pick_camera;
     pick_position_ = pos;
     pick_area_ = area;
@@ -900,6 +904,7 @@ void picking_manager::setup_pick_camera(const camera& cam, math::vec2 pos, math:
 void picking_manager::cancel_pick()
 {
     pick_camera_.reset();
+    original_camera_.reset();
     pick_position_ = {};
     pick_area_ = {};
     reading_ = 0;

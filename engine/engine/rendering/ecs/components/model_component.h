@@ -94,9 +94,9 @@ public:
 
     /**
      * @brief Gets the submesh transforms.
-     * @return A constant reference to the vector of submesh transforms.
+     * @return A constant reference to the submesh pose structure.
      */
-    auto get_submesh_transforms() const -> const pose_mat4&;
+    auto get_submesh_transforms() const -> const submesh_pose_mat4&;
 
     /**
      * @brief Gets the armature entities.
@@ -184,7 +184,7 @@ private:
     /**
      * @brief Vector of submesh transforms.
      */
-    pose_mat4 submesh_pose_;
+    submesh_pose_mat4 submesh_pose_;
 
     /**
      * @brief Skinning pose per palette

@@ -36,6 +36,27 @@ LOAD_INSTANTIATE(VertexLayout, ser20::oarchive_associative_t);
 
 namespace unravel
 {
+REFLECT(mesh::info::lod_info)
+{
+    entt::meta_factory<mesh::info::lod_info>{}
+        .type("lod_info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_info"},
+        })
+        .data<nullptr, &mesh::info::lod_info::triangles>("triangles"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "triangles"},
+            entt::attribute{"pretty_name", "Triangles"},
+            entt::attribute{"tooltip", "Number of triangles in this LOD."},
+        })
+        .data<nullptr, &mesh::info::lod_info::percent>("percent"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "percent"},
+            entt::attribute{"pretty_name", "Percent"},
+            entt::attribute{"tooltip", "Percentage of triangles in this LOD."},
+        });
+}
+
 REFLECT(mesh::info)
 {
     entt::meta_factory<mesh::info>{}
@@ -49,11 +70,11 @@ REFLECT(mesh::info)
             entt::attribute{"pretty_name", "Vertices"},
             entt::attribute{"tooltip", "Vertices count."},
         })
-        .data<nullptr, &mesh::info::primitives>("primitives"_hs)
+        .data<nullptr, &mesh::info::triangles>("triangles"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "primitives"},
-            entt::attribute{"pretty_name", "Primitives"},
-            entt::attribute{"tooltip", "Primitives count."},
+            entt::attribute{"name", "triangles"},
+            entt::attribute{"pretty_name", "Triangles"},
+            entt::attribute{"tooltip", "Triangles count."},
         })
         .data<nullptr, &mesh::info::submeshes>("submeshes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -66,6 +87,12 @@ REFLECT(mesh::info)
             entt::attribute{"name", "data_groups"},
             entt::attribute{"pretty_name", "Material Groups"},
             entt::attribute{"tooltip", "Materials count."},
+        })
+        .data<nullptr, &mesh::info::lods>("lods"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lods"},
+            entt::attribute{"pretty_name", "LODs"},
+            entt::attribute{"tooltip", "Information about each LOD level."},
         });
 }
 
@@ -91,7 +118,6 @@ SAVE(mesh::submesh)
     try_save(ar, ser20::make_nvp("face_start", obj.face_start));
     try_save(ar, ser20::make_nvp("face_count", obj.face_count));
     try_save(ar, ser20::make_nvp("bbox", obj.bbox));
-    try_save(ar, ser20::make_nvp("node_id", obj.node_id));
     try_save(ar, ser20::make_nvp("skinned", obj.skinned));
 
 }
@@ -106,7 +132,6 @@ LOAD(mesh::submesh)
     try_load(ar, ser20::make_nvp("face_start", obj.face_start));
     try_load(ar, ser20::make_nvp("face_count", obj.face_count));
     try_load(ar, ser20::make_nvp("bbox", obj.bbox));
-    try_load(ar, ser20::make_nvp("node_id", obj.node_id));
     try_load(ar, ser20::make_nvp("skinned", obj.skinned));
 
 
@@ -202,6 +227,26 @@ LOAD(mesh::armature_node)
 LOAD_INSTANTIATE(mesh::armature_node, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(mesh::armature_node, ser20::iarchive_associative_t);
 
+SAVE(mesh::lod_load_data)
+{
+    try_save(ar, ser20::make_nvp("index_data", obj.index_data));
+    try_save(ar, ser20::make_nvp("face_count", obj.face_count));
+    try_save(ar, ser20::make_nvp("submeshes", obj.submeshes));
+    try_save(ar, ser20::make_nvp("simplification_error", obj.simplification_error));
+}
+SAVE_INSTANTIATE(mesh::lod_load_data, ser20::oarchive_binary_t);
+SAVE_INSTANTIATE(mesh::lod_load_data, ser20::oarchive_associative_t);
+
+LOAD(mesh::lod_load_data)
+{
+    try_load(ar, ser20::make_nvp("index_data", obj.index_data));
+    try_load(ar, ser20::make_nvp("face_count", obj.face_count));
+    try_load(ar, ser20::make_nvp("submeshes", obj.submeshes));
+    try_load(ar, ser20::make_nvp("simplification_error", obj.simplification_error));
+}
+LOAD_INSTANTIATE(mesh::lod_load_data, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(mesh::lod_load_data, ser20::iarchive_associative_t);
+
 SAVE(mesh::load_data)
 {
     try_save(ar, ser20::make_nvp("vertex_format", obj.vertex_format));
@@ -214,7 +259,11 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("skin_data", obj.skin_data));
     try_save(ar, ser20::make_nvp("root_node", obj.root_node));
     try_save(ar, ser20::make_nvp("bbox", obj.bbox));
+    try_save(ar, ser20::make_nvp("skin_is_prepared", obj.skin_is_prepared));
+    try_save(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
+    try_save(ar, ser20::make_nvp("lods", obj.lods));
 
+    // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
 SAVE_INSTANTIATE(mesh::load_data, ser20::oarchive_binary_t);
 SAVE_INSTANTIATE(mesh::load_data, ser20::oarchive_associative_t);
@@ -231,6 +280,11 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("skin_data", obj.skin_data));
     try_load(ar, ser20::make_nvp("root_node", obj.root_node));
     try_load(ar, ser20::make_nvp("bbox", obj.bbox));
+    try_load(ar, ser20::make_nvp("skin_is_prepared", obj.skin_is_prepared));
+    try_load(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
+    try_load(ar, ser20::make_nvp("lods", obj.lods));
+
+    // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 
 }
 LOAD_INSTANTIATE(mesh::load_data, ser20::iarchive_binary_t);

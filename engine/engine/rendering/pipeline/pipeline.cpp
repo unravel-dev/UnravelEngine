@@ -110,7 +110,7 @@ void pipeline::gather_visible_models(scene& scn,
                 {
                     return;
                 }
-                if(!model.calculate_lod_data(current_lod_data, 0.0f, world_transform, *cam, 0.0f))
+                if(!model.calculate_lod_data(current_lod_data, world_transform, *cam, 0.0f, 0.0f))
                 {
                     return;
                 }

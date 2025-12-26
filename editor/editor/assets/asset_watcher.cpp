@@ -74,14 +74,21 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
     asset_compiler::asset_manifest manifest;
     if(!asset_compiler::load_manifest(manifest_path, manifest))
     {
-        APPLOG_TRACE("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
+        APPLOG_WARNING("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
 
     // Check if source file has changed
     if(asset_compiler::is_source_file_changed(source_file_path, manifest))
     {
-        APPLOG_TRACE("Source file changed for {}, recompilation needed", compiled_output_path.string());
+        APPLOG_WARNING("Source file changed for {}, recompilation needed", compiled_output_path.string());
+        return true;
+    }
+
+    // Check if compiled format has changed
+    if(asset_compiler::is_compiled_format_changed(compiled_output_path, manifest))
+    {
+        APPLOG_WARNING("Compiled format changed for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
 

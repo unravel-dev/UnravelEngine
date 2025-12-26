@@ -16,7 +16,7 @@ namespace unravel
 
 REFLECT(transform_component)
 {
-    auto invisible_predicate_entt = entt::property_predicate(
+    auto invisible_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& i)
         {
             return false;

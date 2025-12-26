@@ -528,45 +528,10 @@ auto get_inspector(rtti::context& ctx, const entt::meta_type& type) -> std::shar
     return it->second;
 }
 
-auto is_property_visible(const entt::meta_any& object, const entt::meta_data& prop) -> bool
-{
-    auto predicate_meta = entt::get_attribute(prop, "predicate");
-    if(predicate_meta.try_cast<entt::property_predicate_t>())
-    {
-        auto pred = predicate_meta.cast<entt::property_predicate_t>();
-        return pred(object);
-    }
-
-    return true;
-}
-
-auto is_property_readonly(const entt::meta_any& object, const entt::meta_data& prop) -> bool
-{
-    auto predicate_meta = entt::get_attribute(prop, "readonly_predicate");
-    if(predicate_meta.try_cast<entt::property_predicate_t>())
-    {
-        auto pred = predicate_meta.cast<entt::property_predicate_t>();
-        return pred(object);
-    }
-
-    return false;
-}
-
-auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& prop) -> bool
-{
-    auto predicate_meta = entt::get_attribute(prop, "flattable");
-    if(predicate_meta.try_cast<bool>())
-    {
-        auto pred = predicate_meta.cast<bool>();
-        return pred;
-    }
-
-    return false;
-}
 
 auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> inspect_result
 {
-    if(!is_property_visible(object, prop))
+    if(!entt::is_property_visible(object, prop))
     {
         return {};
     }
@@ -576,11 +541,11 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     entt::as_derived(prop_var);
 
     auto prop_old_var = prop.get(object);
-    bool is_readonly = prop.is_const() || is_property_readonly(object, prop);
+    bool is_readonly = prop.is_const() || entt::is_property_readonly(object, prop);
 
     auto prop_type = prop_var.type();
 
-    bool is_flattable = is_property_flattable(object, prop);
+    bool is_flattable = entt::is_property_flattable(object, prop);
     bool is_array = prop_type.is_sequence_container();
     bool is_associative_container = prop_type.is_associative_container();
     bool is_container = is_array || is_associative_container;
@@ -600,13 +565,12 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
     override_ctx.push_segment(prop_name, pretty_name);
 
+    ImGui::PushReadonly(is_readonly);
+
     if(prop_inspector)
     {
         prop_inspector->before_inspect(prop);
     }
-
-    ImGui::PushReadonly(is_readonly);
-
 
     auto prop_proxy = make_property_proxy(var_proxy, prop);
 

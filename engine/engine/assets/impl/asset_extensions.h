@@ -183,6 +183,74 @@ inline auto is_format(const std::string& ex) -> bool
 }
 
 template<typename T>
+inline auto get_format_version() -> uint64_t
+{
+    return 0;
+}
+
+// Template specializations for format versions
+// Increment these versions when the binary serialization format changes for each asset type
+template<>
+inline auto get_format_version<unravel::mesh>() -> uint64_t
+{
+    return 2;
+}
+
+template<>
+inline auto get_format_version<unravel::material>() -> uint64_t
+{
+    return 1;
+}
+
+template<>
+inline auto get_format_version<unravel::animation_clip>() -> uint64_t
+{
+    return 1;
+}
+
+template<>
+inline auto get_format_version<unravel::physics_material>() -> uint64_t
+{
+    return 1;
+}
+
+template<>
+inline auto get_format_version<unravel::audio_clip>() -> uint64_t
+{
+    return 1;
+}
+
+inline auto get_format_version(const std::string& extension) -> uint64_t
+{
+    if(is_format<unravel::mesh>(extension))
+    {
+        return get_format_version<unravel::mesh>();
+    }
+    
+    if(is_format<unravel::material>(extension))
+    {
+        return get_format_version<unravel::material>();
+    }
+    
+    if(is_format<unravel::animation_clip>(extension))
+    {
+        return get_format_version<unravel::animation_clip>();
+    }
+    
+    if(is_format<unravel::physics_material>(extension))
+    {
+        return get_format_version<unravel::physics_material>();
+    }
+    
+    if(is_format<unravel::audio_clip>(extension))
+    {
+        return get_format_version<unravel::audio_clip>();
+    }
+    
+    return 0;
+}
+
+template<typename T>
 inline auto get_format(bool include_dot = true) -> std::string
 {
     auto format = get_suported_formats<T>().front();
