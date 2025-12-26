@@ -2033,42 +2033,42 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                         }
                     }
                 }
-                else
-                {
-                    // Fallback to unknown type display
-                    var_info field_info;
-                    field_info.is_property = true;
-                    field_info.read_only = true;
+                // else
+                // {
+                //     // Fallback to unknown type display
+                //     var_info field_info;
+                //     field_info.is_property = true;
+                //     field_info.read_only = true;
 
-                    std::string unknown_text;
+                //     std::string unknown_text;
 
-                    try
-                    {
-                        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-                        auto nested_obj = invoker.get_value(data);
-                        if(nested_obj.valid())
-                        {
-                            unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
-                        }
-                        else
-                        {
-                            unknown_text = "null (" + field_type.get_name() + ")";
-                        }
-                    }
-                    catch(const std::exception& e)
-                    {
-                        unknown_text = fmt::format("Unknown ({})", e.what());
-                    }
+                //     try
+                //     {
+                //         auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                //         auto nested_obj = invoker.get_value(data);
+                //         if(nested_obj.valid())
+                //         {
+                //             unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                //         }
+                //         else
+                //         {
+                //             unknown_text = "null (" + field_type.get_name() + ")";
+                //         }
+                //     }
+                //     catch(const std::exception& e)
+                //     {
+                //         unknown_text = fmt::format("Unknown ({})", e.what());
+                //     }
 
                     
-                    entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
-                    auto unknown_var_proxy = make_proxy(unknown_var);
+                //     entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
+                //     auto unknown_var_proxy = make_proxy(unknown_var);
                     
-                    {
-                        property_layout layout(field.get_name());
-                        result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
-                    }
-                }
+                //     {
+                //         property_layout layout(field.get_name());
+                //         result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
+                //     }
+                // }
 
                 override_ctx.pop_segment();
             }
@@ -2233,42 +2233,42 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                         }
                     }
                 }
-                else
-                {
-                    // Fallback to unknown type display
-                    var_info field_info;
-                    field_info.is_property = true;
-                    field_info.read_only = true;
+                // else
+                // {
+                //     // Fallback to unknown type display
+                //     var_info field_info;
+                //     field_info.is_property = true;
+                //     field_info.read_only = true;
 
-                    std::string unknown_text;
+                //     std::string unknown_text;
 
-                    try
-                    {
-                        auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
-                        auto nested_obj = invoker.get_value(data);
-                        if(nested_obj.valid())
-                        {
-                            unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
-                        }
-                        else
-                        {
-                            unknown_text = "null (" + prop.get_type().get_name() + ")";
-                        }
-                    }
-                    catch(const std::exception& e)
-                    {
-                        unknown_text = fmt::format("Unknown ({})", e.what());
-                    }
+                //     try
+                //     {
+                //         auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                //         auto nested_obj = invoker.get_value(data);
+                //         if(nested_obj.valid())
+                //         {
+                //             unknown_text = fmt::format("Unknown ({})", nested_obj.get_type().get_name());
+                //         }
+                //         else
+                //         {
+                //             unknown_text = "null (" + prop.get_type().get_name() + ")";
+                //         }
+                //     }
+                //     catch(const std::exception& e)
+                //     {
+                //         unknown_text = fmt::format("Unknown ({})", e.what());
+                //     }
 
                     
-                    entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
-                    auto unknown_var_proxy = make_proxy(unknown_var);
+                //     entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
+                //     auto unknown_var_proxy = make_proxy(unknown_var);
                     
-                    {
-                        property_layout layout(prop.get_name());
-                        result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
-                    }
-                }
+                //     {
+                //         property_layout layout(prop.get_name());
+                //         result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
+                //     }
+                // }
 
                 override_ctx.pop_segment();
             }

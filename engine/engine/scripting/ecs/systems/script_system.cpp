@@ -755,10 +755,10 @@ auto script_system::get_app_assembly() const -> mono::mono_assembly
 
 auto script_system::get_type_by_fullname(const std::string& fullname) const -> mono::mono_type
 {
-    auto type = domain_->get_type_by_fullname(fullname);
+    auto type = domain_->get_type(fullname);
     if(!type.valid())
     {
-        type = app_domain_->get_type_by_fullname(fullname);
+        type = app_domain_->get_type(fullname);
     }
     
     return type;

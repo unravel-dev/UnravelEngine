@@ -105,6 +105,9 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     exit_prefab_mode(ctx, save_option::no);
 
+    undo_stack.clear();
+    pending_actions.clear();
+
     save_selection(ctx);
 
     const auto& scenes = scene::get_all_scenes();
