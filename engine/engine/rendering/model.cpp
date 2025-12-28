@@ -5,11 +5,98 @@
 #include "mesh.h"
 #include "camera.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace unravel
 {
-bool model::is_valid() const
+
+namespace
+{
+    
+auto compute_bounds_screen_radius_squared(const math::vec3& origin,
+                                                float radius,
+                                                const math::vec3& view_origin,
+                                                const math::mat4& projection) -> float
+{
+    const float screen_multiple = 0.5f * std::max(std::abs(projection[0][0]), std::abs(projection[1][1]));
+    float projection_w_scale = std::abs(projection[2][3]);
+    if(projection_w_scale < 0.000001f)
+    {
+        projection_w_scale = 1.0f;
+    }
+    const float dist_sqr = glm::length2(origin - view_origin) * projection_w_scale;
+    return math::square(screen_multiple * radius) / std::max(1.0f, dist_sqr);
+}
+
+auto compute_bounds_screen_radius_squared(const math::vec3& origin, float radius, const camera& view) -> float
+{
+    return compute_bounds_screen_radius_squared(origin, radius, view.get_position(), view.get_projection().get_matrix());
+}
+
+auto compute_conservative_world_bounds_sphere(const mesh& m, const math::transform& world_transform) -> math::bsphere
+{
+    const auto& bounds = m.get_bounds();
+    const math::vec3 local_center = bounds.get_center();
+    const math::vec3 local_extents = bounds.get_extents();
+    const float local_radius = glm::length(local_extents);
+    const math::vec3 world_center = world_transform.transform_coord(local_center);
+    const auto scale = world_transform.get_scale();
+    const float max_scale = std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)});
+    return math::bsphere{world_center, local_radius * max_scale};
+}
+
+auto compute_screen_rect_from_sphere(const camera& cam, const math::vec3& world_center, float screen_radius) -> irect32_t
+{
+    const auto& viewport_pos = cam.get_viewport_pos();
+    const auto& viewport_size = cam.get_viewport_size();
+    if(viewport_size.width == 0 || viewport_size.height == 0)
+    {
+        return {};
+    }
+    const auto view_proj = cam.get_view_projection();
+    math::vec4 clip = view_proj * math::vec4{world_center.x, world_center.y, world_center.z, 1.0f};
+    const float clip_w = clip.w;
+    if(std::abs(clip_w) < 0.000001f)
+    {
+        return {viewport_pos.x,
+                viewport_pos.y,
+                viewport_pos.x + static_cast<std::int32_t>(viewport_size.width),
+                viewport_pos.y + static_cast<std::int32_t>(viewport_size.height)};
+    }
+    const float recip_w = 1.0f / clip_w;
+    const float ndc_x = clip.x * recip_w;
+    const float ndc_y = clip.y * recip_w;
+    const float center_x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
+    const float center_y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
+    const float radius_px = screen_radius * float(viewport_size.height);
+    const float left_f = center_x - radius_px;
+    const float right_f = center_x + radius_px;
+    const float top_f = center_y - radius_px;
+    const float bottom_f = center_y + radius_px;
+    const std::int32_t min_x = viewport_pos.x;
+    const std::int32_t min_y = viewport_pos.y;
+    const std::int32_t max_x = viewport_pos.x + static_cast<std::int32_t>(viewport_size.width);
+    const std::int32_t max_y = viewport_pos.y + static_cast<std::int32_t>(viewport_size.height);
+    const std::int32_t left = math::clamp(static_cast<std::int32_t>(std::floor(left_f)), min_x, max_x);
+    const std::int32_t right = math::clamp(static_cast<std::int32_t>(std::ceil(right_f)), min_x, max_x);
+    const std::int32_t top = math::clamp(static_cast<std::int32_t>(std::floor(top_f)), min_y, max_y);
+    const std::int32_t bottom = math::clamp(static_cast<std::int32_t>(std::ceil(bottom_f)), min_y, max_y);
+    return {left, top, right, bottom};
+}
+}
+
+void lod_data::calculate_screen_rect(const camera& cam)
+{
+    const auto& viewport_size = cam.get_viewport_size();
+    const auto& viewport_pos = cam.get_viewport_pos();
+  
+    float screen_radius = percent * 0.005f;
+    rect = compute_screen_rect_from_sphere(cam, center, screen_radius);
+}
+
+
+auto model::is_valid() const -> bool
 {
     return !mesh_lods_.empty();
 }
@@ -25,10 +112,10 @@ auto model::get_lod(uint32_t lod) const -> asset_handle<mesh>
 
     for(int i = int(lod); i >= 0; --i)
     {
-        auto lodMesh = mesh_lods_[i];
-        if(lodMesh)
+        auto lod_mesh = mesh_lods_[i];
+        if(lod_mesh)
         {
-            return lodMesh;
+            return lod_mesh;
         }
     }
     
@@ -49,7 +136,7 @@ void model::set_lod(asset_handle<mesh> mesh, uint32_t lod)
 
     if(recalculate_lod_limits)
     {
-        recalulate_lod_limits(get_lods_count());
+        recalulate_lod_screen_size_limits(get_lods_count());
     }
 
     resize_materials(mesh);
@@ -103,7 +190,7 @@ void model::set_lods(const std::vector<asset_handle<mesh>>& lods)
 {
     mesh_lods_ = lods;
 
-    recalulate_lod_limits(get_lods_count());
+    recalulate_lod_screen_size_limits(get_lods_count());
 
     if(!mesh_lods_.empty())
     {
@@ -195,17 +282,11 @@ auto model::get_or_emplace_material_instance(uint32_t index) -> material::sptr
 }
 
 
-auto model::calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float transition_time, float dt) const -> bool
+auto model::calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float dt) const -> bool
 {
-    
+    data.transition_time = get_lod_transition_time().count();
     const auto lod_count = get_lods_count();
-
-
-    const auto& lod_limits = get_lod_limits();
-
     const auto base_mesh = get_lod(0);
-
-    data.transition_time = transition_time;
     if(!base_mesh)
     {
         return false;
@@ -217,62 +298,115 @@ auto model::calculate_lod_data(lod_data& data, const math::transform& world_tran
         return false;
     }
 
+    const auto bsphere = compute_conservative_world_bounds_sphere(*mesh_ptr, world_transform);
+    const float screen_radius_squared = compute_bounds_screen_radius_squared(bsphere.position, bsphere.radius, cam);
 
-    const auto& viewport = cam.get_viewport_size();
-    auto rect = mesh_ptr->calculate_screen_rect(world_transform, cam);
-    data.rect = rect;
+    const float screen_radius = std::sqrt(std::max(0.0f, screen_radius_squared));
+    data.percent = math::clamp(screen_radius * 200.0f, 0.0f, 100.0f);
+    data.center = bsphere.position;
 
-    float percent = math::clamp((float(rect.height()) / float(viewport.height)) * 100.0f, 0.0f, 100.0f);
-    data.percent = percent;
+    const float lod_screen_size_min = 0.01f;
+    const float cull_threshold_squared = math::square(lod_screen_size_min * 0.5f);
+    const bool is_visible = cull_threshold_squared <= screen_radius_squared;
+    if(!is_visible)
+    {
+        return false;
+    }
 
     std::size_t lod = 0;
-    
-    // If override is enabled, use the override level directly
     if(lod_override_enabled_)
     {
         lod = math::clamp<std::size_t>(lod_override_level_, 0, lod_count - 1);
     }
-    else
+    else if(lod_count > 1 && lod_screen_sizes_.size() >= lod_count)
     {
-        // Calculate LOD based on screen percentage
-        for(size_t i = 0; i < lod_limits.size(); ++i)
+        // Use current LOD for hysteresis (what's being displayed, accounting for transitions)
+        const uint32_t prev_lod = data.current_lod_index;
+        const float hysteresis = lod_hysteresis_;
+        
+        for(std::int32_t lod_index = static_cast<std::int32_t>(lod_count) - 1; lod_index >= 0; --lod_index)
         {
-            const auto& range = lod_limits[i];
-            if(range.contains(urange32_t::value_type(percent)))
+            const auto index = static_cast<size_t>(lod_index);
+            float screen_size = lod_screen_sizes_[index];
+            float screen_size_squared = math::square(screen_size * 0.5f);
+            
+            // Apply hysteresis to create a "sticky" dead zone around the current LOD
+            // This prevents rapid switching at LOD boundaries
+            if(prev_lod == index)
             {
-                lod = i;
+                // Currently at this LOD - INCREASE threshold to make it easier to stay
+                // (larger threshold = condition more likely to be true)
+                float adjusted_size = screen_size * (1.0f + hysteresis);
+                screen_size_squared = math::square(adjusted_size * 0.5f);
+            }
+            else
+            {
+                // Different from current LOD - DECREASE threshold to resist change
+                // (smaller threshold = condition less likely to be true)
+                float adjusted_size = screen_size * (1.0f - hysteresis);
+                screen_size_squared = math::square(adjusted_size * 0.5f);
+            }
+            
+            if(screen_size_squared >= screen_radius_squared)
+            {
+                lod = static_cast<std::size_t>(lod_index);
+                break;
             }
         }
-
-        lod = math::clamp<std::size_t>(lod, 0, lod_count - 1);
-        
-        // Apply bias to the calculated LOD
-        // Positive bias selects less detailed LODs (higher index)
-        // Negative bias selects more detailed LODs (lower index)
-        float biased_lod = static_cast<float>(lod) + lod_selection_bias_;
-        biased_lod = math::clamp(biased_lod, 0.0f, static_cast<float>(lod_count - 1));
-        lod = static_cast<std::size_t>(biased_lod);
     }
+
+    float biased_lod = static_cast<float>(lod) + lod_selection_bias_;
+    biased_lod = math::clamp(biased_lod, 0.0f, static_cast<float>(lod_count - 1));
+    lod = static_cast<std::size_t>(biased_lod);
+
+    // Hysteresis determined new LOD - now handle transition timing
+    // Only trigger a new transition if we're not currently transitioning
     if(data.target_lod_index != lod && data.target_lod_index == data.current_lod_index)
     {
         data.target_lod_index = static_cast<std::uint32_t>(lod);
+        data.current_time = 0.0f;
     }
 
+    // Update transition progress
     if(data.current_lod_index != data.target_lod_index)
     {
         data.current_time += dt;
     }
 
-    if(data.current_time >= transition_time)
+    // Complete transition when time elapsed
+    if(data.current_time >= data.transition_time)
     {
         data.current_lod_index = data.target_lod_index;
         data.current_time = 0.0f;
     }
 
-    // Camera
-    const float camera_cull_threshold = 0.3f; // 0.3%
+    return true;
+}
 
-    return percent >= camera_cull_threshold;
+
+void model::recalulate_lod_screen_size_limits(uint32_t lod_count)
+{
+    lod_screen_sizes_.clear();
+    if(lod_count == 0)
+    {
+        return;
+    }
+    lod_screen_sizes_.resize(lod_count);
+    for(uint32_t i = 0; i < lod_count; ++i)
+    {
+        if(i == 0)
+        {
+            lod_screen_sizes_[i] = 1.0f;
+        }
+        else if(i == 1)
+        {
+            lod_screen_sizes_[i] = 0.3f;
+        }
+        else
+        {
+            lod_screen_sizes_[i] = lod_screen_sizes_[i - 1] * 0.5f;
+        }
+    }
 }
 
 auto model::get_lod_override_enabled() const -> bool
@@ -305,15 +439,56 @@ void model::set_lod_selection_bias(float bias)
     lod_selection_bias_ = bias;
 }
 
-auto model::get_lod_limits() const -> const std::vector<urange32_t>&
+auto model::get_lod_hysteresis() const -> float
 {
-    return lod_limits_;
+    return lod_hysteresis_;
 }
 
-void model::set_lod_limits(const std::vector<urange32_t>& limits)
+void model::set_lod_hysteresis(float hysteresis)
 {
-    lod_limits_ = limits;
+    lod_hysteresis_ = hysteresis;
 }
+
+auto model::get_lod_transition_time() const -> seconds_t
+{
+    return lod_transition_time_;
+}
+
+void model::set_lod_transition_time(seconds_t time)
+{
+    lod_transition_time_ = time;
+}
+
+auto model::get_lod_screen_size_min() const -> float
+{
+    return 0.01f;
+}
+
+void model::set_lod_screen_size_min(float /*value*/)
+{
+    // Deprecated - hysteresis is now used instead
+}
+
+auto model::get_lod_auto_screen_size_power_base() const -> float
+{
+    return 0.5f;
+}
+
+void model::set_lod_auto_screen_size_power_base(float /*value*/)
+{
+    // Deprecated - fixed thresholds are now used
+}
+
+auto model::get_lod_screen_sizes() const -> const std::vector<float>&
+{
+    return lod_screen_sizes_;
+}
+
+void model::set_lod_screen_sizes(const std::vector<float>& sizes)
+{
+    lod_screen_sizes_ = sizes;
+}
+
 
 void model::submit(const math::mat4& world_transform,
                    const submesh_pose_mat4& submesh_transforms,
@@ -463,63 +638,6 @@ void model::submit(const math::mat4& world_transform,
     }
 }
 
-void model::recalulate_lod_limits(uint32_t lod_count)
-{
-    lod_limits_.clear();
-    if(lod_count == 0)
-    {
-        return;
-    }
-    lod_limits_.reserve(lod_count);
-    // Unity-style LOD calculation using exponential decay (halving thresholds)
-    // LOD 0 (highest detail): Used when screen height is 50% or more
-    // Each subsequent LOD halves the threshold: 50%, 25%, 12.5%, 6.25%, etc.
-    // The selection algorithm picks the LAST matching range, so we iterate from
-    // lowest detail (checked first) to highest detail (checked last)
-    const float lod0_threshold = 30.0f; // Start at 30% screen height for highest detail
-    const float epsilon = 0.001f; // Small epsilon to avoid floating point overlap issues
-    // Calculate ranges for each LOD level
-    // The selection algorithm picks the LAST matching range, so higher detail LODs
-    // (with higher indices) will be selected when multiple ranges match
-    for(uint32_t i = 0; i < lod_count; ++i)
-    {
-        // Calculate threshold for this LOD level (50%, 25%, 12.5%, etc.)
-        float threshold = lod0_threshold / std::pow(2.0f, static_cast<float>(i));
-        float lower_limit = 0.0f;
-        float upper_limit = 100.0f;
-        // For LOD 0 (highest detail), range is [threshold, 100]
-        if(i == 0)
-        {
-            lower_limit = threshold;
-            upper_limit = 100.0f;
-        }
-        // For intermediate LODs, range is [threshold, previous_threshold)
-        else if(i < lod_count - 1)
-        {
-            float previous_threshold = lod0_threshold / std::pow(2.0f, static_cast<float>(i - 1));
-            lower_limit = threshold;
-            // Subtract epsilon to make upper bound exclusive, avoiding overlap
-            upper_limit = previous_threshold - epsilon;
-        }
-        // For the last LOD (lowest detail), range is [0, previous_threshold)
-        else
-        {
-            float previous_threshold = lod0_threshold / std::pow(2.0f, static_cast<float>(i - 1));
-            lower_limit = 0.0f;
-            upper_limit = previous_threshold - epsilon;
-        }
-        // Clamp to valid percentage range [0, 100]
-        upper_limit = math::clamp(upper_limit, 0.0f, 100.0f);
-        lower_limit = math::clamp(lower_limit, 0.0f, 100.0f);
-        // Store range with min=lower_limit, max=upper_limit
-        // Example for 4 LODs (with epsilon = 0.001):
-        // LOD 0: [50, 100]        - highest detail, used when >= 50%
-        // LOD 1: [25, 49.999]    - used when 25% <= percent < 50%
-        // LOD 2: [12.5, 24.999]  - used when 12.5% <= percent < 25%
-        // LOD 3: [0, 12.499]     - lowest detail, used when < 12.5%
-        lod_limits_.emplace_back(urange32_t::value_type(lower_limit), urange32_t::value_type(upper_limit));
-    }
-}
 
 void model::resize_materials(const asset_handle<mesh>& mesh)
 {

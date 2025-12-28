@@ -1,4 +1,4 @@
-$input v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0
+$input v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params
 
 #include "common.sh"
 #include "lighting.sh"
@@ -23,7 +23,6 @@ uniform vec4 u_surface_data2;
 
 uniform vec4 u_tiling;
 uniform vec4 u_dither_threshold; //.x = alpha threshold .y = distance threshold
-uniform vec4 u_lod_params;
 
 #define u_surface_roughness u_surface_data.x
 #define u_surface_metalness u_surface_data.y
@@ -79,9 +78,19 @@ void main()
 	float distance_factor = saturate(distance / u_dither_distance_threshold);
 	float dither = dither16x16(gl_FragCoord.xy);
 
+	// LOD transition using optimized single-component branchless approach
+	// v_lod_params.x: positive = current LOD fading out, negative = target LOD fading in
+	// Positive: discard upper portion (dither > threshold)
+	// Negative: discard lower portion (dither < 1-threshold)
+	float lod_param = v_lod_params.x;
+	float abs_param = abs(lod_param);
+	float is_positive = step(0.0f, lod_param);  // 1.0 if positive/zero, 0.0 if negative
+	float threshold = mix(1.0f - abs_param, abs_param, is_positive);  // Positive: abs_param, Negative: 1-abs_param
+	bool lod_discard = (dither - threshold) * sign(lod_param) > 0.0f;
+
 	if((albedo_color.a + (dither * (1.0f - alpha_test_value)) < 1.0f) ||
 	(distance_factor + dither < 1.0f) ||
-	(u_lod_params.x - dither * u_lod_params.y) > u_lod_params.z)
+	lod_discard)
 	{
 		discard;
 	}

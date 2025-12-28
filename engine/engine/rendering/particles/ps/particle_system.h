@@ -143,7 +143,6 @@ struct EmitterUniforms
 
 	bx::Easing::Enum m_easePos; // Only position easing remains - others handled by gradients
 
-	bgfx::TextureHandle m_texture;
 	TextureMode::Enum m_textureMode; // Texture mode (MultiChannel or Mask)
 	RenderMode::Enum m_renderMode; // Render mode (Billboard, Horizontal, or Vertical)
 	

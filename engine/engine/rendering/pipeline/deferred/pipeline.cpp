@@ -371,7 +371,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
         });
 }
 
-void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags query, layer_mask render_mask)
+void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visibility_flags query, layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
@@ -428,7 +428,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, visibility_flags 
 
             if(!queried)
             {
-                gather_visible_models(scn, nullptr, query, render_mask, [&](entt::handle entity, const lod_data& lod_data)
+                gather_visible_models(scn, nullptr, query, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
                 {
                     dirty_models.emplace_back(entity, lod_data);
                 });
@@ -512,7 +512,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(apply_shadows)
     {
-        build_shadows(scn, camera, visibility_query::not_specified, render_mask);
+        build_shadows(scn, camera, dt, visibility_query::not_specified, render_mask);
     }
 
     const auto& viewport_size = camera.get_viewport_size();
@@ -523,7 +523,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(pflags & pipeline_steps::geometry_pass)
     {
-        gather_visible_models(scn, &camera, params.vflags, render_mask, [&](entt::handle entity, const lod_data& lod_data)
+        gather_visible_models(scn, &camera, params.vflags, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
         {
             visibility_set.emplace_back(entity, lod_data);
         });
@@ -605,9 +605,15 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         const auto current_lod_index = lod_data.current_lod_index;
         const auto target_lod_index = lod_data.target_lod_index;
 
-        const auto params = math::vec3{0.0f, -1.0f, (lod_data.transition_time - current_time) / lod_data.transition_time};
-
-        const auto params_inv = math::vec3{1.0f, 1.0f, current_time / lod_data.transition_time};
+        // Optimized single-component LOD transition parameters
+        // Positive: current LOD fading out (1.0 → 0.0)
+        // Negative: target LOD fading in (0.0 → -1.0)
+        const float transition_progress = lod_data.transition_time > 0.0f 
+            ? current_time / lod_data.transition_time 
+            : 1.0f;
+        
+        const auto params = math::vec3{1.0f - transition_progress, 0.0f, 0.0f};      // Current LOD: positive, fading out
+        const auto params_inv = math::vec3{-transition_progress, 0.0f, 0.0f};        // Target LOD: negative, fading in
 
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
         const auto& bone_transforms = model_comp.get_bone_transforms();

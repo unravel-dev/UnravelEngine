@@ -194,9 +194,7 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                     continue;
                 }
 
-                lod_data current_lod_data;
-                model.calculate_lod_data(current_lod_data, world_transform, camera, 0.0f, 0.0f);
-
+                auto& current_lod_data = model_comp->get_lod_data_for_camera(&camera, gfx::get_render_frame());
 
                 auto lod = model.get_lod(current_lod_data.current_lod_index);
                 if(!lod)

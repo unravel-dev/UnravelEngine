@@ -8,6 +8,7 @@
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include <serialization/types/vector.hpp>
+#include <serialization/types/chrono.hpp>
 
 namespace unravel
 {
@@ -42,7 +43,8 @@ REFLECT(model)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lods"},
             entt::attribute{"pretty_name", "LOD"},
-            entt::attribute{"tooltip", "Levels of Detail."},
+            entt::attribute{"tooltip", "Explicit Levels of Detail. If not set, the model will use\n"
+                    "the automatically generated mesh LODs (if any) based on the screen size."},
         })
         .data<&model::set_lod_override_enabled, &model::get_lod_override_enabled>("lod_override_enabled"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -67,6 +69,14 @@ REFLECT(model)
             entt::attribute{"readonly_predicate", is_lod_override_enabled_predicate},
             entt::attribute{"min", -float(mesh::get_max_generated_lod_count())},
             entt::attribute{"max", float(mesh::get_max_generated_lod_count())},
+        })
+        .data<&model::set_lod_transition_time, &model::get_lod_transition_time>("lod_transition_time"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_transition_time"},
+            entt::attribute{"pretty_name", "LOD Transition Time"},
+            entt::attribute{"tooltip", "Duration of LOD transitions in seconds (0 = instant switch, >0 = smooth dithered crossfade)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 2.0f},
         });
 }
 
@@ -78,6 +88,7 @@ SAVE(model)
     try_save(ar, ser20::make_nvp("lod_override_enabled", obj.lod_override_enabled_));
     try_save(ar, ser20::make_nvp("lod_override_level", obj.lod_override_level_));
     try_save(ar, ser20::make_nvp("lod_selection_bias", obj.lod_selection_bias_));
+    try_save(ar, ser20::make_nvp("lod_transition_time", obj.lod_transition_time_));
 }
 SAVE_INSTANTIATE(model, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(model, ser20::oarchive_binary_t);
@@ -92,6 +103,7 @@ LOAD(model)
     try_load(ar, ser20::make_nvp("lod_override_enabled", obj.lod_override_enabled_));
     try_load(ar, ser20::make_nvp("lod_override_level", obj.lod_override_level_));
     try_load(ar, ser20::make_nvp("lod_selection_bias", obj.lod_selection_bias_));
+    try_load(ar, ser20::make_nvp("lod_transition_time", obj.lod_transition_time_));
 }
 LOAD_INSTANTIATE(model, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(model, ser20::iarchive_binary_t);

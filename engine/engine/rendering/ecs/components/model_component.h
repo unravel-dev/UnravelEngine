@@ -2,6 +2,7 @@
 #include <engine/animation/animation_pose.h>
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/model.h>
+#include <unordered_map>
 namespace unravel
 {
 class material;
@@ -13,6 +14,7 @@ class material;
 class model_component : public component_crtp<model_component, owned_component>
 {
 public:
+
     /**
      * @brief Called when the component is created.
      * @param r The registry containing the component.
@@ -139,6 +141,23 @@ public:
     auto is_skinned() const -> bool;
     auto get_bind_pose() const -> const animation_pose&;
 
+    /**
+     * @brief Gets the per-view LOD data for a specific camera/view.
+     * Creates a new entry if this is the first access from this view.
+     * @param view_id Unique identifier for the view (typically camera pointer as uintptr_t).
+     * @param current_frame Current render frame number for tracking access.
+     * @return Reference to the LOD data for this view.
+     */
+    auto get_lod_data_for_camera(const camera* cam, std::uint64_t current_frame) -> lod_data&;
+    
+    /**
+     * @brief Cleans up stale per-view LOD data entries that haven't been accessed recently.
+     * Call this periodically (e.g., once per frame) to prevent unbounded growth.
+     * @param current_frame Current render frame number.
+     * @param max_frames_inactive Maximum frames since last access before cleanup (default: 120 = ~2 seconds at 60fps).
+     */
+    void cleanup_stale_lod_data(std::uint64_t current_frame, std::uint64_t max_frames_inactive = 120);
+
 private:
     auto create_armature(bool force) -> bool;
 
@@ -205,6 +224,14 @@ private:
      * @brief Last frame this model was rendered.
      */
     uint64_t last_render_frame_{};
+
+    /**
+     * @brief Per-view LOD state map.
+     * Key: view identifier (camera pointer as uintptr_t)
+     * Value: LOD state and last access frame for that view
+     * Automatically cleaned up when views become stale.
+     */
+    std::unordered_map<std::uintptr_t, per_view_lod_state> per_view_lod_data_;
 };
 
 struct bone_component : public component_crtp<bone_component>

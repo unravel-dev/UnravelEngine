@@ -2421,7 +2421,7 @@ auto mesh::get_skinned_submeshes_count(uint32_t lod_index) const -> size_t
 auto mesh::get_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
 {
     // For base LOD (lod_index == 0), use cached map for performance
-    if(lod_index == 0)
+    if(lod_index == 0 || lods_.empty())
     {
         auto it = skinned_submesh_indices_.find(data_group_id);
         if(it != skinned_submesh_indices_.end())
@@ -2464,7 +2464,7 @@ auto mesh::get_non_skinned_submeshes_count(uint32_t lod_index) const -> size_t
 auto mesh::get_non_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
 {
     // For base LOD (lod_index == 0), use cached map for performance
-    if(lod_index == 0)
+    if(lod_index == 0 || lods_.empty())
     {
         auto it = non_skinned_submesh_indices_.find(data_group_id);
         if(it != non_skinned_submesh_indices_.end())

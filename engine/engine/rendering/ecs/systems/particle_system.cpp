@@ -1,4 +1,5 @@
 #include "particle_system.h"
+#include "threadpp/thread.h"
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/particles/ps/particle_system.h>
@@ -61,6 +62,9 @@ void particle_system::on_frame_before_render(scene& scn, delta_t dt)
         view.end(),
         [&](entt::entity entity)
     {
+        // This is not needed as we dont cal .get on any assets here
+        // tpp::this_thread::register_this_thread();
+
         auto& transform_comp = view.get<transform_component>(entity);
         auto& emitter_comp = view.get<particle_emitter_component>(entity);
         

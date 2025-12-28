@@ -57,9 +57,11 @@ void pipeline::gather_visible_models(scene& scn,
     const camera* cam, 
     visibility_flags query, 
     const layer_mask& render_mask, 
+    delta_t dt,
     const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback)
 {
-    APP_SCOPE_PERF("Rendering/Cull Models");
+    
+    APP_SCOPE_PERF(cam ? "Rendering/Cull   Models" : "Rendering/Gather Models");
 
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
@@ -73,6 +75,12 @@ void pipeline::gather_visible_models(scene& scn,
             // Get layer component if it exists, otherwise use default layer
             auto entity_layer = layer_comp.layers;
             
+            // Layer filtering - check if entity's layer matches camera's render mask
+            if((entity_layer.mask & render_mask.mask) == 0)
+            {
+                return; // Entity's layer is not visible to this camera
+            }
+
             // Early exit checks
             if(!model_comp.is_enabled()) 
             {
@@ -91,30 +99,25 @@ void pipeline::gather_visible_models(scene& scn,
                 return;
             }
             
-            // Layer filtering - check if entity's layer matches camera's render mask
-            if((entity_layer.mask & render_mask.mask) == 0)
-            {
-                return; // Entity's layer is not visible to this camera
-            }
-            
+            auto& current_lod_data = model_comp.get_lod_data_for_camera(cam, gfx::get_render_frame());
             bool is_visible = true;
-            lod_data current_lod_data{};
-            const auto& world_transform = transform_comp.get_transform_global();
 
             if(cam)
             {
                 const auto& model = model_comp.get_model();
 
-  
+
                 if(!model.is_valid())
                 {
                     return;
                 }
-                if(!model.calculate_lod_data(current_lod_data, world_transform, *cam, 0.0f, 0.0f))
+                const auto& world_transform = transform_comp.get_transform_global();
+
+                if(!model.calculate_lod_data(current_lod_data, world_transform, *cam, dt.count()))
                 {
                     return;
                 }
-                
+
                 const auto& local_bounds = model_comp.get_local_bounds(current_lod_data.current_lod_index);
 
                 // Test the bounding box of the mesh
@@ -122,10 +125,8 @@ void pipeline::gather_visible_models(scene& scn,
                  // Alternative: is_visible = frustum->test_aabb(model_comp.get_world_bounds());
             }
 
-
             if(is_visible)
             {
-
                 lod_data_callback(scn.create_handle(entity), current_lod_data);
             }
             

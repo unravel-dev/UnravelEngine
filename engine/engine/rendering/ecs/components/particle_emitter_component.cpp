@@ -577,16 +577,6 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
         // This is much more efficient than decomposing and recomposing
         uniforms_.m_prevTransform = uniforms_.m_transform;
         uniforms_.m_transform = world_transform;
-
-        auto tex = [&]()
-        {
-            if(texture_.is_valid())
-            {
-                return texture_.get();
-            }
-            return material::default_color_map().get();
-        }();
-        uniforms_.m_texture = tex->native_handle();
         
         psUpdateEmitter(emitter_handle_, dt.count(), &uniforms_);
     }

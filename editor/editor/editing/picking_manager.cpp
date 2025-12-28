@@ -461,8 +461,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 
                 const auto& world_transform = transform_comp.get_transform_global();
 
-                lod_data current_lod_data;
-                model.calculate_lod_data(current_lod_data, world_transform, original_camera, 0.0f, 0.0f);
+                auto& current_lod_data = model_comp.get_lod_data_for_camera(&original_camera, gfx::get_render_frame());
 
                 auto lod = model.get_lod(current_lod_data.current_lod_index);
                 if(!lod)

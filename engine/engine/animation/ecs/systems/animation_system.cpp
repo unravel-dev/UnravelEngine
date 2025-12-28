@@ -138,6 +138,9 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                   view.end(),
                   [&](entt::entity entity)
                   {
+                      // This is needed as we call .get on the animations inside the player
+                      tpp::this_thread::register_this_thread();
+
                       auto& animation_comp = view.get<animation_component>(entity);
                       auto& model_comp = view.get<model_component>(entity);
 

@@ -175,7 +175,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
     if(e.all_of<model_component>() && em.gizmos.show_model)
     {
         const auto& frustum = cam.get_frustum();
-        const auto& model_comp = e.get<model_component>();
+        auto& model_comp = e.get<model_component>();
         const auto& model = model_comp.get_model();
         if(!model.is_valid())
         {
@@ -198,18 +198,16 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.draw(aabb);
             }
         }
-        lod_data lod_runtime_data{};
 
-        if(!model.calculate_lod_data(lod_runtime_data, world_transform, cam, 0.0f, 0.0f))
-        {
-            return;
-        }
+        auto& current_lod_data = model_comp.get_lod_data_for_camera(&cam, gfx::get_render_frame());
+
+        current_lod_data.calculate_screen_rect(cam);
         // local bounds
         if(em.gizmos.show_model_local_bounds)
         {
 
 
-            const auto lod = model.get_lod(lod_runtime_data.current_lod_index);
+            const auto lod = model.get_lod(current_lod_data.current_lod_index);
             if(!lod)
             {
                 return;
@@ -267,15 +265,16 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         //lods
         if(em.gizmos.show_model_lod)
         {   
-            const auto& rect = lod_runtime_data.rect;
-            if(rect.width() > 0 && rect.height() > 0)
+     
+            dd_2d.callbacks.push_back([current_lod_data]()
             {
+                auto window = ImGui::GetCurrentWindow();
+                auto draw_list = window->DrawList;
 
-                dd_2d.callbacks.push_back([rect, lod_runtime_data]()
+                const auto& rect = current_lod_data.rect;
+                if(rect.width() > 0 && rect.height() > 0)
                 {
-                    auto window = ImGui::GetCurrentWindow();
-                    auto draw_list = window->DrawList;
-        
+    
                     draw_list->AddRect(ImVec2(rect.left, rect.top), ImVec2(rect.right, rect.bottom), IM_COL32(255, 255, 255, 255));
                     auto draw_aligned_text = [&](ImVec2 pos, float align,const std::string& text)
                     {
@@ -283,9 +282,10 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                         pos.x += (rect.width() - text_size.x) * align;
                         draw_list->AddText(pos, IM_COL32(255, 255, 255, 255), text.c_str());
                     };
-                    draw_aligned_text(ImVec2(rect.left, rect.bottom), 0.5f, fmt::format("LOD: {}", lod_runtime_data.current_lod_index));
-                });
-            }
+                    draw_aligned_text(ImVec2(rect.left, rect.bottom), 0.5f, fmt::format("LOD: {}", current_lod_data.current_lod_index));
+                }
+            });
+            
 
         }
 

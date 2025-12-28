@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_tangent, a_bitangent, a_texcoord0, i_data0, i_data1, i_data2, i_data3
-$output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0
+$output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params
 
 #include "common.sh"
 
@@ -49,6 +49,6 @@ void main()
     // Pass through texture coordinates
     v_texcoord0 = a_texcoord0;
     
-    // Pass through LOD parameter for potential use in fragment shader
-    //v_lod_param = lod_param;
+    // Pass LOD parameter to fragment shader (using vec2 for consistency)
+    v_lod_params = vec2(lod_param, 0.0);
 }

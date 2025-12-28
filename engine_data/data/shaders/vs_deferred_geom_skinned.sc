@@ -1,7 +1,9 @@
 $input a_position, a_normal, a_tangent, a_bitangent, a_texcoord0, a_weight, a_indices
-$output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0
+$output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params
 
 #include "common.sh"
+
+uniform vec4 u_lod_params;
 
 void main()
 {
@@ -33,5 +35,6 @@ void main()
 	v_wbitangent = wbitangent;
 
 	v_texcoord0 = a_texcoord0;
+	v_lod_params = u_lod_params.xy;
 
 }

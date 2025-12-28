@@ -479,48 +479,124 @@ auto frustum::test_swept_sphere(const bsphere& sphere, const vec3& vecSweepDirec
         return true;
     }
 
-    unsigned int i, nCount = 0;
-    float t0, t1, fDisplacedRadius;
-    float pDisplacements[12];
-    vec3 vDisplacedCenter;
+    // Robust swept-sphere vs convex frustum test using interval intersection.
+    // Plane convention in this engine:
+    // - plane::dot_coord(plane, point) > 0 means point is outside/in-front of the plane
+    // - inside is <= 0
+    //
+    // A sphere of radius r intersects the frustum iff for every plane:
+    //     dot_coord(plane, center(t)) <= r
+    // where center(t) = center0 + dir * t.
+    //
+    // NOTE: max_distance is only meaningful if vecSweepDirection is normalized.
+    constexpr float sweep_parallel_epsilon = 1e-6f;
+    const float radius_tolerance = sphere.radius * 1.1f;
 
-    // Determine all 12 intersection points of the swept sphere with the view
-    // frustum.
+    float t_enter = 0.0f;
+    float t_exit = (max_distance < 0.0f) ? std::numeric_limits<float>::infinity() : max_distance;
+
     for(const auto& plane : planes)
     {
-        // Intersects frustum plane?
-        if(swept_sphere_intersect_plane(t0, t1, plane, sphere, vecSweepDirection))
+        const float b_dot_n = plane::dot_coord(plane, sphere.position);
+        const float d_dot_n = plane::dot_normal(plane, vecSweepDirection);
+
+        // Constraint: b_dot_n + d_dot_n * t <= radius_tolerance
+        if(glm::abs(d_dot_n) < sweep_parallel_epsilon)
         {
-            // TODO: Possibly needs to be < 0?
-            if(t0 >= 0.0f && (max_distance < 0.0f || t0 <= max_distance))
+            // Moving parallel to this plane: either always satisfies, or never satisfies.
+            if(b_dot_n > radius_tolerance)
             {
-                pDisplacements[nCount++] = t0;
+                return false;
             }
-            if(t1 >= 0.0f && (max_distance < 0.0f || t1 <= max_distance))
-            {
-                pDisplacements[nCount++] = t1;
-            }
-
-        } // End if intersects
-
-    } // Next plane
-
-    // For all points > 0, displace the sphere along the sweep direction. If the
-    // displaced
-    // sphere falls inside the frustum then we have an intersection.
-    for(i = 0; i < nCount; ++i)
-    {
-        vDisplacedCenter = sphere.position + (vecSweepDirection * pDisplacements[i]);
-        fDisplacedRadius = sphere.radius * 1.1f; // Tolerance.
-        if(test_sphere(bsphere(vDisplacedCenter, fDisplacedRadius)))
-        {
-            return true;
+            continue;
         }
 
-    } // Next Intersection
+        const float t_bound = (radius_tolerance - b_dot_n) / d_dot_n;
+        if(d_dot_n > 0.0f)
+        {
+            // Increasing distance to plane as t increases -> upper bound on t.
+            t_exit = glm::min(t_exit, t_bound);
+        }
+        else
+        {
+            // Decreasing distance to plane as t increases -> lower bound on t.
+            t_enter = glm::max(t_enter, t_bound);
+        }
 
-    // None of the displaced spheres intersected the frustum
-    return false;
+        if(t_enter > t_exit)
+        {
+            return false;
+        }
+    }
+
+    return t_exit >= 0.0f;
+}
+
+auto frustum::test_swept_aabb(const bbox& box, const vec3& vecSweepDirection, float max_distance) const -> bool
+{
+    // Early out: if box already intersects frustum
+    if(test_aabb(box))
+    {
+        return true;
+    }
+
+    // Robust swept-AABB vs convex frustum test using interval intersection.
+    // For each plane, we find the "support vertex" (corner furthest in direction of plane normal)
+    // and compute when that vertex enters/exits the plane's half-space during the sweep.
+    //
+    // NOTE: max_distance is only meaningful if vecSweepDirection is normalized.
+    constexpr float sweep_parallel_epsilon = 1e-6f;
+
+    float t_enter = 0.0f;
+    float t_exit = (max_distance < 0.0f) ? std::numeric_limits<float>::infinity() : max_distance;
+
+    for(const auto& plane : planes)
+    {
+        // Get plane normal
+        const vec3 normal(plane.data.x, plane.data.y, plane.data.z);
+        
+        // Find the NEAR corner: corner of AABB closest to the plane
+        // This is the critical corner - if it's inside, the whole box can be inside
+        // Use same logic as classify_aabb (line 234)
+        vec3 near_corner(
+            (normal.x >= 0.0f) ? box.min.x : box.max.x,
+            (normal.y >= 0.0f) ? box.min.y : box.max.y,
+            (normal.z >= 0.0f) ? box.min.z : box.max.z
+        );
+
+        const float b_dot_n = plane::dot_coord(plane, near_corner);
+        const float d_dot_n = plane::dot_normal(plane, vecSweepDirection);
+
+        // Constraint: b_dot_n + d_dot_n * t <= 0 (near corner must be inside plane)
+        if(glm::abs(d_dot_n) < sweep_parallel_epsilon)
+        {
+            // Moving parallel to this plane: either always satisfies, or never satisfies.
+            if(b_dot_n > 0.0f)
+            {
+                return false; // Near corner outside, whole box never enters
+            }
+            continue;
+        }
+
+        const float t_bound = -b_dot_n / d_dot_n;
+        if(d_dot_n > 0.0f)
+        {
+            // Near corner moving away from inside → upper bound on t.
+            t_exit = glm::min(t_exit, t_bound);
+        }
+        else
+        {
+            // Near corner moving toward inside → lower bound on t.
+            t_enter = glm::max(t_enter, t_bound);
+        }
+
+        if(t_enter > t_exit)
+        {
+            return false; // No valid interval
+        }
+    }
+
+    return t_exit >= 0.0f;
 }
 
 auto frustum::test_point(const vec3& vecPoint) const -> bool

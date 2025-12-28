@@ -673,7 +673,17 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                   view.end(),
                   [&](entt::entity entity)
                   {
+                      // This is needed as we call .get on the model inside the update_armature
+                      tpp::this_thread::register_this_thread();
+
                       auto& model_comp = view.get<model_component>(entity);
+
+                      // Only get transform after we know we need it
+                      auto& transform_comp = view.get<transform_component>(entity);
+                      model_comp.update_world_bounds(transform_comp.get_transform_global());
+                    
+                      // Cleanup stale per-view LOD data (views not accessed for 2 seconds at 60fps)
+                      model_comp.cleanup_stale_lod_data(gfx::get_render_frame(), 120);
 
                       // Early exit if model wasn't used
                       if(!model_comp.was_used_last_frame())
@@ -683,15 +693,13 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
 
                       if(model_comp.is_newly_created())
                       {
-
                           model_comp.set_last_render_frame(gfx::get_render_frame());
                       }
 
+               
                       model_comp.update_armature();
 
-                      // Only get transform after we know we need it
-                      auto& transform_comp = view.get<transform_component>(entity);
-                      model_comp.update_world_bounds(transform_comp.get_transform_global());
+
                   });
 
 }

@@ -183,6 +183,17 @@ public:
     auto test_swept_sphere(const bsphere& sphere, const vec3& sweepDirection, float max_distance = -1.0f) const -> bool;
 
     /**
+     * @brief Determine whether or not the specified axis-aligned bounding box, swept along the provided direction
+     * vector, intersects the frustum in some way.
+     *
+     * @param box The AABB to test.
+     * @param sweepDirection The direction to sweep the box.
+     * @param max_distance Maximum distance to sweep. If negative, no limit is applied.
+     * @return True if the swept AABB intersects the frustum, false otherwise.
+     */
+    auto test_swept_aabb(const bbox& box, const vec3& sweepDirection, float max_distance = -1.0f) const -> bool;
+
+    /**
      * @brief Tests if another frustum intersects this frustum.
      *
      * @param frustum The other frustum to test.

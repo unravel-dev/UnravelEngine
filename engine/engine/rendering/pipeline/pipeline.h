@@ -116,12 +116,15 @@ public:
      * @param cam The camera used for visibility determination.
      * @param query The visibility query flags.
      * @param render_mask Render mask to filter entities by layers.
+     * @param dt The delta time.
+     * @param lod_data_callback The callback to call for each visible model.
      * @return A vector of handles to the visible models.
      */
     virtual void gather_visible_models(scene& scn,
                                        const camera* cam,
                                        visibility_flags query,
                                        const layer_mask& render_mask,
+                                       delta_t dt,
                                        const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback);
 
     /**

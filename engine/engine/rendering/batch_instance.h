@@ -18,8 +18,8 @@ struct batch_instance
     /// Pointer to world transformation matrix for this instance (valid only during frame processing)
     const math::mat4* world_transform_ptr = nullptr;
     
-    /// LOD blending parameters (x = current blend factor, y = target blend, z = transition time)
-    math::vec3 lod_params = math::vec3(0.0f, -1.0f, 0.0f);
+    /// LOD blending parameters (x = transition factor: +[0,1] = fade out, -[0,1] = fade in; y,z reserved)
+    math::vec3 lod_params = math::vec3(0.0f, 0.0f, 0.0f);
     
     /// Padding to ensure alignment (unused, reserved for future use)
     float padding = 0.0f;

@@ -16,6 +16,7 @@
 #include <reflection/registration.h>
 #include <serialization/serialization.h>
 
+#include <chrono>
 #include <vector>
 
 namespace unravel
@@ -23,17 +24,31 @@ namespace unravel
 
 /**
  * @struct lod_data
- * @brief Contains level of detail (LOD) data for an entity.
+ * @brief Contains level of detail (LOD) data for an entity per view.
+ * Uses distance-based hysteresis for stable LOD selection combined with time-based dithered transitions.
  */
 
 struct lod_data
 {
-    std::uint32_t current_lod_index = 0; ///< Current LOD index.
-    std::uint32_t target_lod_index = 0;  ///< Target LOD index.
-    float current_time = 0.0f;           ///< Current time for LOD transition.
-    float percent = 0.0f;                ///< Percentage of the model visible.
-    float transition_time = 0.0f;        ///< Transition time for the LOD.
+    std::uint32_t current_lod_index = 0; ///< Current LOD index being rendered.
+    std::uint32_t target_lod_index = 0;  ///< Target LOD index to transition to.
+    float current_time = 0.0f;           ///< Current time in the LOD transition.
+    float transition_time = 0.0f;        ///< Total time for the LOD transition.
+    float percent = 0.0f;                ///< Percentage of the model visible (0.0 to 100.0).
     irect32_t rect;                      ///< Screen rectangle of the model.
+    math::vec3 center;                   ///< Center of the model in world space.
+    
+    void calculate_screen_rect(const camera& cam);
+};
+
+/**
+ * @struct per_view_lod_state
+ * @brief Tracks LOD state and last access frame for a specific view (camera).
+ */
+struct per_view_lod_state
+{
+    lod_data data;                       ///< LOD state for this view.
+    std::uint64_t last_access_frame = 0; ///< Last frame this view accessed this state.
 };
 
 struct submesh_pose_mat4
@@ -176,6 +191,8 @@ class model : public crtp_meta_type<model>
 public:
     SERIALIZABLE(model)
 
+    using seconds_t = std::chrono::duration<float>;
+
     /**
      * @brief Checks if the model is valid.
      * @return True if the model is valid, false otherwise.
@@ -285,15 +302,84 @@ public:
     void set_lod_selection_bias(float bias);
 
     /**
-     * @brief Calculates the LOD data for the model.
-     * @param data The LOD data to calculate.
+     * @brief Gets the LOD hysteresis factor used to prevent rapid LOD switching.
+     * @return The hysteresis factor (percentage units for percent-based, dimensionless for screen-radius).
+     */
+    auto get_lod_hysteresis() const -> float;
+
+    /**
+     * @brief Sets the LOD hysteresis factor.
+     * @param hysteresis The hysteresis factor to prevent ping-ponging between LOD levels.
+     */
+    void set_lod_hysteresis(float hysteresis);
+
+    /**
+     * @brief Gets the LOD transition time in seconds.
+     * @return The transition duration (0 = instant switch, >0 = smooth dithered crossfade).
+     */
+    auto get_lod_transition_time() const -> seconds_t;
+
+    /**
+     * @brief Sets the LOD transition time in seconds.
+     * @param time The transition duration (0 = instant switch, >0 = smooth dithered crossfade).
+     */
+    void set_lod_transition_time(seconds_t time);
+
+    /**
+     * @brief Calculates the LOD data for the model using distance-based hysteresis with time-based transitions.
+     * Hysteresis prevents rapid LOD switching; transitions smooth the actual switch when it occurs.
+     * Uses data.current_lod_index for hysteresis and updates target_lod_index when a switch is triggered.
+     * @param data The LOD data to calculate and update.
      * @param world_transform The world transform of the model.
      * @param cam The camera.
-     * @param transition_time The transition time for the LOD.
-     * @param dt The delta time.
+     * @param dt Delta time for updating transition progress.
      * @return True if the LOD data was calculated successfully, false otherwise.
      */
-    auto calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float transition_time, float dt) const -> bool;
+    auto calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float dt) const -> bool;
+
+ 
+    /**
+     * @brief Gets the minimum screen size used by the screen-radius-squared LOD and culling method.
+     * @return Minimum screen size.
+     */
+    auto get_lod_screen_size_min() const -> float;
+
+    /**
+     * @brief Sets the minimum screen size used by the screen-radius-squared LOD and culling method.
+     * @param value Minimum screen size.
+     */
+    void set_lod_screen_size_min(float value);
+
+    /**
+     * @brief Gets the auto LOD screen size power base (used for generating a screen-size table).
+     * @return Power base.
+     */
+    auto get_lod_auto_screen_size_power_base() const -> float;
+
+    /**
+     * @brief Sets the auto LOD screen size power base (used for generating a screen-size table).
+     * @param value Power base.
+     */
+    void set_lod_auto_screen_size_power_base(float value);
+
+    /**
+     * @brief Gets the per-LOD screen size table used by the screen-radius-squared method.
+     * @return Screen size table.
+     */
+    auto get_lod_screen_sizes() const -> const std::vector<float>&;
+
+    /**
+     * @brief Sets the per-LOD screen size table used by the screen-radius-squared method.
+     * @param sizes Screen size table.
+     */
+    void set_lod_screen_sizes(const std::vector<float>& sizes);
+
+    /**
+     * @brief Recalculates the screen-size LOD thresholds for the provided LOD count.
+     * This is a separate mechanism from the percent-based LOD limits and is used by calculate_lod_data_screen_size.
+     * @param lod_count Number of LOD levels to calculate thresholds for.
+     */
+    void recalulate_lod_screen_size_limits(uint32_t lod_count);
 
     /**
      * @struct submit_callbacks
@@ -351,24 +437,6 @@ public:
     static auto fallback_material() -> asset_handle<material>&;
 
 private:
-    /**
-     * @brief Gets the LOD limits.
-     * @return A constant reference to the vector of LOD limits.
-     */
-    auto get_lod_limits() const -> const std::vector<urange32_t>&;
-
-    /**
-     * @brief Sets the LOD limits.
-     * @param limits The vector of LOD limits to set.
-     */
-    void set_lod_limits(const std::vector<urange32_t>& limits);
-
-    /**
-     * @brief Recalculates the LOD limits based on the number of LOD levels.
-     * Uses a Unity-style exponential decay heuristic where each LOD halves the screen height threshold.
-     * @param lod_count Number of LOD levels to calculate limits for.
-     */
-    void recalulate_lod_limits(uint32_t lod_count);
 
     /**
      * @brief Resizes the materials based on the mesh.
@@ -383,8 +451,6 @@ private:
 
     /// Collection of all LODs for this model.
     std::vector<asset_handle<mesh>> mesh_lods_;
-    /// LOD limits for this model.
-    std::vector<urange32_t> lod_limits_;
 
     /// Whether LOD override is enabled.
     bool lod_override_enabled_{false};
@@ -392,6 +458,12 @@ private:
     uint32_t lod_override_level_{0};
     /// Bias value added to calculated LOD index (positive = less detailed, negative = more detailed).
     float lod_selection_bias_{0.0f};
+    /// Hysteresis factor to prevent rapid LOD switching (percentage units for percent-based, dimensionless for screen-radius).
+    float lod_hysteresis_{0.02f};
+    /// LOD transition duration in seconds (0 = instant switching, >0 = smooth dithered crossfade).
+    seconds_t lod_transition_time_{0.0f};
+
+    std::vector<float> lod_screen_sizes_;
 };
 
 } // namespace unravel
