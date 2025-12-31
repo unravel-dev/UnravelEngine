@@ -609,7 +609,12 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
     {
         v = obj.type.new_instance();
     }
-    try_load(ar, ser20::make_nvp("container", obj.container));
+
+    {
+
+        serialization::path_skip_segment_guard guard(true);
+        try_load(ar, ser20::make_nvp("container", obj.container));
+    }
 }
 
 SAVE(mono::mono_object)
@@ -1114,7 +1119,6 @@ LOAD(mono::mono_object)
                 // Handle arrays and lists - load vector and convert back
                 auto invoker = mono::make_field_invoker<mono::mono_object>(field);
                 mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
-                serialization::path_segment_guard guard(field.get_name());
                 if(try_load(ar, ser20::make_nvp(field.get_name(), vec)))
                 {
                     if(field_type.is_array())
@@ -1136,7 +1140,6 @@ LOAD(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    serialization::path_segment_guard guard(field.get_name());
                     try_load(ar, ser20::make_nvp(field.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }
@@ -1168,7 +1171,6 @@ LOAD(mono::mono_object)
                 // Handle arrays and lists - load vector and convert back
                 auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
                 mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
-                serialization::path_segment_guard guard(prop.get_name());
                 if(try_load(ar, ser20::make_nvp(prop.get_name(), vec)))
                 {
                     if(prop_type.is_array())
@@ -1190,7 +1192,6 @@ LOAD(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    serialization::path_segment_guard guard(prop.get_name());
                     try_load(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }

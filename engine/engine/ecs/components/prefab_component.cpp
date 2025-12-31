@@ -1,5 +1,6 @@
 #include "prefab_component.h"
 #include <sstream>
+#include <string_view>
 #include <uuid/uuid.h>
 #include <string_utils/utils.h>
 
@@ -127,13 +128,25 @@ auto prefab_component::has_serialization_override(const std::string& serializati
     // Parse serialization path: "entities/uuid/components/component_type/property_path"
     auto segments = string_utils::tokenize(serialization_path, "/");
     
-    if (segments.size() < 4 || segments[0] != "entities" || segments[2] != "components")
+    if (segments.size() < 4)
+    {
+        return false;
+    }
+    
+    bool starts_with_entities = hpp::string_view(segments[0]).starts_with("entities");
+    if(!starts_with_entities)
+    {
+        return false;
+    }
+    
+    bool starts_with_components = hpp::string_view(segments[2]).starts_with("components");
+    if(!starts_with_components)
     {
         return false;
     }
     
     // Extract UUID and component path
-    std::string uuid_str = segments[1];
+    std::string_view uuid_str = segments[1];
     auto uuid_opt = hpp::uuid::from_string(uuid_str);
     if (!uuid_opt.has_value())
     {
@@ -154,6 +167,7 @@ auto prefab_component::has_serialization_override(const std::string& serializati
         first_segment = false;
     }
     
+    APPLOG_TRACE("Checking for serialization override for property: {}", serialization_path);
     if(has_override(uuid_opt.value(), component_path))
     {
         APPLOG_TRACE("Serialization override found for property: {}", serialization_path);

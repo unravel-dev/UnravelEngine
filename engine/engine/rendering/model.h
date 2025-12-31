@@ -42,12 +42,12 @@ struct lod_data
 };
 
 /**
- * @struct per_view_lod_state
+ * @struct per_camera_lod_state
  * @brief Tracks LOD state and last access frame for a specific view (camera).
  */
-struct per_view_lod_state
+struct per_camera_lod_state
 {
-    lod_data data;                       ///< LOD state for this view.
+    lod_data data;                       ///< LOD state for this camera.
     std::uint64_t last_access_frame = 0; ///< Last frame this view accessed this state.
 };
 

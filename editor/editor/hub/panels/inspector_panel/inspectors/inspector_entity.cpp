@@ -808,7 +808,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 // Track component type for prefab override context
                 override_ctx.set_component_type(std::string(script_type_name), script_type_pretty_name);
 
-                override_ctx.push_segment("script_components/" + name, "Scripts/" + pretty_name);
+                std::string segment = fmt::format("script_components[{}]/{}", i, name);
+                std::string pretty_segment = fmt::format("Scripts[{}]/{}", i, pretty_name);
+                override_ctx.push_segment(segment, pretty_segment);
 
                 result |= inspect_component(pretty_name, callbacks);
 

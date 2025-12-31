@@ -4,11 +4,13 @@
 #include "ser20/types/polymorphic.hpp"
 #include "ser20/types/vector.hpp"
 #include <hpp/source_location.hpp>
+#include <hpp/concepts.hpp>
 
 #include <functional>
 #include <string>
 #include <vector>
 #include <stack>
+#include <unordered_map>
 
 #define SERIALIZE_FUNCTION_NAME                    SER20_SERIALIZE_FUNCTION_NAME
 #define SAVE_FUNCTION_NAME                         SER20_SAVE_FUNCTION_NAME
@@ -19,10 +21,14 @@
 namespace serialization
 {
 using namespace ser20;
-
 using log_callback_t = std::function<void(const std::string&, const hpp::source_location& loc)>;
-void set_warning_logger(const log_callback_t& logger);
+
+struct init_data
+{
+    log_callback_t warning_logger;
+};
 void log_warning(const std::string& log_msg, const hpp::source_location& loc = hpp::source_location::current());
+void init(const init_data& data = {});
 
 // Path tracking for deserialization
 struct path_context
@@ -32,7 +38,7 @@ struct path_context
     bool recording_enabled = false;
     bool ignore_next_push = false;
     
-    void push_segment(const std::string& segment, bool ignore_next = false);
+    auto push_segment(const std::string& segment) -> bool;
     void pop_segment();
     auto get_current_path() const -> std::string;
     void enable_recording();
@@ -59,9 +65,12 @@ auto get_current_deserialization_path() -> std::string;
 // RAII helper for path segments
 struct path_segment_guard
 {
-    path_segment_guard(const std::string& segment, bool ignore_next_push = false);
+    path_segment_guard() = default;
+    path_segment_guard(const std::string& segment);
     ~path_segment_guard();
-    
+
+    void push_segment(const std::string& segment);
+    void pop_segment();
     // Non-copyable and non-movable to avoid double-popping
     path_segment_guard(const path_segment_guard&) = delete;
     path_segment_guard& operator=(const path_segment_guard&) = delete;
@@ -71,6 +80,21 @@ struct path_segment_guard
 private:
     bool was_pushed_ = false;
 };
+
+struct path_skip_segment_guard
+{
+    path_skip_segment_guard(bool ignore_next_push = false);
+    ~path_skip_segment_guard();
+    
+    // Non-copyable and non-movable to avoid double-popping
+    path_skip_segment_guard(const path_skip_segment_guard&) = delete;
+    path_skip_segment_guard& operator=(const path_skip_segment_guard&) = delete;
+    path_skip_segment_guard(path_skip_segment_guard&&) = delete;
+    path_skip_segment_guard& operator=(path_skip_segment_guard&&) = delete;
+    
+private:
+};
+
 
 } // namespace serialization
 
@@ -131,6 +155,19 @@ constexpr inline auto is_binary_archive() -> bool
     return false;
 }
 
+// Check if Archive is loading (deserializing)
+template<typename Archive>
+constexpr inline auto is_loading_archive() -> bool
+{
+    return Archive::is_loading::value;
+}
+
+// Specialized handler for sequence containers with per-element override support
+template<typename Archive, typename T>
+inline auto try_serialize_sequence_container(Archive& ar,
+                                             ser20::NameValuePair<T>&& t,
+                                             const hpp::source_location& loc = hpp::source_location::current()) -> bool;
+
 template<typename Archive, typename T>
 inline auto try_serialize_direct(Archive& ar,
                           ser20::NameValuePair<T>&& t,
@@ -150,6 +187,57 @@ inline auto try_serialize_direct(Archive& ar,
     }
     return true;
 }
+
+// template<typename Archive, typename T>
+// inline auto try_serialize_sequence_container(Archive& ar,
+//                                              ser20::NameValuePair<T>&& t,
+//                                              const hpp::source_location& loc) -> bool
+// {
+//     using decayed_type = std::decay_t<T>;
+//     // static_assert(std::is_same_v<T, std::decay_t<T>>, "T should be decayed type");
+    
+//     auto path_ctx = serialization::get_path_context();
+    
+//     // If not loading or no path context, use normal serialization
+//     if constexpr(!is_loading_archive<Archive>())
+//     {
+//         return try_serialize_direct(ar, std::forward<ser20::NameValuePair<T>>(t), loc);
+//     }
+//     else
+//     {
+//         if(!path_ctx || !path_ctx->is_recording())
+//         {
+//             return try_serialize_direct(ar, std::forward<ser20::NameValuePair<T>>(t), loc);
+//         }
+        
+        
+        
+//         // Deserialize the entire container
+//         bool success = try_serialize_direct(ar, std::forward<ser20::NameValuePair<T>>(t), loc);
+        
+//         // Restore overridden elements (only if they fit in the new container size)
+//         // for(auto& [idx, value] : overridden_elements)
+//         // {
+//         //     if(idx < t.value.size())
+//         //     {
+//         //         // Use iterator-based approach for containers that support it
+//         //         auto it = t.value.begin();
+//         //         std::advance(it, static_cast<typename decayed_type::difference_type>(idx));
+//         //         *it = std::move(value);
+//         //     }
+//         //     else
+//         //     {
+//         //         // Element index is out of bounds in the new container - log warning
+//         //         std::string msg = "Cannot restore overridden element [" + std::to_string(idx) + 
+//         //                           "] in '" + t.name + "': index out of bounds (container size: " + 
+//         //                           std::to_string(t.value.size()) + ")";
+//         //         serialization::log_warning(msg, loc);
+//         //     }
+//         // }
+        
+//         return success;
+//     }
+// }
 
 template<typename F>
 inline auto serialize_check(const std::string& name, F&& serialize_callback) -> bool

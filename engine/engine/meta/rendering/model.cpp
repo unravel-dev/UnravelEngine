@@ -95,7 +95,7 @@ SAVE_INSTANTIATE(model, ser20::oarchive_binary_t);
 
 LOAD(model)
 {
-    std::vector<asset_handle<mesh>> lods;
+    std::vector<asset_handle<mesh>> lods = obj.get_lods();
     try_load(ar, ser20::make_nvp("lods", lods));
     obj.set_lods(lods);
     try_load(ar, ser20::make_nvp("materials", obj.materials_));

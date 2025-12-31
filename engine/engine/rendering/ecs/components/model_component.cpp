@@ -511,27 +511,32 @@ auto model_component::get_armature_by_index(size_t index) const -> entt::handle
     return armature_entities_[index];
 }
 
-auto model_component::get_lod_data_for_camera(const camera* cam, std::uint64_t current_frame) -> lod_data&
+auto model_component::get_lod_data_for_camera(const camera* cam, uint64_t current_frame) -> lod_data&
 {
-    const std::uintptr_t view_id = reinterpret_cast<std::uintptr_t>(cam);
+    if(!cam)
+    {
+        static thread_local lod_data empty_lod_data;
+        return empty_lod_data;
+    }
+    const auto unique_id = reinterpret_cast<uintptr_t>(cam);
     // Get or create entry for this view
-    auto& view_state = per_view_lod_data_[view_id];
+    auto& camera_state = per_camera_lod_data_[unique_id];
     
     // Update last access frame
-    view_state.last_access_frame = current_frame;
+    camera_state.last_access_frame = current_frame;
     
-    return view_state.data;
+    return camera_state.data;
 }
 
-void model_component::cleanup_stale_lod_data(std::uint64_t current_frame, std::uint64_t max_frames_inactive)
+void model_component::cleanup_stale_lod_data(uint64_t current_frame, uint64_t max_frames_inactive)
 {
     // Remove entries that haven't been accessed recently
-    for(auto it = per_view_lod_data_.begin(); it != per_view_lod_data_.end();)
+    for(auto it = per_camera_lod_data_.begin(); it != per_camera_lod_data_.end();)
     {
         const auto frames_since_access = current_frame - it->second.last_access_frame;
         if(frames_since_access > max_frames_inactive)
         {
-            it = per_view_lod_data_.erase(it);
+            it = per_camera_lod_data_.erase(it);
         }
         else
         {

@@ -78,14 +78,13 @@ void add_property_action(rtti::context& ctx,
         auto component_type_pretty_name = override_ctx.pretty_path_context.get_component_type_name();
         auto prop_path = override_ctx.path_context.get_current_path();
         auto prop_pretty_path = override_ctx.pretty_path_context.get_current_path();
-        on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path]()
+        on_success = [entity = override_ctx.entity, component_type_name, component_type_pretty_name, prop_path, prop_pretty_path]()
         {
-            prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path);
+            prefab_override_context::mark_property_as_changed(entity, component_type_name, component_type_pretty_name, prop_path, prop_pretty_path);
         };
     }
 
 
-    //mark_property_as_changed(entity, component_type, property_path);
     if(!result.change_recorded)
     {
         auto& em = ctx.get_cached<editing_manager>();
@@ -356,18 +355,20 @@ void prefab_override_context::mark_material_as_changed(entt::handle entity)
 
 void prefab_override_context::mark_property_as_changed(entt::handle entity,
                                                        const entt::meta_type& component_type,
-                                                       const std::string& property_path)
+                                                       const std::string& property_path,
+                                                       const std::string& property_pretty_path)
 {
     auto component_type_name = entt::get_name(component_type);
     auto component_pretty_type_name = entt::get_pretty_name(component_type);
 
-    mark_property_as_changed(entity, component_type_name, component_pretty_type_name, property_path);
+    mark_property_as_changed(entity, component_type_name, component_pretty_type_name, property_path, property_pretty_path);
 }
 
 void prefab_override_context::mark_property_as_changed(entt::handle entity,
                                                        const std::string& component_type_name,
                                                        const std::string& component_pretty_type_name,
-                                                       const std::string& property_path)
+                                                       const std::string& property_path,
+                                                       const std::string& property_pretty_path)
 {
     auto prefab_root = find_prefab_root_entity(entity);
     if(prefab_root)
@@ -392,13 +393,37 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
 
             for(auto& token : tokens)
             {
-                auto prop = type.data(entt::hashed_string(token.c_str()));
-                auto prop_type = prop.type();
-
                 current_path += "/" + token;
-                current_pretty_path += "/" + entt::get_pretty_name(prop);
+            }
 
-                type = prop_type;
+            auto pretty_tokens = tokens;
+            if(!property_pretty_path.empty())
+            {
+                pretty_tokens = string_utils::tokenize(property_pretty_path, "/");
+                for(auto& token : pretty_tokens)
+                {
+                    current_pretty_path += "/" + token;
+                }
+            }
+            else
+            {
+                for(auto& token : tokens)
+                {
+                    auto prop = type.data(entt::hashed_string(token.c_str()));
+                    auto prop_type = prop.type();
+
+                    if(token.starts_with("script_components["))
+                    {
+                        current_pretty_path += "/" + string_utils::replace(token, "script_components", "Scripts");
+                    }
+                    else
+                    {
+                        current_pretty_path += "/" + entt::get_pretty_name(prop);
+
+                    }
+
+                    type = prop_type;
+                }
             }
 
             prefab_comp->add_override(entity_uuid, current_path, current_pretty_path);
@@ -408,7 +433,7 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
 
     if(component_type_name == "transform_component")
     {
-        auto property_path_global =string_utils::replace(property_path, "global_transform", "local_transform");
+        auto property_path_global = string_utils::replace(property_path, "global_transform", "local_transform");
 
         if(property_path_global != property_path)
         {
@@ -741,7 +766,7 @@ auto inspect_array(rtti::context& ctx,
         for(std::size_t i = 0; i < size; ++i)
         {
             auto value = view[i];
-            std::string element = "Element ";
+            std::string element = "Item ";
             element += std::to_string(i);
 
             ImGui::Separator();
@@ -753,30 +778,28 @@ auto inspect_array(rtti::context& ctx,
             // ImGui::SameLine();
             auto pos_before = ImGui::GetCursorPos();
             {
+ 
+                // Track array index in property path
+                auto& override_ctx = ctx.get_cached<prefab_override_context>();
+                auto array_index_segment = "[" + std::to_string(i) + "]";
+                override_ctx.push_segment(array_index_segment, array_index_segment);
+
                 property_layout layout;
                 layout.set_data(element, {}, true);
                 layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
                 ImGui::PushReadonly(item_info.read_only);
 
-                // Track array index in property path
-                // auto& override_ctx = ctx.get_cached<prefab_override_context>();
-                // if(override_ctx.is_active)
-                // {
-                //     auto array_index_segment = "[" + std::to_string(i) + "]";
-                //     override_ctx.path_context.push_segment(array_index_segment);
-                //     override_ctx.pretty_path_context.push_segment(array_index_segment);
-                // }
 
                 meta_any_proxy value_proxy;
                 value_proxy.impl->type_name = entt::get_pretty_name(value.type());
-                value_proxy.impl->get_name = [var_proxy, element]()
+                value_proxy.impl->get_name = [var_proxy, i]()
                 {
                     auto name = var_proxy.impl->get_name();
                     if(name.empty())
                     {
-                        return element;
+                        return fmt::format("[{}]", i);
                     }
-                    return fmt::format("{}/{}", name, element);
+                    return fmt::format("{}[{}]", name, i);
                 };
                 value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                 {
@@ -822,21 +845,12 @@ auto inspect_array(rtti::context& ctx,
                 // elements.emplace_back(element_t{value, element, value_proxy, item_info});
                 result |= inspect_var(ctx, value, value_proxy, item_info, custom);
 
-                // Pop array index from property path
-                // if(override_ctx.is_active)
-                // {
-                //     override_ctx.path_context.pop_segment();
-                //     override_ctx.pretty_path_context.pop_segment();
-                // }
+                override_ctx.pop_segment();
 
                 ImGui::PopReadonly();
             }
             auto pos_after = ImGui::GetCursorPos();
 
-            // if(result.changed)
-            // {
-            //     view[i] = value;
-            // }
 
             if(!item_info.read_only && resizeable)
             {

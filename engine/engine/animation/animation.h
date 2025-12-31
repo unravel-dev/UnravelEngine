@@ -28,7 +28,7 @@ struct animation_channel
     struct key
     {
         friend auto operator==(const key& lhs, const key& rhs) -> bool = default;
-
+        auto operator=(const key& rhs) -> key& = default;
         /// The time of the keyframe.
         seconds_t time = seconds_t(0);
 

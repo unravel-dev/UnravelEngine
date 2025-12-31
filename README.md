@@ -87,7 +87,7 @@ Unravel Engine is in **active development** and not yet production-ready. We wel
 
 **Prerequisites**: Download and install [Mono](https://www.mono-project.com/) before using the engine.
 
-> **Note for Linux users**: Install the `mono-complete` package for the full IDE experience.
+> **Note for Linux users**: Install the `mono-complete` package after follwing the install instructions from the url for the full IDE experience.
 
 ## 🎯 Editor
 

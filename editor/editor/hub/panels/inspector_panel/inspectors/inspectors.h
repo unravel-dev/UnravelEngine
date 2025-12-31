@@ -227,7 +227,8 @@ struct prefab_override_context
      */
     static void mark_property_as_changed(entt::handle entity,
                                          const entt::meta_type& component_type,
-                                         const std::string& property_path);
+                                         const std::string& property_path,
+                                         const std::string& property_pretty_path = {});
 
     /**
      * @brief Marks a specific property as changed using component type names
@@ -239,7 +240,8 @@ struct prefab_override_context
     static void mark_property_as_changed(entt::handle entity,
                                         const std::string& component_type_name,
                                         const std::string& component_pretty_type_name,
-                                        const std::string& property_path);
+                                        const std::string& property_path,
+                                        const std::string& property_pretty_path = {});
     
     /**
      * @brief Checks if a property exists in the original prefab
