@@ -386,7 +386,13 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         auto on_pick_failed = [&](auto e)
         {
             auto ue = target_scene->create_handle(e);
-            em.unselect(ue);
+
+
+            if(std::find(picked_entities_.begin(), picked_entities_.end(), ue) == picked_entities_.end())
+            {
+                em.unselect(ue);
+            }
+
         };
 
         auto on_pick_success = [&](auto e)
@@ -424,13 +430,15 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         pick_camera_.reset();
         original_camera_.reset();
         pick_position_ = {};
-        pick_area_ = {};
+        // pick_area_ = {};
 
+        // picked_entities_.clear();
         return;
     }
 
     const auto render_frame = gfx::get_render_frame();
 
+    picked_entities_.clear();
     if(pick_camera_ && original_camera_)
     {
         const auto& pick_camera = *pick_camera_;
@@ -908,6 +916,7 @@ void picking_manager::cancel_pick()
     pick_area_ = {};
     reading_ = 0;
     start_readback_ = false;
+    picked_entities_.clear();
 }
 
 void picking_manager::request_pick(const camera& cam,
@@ -915,11 +924,29 @@ void picking_manager::request_pick(const camera& cam,
                                    math::vec2 pos,
                                    math::vec2 area)
 {
+    bool was_area_picking = pick_area_.x > 0.0f && pick_area_.y > 0.0f;
+    bool is_area_picking = area.x > 0.0f && area.y > 0.0f;
+
     setup_pick_camera(cam, pos, area);
     pick_mode_ = mode;
 
-    if(area.x > 0.0f && area.y > 0.0f)
+    if(is_area_picking)
     {
+        if(!was_area_picking)
+        {
+            if(mode == editing_manager::select_mode::normal)
+            {
+                picked_entities_.clear();
+            }
+            else
+            {
+                auto& ctx = engine::context();
+                auto& em = ctx.get_cached<editing_manager>();
+                picked_entities_ = em.try_get_selections_as_copy<entt::handle>();
+            }
+        }
+     
+        
         pick_mode_ = editing_manager::select_mode::shift;
     }
 

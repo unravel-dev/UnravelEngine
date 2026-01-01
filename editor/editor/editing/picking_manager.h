@@ -77,6 +77,7 @@ private:
 
     hpp::optional<camera> original_camera_{};
     hpp::optional<camera> pick_camera_{};
+    std::vector<entt::handle> picked_entities_{};
 
     editing_manager::select_mode pick_mode_{};
     

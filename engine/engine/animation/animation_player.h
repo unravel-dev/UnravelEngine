@@ -136,6 +136,7 @@ public:
      */
     auto update_time(seconds_t delta_time, bool force = false) -> bool;
     void update_poses(const animation_pose& ref_pose,
+                      animation_retargeting_mode retargeting_mode,
                       const update_callback_t& set_transform_callback);
 
     /**
@@ -191,12 +192,12 @@ private:
 
     void sample_animation(const animation_clip* anim_clip,
                           seconds_t time,
+                          animation_retargeting_mode retargeting_mode,
                           animation_pose& pose) const noexcept;
     auto compute_blend_factor(const animation_layer& layer, float normalized_blend_time) noexcept -> float;
     void update_state(seconds_t delta_time, animation_state& state);
     auto get_blend_progress(const animation_layer& layer) const -> float;
-    auto update_pose(animation_layer_state& layer)
-        -> bool;
+    auto update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode) -> bool;
 
     std::vector<animation_layer> layers_;
 

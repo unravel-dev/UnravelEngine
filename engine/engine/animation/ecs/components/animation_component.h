@@ -52,12 +52,25 @@ public:
     auto get_player() const -> const animation_player&;
     auto get_player() -> animation_player&;
 
+    /**
+     * @brief Sets the animation retargeting mode.
+     * @param mode The retargeting mode to use.
+     */
+    void set_retargeting_mode(animation_retargeting_mode mode);
+
+    /**
+     * @brief Gets the animation retargeting mode.
+     * @return The current retargeting mode.
+     */
+    auto get_retargeting_mode() const -> animation_retargeting_mode;
+
 private:
     asset_handle<animation_clip> animation_;
 
     animation_player player_;
 
     culling_mode culling_mode_{culling_mode::always_animate};
+    animation_retargeting_mode retargeting_mode_{animation_retargeting_mode::name_based};
     bool auto_play_ = true;
     bool apply_root_motion_ = false;
     float speed_ = 1.0f;

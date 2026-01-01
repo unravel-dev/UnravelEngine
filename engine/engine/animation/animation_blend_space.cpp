@@ -64,7 +64,9 @@ void blend_poses_by_node_index_sorted_additive(const animation_pose& base,
     result.motion_result.bone_rotation_weight = base.motion_result.bone_rotation_weight;
 
     result.motion_result.root_position_node_index = base.motion_result.root_position_node_index;
+    result.motion_result.root_position_node_name = base.motion_result.root_position_node_name;
     result.motion_result.root_rotation_node_index = base.motion_result.root_rotation_node_index;
+    result.motion_result.root_rotation_node_name = base.motion_result.root_rotation_node_name;
 
     // We'll use indices to iterate through base and additive poses.
     size_t i_base = 0;
@@ -142,27 +144,33 @@ auto blend(const animation_pose::root_motion_result& r1, const animation_pose::r
     if(r1.root_position_node_index == -1)
     {
         result.root_position_node_index = r2.root_position_node_index;
+        result.root_position_node_name = r2.root_position_node_name;
     }
     else if(r2.root_position_node_index == -1)
     {
         result.root_position_node_index = r1.root_position_node_index;
+        result.root_position_node_name = r1.root_position_node_name;
     }
     else
     {
         result.root_position_node_index = factor < 0.5f ? r1.root_position_node_index : r2.root_position_node_index;
+        result.root_position_node_name = factor < 0.5f ? r1.root_position_node_name : r2.root_position_node_name;
     }
 
     if(r1.root_rotation_node_index == -1)
     {
         result.root_rotation_node_index = r2.root_rotation_node_index;
+        result.root_rotation_node_name = r2.root_rotation_node_name;
     }
     else if(r2.root_rotation_node_index == -1)
     {
         result.root_rotation_node_index = r1.root_rotation_node_index;
+        result.root_rotation_node_name = r1.root_rotation_node_name;
     }
     else
     {
         result.root_rotation_node_index = factor < 0.5f ? r1.root_rotation_node_index : r2.root_rotation_node_index;
+        result.root_rotation_node_name = factor < 0.5f ? r1.root_rotation_node_name : r2.root_rotation_node_name;
     }
     return result;
 }

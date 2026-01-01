@@ -1,10 +1,12 @@
 #include "header_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 
 #include <editor/editing/editing_manager.h>
-#include <editor/system/project_manager.h>
 #include <editor/shortcuts.h>
+#include <editor/system/project_manager.h>
+
 
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
@@ -18,9 +20,10 @@
 #include <simulation/simulation.h>
 #include <version/version.h>
 
+#include <editor/imgui/integration/imgui_messagebox.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
-#include <editor/imgui/integration/imgui_messagebox.h>
+
 
 namespace unravel
 {
@@ -54,10 +57,10 @@ void draw_debug_mode()
             }
         }
         ImGui::SetItemTooltipEx("%s",
-                                             "Debug mode enales C# debugging\n"
-                                             "but reduces C# performance.\n"
-                                             "Switching to Debug mode will recompile\n"
-                                             "and reload all scripts.");
+                                "Debug mode enales C# debugging\n"
+                                "but reduces C# performance.\n"
+                                "Switching to Debug mode will recompile\n"
+                                "and reload all scripts.");
 
         if(ImGui::Selectable(modes[1]))
         {
@@ -68,10 +71,10 @@ void draw_debug_mode()
             }
         }
         ImGui::SetItemTooltipEx("%s",
-                                             "Release mode disables C# debugging\n"
-                                             "but improves C# performance.\n"
-                                             "Switching to Release mode will recompile\n"
-                                             "and reload all scripts.");
+                                "Release mode disables C# debugging\n"
+                                "but improves C# performance.\n"
+                                "Switching to Release mode will recompile\n"
+                                "and reload all scripts.");
 
         ImGui::EndCombo();
     }
@@ -137,7 +140,6 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Edit"))
         {
-                    
             auto& em = ctx.get_cached<editing_manager>();
             auto undo = em.can_undo() ? "Undo*" : "Undo";
             auto redo = em.can_redo() ? "Redo*" : "Redo";
@@ -181,7 +183,6 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Developer"))
         {
-
             if(ImGui::BeginMenu("Crash"))
             {
                 if(ImGui::MenuItem("Abort"))
@@ -252,7 +253,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
             ImGui::EndMenu();
         }
-       
+
         ImGui::EndMenuBar();
     }
 
@@ -351,81 +352,87 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
     const auto& style = ImGui::GetStyle();
     auto frame_padding = style.FramePadding;
     auto item_spacing = style.ItemSpacing;
-    ImGui::AlignedItem(0.5f,
-                       width,
-                       ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x + frame_padding.x * 6 +
-                           item_spacing.x * 3,
-                       [&]()
-                       {
-                           ImGuiKeyChord key_chord = ev.is_playing ? shortcuts::play_toggle : shortcuts::play_toggle;
-                           bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
+    ImGui::AlignedItem(
+        0.5f,
+        width,
+        ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x + frame_padding.x * 6 +
+            item_spacing.x * 3,
+        [&]()
+        {
+            ImGuiKeyChord key_chord = ev.is_playing ? shortcuts::play_toggle : shortcuts::play_toggle;
+            bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
 
-                           auto& scripting = ctx.get_cached<script_system>();
-                           bool has_errors = scripting.has_compilation_errors();
-                           ImGui::BeginDisabled(has_errors);
-                           ImGui::BeginGroup();
+            auto& scripting = ctx.get_cached<script_system>();
+            bool has_errors = scripting.has_compilation_errors();
+            ImGui::BeginDisabled(has_errors);
+            ImGui::BeginGroup();
 
-                           play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
+            play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
 
-                           if(has_errors && !ev.is_playing)
-                           {
-                               play_pressed = false;
-                           }
-                           ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
-                           if(play_pressed)
-                           {
-                               ev.toggle_play_mode(ctx);
-                               ImGui::FocusWindow(ImGui::FindWindowByName(ev.is_playing ? GAME_VIEW : SCENE_VIEW));
-                           }
+            if(has_errors && !ev.is_playing)
+            {
+                play_pressed = false;
+            }
+            ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
+            if(play_pressed)
+            {
+                ev.toggle_play_mode(ctx);
+                ImGui::FocusWindow(ImGui::FindWindowByName(ev.is_playing ? GAME_VIEW : SCENE_VIEW));
+            }
 
-                           ImGui::SameLine();
-                           if(ImGui::Button(ICON_MDI_PAUSE))
-                           {
-                               bool was_playing = ev.is_playing;
-                               ev.toggle_pause(ctx);
-                           }
+            ImGui::SameLine();
+            if(ImGui::Button(ICON_MDI_PAUSE))
+            {
+                bool was_playing = ev.is_playing;
+                ev.toggle_pause(ctx);
+            }
 
-                           ImGui::SameLine();
-                           ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
-                           if(ImGui::Button(ICON_MDI_SKIP_NEXT))
-                           {
-                               ev.skip_next_frame(ctx);
-                           }
-                           ImGui::PopItemFlag();
-                           ImGui::SameLine();
+            ImGui::SameLine();
+            ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+            if(ImGui::Button(ICON_MDI_SKIP_NEXT))
+            {
+                ev.skip_next_frame(ctx);
+            }
+            ImGui::PopItemFlag();
+            ImGui::SameLine();
 
-                           ImGui::BeginDisabled(ev.is_playing);
-                           draw_debug_mode();
-                           ImGui::EndDisabled();
-                           ImGui::SameLine();
+            ImGui::BeginDisabled(ev.is_playing);
+            draw_debug_mode();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
 
-                           auto& sim = ctx.get_cached<simulation>();
+            auto& sim = ctx.get_cached<simulation>();
 
-                           auto time_scale = sim.get_time_scale();
-                           ImGui::SetNextItemWidth(100);
-                           if(ImGui::SliderFloat("###Time Scale", &time_scale, 0.0f, 1.0f))
-                           {
-                               sim.set_time_scale(time_scale);
-                           }
-                           ImGui::SetItemTooltipEx("%s", "Time scale.");
-                           ImGui::SameLine();
-                           auto& rend = ctx.get_cached<renderer>();
-                           auto vsync = rend.get_vsync();
-                           if(ImGui::Checkbox("Vsync", &vsync))
-                           {
-                               rend.set_vsync(vsync);
-                           }
+            auto time_scale = sim.get_time_scale();
+            ImGui::SetNextItemWidth(100);
+            if(ImGui::SliderFloat("###Time Scale", &time_scale, 0.0f, 3.0f))
+            {
+                sim.set_time_scale(time_scale);
+            }
+            ImGui::SetItemTooltipEx("%s", "Time scale.");
+            ImGui::SameLine();
+            if(ImGui::Button(ICON_MDI_UNDO_VARIANT))
+            {
+                sim.set_time_scale(1.0f);
+            }
+            ImGui::SetItemTooltipEx("Reset time scale to 1.0");
+            ImGui::SameLine();
 
-                           ImGui::EndGroup();
-                           ImGui::EndDisabled();
+            auto& rend = ctx.get_cached<renderer>();
+            auto vsync = rend.get_vsync();
+            if(ImGui::Checkbox("Vsync", &vsync))
+            {
+                rend.set_vsync(vsync);
+            }
 
-                           if(has_errors)
-                           {
-                               ImGui::SetItemTooltipEx(
-                                   "%s",
-                                   "All compiler errors must be fixed before you can enter Play Mode!");
-                           }
-                       });
+            ImGui::EndGroup();
+            ImGui::EndDisabled();
+
+            if(has_errors)
+            {
+                ImGui::SetItemTooltipEx("%s", "All compiler errors must be fixed before you can enter Play Mode!");
+            }
+        });
 }
 
 void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
@@ -460,14 +467,14 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
     }
 
     ImGui::End();
-    
+
     // Draw the about window (will only be visible if show_about_window_ is true)
     draw_about_window(ctx);
 }
 
 void header_panel::draw_about_window(rtti::context& ctx)
 {
-    if (!show_about_window_)
+    if(!show_about_window_)
         return;
 
     if(!ImGui::IsPopupOpen("About Unravel Engine"))
@@ -477,12 +484,17 @@ void header_panel::draw_about_window(rtti::context& ctx)
 
     auto viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize * 0.30f), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkSize.x * 0.5f, viewport->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("About Unravel Engine", &show_about_window_, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize| ImGuiWindowFlags_NoMove))
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkSize.x * 0.5f, viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    if(ImGui::BeginPopupModal("About Unravel Engine",
+                              &show_about_window_,
+                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
     {
         // Logo and title
         const float title_scale = 1.5f;
-        ImGui::PushFont(GetFont(ImGui::Font::Bold), GetFont(ImGui::Font::Bold)->LegacySize * title_scale); // Use default font
+        ImGui::PushFont(GetFont(ImGui::Font::Bold),
+                        GetFont(ImGui::Font::Bold)->LegacySize * title_scale); // Use default font
         ImGui::TextColored(ImVec4(0.4f, 0.6f, 1.0f, 1.0f), "Unravel Engine");
         ImGui::PopFont();
 
@@ -491,11 +503,10 @@ void header_panel::draw_about_window(rtti::context& ctx)
         ImGui::Separator();
 
         // Engine description
-        ImGui::TextWrapped(
-            "Unravel Engine is a modern, high-performance game engine designed for creating "
-            "interactive 3D and 2D applications. It features a component-based architecture, "
-            "powerful rendering capabilities, and an intuitive editor interface.");
-        
+        ImGui::TextWrapped("Unravel Engine is a modern, high-performance game engine designed for creating "
+                           "interactive 3D and 2D applications. It features a component-based architecture, "
+                           "powerful rendering capabilities, and an intuitive editor interface.");
+
         ImGui::Spacing();
         ImGui::Spacing();
 
@@ -504,7 +515,7 @@ void header_panel::draw_about_window(rtti::context& ctx)
         ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
         ImGui::Text("Key Features");
         ImGui::PopFont();
-        
+
         ImGui::Columns(2);
         ImGui::BulletText("Entity-Component-System");
         ImGui::BulletText("PBR Rendering");
@@ -524,7 +535,7 @@ void header_panel::draw_about_window(rtti::context& ctx)
         ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
         ImGui::Text("Build Information");
         ImGui::PopFont();
-        
+
         ImGui::Text("Build Date: %s", __DATE__);
         ImGui::Text("Build Time: %s", __TIME__);
 #ifdef _DEBUG
@@ -538,14 +549,10 @@ void header_panel::draw_about_window(rtti::context& ctx)
 
         // Copyright notice
         ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), 
-                          "Copyright © %d. All rights reserved.", 2025);
-
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Copyright © %d. All rights reserved.", 2025);
 
         ImGui::EndPopup();
     }
 }
-
-
 
 } // namespace unravel

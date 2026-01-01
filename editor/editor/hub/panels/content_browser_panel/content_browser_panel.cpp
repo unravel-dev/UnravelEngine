@@ -1155,7 +1155,7 @@ void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std:
                 fs::path dir = target_path / filename;
                 if(fs::is_directory(path, err))
                 {
-                    fs::copy(path, dir, err);
+                    fs::copy(path, dir, fs::copy_options::recursive, err);
                     if(err)
                     {
                         APPLOG_ERROR("Failed to import directory {}, error: {}", path.string(), err.message());

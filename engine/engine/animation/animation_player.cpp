@@ -233,7 +233,7 @@ auto animation_player::update_time(seconds_t delta_time, bool force) -> bool
     return false;
 }
 
-void animation_player::update_poses(const animation_pose& ref_pose, const update_callback_t& set_transform_callback)
+void animation_player::update_poses(const animation_pose& ref_pose, animation_retargeting_mode retargeting_mode, const update_callback_t& set_transform_callback)
 {
     if(layers_.empty())
     {
@@ -243,10 +243,10 @@ void animation_player::update_poses(const animation_pose& ref_pose, const update
     for(auto& layer : layers_)
     {
         // Update current layer
-        update_pose(layer.current_state);
+        update_pose(layer.current_state, retargeting_mode);
 
         // Update target layer
-        if(update_pose(layer.target_state))
+        if(update_pose(layer.target_state, retargeting_mode))
         {
             // Compute blend factor
             float blend_progress = get_blend_progress(layer);
@@ -297,7 +297,7 @@ void animation_player::update_poses(const animation_pose& ref_pose, const update
     }
 }
 
-auto animation_player::update_pose(animation_layer_state& layer) -> bool
+auto animation_player::update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode) -> bool
 {
     auto& state = layer.state;
     auto& pose = layer.pose;
@@ -313,7 +313,7 @@ auto animation_player::update_pose(animation_layer_state& layer) -> bool
         for(size_t i = 0; i < state.blend_clips.size(); ++i)
         {
             const auto& clip_weight_pair = state.blend_clips[i];
-            sample_animation(clip_weight_pair.first.get().get(), state.elapsed, state.blend_poses[i]);
+            sample_animation(clip_weight_pair.first.get().get(), state.elapsed, retargeting_mode, state.blend_poses[i]);
         }
 
         // Blend all poses based on their weights
@@ -338,7 +338,7 @@ auto animation_player::update_pose(animation_layer_state& layer) -> bool
 
     if(state.clip)
     {
-        sample_animation(state.clip.get().get(), state.elapsed, pose);
+        sample_animation(state.clip.get().get(), state.elapsed, retargeting_mode, pose);
         return true;
     }
 
@@ -402,6 +402,7 @@ auto animation_player::compute_blend_factor(const animation_layer& layer, float 
 
 void animation_player::sample_animation(const animation_clip* anim_clip,
                                         seconds_t time,
+                                        animation_retargeting_mode retargeting_mode,
                                         animation_pose& pose) const noexcept
 {
     if(!anim_clip)
@@ -418,17 +419,48 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
         math::vec3 scaling = interpolate(channel.scaling_keys, time);
 
         auto& node = pose.nodes.emplace_back();
+        
+        // Store both index and name - callback will resolve based on retargeting mode
         node.desc.index = channel.node_index;
-        // node.desc.name = channel.node_name;
+        node.desc.name = channel.node_name;
         node.transform.set_position(position);
         node.transform.set_rotation(rotation);
         node.transform.set_scale(scaling);
 
-        bool processed = false;
 
-        if(int(node.desc.index) == anim_clip->root_motion.position_node_index)
+        // Root motion comparison based on retargeting mode
+        bool is_root_position_node = false;
+        bool is_root_rotation_node = false;
+        
+        if(retargeting_mode == animation_retargeting_mode::name_based)
+        {
+            // Name-based comparison
+            if(node.desc.name == anim_clip->root_motion.position_node_name)
+            {
+                is_root_position_node = true;
+            }
+            if(node.desc.name == anim_clip->root_motion.rotation_node_name)
+            {
+                is_root_rotation_node = true;
+            }
+        }
+        else
+        {
+            // Index-based comparison (default)
+            if(int(node.desc.index) == anim_clip->root_motion.position_node_index)
+            {
+                is_root_position_node = true;
+            }
+            if(int(node.desc.index) == anim_clip->root_motion.rotation_node_index)
+            {
+                is_root_rotation_node = true;
+            }
+        }
+
+        if(is_root_position_node)
         {
             pose.motion_result.root_position_node_index = anim_clip->root_motion.position_node_index;
+            pose.motion_result.root_position_node_name = anim_clip->root_motion.position_node_name;
 
             const auto& clip_start_pos = channel.position_keys.front().value;
             const auto& clip_end_pos = channel.position_keys.back().value;
@@ -484,9 +516,10 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
             pose.motion_result.root_transform_delta.set_position(delta_position);
         }
 
-        if(int(node.desc.index) == anim_clip->root_motion.rotation_node_index)
+        if(is_root_rotation_node)
         {
             pose.motion_result.root_rotation_node_index = anim_clip->root_motion.rotation_node_index;
+            pose.motion_result.root_rotation_node_name = anim_clip->root_motion.rotation_node_name;
 
             const auto& clip_start_rotation = channel.rotation_keys.front().value;
             const auto& clip_end_rotation = channel.rotation_keys.back().value;

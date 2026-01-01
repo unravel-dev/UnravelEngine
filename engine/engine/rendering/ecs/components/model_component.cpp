@@ -84,7 +84,9 @@ void process_node(const std::unique_ptr<mesh::armature_node>& node,
                   animation_pose& ref_pose)
 {
     if(!parent)
+    {
         return;
+    }
 
     auto entity_node = process_node_impl(node, bind_data, parent, nodes, ref_pose);
     for(auto& child : node->children)
@@ -461,44 +463,40 @@ auto model_component::get_submesh_transforms() const -> const submesh_pose_mat4&
 void model_component::set_armature_entities(const std::vector<entt::handle>& entities)
 {
     armature_entities_ = entities;
+    rebuild_armature_cache();
 
     touch();
+}
+
+void model_component::rebuild_armature_cache()
+{
+    armature_name_to_index_.clear();
+    armature_name_to_index_.reserve(armature_entities_.size());
+    
+    for(size_t i = 0; i < armature_entities_.size(); ++i)
+    {
+        const auto& e = armature_entities_[i];
+        if(e)
+        {
+            const auto& tag_comp = e.get<tag_component>();
+            armature_name_to_index_[tag_comp.name] = i;
+        }
+    }
+}
+
+auto model_component::get_armature_index_by_name_cached(const std::string& node_name) const -> int
+{
+    auto it = armature_name_to_index_.find(node_name);
+    if(it != armature_name_to_index_.end())
+    {
+        return static_cast<int>(it->second);
+    }
+    return -1;
 }
 
 auto model_component::get_armature_entities() const -> const std::vector<entt::handle>&
 {
     return armature_entities_;
-}
-
-auto model_component::get_armature_by_id(const std::string& node_id) const -> entt::handle
-{
-    for(const auto& e : armature_entities_)
-    {
-        const auto& tag_comp = e.get<tag_component>();
-        if(tag_comp.name == node_id)
-        {
-            return e;
-        }
-    }
-
-    return {};
-}
-
-auto model_component::get_armature_index_by_id(const std::string& node_id) const -> int
-{
-    int result = 0;
-    for(const auto& e : armature_entities_)
-    {
-        const auto& tag_comp = e.get<tag_component>();
-        if(tag_comp.name == node_id)
-        {
-            return result;
-        }
-
-        result++;
-    }
-
-    return -1;
 }
 
 auto model_component::get_armature_by_index(size_t index) const -> entt::handle

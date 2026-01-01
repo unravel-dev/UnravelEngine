@@ -105,9 +105,15 @@ public:
      * @return A constant reference to the vector of armature entity handles.
      */
     auto get_armature_entities() const -> const std::vector<entt::handle>&;
-    auto get_armature_by_id(const std::string& node_id) const -> entt::handle;
-    auto get_armature_index_by_id(const std::string& node_id) const -> int;
     auto get_armature_by_index(size_t index) const -> entt::handle;
+    
+    /**
+     * @brief Gets armature index by name using cached lookup (O(1)).
+     * @param node_name The name of the node to find.
+     * @return The index of the armature node, or -1 if not found.
+     */
+    auto get_armature_index_by_name_cached(const std::string& node_name) const -> int;
+    
     auto get_skinning_transforms() const -> const std::vector<pose_mat4>&;
 
     /**
@@ -160,6 +166,12 @@ public:
 
 private:
     auto create_armature(bool force) -> bool;
+    
+    /**
+     * @brief Rebuilds the armature name-to-index cache.
+     * Called automatically when armature entities are set.
+     */
+    void rebuild_armature_cache();
 
     /**
      * @brief Indicates if the model is enabled.
@@ -190,6 +202,12 @@ private:
      * @brief Vector of handles to the armature entities.
      */
     std::vector<entt::handle> armature_entities_;
+    
+    /**
+     * @brief Cached name-to-index mapping for fast armature lookup.
+     * Rebuilt automatically when armature_entities_ changes.
+     */
+    std::unordered_map<std::string, size_t> armature_name_to_index_;
 
     /**
      * @brief Bind pose or reference pose.

@@ -31,7 +31,7 @@ void on_play_begin_impl(animation_component& comp)
         player.play();
     }
 }
-}
+} // namespace
 
 auto animation_system::init(rtti::context& ctx) -> bool
 {
@@ -56,7 +56,6 @@ auto animation_system::deinit(rtti::context& ctx) -> bool
 
 void animation_system::on_create_component(entt::registry& r, entt::entity e)
 {
-
 }
 
 void animation_system::on_destroy_component(entt::registry& r, entt::entity e)
@@ -77,7 +76,6 @@ void animation_system::on_play_begin(rtti::context& ctx)
         });
 }
 
-
 void animation_system::on_play_begin(hpp::span<const entt::handle> entities, delta_t dt)
 {
     for(auto entity : entities)
@@ -88,7 +86,6 @@ void animation_system::on_play_begin(hpp::span<const entt::handle> entities, del
         }
     }
 }
-
 
 void animation_system::on_play_end(rtti::context& ctx)
 {
@@ -167,28 +164,57 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                           // auto physics_comp_ptr = scn.registry->try_get<physics_component>(entity);
 
                           bool apply_root_motion = animation_comp.get_apply_root_motion();
+                          auto retargeting_mode = animation_comp.get_retargeting_mode();
 
                           player.update_poses(
                               model_comp.get_bind_pose(),
+                              retargeting_mode,
                               [&](const animation_pose::node_desc& desc,
                                   const math::transform& transform,
                                   const animation_pose::root_motion_result& motion_result)
                               {
-                                  auto armature = model_comp.get_armature_by_index(desc.index);
+                                  // Resolve armature entity based on retargeting mode
+                                  auto armature_index = desc.index;
+                                  if(retargeting_mode == animation_retargeting_mode::name_based)
+                                  {
+                                      // Name-based: use cached name lookup
+                                      int name_based_armature_index =
+                                          model_comp.get_armature_index_by_name_cached(desc.name);
+                                      if(name_based_armature_index >= 0 &&
+                                         name_based_armature_index != static_cast<int>(armature_index))
+                                      {
+                                          armature_index = name_based_armature_index;
+                                      }
+                                  }
+
+                                  auto armature = model_comp.get_armature_by_index(armature_index);
                                   if(armature)
                                   {
                                       auto& armature_transform_comp = armature.template get<transform_component>();
 
                                       bool processed_by_root_motion = false;
 
-                                      if(apply_root_motion && desc.index == motion_result.root_position_node_index)
+                                      bool is_root_position_node = false;
+                                      bool is_root_rotation_node = false;
+                                      if(retargeting_mode == animation_retargeting_mode::name_based)
+                                      {
+                                          is_root_position_node = desc.name == motion_result.root_position_node_name;
+                                          is_root_rotation_node = desc.name == motion_result.root_rotation_node_name;
+                                      }
+                                      else
+                                      {
+                                          is_root_position_node = desc.index == motion_result.root_position_node_index;
+                                          is_root_rotation_node = desc.index == motion_result.root_position_node_index;
+                                      }
+
+                                      if(apply_root_motion && is_root_position_node)
                                       {
                                           armature_transform_comp.set_scale_local(transform.get_scale());
 
                                           auto position_local = armature_transform_comp.get_position_local();
                                           auto result_positon_local = math::mix(position_local,
-                                                                                 transform.get_position(),
-                                                                                 motion_result.bone_position_weights);
+                                                                                transform.get_position(),
+                                                                                motion_result.bone_position_weights);
                                           armature_transform_comp.set_position_local(result_positon_local);
 
                                           math::vec3 delta_translation_logical =
@@ -201,8 +227,8 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
 
                                           // Blend translation as needed:
                                           auto result_move_local = math::mix(math::zero<math::vec3>(),
-                                                                              delta_translation_logical,
-                                                                              motion_result.root_position_weights);
+                                                                             delta_translation_logical,
+                                                                             motion_result.root_position_weights);
                                           // APPLOG_INFO("position_weights {}", motion_result.position_weights);
                                           // if(physics_comp_ptr)
                                           // {
@@ -222,7 +248,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                           processed_by_root_motion = true;
                                       }
 
-                                      if(apply_root_motion && desc.index == motion_result.root_position_node_index)
+                                      if(apply_root_motion && is_root_rotation_node)
                                       {
                                           armature_transform_comp.set_scale_local(transform.get_scale());
 
@@ -245,7 +271,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                           processed_by_root_motion = true;
                                       }
 
-                                      if(false == processed_by_root_motion)
+                                      if(!processed_by_root_motion)
                                       {
                                           armature_transform_comp.set_transform_local(transform);
                                       }

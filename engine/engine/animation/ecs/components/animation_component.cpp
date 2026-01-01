@@ -61,4 +61,14 @@ auto animation_component::get_player() -> animation_player&
     return player_;
 }
 
+void animation_component::set_retargeting_mode(animation_retargeting_mode mode)
+{
+    retargeting_mode_ = mode;
+}
+
+auto animation_component::get_retargeting_mode() const -> animation_retargeting_mode
+{
+    return retargeting_mode_;
+}
+
 } // namespace unravel
