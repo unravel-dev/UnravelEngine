@@ -1,5 +1,6 @@
 #include "graphics.h"
 #include "bgfx/bgfx.h"
+#include "uniform.h"
 #include <bimg/bimg.h>
 #include <bx/file.h>
 #include <algorithm>
@@ -30,6 +31,11 @@ struct context_data
 void set_trace_logger(const std::function<void(const std::string&, const char*, uint16_t)>& logger)
 {
     get_loggers()["trace"] = logger;
+}
+
+void set_debug_logger(const std::function<void(const std::string&, const char*, uint16_t)>& logger)
+{
+    get_loggers()["debug"] = logger;
 }
 
 void set_info_logger(const std::function<void(const std::string&, const char*, uint16_t)>& logger)
@@ -74,7 +80,10 @@ struct gfx_callback final : public bgfx::CallbackI
         {
             log("warning", out_view.getPtr() + 5, _filePath, _line);
         }
-        //log("trace", out, _filePath, _line);
+        else
+        {
+            log("debug", out, _filePath, _line);
+        }
     }
 
     void profilerBegin(const char* /*_name*/, uint32_t /*_abgr*/, const char* /*_filePath*/, uint16_t /*_line*/) final
@@ -169,6 +178,7 @@ void shutdown()
 {
     if(s_context.initted)
     {
+        deinit_uniform_cache();
         bgfx::destroy(s_context.u_world);
         bgfx::shutdown();
     }

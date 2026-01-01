@@ -525,6 +525,9 @@ void shadowmap_generator::deinit()
 {
     deinit_uniforms();
     deinit_textures();
+
+    uniforms_.destroy();
+    programs_.destroy();
 }
 
 void shadowmap_generator::deinit_textures()

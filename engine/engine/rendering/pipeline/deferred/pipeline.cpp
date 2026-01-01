@@ -179,13 +179,16 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& tex = rview.tex_get_or_emplace("OBUFFER");
-    tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                         viewport_size.height,
-                                         false,
-                                         1,
-                                         gfx::texture_format::RGBA8,
-                                         BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
+    if(!tex || (tex && tex->get_size() != viewport_size))
+    {
+        tex = std::make_shared<gfx::texture>(viewport_size.width,
+                                            viewport_size.height,
+                                            false,
+                                            1,
+                                            gfx::texture_format::RGBA8,
+                                            BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
 
+    }
     {
         auto& fbo = rview.fbo_get_or_emplace("OBUFFER_DEPTH");
         if(!fbo || (fbo && fbo->get_size() != viewport_size))

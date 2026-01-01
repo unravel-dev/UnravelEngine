@@ -53,12 +53,21 @@ namespace
         //     gfx::destroy(counted_uniform->handle);
         //     cache.lut.erase(counted_uniform->handle.idx);
         // }
+
     }
 }
 
 void deinit_uniform_cache()
 {
     auto& cache = get_uniform_cache();
+
+    for(auto& [name, type_map] : cache.cache)
+    {
+        for(auto& [type, handle] : type_map)
+        {
+            gfx::destroy(handle.handle);
+        }
+    }
     // BX_ASSERT(cache.lut.empty(), "Uniform cache is not empty");
     // cache.lut.clear();
     cache.cache.clear();
@@ -84,7 +93,6 @@ uniform::~uniform()
     {
         release(handle_);
     }
-    handle_ = invalid_handle();
 }
 
 

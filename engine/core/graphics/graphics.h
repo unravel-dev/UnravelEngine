@@ -635,7 +635,7 @@ void set_trace_logger(const std::function<void(const std::string&, const char* _
 void set_info_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void set_warning_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void set_error_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
-
+void set_debug_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void flush();
 
 bool is_origin_bottom_left();

@@ -2,6 +2,10 @@ set(SPDLOG_MASTER_PROJECT OFF)
 set(SPDLOG_BUILD_SHARED ${BUILD_SHARED_LIBS} CACHE BOOL "Build shared library" FORCE)
 set(SPDLOG_BUILD_PIC ON CACHE BOOL "Build position independent code (-fPIC)" FORCE)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-deprecated-literal-operator)
+endif()
+
 add_subdirectory( spdlog )
 
 

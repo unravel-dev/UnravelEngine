@@ -35,7 +35,7 @@ auto tonemapping_pass::create_or_update_output_fb(const gfx::frame_buffer::ptr& 
     // 2) Compare with our stored (lastWidth_, lastHeight_, lastFormat_)
     bool needs_recreate = false;
 
-    if(!output_ || input_sz != output_->get_size() || input_format != output_->get_texture()->info.format)
+    if(!output_ || input_sz != output_->get_size())
     {
         needs_recreate = true;
     }

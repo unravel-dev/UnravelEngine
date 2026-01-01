@@ -270,24 +270,32 @@ struct Uniforms
 
     void destroy()
     {
-        bgfx::destroy(u_params0);
-        bgfx::destroy(u_params1);
-        bgfx::destroy(u_params2);
-        bgfx::destroy(u_color);
-        bgfx::destroy(u_smSamplingParams);
-        bgfx::destroy(u_csmFarDistances);
+        auto safe_destroy = [](bgfx::UniformHandle& handle)
+        {
+            if(bgfx::isValid(handle))
+            {
+                bgfx::destroy(handle);
+                handle = {bgfx::kInvalidHandle};
+            }
+        };
+        safe_destroy(u_params0);
+        safe_destroy(u_params1);
+        safe_destroy(u_params2);
+        safe_destroy(u_color);
+        safe_destroy(u_smSamplingParams);
+        safe_destroy(u_csmFarDistances);
 
-        bgfx::destroy(u_tetraNormalGreen);
-        bgfx::destroy(u_tetraNormalYellow);
-        bgfx::destroy(u_tetraNormalBlue);
-        bgfx::destroy(u_tetraNormalRed);
+        safe_destroy(u_tetraNormalGreen);
+        safe_destroy(u_tetraNormalYellow);
+        safe_destroy(u_tetraNormalBlue);
+        safe_destroy(u_tetraNormalRed);
 
-        bgfx::destroy(u_shadowMapMtx0);
-        bgfx::destroy(u_shadowMapMtx1);
-        bgfx::destroy(u_shadowMapMtx2);
-        bgfx::destroy(u_shadowMapMtx3);
+        safe_destroy(u_shadowMapMtx0);
+        safe_destroy(u_shadowMapMtx1);
+        safe_destroy(u_shadowMapMtx2);
+        safe_destroy(u_shadowMapMtx3);
 
-        bgfx::destroy(u_lightMtx);
+        safe_destroy(u_lightMtx);
     }
 
     union

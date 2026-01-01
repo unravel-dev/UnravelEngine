@@ -14,6 +14,11 @@ namespace unravel
 {
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
 {
+    gfx::set_debug_logger(
+        [](const std::string& msg, const char* file_path, uint16_t line)
+        {
+            APPLOG_DEBUG_LOC(file_path, line, "renderer", msg);
+        });
     gfx::set_trace_logger(
         [](const std::string& msg, const char* file_path, uint16_t line)
         {
@@ -104,6 +109,11 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     init_data.resolution.reset = get_reset_flags(parser);
     init_data.platformData.ndt = init_window_->get_native_display();
     init_data.platformData.nwh = init_window_->get_native_handle();
+    std::string video_driver = os::window::get_current_video_driver();
+    if(video_driver == "wayland")
+    {
+        init_data.platformData.type = bgfx::NativeWindowHandleType::Wayland;
+    }
     reset_flags_ = init_data.resolution.reset;
     if(!gfx::init(init_data))
     {
