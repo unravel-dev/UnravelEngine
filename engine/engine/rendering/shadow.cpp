@@ -505,10 +505,10 @@ void split_frustum_adaptive(float* splits, uint8_t num_splits, float near_plane,
  * _splits = { near0, far0, near1, far1... nearN, farN }
  * N = _numSplits
  */
- void splitFrustum(float* _splits, uint8_t _numSplits, float _near, float _far, float _splitWeight = 0.75f)
- {
-     split_frustum_legacy(_splits, _numSplits, _near, _far, _splitWeight);
- }
+void splitFrustum(float* _splits, uint8_t _numSplits, float _near, float _far, float _splitWeight = 0.75f)
+{
+    split_frustum_legacy(_splits, _numSplits, _near, _far, _splitWeight);
+}
 } // namespace
 
 shadowmap_generator::shadowmap_generator()
