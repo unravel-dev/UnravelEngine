@@ -413,14 +413,14 @@ public:
      * @param world_transform The world transform of the model.
      * @param submesh_transforms The submesh transforms (many-to-many mapping).
      * @param bone_transforms The bone transforms for skinned models.
-     * @param skinning_matrices The skinning matrices per palette.
+     * @param skinning_transforms The skinning matrices per submesh.
      * @param lod The level of detail to render.
      * @param callbacks The submit callbacks.
      */
     void submit(const math::mat4& world_transform,
                 const submesh_pose_mat4& submesh_transforms,
                 const pose_mat4& bone_transforms,
-                const std::vector<pose_mat4>& skinning_matrices,
+                const std::vector<pose_mat4>& skinning_transforms,
                 unsigned int lod,
                 const submit_callbacks& callbacks) const;
 

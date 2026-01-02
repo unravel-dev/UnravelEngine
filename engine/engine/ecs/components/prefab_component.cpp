@@ -167,7 +167,7 @@ auto prefab_component::has_serialization_override(const std::string& serializati
         first_segment = false;
     }
     
-    APPLOG_TRACE("Checking for serialization override for property: {}", serialization_path);
+    // APPLOG_TRACE("Checking for serialization override for property: {}", serialization_path);
     if(has_override(uuid_opt.value(), component_path))
     {
         APPLOG_TRACE("Serialization override found for property: {}", serialization_path);

@@ -493,7 +493,7 @@ void model::set_lod_screen_sizes(const std::vector<float>& sizes)
 void model::submit(const math::mat4& world_transform,
                    const submesh_pose_mat4& submesh_transforms,
                    const pose_mat4& bone_transforms,
-                   const std::vector<pose_mat4>& skinning_matrices_per_palette,
+                   const std::vector<pose_mat4>& skinning_transforms,
                    unsigned int lod,
                    const submit_callbacks& callbacks) const
 {
@@ -584,7 +584,7 @@ void model::submit(const math::mat4& world_transform,
     }
 
     // SKINNED
-    if(skinned_submeshes_count > 0 && !skinning_matrices_per_palette.empty())
+    if(skinned_submeshes_count > 0 && !skinning_transforms.empty())
     {
         params.skinned = true;
 
@@ -601,7 +601,7 @@ void model::submit(const math::mat4& world_transform,
         auto render_submesh_skinned = [this](const std::shared_ptr<unravel::mesh>& mesh,
                                              uint32_t lod,
                                              uint32_t group_id,
-                                             const std::vector<pose_mat4>& skinning_matrices_per_palette,
+                                             const std::vector<pose_mat4>& skinning_transforms,
                                              submit_callbacks::params& params,
                                              const submit_callbacks& callbacks)
         {
@@ -617,8 +617,8 @@ void model::submit(const math::mat4& world_transform,
             for(const auto& index : indices)
             {
                 const auto& submesh = submeshes[index];
-                const auto& skinning_matrices = skinning_matrices_per_palette[index];
-                gfx::set_world_transform(skinning_matrices.transforms);
+                const auto& submesh_skinning_transforms = skinning_transforms[index];
+                gfx::set_world_transform(submesh_skinning_transforms.transforms);
 
                 mesh->bind_render_buffers_for_submesh(submesh, lod);
                 params.preserve_state = &index != &indices.back();
@@ -628,7 +628,7 @@ void model::submit(const math::mat4& world_transform,
 
         for(uint32_t i = 0; i < mesh->get_data_groups_count(); ++i)
         {
-            render_submesh_skinned(mesh, lod, i, skinning_matrices_per_palette, params, callbacks);
+            render_submesh_skinned(mesh, lod, i, skinning_transforms, params, callbacks);
         }
 
         if(callbacks.setup_end)
