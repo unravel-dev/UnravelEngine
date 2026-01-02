@@ -13,13 +13,13 @@ struct call_result
     std::string err_output;
 };
 
-inline auto call(const std::vector<std::string>& args_array) -> call_result
+inline auto call(const std::vector<std::string>& args_array, const std::vector<std::string>& environment_array = {}) -> call_result
 {
     call_result result;
     result.retcode = 1;
 
     std::vector<const char*> args;
-
+    std::vector<const char*> environment;
     args.reserve(args_array.size());
     for(const auto& arg : args_array)
     {
@@ -27,12 +27,31 @@ inline auto call(const std::vector<std::string>& args_array) -> call_result
     }
     args.emplace_back(nullptr);
 
+    environment.reserve(environment_array.size());
+    for(const auto& env : environment_array)
+    {
+        environment.emplace_back(env.c_str());
+    }
+    environment.emplace_back(nullptr);
+
+
+
     subprocess_s subprocess;
     std::memset(&subprocess, 0, sizeof(subprocess));
     {
         int options = /*subprocess_option_enable_async |*/ subprocess_option_inherit_environment |
                       subprocess_option_search_user_path | subprocess_option_combined_stdout_stderr;
-        int op_code = subprocess_create(args.data(), options, &subprocess);
+        int op_code = -1;
+        
+        if(environment_array.empty())
+        {
+            op_code = subprocess_create(args.data(), options, &subprocess);
+        }
+        else
+        {
+            op_code = subprocess_create_ex(args.data(), options, environment.data(), &subprocess);
+        }
+        
         if(0 != op_code)
         {
             // an error occurred!

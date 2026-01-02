@@ -654,9 +654,26 @@ auto parse_line(std::string& line, const fs::path& fs_parent_path) -> bool
 #else
     // parse ldd output
     size_t pos = line.find("=> ");
-    if(pos != std::string::npos)
+    bool found = pos != std::string::npos;
+
+    bool is_local = false;
+    if(!found)
     {
-        line = line.substr(pos + 3); // +3 to remove '=> '
+        pos = line.find('\t');
+        found = pos != std::string::npos;
+        is_local = true;
+    }
+
+    if(found)
+    {
+        if(!is_local)
+        {
+            line = line.substr(pos + 3); // +3 to remove '=> '
+        }
+        else
+        {
+            line = line.substr(pos + 1); // +1 to remove '\t'
+        }
         size_t address_pos = line.find(" (0x");
         if(address_pos != std::string::npos)
         {
@@ -666,6 +683,12 @@ auto parse_line(std::string& line, const fs::path& fs_parent_path) -> bool
         trim_line(line);
 
         fs::path fs_path(line);
+
+        if(is_local)
+        {
+            fs_path = fs_parent_path / fs_path;
+            line = fs_path.string();
+        }
 
         if(fs::exists(fs_path) && fs::exists(fs_parent_path))
         {
@@ -718,7 +741,10 @@ auto get_dependencies(const fs::path& file) -> std::vector<std::string>
     auto parent_path = file.parent_path();
 
     auto params = get_subprocess_params(file);
+    APPLOG_TRACE("Params: \n{}", params);
+
     auto result = subprocess::call(params);
+    APPLOG_TRACE("Dependencies: \n{}", result.out_output);
     return parse_dependencies(result.out_output, parent_path);
 }
 
@@ -1256,6 +1282,28 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
                         {
                             fs::path cached_data = params.deploy_location / "data" / "engine" / "mono" / "lib";
+
+                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
+                            // fs::remove_all(cached_data, ec);
+
+                            APPLOG_TRACE("Creating directories {}", cached_data.generic_string());
+                            fs::create_directories(cached_data, ec);
+
+                            auto mono_libraries = mono::get_common_library_names_for_deploy();
+
+                            fs::path lib_dir = assembly_dir.parent_path().parent_path();
+                            for(const auto& path : mono_libraries)
+                            {
+                                fs::path so_file = lib_dir / path;
+                                if(fs::exists(so_file))
+                                {
+                                    auto dst = cached_data / path;
+                                    APPLOG_TRACE("Copying {} -> {}", so_file.generic_string(), dst.generic_string());
+                                    fs::copy(so_file, dst, fs::copy_options::overwrite_existing, ec);
+                                }
+                            }
+
+
                             cached_data /= "mono";
 
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
