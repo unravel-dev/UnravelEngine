@@ -31,7 +31,7 @@ struct editing_manager
     struct focused
     {
         entt::meta_any object;
-        int frames{};
+        delta_t remaining_time{};
 
         fs::path focus_path{};
     };

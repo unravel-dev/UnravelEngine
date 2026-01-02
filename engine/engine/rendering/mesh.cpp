@@ -2080,6 +2080,10 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
     // Clear existing LODs
     data.lods.clear();
 
+    // Track previous LOD face count to detect when simplification stops making progress
+    uint32_t previous_face_count = data.triangle_count;
+    constexpr float MIN_FACE_COUNT_DIFFERENCE_RATIO = 0.05f; // 5% minimum difference
+
     // Prepare attribute packing data (shared across all submeshes and LODs)
     bool use_attribute_simplify = false;
     std::vector<float> packed_attributes;
@@ -2329,7 +2333,22 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             break;
         }
         
+        // Check if this LOD has significant difference from previous LOD
+        if(previous_face_count > 0)
+        {
+            float face_count_difference = static_cast<float>(previous_face_count - lod_data.face_count);
+            float difference_ratio = face_count_difference / static_cast<float>(previous_face_count);
+            
+            if(difference_ratio < MIN_FACE_COUNT_DIFFERENCE_RATIO)
+            {
+                APPLOG_INFO("Stopping LOD generation: new LOD face count ({}) is not significantly different from previous ({}, {:.2f}% difference)\n",
+                           lod_data.face_count, previous_face_count, difference_ratio * 100.0f);
+                break;
+            }
+        }
+        
         data.lods.push_back(std::move(lod_data));
+        previous_face_count = lod_data.face_count;
     }
 
     APPLOG_INFO("Generated {} LOD levels\n", data.lods.size());

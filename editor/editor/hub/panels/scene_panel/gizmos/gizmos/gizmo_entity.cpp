@@ -202,20 +202,21 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         auto& current_lod_data = model_comp.get_lod_data_for_camera(&cam, gfx::get_render_frame());
 
         current_lod_data.calculate_screen_rect(cam);
+
+        const auto lod = model.get_lod(current_lod_data.current_lod_index);
+        if(!lod)
+        {
+            return;
+        }
+        const auto& mesh = lod.get();
+        const auto& bounds = mesh->get_bounds();
+        // Test the bounding box of the mesh
+        bool visible = frustum.test_obb(bounds, world_transform);
         // local bounds
         if(em.gizmos.show_model_local_bounds)
         {
 
-
-            const auto lod = model.get_lod(current_lod_data.current_lod_index);
-            if(!lod)
-            {
-                return;
-            }
-            const auto& mesh = lod.get();
-            const auto& bounds = mesh->get_bounds();
-            // Test the bounding box of the mesh
-            if(frustum.test_obb(bounds, world_transform))
+            if(visible)
             {
                 DebugDrawEncoderScopePush scope(dd.encoder);
                 dd.encoder.setColor(0xffffffff);
@@ -263,7 +264,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
 
 
         //lods
-        if(em.gizmos.show_model_lod)
+        if(em.gizmos.show_model_lod && visible)
         {   
      
             dd_2d.callbacks.push_back([current_lod_data]()

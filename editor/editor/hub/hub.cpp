@@ -1,7 +1,7 @@
 #include "hub.h"
 #include "imgui_widgets/utils.h"
 #include <editor/events.h>
-#include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include "panels/panels_defs.h"
 #include <editor/system/project_manager.h>
 #include <engine/engine.h>
 #include <engine/events.h>
@@ -269,6 +269,8 @@ hub::hub(rtti::context& ctx)
     ev.on_frame_before_render.connect(sentinel_, this, &hub::on_frame_before_render);
     ev.on_frame_render.connect(sentinel_, this, &hub::on_frame_render);
     ev.on_play_begin.connect(sentinel_, -999, this, &hub::on_play_begin);
+    ev.on_play_after_end.connect(sentinel_, -999, this, &hub::on_play_after_end);
+
     ev.on_script_recompile.connect(sentinel_, 10000, this, &hub::on_script_recompile);
     ev.on_os_event.connect(sentinel_, 10000, this, &hub::on_os_event);
 
@@ -360,6 +362,14 @@ void hub::on_script_recompile(rtti::context& ctx, const std::string& protocol, u
 void hub::on_play_begin(rtti::context& ctx)
 {
     panels_.get_console_log_panel().on_play();
+    ImGui::FocusWindow(ImGui::FindWindowByName(GAME_VIEW));
+
+}
+
+void hub::on_play_after_end(rtti::context& ctx)
+{
+    auto& ev = ctx.get_cached<events>();
+    ImGui::FocusWindow(ImGui::FindWindowByName(SCENE_VIEW));
 }
 
 void hub::on_os_event(rtti::context& ctx, os::event& e)

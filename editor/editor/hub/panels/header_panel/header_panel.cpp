@@ -377,7 +377,6 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
             if(play_pressed)
             {
                 ev.toggle_play_mode(ctx);
-                ImGui::FocusWindow(ImGui::FindWindowByName(ev.is_playing ? GAME_VIEW : SCENE_VIEW));
             }
 
             ImGui::SameLine();

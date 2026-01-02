@@ -437,18 +437,18 @@ auto editing_manager::get_select_mode() const -> select_mode
     return mode;
 }
 
-void editing_manager::on_frame_update(rtti::context& ctx, delta_t)
+void editing_manager::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     session.tick();
 
     execute_actions();
 
-    if(focused_data.frames > 0)
+    if(focused_data.remaining_time > delta_t::zero())
     {
-        focused_data.frames--;
+        focused_data.remaining_time -= dt;
     }
 
-    if(focused_data.frames == 0)
+    if(focused_data.remaining_time <= delta_t::zero())
     {
         unfocus();
     }
@@ -456,7 +456,7 @@ void editing_manager::on_frame_update(rtti::context& ctx, delta_t)
 void editing_manager::focus(entt::meta_any object)
 {
     focused_data.object = object;
-    focused_data.frames = 20;
+    focused_data.remaining_time = delta_t(0.5f);
 }
 
 void editing_manager::focus_path(const fs::path& object)

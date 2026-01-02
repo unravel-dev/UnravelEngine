@@ -447,6 +447,8 @@ auto draw_item(const content_browser_item& item)
     if(item.is_focused)
     {
         ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
+        ImGui::SetScrollHereY();
+
     }
 
     if(item.is_loading)
