@@ -2082,7 +2082,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
 
     // Track previous LOD face count to detect when simplification stops making progress
     uint32_t previous_face_count = data.triangle_count;
-    constexpr float MIN_FACE_COUNT_DIFFERENCE_RATIO = 0.05f; // 5% minimum difference
+    constexpr float MIN_FACE_COUNT_DIFFERENCE_RATIO = 0.02f; //minimum difference
 
     // Prepare attribute packing data (shared across all submeshes and LODs)
     bool use_attribute_simplify = false;

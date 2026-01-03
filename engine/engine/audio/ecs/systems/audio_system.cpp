@@ -78,6 +78,7 @@ auto audio_system::init(rtti::context& ctx) -> bool
             APPLOG_TRACE(s);
         });
 
+    audio::device::print_devices();
     device_ = std::make_unique<audio::device>();
 
     return true;

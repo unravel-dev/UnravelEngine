@@ -1261,6 +1261,10 @@ void RmlUi_RenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter)
     filter_manager_.free(internal_handle.idx);
 }
 
+static constexpr int max_uniform_gradient_stop_colors = 16;
+static constexpr int max_uniform_gradient_stop_positions = 4;
+static constexpr int max_uniform_weights = 4;
+
 auto RmlUi_RenderInterface::CompileShader(const Rml::String& name,
                                           const Rml::Dictionary& parameters) -> Rml::CompiledShaderHandle
 {
@@ -1441,12 +1445,27 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
 
                 if(bgfx::isValid(stop_positions_uniform) && !shader.stop_positions.empty())
                 {
-                    gfx::set_uniform(stop_positions_uniform, shader.stop_positions.data(), num_stops);
+                    std::array<float, 4 * max_uniform_gradient_stop_positions> stop_positions_data = {};
+                    auto max_stops = std::min<int>(num_stops, stop_positions_data.size());
+                    for(int i = 0; i < max_stops; i++)
+                    {
+                        stop_positions_data[i] = shader.stop_positions[i];
+                    }
+                    gfx::set_uniform(stop_positions_uniform, stop_positions_data.data(), max_uniform_gradient_stop_positions);
                 }
 
                 if(bgfx::isValid(stop_colors_uniform) && !shader.stop_colors.empty())
                 {
-                    gfx::set_uniform(stop_colors_uniform, shader.stop_colors[0], num_stops);
+                    std::array<std::array<float, 4>, max_uniform_gradient_stop_colors> stop_colors_data = {};
+                    auto max_stops = std::min<int>(num_stops, stop_colors_data.size());
+                    for(int i = 0; i < max_stops; i++)
+                    {
+                        stop_colors_data[i][0] = shader.stop_colors[i].red;
+                        stop_colors_data[i][1] = shader.stop_colors[i].green;
+                        stop_colors_data[i][2] = shader.stop_colors[i].blue;
+                        stop_colors_data[i][3] = shader.stop_colors[i].alpha;
+                    }
+                    gfx::set_uniform(stop_colors_uniform, stop_colors_data.data(), max_uniform_gradient_stop_colors);
                 }
 
                 submit_transform_uniform(translation);
@@ -1644,9 +1663,9 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     uniforms_[static_cast<size_t>(RmlUi_UniformId::P)] = gfx::create_uniform("u_gradient_p", gfx::uniform_type::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::V)] = gfx::create_uniform("u_gradient_v", gfx::uniform_type::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::StopColors)] =
-        gfx::create_uniform("u_gradient_stops", gfx::uniform_type::Vec4, 16);
+        gfx::create_uniform("u_gradient_stops", gfx::uniform_type::Vec4, max_uniform_gradient_stop_colors);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::StopPositions)] =
-        gfx::create_uniform("u_gradient_positions", gfx::uniform_type::Vec4, 4);
+        gfx::create_uniform("u_gradient_positions", gfx::uniform_type::Vec4, max_uniform_gradient_stop_positions);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::NumStops)] =
         gfx::create_uniform("u_gradient_num_stops", gfx::uniform_type::Vec4);
 
@@ -1658,7 +1677,7 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexCoordMax)] =
         gfx::create_uniform("u_texCoordMax", gfx::uniform_type::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Weights)] =
-        gfx::create_uniform("u_weights", gfx::uniform_type::Vec4, 4);
+        gfx::create_uniform("u_weights", gfx::uniform_type::Vec4, max_uniform_weights);
 
     // Creation shader uniforms
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Value)] = gfx::create_uniform("u_value", gfx::uniform_type::Vec4);
@@ -2365,11 +2384,10 @@ void RmlUi_RenderInterface::sigma_to_parameters(const float desired_sigma, int& 
 
 void RmlUi_RenderInterface::set_blur_weights(float sigma)
 {
-    constexpr int blur_num_weights = 4; // (BLUR_SIZE + 1) / 2 where BLUR_SIZE = 7
-    std::array<std::array<float, 4>, blur_num_weights> weights;
+    std::array<std::array<float, 4>, max_uniform_weights> weights;
     float normalization = 0.0f;
 
-    for(int i = 0; i < blur_num_weights; i++)
+    for(int i = 0; i < max_uniform_weights; i++)
     {
         if(Rml::Math::Absolute(sigma) < 0.1f)
         {
@@ -2390,7 +2408,7 @@ void RmlUi_RenderInterface::set_blur_weights(float sigma)
         normalization += (i == 0 ? 1.f : 2.0f) * weights[i][0];
     }
 
-    for(int i = 0; i < blur_num_weights; i++)
+    for(int i = 0; i < max_uniform_weights; i++)
     {
         weights[i][0] /= normalization;
         weights[i][1] /= normalization;
@@ -2401,7 +2419,7 @@ void RmlUi_RenderInterface::set_blur_weights(float sigma)
     auto weights_uniform = get_uniform_handle(RmlUi_UniformId::Weights);
     if(bgfx::isValid(weights_uniform))
     {
-        gfx::set_uniform(weights_uniform, weights.data(), blur_num_weights);
+        gfx::set_uniform(weights_uniform, weights.data(), max_uniform_weights);
     }
 }
 

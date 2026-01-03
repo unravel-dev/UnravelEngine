@@ -104,7 +104,7 @@ vec2 WorldToScreenPrevious(vec3 ws_pos)
     vec4 prev_clip4 = mul(u_prev_view_proj, vec4(ws_pos, 1.0));
     vec3 prev_clip = prev_clip4.xyz / prev_clip4.w;
     prev_clip = clipTransform(prev_clip);
-    return prev_clip.xy * 0.5 + 0.5;
+    return prev_clip.xy * vec2_splat(0.5) + vec2_splat(0.5);
 }
 
 // Function to compute previous frame UV coordinates for temporal reprojection

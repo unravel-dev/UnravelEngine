@@ -386,6 +386,10 @@ struct mono_loader<Archive, entt::entity>
             {
                 invoker.set_value(obj, val.handle.entity());
             }
+            else
+            {
+                return true;
+            }
             return true;
         }
         return false;
@@ -503,8 +507,8 @@ struct mono_loader<Archive, asset_handle<T>>
                 {
                     mutable_uid_property.set_value(var, val.uid());
                 }
+                return true;
             }
-            return true;
         }
         return false;
     }
@@ -531,8 +535,8 @@ struct mono_loader<Archive, asset_handle<T>>
                     }
                     
                 }
+                return true;
             }
-            return true;
         }
         return false;
     }

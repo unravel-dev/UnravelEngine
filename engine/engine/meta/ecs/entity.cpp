@@ -37,10 +37,11 @@ auto as_span(const std::vector<entity_data<entt::handle>>& entities) -> hpp::spa
     // pointer to the first entity_data
     auto* base = entities.data();
 
+    // entity_data is just a tag type around entt::handle, so they must have the same size
+    static_assert(sizeof(entity_data<entt::handle>) == sizeof(entt::handle), "entity_data<entt::handle> and entt::handle must have the same size");
+    static_assert(alignof(entity_data<entt::handle>) == alignof(entt::handle), "entity_data<entt::handle> and entt::handle must have the same alignment");
     // compute the address of the first entt::handle
-    constexpr size_t offset = offsetof(entity_data<entt::handle>, components.entity);
-
-    auto* first_handle = reinterpret_cast<const entt::handle*>(reinterpret_cast<const std::uint8_t*>(base) + offset);
+    auto* first_handle = reinterpret_cast<const entt::handle*>(base);
 
     // build a span over all of them
     hpp::span<const entt::handle> handles{first_handle, entities.size()};
