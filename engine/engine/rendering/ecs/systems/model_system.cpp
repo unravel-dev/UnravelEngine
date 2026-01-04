@@ -666,9 +666,10 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
     APP_SCOPE_PERF("Model/Skinning");
     auto view = scn.registry->view<transform_component, model_component, active_component>();
 
+    auto frame = gfx::get_render_frame();
     // this code should be thread safe as each task works with a whole hierarchy and
     // there is no interleaving between tasks.
-    std::for_each(std::execution::par,
+    std::for_each(poolstl::par,//std::execution::par,
                   view.begin(),
                   view.end(),
                   [&](entt::entity entity)
@@ -683,7 +684,7 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
                     
                       // Cleanup stale per-view LOD data (views not accessed for 2 seconds at 60fps)
-                      model_comp.cleanup_stale_lod_data(gfx::get_render_frame(), 120);
+                      model_comp.cleanup_stale_lod_data(frame, 120);
 
                       // Early exit if model wasn't used
                       if(!model_comp.was_used_last_frame())
@@ -693,7 +694,7 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
 
                       if(model_comp.is_newly_created())
                       {
-                          model_comp.set_last_render_frame(gfx::get_render_frame());
+                          model_comp.set_last_render_frame(frame);
                       }
 
                

@@ -7,7 +7,7 @@ add_library(${target_name} ${libsrc})
 target_link_libraries(${target_name})
 
 target_include_directories(${target_name}
-    INTERFACE
+    PUBLIC
 		${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 

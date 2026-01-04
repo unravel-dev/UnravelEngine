@@ -423,7 +423,7 @@ auto get_transformed_vertices(const aiMesh* mesh,
 
     // Iterate over bones in the mesh using parallel execution
     std::for_each(
-        // std::execution::par,
+        //poolstl::par,//std::execution::par,
         mesh->mBones,
         mesh->mBones + mesh->mNumBones,
         [&](const aiBone* bone)
@@ -566,7 +566,7 @@ auto compute_bounding_boxes_for_animations(const aiScene* scene, float sample_in
     std::atomic<size_t> current_steps = 0;
 
     std::for_each(
-        // std::execution::par,
+        //poolstl::par,//std::execution::par,
         scene->mAnimations,
         scene->mAnimations + scene->mNumAnimations,
         [&](const aiAnimation* animation)

@@ -855,7 +855,14 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     if(is_parent_of_focused(ctx, entity))
     {
         ImGui::SetNextItemOpen(true, 0);
-        ImGui::SetScrollHereY();
+    }
+
+    if(em.is_focused(entity))
+    {
+        if(!ImGui::IsItemVisible())
+        {
+            ImGui::SetScrollHereY();
+        }
     }
 
     auto pos = ImGui::GetCursorScreenPos() + ImVec2(ImGui::GetTextLineHeightWithSpacing(), 0.0f);

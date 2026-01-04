@@ -1074,13 +1074,38 @@ auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& regis
     return obj;
 }
 
+auto has_prefab_component(const entt::const_handle& obj) -> bool
+{
+
+    if(!obj.valid())
+    {
+        return false;
+    }
+    if(obj.all_of<prefab_component>())
+    {
+        return true;
+    }
+    
+    if(auto transform_comp = obj.try_get<transform_component>())
+    {
+        for(auto child : transform_comp->get_children())
+        {
+            if(has_prefab_component(child))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
 {
     // APPLOG_INFO_PERF(std::chrono::microseconds);
 
-    bool is_prefab_instance = src_obj.all_of<prefab_component>();
+    bool has_prefab_instances = has_prefab_component(src_obj);
 
-    auto clone_mode = is_prefab_instance ? clone_mode_t::cloning_prefab_instance : clone_mode_t::cloning_object;
+    auto clone_mode = has_prefab_instances ? clone_mode_t::cloning_prefab_instance : clone_mode_t::cloning_object;
     bool pushed = push_save_context();
     auto& save_ctx = get_save_context();
     save_ctx.save_source = src_obj;

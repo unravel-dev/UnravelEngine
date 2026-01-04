@@ -19,6 +19,8 @@
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
 
+#include <concurrency/concurrentqueue.h>
+
 namespace unravel
 {
 namespace rendering
@@ -65,11 +67,17 @@ void pipeline::gather_visible_models(scene& scn,
 
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
-    
-    // Use parallel execution for visibility testing
-    std::for_each(/*std::execution::par_unseq,*/ view.begin(), view.end(),
+    moodycamel::ConcurrentQueue<std::pair<entt::entity, lod_data>> queue;
+
+    //get_lod_data_for_camera is not thread safe but we are only operating on a single model once
+    //so we can use parallel execution here
+    std::for_each(poolstl::par,//std::execution::par,
+        view.begin(), 
+        view.end(),
         [&](auto entity)
         {
+            tpp::this_thread::register_this_thread();
+
             auto&& [transform_comp, model_comp, layer_comp, active_comp] = view.get(entity);
             
             // Get layer component if it exists, otherwise use default layer
@@ -127,10 +135,17 @@ void pipeline::gather_visible_models(scene& scn,
 
             if(is_visible)
             {
-                lod_data_callback(scn.create_handle(entity), current_lod_data);
+                // lod_data_callback(scn.create_handle(entity), current_lod_data);
+                queue.enqueue(std::make_pair(entity, current_lod_data));
             }
             
         });
+
+    std::pair<entt::entity, lod_data> entity_lod_data;
+    while(queue.try_dequeue_non_interleaved(entity_lod_data))
+    {
+        lod_data_callback(scn.create_handle(entity_lod_data.first), entity_lod_data.second);
+    }
 }
 
 

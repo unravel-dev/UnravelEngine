@@ -34,7 +34,7 @@ void transform_system::on_frame_update(scene& scn, delta_t dt)
     auto view_root = scn.registry->view<transform_component, root_component>();
 
     // Use std::for_each with the view's iterators
-    std::for_each(std::execution::par,
+    std::for_each(poolstl::par,//std::execution::par,
                   view_root.begin(),
                   view_root.end(),
                   [&view_root](entt::entity entity)

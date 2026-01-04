@@ -27,6 +27,7 @@ target_link_libraries (${target_name}
     context
     logging
     cmd_line
+    concurrency
     memory
     ospp
     audiopp

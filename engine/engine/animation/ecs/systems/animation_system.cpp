@@ -130,7 +130,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
 
     // this code should be thread safe as each task works with a whole hierarchy and
     // there is no interleaving between tasks.
-    std::for_each(std::execution::par,
+    std::for_each(poolstl::par,//std::execution::par,
                   view.begin(),
                   view.end(),
                   [&](entt::entity entity)

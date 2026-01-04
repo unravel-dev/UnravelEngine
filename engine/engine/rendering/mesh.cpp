@@ -3223,6 +3223,29 @@ auto mesh::generate_vertex_tangents() -> bool
 
         // GramSchmidt orthogonalize
         T = T - (normal_vec * math::dot(normal_vec, T));
+        
+        // Check if the resulting tangent is too small (parallel to normal case)
+        float length_sq = math::dot(T, T);
+        if(length_sq < 1e-6f)
+        {
+            // Tangent was parallel to normal, generate a perpendicular vector
+            // Find the axis that the normal is least aligned with
+            math::vec3 axis;
+            if(std::abs(normal_vec.x) < std::abs(normal_vec.y) && std::abs(normal_vec.x) < std::abs(normal_vec.z))
+            {
+                axis = math::vec3(1.0f, 0.0f, 0.0f);
+            }
+            else if(std::abs(normal_vec.y) < std::abs(normal_vec.z))
+            {
+                axis = math::vec3(0.0f, 1.0f, 0.0f);
+            }
+            else
+            {
+                axis = math::vec3(0.0f, 0.0f, 1.0f);
+            }
+            T = math::cross(normal_vec, axis);
+        }
+        
         T = math::normalize(T);
 
         // Store tangent if required
