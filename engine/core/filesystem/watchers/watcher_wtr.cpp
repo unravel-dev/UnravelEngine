@@ -1,5 +1,6 @@
 #include "watcher_wtr.h"
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <sstream>
 #include <utility>
@@ -171,7 +172,9 @@ private:
 
             while(diff > std::chrono::milliseconds(0))
             {
+                lock.unlock();
                 std::this_thread::sleep_for(diff);
+                lock.lock();
 
                 now = std::chrono::steady_clock::now();
 
@@ -610,7 +613,7 @@ private:
             auto file_timestamp = fs::last_write_time(event.path_name, err);
             if(!err)
             {
-                system_timestamp = std::chrono::file_clock::to_sys(file_timestamp);
+                system_timestamp = std::chrono::clock_cast<std::chrono::system_clock>(file_timestamp);
             }
             else 
             {
@@ -620,7 +623,7 @@ private:
             return system_timestamp;
         }
         auto effect_time = std::chrono::nanoseconds(event.effect_time);
-        auto system_timestamp = std::chrono::system_clock::time_point(effect_time);
+        auto system_timestamp = std::chrono::system_clock::time_point(std::chrono::duration_cast<std::chrono::system_clock::duration>(effect_time));
         return system_timestamp;
     }
 
