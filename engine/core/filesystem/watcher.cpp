@@ -7,9 +7,9 @@ namespace fs
 
 namespace
 {
-#ifndef WIN32
-#define FS_WATCHER_WTR 1
-#endif
+// #ifndef WIN32
+// #define FS_WATCHER_WTR 1
+// #endif
 
 #ifdef FS_WATCHER_WTR
 using watcher_impl = watcher_wtr;

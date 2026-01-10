@@ -500,7 +500,6 @@ private:
                     
                     // Add to cache
                     std::string key = e.path.string();
-                    // entries_[key] = e;
                     
                     if(emit_initial_list && filter_passed)
                     {
@@ -531,7 +530,6 @@ private:
                     e.event_time = std::chrono::system_clock::now();
                     // Add to cache
                     std::string key = e.path.string();
-                    // entries_[key] = e;
                     
                     if(emit_initial_list && filter_passed)
                     {
@@ -631,8 +629,6 @@ private:
     uint64_t slot_key_ = 0;
     std::atomic<bool> paused_ = false;
     std::vector<watcher::entry> buffered_changes_;
-    /// Cache watched files
-    // std::map<std::string, watcher::entry> entries_;
     std::string watcher_name_;
 };
 
@@ -775,23 +771,23 @@ void watcher_fallback::unwatch_impl(std::uint64_t key)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        
         watchers_.erase(key);
-    }
-    std::set<fs::path> stale_listeners;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for(auto& [path, listener] : directory_listeners_)
+        
+        std::set<fs::path> stale_listeners;
         {
-            if(listener.use_count() == 1)
+            for(auto& [path, listener] : directory_listeners_)
             {
-                stale_listeners.insert(path);
+                if(listener.use_count() == 1)
+                {
+                    stale_listeners.insert(path);
+                }
             }
         }
-    }
-    for(const auto& path : stale_listeners)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        directory_listeners_.erase(path);
+        for(const auto& path : stale_listeners)
+        {
+            directory_listeners_.erase(path);
+        }
     }
     cv_.notify_all();
 }
@@ -801,9 +797,6 @@ void watcher_fallback::unwatch_all_impl()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_.clear();
-    }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
         directory_listeners_.clear();
     }
     cv_.notify_all();
