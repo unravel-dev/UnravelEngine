@@ -43,3 +43,6 @@
 [submodule "deps/3rdparty/RmlUi/RmlUi"]
 	path = deps/3rdparty/RmlUi/RmlUi
 	url = https://github.com/mikke89/RmlUi.git
+[submodule "deps/3rdparty/watcher/watcher"]
+	path = deps/3rdparty/watcher/watcher
+	url = https://github.com/e-dant/watcher.git

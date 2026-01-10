@@ -55,6 +55,7 @@ uniform mat4 u_shadowMapMtx3;
 #define u_shadowMapTexelSize    u_params2.z
 
 
+
 // Pcf
 #define u_shadowMapPcfMode     u_shadowMapParam0
 #define u_shadowMapNoiseAmount u_shadowMapParam1
@@ -87,7 +88,15 @@ float calculateSlopeBias(float _bias, vec3 _normal, vec3 _lightDir)
 
 float calculateDistanceBias(float _bias, float _distanceFromCamera)
 {
-    return _bias * (1.0 + _distanceFromCamera * 0.002); // Adjust this factor as necessary
+    // Use power function (exponent 0.65) for non-linear scaling - starts very gentle
+    // at close distances, scales more aggressively at far distances. This reduces
+    // shadow floating when close while maintaining good bias at distance.
+    // shadowMapDistanceBiasScale controls the scaling intensity (default ~0.02)
+    // Lower values = gentler scaling, higher values = more aggressive scaling
+    float shadowMapDistanceBiasScale = 0.02f;
+    float shadowMapDistanceBiasExponent = 0.65f;
+    float distanceScale = pow(_distanceFromCamera, shadowMapDistanceBiasExponent) * shadowMapDistanceBiasScale;
+    return _bias * (1.0 + distanceScale);
 }
 
 float computeVisibility(sampler2D _sampler
