@@ -14,7 +14,7 @@ namespace asset_compiler
 struct asset_manifest
 {
     /// Path to the source file
-    fs::path source_key;
+    // fs::path source_key;
     /// Timestamp when the asset was compiled
     std::chrono::nanoseconds source_timestamp;
     
@@ -28,7 +28,6 @@ struct asset_manifest
     asset_manifest() = default;
     
     asset_manifest(const fs::path& key)
-        : source_key(key)
     {
         fs::error_code ec;
         source_timestamp = fs::last_write_time(fs::resolve_protocol(key), ec).time_since_epoch();
@@ -36,7 +35,7 @@ struct asset_manifest
 
     }
     
-    void compute_source_sha();
+    void compute_source_sha(const fs::path& source_key);
 };
 
 /// Generate manifest file path from compiled asset path
@@ -51,7 +50,7 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
 /// Check if source file has changed compared to manifest
 auto is_source_file_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool;
 
-auto is_compiled_format_changed(const fs::path& compiled_asset_path, const asset_manifest& manifest) -> bool;
+auto is_compiled_format_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool;
 
 } // namespace asset_compiler
 } // namespace unravel

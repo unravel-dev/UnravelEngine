@@ -138,6 +138,9 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     # For Clang on Windows, try /bigobj
     add_flag_if_supported("/bigobj")
   endif()
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_flag_if_supported("-fno-limit-debug-info")
+  endif()
 endif()
 
 # Set the sanitizers you want to enable

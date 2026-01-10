@@ -1,8 +1,8 @@
 #include "syncer.h"
 #include "watcher.h"
-
 namespace fs
 {
+
 static void ensure_directory_exists(const fs::path& path)
 {
     fs::error_code err;

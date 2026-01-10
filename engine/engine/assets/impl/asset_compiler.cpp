@@ -522,7 +522,7 @@ auto write_manifest_file(const fs::path& input_path, const fs::path& output_path
 {
     // Generate manifest file for the compiled shader
     asset_manifest manifest(input_path);
-    manifest.compute_source_sha();
+    manifest.compute_source_sha(input_path);
     auto manifest_path = get_manifest_path(output_path);
 
     fs::error_code err;
@@ -586,7 +586,7 @@ auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path
     
     fs::error_code err;
     // Use atomic_write_file to handle the temporary file creation and atomic rename
-    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) 
+    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) -> void
     {
         compile_shader_to_file(
             absolute_path,
@@ -625,7 +625,7 @@ auto read_importer<gfx::texture>(asset_manager& am, const fs::path& key) -> std:
             meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
 
             fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) 
+            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), meta);
             }, err);
@@ -654,7 +654,7 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
 
     fs::error_code err;
     
-    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) 
+    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) -> void
     {
         compile_texture_to_file(
             absolute_path, 
@@ -693,7 +693,7 @@ auto compile<material>(asset_manager& am, const fs::path& key, const fs::path& o
     {
         load_from_file(str_input, material);
 
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file_bin(temp.string(), material);
         }, err);
@@ -729,7 +729,7 @@ auto read_importer<mesh>(asset_manager& am, const fs::path& key) -> std::shared_
             meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
 
             fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) 
+            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), meta);
             }, err);
@@ -801,7 +801,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             }
         }
         
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file_bin(temp.string(), data);
         }, err);
@@ -820,7 +820,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                anim_output = dir / (animation.name + ".anim");
            }
 
-           asset_writer::atomic_write_file(anim_output, [&](const fs::path& temp) 
+           asset_writer::atomic_write_file(anim_output, [&](const fs::path& temp) -> void
            {
                 save_to_file(temp.string(), animation);
            }, err);
@@ -842,7 +842,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                 mat_output = dir / (material.name + ".mat");
             }   
 
-            asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) 
+            asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), material.mat);
             }, err);
@@ -881,7 +881,7 @@ auto read_importer<animation_clip>(asset_manager& am, const fs::path& key) -> st
             meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
 
             fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) 
+            asset_writer::atomic_write_file(absolute,   [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), meta);
             }, err);
@@ -922,7 +922,7 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
         anim.root_motion.keep_in_place = importer->root_motion.keep_in_place;
 
         fs::error_code err;
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file_bin(temp.string(), anim);
         }, err);
@@ -1013,7 +1013,7 @@ auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs:
     {
         load_from_file(str_input, material);
 
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file_bin(temp.string(), material);
         }, err);
@@ -1054,7 +1054,7 @@ auto compile<ui_tree>(asset_manager& am, const fs::path& key, const fs::path& ou
             file.close();
         }
 
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file(temp.string(), tree);
         }, err);
@@ -1095,7 +1095,7 @@ auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path
             file.close();
         }
 
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file(temp.string(), sheet);
         }, err);
@@ -1131,7 +1131,7 @@ auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::s
             meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
 
             fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) 
+            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), meta);
             }, err);
@@ -1180,7 +1180,7 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
             clip.convert_to_stereo();
         }
 
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) 
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
             save_to_file_bin(temp.string(), clip);
         }, err);

@@ -14,7 +14,7 @@ namespace asset_compiler
 {
 
 
-void asset_manifest::compute_source_sha()
+void asset_manifest::compute_source_sha(const fs::path& source_key)
 {
     auto source_file_path = fs::resolve_protocol(source_key);
     fs::error_code ec;
@@ -68,7 +68,6 @@ auto save_manifest(const fs::path& manifest_path, const asset_manifest& manifest
         auto archive = ser20::create_oarchive_associative(file);
         
         bool success = true;
-        success &= try_save(archive, ser20::make_nvp("source_key", manifest.source_key.generic_string()));
         success &= try_save(archive, ser20::make_nvp("source_sha", manifest.source_sha));
         success &= try_save(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         success &= try_save(archive, ser20::make_nvp("format_version", manifest.format_version));
@@ -100,11 +99,8 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
         
         auto archive = ser20::create_iarchive_associative(file);
         
-        std::string source_path;
         
         bool success = true;
-        success &= try_load(archive, ser20::make_nvp("source_key", source_path));
-        manifest.source_key = fs::path(source_path);
         success &= try_load(archive, ser20::make_nvp("source_sha", manifest.source_sha));
         success &= try_load(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         success &= try_load(archive, ser20::make_nvp("format_version", manifest.format_version));
@@ -140,16 +136,28 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
         return false;
     }
     
-    current_manifest.compute_source_sha();
+    current_manifest.compute_source_sha(source_key);
     // Compare SHA values
     return current_manifest.source_sha != manifest.source_sha;
 }
 
-auto is_compiled_format_changed(const fs::path& compiled_asset_path, const asset_manifest& manifest) -> bool
+auto is_compiled_format_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool
 {
-    auto extension = manifest.source_key.extension().string();
+    auto resolve_input_file = [](const fs::path& key) -> fs::path
+    {
+        fs::path source_key = fs::convert_to_protocol(key);
+        source_key = fs::replace(source_key, ex::get_meta_directory(), ex::get_data_directory());
+        // absolute_path = fs::resolve_protocol(fs::replace(absolute_path, ex::get_meta_directory(), ex::get_data_directory()));
+        if(source_key.extension() == ".meta")
+        {
+            source_key.replace_extension();
+        }
+        return source_key;
+    };
+
+    auto source_key = resolve_input_file(source_path);
+    auto extension = source_key.extension().string();
     auto current_version = ex::get_format_version(extension);
-    
     return manifest.format_version != current_version;
 }
 } // namespace asset_compiler

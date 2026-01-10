@@ -50,6 +50,7 @@ auto checking_dependencies_job_name() -> std::string
     return fmt::format("Checking dependencies of {}", ex::get_type<T>());
 }
 
+
 /// Check if recompilation is needed based on manifest
 auto needs_recompilation(const fs::path& source_file_path, const fs::path& compiled_output_path) -> bool
 {
@@ -86,7 +87,7 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
     }
 
     // Check if compiled format has changed
-    if(asset_compiler::is_compiled_format_changed(compiled_output_path, manifest))
+    if(asset_compiler::is_compiled_format_changed(source_file_path, manifest))
     {
         APPLOG_WARNING("Compiled format changed for {}, recompilation needed", compiled_output_path.string());
         return true;

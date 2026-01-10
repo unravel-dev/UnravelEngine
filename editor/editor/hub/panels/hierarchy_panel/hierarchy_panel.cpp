@@ -857,13 +857,6 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
         ImGui::SetNextItemOpen(true, 0);
     }
 
-    if(em.is_focused(entity))
-    {
-        if(!ImGui::IsItemVisible())
-        {
-            ImGui::SetScrollHereY();
-        }
-    }
 
     auto pos = ImGui::GetCursorScreenPos() + ImVec2(ImGui::GetTextLineHeightWithSpacing(), 0.0f);
     ImGui::AlignTextToFramePadding();
@@ -891,6 +884,12 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     if(em.is_focused(entity))
     {
         ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
+   
+        if(!ImGui::IsItemVisible())
+        {
+            ImGui::SetScrollHereY();
+        }
+    
     }
     
     if(!is_editing_label())

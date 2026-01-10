@@ -255,7 +255,7 @@ private:
                                        [this](const auto&, bool)
                                        {
                                            should_refresh_ = true;
-                                       });
+                                       }, "directory_cache");
         
     }
     void unwatch()
