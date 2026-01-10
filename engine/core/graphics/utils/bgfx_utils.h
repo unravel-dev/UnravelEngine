@@ -14,26 +14,27 @@
 #include <bx/bounds.h>
 #include <bx/pixelformat.h>
 #include <bx/string.h>
+#include <bx/filepath.h>
 
 #include <tinystl/allocator.h>
 #include <tinystl/vector.h>
 namespace stl = tinystl;
 
-bool saveToFile(bgfx::ViewId viewId, const char* _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
+bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
 ///
-void* load(const char* _filePath, uint32_t* _size = NULL);
+void* load(const bx::FilePath& _filePath, uint32_t* _size = NULL);
 
 ///
 void unload(void* _ptr);
 
 ///
-bgfx::ShaderHandle loadShader(const char* _name);
+bgfx::ShaderHandle loadShader(const bx::StringView& _name);
 
 ///
-bgfx::ProgramHandle loadProgram(const char* _vsName, const char* _fsName);
+bgfx::ProgramHandle loadProgram(const bx::StringView& _vsName, const bx::StringView& _fsName);
 
 ///
-bgfx::TextureHandle loadTexture(const char* _name,
+bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
                                 uint8_t _skip = 0,
                                 bgfx::TextureInfo* _info = NULL,
@@ -41,7 +42,7 @@ bgfx::TextureHandle loadTexture(const char* _name,
 
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
-bimg::ImageContainer* imageLoad(const char* _filePath, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
+bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
 bool imageSave(const char* saveAs, bimg::ImageContainer* image);
 
 ///

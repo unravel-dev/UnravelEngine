@@ -4,7 +4,7 @@ set(BGFX_INSTALL OFF CACHE BOOL "Create installation target." FORCE)
 
 set(BGFX_CONFIG_MULTITHREADED ON CACHE BOOL "Build bgfx with multithreaded configuration." FORCE)
 
-set(BX_AMALGAMATED OFF CACHE BOOL "Amalgamated bx build for faster compilation" FORCE)
+set(BX_AMALGAMATED ON CACHE BOOL "Amalgamated bx build for faster compilation" FORCE)
 set(BGFX_AMALGAMATED ON CACHE BOOL "Amalgamated bgfx build for faster compilation" FORCE)
 
 if(BUILD_SHARED_LIBS)

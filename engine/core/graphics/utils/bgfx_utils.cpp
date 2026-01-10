@@ -72,7 +72,7 @@ bx::AllocatorI* getAllocator()
 } // namespace
 } // namespace entry
 
-void* load(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const char* _filePath, uint32_t* _size)
+void* load(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const bx::FilePath& _filePath, uint32_t* _size)
 {
     if(bx::open(_reader, _filePath))
     {
@@ -99,7 +99,7 @@ void* load(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const char* _fi
     return NULL;
 }
 
-void* load(const char* _filePath, uint32_t* _size)
+void* load(const bx::FilePath& _filePath, uint32_t* _size)
 {
     entry::FileReader reader;
     return load(&reader, entry::getAllocator(), _filePath, _size);
@@ -126,7 +126,7 @@ static const bgfx::Memory* loadMem(bx::FileReaderI* _reader, const char* _filePa
     return NULL;
 }
 
-static void* loadMem(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const char* _filePath, uint32_t* _size)
+static void* loadMem(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const bx::FilePath& _filePath, uint32_t* _size)
 {
     if(bx::open(_reader, _filePath))
     {
@@ -146,52 +146,39 @@ static void* loadMem(bx::FileReaderI* _reader, bx::AllocatorI* _allocator, const
     return NULL;
 }
 
-static bgfx::ShaderHandle loadShader(bx::FileReaderI* _reader, const char* _name)
+static bgfx::ShaderHandle loadShader(bx::FileReaderI* _reader, const bx::StringView& _name)
 {
-    char filePath[512];
+	bx::FilePath filePath("shaders/");
 
-    const char* shaderPath = "???";
+	switch (bgfx::getRendererType() )
+	{
+	case bgfx::RendererType::Noop:
+	case bgfx::RendererType::Direct3D11:
+	case bgfx::RendererType::Direct3D12: filePath.join("dx11");  break;
+	case bgfx::RendererType::Agc:
+	case bgfx::RendererType::Gnm:        filePath.join("pssl");  break;
+	case bgfx::RendererType::Metal:      filePath.join("metal"); break;
+	case bgfx::RendererType::Nvn:        filePath.join("nvn");   break;
+	case bgfx::RendererType::OpenGL:     filePath.join("glsl");  break;
+	case bgfx::RendererType::OpenGLES:   filePath.join("essl");  break;
+	case bgfx::RendererType::Vulkan:     filePath.join("spirv"); break;
+	case bgfx::RendererType::WebGPU:     filePath.join("wgsl");  break;
 
-    switch(bgfx::getRendererType())
-    {
-        case bgfx::RendererType::Noop:
-        case bgfx::RendererType::Direct3D11:
-        case bgfx::RendererType::Direct3D12:
-            shaderPath = "shaders/dx11/";
-            break;
-        case bgfx::RendererType::Agc:
-        case bgfx::RendererType::Gnm:
-            shaderPath = "shaders/pssl/";
-            break;
-        case bgfx::RendererType::Metal:
-            shaderPath = "shaders/metal/";
-            break;
-        case bgfx::RendererType::Nvn:
-            shaderPath = "shaders/nvn/";
-            break;
-        case bgfx::RendererType::OpenGL:
-            shaderPath = "shaders/glsl/";
-            break;
-        case bgfx::RendererType::OpenGLES:
-            shaderPath = "shaders/essl/";
-            break;
-        case bgfx::RendererType::Vulkan:
-            shaderPath = "shaders/spirv/";
-            break;
+	case bgfx::RendererType::Count:
+		BX_ASSERT(false, "You should not be here!");
+		break;
+	}
 
-        case bgfx::RendererType::Count:
-            BX_ASSERT(false, "You should not be here!");
-            break;
-    }
+	char fileName[512];
+	bx::strCopy(fileName, BX_COUNTOF(fileName), _name);
+	bx::strCat(fileName, BX_COUNTOF(fileName), ".bin");
 
-    bx::strCopy(filePath, BX_COUNTOF(filePath), shaderPath);
-    bx::strCat(filePath, BX_COUNTOF(filePath), _name);
-    bx::strCat(filePath, BX_COUNTOF(filePath), ".bin");
+	filePath.join(fileName);
 
-    bgfx::ShaderHandle handle = bgfx::createShader(loadMem(_reader, filePath));
-    bgfx::setName(handle, _name);
+	bgfx::ShaderHandle handle = bgfx::createShader(loadMem(_reader, filePath.getCPtr() ) );
+	bgfx::setName(handle, _name.getPtr(), _name.getLength() );
 
-    return handle;
+	return handle;
 }
 
 bgfx::ShaderHandle loadShader(const char* _name)
@@ -200,7 +187,7 @@ bgfx::ShaderHandle loadShader(const char* _name)
     return loadShader(&reader, _name);
 }
 
-bgfx::ProgramHandle loadProgram(bx::FileReaderI* _reader, const char* _vsName, const char* _fsName)
+bgfx::ProgramHandle loadProgram(bx::FileReaderI* _reader, const bx::StringView& _vsName, const bx::StringView& _fsName)
 {
     bgfx::ShaderHandle vsh = loadShader(_reader, _vsName);
     bgfx::ShaderHandle fsh = BGFX_INVALID_HANDLE;
@@ -212,7 +199,7 @@ bgfx::ProgramHandle loadProgram(bx::FileReaderI* _reader, const char* _vsName, c
     return bgfx::createProgram(vsh, fsh, true /* destroy shaders when program is destroyed */);
 }
 
-bgfx::ProgramHandle loadProgram(const char* _vsName, const char* _fsName)
+bgfx::ProgramHandle loadProgram(const bx::StringView& _vsName, const bx::StringView& _fsName)
 {
     entry::FileReader reader;
     return loadProgram(&reader, _vsName, _fsName);
@@ -226,7 +213,7 @@ static void imageReleaseCb(void* _ptr, void* _userData)
 }
 
 bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
-                                const char* _filePath,
+                                const bx::FilePath& _filePath,
                                 uint64_t _flags,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
@@ -317,14 +304,14 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
     return handle;
 }
 
-bgfx::TextureHandle loadTexture(const char* _name,
+bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint64_t _flags,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
                                 bimg::Orientation::Enum* _orientation)
 {
     entry::FileReader reader;
-    return loadTexture(&reader, _name, _flags, _skip, _info, _orientation);
+    return loadTexture(&reader, _filePath, _flags, _skip, _info, _orientation);
 }
 
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat)
@@ -332,7 +319,7 @@ bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFo
     return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
 }
 
-bimg::ImageContainer* imageLoad(const char* _filePath, bgfx::TextureFormat::Enum _dstFormat)
+bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureFormat::Enum _dstFormat)
 {
     entry::FileReader reader;
 
@@ -443,7 +430,7 @@ void calcTangents(void* _vertices,
     delete[] tangents;
 }
 
-bool saveToFile(bgfx::ViewId viewId, const char* _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height)
+bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height)
 {
 
     auto input_tex = bgfx::getTexture(fbo);
