@@ -1,7 +1,8 @@
 #include "watcher_fallback.h"
-#include <sstream>
+#include <set>
 #include <utility>
 #include <base/platform/thread.hpp>
+#include <hpp/event.hpp>
 namespace fs
 {
 using namespace std::literals;
@@ -15,7 +16,7 @@ void log_path(const fs::path& /*unused*/)
 
 } // namespace
 
-class watcher_fallback::impl
+class watcher_fallback::directory_listener
 {
 public:
 
@@ -78,28 +79,20 @@ public:
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    impl(const fs::path& path,
-         const pattern_filter& filter,
-         bool recursive,
-         bool initial_list,
-         watcher::clock_t::duration poll_interval,
-         watcher::notify_callback list_callback,
-         const std::string& watcher_name)
-        : filter_(filter)
-        , callback_(std::move(list_callback))
+    directory_listener(const fs::path& path,
+                       bool recursive,
+                       watcher::clock_t::duration poll_interval)
+        : root_(path)
         , poll_interval_(poll_interval)
         , recursive_(recursive)
-        , watcher_name_(watcher_name)
     {
-        root_ = path;
         observed_changes changes;
         if(recursive_)
         {
             fs::error_code err;
             for(auto& entry : fs::recursive_directory_iterator(root_, err))
             {
-                if(filter_.should_include(entry.path()))
-                    poll_entry(entry.path(), changes);
+                poll_entry(entry.path(), changes);
             }
         }
         else
@@ -107,15 +100,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::directory_iterator(root_, err))
             {
-                if(filter_.should_include(entry.path()))
-                    poll_entry(entry.path(), changes);
-            }
-        }
-        if(initial_list)
-        {
-            if(!changes.entries.empty() && callback_)
-            {
-                callback_(changes.entries, true);
+                poll_entry(entry.path(), changes);
             }
         }
     }
@@ -154,8 +139,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::recursive_directory_iterator(root_, err))
             {
-                if(filter_.should_include(entry.path()))
-                    poll_entry(entry.path(), changes);
+                poll_entry(entry.path(), changes);
             }
         }
         else
@@ -163,8 +147,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::directory_iterator(root_, err))
             {
-                if(filter_.should_include(entry.path()))
-                    poll_entry(entry.path(), changes);
+                poll_entry(entry.path(), changes);
             }
         }
         if(paused)
@@ -177,9 +160,9 @@ public:
         else
         {
             process_modifications(entries_, changes);
-            if(!changes.entries.empty() && callback_)
+            if(!changes.entries.empty())
             {
-                callback_(changes.entries, false);
+                on_changes.emit(changes.entries);
             }
         }
     }
@@ -219,7 +202,7 @@ public:
             {
                 e.status = watcher::entry_status::renamed;
                 e.last_path = get_original_path(renamed_e.last_path, renamed_e.path, e.path);
-
+                e.event_time = std::chrono::system_clock::now();
 
                 return true;
             }
@@ -252,6 +235,7 @@ public:
                         {
                             e.status = watcher::entry_status::renamed;
                             e.last_path = fi.path;
+                            e.event_time = std::chrono::system_clock::now();
 
                                    // remove the cached old path entry
                             container.erase(it);
@@ -359,6 +343,7 @@ public:
                 fi.last_mod_time = time;
                 fi.status = watcher::entry_status::modified;
                 fi.type = status.type();
+                fi.event_time = std::chrono::system_clock::now();
                 changes.entries.push_back(fi);
                 changes.modified.push_back(changes.entries.size() - 1);
             }
@@ -378,22 +363,30 @@ public:
             fi.status = watcher::entry_status::created;
             fi.size = size;
             fi.type = status.type();
-
+            fi.event_time = std::chrono::system_clock::now();
             changes.entries.push_back(fi);
             changes.created.push_back(changes.entries.size() - 1);
         }
     }
 
-protected:
-    friend class watcher_fallback;
+    /// Event that emits changes to all connected impls
+    hpp::event<void(const std::vector<watcher::entry>&)> on_changes;
+    
+    auto get_path() const -> const fs::path&
+    {
+        return root_;
+    }
+    
+    auto get_recursive() const -> bool
+    {
+        return recursive_;
+    }
 
+private:
+    friend class watcher_fallback;
 
     /// Path to watch
     fs::path root_;
-    /// Filter applied
-    pattern_filter filter_;
-    /// Callback for list of modifications
-    watcher::notify_callback callback_;
     /// Cache watched files
     std::map<std::string, watcher::entry> entries_;
     ///
@@ -406,7 +399,240 @@ protected:
     std::atomic<bool> paused_ = {false};
 
     observed_changes buffered_changes_;
+};
 
+class watcher_fallback::impl
+{
+public:
+    impl(const fs::path& path,
+         const pattern_filter& filter,
+         bool recursive,
+         bool initial_list,
+         watcher::clock_t::duration poll_interval,
+         watcher::notify_callback callback,
+         std::shared_ptr<directory_listener> listener,
+         const std::string& watcher_name)
+        : path_(path)
+        , filter_(filter)
+        , recursive_(recursive)
+        , callback_(std::move(callback))
+        , listener_(std::move(listener))
+        , init_time_timestamp_(std::chrono::system_clock::now())
+        , watcher_name_(watcher_name)
+    {
+        // Initialize entries cache and optionally emit initial list
+        initialize_entries(initial_list);
+        
+        // Connect to the listener's changes
+        slot_key_ = listener_->on_changes.connect([this](const std::vector<watcher::entry>& changes) -> void
+        {
+            handle_changes(changes);
+        });
+    }
+    
+    ~impl()
+    {
+        if(listener_)
+        {
+            listener_->on_changes.disconnect(slot_key_);
+        }
+    }
+    
+    void pause()
+    {
+        paused_ = true;
+    }
+    
+    void resume()
+    {
+        paused_ = false;
+        // Process buffered changes
+        if(!buffered_changes_.empty())
+        {
+            std::vector<watcher::entry> changes_to_process;
+            std::swap(changes_to_process, buffered_changes_);
+            
+            if(!changes_to_process.empty() && callback_)
+            {
+                callback_(changes_to_process, false);
+            }
+        }
+    }
+    
+    auto get_path() const -> const fs::path&
+    {
+        return path_;
+    }
+    
+    auto get_listener() const -> std::shared_ptr<directory_listener>
+    {
+        return listener_;
+    }
+
+private:
+    void initialize_entries(bool emit_initial_list)
+    {
+        // Iterate through the directory and populate entries_ cache
+        fs::error_code err;
+        std::vector<watcher::entry> initial_entries;
+        
+        if(recursive_)
+        {
+            for(auto& entry : fs::recursive_directory_iterator(path_, err))
+            {
+                bool filter_passed = filter_.should_include(entry.path());
+                
+                fs::error_code err2;
+                fs::file_status file_status = fs::status(entry.path(), err2);
+                auto file_type = file_status.type();
+                if(filter_passed || (file_type == fs::file_type::directory))
+                {
+                    watcher::entry e;
+                    e.path = entry.path();
+                    e.last_path = entry.path();
+                    e.status = watcher::entry_status::created;
+                    
+                    fs::error_code err3;
+                    e.last_mod_time = fs::last_write_time(entry.path(), err3);
+                    e.size = fs::file_size(entry.path(), err3);
+                    e.type = file_type;
+                    e.event_time = std::chrono::system_clock::now();
+                    
+                    // Add to cache
+                    std::string key = e.path.string();
+                    // entries_[key] = e;
+                    
+                    if(emit_initial_list && filter_passed)
+                    {
+                        initial_entries.push_back(e);
+                    }
+                }
+            }
+        }
+        else
+        {
+            for(auto& entry : fs::directory_iterator(path_, err))
+            {
+                bool filter_passed = filter_.should_include(entry.path());
+                fs::error_code err2;
+                fs::file_status file_status = fs::status(entry.path(), err2);
+                auto file_type = file_status.type();
+                if(filter_passed || (file_type == fs::file_type::directory))
+                {
+                    watcher::entry e;
+                    e.path = entry.path();
+                    e.last_path = entry.path();
+                    e.status = watcher::entry_status::created;
+                    
+                    fs::error_code err3;
+                    e.last_mod_time = fs::last_write_time(entry.path(), err3);
+                    e.size = fs::file_size(entry.path(), err3);
+                    e.type = file_type;
+                    e.event_time = std::chrono::system_clock::now();
+                    // Add to cache
+                    std::string key = e.path.string();
+                    // entries_[key] = e;
+                    
+                    if(emit_initial_list && filter_passed)
+                    {
+                        initial_entries.push_back(e);
+                    }
+                }
+            }
+        }
+        
+        // Emit initial list if requested
+        if(emit_initial_list && !initial_entries.empty() && callback_)
+        {
+            callback_(initial_entries, true);
+        }
+    }
+
+    auto get_system_timestamp(const watcher::entry& entry) -> std::chrono::system_clock::time_point
+    {
+        if(entry.status == watcher::entry_status::renamed)
+        {
+            return entry.event_time;
+        }
+        return std::chrono::clock_cast<std::chrono::system_clock>(entry.last_mod_time);
+
+    }
+    
+    void handle_changes(const std::vector<watcher::entry>& changes)
+    {
+        // Filter changes according to this impl's filter and path
+        std::vector<watcher::entry> filtered_changes;
+        
+        for(const auto& entry : changes)
+        {
+            // Check if event is under our watched path (for parent listener reuse)
+            if(!is_path_under_watch(entry.path))
+            {
+                continue;
+            }
+            
+            // Check filter
+            if(!filter_.should_include(entry.path))
+            {
+                continue;
+            }
+            
+            // Check timestamp
+            auto system_timestamp = get_system_timestamp(entry);
+            
+            if(system_timestamp < init_time_timestamp_)
+            {
+                continue;
+            }
+            
+            filtered_changes.push_back(entry);
+        }
+        
+        if(filtered_changes.empty())
+        {
+            return;
+        }
+        
+        // Check if paused
+        if(paused_)
+        {
+            // Buffer changes when paused
+            buffered_changes_.insert(buffered_changes_.end(), filtered_changes.begin(), filtered_changes.end());
+            return;
+        }
+        
+        // Call callback
+        if(callback_)
+        {
+            callback_(filtered_changes, false);
+        }
+    }
+    
+    auto is_path_under_watch(const fs::path& event_path) const -> bool
+    {
+        // Path-level filtering: When reusing a parent listener, we receive events for
+        // the entire parent directory tree. We must filter to only events under our specific path.
+        fs::error_code ec;
+        auto canonical_event_path = fs::weakly_canonical(event_path, ec);
+        auto canonical_watch_path = fs::weakly_canonical(path_, ec);
+        
+        // Check if event path is under our watched path
+        auto rel = canonical_event_path.lexically_relative(canonical_watch_path);
+        return !(rel.empty() || rel.string().substr(0, 2) == "..");
+    }
+    
+    fs::path path_;
+    pattern_filter filter_;
+    bool recursive_;
+    watcher::notify_callback callback_;
+    std::shared_ptr<directory_listener> listener_;
+    
+    std::chrono::system_clock::time_point init_time_timestamp_;
+    uint64_t slot_key_ = 0;
+    std::atomic<bool> paused_ = false;
+    std::vector<watcher::entry> buffered_changes_;
+    /// Cache watched files
+    // std::map<std::string, watcher::entry> entries_;
     std::string watcher_name_;
 };
 
@@ -442,7 +668,7 @@ void watcher_fallback::close()
     watching_ = false;
     // remove all watchers
     unwatch_all_impl();
-
+    
     if(thread_.joinable())
     {
         thread_.join();
@@ -462,26 +688,26 @@ void watcher_fallback::start()
             {
                 watcher::clock_t::duration sleep_time = 99999h;
 
-                // iterate through each watcher and check for modification
-                std::map<std::uint64_t, std::shared_ptr<impl>> watchers;
+                // iterate through each directory listener and check for modification
+                std::map<fs::path, std::shared_ptr<directory_listener>> listeners;
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    watchers = watchers_;
+                    listeners = directory_listeners_;
                 }
 
-                for(auto& pair : watchers)
+                for(auto& pair : listeners)
                 {
-                    auto watcher = pair.second;
+                    auto listener = pair.second;
 
                     auto now = watcher::clock_t::now();
 
-                    auto diff = (watcher->last_poll_ + watcher->poll_interval_) - now;
+                    auto diff = (listener->last_poll_ + listener->poll_interval_) - now;
                     if(diff <= watcher::clock_t::duration(0))
                     {
-                        watcher->watch();
-                        watcher->last_poll_ = now;
+                        listener->watch();
+                        listener->last_poll_ = now;
 
-                        sleep_time = std::min(sleep_time, watcher->poll_interval_);
+                        sleep_time = std::min(sleep_time, listener->poll_interval_);
                     }
                     else
                     {
@@ -507,12 +733,39 @@ auto watcher_fallback::watch_impl(const fs::path& path,
     {
         return 0;
     }
+    std::shared_ptr<directory_listener> listener;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        fs::error_code err;
+        fs::path abs_path = fs::absolute(path, err);
+        auto it = directory_listeners_.find(abs_path);
+        if(it != directory_listeners_.end())
+        {
+            listener = it->second;
+        }
+        else
+        {
+            for(auto& [watched_path, existing_listener] : directory_listeners_)
+            {
+                if(existing_listener->get_recursive() && fs::is_any_parent_path(watched_path, abs_path))
+                {
+                    listener = existing_listener;
+                    break;
+                }
+            }
+            if(!listener)
+            {
+                listener = std::make_shared<directory_listener>(abs_path, recursive, poll_interval);
+                directory_listeners_[abs_path] = listener;
+            }
+        }
+    }
     static std::atomic<std::uint64_t> free_id = {1};
     auto key = free_id++;
+    auto impl = std::make_shared<watcher_fallback::impl>(path, filter, recursive, initial_list, poll_interval, std::move(callback), listener, watcher_name);
     {
-        auto imp = std::make_shared<impl>(path, filter, recursive, initial_list, poll_interval, std::move(callback), watcher_name);
         std::lock_guard<std::mutex> lock(mutex_);
-        watchers_.emplace(key, std::move(imp));
+        watchers_[key] = impl;
     }
     cv_.notify_all();
     return key;
@@ -524,6 +777,22 @@ void watcher_fallback::unwatch_impl(std::uint64_t key)
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_.erase(key);
     }
+    std::set<fs::path> stale_listeners;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for(auto& [path, listener] : directory_listeners_)
+        {
+            if(listener.use_count() == 1)
+            {
+                stale_listeners.insert(path);
+            }
+        }
+    }
+    for(const auto& path : stale_listeners)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        directory_listeners_.erase(path);
+    }
     cv_.notify_all();
 }
 
@@ -532,6 +801,10 @@ void watcher_fallback::unwatch_all_impl()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        directory_listeners_.clear();
     }
     cv_.notify_all();
 }

@@ -83,9 +83,13 @@ public:
     std::condition_variable cv_;
     /// Thread that polls for changes
     std::thread thread_;
-    /// Registered file watchers
+    /// Implementation class for each watch
     class impl;
     std::map<std::uint64_t, std::shared_ptr<impl>> watchers_;
+    
+    /// Directory listeners (shared per directory)
+    class directory_listener;
+    std::map<fs::path, std::shared_ptr<directory_listener>> directory_listeners_;
 };
 
 } // namespace fs

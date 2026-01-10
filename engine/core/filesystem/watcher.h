@@ -33,6 +33,7 @@ public:
         fs::path last_path;
         entry_status status = unmodified;
         fs::file_time_type last_mod_time;
+        std::chrono::system_clock::time_point event_time{};
         std::uintmax_t size = 0;
         fs::file_type type;
     };
