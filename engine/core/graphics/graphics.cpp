@@ -100,9 +100,47 @@ struct gfx_callback final : public bgfx::CallbackI
     void profilerEnd() final
     {
     }
-    void fatal(const char* _filePath, uint16_t _line, bgfx::Fatal::Enum /*_code*/, const char* _str) final
+    void fatal(const char* _filePath, uint16_t _line, bgfx::Fatal::Enum _code, const char* _str) final
     {
-        log("error", _str, _filePath, _line);
+        switch(_code)
+        {
+            case bgfx::Fatal::InvalidShader:
+            {
+                std::string error_msg = "[Invalid Shader] " + std::string(_str);
+                log("error", error_msg, _filePath, _line);
+                break;
+            }
+            case bgfx::Fatal::UnableToInitialize:
+            {
+                std::string error_msg = "[Unable To Initialize] " + std::string(_str);
+                log("error", error_msg, _filePath, _line);
+                break;
+            }
+            case bgfx::Fatal::UnableToCreateTexture:
+            {
+                std::string error_msg = "[Unable To Create Texture] " + std::string(_str);
+                log("error", error_msg, _filePath, _line);
+                break;
+            }
+            case bgfx::Fatal::DeviceLost:
+            {
+                std::string error_msg = "[Device Lost] " + std::string(_str);
+                log("error", error_msg, _filePath, _line);
+                break;
+            }
+            case bgfx::Fatal::DebugCheck:
+            {
+                std::string error_msg = "[Debug Check] " + std::string(_str);
+                log("error", error_msg, _filePath, _line);
+                break;
+            }
+            default:
+            {
+                log("error", _str, _filePath, _line);
+                break;
+            }
+        }
+
     }
 
     uint32_t cacheReadSize(uint64_t /*_id*/) final
