@@ -507,7 +507,13 @@ auto script_component::get_script_components(const mono::mono_type& type) -> std
 
         if(comp_type.get_internal_ptr() == type.get_internal_ptr() || comp_type.is_derived_from(type))
         {
-            result.emplace_back(static_cast<mono::mono_object&>(component.scoped->object));
+            // Validate the object is still valid before adding
+            if(!component.is_marked_for_destroy())
+            {
+                auto& obj = component.scoped->object;
+                // Since the handle is pinned, the object pointer remains valid
+                result.emplace_back(static_cast<mono::mono_object&>(obj));
+            }
         }
     }
 

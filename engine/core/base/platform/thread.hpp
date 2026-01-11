@@ -5,7 +5,7 @@
 #include <thread>
 
 // An attempt at making a wrapper to deal with many Linuxes as well as Windows. Please edit as needed.
-#if UNRAVEL_PLATFORM_WINDOWS && UNRAVEL_COMPILER_MSVC
+#if UNRAVEL_PLATFORM_WINDOWS && (UNRAVEL_COMPILER_MSVC || UNRAVEL_COMPILER_CLANG)
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 

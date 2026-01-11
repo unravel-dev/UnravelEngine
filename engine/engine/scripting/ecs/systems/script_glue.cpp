@@ -814,7 +814,14 @@ auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) ->
 
     if(component.scoped)
     {
-        return static_cast<mono::mono_object&>(component.scoped->object);
+        // Validate the object is still valid before returning
+        // Even with pinned handles, objects can be finalized or corrupted
+        if(!component.is_marked_for_destroy())
+        {
+            auto& obj = component.scoped->object;
+            // Since the handle is pinned, the object pointer remains valid
+            return static_cast<mono::mono_object&>(obj);
+        }
     }
 
     return {};

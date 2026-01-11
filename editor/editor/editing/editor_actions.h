@@ -30,11 +30,11 @@ struct editor_actions
         -> std::map<std::string, tpp::shared_future<void>>;
 
 
-    static void recompile_shaders();
-    static void recompile_textures();
-    static void recompile_ui();
-    static void recompile_scripts();
-    static void recompile_all();
+    static void recompile_shaders(const std::string& group = "");
+    static void recompile_textures(const std::string& group = "");
+    static void recompile_ui(const std::string& group = "");
+    static void recompile_scripts(const std::string& group = "");
+    static void recompile_all(const std::string& group = "");
     static void generate_script_workspace();
     static void open_workspace_on_file(const fs::path& file, int line = 0);
 

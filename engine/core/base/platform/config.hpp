@@ -8,6 +8,11 @@
 #ifndef _NDEBUG
 #define _NDEBUG
 #endif
+#define UNRAVEL_DEBUG 0
+#define UNRAVEL_RELEASE 1
+#else
+#define UNRAVEL_DEBUG 1
+#define UNRAVEL_RELEASE 0
 #endif
 
 
@@ -461,9 +466,9 @@
 
 #if defined(__cplusplus)
 
-static_assert(__cplusplus >= UNRAVEL_LANGUAGE_CPP17, "\n\n"
+static_assert(__cplusplus >= UNRAVEL_LANGUAGE_CPP20, "\n\n"
     "\t** IMPORTANT! **\n\n"
-    "\tC++17 standard support is required to build.\n"
+    "\tC++20 standard support is required to build.\n"
     "\t\n");
 
 // https://releases.llvm.org/

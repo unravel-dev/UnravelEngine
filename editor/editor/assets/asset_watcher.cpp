@@ -335,8 +335,8 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
     auto& em = ctx.get_cached<editing_manager>();
 
     fs::path watch_dir = fs::path(dir).make_preferred();
-
-    auto callback = [&am, &ts, &tm, &em](const auto& entries, bool is_initial_list)
+    hpp::source_location loc = hpp::source_location::current();
+    auto callback = [&am, &ts, &tm, &em, loc](const auto& entries, bool is_initial_list)
     {
         std::set<hpp::uuid> changed;
         std::set<hpp::uuid> removed;
@@ -345,7 +345,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         {
             auto key = get_asset_key(entry.path);
 
-            APPLOG_TRACE("{}", fs::to_string(entry));
+            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "{}", fs::to_string(entry));
 
             if(entry.type == fs::file_type::regular)
             {
@@ -542,8 +542,9 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
 
         for(const auto& output : paths)
         {
+            auto extension = output.extension().string();
             auto it =
-                std::find(std::begin(platform_supported), std::end(platform_supported), output.extension().string());
+                std::find(std::begin(platform_supported), std::end(platform_supported), extension);
 
             if(it == std::end(platform_supported))
             {
@@ -560,10 +561,11 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
-                bool high_priority = gfx::get_current_renderer_filename_extension() == output.extension().string();
-                tpp::priority::group priority = tpp::priority::normal( high_priority ? 100 : 0 );
+                bool high_priority = gfx::get_current_renderer_filename_extension() == extension;
+                tpp::priority::group priority = high_priority ? tpp::priority::normal() : tpp::priority::low();
 
-                auto task = ts.pool->schedule(get_job_name<gfx::shader>(),
+                auto task = ts.pool->schedule(get_job_name<gfx::shader>() + "(" + extension + ")",
+                                              priority,
                                               [&am, ref_path, output]()
                                               {
                                                   asset_compiler::compile<gfx::shader>(am, ref_path, output);
@@ -705,7 +707,12 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
     if(wait)
     {
         auto& ts = ctx.get_cached<threader>();
-        ts.pool->wait_all();
+        APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
+        hpp::source_location loc = hpp::source_location::current();
+        ts.pool->wait_all(tpp::priority::category::normal, [loc](const tpp::thread_pool::progress_info& info)
+        {
+            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
+        });
     }
 }
 
@@ -764,7 +771,12 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     if(wait)
     {
         auto& ts = ctx.get_cached<threader>();
-        ts.pool->wait_all();
+        APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
+        hpp::source_location loc = hpp::source_location::current();
+        ts.pool->wait_all(tpp::priority::category::normal, [loc](const tpp::thread_pool::progress_info& info)
+        {
+            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
+        });
     }
 
     watch_synced<gfx::texture>(ctx, watchers, cache_dir);

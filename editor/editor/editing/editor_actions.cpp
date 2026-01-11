@@ -1434,11 +1434,11 @@ void editor_actions::open_workspace_on_file(const fs::path& file, int line)
         });
 }
 
-void editor_actions::recompile_shaders()
+void editor_actions::recompile_shaders(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    auto shaders = am.get_assets<gfx::shader>();
+    auto shaders = am.get_assets<gfx::shader>(group);
     fs::watcher::pause();
     for(auto& asset : shaders)
     {
@@ -1448,11 +1448,11 @@ void editor_actions::recompile_shaders()
     fs::watcher::resume();
 }
 
-void editor_actions::recompile_textures()
+void editor_actions::recompile_textures(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    auto textures = am.get_assets<gfx::texture>();
+    auto textures = am.get_assets<gfx::texture>(group);
     fs::watcher::pause();
     for(auto& asset : textures)
     {
@@ -1462,13 +1462,13 @@ void editor_actions::recompile_textures()
     fs::watcher::resume();
 }
 
-void editor_actions::recompile_ui()
+void editor_actions::recompile_ui(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     fs::watcher::pause();
     {
-        auto assets = am.get_assets<ui_tree>();
+        auto assets = am.get_assets<ui_tree>(group);
         for(auto& asset : assets)
         {
             auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
@@ -1476,7 +1476,7 @@ void editor_actions::recompile_ui()
         }
     }
     {
-        auto assets = am.get_assets<style_sheet>();
+        auto assets = am.get_assets<style_sheet>(group);
         for(auto& asset : assets)
         {
             auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
@@ -1486,11 +1486,11 @@ void editor_actions::recompile_ui()
    
     fs::watcher::resume();
 }
-void editor_actions::recompile_scripts()
+void editor_actions::recompile_scripts(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    auto scripts = am.get_assets<script>();
+    auto scripts = am.get_assets<script>(group);
     fs::watcher::pause();
     for(auto& asset : scripts)
     {
@@ -1499,11 +1499,11 @@ void editor_actions::recompile_scripts()
     }
     fs::watcher::resume();
 }
-void editor_actions::recompile_all()
+void editor_actions::recompile_all(const std::string& group)
 {
-    recompile_shaders();
-    recompile_textures();
-    recompile_scripts();
-    recompile_ui();
+    recompile_shaders(group);
+    recompile_textures(group);
+    recompile_scripts(group);
+    recompile_ui(group);
 }
 } // namespace unravel

@@ -226,6 +226,11 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 {
                     editor_actions::recompile_all();
                 }
+
+                if(ImGui::MenuItem("All (Project)"))
+                {
+                    editor_actions::recompile_all("app");
+                }
                 ImGui::EndMenu();
             }
 

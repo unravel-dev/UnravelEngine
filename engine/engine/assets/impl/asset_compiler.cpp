@@ -70,10 +70,14 @@ auto escape_str(const std::string& str) -> std::string
 
 auto run_process(const std::string& process,
                  const std::vector<std::string>& args_array,
-                 bool chekc_retcode,
+                 bool check_retcode,
                  std::string& err) -> bool
 {
+    auto now = std::chrono::high_resolution_clock::now();
     auto result = subprocess::call(process, args_array);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - now);
+    APPLOG_TRACE("Process {} took {} ", process, duration);
     err = result.out_output;
 
     if(!result.err_output.empty())
@@ -93,6 +97,70 @@ auto run_process(const std::string& process,
 
     return result.retcode == 0;
 }
+// auto run_process(const std::string& process, const std::vector<std::string>& args_array, bool check_retcode, std::string& err) -> bool
+// {
+//     auto now = std::chrono::high_resolution_clock::now();
+
+//     std::string args;
+//     size_t i = 0;
+//     for(const auto& arg : args_array)
+//     {
+//         if(arg.front() == '-')
+//         {
+//             args += arg;
+//         }
+//         else
+//         {
+//             args += escape_str(arg);
+//         }
+
+//         if(i++ != args_array.size() - 1)
+//             args += " ";
+//     }
+
+//     bx::Error error;
+//     bx::ProcessReader process_reader;
+
+// #if UNRAVEL_PLATFORM_WINDOWS
+//     process_reader.open((process + " " + args).c_str(), "", &error);
+// #else
+//     process_reader.open(process.c_str(), args.c_str(), &error);
+// #endif
+
+//     bool ok = true;
+//     if(!error.isOk())
+//     {
+//         err = std::string(error.getMessage().getCPtr());
+//         ok = false;
+//     }
+//     else
+//     {
+//         std::array<char, 2048 * 32> buffer;
+//         buffer.fill(0);
+//         int32_t sz = process_reader.read(buffer.data(), static_cast<std::int32_t>(buffer.size()), &error);
+
+//         process_reader.close();
+//         int32_t result = process_reader.getExitCode();
+
+        
+//         if(0 != result)
+//         {
+//             err = std::string(error.getMessage().getCPtr());
+//             if(sz > 0)
+//             {
+//                 err += " " + std::string(buffer.data());
+//             }
+//             ok = false;
+//         }
+
+//     }
+
+    
+//     auto end = std::chrono::high_resolution_clock::now();
+//     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - now);
+//     APPLOG_TRACE("Process {} took {} ", process, duration);
+//     return ok;
+// }
 
 void copy_compiled_file(const fs::path& from, const fs::path& to)
 {
@@ -409,7 +477,13 @@ auto compile_shader_to_file(const fs::path& input_path,
     std::string str_platform;
     std::string str_profile;
     std::string str_type;
-    std::string str_opt = "3";
+
+    bool optimize = true;
+// #if UNRAVEL_DEBUG
+//     optimize = false;
+// #endif
+
+    std::string str_opt = optimize ? "3" : "0";
 
     bool vs = hpp::string_view(file).starts_with("vs_");
     bool fs = hpp::string_view(file).starts_with("fs_");
@@ -428,12 +502,11 @@ auto compile_shader_to_file(const fs::path& input_path,
         if(vs || fs)
         {
             str_profile = "s_5_0";
-            str_opt = "3";
         }
         else if(cs)
         {
             str_profile = "s_5_0";
-            str_opt = "1";
+            str_opt = optimize ? "1" : "0";
         }
     }
     else if(renderer == gfx::renderer_type::OpenGLES)
@@ -514,7 +587,6 @@ auto compile_shader_to_file(const fs::path& input_path,
         APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, output_path.filename().string(), error);
         return false;
     }
-    
     return true;
 }
 
