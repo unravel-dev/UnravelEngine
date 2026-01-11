@@ -555,10 +555,14 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
             {
                 continue;
             }
+            
 
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
+                bool high_priority = gfx::get_current_renderer_filename_extension() == output.extension().string();
+                tpp::priority::group priority = tpp::priority::normal( high_priority ? 100 : 0 );
+
                 auto task = ts.pool->schedule(get_job_name<gfx::shader>(),
                                               [&am, ref_path, output]()
                                               {
