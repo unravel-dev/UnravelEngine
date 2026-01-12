@@ -613,7 +613,7 @@ private:
             auto file_timestamp = fs::last_write_time(event.path_name, err);
             if(!err)
             {
-                system_timestamp = std::chrono::clock_cast<std::chrono::system_clock>(file_timestamp);
+                system_timestamp = fs::filetime_to_system_clock(file_timestamp);
             }
             else 
             {

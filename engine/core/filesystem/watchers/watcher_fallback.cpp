@@ -552,7 +552,7 @@ private:
         {
             return entry.event_time;
         }
-        return std::chrono::clock_cast<std::chrono::system_clock>(entry.last_mod_time);
+        return fs::filetime_to_system_clock(entry.last_mod_time);
 
     }
     

@@ -101,6 +101,17 @@ public:
 
 auto to_string(const watcher::entry& e) -> std::string;
 
+
+inline auto filetime_to_system_clock(fs::file_time_type ft) -> std::chrono::system_clock::time_point
+{
+    using namespace std::chrono;
+
+    const auto now_file = fs::file_time_type::clock::now();
+    const auto now_sys  = system_clock::now();
+
+    return now_sys + (ft - now_file);
+}
+
 } // namespace fs
 
 #endif
