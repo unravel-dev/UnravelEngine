@@ -41,7 +41,7 @@ namespace
         {
             for(auto& obj : script_objects)
             {
-                if(obj.scoped->object.get_type().get_hash() == hash)
+                if(obj.pinned->object.get_type().get_hash() == hash)
                 {
                     return &obj;
                 }
@@ -1216,7 +1216,7 @@ namespace unravel
 {
 SAVE(script_component::script_object)
 {
-    const auto& object = obj.scoped->object;
+    const auto& object = obj.pinned->object;
     const auto& type = object.get_type();
 
     try_save_mono_type(ar, "type", type);
@@ -1253,7 +1253,7 @@ LOAD(script_component::script_object)
         obj = script_component::script_object(object);
     }
 
-    LOAD_FUNCTION_NAME(ar, obj.scoped->object);
+    LOAD_FUNCTION_NAME(ar, obj.pinned->object);
 
 }
 LOAD_INSTANTIATE(script_component::script_object, ser20::iarchive_associative_t);

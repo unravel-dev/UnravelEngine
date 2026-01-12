@@ -673,11 +673,11 @@ auto internal_add_native_component(const mono::mono_type& type, entt::handle e, 
     {
         auto comp = script_comp.get_native_component(type);
 
-        if(!comp.scoped)
+        if(!comp.pinned)
         {
             comp = script_comp.add_native_component(type);
         }
-        return static_cast<mono::mono_object&>(comp.scoped->object);
+        return static_cast<mono::mono_object&>(comp.pinned->object);
     }
 
     return {};
@@ -691,16 +691,16 @@ auto internal_get_native_component_impl(const mono::mono_type& type,
     auto comp = script_comp.get_native_component(type);
     if(exists)
     {
-        if(!comp.scoped)
+        if(!comp.pinned)
         {
             comp = script_comp.add_native_component(type);
         }
-        return static_cast<mono::mono_object&>(comp.scoped->object);
+        return static_cast<mono::mono_object&>(comp.pinned->object);
     }
 
-    if(comp.scoped)
+    if(comp.pinned)
     {
-        script_comp.remove_native_component(comp.scoped->object);
+        script_comp.remove_native_component(comp.pinned->object);
     }
 
     return {};
@@ -791,7 +791,7 @@ auto internal_m2n_add_component(entt::entity id, const mono::mono_type& type) ->
     }
 
     auto component = script_comp.add_script_component(type);
-    return static_cast<mono::mono_object&>(component.scoped->object);
+    return static_cast<mono::mono_object&>(component.pinned->object);
 }
 
 auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object
@@ -812,13 +812,13 @@ auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) ->
 
     auto component = script_comp.get_script_component(type);
 
-    if(component.scoped)
+    if(component.pinned)
     {
         // Validate the object is still valid before returning
         // Even with pinned handles, objects can be finalized or corrupted
         if(!component.is_marked_for_destroy())
         {
-            auto& obj = component.scoped->object;
+            auto& obj = component.pinned->object;
             // Since the handle is pinned, the object pointer remains valid
             return static_cast<mono::mono_object&>(obj);
         }

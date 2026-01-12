@@ -21,7 +21,6 @@ namespace unravel
 class script_component : public component_crtp<script_component, owned_component>
 {
 public:
-    using scoped_object_ptr = std::shared_ptr<mono::mono_scoped_object>;
 
     struct script_object_state
     {
@@ -36,7 +35,7 @@ public:
         script_object() = default;
         script_object(const mono::mono_object& obj)
         {
-            scoped = std::make_shared<mono::mono_scoped_object>(obj);
+            pinned = mono::make_object_pinned(obj);
             state = std::make_shared<script_component::script_object_state>();
         }
         
@@ -95,7 +94,7 @@ public:
             return state->active == 0;
         }
 
-        scoped_object_ptr scoped;
+        mono::mono_object_pinned_ptr pinned;
         std::shared_ptr<script_object_state> state;
     };
 

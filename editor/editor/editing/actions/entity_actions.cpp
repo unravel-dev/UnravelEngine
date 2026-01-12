@@ -422,7 +422,7 @@ void entity_add_script_component_action_t::do_action()
             }
             
             auto script_obj = script_comp->add_script_component(script_type);
-            do_was_successful = script_obj.scoped != nullptr;
+            do_was_successful = script_obj.pinned != nullptr;
         }
     }
 }
@@ -513,14 +513,14 @@ void entity_remove_script_component_action_t::do_action()
                     const auto& script_obj = comps[script_index];
                     
                     // Verify this is the correct type
-                    if (script_obj.scoped && script_obj.scoped->object.get_type().get_fullname() == script_type_name)
+                    if (script_obj.pinned && script_obj.pinned->object.get_type().get_fullname() == script_type_name)
                     {
                         // Serialize the script object before removing it
                         removed_script_object_data = {};
                         save_to_stream(removed_script_object_data, entity, script_obj);
                         
                         // Remove the specific script component instance
-                        do_was_successful = script_comp->remove_script_component(script_obj.scoped->object);
+                        do_was_successful = script_comp->remove_script_component(script_obj.pinned->object);
                         if (do_was_successful)
                         {
                             script_comp->process_pending_deletions();
@@ -531,7 +531,7 @@ void entity_remove_script_component_action_t::do_action()
                 {
                     // Fallback to old behavior: remove first component of this type
                     auto script_obj = script_comp->get_script_component(script_type);
-                    if (script_obj.scoped)
+                    if (script_obj.pinned)
                     {
                         // Serialize the script object before removing it
                         removed_script_object_data = {};

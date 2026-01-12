@@ -2294,7 +2294,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     return result;
 }
 
-auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
+auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
                                            entt::meta_any& var,
                                            const meta_any_proxy& var_proxy,
                                            const var_info& info,
@@ -2311,7 +2311,7 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
         {
-            auto& data = var.cast<mono::mono_scoped_object&>();
+            auto& data = var.cast<mono::mono_object_pinned&>();
             auto& mono_obj = static_cast<mono::mono_object&>(data.object);
             result = entt::forward_as_meta(mono_obj);
             return true;
@@ -2330,7 +2330,7 @@ auto inspector_mono_scoped_object::inspect(rtti::context& ctx,
     };
 
 
-    auto& data = var.cast<mono::mono_scoped_object&>();
+    auto& data = var.cast<mono::mono_object_pinned&>();
     auto& mono_obj = static_cast<mono::mono_object&>(data.object);
     auto obj_var = entt::forward_as_meta(mono_obj);
 

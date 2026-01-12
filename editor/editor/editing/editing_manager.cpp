@@ -102,6 +102,8 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     waiting_for_compilation_before_play_ = true;
 
+    push_undo_stack_enabled(false);  
+
 
     exit_prefab_mode(ctx, save_option::no);
 
@@ -150,6 +152,8 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
         }
     }
 
+    pop_undo_stack_enabled();
+
     waiting_for_compilation_before_play_ = false;
 
 }
@@ -157,6 +161,8 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 void editing_manager::on_play_after_end(rtti::context& ctx)
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
+    push_undo_stack_enabled(false);  
+
     unselect();
 
     const auto& scenes = scene::get_all_scenes();
@@ -172,6 +178,13 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         save_checkpoint(ctx, cache);
     }
 
+    pop_undo_stack_enabled();
+
+    
+    undo_stack.clear();
+    pending_actions.clear();
+
+    
     auto& scripting = ctx.get_cached<script_system>();
     scripting.unload_app_domain();
     scripting.unload_engine_domain();
@@ -190,9 +203,6 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
     caches_.clear();
 
-    undo_stack.clear();
-    pending_actions.clear();
-
     ctx.get_cached<simulation>().set_time_scale(1.0f);
 }
 
@@ -202,6 +212,10 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
     {
         return;
     }
+    undo_stack.clear();
+
+
+    push_undo_stack_enabled(false);  
 
     save_selection(ctx);
 
@@ -229,6 +243,7 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
     }
 
     caches_.clear();
+    pop_undo_stack_enabled();
 }
 
 void editing_manager::save_selection(rtti::context& ctx)
@@ -790,7 +805,13 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
 
 void editing_manager::push_undo_stack_enabled(bool enabled)
 {
-    undo_stack_enabled.push(enabled);
+    bool last_enabled = true;
+    if(!undo_stack_enabled.empty())
+    {
+        last_enabled = undo_stack_enabled.top();
+    }
+
+    undo_stack_enabled.push(enabled && last_enabled);
 }
 void editing_manager::pop_undo_stack_enabled()
 {
