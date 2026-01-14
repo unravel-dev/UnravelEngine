@@ -325,14 +325,18 @@ endforeach()
 
 # Now install the remaining files from the directory, skipping those executables.
 install(DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/
+        COMPONENT UnravelEngine
         DESTINATION .
-        FILES_MATCHING PATTERN "*")
+        FILES_MATCHING PATTERN "*"
+        )
 
 # Install each executable using its generator expression for its file path.
 foreach(exec ${exec_targets})
 
   install(PROGRAMS "$<TARGET_FILE:${exec}>"
-          DESTINATION .)
+          COMPONENT UnravelEngine
+          DESTINATION .
+          )
 endforeach()
 
 
@@ -340,6 +344,7 @@ endforeach()
 
 set(CPACK_PACKAGE_NAME "UnravelEngine")
 set(CPACK_PACKAGE_VERSION "${VERSION_SHORT}")
+set(CPACK_COMPONENTS_ALL UnravelEngine)
 
 
 # 3) Override the *file* name for all generators (NSIS, ZIP, DEB, RPM, etc):
