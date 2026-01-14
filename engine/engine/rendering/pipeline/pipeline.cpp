@@ -1,4 +1,5 @@
 #include "pipeline.h"
+#include "bx/bx.h"
 #include "engine/rendering/camera.h"
 #include <engine/rendering/batch_collector.h>
 #include <engine/assets/asset_manager.h>
@@ -68,6 +69,14 @@ void pipeline::gather_visible_models(scene& scn,
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
     moodycamel::ConcurrentQueue<std::pair<entt::entity, lod_data>> queue;
+
+    if(cam)
+    {
+        // first force get the frustum to ensure it is up to date. it is internally cached and we don't want
+        // to updated it in the loop since it is not thread safe. Force it here.
+        auto& frustum = cam->get_frustum();
+        BX_UNUSED(frustum);
+    }
 
     //get_lod_data_for_camera is not thread safe but we are only operating on a single model once
     //so we can use parallel execution here
