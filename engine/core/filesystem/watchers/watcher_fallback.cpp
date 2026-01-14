@@ -1,4 +1,5 @@
 #include "watcher_fallback.h"
+#include <filesystem>
 #include <set>
 #include <utility>
 #include <base/platform/thread.hpp>
@@ -85,6 +86,7 @@ public:
         : root_(path)
         , poll_interval_(poll_interval)
         , recursive_(recursive)
+        , init_time_timestamp_(std::chrono::system_clock::now())
     {
         observed_changes changes;
         if(recursive_)
@@ -92,7 +94,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::recursive_directory_iterator(root_, err))
             {
-                poll_entry(entry.path(), changes);
+                poll_entry(entry, changes);
             }
         }
         else
@@ -100,7 +102,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::directory_iterator(root_, err))
             {
-                poll_entry(entry.path(), changes);
+                poll_entry(entry, changes);
             }
         }
     }
@@ -139,7 +141,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::recursive_directory_iterator(root_, err))
             {
-                poll_entry(entry.path(), changes);
+                poll_entry(entry, changes);
             }
         }
         else
@@ -147,7 +149,7 @@ public:
             fs::error_code err;
             for(auto& entry : fs::directory_iterator(root_, err))
             {
-                poll_entry(entry.path(), changes);
+                poll_entry(entry, changes);
             }
         }
         if(paused)
@@ -322,16 +324,16 @@ public:
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    void poll_entry(const fs::path& path,
+    void poll_entry(const fs::directory_entry& entry,
                     observed_changes& changes)
     {
         // get the last modification time
         fs::error_code err;
-        auto time = fs::last_write_time(path, err);
-        auto size = fs::file_size(path, err);
-        fs::file_status status = fs::status(path, err);
+        auto time = entry.last_write_time( err);
+        auto size = entry.file_size( err);
+        fs::file_status status = entry.status( err);
         // add a new modification time to the map
-        std::string key = path.string();
+        std::string key = entry.path().string();
         auto it = entries_.find(key);
         if(it != entries_.end())
         {
@@ -343,7 +345,12 @@ public:
                 fi.last_mod_time = time;
                 fi.status = watcher::entry_status::modified;
                 fi.type = status.type();
-                fi.event_time = std::chrono::system_clock::now();
+                
+                // on modify set the event time to the last modification time.
+                // since modifications are always observed while watching, we can use the last modification time.
+                auto last_mod_time = fs::filetime_to_system_clock(time);
+                fi.event_time = last_mod_time;
+
                 changes.entries.push_back(fi);
                 changes.modified.push_back(changes.entries.size() - 1);
             }
@@ -357,12 +364,14 @@ public:
         {
             // or compare with an older one
             auto& fi = entries_[key];
-            fi.path = path;
-            fi.last_path = path;
+            fi.path = entry.path();
+            fi.last_path = entry.path();
             fi.last_mod_time = time;
             fi.status = watcher::entry_status::created;
             fi.size = size;
             fi.type = status.type();
+
+            // on create set the event time to the current time
             fi.event_time = std::chrono::system_clock::now();
             changes.entries.push_back(fi);
             changes.created.push_back(changes.entries.size() - 1);
@@ -389,6 +398,8 @@ private:
     fs::path root_;
     /// Cache watched files
     std::map<std::string, watcher::entry> entries_;
+
+    std::chrono::system_clock::time_point init_time_timestamp_;
     ///
     watcher::clock_t::duration poll_interval_ = 500ms;
 
@@ -470,6 +481,39 @@ public:
     }
 
 private:
+    void poll_entry(const fs::directory_entry& entry, std::vector<watcher::entry>& initial_entries, bool emit_initial_list)
+    {
+        bool filter_passed = filter_.should_include(entry.path());
+        fs::error_code err2;
+        fs::file_status file_status = entry.status(err2);
+
+        auto file_type = file_status.type();
+        if(filter_passed || (file_type == fs::file_type::directory))
+        {
+            watcher::entry e;
+            e.path = entry.path();
+            e.last_path = entry.path();
+            e.status = watcher::entry_status::created;
+            
+            fs::error_code err3;
+            e.last_mod_time = entry.last_write_time(err3);
+            e.size = entry.file_size(err3);
+            e.type = file_type;
+            
+            // on create set the event time to the current time
+            e.event_time = std::chrono::system_clock::now();
+            
+            // Add to cache
+            std::string key = e.path.string();
+            
+            if(emit_initial_list && filter_passed)
+            {
+                initial_entries.push_back(e);
+            }
+        }
+
+    }
+
     void initialize_entries(bool emit_initial_list)
     {
         // Iterate through the directory and populate entries_ cache
@@ -480,62 +524,14 @@ private:
         {
             for(auto& entry : fs::recursive_directory_iterator(path_, err))
             {
-                bool filter_passed = filter_.should_include(entry.path());
-                
-                fs::error_code err2;
-                fs::file_status file_status = fs::status(entry.path(), err2);
-                auto file_type = file_status.type();
-                if(filter_passed || (file_type == fs::file_type::directory))
-                {
-                    watcher::entry e;
-                    e.path = entry.path();
-                    e.last_path = entry.path();
-                    e.status = watcher::entry_status::created;
-                    
-                    fs::error_code err3;
-                    e.last_mod_time = fs::last_write_time(entry.path(), err3);
-                    e.size = fs::file_size(entry.path(), err3);
-                    e.type = file_type;
-                    e.event_time = std::chrono::system_clock::now();
-                    
-                    // Add to cache
-                    std::string key = e.path.string();
-                    
-                    if(emit_initial_list && filter_passed)
-                    {
-                        initial_entries.push_back(e);
-                    }
-                }
+                poll_entry(entry, initial_entries, emit_initial_list); 
             }
         }
         else
         {
             for(auto& entry : fs::directory_iterator(path_, err))
             {
-                bool filter_passed = filter_.should_include(entry.path());
-                fs::error_code err2;
-                fs::file_status file_status = fs::status(entry.path(), err2);
-                auto file_type = file_status.type();
-                if(filter_passed || (file_type == fs::file_type::directory))
-                {
-                    watcher::entry e;
-                    e.path = entry.path();
-                    e.last_path = entry.path();
-                    e.status = watcher::entry_status::created;
-                    
-                    fs::error_code err3;
-                    e.last_mod_time = fs::last_write_time(entry.path(), err3);
-                    e.size = fs::file_size(entry.path(), err3);
-                    e.type = file_type;
-                    e.event_time = std::chrono::system_clock::now();
-                    // Add to cache
-                    std::string key = e.path.string();
-                    
-                    if(emit_initial_list && filter_passed)
-                    {
-                        initial_entries.push_back(e);
-                    }
-                }
+                poll_entry(entry, initial_entries, emit_initial_list);
             }
         }
         
@@ -548,11 +544,11 @@ private:
 
     auto get_system_timestamp(const watcher::entry& entry) -> std::chrono::system_clock::time_point
     {
-        if(entry.status == watcher::entry_status::renamed)
+        // if(entry.status == watcher::entry_status::renamed || entry.status == watcher::entry_status::removed)
         {
             return entry.event_time;
         }
-        return fs::filetime_to_system_clock(entry.last_mod_time);
+        // return fs::filetime_to_system_clock(entry.last_mod_time);
 
     }
     
@@ -657,7 +653,11 @@ void watcher_fallback::resume()
     }
 }
 
-
+void watcher_fallback::wait_all(watcher::clock_t::duration duration)
+{
+    cv_.notify_all();
+    std::this_thread::sleep_for(duration);
+}
 void watcher_fallback::close()
 {
     // stop the thread
@@ -729,6 +729,7 @@ auto watcher_fallback::watch_impl(const fs::path& path,
     {
         return 0;
     }
+
     std::shared_ptr<directory_listener> listener;
     {
         std::lock_guard<std::mutex> lock(mutex_);

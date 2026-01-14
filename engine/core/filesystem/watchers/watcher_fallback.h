@@ -55,6 +55,8 @@ public:
     void pause();
     void resume();
 
+    void wait_all(watcher::clock_t::duration duration);
+
     //-----------------------------------------------------------------------------
     //  Name : close ()
     /// <summary>
