@@ -27,6 +27,7 @@
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/layers/layer_mask.hpp>
 #include <graphics/texture.h>
+#include <hpp/finally.hpp>
 
 namespace unravel
 {
@@ -41,7 +42,9 @@ namespace
         {
             for(auto& obj : script_objects)
             {
-                if(obj.pinned->object.get_type().get_hash() == hash)
+                auto mono_obj = obj.pinned->get_object();
+                const auto& type = mono_obj.get_type();
+                if(type.get_hash() == hash)
                 {
                     return &obj;
                 }
@@ -1216,7 +1219,7 @@ namespace unravel
 {
 SAVE(script_component::script_object)
 {
-    const auto& object = obj.pinned->object;
+    auto object = obj.pinned->get_object();
     const auto& type = object.get_type();
 
     try_save_mono_type(ar, "type", type);
@@ -1253,7 +1256,9 @@ LOAD(script_component::script_object)
         obj = script_component::script_object(object);
     }
 
-    LOAD_FUNCTION_NAME(ar, obj.pinned->object);
+    auto pinned_object = obj.pinned->get_object();
+
+    LOAD_FUNCTION_NAME(ar, pinned_object);
 
 }
 LOAD_INSTANTIATE(script_component::script_object, ser20::iarchive_associative_t);
@@ -1277,7 +1282,13 @@ LOAD(script_component)
 
         script_component_loader_context ctx;
         ctx.script_objects = obj.get_script_components();
+        
         script_component_loader_ctx = &ctx;
+
+        auto _ = hpp::finally([&]()
+        {
+            script_component_loader_ctx = nullptr;
+        });
 
 
         script_component::script_components_t comps;
@@ -1286,7 +1297,6 @@ LOAD(script_component)
             obj.add_missing_script_components(comps);
         }
 
-        script_component_loader_ctx = nullptr;
     }
     else
     {

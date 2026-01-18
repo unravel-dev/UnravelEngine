@@ -22,6 +22,8 @@
 namespace unravel
 {
 
+class batch_collector;
+
 /**
  * @struct lod_data
  * @brief Contains level of detail (LOD) data for an entity per view.
@@ -63,7 +65,12 @@ struct submesh_pose_mat4
      * @brief Maps submesh index to a list of transform indices.
      * Key: submesh_index, Value: list of indices into the transforms array
      */
-    hpp::small_vector<hpp::small_vector<uint32_t>> submesh_to_transform_indices;
+    struct transform_index
+    {
+        uint32_t index{};
+        bool active{};
+    };
+    hpp::small_vector<hpp::small_vector<transform_index>> submesh_to_transform_indices;
     
     /**
      * @brief Clears all data.
@@ -90,7 +97,7 @@ struct submesh_pose_mat4
      * @param transform The transform to add.
      * @return The index of the transform in the transforms array.
      */
-    auto add_transform(const std::vector<uint32_t>& submesh_indices, const math::mat4& transform) -> uint32_t
+    auto add_transform(const std::vector<uint32_t>& submesh_indices, const math::mat4& transform, bool active) -> uint32_t
     {
         // Add the transform to the pool
         uint32_t transform_index = static_cast<uint32_t>(transforms.size());
@@ -112,7 +119,7 @@ struct submesh_pose_mat4
         // Map all submesh indices to this transform
         for(uint32_t submesh_index : submesh_indices)
         {
-            submesh_to_transform_indices[submesh_index].emplace_back(transform_index);
+            submesh_to_transform_indices[submesh_index].emplace_back(transform_index, active);
         }
         
         return transform_index;
@@ -145,10 +152,10 @@ struct submesh_pose_mat4
             const auto& indices = submesh_to_transform_indices[submesh_index];
             if(instance_index < indices.size())
             {
-                uint32_t transform_index = indices[instance_index];
-                if(transform_index < transforms.size())
+                auto transform_index = indices[instance_index];
+                if(transform_index.active && transform_index.index < transforms.size())
                 {
-                    return &transforms[transform_index];
+                    return &transforms[transform_index.index];
                 }
             }
         }
@@ -164,6 +171,25 @@ struct submesh_pose_mat4
     {
         return submesh_index < submesh_to_transform_indices.size() && 
                !submesh_to_transform_indices[submesh_index].empty();
+    }
+
+    /**
+     * @brief Checks if a transform is active.
+     * @param submesh_index The index of the submesh.
+     * @param instance_index The instance index (0 to get_transform_count()-1).
+     * @return True if the transform is active, false otherwise.
+     */
+    auto get_transform_active(uint32_t submesh_index, size_t instance_index) const -> bool
+    {
+        if(submesh_index < submesh_to_transform_indices.size())
+        {
+            const auto& indices = submesh_to_transform_indices[submesh_index];
+            if(instance_index < indices.size())
+            {
+                return indices[instance_index].active;
+            }
+        }
+        return false;
     }
 };
 
@@ -423,6 +449,20 @@ public:
                 const std::vector<pose_mat4>& skinning_transforms,
                 unsigned int lod,
                 const submit_callbacks& callbacks) const;
+
+    /**
+     * @brief Collects this model into a batch collector for instanced rendering.
+     * @param collector The batch collector to add this model to.
+     * @param world_transform The world transform of the model.
+     * @param submesh_transforms The submesh transforms (many-to-many mapping).
+     * @param lod_index The level of detail to use.
+     * @param lod_param The LOD transition parameter (for smooth LOD transitions).
+     */
+    void submit_for_batching(batch_collector& collector,
+                            const math::mat4& world_transform,
+                            const submesh_pose_mat4& submesh_transforms,
+                            uint32_t lod_index,
+                            float lod_param = 0.0f) const;
 
     /**
      * @brief Gets the default material.

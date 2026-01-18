@@ -4,6 +4,7 @@
 #include "material.h"
 #include "mesh.h"
 #include "camera.h"
+#include "batch_collector.h"
 
 #include <algorithm>
 #include <cmath>
@@ -659,6 +660,93 @@ auto model::fallback_material() -> asset_handle<material>&
 {
     static asset_handle<material> asset;
     return asset;
+}
+
+void model::submit_for_batching(batch_collector& collector,
+                                const math::mat4& world_transform,
+                                const submesh_pose_mat4& submesh_transforms,
+                                uint32_t lod_index,
+                                float lod_param) const
+{
+    auto mesh_asset = get_lod(lod_index);
+    if(!mesh_asset)
+    {
+        return;
+    }
+
+    auto mesh = mesh_asset.get();
+    if(!mesh)
+    {
+        return;
+    }
+
+    // Iterate over data groups (material groups)
+    const auto data_group_count = mesh->get_data_groups_count();
+
+    for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
+    {
+        // Get material for this data group
+        auto material_ptr = get_material_instance(data_group_id);
+        if(!material_ptr)
+        {
+            continue; // Skip data groups without valid materials
+        }
+
+        // Get all non-skinned submeshes for this data group
+        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
+        
+        // Collect each submesh in this data group as a separate batch entry
+        for (size_t submesh_idx : submesh_indices)
+        {
+            uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
+
+            // Check if this submesh has specific transforms
+            if (submesh_transforms.has_transforms(submesh_index))
+            {
+                // This submesh has one or more node transforms - create an instance for each
+                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
+                
+                for (size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
+                {
+                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
+                    if (!transform_ptr)
+                    {
+                        continue;
+                    }
+                    
+                    // Create batch key
+                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                    if (!key.is_valid())
+                    {
+                        continue;
+                    }
+
+                    // Create batch instance with the specific transform
+                    batch_instance instance(transform_ptr);
+                    instance.lod_params.x = lod_param;
+
+                    // Collect for batching
+                    collector.collect_renderable(key, instance);
+                }
+            }
+            else
+            {
+                // No specific transform for this submesh - use world transform
+                batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                if (!key.is_valid())
+                {
+                    continue;
+                }
+
+                // Create batch instance with world transform
+                batch_instance instance(&world_transform);
+                instance.lod_params.x = lod_param;
+
+                // Collect for batching
+                collector.collect_renderable(key, instance);
+            }
+        }
+    }
 }
 
 } // namespace unravel

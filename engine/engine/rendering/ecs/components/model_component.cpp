@@ -127,16 +127,17 @@ void get_transforms_for_entities(const std::vector<entt::handle>& entities,
                   entities.end(),
                   [&](entt::handle e)
                   {
-                      auto&& [transform_comp, submesh_comp, bone_comp] =
-                          e.try_get<transform_component, submesh_component, bone_component>();
+                      auto&& [transform_comp, submesh_comp, bone_comp, active_comp] =
+                          e.try_get<transform_component, submesh_component, bone_component, active_component>();
                       if(transform_comp)
                       {
                           const auto& transform_global = transform_comp->get_transform_global().get_matrix();
 
                           if(submesh_comp && !submesh_comp->submeshes.empty())
                           {
+                              bool active = active_comp != nullptr;
                               // Add the transform once and map all submesh indices to it
-                              submesh_pose.add_transform(submesh_comp->submeshes, transform_global);
+                              submesh_pose.add_transform(submesh_comp->submeshes, transform_global, active);
                           }
 
                           if(bone_comp)

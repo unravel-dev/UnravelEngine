@@ -676,13 +676,12 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
         if (can_batch)
         {
-            // Collect this model for batching with appropriate transforms
-            collect_model_for_batching(model, world_transform, submesh_transforms, current_lod_index, params.x);
-            
+            // Collect this model for batching with appropriate transforms            
+            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x);
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                collect_model_for_batching(model, world_transform, submesh_transforms, target_lod_index, params_inv.x);
+                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x);
             }
         }
         else
@@ -719,94 +718,6 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         submit_batched_geometry(pass, camera);
     }
     gfx::discard();
-}
-
-void deferred::collect_model_for_batching(const model& m, 
-                                         const math::mat4& world_transform,
-                                         const submesh_pose_mat4& submesh_transforms,
-                                         uint32_t lod_index, 
-                                         float lod_param)
-{
-
-    auto mesh_asset = m.get_lod(lod_index);
-    if(!mesh_asset)
-    {
-        return;
-    }
-
-    auto mesh = mesh_asset.get();
-    if(!mesh)
-    {
-        return;
-    }
-
-    // Iterate over data groups (material groups)
-    const auto data_group_count = mesh->get_data_groups_count();
-
-    for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
-    {
-        // Get material for this data group
-        auto material_ptr = m.get_material_instance(data_group_id);
-        if(!material_ptr)
-        {
-            continue; // Skip data groups without valid materials
-        }
-
-        // Get all non-skinned submeshes for this data group
-        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
-        
-        // Collect each submesh in this data group as a separate batch entry
-        for (size_t submesh_idx : submesh_indices)
-        {
-            uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
-
-            // Check if this submesh has specific transforms
-            if (submesh_transforms.has_transforms(submesh_index))
-            {
-                // This submesh has one or more node transforms - create an instance for each
-                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
-                
-                for (size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
-                {
-                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
-                    if (!transform_ptr)
-                    {
-                        continue;
-                    }
-                    
-                    // Create batch key
-                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
-                    if (!key.is_valid())
-                    {
-                        continue;
-                    }
-
-                    // Create batch instance with the specific transform
-                    batch_instance instance(transform_ptr);
-                    instance.lod_params.x = lod_param;
-
-                    // Collect for batching
-                    batch_collector_.collect_renderable(key, instance);
-                }
-            }
-            else
-            {
-                // No specific transform for this submesh - use world transform
-                batch_key key(mesh, material_ptr, lod_index, submesh_index);
-                if (!key.is_valid())
-                {
-                    continue;
-                }
-
-                // Create batch instance with world transform
-                batch_instance instance(&world_transform);
-                instance.lod_params.x = lod_param;
-
-                // Collect for batching
-                batch_collector_.collect_renderable(key, instance);
-            }
-        }
-    }
 }
 
 void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& camera)
@@ -1446,13 +1357,13 @@ auto deferred::init(rtti::context& ctx) -> bool
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
 
-    geom_program_.program = load_program("vs_deferred_geom", "fs_deferred_geom");
+    geom_program_.program = load_program("deferred_geom/vs_deferred_geom", "deferred_geom/fs_deferred_geom");
     geom_program_.cache_uniforms();
 
-    geom_program_skinned_.program = load_program("vs_deferred_geom_skinned", "fs_deferred_geom");
+    geom_program_skinned_.program = load_program("deferred_geom/vs_deferred_geom_skinned", "deferred_geom/fs_deferred_geom");
     geom_program_skinned_.cache_uniforms();
 
-    geom_program_instanced_.program = load_program("vs_deferred_geom_instanced", "fs_deferred_geom");
+    geom_program_instanced_.program = load_program("deferred_geom/vs_deferred_geom_instanced", "deferred_geom/fs_deferred_geom");
     geom_program_instanced_.cache_uniforms();
 
     sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");

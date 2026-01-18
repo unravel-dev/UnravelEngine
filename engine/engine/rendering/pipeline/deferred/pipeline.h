@@ -253,7 +253,6 @@ private:
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;
     void submit_pbr_material(geom_program& program, const pbr_material& mat);
     void submit_batched_geometry(gfx::render_pass& pass, const camera& camera);
-    void collect_model_for_batching(const model& model_asset, const math::mat4& world_transform, const submesh_pose_mat4& submesh_transforms, uint32_t lod_index, float lod_param);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];

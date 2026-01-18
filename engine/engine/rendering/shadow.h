@@ -674,12 +674,6 @@ private:
                                      const camera* cam,
                                      ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
     
-    void collect_model_for_shadow_batching_cascade(batch_collector& collector,
-                                                  const model& model_asset, 
-                                                  const math::mat4& world_transform,
-                                                  const submesh_pose_mat4& submesh_transforms,
-                                                  uint32_t lod_index);
-    
     void submit_batched_shadow_geometry_cascade(batch_collector& collector,
                                                uint8_t viewId, 
                                                ShadowMapSettings* currentSmSettings,

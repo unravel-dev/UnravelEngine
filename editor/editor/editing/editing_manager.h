@@ -462,7 +462,7 @@ struct editing_manager
     auto has_unsaved_changes() const -> bool { return has_unsaved_changes_; }
     void clear_unsaved_changes() { has_unsaved_changes_ = false; }
 
-    void clear();
+    void clear(bool clear_unsaved = true);
 
     // Prefab editing mode methods
     void enter_prefab_mode(rtti::context& ctx, const asset_handle<prefab>& prefab, bool auto_save = false);
@@ -472,6 +472,8 @@ struct editing_manager
     
     // Returns the active scene based on the current edit mode
     auto get_active_scene(rtti::context& ctx) -> scene*;
+
+    void unload_scenes_scripting(const std::vector<scene*>& scenes);
 
     /// enable editor grid
     bool show_grid = true;

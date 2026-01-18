@@ -2301,6 +2301,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         collector.clear();
     }
 
+    bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
+
+
     for(const auto& element : models)
     {
         const auto& entity = element.entity;
@@ -2385,12 +2388,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             model_comp.set_last_render_frame(gfx::get_render_frame());
             
             // Check if this model can be batched (static mesh, no skinning)
-            const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned;
+            const bool can_batch = static_batching_enabled && !is_skinned;
             
             if (can_batch)
             {
                 // Collect this model for batching in this specific cascade
-                collect_model_for_shadow_batching_cascade(cascade_batch_collectors_[ii], model, world_transform, submesh_transforms, lod_data.current_lod_index);
+                model.submit_for_batching(cascade_batch_collectors_[ii], world_transform, submesh_transforms, lod_data.current_lod_index);
             }
             else
             {
@@ -2452,7 +2455,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     }
     
     // Submit batched geometry for each cascade
-    if (batch_collector::is_static_mesh_batching_enabled())
+    if (static_batching_enabled)
     {
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
@@ -2471,82 +2474,6 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     }
 
     return any_rendered;
-}
-
-void shadowmap_generator::collect_model_for_shadow_batching_cascade(batch_collector& collector,
-                                                                   const model& model_asset, 
-                                                                   const math::mat4& world_transform,
-                                                                   const submesh_pose_mat4& submesh_transforms,
-                                                                   uint32_t lod_index)
-{
-    auto mesh_asset = model_asset.get_lod(lod_index);
-    if(!mesh_asset)
-    {
-        return;
-    }
-
-    auto mesh = mesh_asset.get();
-    if(!mesh)
-    {
-        return;
-    }
-
-    const auto& materials = model_asset.get_materials();
-    const auto data_group_count = mesh->get_data_groups_count();
-
-    // Iterate over data groups (material groups)
-    for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
-    {
-        std::shared_ptr<material> material_ptr;
-        if (data_group_id < materials.size() && materials[data_group_id].is_valid()) {
-            material_ptr = materials[data_group_id].get();
-        } else {
-            // For shadow maps, we can use a null material since we only care about depth
-            material_ptr = nullptr;
-        }
-
-        // Get all non-skinned submeshes for this data group
-        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
-        
-        // Collect each submesh in this data group as a separate batch entry
-        for (size_t submesh_idx : submesh_indices)
-        {
-            uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
-
-            // Check if this submesh has specific transforms
-            if (submesh_transforms.has_transforms(submesh_index))
-            {
-                // This submesh has one or more node transforms - create an instance for each
-                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
-                
-                for (size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
-                {
-                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
-                    if (!transform_ptr)
-                    {
-                        continue;
-                    }
-                    
-                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
-                    if (!key.is_valid()) { continue; }
-
-                    // Create batch instance with the specific transform
-                    batch_instance instance(transform_ptr);
-                    collector.collect_renderable(key, instance);
-                }
-            }
-            else
-            {
-                // No specific transform for this submesh - use world transform
-                batch_key key(mesh, material_ptr, lod_index, submesh_index);
-                if (!key.is_valid()) { continue; }
-
-                // Create batch instance with world transform
-                batch_instance instance(&world_transform);
-                collector.collect_renderable(key, instance);
-            }
-        }
-    }
 }
 
 void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector& collector,
@@ -2677,24 +2604,24 @@ void Programs::init(rtti::context& ctx)
     m_drawDepth[PackDepth::VSM]  = loadProgram("vs_shadowmaps_unpackdepth", "fs_shadowmaps_unpackdepth_vsm");
 
     // Pack depth.
-    m_packDepth[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth", "fs_shadowmaps_packdepth");
-    m_packDepth[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth", "fs_shadowmaps_packdepth_vsm");
+    m_packDepth[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth", "packdepth/fs_shadowmaps_packdepth");
+    m_packDepth[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth", "packdepth/fs_shadowmaps_packdepth_vsm");
 
-    m_packDepth[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_linear", "fs_shadowmaps_packdepth_linear");
-    m_packDepth[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_linear", "fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepth[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear", "packdepth/fs_shadowmaps_packdepth_linear");
+    m_packDepth[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
 
-    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_skinned", "fs_shadowmaps_packdepth");
-    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_skinned", "fs_shadowmaps_packdepth_vsm");
+    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned", "packdepth/fs_shadowmaps_packdepth");
+    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned", "packdepth/fs_shadowmaps_packdepth_vsm");
 
-    m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_linear_skinned", "fs_shadowmaps_packdepth_linear");
-    m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_linear_skinned", "fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned", "packdepth/fs_shadowmaps_packdepth_linear");
+    m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
 
     // Pack depth instanced (for static mesh batching).
-    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_instanced", "fs_shadowmaps_packdepth");
-    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_instanced", "fs_shadowmaps_packdepth_vsm");
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced", "packdepth/fs_shadowmaps_packdepth");
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced", "packdepth/fs_shadowmaps_packdepth_vsm");
 
-    m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("vs_shadowmaps_packdepth_linear_instanced", "fs_shadowmaps_packdepth_linear");
-    m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("vs_shadowmaps_packdepth_linear_instanced", "fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
 
 }
 

@@ -9,6 +9,7 @@
 #include <monopp/mono_property_invoker.h>
 #include <monopp/mono_type_conversion.h>
 #include <monopp/mono_list.h>
+#include <monopp/mono_gc_handle.h>
 #include <type_traits>
 #include <functional>
 
@@ -125,7 +126,12 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            const auto& mono_obj = pinned_ptr->get_object();
             
             // Recreate the invoker from the field name
             auto obj_type = mono_obj.get_type();
@@ -135,8 +141,9 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
             auto nested_obj = invoker.get_value(mono_obj);
             if(nested_obj.valid())
             {
-                // Create an owned copy to avoid dangling references
-                result = entt::meta_any{std::in_place_type<mono::mono_object>, nested_obj};
+                // Create a pinned pointer to avoid dangling references
+                auto nested_pinned = mono::make_object_pinned(nested_obj);
+                result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, nested_pinned};
                 return true;
             }
         }
@@ -148,15 +155,20 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
-            if(value.try_cast<mono::mono_object>())
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            if(auto nested_pinned_ptr = value.try_cast<mono::mono_object_pinned_ptr>())
             {
                 // Recreate the invoker from the field name
+                auto mono_obj = pinned_ptr->get_object();
                 auto obj_type = mono_obj.get_type();
                 auto field = obj_type.get_field(field_name);
                 auto invoker = mono::make_field_invoker<mono::mono_object>(field);
                 
-                auto nested_obj = value.cast<mono::mono_object>();
+                auto nested_obj = (*nested_pinned_ptr)->get_object();
                 invoker.set_value(mono_obj, nested_obj);
                 return obj_proxy.impl->setter(proxy, obj_var, execution_count);
             }
@@ -195,7 +207,12 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            const auto& mono_obj = pinned_ptr->get_object();
             
             // Recreate the invoker from the property name
             auto obj_type = mono_obj.get_type();
@@ -205,8 +222,9 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
             auto nested_obj = invoker.get_value(mono_obj);
             if(nested_obj.valid())
             {
-                // Create an owned copy to avoid dangling references
-                result = entt::meta_any{std::in_place_type<mono::mono_object>, nested_obj};
+                // Create a pinned pointer to avoid dangling references
+                auto nested_pinned = mono::make_object_pinned(nested_obj);
+                result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, nested_pinned};
                 return true;
             }
         }
@@ -218,15 +236,20 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
-            if(value.try_cast<mono::mono_object>())
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            if(auto nested_pinned_ptr = value.try_cast<mono::mono_object_pinned_ptr>())
             {
                 // Recreate the invoker from the property name
+                auto mono_obj = pinned_ptr->get_object();
                 auto obj_type = mono_obj.get_type();
                 auto property = obj_type.get_property(prop_name);
                 auto invoker = mono::make_property_invoker<mono::mono_object>(property);
                 
-                auto nested_obj = value.cast<mono::mono_object>();
+                const auto& nested_obj = (*nested_pinned_ptr)->get_object();
                 invoker.set_value(mono_obj, nested_obj);
                 return obj_proxy.impl->setter(proxy, obj_var, execution_count);
             }
@@ -239,7 +262,7 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
 
 // Forward declaration for recursive serializable object inspection
 auto inspect_serializable_object(rtti::context& ctx,
-                                 mono::mono_object& obj,
+                                 mono::mono_object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
                                  const std::string& name,
                                  const var_info& info) -> inspect_result;
@@ -354,11 +377,18 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
-            if(!mono_obj.valid())
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
             {
                 return false;
             }
+            const auto& mono_obj_const = pinned_ptr->get_object();
+            if(!mono_obj_const.valid())
+            {
+                return false;
+            }
+            // get_value requires non-const reference, but it only reads
+            auto& mono_obj = const_cast<mono::mono_object&>(mono_obj_const);
             auto field_value = script_proxy.get_value(mono_obj);
             // Create an owned copy to avoid dangling references
             result = entt::meta_any{std::in_place_type<T>, field_value};
@@ -372,9 +402,14 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
             if(value.try_cast<T>())
             {
+                auto mono_obj = pinned_ptr->get_object();
                 script_proxy.set_value(mono_obj, value.cast<T>());
                 return obj_proxy.impl->setter(proxy, obj_var, execution_count);
             }
@@ -414,7 +449,12 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            const auto& mono_obj = pinned_ptr->get_object();
             
             // Recreate the invoker from the field/property name
             auto obj_type = mono_obj.get_type();
@@ -447,10 +487,15 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
             if(value.try_cast<entt::handle>())
             {
                 // Recreate the invoker from the field/property name
+                auto mono_obj = pinned_ptr->get_object();
                 auto obj_type = mono_obj.get_type();
                 if constexpr(is_property)
                 {
@@ -503,7 +548,12 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            const auto& mono_obj = pinned_ptr->get_object();
             
             // Recreate the invoker from the field name
             auto obj_type = mono_obj.get_type();
@@ -537,11 +587,16 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto& mono_obj = obj_var.cast<mono::mono_object&>();
+            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
             if(value.try_cast<asset_handle<T>>())
             {
                 // Recreate the invoker from the field name
-                auto obj_type = mono_obj.get_type();
+                auto mono_obj = pinned_ptr->get_object();
+                const auto& obj_type = mono_obj.get_type();
                 auto field = obj_type.get_field(field_name);
                 auto invoker = mono::make_field_invoker<mono::mono_object>(field);
                 
@@ -606,7 +661,12 @@ struct mono_inspector
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
+                const auto& mono_obj = pinned_ptr->get_object();
                 T value = mono::mono_converter<T>::from_mono(mono_obj.get_internal_ptr());
                 result = entt::meta_any{std::in_place_type<T>, value};
                 return true;
@@ -619,17 +679,23 @@ struct mono_inspector
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
                 if(value.try_cast<T>() )
                 {
-                    auto type = mono_obj.get_type();
+                    auto mono_obj = pinned_ptr->get_object();
+                    const auto& type = mono_obj.get_type();
                     if(type.is_string())
                     {
                         if(std::is_same<T, std::string>::value)
                         {
                             auto str = value.cast<std::string>();
                             auto new_mono_obj = mono::mono_object(mono::mono_converter<std::string>::to_mono(str));
-                            obj_var = entt::meta_any{std::in_place_type<mono::mono_object>, new_mono_obj};
+                            auto new_pinned = mono::make_object_pinned(new_mono_obj);
+                            obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, new_pinned};
 
                             return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
 
@@ -639,7 +705,7 @@ struct mono_inspector
                     {
                         auto mono_value = mono::mono_converter<T>::to_mono(value.cast<T>());
                         mono_obj.box_value(mono_value, type);
-                        obj_var = mono_obj;
+                        obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
 
                     }
@@ -1227,7 +1293,12 @@ struct mono_inspector<entt::handle>
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
+                const auto& mono_obj = pinned_ptr->get_object();
                 
                 // Unbox the Entity value from the mono_object
                 // Entity is a value type in C#, so we need to unbox it
@@ -1253,19 +1324,24 @@ struct mono_inspector<entt::handle>
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
                 if(value.try_cast<entt::handle>())
                 {
                     auto handle = value.cast<entt::handle>();
                     entt::entity entity = handle ? handle.entity() : entt::null;
                     
                     // Box the entity value back into the mono_object
+                    auto mono_obj = pinned_ptr->get_object();
                     auto obj_type = mono_obj.get_type();
                     if(obj_type.is_valuetype())
                     {
                         auto mono_entity = mono::mono_converter<entt::entity>::to_mono(entity);
                         mono_obj.box_value(mono_entity, obj_type);
-                        obj_var = mono_obj;
+                        obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
                     }
                 }
@@ -1377,7 +1453,12 @@ struct mono_inspector<asset_handle<T>>
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
+                const auto& mono_obj = pinned_ptr->get_object();
                 
                 // The mono_object itself represents an asset handle (reference type)
                 // Get the UID property from the asset handle object
@@ -1407,16 +1488,22 @@ struct mono_inspector<asset_handle<T>>
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
                 if(value.try_cast<asset_handle<T>>())
                 {
                     auto asset = value.cast<asset_handle<T>>();
-                    auto obj_type = mono_obj.get_type();
+                    auto mono_obj = pinned_ptr->get_object();
+                    const auto& obj_type = mono_obj.get_type();
 
                     // Set the UID property on the asset handle object
                     if(!mono_obj.valid() && obj_type.valid())
                     {  
-                        mono_obj = obj_type.new_instance();
+                        auto new_obj = obj_type.new_instance();
+                        mono_obj = new_obj;
                     }
                     
                     if(mono_obj.valid())
@@ -1426,7 +1513,7 @@ struct mono_inspector<asset_handle<T>>
                         {
                             auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
                             uid_prop.set_value(mono_obj, asset ? asset.uid() : hpp::uuid{});
-                            obj_var = mono_obj;
+                            obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
                             return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
                         }
                     }
@@ -1563,20 +1650,39 @@ struct mono_inspector_collection
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
+                {
+                    return false;
+                }
+                const auto& mono_obj = pinned_ptr->get_object();
                 auto collection_obj = mutable_field.get_value(mono_obj);
 
 
                 if(is_array)
                 {
-                    auto array = mono::mono_array<mono::mono_object>(collection_obj).to_vector();
-                    result = array;
+                    auto array = mono::mono_array<mono::mono_object>(collection_obj);
+                    auto array_vec = array.to_vector();
+                    std::vector<mono::mono_object_pinned_ptr> pinned_vec;
+                    pinned_vec.reserve(array_vec.size());
+                    for(const auto& elem : array_vec)
+                    {
+                        pinned_vec.push_back(mono::make_object_pinned(elem));
+                    }
+                    result = pinned_vec;
                     return true;
                 }
                 if(is_list)
                 {
-                    auto list = mono::mono_list<mono::mono_object>(collection_obj).to_vector();
-                    result = list;
+                    auto list = mono::mono_list<mono::mono_object>(collection_obj);
+                    auto list_vec = list.to_vector();
+                    std::vector<mono::mono_object_pinned_ptr> pinned_vec;
+                    pinned_vec.reserve(list_vec.size());
+                    for(const auto& elem : list_vec)
+                    {
+                        pinned_vec.push_back(mono::make_object_pinned(elem));
+                    }
+                    result = pinned_vec;
                     return true;
                 }
 
@@ -1588,17 +1694,46 @@ struct mono_inspector_collection
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto& mono_obj = obj_var.cast<mono::mono_object&>();
-                if(auto vec = value.try_cast<std::vector<mono::mono_object>>())
+                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                if(!pinned_ptr)
                 {
+                    return false;
+                }
+                if(auto pinned_vec = value.try_cast<std::vector<mono::mono_object_pinned_ptr>>())
+                {
+                    // Convert pinned pointers to mono_objects for setting
+                    std::vector<mono::mono_object> vec;
+                    vec.reserve(pinned_vec->size());
+                    for(const auto& pinned_elem : *pinned_vec)
+                    {
+                        if(pinned_elem)
+                        {
+                            vec.emplace_back(pinned_elem->get_object());
+                        }
+                        else
+                        {
+                            vec.emplace_back(mono::mono_object());
+                        }
+                    }
+                    
+                    auto mono_obj = pinned_ptr->get_object();
+                    
                     if(is_array)
                     {
-                        
                         auto element_type = mutable_field.get_type().get_element_type();
 
                         auto collection_obj = mutable_field.get_value(mono_obj);
+                        
                         auto collection = mono::mono_array<mono::mono_object>(collection_obj);
-                        collection.set(*vec, element_type);
+
+                        if(!collection_obj.valid())
+                        {
+                            collection = mono::mono_array<mono::mono_object>(vec, element_type);
+                        }
+                        else
+                        {
+                            collection.set(vec, element_type, true);
+                        }
 
                         mutable_field.set_value(mono_obj, collection);
                     }
@@ -1608,8 +1743,16 @@ struct mono_inspector_collection
 
                         auto collection_obj = mutable_field.get_value(mono_obj);
                         auto collection = mono::mono_list<mono::mono_object>(collection_obj);
-                        auto old_vec = collection.to_vector<std::vector<mono::mono_object>>();
-                        collection.set(*vec, element_type);
+                        
+                        if(!collection_obj.valid())
+                        {
+                            collection = mono::mono_list<mono::mono_object>(vec, element_type);
+                        }
+                        else
+                        {
+                            collection.set(vec, element_type, true);
+                        }
+
                         mutable_field.set_value(mono_obj, collection);
                     }
                     return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
@@ -1641,8 +1784,14 @@ struct mono_inspector_collection
             {
                 mono::mono_array<mono::mono_object> array(val);
                 push_mono_type(array.get_element_type());
-                auto vec = array.to_vector();
-                entt::meta_any vec_var = entt::forward_as_meta(vec);
+                auto array_vec = array.to_vector();
+                std::vector<mono::mono_object_pinned_ptr> pinned_vec;
+                pinned_vec.reserve(array_vec.size());
+                for(const auto& elem : array_vec)
+                {
+                    pinned_vec.push_back(mono::make_object_pinned(elem));
+                }
+                entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
 
                 pop_mono_type();
@@ -1652,8 +1801,14 @@ struct mono_inspector_collection
             {
                 mono::mono_list<mono::mono_object> list(val);
                 push_mono_type(list.get_element_type());
-                auto vec = list.to_vector();
-                entt::meta_any vec_var = entt::forward_as_meta(vec);
+                auto list_vec = list.to_vector();
+                std::vector<mono::mono_object_pinned_ptr> pinned_vec;
+                pinned_vec.reserve(list_vec.size());
+                for(const auto& elem : list_vec)
+                {
+                    pinned_vec.push_back(mono::make_object_pinned(elem));
+                }
+                entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
                 pop_mono_type();
             }
@@ -1717,8 +1872,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
         {
-            auto data = var.cast<mono::mono_object&>();
-            result = data;
+            auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
             return true;
         }
         return false;
@@ -1734,14 +1893,17 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         return false;
     };
 
-    // auto& data =  var.cast<mono::mono_object&>();
-
     entt::meta_any vdata;
     if(!obj_proxy.impl->getter(vdata))
     {
         return {};
     }
-    auto& data = vdata.cast<mono::mono_object&>();
+    auto pinned_ptr = vdata.cast<mono::mono_object_pinned_ptr>();
+    if(!pinned_ptr)
+    {
+        return {};
+    }
+    const auto& data = pinned_ptr->get_object();
 
     inspect_result result{};
     auto type = data.get_type();
@@ -1904,7 +2066,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     auto object_inspector = get_object_inspector(type.get_name());
     if(object_inspector)
     {
-        result |= object_inspector(ctx, data, obj_proxy, info);
+        // object_inspector expects mono::mono_object&, so we need to use mutate_pinned
+        // However, since inspect_object typically only reads, we can use get_object()
+        // But to be safe and allow mutations, we'll create a temporary mutable reference
+        auto mono_obj = pinned_ptr->get_object();
+        result |= object_inspector(ctx, mono_obj, obj_proxy, info);
     }
     else if(should_inspect)
     {
@@ -1913,7 +2079,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             // if(ImGui::Button("New"))
             // {
             //     auto new_data = type.new_instance();
-            //     vdata = new_data;
+            //     vdata = mono::make_object_pinned(new_data);
             //     result.changed = obj_proxy.impl->setter(obj_proxy, vdata, 1);
             //     result.edit_finished = result.changed;
             //     return result;
@@ -1938,9 +2104,9 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
         // if(ImGui::Button("Null"))
         // {
-        //     data.set_data(nullptr, type);
-        //     result.changed = true;
-        //     result.edit_finished = true;
+        //     vdata = mono::make_object_pinned(mono::mono_object());
+        //     result.changed = obj_proxy.impl->setter(obj_proxy, vdata, 1);
+        //     result.edit_finished = result.changed;
         //     return result;
         // }
 
@@ -1989,7 +2155,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 if(field_inspector)
                 {
-                    result |= field_inspector(ctx, data, obj_proxy, field, info);
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= field_inspector(ctx, mono_obj, obj_proxy, field, info);
                 }
                 else if(field_type.is_enum())
                 {
@@ -1997,24 +2164,28 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     auto enum_inspector = get_enum_field_inspector(enum_type.get_name());
                     if(enum_inspector)
                     {
-                        result |= enum_inspector(ctx, data, obj_proxy, field, info);
+                        auto mono_obj = pinned_ptr->get_object();
+                        result |= enum_inspector(ctx, mono_obj, obj_proxy, field, info);
                     }
                 }
                 else if(field_type.is_array() || field_type.is_list())
                 {
                     //Handle arrays and List<T> with add/remove support
-                    result |= mono_inspector_collection::inspect_field(ctx, data, obj_proxy, field, info);
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= mono_inspector_collection::inspect_field(ctx, mono_obj, obj_proxy, field, info);
                 }
                 else if(field_type.is_serializable())
                 {
                     // Recursively inspect serializable nested objects
+                    auto mono_obj = pinned_ptr->get_object();
                     auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-                    auto nested_obj = invoker.get_value(data);
+                    auto nested_obj = invoker.get_value(mono_obj);
                     
                     if(nested_obj.valid())
                     {
+                        auto nested_pinned = mono::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_object_proxy(obj_proxy, invoker);
-                        result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, field.get_name(), info);
+                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, field.get_name(), info);
                     }
                     else
                     {
@@ -2189,7 +2360,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 if(property_inspector)
                 {
-                    result |= property_inspector(ctx, data, obj_proxy, prop, info);
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= property_inspector(ctx, mono_obj, obj_proxy, prop, info);
                 }
                 else if(prop_type.is_enum())
                 {
@@ -2197,24 +2369,28 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     auto enum_inspector = get_enum_property_inspector(enum_type.get_name());
                     if(enum_inspector)
                     {
-                        result |= enum_inspector(ctx, data, obj_proxy, prop, info);
+                        auto mono_obj = pinned_ptr->get_object();
+                        result |= enum_inspector(ctx, mono_obj, obj_proxy, prop, info);
                     }
                 }
                 else if(prop_type.is_array() || prop_type.is_list())
                 {
                     // Handle arrays and List<T> with add/remove support
-                    result |= mono_inspector_collection::inspect_property(ctx, data, obj_proxy, prop, info);
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= mono_inspector_collection::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
                 }
                 else if(prop_type.is_serializable())
                 {
                     // Recursively inspect serializable nested objects
+                    auto mono_obj = pinned_ptr->get_object();
                     auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
-                    auto nested_obj = invoker.get_value(data);
+                    auto nested_obj = invoker.get_value(mono_obj);
                     
                     if(nested_obj.valid())
                     {
+                        auto nested_pinned = mono::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_property_proxy(obj_proxy, invoker);
-                        result |= inspect_serializable_object(ctx, nested_obj, nested_proxy, prop.get_name(), info);
+                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, prop.get_name(), info);
                     }
                     else
                     {
@@ -2311,9 +2487,12 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
         {
-            auto& data = var.cast<mono::mono_object_pinned&>();
-            auto& mono_obj = static_cast<mono::mono_object&>(data.object);
-            result = entt::forward_as_meta(mono_obj);
+            auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
             return true;
         }
         return false;
@@ -2330,9 +2509,12 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
     };
 
 
-    auto& data = var.cast<mono::mono_object_pinned&>();
-    auto& mono_obj = static_cast<mono::mono_object&>(data.object);
-    auto obj_var = entt::forward_as_meta(mono_obj);
+    auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+    if(!pinned_ptr)
+    {
+        return {};
+    }
+    auto obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
 
     return inspector_mono_object::inspect(ctx, obj_var, obj_proxy, info, custom);
 }
@@ -2344,7 +2526,7 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
  * to handle all fields and properties of a serializable object.
  */
 auto inspect_serializable_object(rtti::context& ctx,
-                                 mono::mono_object& obj,
+                                 mono::mono_object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
                                  const std::string& name,
                                  const var_info& info) -> inspect_result
@@ -2358,8 +2540,8 @@ auto inspect_serializable_object(rtti::context& ctx,
     {
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
         
-        // Create a meta_any wrapper for the nested object and call the main inspector
-        auto obj_var = entt::forward_as_meta(obj);
+        // Create a meta_any wrapper for the nested pinned object and call the main inspector
+        auto obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
         inspector_mono_object inspector;
         result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
         

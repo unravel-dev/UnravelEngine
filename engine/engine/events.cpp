@@ -1,10 +1,17 @@
 #include "events.h"
+#include "seq/seq_core.h"
+#include <seq/seq.h>
 
 namespace unravel
 {
 void events::toggle_play_mode(rtti::context& ctx)
 {
-    set_play_mode(ctx, !is_playing);
+    auto action = seq::delay(1ms);
+    action.on_begin.connect([this, &ctx]()
+    {
+        set_play_mode(ctx, !is_playing);
+    });
+    seq::start(action);
 }
 
 void events::set_play_mode(rtti::context& ctx, bool play)
@@ -43,7 +50,12 @@ void events::set_play_mode(rtti::context& ctx, bool play)
 
 void events::toggle_pause(rtti::context& ctx)
 {
-    set_paused(ctx, !is_paused);
+    auto action = seq::delay(1ms);
+    action.on_begin.connect([this, &ctx]()
+    {
+        set_paused(ctx, !is_paused);
+    });
+    seq::start(action);
 }
 
 void events::set_paused(rtti::context& ctx, bool paused)

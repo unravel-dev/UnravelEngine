@@ -692,7 +692,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
             {
                 ImGui::PushID(i);
                 const auto& script = comps[i];
-                const auto& type = script.pinned->object.get_type();
+                const auto& type = script.pinned->get_object().get_type();
                 fs::path source_loc = script_comp->get_script_source_location(script);
 
                 auto name = type.get_fullname();
@@ -755,7 +755,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                                     if(i < comps.size())
                                     {
                                         auto& script = comps[i];
-                                        result = entt::forward_as_meta(*script.pinned);
+                                        result = script.pinned;//entt::forward_as_meta(script.pinned);
                                         return true;
                                     }
                                 }
@@ -769,7 +769,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     };
                     // entt::meta_any obj_var;
                     // call_var_getter(obj_var, obj_getter);
-                    auto obj_var = entt::forward_as_meta(*script.pinned);
+                    entt::meta_any obj_var = script.pinned;//entt::forward_as_meta(*script.pinned);
                     obj_proxy.impl->type_name = entt::get_pretty_name(obj_var.type());
 
                     var_info obj_info;
@@ -825,7 +825,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 script_component::script_object comp_to_add;
 
-                auto type = comp_to_remove.pinned->object.get_type();
+                auto type = comp_to_remove.pinned->get_object().get_type();
 
                 auto& em = ctx.get_cached<editing_manager>();
                 auto script_type_name = type.get_fullname();

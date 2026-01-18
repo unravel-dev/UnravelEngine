@@ -75,7 +75,7 @@ void script_component::destroy()
                  {
                      if(script.pinned)
                      {
-                         auto& obj = script.pinned->object;
+                         auto obj = script.pinned->get_object();
                          remove_script_component(obj);
                      }
                  });
@@ -88,7 +88,7 @@ void script_component::enable()
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      enable(script, true);
                  });
 }
@@ -98,7 +98,7 @@ void script_component::disable()
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      disable(script, true);
                  });
 }
@@ -109,7 +109,7 @@ void script_component::on_sensor_enter(entt::handle other, const std::vector<man
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      on_sensor_enter(obj, other, managed_manifolds);
                  });
 }
@@ -120,7 +120,7 @@ void script_component::on_sensor_exit(entt::handle other, const std::vector<mani
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      on_sensor_exit(obj, other, managed_manifolds);
                  });
 }
@@ -131,7 +131,7 @@ void script_component::on_collision_enter(entt::handle b, const std::vector<mani
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      on_collision_enter(obj, b, managed_manifolds);
                  });
 }
@@ -142,7 +142,7 @@ void script_component::on_collision_exit(entt::handle b, const std::vector<manif
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
-                     auto& obj = script.pinned->object;
+                     auto obj = script.pinned->get_object();
                      on_collision_exit(obj, b, managed_manifolds);
                  });
 }
@@ -164,7 +164,12 @@ void script_component::enable(script_object& script_obj, bool check_order)
         }
     }
 
-    auto& obj = script_obj.pinned->object;
+    auto obj = script_obj.pinned->get_object();
+    if(!obj.valid())
+    {
+        APPLOG_WARNING("Script component already destroyed");
+        return;
+    }
 
     try
     {
@@ -193,8 +198,12 @@ void script_component::disable(script_object& script_obj, bool check_order)
             return;
         }
     }
-    auto& obj = script_obj.pinned->object;
-
+    auto obj = script_obj.pinned->get_object();
+    if(!obj.valid())
+    {
+        APPLOG_WARNING("Script component already destroyed");
+        return;
+    }
     try
     {
         auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_disable");
@@ -214,7 +223,12 @@ void script_component::create(script_object& script_obj)
     }
 
     script_obj.state->create_called = true;
-    auto& obj = script_obj.pinned->object;
+    auto obj = script_obj.pinned->get_object();
+    if(!obj.valid())
+    {
+        APPLOG_WARNING("Script component already destroyed");
+        return;
+    }
 
     try
     {
@@ -233,8 +247,12 @@ void script_component::start(script_object& script_obj)
         return;
     }
     script_obj.state->start_called = true;
-    auto& obj = script_obj.pinned->object;
-
+    auto obj = script_obj.pinned->get_object();
+    if(!obj.valid())
+    {
+        APPLOG_WARNING("Script component already destroyed");
+        return;
+    }
     try
     {
         auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_start");
@@ -248,7 +266,12 @@ void script_component::start(script_object& script_obj)
 
 void script_component::destroy(script_object& script_obj)
 {
-    auto& obj = script_obj.pinned->object;
+    auto obj = script_obj.pinned->get_object();
+    if(!obj.valid())
+    {
+        APPLOG_WARNING("Script component already destroyed");
+        return;
+    }
     try
     {
         auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_destroy");
@@ -447,7 +470,7 @@ auto script_component::add_script_component(const script_object& script_obj, boo
     script_components_to_create_.emplace_back(script_obj);
     script_components_to_start_.emplace_back(script_obj);
 
-    auto& obj = script_obj.pinned->object;
+    auto obj = script_obj.pinned->get_object();
 
     set_entity(obj, get_owner());
 
@@ -476,7 +499,7 @@ void script_component::add_missing_script_components(const script_components_t& 
     {
         if(comp.pinned)
         {
-            auto& obj = comp.pinned->object;
+            auto obj = comp.pinned->get_object();
             const auto& type = obj.get_type();
             if(get_script_component(type).pinned)
             {
@@ -503,16 +526,16 @@ auto script_component::get_script_components(const mono::mono_type& type) -> std
     std::vector<mono::mono_object> result;
     for(const auto& component : script_components_)
     {
-        const auto& comp_type = component.pinned->object.get_type();
+        auto obj = component.pinned->get_object();
+        const auto& comp_type = obj.get_type();
 
         if(comp_type.get_internal_ptr() == type.get_internal_ptr() || comp_type.is_derived_from(type))
         {
             // Validate the object is still valid before adding
             if(!component.is_marked_for_destroy())
             {
-                auto& obj = component.pinned->object;
                 // Since the handle is pinned, the object pointer remains valid
-                result.emplace_back(static_cast<mono::mono_object&>(obj));
+                result.emplace_back(obj);
             }
         }
     }
@@ -526,7 +549,8 @@ auto script_component::get_script_component(const mono::mono_type& type) -> scri
                            std::end(script_components_),
                            [&](const auto& component)
                            {
-                                const auto& comp_type = component.pinned->object.get_type();
+                                auto obj = component.pinned->get_object();
+                                const auto& comp_type = obj.get_type();
                                 return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
                                         comp_type.is_derived_from(type);
                            });
@@ -545,7 +569,8 @@ auto script_component::get_native_component(const mono::mono_type& type) -> scri
                            std::end(native_components_),
                            [&](const auto& component)
                            {
-                                const auto& comp_type = component.pinned->object.get_type();
+                                auto obj = component.pinned->get_object();
+                                const auto& comp_type = obj.get_type();
                                 return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
                                         comp_type.is_derived_from(type);
                            });
@@ -562,7 +587,7 @@ auto script_component::remove_script_component(const mono::mono_object& obj) -> 
 {
     auto checker = [&](const auto& rhs)
     {
-        return rhs.pinned->object.get_internal_ptr() == obj.get_internal_ptr();
+        return rhs.pinned->get_object().get_internal_ptr() == obj.get_internal_ptr();
     };
     std::erase_if(script_components_to_create_, checker);
 
@@ -598,7 +623,7 @@ auto script_component::remove_script_component(const mono::mono_type& type) -> b
 {
     auto checker = [&](const auto& rhs)
     {
-        return rhs.pinned->object.get_type().get_internal_ptr() == type.get_internal_ptr();
+        return rhs.pinned->get_object().get_type().get_internal_ptr() == type.get_internal_ptr();
     };
     std::erase_if(script_components_to_create_, checker);
 
@@ -618,7 +643,7 @@ auto script_component::remove_script_component(const mono::mono_type& type) -> b
                 APPLOG_WARNING("Script component already queued for destruction");
                 return true;
             }
-            auto& obj = script_obj.pinned->object;
+            auto obj = script_obj.pinned->get_object();
             set_entity(obj, {});
 
             script_obj.state->marked_for_destroy = true;
@@ -638,7 +663,7 @@ auto script_component::remove_native_component(const mono::mono_object& obj) -> 
                            std::end(native_components_),
                            [&](const auto& rhs)
                            {
-                               return rhs.pinned->object.get_internal_ptr() == obj.get_internal_ptr();
+                               return rhs.pinned->get_object().get_internal_ptr() == obj.get_internal_ptr();
                            });
 
     if(it != std::end(native_components_))
@@ -660,14 +685,14 @@ auto script_component::remove_native_component(const mono::mono_type& type) -> b
                            std::end(native_components_),
                            [&](const auto& rhs)
                            {
-                               return rhs.pinned->object.get_type().get_internal_ptr() == type.get_internal_ptr();
+                               return rhs.pinned->get_object().get_type().get_internal_ptr() == type.get_internal_ptr();
                            });
 
     if(it != std::end(native_components_))
     {
         auto& script_obj = *it;
 
-        auto& obj = script_obj.pinned->object;
+        auto obj = script_obj.pinned->get_object();
         set_entity(obj, {});
 
         script_obj.state->marked_for_destroy = true;
@@ -691,7 +716,7 @@ auto script_component::has_script_components(const std::string& type_name) const
 {
     return std::any_of(std::begin(script_components_), std::end(script_components_), [&](const auto& component)
     {
-        return component.pinned->object.get_type().get_name() == type_name;
+        return component.pinned->get_object().get_type().get_name() == type_name;
     });
 }
 
@@ -702,7 +727,7 @@ auto script_component::get_script_source_location(const script_object& obj) cons
         return {};
     }
 
-    const auto& object = obj.pinned->object;
+    auto object = obj.pinned->get_object();
     const auto& type = object.get_type();
     try
     {

@@ -677,7 +677,7 @@ auto internal_add_native_component(const mono::mono_type& type, entt::handle e, 
         {
             comp = script_comp.add_native_component(type);
         }
-        return static_cast<mono::mono_object&>(comp.pinned->object);
+        return comp.pinned->get_object();
     }
 
     return {};
@@ -695,12 +695,12 @@ auto internal_get_native_component_impl(const mono::mono_type& type,
         {
             comp = script_comp.add_native_component(type);
         }
-        return static_cast<mono::mono_object&>(comp.pinned->object);
+        return comp.pinned->get_object();
     }
 
     if(comp.pinned)
     {
-        script_comp.remove_native_component(comp.pinned->object);
+        script_comp.remove_native_component(comp.pinned->get_object());
     }
 
     return {};
@@ -791,7 +791,7 @@ auto internal_m2n_add_component(entt::entity id, const mono::mono_type& type) ->
     }
 
     auto component = script_comp.add_script_component(type);
-    return static_cast<mono::mono_object&>(component.pinned->object);
+    return component.pinned->get_object();
 }
 
 auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object
@@ -818,9 +818,7 @@ auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) ->
         // Even with pinned handles, objects can be finalized or corrupted
         if(!component.is_marked_for_destroy())
         {
-            auto& obj = component.pinned->object;
-            // Since the handle is pinned, the object pointer remains valid
-            return static_cast<mono::mono_object&>(obj);
+            return component.pinned->get_object();
         }
     }
 

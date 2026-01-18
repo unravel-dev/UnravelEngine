@@ -8,6 +8,7 @@
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/scripting/ecs/components/script_component.h>
 
 #include <engine/ecs/ecs.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -103,6 +104,11 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     waiting_for_compilation_before_play_ = true;
 
     push_undo_stack_enabled(false);  
+    auto& scripting = ctx.get_cached<script_system>();
+
+    {
+        scripting.wait_for_jobs_to_finish(ctx);
+    }
 
 
     exit_prefab_mode(ctx, save_option::no);
@@ -111,6 +117,8 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     pending_actions.clear();
 
     save_selection(ctx);
+
+    clear(false);
 
     const auto& scenes = scene::get_all_scenes();
     {
@@ -124,15 +132,17 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
         }
     }
 
+
+    // Unload scenes BEFORE unloading domains to prevent script_component destructors
+    // from trying to free GC handles from the old domain
+    unload_scenes_scripting(scenes);
     
-    auto& scripting = ctx.get_cached<script_system>();
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "unload_app_domain");
         scripting.unload_app_domain();
         scripting.unload_engine_domain();
     }
     {
-        // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "wait_for_jobs_to_finish");
         scripting.wait_for_jobs_to_finish(ctx);
     }
     {
@@ -165,6 +175,11 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
     unselect();
 
+    auto& scripting = ctx.get_cached<script_system>();
+    {
+        scripting.wait_for_jobs_to_finish(ctx);
+    }
+
     const auto& scenes = scene::get_all_scenes();
     for(auto scn : scenes)
     {
@@ -178,16 +193,27 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         save_checkpoint(ctx, cache);
     }
 
-    pop_undo_stack_enabled();
 
     
     undo_stack.clear();
     pending_actions.clear();
 
     
-    auto& scripting = ctx.get_cached<script_system>();
+    clear(false);
+    
+
+    // Unload scenes BEFORE unloading domains to prevent script_component destructors
+    // from trying to free GC handles from the old domain
+    unload_scenes_scripting(scenes);
+
+    
+    
     scripting.unload_app_domain();
     scripting.unload_engine_domain();
+    {
+        scripting.wait_for_jobs_to_finish(ctx);
+
+    }
     scripting.load_engine_domain(ctx, false);
     scripting.load_app_domain(ctx, false);
         
@@ -200,6 +226,8 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         sync_prefab_instances(ctx, scn);
 
     }
+
+    pop_undo_stack_enabled();
 
     caches_.clear();
 
@@ -214,9 +242,6 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
     }
     undo_stack.clear();
 
-
-    push_undo_stack_enabled(false);  
-
     save_selection(ctx);
 
     const auto& scenes = scene::get_all_scenes();
@@ -228,6 +253,14 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
         save_checkpoint(ctx, cache);
     }
 
+    push_undo_stack_enabled(false);  
+
+    clear(false);
+
+
+    // Unload scenes BEFORE unloading domains to prevent script_component destructors
+    // from trying to free GC handles from the old domain
+    unload_scenes_scripting(scenes);
 
     auto& scripting = ctx.get_cached<script_system>();
     scripting.unload_app_domain();
@@ -711,9 +744,25 @@ auto editing_manager::get_active_scene(rtti::context& ctx) -> scene*
 
 }
 
-void editing_manager::clear()
+void editing_manager::unload_scenes_scripting(const std::vector<scene*>& scenes)
 {
-    clear_unsaved_changes();
+    // Only clear script_components to free GC handles before domain unload
+    // Don't unload entire scenes as that destroys rendering resources that
+    // might still be referenced by the graphics system
+    for(auto scn : scenes)
+    {
+        // Clear only script_components to free GC handles
+        // The scenes will be properly unloaded in load_checkpoint
+        scn->registry->clear<script_component>();
+    }
+}
+
+void editing_manager::clear(bool clear_unsaved)
+{
+    if(clear_unsaved)
+    {
+        clear_unsaved_changes();
+    }
     unselect();
     unfocus();
 

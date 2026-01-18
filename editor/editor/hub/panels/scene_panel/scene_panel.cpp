@@ -1857,7 +1857,7 @@ void scene_panel::draw_ui(rtti::context& ctx)
 {
     draw_menubar(ctx);
 
-    auto& em = ctx.get_cached<editing_manager>();
+    // auto& em = ctx.get_cached<editing_manager>();
     auto camera_entity = get_camera();
 
     bool has_edit_camera = camera_entity && camera_entity.all_of<transform_component, camera_component>();

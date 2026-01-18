@@ -513,17 +513,21 @@ void entity_remove_script_component_action_t::do_action()
                     const auto& script_obj = comps[script_index];
                     
                     // Verify this is the correct type
-                    if (script_obj.pinned && script_obj.pinned->object.get_type().get_fullname() == script_type_name)
+                    if (script_obj.pinned)
                     {
-                        // Serialize the script object before removing it
-                        removed_script_object_data = {};
-                        save_to_stream(removed_script_object_data, entity, script_obj);
-                        
-                        // Remove the specific script component instance
-                        do_was_successful = script_comp->remove_script_component(script_obj.pinned->object);
-                        if (do_was_successful)
+                        auto obj = script_obj.pinned->get_object();
+                        if(obj.get_type().get_fullname() == script_type_name)
                         {
-                            script_comp->process_pending_deletions();
+                            // Serialize the script object before removing it
+                            removed_script_object_data = {};
+                            save_to_stream(removed_script_object_data, entity, script_obj);
+                            
+                            // Remove the specific script component instance
+                            do_was_successful = script_comp->remove_script_component(obj);
+                            if (do_was_successful)
+                            {
+                                script_comp->process_pending_deletions();
+                            }
                         }
                     }
                 }

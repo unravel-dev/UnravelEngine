@@ -185,11 +185,11 @@ auto renderer::get_renderer_type(const cmd_line::parser& parser) const -> gfx::r
         {
             preferred_renderer_type = gfx::renderer_type::Vulkan;
         }
-        else if(preferred_renderer == "directx11")
+        else if(preferred_renderer == "directx11" || preferred_renderer == "direct3d11")
         {
             preferred_renderer_type = gfx::renderer_type::Direct3D11;
         }
-        else if(preferred_renderer == "directx12")
+        else if(preferred_renderer == "directx12" || preferred_renderer == "direct3d12")
         {
             preferred_renderer_type = gfx::renderer_type::Direct3D12;
         }
