@@ -385,6 +385,17 @@ if(WIN32)
     set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}\\\\rc\\\\UnravelEngine.ico")
     set(CPACK_NSIS_INSTALLED_ICON_NAME "${CMAKE_SOURCE_DIR}\\\\rc\\\\UnravelEngine.ico")
     set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/rc/UnravelEngine.ico")
+
+    file(TO_CMAKE_PATH "${CMAKE_BINARY_DIR}" _bin_dir)   # "C:/..."
+    string(SUBSTRING "${_bin_dir}" 0 2 _drive)           # "C:"
+    set(_drive_root "${_drive}/")
+
+    # message(STATUS "Drive root: ${_drive_root}")
+    set(CPACK_PACKAGE_DIRECTORY  "${_drive_root}_cpack")
+    set(CPACK_OUTPUT_FILE_PREFIX  "${CMAKE_BINARY_DIR}")
+
+    message(STATUS "CPACK_PACKAGE_DIRECTORY: ${CPACK_PACKAGE_DIRECTORY}")
+    message(STATUS "CPACK_OUTPUT_FILE_PREFIX: ${CPACK_OUTPUT_FILE_PREFIX}")
 endif()
 
 # For macOS DMG:

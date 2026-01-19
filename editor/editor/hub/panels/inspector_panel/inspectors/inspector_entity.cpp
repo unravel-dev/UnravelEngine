@@ -692,7 +692,18 @@ auto inspector_entity::inspect(rtti::context& ctx,
             {
                 ImGui::PushID(i);
                 const auto& script = comps[i];
-                const auto& type = script.pinned->get_object().get_type();
+                const auto& mono_obj = script.pinned->get_object();
+                if(!mono_obj.valid())
+                {
+                    APPLOG_ERROR("Script object is invalid for domain version: {}", script.pinned->get_domain_version());
+                    continue;
+                }
+                const auto& type = mono_obj.get_type();
+                if(!type.valid())
+                {
+                    APPLOG_ERROR("Script object type is invalid for domain version: {}", script.pinned->get_domain_version());
+                    continue;
+                }
                 fs::path source_loc = script_comp->get_script_source_location(script);
 
                 auto name = type.get_fullname();

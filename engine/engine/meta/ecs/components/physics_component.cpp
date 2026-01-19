@@ -202,7 +202,15 @@ REFLECT(mesh_collision_type)
             entt::attribute{"pretty_name", "Mesh Collision Type"},
         })
         .data<mesh_collision_type::convex>("convex"_hs)
-        .data<mesh_collision_type::concave>("concave"_hs);
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "convex"},
+            entt::attribute{"pretty_name", "Convex"},
+        })
+        .data<mesh_collision_type::concave>("concave"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "concave"},
+            entt::attribute{"pretty_name", "Concave"},
+        });
 }
 
 REFLECT(physics_mesh_shape)

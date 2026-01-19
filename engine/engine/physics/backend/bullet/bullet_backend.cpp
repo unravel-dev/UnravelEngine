@@ -1,4 +1,5 @@
 #include "bullet_backend.h"
+#include "graphics/graphics.h"
 
 #include <engine/defaults/defaults.h>
 #include <engine/events.h>
@@ -1283,6 +1284,7 @@ auto create_bullet_mesh_shape(const physics_mesh_shape& shape) -> btCollisionSha
     // Create Bullet triangle mesh
     auto* triangle_mesh = new btTriangleMesh(true, false); // 32-bit indices, 3-component vertices
     
+    
     // Extract triangles and add to Bullet mesh
     for(uint32_t i = 0; i < face_count; ++i)
     {
@@ -1290,19 +1292,16 @@ auto create_bullet_mesh_shape(const physics_mesh_shape& shape) -> btCollisionSha
         uint32_t i1 = index_data[i * 3 + 1];
         uint32_t i2 = index_data[i * 3 + 2];
         
-        // Get vertex positions
-        auto* v0_ptr = vertex_data + (i0 * vertex_stride) + position_offset;
-        auto* v1_ptr = vertex_data + (i1 * vertex_stride) + position_offset;
-        auto* v2_ptr = vertex_data + (i2 * vertex_stride) + position_offset;
-        
-        auto* v0 = reinterpret_cast<const float*>(v0_ptr);
-        auto* v1 = reinterpret_cast<const float*>(v1_ptr);
-        auto* v2 = reinterpret_cast<const float*>(v2_ptr);
-        
+        float v0[4];
+        float v1[4];
+        float v2[4];
+        gfx::vertex_unpack(v0, gfx::attribute::Position, vertex_format, vertex_data, i0);
+        gfx::vertex_unpack(v1, gfx::attribute::Position, vertex_format, vertex_data, i1);
+        gfx::vertex_unpack(v2, gfx::attribute::Position, vertex_format, vertex_data, i2);
+
         btVector3 vertex0(v0[0], v0[1], v0[2]);
         btVector3 vertex1(v1[0], v1[1], v1[2]);
         btVector3 vertex2(v2[0], v2[1], v2[2]);
-        
         triangle_mesh->addTriangle(vertex0, vertex1, vertex2);
     }
     

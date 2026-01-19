@@ -2,6 +2,9 @@
 
 #include <engine/rendering/mesh.h>
 #include <bx/math.h>
+#include <graphics/debugdraw.h>
+#include <vector>
+#include <array>
 namespace unravel
 {
 
@@ -47,21 +50,76 @@ void draw(DebugDrawEncoder& dde, const physics_box_shape& sh)
 
 void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
 {
-    // Draw a wireframe bounding box representation for mesh shapes
-    // In a full implementation, you could draw the actual mesh wireframe
-    if(sh.mesh_asset && sh.mesh_asset.is_ready())
+    if(!sh.mesh_asset || !sh.mesh_asset.is_ready())
     {
-        const auto& mesh_ref = sh.mesh_asset.get();
-        auto bbox = mesh_ref->get_bounds();
+        return;
+    }
+    
+    const auto& mesh_ref = sh.mesh_asset.get();
+    
+    // Get vertex and index data from mesh
+    auto* vertex_data = mesh_ref->get_system_vb();
+    auto* index_data = mesh_ref->get_system_ib();
+    auto vertex_count = mesh_ref->get_vertex_count();
+    auto face_count = mesh_ref->get_face_count();
+    const auto& vertex_format = mesh_ref->get_vertex_format();
+    
+    if(!vertex_data || !index_data || vertex_count == 0 || face_count == 0)
+    {
+        return;
+    }
+    
+    // Find position attribute offset in vertex format
+    auto position_offset = vertex_format.getOffset(bgfx::Attrib::Position);
+    
+    if(position_offset == UINT16_MAX)
+    {
+        return; // No position data
+    }
+    
+    // Extract vertex positions and convert to DdVertex format
+    std::vector<DdVertex> vertices;
+    vertices.reserve(vertex_count);
+    
+    for(uint32_t i = 0; i < vertex_count; ++i)
+    {
+        std::array<float, 4> pos;
+        gfx::vertex_unpack(pos.data(), gfx::attribute::Position, vertex_format, vertex_data, i);
         
-        // Offset by center
-        bbox.min += sh.center;
-        bbox.max += sh.center;
-        
+        DdVertex v;
+        v.x = pos[0];
+        v.y = pos[1];
+        v.z = pos[2];
+        vertices.push_back(v);
+    }
+    
+    // Extract indices (faces are already triangles, 3 indices per face)
+    const uint32_t index_count = face_count * 3;
+    
+    // Create geometry handle
+    GeometryHandle geom_handle = ddCreateGeometry(static_cast<uint32_t>(vertices.size()),
+                                                   vertices.data(),
+                                                   index_count,
+                                                   index_data,
+                                                   true); // Use 32-bit indices
+    
+    if(isValid(geom_handle))
+    {
+        // Set color based on collision type
+        // Green for convex, blue for concave
         dde.setColor(sh.collision_type == mesh_collision_type::convex ? 0xff00ff00 : 0xff0000ff);
-        auto aabb = bx::Aabb{to_bx(bbox.min), to_bx(bbox.max)};
-        dde.draw(aabb);
-        //drawTriangleList
+        
+        // Enable wireframe mode for better visibility
+        dde.setWireframe(true);
+
+        math::transform local_transform;
+        local_transform.set_position(sh.center);
+        dde.pushTransform((const float*)local_transform);
+        // Draw the geometry
+        dde.draw(geom_handle);
+        dde.popTransform();
+        // Clean up geometry handle
+        ddDestroy(geom_handle);
     }
 }
 

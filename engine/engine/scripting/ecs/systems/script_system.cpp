@@ -323,6 +323,10 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     auto assembly = domain_->get_assembly(engine_script_lib.string());
     // print_assembly_info(assembly);
 
+    APPLOG_TRACE("-------------------------------------------------------");
+    APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), reinterpret_cast<intptr_t>(domain_->get_internal_ptr()));
+    APPLOG_TRACE("-------------------------------------------------------");
+
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
 
     // Cache methods to avoid repeated allocations every frame
@@ -335,6 +339,13 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
 void script_system::unload_engine_domain()
 {
     cache_ = {};
+    if(domain_)
+    {
+        auto domain_version = reinterpret_cast<intptr_t>(domain_->get_internal_ptr());
+        APPLOG_TRACE("-------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", domain_->get_name(), domain_version);
+        APPLOG_TRACE("-------------------------------------------------------");
+    }
     domain_.reset();
     mono::mono_domain::set_current_domain(nullptr);
 }
@@ -371,6 +382,9 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         }
     }
 
+    APPLOG_TRACE("-------------------------------------------------------");
+    APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));
+    APPLOG_TRACE("-------------------------------------------------------");
     try
     {
         auto assembly = app_domain_->get_assembly(app_script_lib.string());
@@ -393,6 +407,14 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 void script_system::unload_app_domain()
 {
     app_cache_ = {};
+
+    if(app_domain_)
+    {
+        auto domain_version = reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr());
+        APPLOG_TRACE("-------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", app_domain_->get_name(), domain_version);
+        APPLOG_TRACE("-------------------------------------------------------");
+    }
     app_domain_.reset();
     mono::mono_domain::set_current_domain(domain_.get());
 }

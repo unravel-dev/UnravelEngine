@@ -1,4 +1,5 @@
 #include "script_component.hpp"
+#include "logging/logging.h"
 #include "serialization/serialization.h"
 
 #include <serialization/associative_archive.h>
@@ -43,7 +44,18 @@ namespace
             for(auto& obj : script_objects)
             {
                 auto mono_obj = obj.pinned->get_object();
+
+                if(!mono_obj.valid())
+                {
+                    APPLOG_ERROR("Script object is invalid for domain version: {}", obj.pinned->get_domain_version());
+                    continue;
+                }
                 const auto& type = mono_obj.get_type();
+                if(!type.valid())
+                {
+                    APPLOG_ERROR("Script object type is invalid for domain version: {}", obj.pinned->get_domain_version());
+                    continue;
+                }
                 if(type.get_hash() == hash)
                 {
                     return &obj;
