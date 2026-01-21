@@ -1,7 +1,8 @@
 #include "inspector.h"
 #include <imgui/imgui_internal.h>
 #include <string_utils/utils.h>
-
+#include <engine/engine.h>
+#include "inspectors.h"
 namespace unravel
 {
 
@@ -128,11 +129,17 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
  
              
     
-    if(ImGui::BeginPopupContextItem("Property Context Menu"))
+    if(ImGui::BeginPopupContextItem(("Property Context Menu##" + name_).c_str()))
     {
-        if(ImGui::MenuItem(fmt::format("Reset {} to default", name_).c_str()))
-        {
+        auto& ctx = engine::context();
+        auto& override_ctx = ctx.get_cached<prefab_override_context>();
 
+        if(override_ctx.is_path_overridden())
+        {
+            if(ImGui::MenuItem(fmt::format("Reset {} to default", name_).c_str()))
+            {
+                override_ctx.reset_override();
+            }
         }
 
         ImGui::EndPopup();
@@ -191,11 +198,17 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
 
                
     
-    if(ImGui::BeginPopupContextItem("Property Context Menu"))
+    if(ImGui::BeginPopupContextItem(("Property Context Menu##" + name_).c_str()))
     {
-        if(ImGui::MenuItem(fmt::format("Reset {} to default", name_).c_str()))
-        {
+        auto& ctx = engine::context();
+        auto& override_ctx = ctx.get_cached<prefab_override_context>();
 
+        if(override_ctx.is_path_overridden())
+        {
+            if(ImGui::MenuItem(fmt::format("Reset {} to default", name_).c_str()))
+            {
+                override_ctx.reset_override();
+            }
         }
 
         ImGui::EndPopup();

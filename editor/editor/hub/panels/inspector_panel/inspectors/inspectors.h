@@ -164,6 +164,8 @@ struct prefab_override_context
      */
     auto record_override() -> bool;
 
+    auto reset_override() -> bool;
+
     /**
      * @brief Check if the current property path is already overridden
      * @return true if the current path has an existing override

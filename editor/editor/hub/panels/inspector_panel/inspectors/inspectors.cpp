@@ -198,6 +198,27 @@ auto prefab_override_context::record_override() -> bool
     return true;
 }
 
+auto prefab_override_context::reset_override() -> bool
+{
+    if(!is_active || !prefab_root_entity)
+    {
+        return false;
+    }
+    
+    auto* prefab_comp = prefab_root_entity.try_get<prefab_component>();
+    if(prefab_comp)
+    {
+        prefab_comp->remove_override(path_context.get_entity_uuid(), path_context.get_current_path_with_component_type());
+        prefab_comp->changed = true;
+        
+        auto& ctx = engine::context();
+        auto& em = ctx.get_cached<editing_manager>();
+        em.sync_prefab_entity(ctx, prefab_root_entity, prefab_comp->source);
+        return true;
+    }
+    return false;
+}
+
 void prefab_override_context::set_entity_uuid(const hpp::uuid& uuid)
 {
     if(!is_active)
