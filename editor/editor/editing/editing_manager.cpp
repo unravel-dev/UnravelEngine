@@ -496,10 +496,14 @@ void editing_manager::on_frame_update(rtti::context& ctx, delta_t dt)
         focused_data.remaining_time -= dt;
     }
 
+    undo_stack.last_action_elapsed_time += dt;
+
+
     if(focused_data.remaining_time <= delta_t::zero())
     {
         unfocus();
     }
+
 }
 void editing_manager::focus(entt::meta_any object)
 {

@@ -612,6 +612,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         return fmt::format("{}/{}", name, pretty_name);
                     };
+                    comp_var_proxy.impl->name = comp_var_proxy.impl->get_name();
                     comp_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
                     {
                         entt::meta_any var;
@@ -751,6 +752,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         }
                         return fmt::format("{}/{}", name, pretty_name);
                     };
+                    obj_proxy.impl->name = obj_proxy.impl->get_name();
                     obj_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;

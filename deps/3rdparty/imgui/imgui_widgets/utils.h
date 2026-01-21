@@ -239,6 +239,7 @@ enum OutlineFlags_
     OutlineFlags_WhenActive      = 1 << 2,   // draw an outline when item is active
     OutlineFlags_WhenInactive    = 1 << 3,   // draw an outline when item is inactive
     OutlineFlags_HighlightActive = 1 << 4,   // when active, the outline is in highlight colour
+    OutlineFlags_WhenCalled = 1 << 5,   // when called, the outline is in highlight colour
     OutlineFlags_NoHighlightActive = OutlineFlags_WhenHovered | OutlineFlags_WhenActive | OutlineFlags_WhenInactive,
     OutlineFlags_NoOutlineInactive = OutlineFlags_WhenHovered | OutlineFlags_WhenActive | OutlineFlags_HighlightActive,
     OutlineFlags_All = OutlineFlags_WhenHovered | OutlineFlags_WhenActive | OutlineFlags_WhenInactive | OutlineFlags_HighlightActive,

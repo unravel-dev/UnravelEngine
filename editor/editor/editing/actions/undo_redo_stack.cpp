@@ -68,6 +68,8 @@ void undo_redo_stack::undo()
             {
                 action->execution_count++;
                 action->undo_action();
+                last_action_name = action->get_name();
+                last_action_elapsed_time = delta_t::zero();
             }
             else
             {
@@ -89,6 +91,8 @@ void undo_redo_stack::redo()
             {
                 action->execution_count++;
                 action->do_action();
+                last_action_name = action->get_name();
+                last_action_elapsed_time = delta_t::zero();
             }
             else
             {
@@ -103,6 +107,8 @@ void undo_redo_stack::clear()
 {
     actions.clear();
     current_index = 0;
+    last_action_name.clear();
+    last_action_elapsed_time = delta_t::zero();
 }
 
 } // namespace unravel

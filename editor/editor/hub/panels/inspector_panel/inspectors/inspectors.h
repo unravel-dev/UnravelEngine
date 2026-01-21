@@ -265,13 +265,13 @@ struct prefab_override_context
     static void mark_entity_as_removed(entt::handle entity);
 };
 
-void add_property_action(rtti::context& ctx,
+auto add_property_action(rtti::context& ctx,
                          prefab_override_context& override_ctx,
                          inspect_result& result,
                          const meta_any_proxy& var_proxy,
                          const entt::meta_any& old_var,
                          const entt::meta_any& new_var,
-                         const entt::meta_custom& custom);
+                         const entt::meta_custom& custom) -> bool;
 /**
  * @brief Pushes debug view mode (increases debug view counter)
  */
@@ -392,10 +392,10 @@ auto inspect_enum(rtti::context& ctx,
  * @return Result indicating what changes occurred during inspection
  */
 template<typename T>
-auto inspect(rtti::context& ctx, T& obj) -> inspect_result
+auto inspect(rtti::context& ctx, T& obj, const std::string& name = {}) -> inspect_result
 {
     entt::meta_any var = entt::forward_as_meta(obj);
-    return inspect_var(ctx, var, make_proxy(var));
+    return inspect_var(ctx, var, make_proxy(var, name));
 }
 
 } // namespace unravel

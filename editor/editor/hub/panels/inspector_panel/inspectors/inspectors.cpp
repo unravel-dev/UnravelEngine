@@ -62,14 +62,35 @@ auto is_debug_view() -> bool
     return debug_view > 0;
 }
 
+auto focus_property_on_undo_redo(rtti::context& ctx,
+                                const meta_any_proxy& var_proxy)
+{
+    if(!var_proxy.impl->name.empty())
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto& undo_redo_stack = em.undo_stack;
+        if(undo_redo_stack.last_action_name == var_proxy.impl->name)
+        {
+            if(undo_redo_stack.last_action_elapsed_time < delta_t(1.0f))
+            {
+                // ImGui::SetItemFocusFrame();
+                ImGui::DrawItemActivityOutline(ImGui::OutlineFlags_WhenCalled | ImGui::OutlineFlags_HighlightActive);
+            }
+            if(undo_redo_stack.last_action_elapsed_time < delta_t(0.1f))
+            {
+                ImGui::SetScrollHereY();
+            }
+        }
+    }
+}
 
-void add_property_action(rtti::context& ctx,
+auto add_property_action(rtti::context& ctx,
                          prefab_override_context& override_ctx,
                          inspect_result& result,
                          const meta_any_proxy& var_proxy,
                          const entt::meta_any& old_var,
                          const entt::meta_any& new_var,
-                         const entt::meta_custom& custom)
+                         const entt::meta_custom& custom) -> bool
 {
     std::function<void()> on_success = nullptr;
     if(override_ctx.record_override())
@@ -97,6 +118,8 @@ void add_property_action(rtti::context& ctx,
 
         result.change_recorded = true;
     }
+
+    return result.change_recorded;
 }
 
 auto prefab_override_context::begin_prefab_inspection(entt::handle e) -> bool
@@ -658,11 +681,14 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
         }
     }
 
-    if(result.changed && !is_readonly)
+    if(!is_readonly)
     {
-        prop.set(object, prop_var);
-        add_property_action(ctx, override_ctx, result, prop_proxy, prop_old_var, prop_var, prop.custom());
-  
+        if(result.changed)
+        {
+            add_property_action(ctx, override_ctx, result, prop_proxy, prop_old_var, prop_var, prop.custom());
+        }
+
+        focus_property_on_undo_redo(ctx, prop_proxy);
     }
 
     // ImGui::PopEnabled();
@@ -801,6 +827,7 @@ auto inspect_array(rtti::context& ctx,
                     }
                     return fmt::format("{}[{}]", name, i);
                 };
+                value_proxy.impl->name = value_proxy.impl->get_name();
                 value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                 {
                     entt::meta_any var;
@@ -1113,6 +1140,7 @@ auto inspect_var(rtti::context& ctx,
     {
         return parent_proxy.impl->get_name();
     };
+    derived_var_proxy.impl->name = derived_var_proxy.impl->get_name();
     derived_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {      
         if(parent_proxy.impl->getter(result) && result)
@@ -1158,11 +1186,15 @@ auto inspect_var(rtti::context& ctx,
     }
 
     // Record override if this was a property change in a prefab instance
-    if(result.changed && info.is_property)
+    if(info.is_property)
     {
-        auto& override_ctx = ctx.get_cached<prefab_override_context>();
+        if(result.changed)
+        {
+            auto& override_ctx = ctx.get_cached<prefab_override_context>();
+            add_property_action(ctx, override_ctx, result, derived_var_proxy, old_var, var, custom);
+        }
 
-        add_property_action(ctx, override_ctx, result, derived_var_proxy, old_var, var, custom);
+        focus_property_on_undo_redo(ctx, derived_var_proxy);      
     }
 
     ImGui::PopReadonly();

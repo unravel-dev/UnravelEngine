@@ -205,6 +205,8 @@ struct meta_any_proxy
     struct meta_any_proxy_impl
     {
         std::string type_name;
+
+        std::string name;
         /// Function to retrieve the current value by evaluating the property path
         /// Returns false if any step in the path is invalid (safe failure)
         std::function<bool(entt::meta_any&)> getter;

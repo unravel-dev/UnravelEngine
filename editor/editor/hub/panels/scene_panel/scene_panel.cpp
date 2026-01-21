@@ -1645,7 +1645,7 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
 
     if(ImGui::BeginMenu(ICON_MDI_CAMERA ICON_MDI_ARROW_DOWN_BOLD))
     {
-        if(ImGui::Button("Scene Camera"))
+        if(ImGui::Button("Reset Camera"))
         {
             get_camera().destroy();
             defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");

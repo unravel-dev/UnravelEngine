@@ -928,7 +928,7 @@ void DrawItemActivityOutline(OutlineFlags flags, ImColor colourHighlight, float 
     {
         rounding = ImGui::GetStyle().FrameRounding;
     }
-    if((flags & OutlineFlags_WhenActive) && ImGui::IsItemActive())
+    if((flags & OutlineFlags_WhenActive) && ImGui::IsItemActive() || (flags & OutlineFlags_WhenCalled))
     {
         if(flags & OutlineFlags_HighlightActive)
         {

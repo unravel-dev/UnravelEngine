@@ -267,6 +267,7 @@ auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_pr
     {
         return parent_proxy.impl->get_name();
     };
+    data_var_proxy.impl->name = data_var_proxy.impl->get_name();
     data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
@@ -301,6 +302,7 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
     {
         return parent_proxy.impl->get_name();
     };
+    data_var_proxy.impl->name = data_var_proxy.impl->get_name();
     data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
@@ -344,6 +346,7 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
     {
         return parent_proxy.impl->get_name();
     };
+    data_var_proxy.impl->name = data_var_proxy.impl->get_name();
     data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;

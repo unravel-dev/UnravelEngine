@@ -120,6 +120,7 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         }
         return fmt::format("{}/{}", parent_name, field_name);
     };
+    nested_proxy.impl->name = nested_proxy.impl->get_name();
     
     nested_proxy.impl->getter = [obj_proxy, field_name](entt::meta_any& result) mutable
     {
@@ -191,7 +192,6 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
     meta_any_proxy nested_proxy;
     auto prop_name = mutable_property.get_name();
     nested_proxy.impl->type_name = mutable_property.get_type().get_fullname();
-
     nested_proxy.impl->get_name = [obj_proxy, prop_name]()
     {
         auto parent_name = obj_proxy.impl->get_name();
@@ -201,7 +201,8 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
         }
         return fmt::format("{}/{}", parent_name, prop_name);
     };
-    
+    nested_proxy.impl->name = nested_proxy.impl->get_name();
+
     nested_proxy.impl->getter = [obj_proxy, prop_name](entt::meta_any& result) mutable
     {
         entt::meta_any obj_var;
@@ -371,7 +372,8 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
         }
         return fmt::format("{}/{}", parent_name, script_proxy.get_name());
     };
-    
+    field_proxy.impl->name = field_proxy.impl->get_name();
+
     field_proxy.impl->getter = [obj_proxy, script_proxy](entt::meta_any& result) mutable
     {
         entt::meta_any obj_var;
@@ -443,6 +445,7 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         }
         return fmt::format("{}/{}", parent_name, field_name);
     };
+    handle_proxy.impl->name = handle_proxy.impl->get_name();
     
     handle_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
     {
@@ -542,7 +545,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
         }
         return fmt::format("{}/{}", parent_name, field_name);
     };
-    
+    asset_proxy.impl->name = asset_proxy.impl->get_name();
     asset_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
     {
         entt::meta_any obj_var;
@@ -648,13 +651,21 @@ struct mono_inspector
     {
         inspect_result result;
   
+        auto type = obj.get_type();
+
+        if(!type.valid())
+        {
+            type = get_current_mono_type();
+        }
+
         // Create a proxy that can get/set the value directly from/to the mono_object
         meta_any_proxy value_proxy;
-        value_proxy.impl->type_name = obj.get_type().get_fullname();
+        value_proxy.impl->type_name = type.get_fullname();
         value_proxy.impl->get_name = [parent_proxy = obj_proxy]()
         {
             return parent_proxy.impl->get_name();
         };
+        value_proxy.impl->name = value_proxy.impl->get_name();
         
         value_proxy.impl->getter = [parent_proxy = obj_proxy](entt::meta_any& result) mutable
         {
@@ -674,7 +685,7 @@ struct mono_inspector
             return false;
         };
         
-        value_proxy.impl->setter = [parent_proxy = obj_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+        value_proxy.impl->setter = [parent_proxy = obj_proxy, obj_type = type](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
         {
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
@@ -687,7 +698,11 @@ struct mono_inspector
                 if(value.try_cast<T>() )
                 {
                     auto mono_obj = pinned_ptr->get_object();
-                    const auto& type = mono_obj.get_type();
+                    auto type = mono_obj.get_type();
+                    if(!type.valid())
+                    {
+                        type = obj_type;
+                    }
                     if(type.is_string())
                     {
                         if(std::is_same<T, std::string>::value)
@@ -1287,7 +1302,7 @@ struct mono_inspector<entt::handle>
         {
             return obj_proxy.impl->get_name();
         };
-        
+        handle_proxy.impl->name = handle_proxy.impl->get_name();
         handle_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
         {
             entt::meta_any obj_var;
@@ -1447,7 +1462,7 @@ struct mono_inspector<asset_handle<T>>
         {
             return obj_proxy.impl->get_name();
         };
-        
+        asset_proxy.impl->name = asset_proxy.impl->get_name();
         asset_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
         {
             entt::meta_any obj_var;
@@ -1645,6 +1660,7 @@ struct mono_inspector_collection
             }
             return fmt::format("{}/{}", parent_name, field_name);
         };
+        collection_proxy.impl->name = collection_proxy.impl->get_name();
         collection_proxy.impl->getter = [obj_proxy, mutable_field, is_array, is_list](entt::meta_any& result) mutable
         {
             entt::meta_any obj_var;
@@ -1867,6 +1883,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     {
         return parent_proxy.impl->get_name();
     };
+    obj_proxy.impl->name = obj_proxy.impl->get_name();
     obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
@@ -1893,12 +1910,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         return false;
     };
 
-    entt::meta_any vdata;
-    if(!obj_proxy.impl->getter(vdata))
-    {
-        return {};
-    }
-    auto pinned_ptr = vdata.cast<mono::mono_object_pinned_ptr>();
+ 
+    auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
     if(!pinned_ptr)
     {
         return {};
@@ -2079,8 +2092,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             // if(ImGui::Button("New"))
             // {
             //     auto new_data = type.new_instance();
-            //     vdata = mono::make_object_pinned(new_data);
-            //     result.changed = obj_proxy.impl->setter(obj_proxy, vdata, 1);
+            //     pinned_ptr->lock(new_data);
+            //     result.changed = true;
             //     result.edit_finished = result.changed;
             //     return result;
             // }
@@ -2104,8 +2117,10 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
         // if(ImGui::Button("Null"))
         // {
-        //     vdata = mono::make_object_pinned(mono::mono_object());
-        //     result.changed = obj_proxy.impl->setter(obj_proxy, vdata, 1);
+        //     pinned_ptr->unlock();
+        //     pinned_ptr->lock(mono::mono_object());
+
+        //     result.changed = true;
         //     result.edit_finished = result.changed;
         //     return result;
         // }
@@ -2482,6 +2497,7 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
     {
         return parent_proxy.impl->get_name();
     };
+    obj_proxy.impl->name = obj_proxy.impl->get_name();
     obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
     {
         entt::meta_any var;
