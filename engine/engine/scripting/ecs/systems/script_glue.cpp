@@ -1731,6 +1731,78 @@ auto internal_m2n_physics_get_collision_layers(entt::entity id) -> layer_mask
 
     return {};
 }
+
+auto internal_m2n_physics_get_is_sensor(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->is_sensor();
+    }
+
+    return false;
+}
+
+void internal_m2n_physics_set_is_sensor(entt::entity id, bool sensor)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_is_sensor(sensor);
+    }
+}
+
+auto internal_m2n_physics_get_mass(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_mass();
+    }
+
+    return 1.0f;
+}
+
+void internal_m2n_physics_set_mass(entt::entity id, float mass)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_mass(mass);
+    }
+}
+
+auto internal_m2n_physics_get_is_kinematic(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->is_kinematic();
+    }
+
+    return false;
+}
+
+void internal_m2n_physics_set_is_kinematic(entt::entity id, bool kinematic)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_is_kinematic(kinematic);
+    }
+}
+
+auto internal_m2n_physics_get_use_gravity(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->is_using_gravity();
+    }
+
+    return true;
+}
+
+void internal_m2n_physics_set_use_gravity(entt::entity id, bool use_gravity)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_is_using_gravity(use_gravity);
+    }
+}
 //------------------------------
 
 void internal_m2n_animation_blend(entt::entity id, int layer, hpp::uuid guid, float seconds, bool loop, bool phase_sync)
@@ -4610,6 +4682,23 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               internal_call(internal_m2n_physics_set_exclude_layers));
         reg.add_internal_call("internal_m2n_physics_get_collision_layers",
                               internal_call(internal_m2n_physics_get_collision_layers));
+
+        reg.add_internal_call("internal_m2n_physics_get_is_sensor",
+                              internal_call(internal_m2n_physics_get_is_sensor));
+        reg.add_internal_call("internal_m2n_physics_set_is_sensor",
+                              internal_call(internal_m2n_physics_set_is_sensor));
+        reg.add_internal_call("internal_m2n_physics_get_mass",
+                              internal_call(internal_m2n_physics_get_mass));
+        reg.add_internal_call("internal_m2n_physics_set_mass",
+                              internal_call(internal_m2n_physics_set_mass));
+        reg.add_internal_call("internal_m2n_physics_get_is_kinematic",
+                              internal_call(internal_m2n_physics_get_is_kinematic));
+        reg.add_internal_call("internal_m2n_physics_set_is_kinematic",
+                              internal_call(internal_m2n_physics_set_is_kinematic));
+        reg.add_internal_call("internal_m2n_physics_get_use_gravity",
+                              internal_call(internal_m2n_physics_get_use_gravity));
+        reg.add_internal_call("internal_m2n_physics_set_use_gravity",
+                              internal_call(internal_m2n_physics_set_use_gravity));
     }
 
     {

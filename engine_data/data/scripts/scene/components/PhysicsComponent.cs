@@ -42,6 +42,67 @@ namespace Unravel.Core
                 return internal_m2n_physics_get_collision_layers(owner);
             }
         }
+
+        /// <summary>
+        /// Whether this physics component is a sensor (triggers collision events but doesn't generate physical responses).
+        /// </summary>
+        public bool isSensor
+        {
+            get
+            {
+                return internal_m2n_physics_get_is_sensor(owner);
+            }
+            set
+            {
+                internal_m2n_physics_set_is_sensor(owner, value);
+            }
+        }
+
+        /// <summary>
+        /// The mass of the rigidbody. Mass determines how much force is needed to move the object.
+        /// </summary>
+        public float mass
+        {
+            get
+            {
+                return internal_m2n_physics_get_mass(owner);
+            }
+            set
+            {
+                internal_m2n_physics_set_mass(owner, value);
+            }
+        }
+
+        /// <summary>
+        /// Whether this physics component is kinematic. Kinematic objects are moved by script and don't respond to forces.
+        /// </summary>
+        public bool isKinematic
+        {
+            get
+            {
+                return internal_m2n_physics_get_is_kinematic(owner);
+            }
+            set
+            {
+                internal_m2n_physics_set_is_kinematic(owner, value);
+            }
+        }
+
+        /// <summary>
+        /// Whether this physics component uses gravity.
+        /// </summary>
+        public bool useGravity
+        {
+            get
+            {
+                return internal_m2n_physics_get_use_gravity(owner);
+            }
+            set
+            {
+                internal_m2n_physics_set_use_gravity(owner, value);
+            }
+        }
+
         /// <summary>
         /// The velocity vector of the rigidbody. It represents the rate of change of Rigidbody position.
         /// In most cases you should not modify the velocity directly, as this can result in unrealistic 
@@ -150,5 +211,29 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern LayerMask internal_m2n_physics_get_collision_layers(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_physics_get_is_sensor(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_is_sensor(Entity eid, bool sensor);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_physics_get_mass(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_mass(Entity eid, float mass);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_physics_get_is_kinematic(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_is_kinematic(Entity eid, bool kinematic);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_physics_get_use_gravity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_use_gravity(Entity eid, bool useGravity);
     }
 }

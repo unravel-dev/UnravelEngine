@@ -267,11 +267,6 @@ void inspector::after_inspect(const entt::meta_data& prop)
 
 auto make_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
 {
-    if(name.empty())
-    {
-        int a = 0;
-        a++;
-    }
     meta_any_proxy proxy;
     proxy.impl->type_name = entt::get_pretty_name(var.type());
     proxy.impl->get_name = [name]()
@@ -279,18 +274,19 @@ auto make_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
         return name;
     };
     proxy.impl->name = name;
-    proxy.impl->getter = [var](entt::meta_any& result)
+    proxy.impl->getter = [var = var.as_ref()](entt::meta_any& result) mutable
     {
-        result = var;
+        result = var.as_ref();
         return true;
     };
-    proxy.impl->setter = [var](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count)
+    proxy.impl->setter = [var = var.as_ref()](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
-        entt::meta_any var;
-        if(proxy.impl->getter(var) && var)
-        {
-            return var.assign(value);
-        }
+        // entt::meta_any var;
+        // if(proxy.impl->getter(var) && var)
+        // {
+        //     return var.assign(value);
+        // }
+        var.assign(value);
         return false;
     };
     return proxy;

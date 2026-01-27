@@ -845,9 +845,13 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                 item.is_selected = em.is_selected(entry);
                 item.is_focused = em.is_focused(entry);
 
-                item.on_click = [&em, entry]()
+                item.on_click = [&em, entry, &item]()
                 {
-                    em.select(entry, em.get_select_mode());
+                    bool is_directory = item.entry.entry.is_directory();
+                    const auto& file_ext = item.entry.extension;
+                    const auto& file_type = ex::get_type(file_ext, is_directory);
+                    const auto& name = item.entry.stem;
+                    em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
                 };
 
                 // Use reusable template delete handler for unknown assets
@@ -1248,9 +1252,14 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
     item.is_loading = !entry.is_ready();
     
     // Simple click handler
-    item.on_click = [&em, entry]()
+    item.on_click = [&em, entry, &item]()
     {
-        em.select(entry, em.get_select_mode());
+        bool is_directory = item.entry.entry.is_directory();
+        const auto& file_ext = item.entry.extension;
+        const auto& file_type = ex::get_type(file_ext, is_directory);
+        const auto& name = item.entry.stem;
+
+        em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
     };
 
     // Use reusable template delete handler

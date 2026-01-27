@@ -1647,9 +1647,12 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
     {
         if(ImGui::Button("Reset Camera"))
         {
-            get_camera().destroy();
+            auto camera = get_camera();
+            if(camera)
+            {
+                camera.destroy();
+            }
             defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
-    
         }
 
         ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");

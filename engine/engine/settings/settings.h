@@ -23,6 +23,18 @@ struct settings
         std::string product;
         std::string version;
         friend auto operator==(const app_settings& lhs, const app_settings& rhs) -> bool = default;
+
+        auto operator=(const app_settings& rhs) -> app_settings&
+        {
+            if(this == &rhs)
+            {
+                return *this;
+            }
+            company = rhs.company;
+            product = rhs.product;
+            version = rhs.version;
+            return *this;
+        }
     } app;
 
     struct asset_settings

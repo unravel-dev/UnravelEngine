@@ -5,6 +5,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/ecs/components/tag_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <math/math.h>
 #include <uuid/uuid.h>
@@ -361,8 +362,23 @@ struct editing_manager
     }
 
     template<typename T>
-    void select(const T& entry, select_mode mode = select_mode::normal)
+    void select(const T& entry, select_mode mode = select_mode::normal, std::string hint = "")
     {
+        if(hint.empty())
+        {
+            if constexpr(std::is_same_v<T, entt::handle>)
+            {
+                
+                if(auto tag = entry.template try_get<tag_component>())
+                {
+                    hint = tag->name + " (Entity)";
+                }
+                else
+                {
+                    hint = "Entity";
+                }
+            }
+        }
         // Capture the old selection state before making changes
         std::vector<entt::meta_any> old_selection = selection_data.objects;
         
@@ -390,7 +406,7 @@ struct editing_manager
         if (selection_changed)
         {
             push_undo_stack_enabled(true);  
-            queue_action("Select", std::make_shared<selection_action_t>(this, old_selection, new_selection, true));
+            queue_action("Select " + hint, std::make_shared<selection_action_t>(this, old_selection, new_selection, true));
             pop_undo_stack_enabled();
         }
 
