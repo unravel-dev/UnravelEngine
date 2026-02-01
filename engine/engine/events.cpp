@@ -6,12 +6,12 @@ namespace unravel
 {
 void events::toggle_play_mode(rtti::context& ctx)
 {
-    auto action = seq::delay(1ms);
-    action.on_begin.connect([this, &ctx]()
+    auto action = seq::delay(0ms);
+    action.on_end.connect([this, &ctx]()
     {
         set_play_mode(ctx, !is_playing);
     });
-    seq::start(action);
+    seq::queue(action, "events");
 }
 
 void events::set_play_mode(rtti::context& ctx, bool play)
@@ -50,12 +50,12 @@ void events::set_play_mode(rtti::context& ctx, bool play)
 
 void events::toggle_pause(rtti::context& ctx)
 {
-    auto action = seq::delay(1ms);
+    auto action = seq::delay(0ms);
     action.on_begin.connect([this, &ctx]()
     {
         set_paused(ctx, !is_paused);
     });
-    seq::start(action);
+    seq::queue(action, "events");
 }
 
 void events::set_paused(rtti::context& ctx, bool paused)

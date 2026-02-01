@@ -369,6 +369,11 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
 
             auto& scripting = ctx.get_cached<script_system>();
             bool has_errors = scripting.has_compilation_errors();
+
+            if(ev.is_playing)
+            {
+                has_errors = false;
+            }
             ImGui::BeginDisabled(has_errors);
             ImGui::BeginGroup();
 

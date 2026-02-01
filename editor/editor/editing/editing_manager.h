@@ -131,6 +131,13 @@ struct editing_manager
     void focus(entt::meta_any object);
     void focus_path(const fs::path& object);
 
+    template<typename T>
+    void foucs_asset(const asset_handle<T>& entry)
+    {
+        focus(entry);
+        focus_path(fs::resolve_protocol(fs::path(entry.id()).parent_path()));
+    }
+
     //-----------------------------------------------------------------------------
     //  Name : unselect ()
     /// <summary>

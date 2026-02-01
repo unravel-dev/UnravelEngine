@@ -129,16 +129,18 @@ auto pick_asset(ImGuiTextFilter& filter,
 
         if(ImGui::ContentButtonItem(citem))
         {
-            em.focus(data);
-            em.focus_path(fs::resolve_protocol(fs::path(data.id()).parent_path()));
+            em.foucs_asset(data);
         }
+        ImGui::SetItemTooltipEx("Locate the asset in the content browser.\n%s", data.id().c_str());
+
 
         ImGui::DrawItemActivityOutline();
     }
     else
     {
-        ImGui::Dummy(item_size);
-        ImGui::RenderFrameEx(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        ImGui::Button("##None", item_size);
+        
+        ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_TextDisabled), 1.0f);
     }
 
     bool drag_dropped = process_drag_drop_target(am, data);
@@ -165,8 +167,7 @@ auto pick_asset(ImGuiTextFilter& filter,
 
     if(ImGui::Button(ICON_MDI_FILE_FIND))
     {
-        em.focus(data);
-        em.focus_path(fs::resolve_protocol(fs::path(data.id()).parent_path()));
+        em.foucs_asset(data);
     }
     ImGui::DrawItemActivityOutline();
 

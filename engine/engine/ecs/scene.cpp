@@ -266,7 +266,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bo
             auto e = entities[0];
             if(e)
             {
-                auto trans_comp = e.get<transform_component>();
+                auto& trans_comp = e.get<transform_component>();
                 trans_comp.set_parent(parent, false);
             }
             else
@@ -283,11 +283,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bo
     };
     push_on_load_callbacks({load_callback_override});
     auto e = load_from_prefab(pfb, *registry);
-
-    if(call_callbacks)
-    {
-        pop_on_load_callbacks();
-    }
+    pop_on_load_callbacks();
 
     return e;
 }
@@ -341,11 +337,8 @@ void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool k
     };
     push_on_load_callbacks({load_callback_override});
     clone_entity_from_stream(clone_from, clone_to);
+    pop_on_load_callbacks();
 
-    if(call_callbacks)
-    {
-        pop_on_load_callbacks();
-    }
 }
 
 auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_callbacks) -> entt::handle

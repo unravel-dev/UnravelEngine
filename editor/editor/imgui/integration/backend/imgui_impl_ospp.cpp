@@ -270,7 +270,7 @@ static void ImGui_ImplOSPP_SetPlatformImeData(ImGuiContext* ctx, ImGuiViewport* 
     }
 }
 
-static auto ImGui_ImplOSPP_KeycodeToImGuiKey(os::key::code keycode) -> ImGuiKey
+auto ImGui_ImplOSPP_KeycodeToImGuiKey(os::key::code keycode) -> ImGuiKey
 {
     switch(keycode)
     {
@@ -485,6 +485,223 @@ static auto ImGui_ImplOSPP_KeycodeToImGuiKey(os::key::code keycode) -> ImGuiKey
             return ImGuiKey_F12;
         default:
             return ImGuiKey_None;
+    }
+}
+
+auto ImGui_ImplOSPP_ImGuiKeyToKeycode(ImGuiKey key) -> os::key::code
+{
+    switch(key)
+    {
+        case ImGuiKey_Tab:
+            return os::key::code::tab;
+        case ImGuiKey_LeftArrow:
+            return os::key::code::left;
+        case ImGuiKey_RightArrow:
+            return os::key::code::right;
+        case ImGuiKey_UpArrow:
+            return os::key::code::up;
+        case ImGuiKey_DownArrow:
+            return os::key::code::down;
+        case ImGuiKey_PageUp:
+            return os::key::code::pageup;
+        case ImGuiKey_PageDown:
+            return os::key::code::pagedown;
+        case ImGuiKey_Home:
+            return os::key::code::home;
+        case ImGuiKey_End:
+            return os::key::code::end;
+        case ImGuiKey_Insert:
+            return os::key::code::insert;
+        case ImGuiKey_Delete:
+            return os::key::code::del;
+        case ImGuiKey_Backspace:
+            return os::key::code::backspace;
+        case ImGuiKey_Space:
+            return os::key::code::space;
+        case ImGuiKey_Enter:
+            return os::key::code::enter;
+        case ImGuiKey_Escape:
+            return os::key::code::escape;
+        case ImGuiKey_Apostrophe:
+            return os::key::code::apostrophe;
+        case ImGuiKey_Comma:
+            return os::key::code::comma;
+        case ImGuiKey_Minus:
+            return os::key::code::minus;
+        case ImGuiKey_Period:
+            return os::key::code::period;
+        case ImGuiKey_Slash:
+            return os::key::code::slash;
+        case ImGuiKey_Semicolon:
+            return os::key::code::semicolon;
+        case ImGuiKey_Equal:
+            return os::key::code::equals;
+        case ImGuiKey_LeftBracket:
+            return os::key::code::leftbracket;
+        case ImGuiKey_Backslash:
+            return os::key::code::backslash;
+        case ImGuiKey_RightBracket:
+            return os::key::code::rightbracket;
+        case ImGuiKey_CapsLock:
+            return os::key::code::capslock;
+        case ImGuiKey_ScrollLock:
+            return os::key::code::scrolllock;
+        case ImGuiKey_NumLock:
+            return os::key::code::numlockclear;
+        case ImGuiKey_PrintScreen:
+            return os::key::code::printscreen;
+        case ImGuiKey_Pause:
+            return os::key::code::pause;
+        case ImGuiKey_Keypad0:
+            return os::key::code::kp_digit0;
+        case ImGuiKey_Keypad1:
+            return os::key::code::kp_digit1;
+        case ImGuiKey_Keypad2:
+            return os::key::code::kp_digit2;
+        case ImGuiKey_Keypad3:
+            return os::key::code::kp_digit3;
+        case ImGuiKey_Keypad4:
+            return os::key::code::kp_digit4;
+        case ImGuiKey_Keypad5:
+            return os::key::code::kp_digit5;
+        case ImGuiKey_Keypad6:
+            return os::key::code::kp_digit6;
+        case ImGuiKey_Keypad7:
+            return os::key::code::kp_digit7;
+        case ImGuiKey_Keypad8:
+            return os::key::code::kp_digit8;
+        case ImGuiKey_Keypad9:
+            return os::key::code::kp_digit9;
+        case ImGuiKey_KeypadDecimal:
+            return os::key::code::kp_period;
+        case ImGuiKey_KeypadDivide:
+            return os::key::code::kp_divide;
+        case ImGuiKey_KeypadMultiply:
+            return os::key::code::kp_multiply;
+        case ImGuiKey_KeypadSubtract:
+            return os::key::code::kp_minus;
+        case ImGuiKey_KeypadAdd:
+            return os::key::code::kp_plus;
+        case ImGuiKey_KeypadEnter:
+            return os::key::code::kp_enter;
+        case ImGuiKey_KeypadEqual:
+            return os::key::code::kp_equals;
+        case ImGuiKey_LeftCtrl:
+            return os::key::code::lctrl;
+        case ImGuiKey_LeftShift:
+            return os::key::code::lshift;
+        case ImGuiKey_LeftAlt:
+            return os::key::code::lalt;
+        case ImGuiKey_LeftSuper:
+            return os::key::code::lgui;
+        case ImGuiKey_RightCtrl:
+            return os::key::code::rctrl;
+        case ImGuiKey_RightShift:
+            return os::key::code::rshift;
+        case ImGuiKey_RightAlt:
+            return os::key::code::ralt;
+        case ImGuiKey_RightSuper:
+            return os::key::code::rgui;
+        case ImGuiKey_Menu:
+            return os::key::code::application;
+        case ImGuiKey_0:
+            return os::key::code::digit0;
+        case ImGuiKey_1:
+            return os::key::code::digit1;
+        case ImGuiKey_2:
+            return os::key::code::digit2;
+        case ImGuiKey_3:
+            return os::key::code::digit3;
+        case ImGuiKey_4:
+            return os::key::code::digit4;
+        case ImGuiKey_5:
+            return os::key::code::digit5;
+        case ImGuiKey_6:
+            return os::key::code::digit6;
+        case ImGuiKey_7:
+            return os::key::code::digit7;
+        case ImGuiKey_8:
+            return os::key::code::digit8;
+        case ImGuiKey_9:
+            return os::key::code::digit9;
+        case ImGuiKey_A:
+            return os::key::code::a;
+        case ImGuiKey_B:
+            return os::key::code::b;
+        case ImGuiKey_C:
+            return os::key::code::c;
+        case ImGuiKey_D:
+            return os::key::code::d;
+        case ImGuiKey_E:
+            return os::key::code::e;
+        case ImGuiKey_F:
+            return os::key::code::f;
+        case ImGuiKey_G:
+            return os::key::code::g;
+        case ImGuiKey_H:
+            return os::key::code::h;
+        case ImGuiKey_I:
+            return os::key::code::i;
+        case ImGuiKey_J:
+            return os::key::code::j;
+        case ImGuiKey_K:
+            return os::key::code::k;
+        case ImGuiKey_L:
+            return os::key::code::l;
+        case ImGuiKey_M:
+            return os::key::code::m;
+        case ImGuiKey_N:
+            return os::key::code::n;
+        case ImGuiKey_O:
+            return os::key::code::o;
+        case ImGuiKey_P:
+            return os::key::code::p;
+        case ImGuiKey_Q:
+            return os::key::code::q;
+        case ImGuiKey_R:
+            return os::key::code::r;
+        case ImGuiKey_S:
+            return os::key::code::s;
+        case ImGuiKey_T:
+            return os::key::code::t;
+        case ImGuiKey_U:
+            return os::key::code::u;
+        case ImGuiKey_V:
+            return os::key::code::v;
+        case ImGuiKey_W:
+            return os::key::code::w;
+        case ImGuiKey_X:
+            return os::key::code::x;
+        case ImGuiKey_Y:
+            return os::key::code::y;
+        case ImGuiKey_Z:
+            return os::key::code::z;
+        case ImGuiKey_F1:
+            return os::key::code::f1;
+        case ImGuiKey_F2:
+            return os::key::code::f2;
+        case ImGuiKey_F3:
+            return os::key::code::f3;
+        case ImGuiKey_F4:
+            return os::key::code::f4;
+        case ImGuiKey_F5:
+            return os::key::code::f5;
+        case ImGuiKey_F6:
+            return os::key::code::f6;
+        case ImGuiKey_F7:
+            return os::key::code::f7;
+        case ImGuiKey_F8:
+            return os::key::code::f8;
+        case ImGuiKey_F9:
+            return os::key::code::f9;
+        case ImGuiKey_F10:
+            return os::key::code::f10;
+        case ImGuiKey_F11:
+            return os::key::code::f11;
+        case ImGuiKey_F12:
+            return os::key::code::f12;
+        default:
+            return os::key::code::unknown;
     }
 }
 

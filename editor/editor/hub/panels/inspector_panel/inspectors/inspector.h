@@ -8,6 +8,12 @@
 
 namespace unravel
 {
+
+struct property_layout_group
+{
+    property_layout_group(const std::string& name);
+    ~property_layout_group();
+};
 /**
  * @brief Manages ImGui layout for property inspection in the editor
  * 
@@ -110,6 +116,7 @@ public:
     static auto get_current() -> property_layout*;
 
 private:
+    hpp::optional<property_layout_group> group_;
     /// Whether ImGui state has been pushed and needs cleanup
     bool pushed_{};
     /// Display name for the property

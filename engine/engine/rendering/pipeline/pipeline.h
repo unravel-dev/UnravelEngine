@@ -165,12 +165,12 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
-    virtual void ui_pass(scene& scn,
+    virtual void run_ui_pass(scene& scn,
                          const camera& camera,
                          gfx::render_view& rview,
                          const gfx::frame_buffer::ptr& output);
 
-    virtual void particle_pass(scene& scn,
+    virtual void run_particle_pass(scene& scn,
                                const camera& camera,
                                gfx::render_view& rview,
                                const gfx::frame_buffer::ptr& output);

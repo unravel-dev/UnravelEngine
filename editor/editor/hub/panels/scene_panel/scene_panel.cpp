@@ -1630,6 +1630,11 @@ void scene_panel::draw_inverse_kinematics_menu(editing_manager& em)
         ImGui::PushItemWidth(200.0f);
         ImGui::InputInt("Inverse Kinematic Nodes", &em.ik_data.num_nodes);
 
+        ImGui::Separator();
+        ImGui::TextUnformatted("Inverse Kinematic Shortcuts");
+        ImGui::Text("CCD: %s", shortcuts::get_shortcut_name(shortcuts::ik_ccd).c_str());
+        ImGui::Text("Fabrik: %s", shortcuts::get_shortcut_name(shortcuts::ik_fabrik).c_str());
+        ImGui::Text("Two Bone: %s", shortcuts::get_shortcut_name(shortcuts::ik_two_bone).c_str());
         ImGui::PopItemWidth();
         ImGui::EndMenu();
     }

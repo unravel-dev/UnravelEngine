@@ -2,7 +2,21 @@
 #include <imgui/imgui_internal.h>
 #include <string_utils/utils.h>
 #include <engine/engine.h>
+#include "imgui/imgui.h"
 #include "inspectors.h"
+
+namespace ImGui
+{
+    auto GetTintedStyleColor(ImGuiCol idx, float multiplier = 1.0f) -> ImVec4
+    {
+        auto color = ImGui::GetStyleColorVec4(idx);
+        color.x *= multiplier;
+        color.y *= multiplier;
+        color.z *= multiplier;
+        return color;
+    }
+}
+
 namespace unravel
 {
 
@@ -19,6 +33,25 @@ void pop_layout_from_stack(property_layout* l)
     stack.pop_back();
 }
 } // namespace
+
+
+property_layout_group::property_layout_group(const std::string& name)
+{
+    // ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetTintedStyleColor(ImGuiCol_ChildBg, 0.8f));
+    // ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    // ImGui::BeginChild(name.c_str(), {-1.0f, 0.0f}, ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_AutoResizeY);
+    
+}
+
+property_layout_group::~property_layout_group()
+{
+    // ImGui::EndChild();
+    // ImGui::PopStyleVar();
+    // ImGui::PopStyleColor();
+    // ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
+
+}
+
 auto property_layout::get_current() -> property_layout*
 {
     if(stack.empty())
@@ -175,6 +208,8 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
 {
     pushed_ = true;
 
+    // group_ = property_layout_group(name_);
+
     if(columns_)
     {
         auto avail = ImGui::GetContentRegionAvail();
@@ -250,6 +285,8 @@ void property_layout::pop_layout()
             ImGui::EndTable();
         }
     }
+
+    // group_.reset();
 
     pushed_ = false;
 }

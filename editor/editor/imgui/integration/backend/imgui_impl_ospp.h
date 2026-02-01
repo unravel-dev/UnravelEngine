@@ -16,3 +16,5 @@ IMGUI_IMPL_API void ImGui_ImplOSPP_NewFrame(float delta_time);
 IMGUI_IMPL_API void ImGui_ImplOSPP_EndFrame();
 
 IMGUI_IMPL_API auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool;
+IMGUI_IMPL_API auto ImGui_ImplOSPP_KeycodeToImGuiKey(os::key::code keycode) -> ImGuiKey;
+IMGUI_IMPL_API auto ImGui_ImplOSPP_ImGuiKeyToKeycode(ImGuiKey key) -> os::key::code;

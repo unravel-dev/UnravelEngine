@@ -1170,7 +1170,7 @@ void internal_m2n_log_error(const std::string& message, const std::string& func,
 
 void internal_m2n_application_quit()
 {
-    auto delay = seq::delay(1ms);
+    auto delay = seq::delay(0ms);
     delay.on_end.connect(
         []()
         {
@@ -1179,7 +1179,7 @@ void internal_m2n_application_quit()
             ev.set_play_mode(ctx, false);
         });
 
-    seq::start(delay, "script");
+    seq::queue(delay, "script");
 }
 
 void internal_m2n_set_time_scale(float scale)

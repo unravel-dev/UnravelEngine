@@ -217,7 +217,7 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
     return params;
 }
 
-void pipeline::ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
+void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
     APP_SCOPE_PERF("Rendering/3D Text Pass");
 
@@ -248,7 +248,7 @@ void pipeline::ui_pass(scene& scn, const camera& camera, gfx::render_view& rview
 }
 
 
-void pipeline::particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
+void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
 

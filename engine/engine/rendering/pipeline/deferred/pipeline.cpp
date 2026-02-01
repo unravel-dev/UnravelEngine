@@ -33,12 +33,38 @@ namespace rendering
 namespace
 {
 
+
+auto get_default_format() -> gfx::texture_format
+{
+    return gfx::texture_format::RGBA8;
+}
+
+auto get_default_hdr_format() -> gfx::texture_format
+{
+    return gfx::texture_format::RGBA16F;
+}
+
+auto get_default_depth_format() -> gfx::texture_format
+{
+    return gfx::texture_format::D32F;
+}
+
+auto needs_recreate(const gfx::texture::ptr& tex, const usize32_t& viewport_size) -> bool
+{
+    return !tex || (tex && tex->get_size() != viewport_size);
+}
+
+auto needs_recreate(const gfx::frame_buffer::ptr& fbo, const usize32_t& viewport_size) -> bool
+{
+    return !fbo || (fbo && fbo->get_size() != viewport_size);
+}
+
 auto create_or_resize_d_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
                                const pipeline::run_params& params) -> const gfx::texture::ptr&
 {
     auto& depth = rview.tex_get_or_emplace("DEPTH");
-    if(!depth || (depth && depth->get_size() != viewport_size))
+    if(needs_recreate(depth, viewport_size))
     {
         depth = std::make_shared<gfx::texture>(viewport_size.width,
                                                viewport_size.height,
@@ -54,7 +80,7 @@ auto create_or_resize_d_buffer(gfx::render_view& rview,
 auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewport_size) -> const gfx::texture::ptr&
 {
     auto& hiz = rview.tex_get_or_emplace("HIZBUFFER");
-    if(!hiz || (hiz && hiz->get_size() != viewport_size))
+    if(needs_recreate(hiz, viewport_size))
     {
         // Create Hi-Z texture with compute shader support
         hiz = std::make_shared<gfx::texture>(viewport_size.width,
@@ -82,15 +108,15 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& fbo = rview.fbo_get_or_emplace("GBUFFER");
-    if(!fbo || (fbo && fbo->get_size() != viewport_size))
+    if(needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? gfx::texture_format::RGBA16F : gfx::texture_format::RGBA8;
+        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
 
         auto tex0 = std::make_shared<gfx::texture>(viewport_size.width,
                                                    viewport_size.height,
                                                    false,
                                                    1,
-                                                   gfx::texture_format::RGBA8,
+                                                   get_default_format(),
                                                    BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
 
         auto tex1 = std::make_shared<gfx::texture>(viewport_size.width,
@@ -104,14 +130,14 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
                                                    viewport_size.height,
                                                    false,
                                                    1,
-                                                   gfx::texture_format::RGBA8,
+                                                   get_default_format(),
                                                    BGFX_TEXTURE_RT);
 
         auto tex3 = std::make_shared<gfx::texture>(viewport_size.width,
                                                    viewport_size.height,
                                                    false,
                                                    1,
-                                                   gfx::texture_format::RGBA8,
+                                                   get_default_format(),
                                                    BGFX_TEXTURE_RT);
 
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -128,9 +154,9 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& fbo = rview.fbo_get_or_emplace("LBUFFER");
-    if(!fbo || (fbo && fbo->get_size() != viewport_size))
+    if(needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? gfx::texture_format::RGBA16F : gfx::texture_format::RGBA8;
+        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
 
         auto tex = std::make_shared<gfx::texture>(viewport_size.width,
                                                   viewport_size.height,
@@ -155,9 +181,9 @@ auto create_or_resize_r_buffer(gfx::render_view& rview,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
     auto& fbo = rview.fbo_get_or_emplace("RBUFFER");
-    if(!fbo || (fbo && fbo->get_size() != viewport_size))
+    if(needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? gfx::texture_format::RGBA16F : gfx::texture_format::RGBA8;
+        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
 
         auto tex = std::make_shared<gfx::texture>(viewport_size.width,
                                                   viewport_size.height,
@@ -179,19 +205,19 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& tex = rview.tex_get_or_emplace("OBUFFER");
-    if(!tex || (tex && tex->get_size() != viewport_size))
+    if(needs_recreate(tex, viewport_size))
     {
         tex = std::make_shared<gfx::texture>(viewport_size.width,
                                             viewport_size.height,
                                             false,
                                             1,
-                                            gfx::texture_format::RGBA8,
+                                            get_default_format(),
                                             BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
 
     }
     {
         auto& fbo = rview.fbo_get_or_emplace("OBUFFER_DEPTH");
-        if(!fbo || (fbo && fbo->get_size() != viewport_size))
+        if(needs_recreate(fbo, viewport_size))
         {
             fbo = std::make_shared<gfx::frame_buffer>();
             fbo->populate({tex, depth});
@@ -199,7 +225,7 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     }
 
     auto& fbo = rview.fbo_get_or_emplace("OBUFFER");
-    if(!fbo || (fbo && fbo->get_size() != viewport_size))
+    if(needs_recreate(fbo, viewport_size))
     {
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
@@ -549,7 +575,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(pflags & pipeline_steps::particles_pass)
     {
-        particle_pass(scn, camera, rview, target);
+        run_particle_pass(scn, camera, rview, target);
     }
 
     target = run_tonemapping_pass(rview, target, output, params);
@@ -558,7 +584,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(pflags == pipeline_steps::full)
     {
-        ui_pass(scn, camera, rview, output);
+        run_ui_pass(scn, camera, rview, output);
 
         if(debug_pass_ >= 0)
         {

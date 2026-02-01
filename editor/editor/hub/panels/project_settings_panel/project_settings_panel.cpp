@@ -10,6 +10,12 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
+#include <imgui_widgets/keyboard/imgui_keyboard.h>
+#include <imgui_widgets/keyboard/imgui_mouse.h>
+#include <imgui_widgets/keyboard/imgui_gamepad.h>
+
+#include <editor/imgui/integration/backend/imgui_impl_ospp.h>
+
 namespace unravel
 {
 
@@ -74,6 +80,66 @@ auto ImGuiEnumCombo(const char* label,
 
     return changed;
 }
+
+
+auto ImGuiKeySelector(const char* label,
+                      os::key::code& selected_value,
+                      const char* popup_id = "Key Selector") -> bool
+{
+    std::vector<std::string> names;
+    std::vector<const char*> names_cstr;
+
+    ImGui::PushID(label);
+
+
+    // The button text: what is the current selection's name?
+    std::string current_name = os::key::to_string(selected_value);
+    if(current_name.empty())
+    {
+        current_name = "None";
+    }
+
+    // If user clicks, open the popup
+    bool selection_changed = false;
+    if(ImGui::Button(current_name.c_str(), ImVec2(150.0f, ImGui::GetFrameHeight())))
+    {
+        ImGui::OpenPopup(popup_id);
+    }
+    std::string desc = {};
+    if(!desc.empty())
+    {
+        ImGui::SetItemTooltipEx("%s", desc.c_str());
+    }
+
+    ImGui::SameLine();
+    ImGui::TextUnformatted(label);
+
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    const ImGuiViewport* viewport = window->WasActive ? window->Viewport : ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if(ImGui::BeginPopup(popup_id, ImGuiWindowFlags_Popup))
+    {
+        ImKeyboard::Highlight(ImGui_ImplOSPP_KeycodeToImGuiKey(selected_value), true);
+        ImKeyboard::Keyboard(ImKeyboard::ImGuiKeyboardLayout_Qwerty, ImKeyboard::ImGuiKeyboardFlags_Recordable);
+
+        auto recorded_keys = ImKeyboard::GetRecordedKeys();
+        for(auto& key : recorded_keys)
+        {
+            selected_value = ImGui_ImplOSPP_ImGuiKeyToKeycode(key);
+
+            selection_changed = true;
+        }
+        ImKeyboard::ClearHighlights();
+        ImKeyboard::ClearRecorded();
+        
+        ImGui::EndPopup();
+    }
+
+    ImGui::PopID();
+
+    return selection_changed;
+}
+
 
 template<typename EnumT, typename ToStringFn, typename FromIntFn, typename GetDescriptionFn>
 auto ImGuiEnumSelector(const char* label,
@@ -298,6 +364,7 @@ void draw_input_settings(rtti::context& ctx)
 
     if(ImGui::TreeNode("Keyboard"))
     {
+
         auto& entries = settings.input.actions.keyboard_map.entries_by_action_id_;
 
         if(ImGui::Button("Add Action"))
@@ -355,7 +422,7 @@ void draw_input_settings(rtti::context& ctx)
 
                     ImGui::PushID(int32_t(i));
 
-                    ImGui::PushID(int32_t(mapping.key));
+                    // ImGui::PushID(int32_t(mapping.key));
 
                     if(ImGui::Button(ICON_MDI_DELETE))
                     {
@@ -367,28 +434,38 @@ void draw_input_settings(rtti::context& ctx)
                     {
                         auto oskey = to_os_key(mapping.key);
 
-                        if(ImGuiEnumSelector(
-                               "Key",
-                               oskey,
-                               os::key::code::count,
-                               [](os::key::code code)
-                               {
-                                   return os::key::to_string(code);
-                               },
-                               [](int code)
-                               {
-                                   return to_os_key(code);
-                               },
-                               [](os::key::code code)
-                               {
-                                   return "";
-                               },
-                               "Key Selector"))
+                        if(ImGuiKeySelector("Key", oskey, "Key Selector"))
                         {
                             mapping.key = from_os_key(oskey);
                             result.changed = true;
                             result.edit_finished = true;
                         }
+
+                       
+
+                        // if(ImGuiEnumSelector(
+                        //        "Key",
+                        //        oskey,
+                        //        os::key::code::count,
+                        //        [](os::key::code code)
+                        //        {
+                        //            return os::key::to_string(code);
+                        //        },
+                        //        [](int code)
+                        //        {
+                        //            return to_os_key(code);
+                        //        },
+                        //        [](os::key::code code)
+                        //        {
+                        //            return "";
+                        //        },
+                        //        "Key Selector"))
+                        // {
+                        //     mapping.key = from_os_key(oskey);
+                        //     result.changed = true;
+                        //     result.edit_finished = true;
+                        // }
+
 
                         int mod_i = 0;
                         int mod_index_to_remove = -1;
@@ -402,28 +479,35 @@ void draw_input_settings(rtti::context& ctx)
                             }
                             ImGui::SameLine();
 
-                            if(ImGuiEnumSelector(
-                                   "Modifier",
-                                   osmodifier,
-                                   os::key::code::count,
-                                   [](os::key::code code)
-                                   {
-                                       return os::key::to_string(code);
-                                   },
-                                   [](int code)
-                                   {
-                                       return to_os_key(code);
-                                   },
-                                   [](os::key::code code)
-                                   {
-                                       return "";
-                                   },
-                                   "Modifier Selector"))
+                            if(ImGuiKeySelector("Modifier", osmodifier, "Modifier Selector"))
                             {
                                 modifier = from_os_key(osmodifier);
                                 result.changed = true;
                                 result.edit_finished = true;
                             }
+
+                            // if(ImGuiEnumSelector(
+                            //        "Modifier",
+                            //        osmodifier,
+                            //        os::key::code::count,
+                            //        [](os::key::code code)
+                            //        {
+                            //            return os::key::to_string(code);
+                            //        },
+                            //        [](int code)
+                            //        {
+                            //            return to_os_key(code);
+                            //        },
+                            //        [](os::key::code code)
+                            //        {
+                            //            return "";
+                            //        },
+                            //        "Modifier Selector"))
+                            // {
+                            //     modifier = from_os_key(osmodifier);
+                            //     result.changed = true;
+                            //     result.edit_finished = true;
+                            // }
                             ImGui::PopID();
 
                             mod_i++;
@@ -456,7 +540,7 @@ void draw_input_settings(rtti::context& ctx)
 
                     i++;
                     ImGui::PopID();
-                    ImGui::PopID();
+                    // ImGui::PopID();
                 }
 
                 if(index_to_remove != -1)

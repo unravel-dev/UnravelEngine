@@ -27,6 +27,18 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ImGui
+{
+    auto GetStyleColor(ImGuiCol idx, float multiplier = 1.0f) -> ImVec4
+    {
+        auto color = ImGui::GetStyleColorVec4(idx);
+        color.x *= multiplier;
+        color.y *= multiplier;
+        color.z *= multiplier;
+        return color;
+    }
+}
+
 namespace unravel
 {
 namespace
@@ -666,14 +678,13 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
             }
             else if(!is_flattable)
             {
-                ImGui::AlignTextToFramePadding();
+                
+                property_layout_group group(pretty_name);
+
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
-
+                ImGui::AlignTextToFramePadding();
                 ImGui::BeginGroup();
-
-                bool open = ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
-
-                if(open)
+                if(ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
                     ImGui::TreePush(pretty_name.c_str());
 
@@ -683,13 +694,12 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
                     ImGui::TreePop();
 
                     ImGui::EndGroup();
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
                 }
                 else
                 {
                     ImGui::EndGroup();
                 }
-                
             }
             else
             {
@@ -753,197 +763,204 @@ auto inspect_array(rtti::context& ctx,
     inspect_result result{};
     auto int_size = static_cast<int>(size);
 
+    
+    property_layout_group group(name);
+
     ImGui::BeginGroup();
-    property_layout layout;
-    layout.set_data(name, tooltip);
-
-    bool open = layout.push_tree_layout();
-
-    int readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
-    bool is_fixed_size_array = entt::get_attribute_as<bool>(custom, "is_fixed_size_array");
-
-    bool resizeable = !is_fixed_size_array && view.resize(size);
     {
+        property_layout layout;
+        layout.set_data(name, tooltip);
 
-        ImGuiInputTextFlags flags = 0;
-        int step = 1;
-        int step_fast = 100;
-        bool readonly = info.read_only || !resizeable;
-        if(readonly)
+        bool open = layout.push_tree_layout();
+
+        int readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
+        bool is_fixed_size_array = entt::get_attribute_as<bool>(custom, "is_fixed_size_array");
+
+        bool resizeable = !is_fixed_size_array && view.resize(size);
         {
-            step = 0;
-            step_fast = 0;
-            flags |= ImGuiInputTextFlags_ReadOnly;
-        }
 
-        ImGui::PushReadonly(readonly);
-
-        if(ImGui::InputInt("##array", &int_size, step, step_fast, flags))
-        {
-            int_size = std::max(readonly_count, int_size);
-
-            if(view.resize(static_cast<std::size_t>(int_size)))
+            ImGuiInputTextFlags flags = 0;
+            int step = 1;
+            int step_fast = 100;
+            bool readonly = info.read_only || !resizeable;
+            if(readonly)
             {
-                size = static_cast<std::size_t>(int_size);
-                result.changed = true;
+                step = 0;
+                step_fast = 0;
+                flags |= ImGuiInputTextFlags_ReadOnly;
             }
-            result.edit_finished = true;
-        }
-        ImGui::PopReadonly();
 
-        ImGui::DrawItemActivityOutline();
-    }
+            ImGui::PushReadonly(readonly);
 
-    if(open)
-    {
-        layout.pop_layout();
-
-        // struct element_t
-        // {
-        //     entt::meta_any value;
-        //     std::string name;
-        //     meta_any_proxy proxy;
-        //     var_info info;
-        // };
-        // std::vector<element_t> elements;
-
-        ImGui::TreePush("array");
-
-        int index_to_remove = -1;
-        for(std::size_t i = 0; i < size; ++i)
-        {
-            auto value = view[i];
-            std::string element = "Item ";
-            element += std::to_string(i);
-
-            ImGui::Separator();
-
-            auto item_info = info;
-            item_info.read_only |= readonly_count > 0;
-            readonly_count--;
-
-            // ImGui::SameLine();
-            auto pos_before = ImGui::GetCursorPos();
+            if(ImGui::InputInt("##array", &int_size, step, step_fast, flags))
             {
- 
-                // Track array index in property path
-                auto& override_ctx = ctx.get_cached<prefab_override_context>();
-                auto array_index_segment = "[" + std::to_string(i) + "]";
-                override_ctx.push_segment(array_index_segment, array_index_segment);
+                int_size = std::max(readonly_count, int_size);
 
-                property_layout layout;
-                layout.set_data(element, {}, true);
-                layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
-                ImGui::PushReadonly(item_info.read_only);
-
-
-                meta_any_proxy value_proxy;
-                value_proxy.impl->type_name = entt::get_pretty_name(value.type());
-                value_proxy.impl->get_name = [var_proxy, i]()
+                if(view.resize(static_cast<std::size_t>(int_size)))
                 {
-                    auto name = var_proxy.impl->get_name();
-                    if(name.empty())
-                    {
-                        return fmt::format("[{}]", i);
-                    }
-                    return fmt::format("{}[{}]", name, i);
-                };
-                value_proxy.impl->name = value_proxy.impl->get_name();
-                value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
-                {
-                    entt::meta_any var;
-                    if(parent_proxy.impl->getter(var) && var)
-                    {
-                        auto view = var.as_sequence_container();
-                        if(view.size() > static_cast<std::size_t>(i))
-                        {
-                            auto value = view[i];   
-                            result = value;
-                            return true;
-                        }
-                    }
-                    return false;
-                };
-                value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-                {
-                    entt::meta_any var;
-                    if(parent_proxy.impl->getter(var) && var)
-                    {
-                        auto view = var.as_sequence_container();
-                        if(view.size() > static_cast<std::size_t>(i))
-                        {
-                             // get iterator to i
-                            auto it = view.begin();
-                            std::advance(it, static_cast<std::ptrdiff_t>(i));
-
-                            // remove old element
-                            it = view.erase(it);
-
-                            // insert new element at position i
-                            view.insert(it, value);
-
-                            // If the getter returned a copy, write back; if it was a ref, this is harmless.
-                            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
-                
-                        }
-                    }
-                    return false;
-                };
-
-                // elements.emplace_back(element_t{value, element, value_proxy, item_info});
-                result |= inspect_var(ctx, value, value_proxy, item_info, custom);
-
-                override_ctx.pop_segment();
-
-                ImGui::PopReadonly();
-            }
-            auto pos_after = ImGui::GetCursorPos();
-
-
-            if(!item_info.read_only && resizeable)
-            {
-                ImGui::SetCursorPos(pos_before);
-
-                ImGui::PushID(i);
-                ImGui::AlignTextToFramePadding();
-                if(ImGui::Button(ICON_MDI_DELETE, ImVec2(0.0f, ImGui::GetFrameHeightWithSpacing())))
-                {
-                    index_to_remove = i;
+                    size = static_cast<std::size_t>(int_size);
+                    result.changed = true;
                 }
-                ImGui::SetItemTooltipEx("Remove element.");
-                ImGui::PopID();
-                ImGui::SetCursorPos(pos_after);
-                ImGui::Dummy({});
+                result.edit_finished = true;
             }
+            ImGui::PopReadonly();
+
+            ImGui::DrawItemActivityOutline();
         }
 
-        // ImGui::ReorderableList(name.c_str(), static_cast<int>(elements.size()), [&](int index) {
-        //     auto& element = elements[index];
-        //     property_layout layout;
-        //     layout.set_data(element.name, {}, true);
-        //     layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
-        //     ImGui::PushReadonly(element.info.read_only);
-        //     result |= inspect_var(ctx, element.value, element.proxy, element.info, custom);
-        //     ImGui::PopReadonly();
-        // }, [&](int from, int insert_before) {
-        //     ImGui::VectorMoveInsert(view, from, insert_before);
-        //     result.changed = true;
-        //     result.edit_finished = true;
-        // });
-
-        if(index_to_remove != -1)
+        if(open)
         {
-            auto it = view.begin();
-            std::advance(it, index_to_remove);
-            view.erase(it);
-            result.changed = true;
-            result.edit_finished = true;
+            layout.pop_layout();
+
+            // struct element_t
+            // {
+            //     entt::meta_any value;
+            //     std::string name;
+            //     meta_any_proxy proxy;
+            //     var_info info;
+            // };
+            // std::vector<element_t> elements;
+
+            // ImGui::TreePush("array");
+
+            int index_to_remove = -1;
+            for(std::size_t i = 0; i < size; ++i)
+            {
+                auto value = view[i];
+                std::string element = "Item ";
+                element += std::to_string(i);
+
+                ImGui::Separator();
+
+                auto item_info = info;
+                item_info.read_only |= readonly_count > 0;
+                readonly_count--;
+
+                // ImGui::SameLine();
+                auto pos_before = ImGui::GetCursorPos();
+                {
+    
+                    // Track array index in property path
+                    auto& override_ctx = ctx.get_cached<prefab_override_context>();
+                    auto array_index_segment = "[" + std::to_string(i) + "]";
+                    override_ctx.push_segment(array_index_segment, array_index_segment);
+
+                    property_layout layout;
+                    layout.set_data(element, {}, true);
+                    layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
+                    ImGui::PushReadonly(item_info.read_only);
+
+
+                    meta_any_proxy value_proxy;
+                    value_proxy.impl->type_name = entt::get_pretty_name(value.type());
+                    value_proxy.impl->get_name = [var_proxy, i]()
+                    {
+                        auto name = var_proxy.impl->get_name();
+                        if(name.empty())
+                        {
+                            return fmt::format("[{}]", i);
+                        }
+                        return fmt::format("{}[{}]", name, i);
+                    };
+                    value_proxy.impl->name = value_proxy.impl->get_name();
+                    value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
+                    {
+                        entt::meta_any var;
+                        if(parent_proxy.impl->getter(var) && var)
+                        {
+                            auto view = var.as_sequence_container();
+                            if(view.size() > static_cast<std::size_t>(i))
+                            {
+                                auto value = view[i];   
+                                result = value;
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    value_proxy.impl->setter = [parent_proxy = var_proxy, i](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+                    {
+                        entt::meta_any var;
+                        if(parent_proxy.impl->getter(var) && var)
+                        {
+                            auto view = var.as_sequence_container();
+                            if(view.size() > static_cast<std::size_t>(i))
+                            {
+                                // get iterator to i
+                                auto it = view.begin();
+                                std::advance(it, static_cast<std::ptrdiff_t>(i));
+
+                                // remove old element
+                                it = view.erase(it);
+
+                                // insert new element at position i
+                                view.insert(it, value);
+
+                                // If the getter returned a copy, write back; if it was a ref, this is harmless.
+                                return parent_proxy.impl->setter(parent_proxy, var, execution_count);
+                    
+                            }
+                        }
+                        return false;
+                    };
+
+                    // elements.emplace_back(element_t{value, element, value_proxy, item_info});
+                    result |= inspect_var(ctx, value, value_proxy, item_info, custom);
+
+                    override_ctx.pop_segment();
+
+                    ImGui::PopReadonly();
+                }
+                auto pos_after = ImGui::GetCursorPos();
+
+
+                if(!item_info.read_only && resizeable)
+                {
+                    ImGui::SetCursorPos(pos_before);
+
+                    ImGui::PushID(i);
+                    ImGui::AlignTextToFramePadding();
+                    if(ImGui::Button(ICON_MDI_DELETE, ImVec2(0.0f, ImGui::GetFrameHeightWithSpacing())))
+                    {
+                        index_to_remove = i;
+                    }
+                    ImGui::SetItemTooltipEx("Remove element.");
+                    ImGui::PopID();
+                    ImGui::SetCursorPos(pos_after);
+                    ImGui::Dummy({});
+                }
+            }
+
+            // ImGui::ReorderableList(name.c_str(), static_cast<int>(elements.size()), [&](int index) {
+            //     auto& element = elements[index];
+            //     property_layout layout;
+            //     layout.set_data(element.name, {}, true);
+            //     layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
+            //     ImGui::PushReadonly(element.info.read_only);
+            //     result |= inspect_var(ctx, element.value, element.proxy, element.info, custom);
+            //     ImGui::PopReadonly();
+            // }, [&](int from, int insert_before) {
+            //     ImGui::VectorMoveInsert(view, from, insert_before);
+            //     result.changed = true;
+            //     result.edit_finished = true;
+            // });
+
+            if(index_to_remove != -1)
+            {
+                auto it = view.begin();
+                std::advance(it, index_to_remove);
+                view.erase(it);
+                result.changed = true;
+                result.edit_finished = true;
+            }
+
+            // ImGui::TreePop();
         }
 
-        ImGui::TreePop();
     }
     ImGui::EndGroup();
-    ImGui::RenderFrameEx(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
+
 
     return result;
 }
@@ -1192,6 +1209,7 @@ auto inspect_var(rtti::context& ctx,
 
     ImGui::PushReadonly(info.read_only);
 
+    // ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     auto inspector = get_inspector(ctx, type);
     if(inspector)
     {
@@ -1219,7 +1237,7 @@ auto inspect_var(rtti::context& ctx,
     }
 
     ImGui::PopReadonly();
-
+    // ImGui::PopStyleColor();
     return result;
 }
 
@@ -1294,13 +1312,14 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             }
             else
             {
-                ImGui::AlignTextToFramePadding();
+                property_layout_group group(group_name);
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
                 ImGui::BeginGroup();
-                if(ImGui::TreeNodeEx(kvp.first.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+                ImGui::AlignTextToFramePadding();
+                if(ImGui::TreeNodeEx(group_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
                 {
-                    ImGui::TreePush(kvp.first.c_str());
-                    ImGui::PushID(kvp.first.c_str());
+                    ImGui::TreePush(group_name.c_str());
+                    ImGui::PushID(group_name.c_str());
 
                     for(auto& prop : props)
                     {
@@ -1315,12 +1334,13 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                     ImGui::TreePop();
 
                     ImGui::EndGroup();
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
                 }
                 else
                 {
                     ImGui::EndGroup();
                 }
+
             }
         }
     }

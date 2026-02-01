@@ -129,6 +129,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
             auto& cache = caches_[scn->tag];
             cache.scn = scn;
             save_checkpoint(ctx, cache);
+            cache.scn = nullptr;
         }
     }
 
@@ -159,6 +160,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
             auto& cache = caches_[scn->tag];
             cache.scn = scn;
             load_checkpoint(ctx, cache, true);
+            cache.scn = nullptr;
         }
     }
 
@@ -179,10 +181,18 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     {
         scripting.wait_for_jobs_to_finish(ctx);
     }
+    
+    undo_stack.clear();
+    pending_actions.clear();
+
+    
+    clear(false);
+
 
     const auto& scenes = scene::get_all_scenes();
     for(auto scn : scenes)
     {
+        // GAME scene is not saved. Any changes to it during play will be lost.
         if(scn->tag == "game")
         {
             continue;
@@ -191,22 +201,13 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         auto& cache = caches_[scn->tag];
         cache.scn = scn;
         save_checkpoint(ctx, cache);
+        cache.scn = nullptr;
     }
-
-
-    
-    undo_stack.clear();
-    pending_actions.clear();
-
-    
-    clear(false);
-    
 
     // Unload scenes BEFORE unloading domains to prevent script_component destructors
     // from trying to free GC handles from the old domain
     unload_scenes_scripting(scenes);
 
-    
     
     scripting.unload_app_domain();
     scripting.unload_engine_domain();
@@ -222,6 +223,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
         auto& cache = caches_[scn->tag];
         cache.scn = scn;
         load_checkpoint(ctx, cache, true);
+        cache.scn = nullptr;
 
         sync_prefab_instances(ctx, scn);
 
@@ -244,6 +246,11 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
 
     save_selection(ctx);
 
+    
+    push_undo_stack_enabled(false);  
+
+    clear(false);
+
     const auto& scenes = scene::get_all_scenes();
     caches_.clear();
     for(auto scn : scenes)
@@ -251,12 +258,8 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
         auto& cache = caches_[scn->tag];
         cache.scn = scn;
         save_checkpoint(ctx, cache);
+        cache.scn = nullptr;
     }
-
-    push_undo_stack_enabled(false);  
-
-    clear(false);
-
 
     // Unload scenes BEFORE unloading domains to prevent script_component destructors
     // from trying to free GC handles from the old domain
@@ -273,6 +276,7 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
         auto& cache = caches_[scn->tag];
         cache.scn = scn;
         load_checkpoint(ctx, cache, true);
+        cache.scn = nullptr;
     }
 
     caches_.clear();

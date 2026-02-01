@@ -54,11 +54,6 @@ auto inspector_physics_compound_shape::inspect(rtti::context& ctx,
 
     ImGui::DrawItemActivityOutline();
 
-    if(auto current = property_layout::get_current())
-    {
-        current->pop_layout();
-    }
-
     if(result.changed)
     {
         const auto type = variant_types[item_current_idx];
