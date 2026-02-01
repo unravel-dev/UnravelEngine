@@ -661,6 +661,11 @@ auto transform_component::set_parent(const entt::handle& p, bool global_stays) -
 
     bool was_active = is_active();
     parent_ = new_parent;
+    if(!new_parent)
+    {
+        int a = 0;
+        a++;
+    }
     set_dirty(true);
 
     if(global_stays)

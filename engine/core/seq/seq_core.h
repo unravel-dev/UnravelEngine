@@ -2,6 +2,7 @@
 #include "seq_common.h"
 #include "seq_ease.h"
 #include "seq_private.h"
+#include <functional>
 #include <vector>
 
 /**
