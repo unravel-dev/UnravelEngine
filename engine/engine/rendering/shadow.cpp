@@ -270,245 +270,40 @@ void screenSpaceQuad(bool _originBottomLeft = true, float _width = 1.0f, float _
 }
 
 
-void world_space_frustum_corners_legacy(float* corners24f,
-                                       float near_plane,
-                                       float far_plane,
-                                       float proj_width,
-                                       float proj_height,
-                                       const float* inv_view_mtx)
-{
-    // Define frustum corners in view space.
-    const float nw = near_plane * proj_width;
-    const float nh = near_plane * proj_height;
-    const float fw = far_plane * proj_width;
-    const float fh = far_plane * proj_height;
-
-    const uint8_t num_corners = 8;
-    const bx::Vec3 corners[num_corners] = {
-        {-nw, nh, near_plane},
-        {nw, nh, near_plane},
-        {nw, -nh, near_plane},
-        {-nw, -nh, near_plane},
-        {-fw, fh, far_plane},
-        {fw, fh, far_plane},
-        {fw, -fh, far_plane},
-        {-fw, -fh, far_plane},
-    };
-
-    // Convert them to world space.
-    float(*out)[3] = (float(*)[3])corners24f;
-    for(uint8_t ii = 0; ii < num_corners; ++ii)
-    {
-        bx::store(&out[ii], bx::mul(corners[ii], inv_view_mtx));
-    }
-}
-
-void world_space_frustum_corners_adaptive(float* corners24f,
-                                         float near_plane,
-                                         float far_plane,
-                                         float proj_width,
-                                         float proj_height,
-                                         const float* inv_view_mtx,
-                                         float altitude_scale_factor,
-                                         float min_altitude_boost,
-                                         float max_altitude_boost)
-{
-    // Extract camera position from inverse view matrix
-    bx::Vec3 camera_pos = {inv_view_mtx[12], inv_view_mtx[13], inv_view_mtx[14]};
-
-    // Compute camera altitude above the ground plane (assuming Y is up)
-    const float altitude = camera_pos.y;
-    const float clamped_altitude = bx::clamp(altitude, 0.0f, max_altitude_boost);
-
-    // Adaptive scaling based on altitude
-    const float altitude_boost = bx::max(min_altitude_boost, clamped_altitude * altitude_scale_factor);
-    
-    // Adjust near and far planes based on altitude
-    const float actual_near = bx::max(0.01f, near_plane - altitude_boost * 0.1f); // Pull near plane closer for high cameras
-    const float actual_far = far_plane + altitude_boost;                          // Push far plane further for high cameras
-
-    // Compute corners in view space using adjusted near/far
-    const float nw = actual_near * proj_width;
-    const float nh = actual_near * proj_height;
-    const float fw = actual_far * proj_width;
-    const float fh = actual_far * proj_height;
-
-    const uint8_t num_corners = 8;
-    const bx::Vec3 corners[num_corners] = {
-        {-nw, nh, actual_near},
-        {nw, nh, actual_near},
-        {nw, -nh, actual_near},
-        {-nw, -nh, actual_near},
-        {-fw, fh, actual_far},
-        {fw, fh, actual_far},
-        {fw, -fh, actual_far},
-        {-fw, -fh, actual_far},
-    };
-
-    // Convert them to world space.
-    float(*out)[3] = (float(*)[3])corners24f;
-    for(uint8_t ii = 0; ii < num_corners; ++ii)
-    {
-        bx::store(&out[ii], bx::mul(corners[ii], inv_view_mtx));
-    }
-}
-
-void world_space_frustum_corners_hybrid(float* corners24f,
-                                       float near_plane,
-                                       float far_plane,
-                                       float proj_width,
-                                       float proj_height,
-                                       const float* inv_view_mtx,
-                                       float blend_factor)
-{
-    // Get both legacy and adaptive results
-    float legacy_corners[8][3];
-    float adaptive_corners[8][3];
-    
-    world_space_frustum_corners_legacy((float*)legacy_corners, near_plane, far_plane, proj_width, proj_height, inv_view_mtx);
-    world_space_frustum_corners_adaptive((float*)adaptive_corners, near_plane, far_plane, proj_width, proj_height, inv_view_mtx, 0.5f, 0.05f, 100.0f);
-    
-    // Blend between the two approaches
-    float(*out)[3] = (float(*)[3])corners24f;
-    for(uint8_t ii = 0; ii < 8; ++ii)
-    {
-        for(uint8_t jj = 0; jj < 3; ++jj)
-        {
-            out[ii][jj] = bx::lerp(legacy_corners[ii][jj], adaptive_corners[ii][jj], blend_factor);
-        }
-    }
-}
-
-
-
-void worldSpaceFrustumCorners(float* _corners24f,
-    float _near,
-    float _far,
-    float _projWidth,
-    float _projHeight,
-    const float* _invViewMtx)
-{
-    // Original/Legacy implementation
-    world_space_frustum_corners_legacy(_corners24f, _near, _far, _projWidth, _projHeight, _invViewMtx);
-}
-
-
-void compute_world_space_frustum_corners(float* corners24f,
-    float near_plane,
-    float far_plane,
-    float proj_width,
-    float proj_height,
-    const float* inv_view_mtx,
-    frustum_calculation_method::Enum method,
-    const adaptive_shadow_params& params)
-{
-    switch(method)
-    {
-    case frustum_calculation_method::adaptive:
-    world_space_frustum_corners_adaptive(corners24f,
-            near_plane,
-            far_plane,
-            proj_width,
-            proj_height,
-            inv_view_mtx,
-            params.altitude_scale_factor,
-            params.min_altitude_boost,
-            params.max_altitude_boost);
-    break;
-
-    case frustum_calculation_method::hybrid:
-    world_space_frustum_corners_hybrid(corners24f,
-            near_plane,
-            far_plane,
-            proj_width,
-            proj_height,
-            inv_view_mtx,
-            0.5f); // 50% blend
-    break;
-
-    case frustum_calculation_method::legacy:
-    default:
-    world_space_frustum_corners_legacy(corners24f,
-            near_plane,
-            far_plane,
-            proj_width,
-            proj_height,
-            inv_view_mtx);
-    break;
-    }
-}
-
-void split_frustum_legacy(float* splits, uint8_t num_splits, float near_plane, float far_plane, float split_weight)
-{
-    auto factor = float(num_splits) / 4.0f;
-    far_plane = far_plane * factor;
-
-    const float l = split_weight;
-    const float ratio = far_plane / near_plane;
-    const int8_t num_slices = num_splits * 2;
-    const float num_slices_f = float(num_slices);
-
-    // First slice.
-    splits[0] = near_plane;
-
-    for(uint8_t nn = 2, ff = 1; nn < num_slices; nn += 2, ff += 2)
-    {
-        float si = float(int8_t(ff)) / num_slices_f;
-
-        const float near_p = l * (near_plane * bx::pow(ratio, si)) + (1 - l) * (near_plane + (far_plane - near_plane) * si);
-        splits[nn] = near_p;          // near
-        splits[ff] = near_p * 1.005f; // far from previous split
-    }
-
-    // Last slice.
-    splits[num_slices - 1] = far_plane;
-}
-
-void split_frustum_adaptive(float* splits, uint8_t num_splits, float near_plane, float far_plane, 
-                           float split_weight, float camera_altitude, float altitude_influence = 0.2f)
-{
-    auto factor = float(num_splits) / 4.0f;
-    far_plane = far_plane * factor;
-
-    // Adjust split weight based on camera altitude - higher cameras benefit from more uniform distribution
-    const float altitude_factor = bx::clamp(camera_altitude * altitude_influence, 0.0f, 1.0f);
-    const float adjusted_split_weight = bx::lerp(split_weight, 0.5f, altitude_factor); // Move towards linear distribution
-
-    const float l = adjusted_split_weight;
-    const float ratio = far_plane / near_plane;
-    const int8_t num_slices = num_splits * 2;
-    const float num_slices_f = float(num_slices);
-
-    // First slice.
-    splits[0] = near_plane;
-
-    for(uint8_t nn = 2, ff = 1; nn < num_slices; nn += 2, ff += 2)
-    {
-        float si = float(int8_t(ff)) / num_slices_f;
-
-        // Apply non-linear distribution that favors distant splits for high cameras
-        if(camera_altitude > 10.0f)
-        {
-            si = bx::pow(si, 0.8f); // Slightly favor distant splits
-        }
-
-        const float near_p = l * (near_plane * bx::pow(ratio, si)) + (1 - l) * (near_plane + (far_plane - near_plane) * si);
-        splits[nn] = near_p;          // near
-        splits[ff] = near_p * 1.005f; // far from previous split
-    }
-
-    // Last slice.
-    splits[num_slices - 1] = far_plane;
-}
-
 /**
- * _splits = { near0, far0, near1, far1... nearN, farN }
- * N = _numSplits
- */
-void splitFrustum(float* _splits, uint8_t _numSplits, float _near, float _far, float _splitWeight = 0.75f)
+* Calculate cascade split depths based on view camera frustum using GPU Gems 3 method.
+* Based on: https://developer.nvidia.com/gpugems/GPUGems3/gpugems3_ch10.html
+* 
+* @param cascadeSplits Output array of normalized split depths [0..1] for each cascade
+* @param numSplits Number of cascade splits (typically 4)
+* @param nearClip Near clip plane distance
+* @param farClip Far clip plane distance  
+* @param splitLambda Blend factor between logarithmic (1.0) and uniform (0.0) distribution
+*/
+void calculateCascadeSplits(float* cascadeSplits, uint8_t numSplits, float nearClip, float farClip, float splitLambda)
 {
-    split_frustum_legacy(_splits, _numSplits, _near, _far, _splitWeight);
+    const float clipRange = farClip - nearClip;
+    const float minZ = nearClip;
+    const float maxZ = nearClip + clipRange;
+    const float range = maxZ - minZ;
+    const float ratio = maxZ / minZ;
+
+    // Calculate split depths based on view camera frustum
+    // Use a modified indexing similar to the original implementation for better distribution feel
+    // The original used odd indices (1,3,5,7) out of (num_splits*2), giving more weight to near cascades
+    const float numSlicesF = float(numSplits) * 2.5f;
+    
+    for(uint32_t i = 0; i < numSplits; i++)
+    {
+        // Use odd indices like the original: 1, 3, 5, 7 for 4 splits
+        const float si = float(i * 2 + 1) / numSlicesF;
+        const float logSplit = minZ * bx::pow(ratio, si);
+        const float uniformSplit = minZ + range * si;
+        const float d = splitLambda * (logSplit - uniformSplit) + uniformSplit;
+        cascadeSplits[i] = (d - nearClip) / clipRange;
+    }
 }
+
 } // namespace
 
 shadowmap_generator::shadowmap_generator()
@@ -1567,178 +1362,170 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     }
     else // LightType::DirectionalLight == m_settings.m_lightType
     {
-        // Setup light view matrix to look at the camera position
-        // Get camera position from the view inverse matrix
-        const auto camera_pos = cam.get_position();
-        const float camera_pos_x = camera_pos.x;
-        const float camera_pos_y = camera_pos.y;
-        const float camera_pos_z = camera_pos.z;
-        
-        // Create eye position by offsetting from camera position using light direction
-        const bx::Vec3 eye = {
-            camera_pos_x - directional_light_.m_position.m_x,
-            camera_pos_y - directional_light_.m_position.m_y,
-            camera_pos_z - directional_light_.m_position.m_z,
-        };
+        // ============================================================================
+        // Cascaded Shadow Map calculation based on GPU Gems 3, Chapter 10
+        // ============================================================================
 
-        
-        // Look at the camera position
-        const bx::Vec3 at = {camera_pos_x, camera_pos_y, camera_pos_z};
-        bx::mtxLookAt(lightView[0], eye, at);
-
-        // Compute split distances.
         const uint8_t maxNumSplits = 4;
         BX_ASSERT(maxNumSplits >= settings_.m_numSplits, "Error! Max num splits.");
 
-        // Split distances
+        // Get camera parameters
+        const float nearClip = currentSmSettings->m_near;
+        const float farClip = currentSmSettings->m_far;
+        const float clipRange = farClip - nearClip;
 
-        std::array<float, maxNumSplits * 2> splitSlices; //[maxNumSplits * 2];
-        splitFrustum(splitSlices.data(),
-                     uint8_t(settings_.m_numSplits),
-                     currentSmSettings->m_near,
-                     currentSmSettings->m_far,
-                     settings_.m_splitDistribution);
+        // Calculate cascade split depths using GPU Gems 3 logarithmic/uniform blend
+        float cascadeSplits[maxNumSplits];
+        calculateCascadeSplits(cascadeSplits, 
+                                 uint8_t(settings_.m_numSplits), 
+                                 nearClip, 
+                                 farClip, 
+                                 settings_.m_splitDistribution);
 
-        // Create initial orthographic projection with fixed size
-        // The actual size will be adjusted by the crop matrix based on frustum bounds
+        // Light direction (normalized) - this is the direction the light travels
+        const bx::Vec3 lightDir = bx::normalize(bx::Vec3{
+            directional_light_.m_position.m_x,
+            directional_light_.m_position.m_y,
+            directional_light_.m_position.m_z
+        });
+
+        const bx::Vec3 lightEye = {0.0f, 0.0f, 0.0f};
+        const bx::Vec3 lightAt = lightDir;  // Look along light direction
+        
+        // Use +Y as default up vector, falling back to +Z if light is nearly vertical
+        bx::Vec3 upVec = {0.0f, 1.0f, 0.0f};
+        if(bx::abs(bx::dot(lightDir, upVec)) > 0.99f)
+        {
+            upVec = {0.0f, 0.0f, 1.0f};
+        }
+        
+        // All cascades share the same light view matrix (camera position independent)
+        bx::mtxLookAt(lightView[0], lightEye, lightAt, upVec);
+
+        // Create base orthographic projection (will be adjusted by crop matrices)
         float mtxProj[16];
         bx::mtxOrtho(mtxProj,
-                     /*left*/ -1.0f,
-                     /*right*/ +1.0f,
-                     /*bottom*/ -1.0f,
-                     /*top*/ +1.0f,
+                     -1.0f, 1.0f,    // left, right
+                     -1.0f, 1.0f,    // bottom, top
                      -currentSmSettings->m_far,
                      currentSmSettings->m_far,
                      0.0f,
                      homogeneousDepth);
 
-        // Update uniforms.
-        for(uint8_t ii = 0, ff = 1; ii < settings_.m_numSplits; ++ii, ff += 2)
-        {
-            // This lags for 1 frame, but it's not a problem.
-            uniforms_.m_csmFarDistances[ii] = splitSlices[ff];
-        }
-
-        // Compute camera inverse view mtx.
-
+        // Get camera inverse view matrix for frustum corner calculation
         const auto& mtxViewInv = cam.get_view_inverse();
 
+        // Process each cascade
         const uint8_t numCorners = 8;
         float frustumCorners[maxNumSplits][numCorners][3];
-        for(uint8_t ii = 0, nn = 0, ff = 1; ii < settings_.m_numSplits; ++ii, nn += 2, ff += 2)
+        float lastSplitDist = 0.0f;
+
+        for(uint8_t ii = 0; ii < settings_.m_numSplits; ++ii)
         {
+            const float splitDist = cascadeSplits[ii];
+            
+            // Compute actual near/far distances for this cascade
+            const float cascadeNear = nearClip + lastSplitDist * clipRange;
+            const float cascadeFar = nearClip + splitDist * clipRange;
+
+            // Update cascade far distance uniform
+            uniforms_.m_csmFarDistances[ii] = cascadeFar;
+
+            // Compute frustum corners in view space then transform to world space
+            const float camFovy = cam.get_fov();
+            const float camAspect = cam.get_aspect_ratio();
+            const float projHeight = bx::tan(bx::toRad(camFovy) * 0.5f);
+            const float projWidth = projHeight * camAspect;
+
+            // Compute frustum corners for this cascade in world space
+            const float nw = cascadeNear * projWidth;
+            const float nh = cascadeNear * projHeight;
+            const float fw = cascadeFar * projWidth;
+            const float fh = cascadeFar * projHeight;
+
+            // Frustum corners in view space (camera looking along +Z)
+            const bx::Vec3 viewSpaceCorners[8] = {
+                {-nw,  nh, cascadeNear},  // near top-left
+                { nw,  nh, cascadeNear},  // near top-right
+                { nw, -nh, cascadeNear},  // near bottom-right
+                {-nw, -nh, cascadeNear},  // near bottom-left
+                {-fw,  fh, cascadeFar},   // far top-left
+                { fw,  fh, cascadeFar},   // far top-right
+                { fw, -fh, cascadeFar},   // far bottom-right
+                {-fw, -fh, cascadeFar},   // far bottom-left
+            };
+
+            // Transform corners to world space and then to light space
             bx::Vec3 min = {9000.0f, 9000.0f, 9000.0f};
             bx::Vec3 max = {-9000.0f, -9000.0f, -9000.0f};
-
             float frustum_radius = 0.0f;
-
-            // if(cam)
+            
+            // Calculate frustum center in world space
+            bx::Vec3 frustumCenter = {0.0f, 0.0f, 0.0f};
+            for(uint8_t jj = 0; jj < numCorners; ++jj)
             {
-                const float camFovy = cam.get_fov();
-                const float camAspect = cam.get_aspect_ratio();
-                const float projHeight = bx::tan(bx::toRad(camFovy) * 0.5f);
-                const float projWidth = projHeight * camAspect;
-
-                // Compute frustum corners for one split in world space.
-                // Use configurable method for frustum calculation  
-                compute_world_space_frustum_corners((float*)frustumCorners[ii],
-                                                               splitSlices[nn],
-                                                               splitSlices[ff],
-                                                               projWidth,
-                                                               projHeight,
-                                                               mtxViewInv,
-                                                               frustum_method_,
-                                                               adaptive_params_);
-
-                // Calculate frustum center in world space first
-                bx::Vec3 frustumCenter = {0.0f, 0.0f, 0.0f};
-                for(uint8_t jj = 0; jj < numCorners; ++jj)
-                {
-                    frustumCenter.x += frustumCorners[ii][jj][0];
-                    frustumCenter.y += frustumCorners[ii][jj][1];
-                    frustumCenter.z += frustumCorners[ii][jj][2];
-                }
-                
-                // Average to get center
-                frustumCenter.x /= numCorners;
-                frustumCenter.y /= numCorners;
-                frustumCenter.z /= numCorners;
-                
-                // Transform center to light space
-                const bx::Vec3 lightSpaceCenter = bx::mul(frustumCenter, lightView[0]);
-                
-                // Calculate radius and transform corners to light space
-                for(uint8_t jj = 0; jj < numCorners; ++jj)
-                {
-                    // Transform to light space
-                    const bx::Vec3 xyz = bx::mul(bx::load<bx::Vec3>(frustumCorners[ii][jj]), lightView[0]);
-                    
-                    // Calculate distance from center
-                    const float dx = xyz.x - lightSpaceCenter.x;
-                    const float dy = xyz.y - lightSpaceCenter.y;
-                    const float dz = xyz.z - lightSpaceCenter.z;
-                    const float distance = bx::sqrt(dx*dx + dy*dy + dz*dz);
-                    frustum_radius = bx::max(frustum_radius, distance);
-                    
-                    // Update bounding box
-                    min = bx::min(min, xyz);
-                    max = bx::max(max, xyz);
-                }
-                
-                // Round radius to reduce flickering (similar to the other engine)
-                frustum_radius = bx::ceil(frustum_radius * 16.0f) / 16.0f;
+                // Transform from view space to world space
+                const bx::Vec3 worldCorner = bx::mul(viewSpaceCorners[jj], mtxViewInv);
+                bx::store(&frustumCorners[ii][jj], worldCorner);
+                frustumCenter = bx::add(frustumCenter, worldCorner);
             }
+            frustumCenter = bx::mul(frustumCenter, 1.0f / 8.0f);
+            
+            // Transform center to light space for radius calculation
+            const bx::Vec3 lightSpaceCenter = bx::mul(frustumCenter, lightView[0]);
+            
+            // Transform corners to light space and compute bounds
+            for(uint8_t jj = 0; jj < numCorners; ++jj)
+            {
+                const bx::Vec3 xyz = bx::mul(bx::load<bx::Vec3>(frustumCorners[ii][jj]), lightView[0]);
+                
+                // Calculate distance from center for radius
+                const float dx = xyz.x - lightSpaceCenter.x;
+                const float dy = xyz.y - lightSpaceCenter.y;
+                const float dz = xyz.z - lightSpaceCenter.z;
+                const float distance = bx::sqrt(dx*dx + dy*dy + dz*dz);
+                frustum_radius = bx::max(frustum_radius, distance);
+                
+                // Update bounding box in light space
+                min = bx::min(min, xyz);
+                max = bx::max(max, xyz);
+            }
+            
+            // Round radius to reduce flickering
+            frustum_radius = bx::ceil(frustum_radius * 16.0f) / 16.0f;
 
-            // Option 1: Use min/max approach (your original approach)
+            // Project bounds to the base ortho projection space
             const bx::Vec3 minproj = bx::mulH(min, mtxProj);
             const bx::Vec3 maxproj = bx::mulH(max, mtxProj);
 
-            // Option 2: Use radius-based approach (like the other engine)
-            // We'll blend between both approaches for better stability
-            
-            // Calculate scales using min/max approach
-            float scalex_minmax = 2.0f / (maxproj.x - minproj.x);
-            float scaley_minmax = 2.0f / (maxproj.y - minproj.y);
-            
-            // Use the calculated frustum radius for a more stable approach
-            float scalex_radius = 1.0f / frustum_radius;
-            float scaley_radius = 1.0f / frustum_radius;
-        
-            // Blend between the two approaches (0.7 weight to radius approach)
-            float scalex = bx::lerp(scalex_minmax, scalex_radius, 0.7f);
-            float scaley = bx::lerp(scaley_minmax, scaley_radius, 0.7f);
+            // Calculate scale using radius-based approach for stability
+            float scalex = 1.0f / frustum_radius;
+            float scaley = 1.0f / frustum_radius;
 
             if(settings_.m_stabilize)
             {
-                // Increase quantizer for better stability
-                const float quantizer = 128.0f;
+                // Quantize scale for stability
+                const float quantizer = 64.0f;
                 scalex = quantizer / bx::ceil(quantizer / scalex);
                 scaley = quantizer / bx::ceil(quantizer / scaley);
             }
 
-            // Calculate center-based offset for better balance
-            float offsetx = -1.0f - scalex * minproj.x;
-            float offsety = -1.0f - scaley * minproj.y;
+            // Calculate offset to center the cascade in the projection
+            float offsetx = -scalex * (minproj.x + maxproj.x) * 0.5f;
+            float offsety = -scaley * (minproj.y + maxproj.y) * 0.5f;
 
-            // Apply texel snapping for stability (similar to the other engine's approach)
+            // Apply texel snapping for stability
             if(settings_.m_stabilize)
             {
                 float currentShadowMapSizef = float(int16_t(current_shadow_map_size_));
                 const float halfSize = currentShadowMapSizef * 0.5f;
                 
-                // Calculate shadow origin in texel space
-                float shadowOriginX = offsetx * halfSize;
-                float shadowOriginY = offsety * halfSize;
-                
-                // Round to nearest texel
-                shadowOriginX = bx::round(shadowOriginX);
-                shadowOriginY = bx::round(shadowOriginY);
-                
-                // Convert back to normalized space
-                offsetx = shadowOriginX / halfSize;
-                offsety = shadowOriginY / halfSize;
+                // Snap to texel grid
+                offsetx = bx::round(offsetx * halfSize) / halfSize;
+                offsety = bx::round(offsety * halfSize) / halfSize;
             }
 
+            // Build crop matrix to adjust the base projection for this cascade
             float mtxCrop[16];
             bx::mtxIdentity(mtxCrop);
             mtxCrop[0] = scalex;   // x-scale
@@ -1746,7 +1533,10 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             mtxCrop[12] = offsetx; // x-offset
             mtxCrop[13] = offsety; // y-offset
 
+            // Final projection = crop * base projection
             bx::mtxMul(lightProj[ii], mtxCrop, mtxProj);
+
+            lastSplitDist = splitDist;
         }
     }
 
@@ -1919,6 +1709,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         }
         else // LightType::DirectionalLight == settings.m_lightType
         {
+            // Use per-cascade light view matrices for improved cascade stability
             for(uint8_t ii = 0; ii < settings_.m_numSplits; ++ii)
             {
                 float mtxTmp[16];
@@ -2109,6 +1900,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         bgfx::setViewRect(RENDERVIEW_VBLUR_3_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_HBLUR_3_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
 
+        // Each cascade now has its own light view matrix for improved stability
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_1_ID, lightView[0], lightProj[0]);
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_2_ID, lightView[0], lightProj[1]);
         bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_3_ID, lightView[0], lightProj[2]);

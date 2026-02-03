@@ -639,6 +639,7 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
 SAVE(mono::mono_object)
 {
     using namespace unravel;
+    auto pinned_obj = mono::make_object_pinned(obj);
     // First, try object-level serializer (like inspector's get_object_inspector)
     using mono_object_serializer = std::function<bool(ser20::detail::OutputArchiveBase&, const mono::mono_object&)>;
     
@@ -850,12 +851,14 @@ SAVE(mono::mono_object)
                     if(field_type.is_array())
                     {
                         mono::mono_array<mono::mono_object> array(collection_obj);
+                        auto pinned_array = mono::make_array_pinned(array);
                         auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
                     else if(field_type.is_list())
                     {
                         mono::mono_list<mono::mono_object> list(collection_obj);
+                        auto pinned_list = mono::make_list_pinned(list);
                         auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();    
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
@@ -868,6 +871,7 @@ SAVE(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
+                    auto pinned_nested = mono::make_object_pinned(nested_obj);
                     serialization::path_segment_guard guard(field.get_name());
                     try_save(ar, ser20::make_nvp(field.get_name(), nested_obj));
                 }
@@ -910,12 +914,14 @@ SAVE(mono::mono_object)
                     if(prop_type.is_array())
                     {
                         mono::mono_array<mono::mono_object> array(collection_obj);
+                        auto pinned_array = mono::make_array_pinned(array);
                         auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                     else if(prop_type.is_list())
                     {
                         mono::mono_list<mono::mono_object> list(collection_obj);
+                        auto pinned_list = mono::make_list_pinned(list);
                         auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
@@ -928,6 +934,7 @@ SAVE(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
+                    auto pinned_nested = mono::make_object_pinned(nested_obj);
                     serialization::path_segment_guard guard(prop.get_name());
                     try_save(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                 }
@@ -941,6 +948,7 @@ LOAD(mono::mono_object)
 {
     using namespace unravel;
     
+    auto pinned_obj = mono::make_object_pinned(obj);
     // First, try object-level serializer (like inspector's get_object_inspector)
     using mono_object_serializer = std::function<bool(ser20::detail::InputArchiveBase&, mono::mono_object&)>;
     
@@ -1159,6 +1167,7 @@ LOAD(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
+                    auto pinned_nested = mono::make_object_pinned(nested_obj);
                     try_load(ar, ser20::make_nvp(field.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }
@@ -1211,6 +1220,7 @@ LOAD(mono::mono_object)
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
+                    auto pinned_nested = mono::make_object_pinned(nested_obj);
                     try_load(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }
