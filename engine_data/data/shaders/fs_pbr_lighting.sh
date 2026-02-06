@@ -68,7 +68,7 @@ uniform mat4 u_shadowMapMtx3;
 #define u_shadowMapHardness        u_shadowMapParam0
 #define u_shadowMapDepthMultiplier u_shadowMapParam1
 
-
+//#define BLEND_CASCADES 1
 
 float calculateSlopeBias(float _bias, vec3 _normal, vec3 _lightDir)
 {
@@ -190,12 +190,21 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     vec2 texcoord3 = v_texcoord3.xy/v_texcoord3.w;
     vec2 texcoord4 = v_texcoord4.xy/v_texcoord4.w;
 
-    bool selection0 = all(lessThan(texcoord1, vec2_splat(0.9999))) && all(greaterThan(texcoord1, vec2_splat(0.0001)));
-    bool selection1 = all(lessThan(texcoord2, vec2_splat(0.9999))) && all(greaterThan(texcoord2, vec2_splat(0.0001)));
-    bool selection2 = all(lessThan(texcoord3, vec2_splat(0.9999))) && all(greaterThan(texcoord3, vec2_splat(0.0001)));
-    bool selection3 = all(lessThan(texcoord4, vec2_splat(0.9999))) && all(greaterThan(texcoord4, vec2_splat(0.0001)));
+	float selection0 = texcoordInRange(texcoord1);
+	float selection1 = texcoordInRange(texcoord2);
+	float selection2 = texcoordInRange(texcoord3);
+	float selection3 = texcoordInRange(texcoord4);
 
-    if (selection0)
+    // Cascade transition blend band in UV space.
+    // Each cascade's bounding sphere radius is roughly proportional to its far distance,
+    // so we scale the blend band inversely with the far distance ratio to keep the
+    // world-space transition width constant regardless of split distribution.
+    float cascadeBlendBase = 0.04;
+    float blendBand0 = cascadeBlendBase;
+    float blendBand1 = cascadeBlendBase * u_csmFarDistances.x / u_csmFarDistances.y;
+    float blendBand2 = cascadeBlendBase * u_csmFarDistances.x / u_csmFarDistances.z;
+
+    if (selection0 > 0.0)
     {
         vec4 shadowcoord = v_texcoord1;
 
@@ -210,8 +219,27 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
                         );
+#ifdef BLEND_CASCADES
+        // Blend with cascade 1 near the edge of this cascade's shadow map
+        vec2 edgeDist0 = min(texcoord1, vec2_splat(1.0) - texcoord1);
+        float minEdgeDist0 = min(edgeDist0.x, edgeDist0.y);
+        float blendFactor = 1.0 - smoothstep(0.0, blendBand0, minEdgeDist0);
+        if (blendFactor > 0.0 && selection1 > 0.0)
+        {
+            float nextVisibility = computeVisibility(s_shadowMap1
+                            , v_texcoord2
+                            , adjustedBias
+                            , u_smSamplingParams
+                            , texelSize/2.0
+                            , u_shadowMapDepthMultiplier
+                            , u_shadowMapMinVariance
+                            , u_shadowMapHardness
+                            );
+            visibility = mix(visibility, nextVisibility, blendFactor);
+        }
+#endif
     }
-    else if (selection1)
+    else if (selection1 > 0.0)
     {
         vec4 shadowcoord = v_texcoord2;
 
@@ -226,8 +254,28 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
                         );
+#ifdef BLEND_CASCADES
+
+        // Blend with cascade 2 near the edge of this cascade's shadow map
+        vec2 edgeDist1 = min(texcoord2, vec2_splat(1.0) - texcoord2);
+        float minEdgeDist1 = min(edgeDist1.x, edgeDist1.y);
+        float blendFactor = 1.0 - smoothstep(0.0, blendBand1, minEdgeDist1);
+        if (blendFactor > 0.0 && selection2 > 0.0)
+        {
+            float nextVisibility = computeVisibility(s_shadowMap2
+                            , v_texcoord3
+                            , adjustedBias
+                            , u_smSamplingParams
+                            , texelSize/3.0
+                            , u_shadowMapDepthMultiplier
+                            , u_shadowMapMinVariance
+                            , u_shadowMapHardness
+                            );
+            visibility = mix(visibility, nextVisibility, blendFactor);
+        }
+#endif
     }
-    else if (selection2)
+    else if (selection2 > 0.0)
     {
         vec4 shadowcoord = v_texcoord3;
 
@@ -242,6 +290,26 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
                         );
+#ifdef BLEND_CASCADES
+
+        // Blend with cascade 3 near the edge of this cascade's shadow map
+        vec2 edgeDist2 = min(texcoord3, vec2_splat(1.0) - texcoord3);
+        float minEdgeDist2 = min(edgeDist2.x, edgeDist2.y);
+        float blendFactor = 1.0 - smoothstep(0.0, blendBand2, minEdgeDist2);
+        if (blendFactor > 0.0 && selection3 > 0.0)
+        {
+            float nextVisibility = computeVisibility(s_shadowMap3
+                            , v_texcoord4
+                            , adjustedBias
+                            , u_smSamplingParams
+                            , texelSize/4.0
+                            , u_shadowMapDepthMultiplier
+                            , u_shadowMapMinVariance
+                            , u_shadowMapHardness
+                            );
+            visibility = mix(visibility, nextVisibility, blendFactor);
+        }
+#endif
     }
     else // selection3
     {

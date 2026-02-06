@@ -1420,15 +1420,30 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         float frustumCorners[maxNumSplits][numCorners][3];
         float lastSplitDist = 0.0f;
 
+        // Cascade blend overlap: extend each cascade's near plane backward to cover
+        // the previous cascade's transition band. Must match the shader's cascadeBlendBand.
+        // const float cascadeBlendOverlap = 0.1f;
+
         for(uint8_t ii = 0; ii < settings_.m_numSplits; ++ii)
         {
             const float splitDist = cascadeSplits[ii];
             
             // Compute actual near/far distances for this cascade
+            // Extend near distance backward to overlap with previous cascade's blend zone
+            // float renderNearSplit = lastSplitDist;
+            // if(ii > 0)
+            // {
+            //     const float prevFarDist = nearClip + lastSplitDist * clipRange;
+            //     const float overlapStart = prevFarDist * (1.0f - cascadeBlendOverlap);
+            //     renderNearSplit = bx::max(0.0f, (overlapStart - nearClip) / clipRange);
+            // }
+
+            // const float cascadeNear = nearClip + renderNearSplit * clipRange;
+
             const float cascadeNear = nearClip + lastSplitDist * clipRange;
             const float cascadeFar = nearClip + splitDist * clipRange;
 
-            // Update cascade far distance uniform
+            // Update cascade far distance uniform (use original split distance for shader blend)
             uniforms_.m_csmFarDistances[ii] = cascadeFar;
 
             // Compute frustum corners in view space then transform to world space
@@ -1532,6 +1547,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             mtxCrop[5] = scaley;   // y-scale
             mtxCrop[12] = offsetx; // x-offset
             mtxCrop[13] = offsety; // y-offset
+            mtxCrop[14] = -lightSpaceCenter.z; // z-offset: center depth range on cascade frustum
 
             // Final projection = crop * base projection
             bx::mtxMul(lightProj[ii], mtxCrop, mtxProj);
