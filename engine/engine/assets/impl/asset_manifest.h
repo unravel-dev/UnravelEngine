@@ -12,12 +12,7 @@ namespace asset_compiler
 
 /// Manifest data for compiled assets
 struct asset_manifest
-{
-    /// Path to the source file
-    // fs::path source_key;
-    /// Timestamp when the asset was compiled
-    std::chrono::nanoseconds source_timestamp;
-    
+{    
     /// SHA1 hash of the source file content
     std::string source_sha;
 
@@ -30,7 +25,6 @@ struct asset_manifest
     asset_manifest(const fs::path& key)
     {
         fs::error_code ec;
-        source_timestamp = fs::last_write_time(fs::resolve_protocol(key), ec).time_since_epoch();
         format_version = ex::get_format_version(key.extension().string());
 
     }

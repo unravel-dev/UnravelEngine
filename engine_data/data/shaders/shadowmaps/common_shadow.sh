@@ -5,15 +5,15 @@
 
 #include "../common.sh"
 
+#if BGFX_SHADER_LANGUAGE_GLSL
+#	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = _type[](
+#else
+#	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = {
+#endif // BGFX_SHADER_LANGUAGE_GLSL
+
 vec2 samplePoisson(int index)
 {
-
-CONST(vec2) PoissonDistribution[64] =
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_SPIRV
-{
-#else
-vec2[](
-#endif
+CONST_ARRAY_BEGIN(vec2, PoissonDistribution, 64)
     vec2(-0.94201624, -0.39906216),
     vec2(0.94558609, -0.76890725),
     vec2(-0.094184101, -0.92938870),
@@ -78,11 +78,8 @@ vec2[](
     vec2(0.265220, -0.596716),
     vec2(-0.009628, -0.483058),
     vec2(-0.018516, 0.435703)
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_SPIRV
-};
-#else
-);
-#endif
+ARRAY_END();
+
 
     return PoissonDistribution[int(mod(index,64))];
 }
@@ -257,9 +254,6 @@ vec4 blur9VSM(sampler2D _sampler, vec2 _uv0, vec4 _uv1, vec4 _uv2, vec4 _uv3, ve
 
 float findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float _bias)
 {
-
-
-
 #define BLOCKER_SEARCH_NUM_SAMPLES 16
 
     int blockerCount = 0;
@@ -277,7 +271,6 @@ float findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float
             blockerCount++;
         }
     }
-
 
     // Calculate average blocker depth
     if (blockerCount > 0)
@@ -307,7 +300,9 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcfParams, 
         return 1.0;
     }
 
-    vec4 _pcssParams = vec4(0.05, 1.0, 0.0008, 0.1);  // Adjust as needed
+    //vec4 _pcssParams = vec4(0.05, 1.0, 0.0008, 0.1);  // Adjust as needed
+	vec4 _pcssParams = vec4(0.25, 4.0, 0.0008, 0.5);
+
 
     // Step 2: Penumbra Size Calculation
     float penumbraSize = (_shadowCoord.z - avgBlockerDepth) / avgBlockerDepth;

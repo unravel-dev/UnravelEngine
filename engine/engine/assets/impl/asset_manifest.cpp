@@ -69,7 +69,6 @@ auto save_manifest(const fs::path& manifest_path, const asset_manifest& manifest
         
         bool success = true;
         success &= try_save(archive, ser20::make_nvp("source_sha", manifest.source_sha));
-        success &= try_save(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         success &= try_save(archive, ser20::make_nvp("format_version", manifest.format_version));
         return success;
     }
@@ -102,7 +101,6 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
         
         bool success = true;
         success &= try_load(archive, ser20::make_nvp("source_sha", manifest.source_sha));
-        success &= try_load(archive, ser20::make_nvp("source_timestamp", manifest.source_timestamp));
         success &= try_load(archive, ser20::make_nvp("format_version", manifest.format_version));
         return success;
     }
@@ -131,11 +129,6 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
     // Create a temporary manifest to compute current SHA
     asset_manifest current_manifest(source_key);
 
-    if(current_manifest.source_timestamp == manifest.source_timestamp)
-    {
-        return false;
-    }
-    
     current_manifest.compute_source_sha(source_key);
     // Compare SHA values
     return current_manifest.source_sha != manifest.source_sha;

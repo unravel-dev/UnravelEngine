@@ -9,7 +9,7 @@
 #if BGFX_SHADER_LANGUAGE_GLSL
 #	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = _type[](
 #else
-#	define CONST_ARRAY_BEGIN(_type, _name, _count)CONST(_type) _name[_count] = {
+#	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = {
 #endif // BGFX_SHADER_LANGUAGE_GLSL
 
 vec4 encodeRE8(float _r)
