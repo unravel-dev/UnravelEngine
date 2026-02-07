@@ -269,6 +269,41 @@ void screenSpaceQuad(bool _originBottomLeft = true, float _width = 1.0f, float _
     }
 }
 
+void worldSpaceFrustumCorners(
+    float* _corners24f
+  , float _near
+  , float _far
+  , float _projWidth
+  , float _projHeight
+  , const float* _invViewMtx
+  )
+{
+  // Define frustum corners in view space.
+  const float nw = _near * _projWidth;
+  const float nh = _near * _projHeight;
+  const float fw = _far  * _projWidth;
+  const float fh = _far  * _projHeight;
+
+  const uint8_t numCorners = 8;
+  const bx::Vec3 corners[numCorners] =
+  {
+      { -nw,  nh, _near },
+      {  nw,  nh, _near },
+      {  nw, -nh, _near },
+      { -nw, -nh, _near },
+      { -fw,  fh, _far  },
+      {  fw,  fh, _far  },
+      {  fw, -fh, _far  },
+      { -fw, -fh, _far  },
+  };
+
+  // Convert them to world space.
+  float (*out)[3] = (float(*)[3])_corners24f;
+  for (uint8_t ii = 0; ii < numCorners; ++ii)
+  {
+      bx::store(&out[ii], bx::mul(corners[ii], _invViewMtx) );
+  }
+}
 
 /**
 * Calculate cascade split depths based on view camera frustum using GPU Gems 3 method.
@@ -1419,7 +1454,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         const uint8_t numCorners = 8;
         float frustumCorners[maxNumSplits][numCorners][3];
         float lastSplitDist = 0.0f;
-        
+
         for(uint8_t ii = 0; ii < settings_.m_numSplits; ++ii)
         {
             const float splitDist = cascadeSplits[ii];
@@ -1436,25 +1471,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             const float projHeight = bx::tan(bx::toRad(camFovy) * 0.5f);
             const float projWidth = projHeight * camAspect;
 
-            // Compute frustum corners for this cascade in world space
-            const float nw = cascadeNear * projWidth;
-            const float nh = cascadeNear * projHeight;
-            const float fw = cascadeFar * projWidth;
-            const float fh = cascadeFar * projHeight;
+            // Compute frustum corners for one split in world space.
+            worldSpaceFrustumCorners((float*)frustumCorners[ii], cascadeNear, cascadeFar, projWidth, projHeight, mtxViewInv);
 
-            // Frustum corners in view space (camera looking along +Z)
-            const bx::Vec3 viewSpaceCorners[8] = {
-                {-nw,  nh, cascadeNear},  // near top-left
-                { nw,  nh, cascadeNear},  // near top-right
-                { nw, -nh, cascadeNear},  // near bottom-right
-                {-nw, -nh, cascadeNear},  // near bottom-left
-                {-fw,  fh, cascadeFar},   // far top-left
-                { fw,  fh, cascadeFar},   // far top-right
-                { fw, -fh, cascadeFar},   // far bottom-right
-                {-fw, -fh, cascadeFar},   // far bottom-left
-            };
-
-            // Transform corners to world space and then to light space
             bx::Vec3 min = {9000.0f, 9000.0f, 9000.0f};
             bx::Vec3 max = {-9000.0f, -9000.0f, -9000.0f};
             float frustum_radius = 0.0f;
@@ -1464,11 +1483,11 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             for(uint8_t jj = 0; jj < numCorners; ++jj)
             {
                 // Transform from view space to world space
-                const bx::Vec3 worldCorner = bx::mul(viewSpaceCorners[jj], mtxViewInv);
-                bx::store(&frustumCorners[ii][jj], worldCorner);
+                const bx::Vec3 worldCorner = bx::load<bx::Vec3>(&frustumCorners[ii][jj]);
                 frustumCenter = bx::add(frustumCenter, worldCorner);
             }
-            frustumCenter = bx::mul(frustumCenter, 1.0f / 8.0f);
+            frustumCenter = bx::mul(frustumCenter, 1.0f / float(numCorners));
+					
             
             // Transform center to light space for radius calculation
             const bx::Vec3 lightSpaceCenter = bx::mul(frustumCenter, lightView[0]);
