@@ -305,7 +305,7 @@ struct Uniforms
             float m_ambientPass;
             float m_lightingPass;
             float m_unused00;
-            float m_unused01;
+            float m_numSplits;
         };
 
         float m_params0[4];

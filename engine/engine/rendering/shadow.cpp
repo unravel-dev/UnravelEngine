@@ -1287,6 +1287,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     uniforms_.m_XOffset = currentSmSettings->m_xOffset;
     uniforms_.m_YOffset = currentSmSettings->m_yOffset;
     uniforms_.m_showSmCoverage = float(settings_.m_showSmCoverage);
+    uniforms_.m_numSplits = float(settings_.m_numSplits);
     uniforms_.m_lightPtr = (LightType::DirectionalLight == settings_.m_lightType) ? &directional_light_ : &point_light_;
 
     ///

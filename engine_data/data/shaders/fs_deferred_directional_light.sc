@@ -7,5 +7,5 @@ $input v_texcoord0
 
 void main()
 {
-    gl_FragColor = pbr_light(v_texcoord0);
+    gl_FragColor = pbr_light(v_texcoord0, gl_FragCoord.xy);
 }

@@ -46,6 +46,8 @@ uniform mat4 u_shadowMapMtx1;
 uniform mat4 u_shadowMapMtx2;
 uniform mat4 u_shadowMapMtx3;
 
+#define u_numSplits   u_params0.w
+
 #define u_shadowMapBias   u_params1.x
 #define u_shadowMapOffset u_params1.y
 #define u_shadowMapParam0 u_params1.z
@@ -105,6 +107,7 @@ float computeVisibility(sampler2D _sampler
                       , float _depthMultiplier
                       , float _minVariance
                       , float _hardness
+                      , vec2 _fragCoord
                       )
 {
     float visibility = 1.0f;
@@ -118,9 +121,9 @@ float computeVisibility(sampler2D _sampler
 #if SM_HARD
     visibility = hardShadow(_sampler, shadowcoord, _bias);
 #elif SM_PCF
-    visibility = PCF(_sampler, shadowcoord, _bias, _samplingParams, _texelSize);
+    visibility = PCF(_sampler, shadowcoord, _bias, _samplingParams, _texelSize, _fragCoord);
 #elif SM_PCSS
-    visibility = PCSS(_sampler, shadowcoord, _bias, _samplingParams, _texelSize);
+    visibility = PCSS(_sampler, shadowcoord, _bias, _samplingParams, _texelSize, _fragCoord);
 #elif SM_VSM
     visibility = VSM(_sampler, shadowcoord, _bias, _depthMultiplier, _minVariance);
 #elif SM_ESM
@@ -131,7 +134,7 @@ float computeVisibility(sampler2D _sampler
 }
 
 
-float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_dir, out vec3 colorCoverage)
+float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_dir, vec2 fragCoord, out vec3 colorCoverage)
 {
     float visibility = 1.0f;
     colorCoverage = vec3(0.0f, 0.0f, 0.0f);
@@ -207,10 +210,11 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapDepthMultiplier
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
+                        , fragCoord
                         );
 
     }
-    else if (selection1)
+    else if (selection1 && u_numSplits > 1)
     {
         vec4 shadowcoord = v_texcoord2;
 
@@ -224,9 +228,10 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapDepthMultiplier
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
+                        , fragCoord
                         );
     }
-    else if (selection2)
+    else if (selection2 && u_numSplits > 2)
     {
         vec4 shadowcoord = v_texcoord3;
 
@@ -240,9 +245,10 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapDepthMultiplier
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
+                        , fragCoord
                         );
     }
-    else // selection3
+    else if (selection3 && u_numSplits > 3) // selection3
     {
         vec4 shadowcoord = v_texcoord4;
 
@@ -256,6 +262,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , u_shadowMapDepthMultiplier
                         , u_shadowMapMinVariance
                         , u_shadowMapHardness
+                        , fragCoord
                         );
     }
 #elif SM_OMNI
@@ -307,6 +314,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                     , u_shadowMapDepthMultiplier
                     , u_shadowMapMinVariance
                     , u_shadowMapHardness
+                    , fragCoord
                     );
 #else
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize);
@@ -324,6 +332,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                     , u_shadowMapDepthMultiplier
                     , u_shadowMapMinVariance
                     , u_shadowMapHardness
+                    , fragCoord
                     );
 #endif
 #endif
@@ -331,7 +340,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     return visibility;
 }
 
-vec4 pbr_light(vec2 texcoord0)
+vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
@@ -374,7 +383,7 @@ vec4 pbr_light(vec2 texcoord0)
 
 
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
-    float surface_shadow = CalculateSurfaceShadow(world_position, N, L, colorCoverage);
+    float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
     float subsurface_shadow = 1.0f;
     float surface_attenuation = (intensity * distance_attenuation * light_radius_mask * light_falloff) * surface_shadow;
     float subsurface_attenuation = (distance_attenuation * light_radius_mask * light_falloff) * subsurface_shadow;
