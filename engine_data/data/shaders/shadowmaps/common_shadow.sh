@@ -164,7 +164,7 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
         vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
         result += hardShadowLod(_sampler, lod, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias);
     }
-    return result / PCF_LOD_OFFSET_NUM_SAMPLES;
+    return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
 }
 
 float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation)
