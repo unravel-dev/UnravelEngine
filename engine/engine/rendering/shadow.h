@@ -201,17 +201,17 @@ struct Uniforms
         m_YOffset = 10.0f / 512.0f;
 
         u_params0 = bgfx::createUniform("u_params0", bgfx::UniformType::Vec4);
-        u_params1 = bgfx::createUniform("u_params1", bgfx::UniformType::Vec4);
-        u_params2 = bgfx::createUniform("u_params2", bgfx::UniformType::Vec4);
+        u_params1 = bgfx::createUniform("u_params1", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
+        u_params2 = bgfx::createUniform("u_params2", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
         u_color = bgfx::createUniform("u_color", bgfx::UniformType::Vec4);
-        u_smSamplingParams = bgfx::createUniform("u_smSamplingParams", bgfx::UniformType::Vec4);
-        u_csmFarDistances = bgfx::createUniform("u_csmFarDistances", bgfx::UniformType::Vec4);
+        u_smSamplingParams = bgfx::createUniform("u_smSamplingParams", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
+        u_csmFarDistances = bgfx::createUniform("u_csmFarDistances", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
         u_lightMtx = bgfx::createUniform("u_lightMtx", bgfx::UniformType::Mat4);
 
-        u_tetraNormalGreen = bgfx::createUniform("u_tetraNormalGreen", bgfx::UniformType::Vec4);
-        u_tetraNormalYellow = bgfx::createUniform("u_tetraNormalYellow", bgfx::UniformType::Vec4);
-        u_tetraNormalBlue = bgfx::createUniform("u_tetraNormalBlue", bgfx::UniformType::Vec4);
-        u_tetraNormalRed = bgfx::createUniform("u_tetraNormalRed", bgfx::UniformType::Vec4);
+        u_tetraNormalGreen = bgfx::createUniform("u_tetraNormalGreen", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
+        u_tetraNormalYellow = bgfx::createUniform("u_tetraNormalYellow", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
+        u_tetraNormalBlue = bgfx::createUniform("u_tetraNormalBlue", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
+        u_tetraNormalRed = bgfx::createUniform("u_tetraNormalRed", bgfx::UniformFreq::Frame, bgfx::UniformType::Vec4);
 
         u_shadowMapMtx0 = bgfx::createUniform("u_shadowMapMtx0", bgfx::UniformType::Mat4);
         u_shadowMapMtx1 = bgfx::createUniform("u_shadowMapMtx1", bgfx::UniformType::Mat4);
@@ -237,22 +237,22 @@ struct Uniforms
         m_shadowMapMtx3 = _shadowMapMtx3;
     }
 
-    // Call this once at initialization.
+    // Call this once at initialization (frame uniforms persist until changed).
     void submitConstUniforms() const
     {
-        bgfx::setUniform(u_tetraNormalGreen, m_tetraNormalGreen);
-        bgfx::setUniform(u_tetraNormalYellow, m_tetraNormalYellow);
-        bgfx::setUniform(u_tetraNormalBlue, m_tetraNormalBlue);
-        bgfx::setUniform(u_tetraNormalRed, m_tetraNormalRed);
+        bgfx::setFrameUniform(u_tetraNormalGreen, m_tetraNormalGreen);
+        bgfx::setFrameUniform(u_tetraNormalYellow, m_tetraNormalYellow);
+        bgfx::setFrameUniform(u_tetraNormalBlue, m_tetraNormalBlue);
+        bgfx::setFrameUniform(u_tetraNormalRed, m_tetraNormalRed);
     }
 
     // Call this once per frame.
     void submitPerFrameUniforms() const
     {
-        bgfx::setUniform(u_params1, m_params1);
-        bgfx::setUniform(u_params2, m_params2);
-        bgfx::setUniform(u_smSamplingParams, m_paramsBlur);
-        bgfx::setUniform(u_csmFarDistances, m_csmFarDistances);
+        bgfx::setFrameUniform(u_params1, m_params1);
+        bgfx::setFrameUniform(u_params2, m_params2);
+        bgfx::setFrameUniform(u_smSamplingParams, m_paramsBlur);
+        bgfx::setFrameUniform(u_csmFarDistances, m_csmFarDistances);
     }
 
     // Call this before each draw call.

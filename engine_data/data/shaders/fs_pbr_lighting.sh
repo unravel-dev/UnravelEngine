@@ -162,7 +162,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 #endif
 
 #if SM_LINEAR
-    v_shadowcoord.z += 0.5;
 #if SM_CSM
     v_texcoord1.z += 0.5;
     v_texcoord2.z += 0.5;
@@ -173,8 +172,9 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     v_texcoord2.z += 0.5;
     v_texcoord3.z += 0.5;
     v_texcoord4.z += 0.5;
+#else
+    v_shadowcoord.z += 0.5;
 #endif
-
 #endif
 
     // Calculate distance from the camera to the fragment
@@ -269,7 +269,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize/4.0);
 
     vec4 faceSelection;
-    vec3 pos = v_shadowcoord.xyz;
+	vec3 pos = v_shadowcoord.xyz;
     faceSelection.x = dot(u_tetraNormalGreen.xyz,  pos);
     faceSelection.y = dot(u_tetraNormalYellow.xyz, pos);
     faceSelection.z = dot(u_tetraNormalBlue.xyz,   pos);

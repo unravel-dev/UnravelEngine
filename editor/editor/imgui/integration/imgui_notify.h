@@ -29,6 +29,7 @@
 #ifndef IMGUI_NOTIFY
 #define IMGUI_NOTIFY
 
+#include "imgui/imgui.h"
 #pragma once
 #include <vector>
 #include <chrono>
@@ -47,6 +48,8 @@
 #define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing
 // Comment out if you don't want any separator between title and content
 #define NOTIFY_USE_SEPARATOR
+#define NOTIFY_USE_DISMISS_BUTTON		false		// If true, a dismiss button will be rendered in the top right corner of the toast
+#define NOTIFY_RENDER_LIMIT				10
 
 #define NOTIFY_INLINE					inline
 #define NOTIFY_NULL_OR_EMPTY(str)		(!str ||! strlen(str))
@@ -103,6 +106,10 @@ private:
 	int				dismiss_time = NOTIFY_DEFAULT_DISMISS;
 	uint64_t		creation_time = 0;
 	ImGuiToastDrawCallback draw_callback = nullptr;
+	ImGuiWindowFlags	window_flags = NOTIFY_TOAST_FLAGS;
+	bool			show_dismiss_button = NOTIFY_USE_DISMISS_BUTTON;
+
+	
 private:
 	// Setters
 
@@ -121,19 +128,38 @@ public:
 
 	NOTIFY_INLINE auto set_draw_callback(const ImGuiToastDrawCallback& callback) -> void { this->draw_callback = callback; };
 
+	NOTIFY_INLINE auto set_show_dismiss_button(const bool& show) -> void { this->show_dismiss_button = show; }
+
+	    /**
+     * @brief Set the label for the button in the notification.
+     * 
+     * @param format The format string for the label.
+     * @param ... The arguments for the format string.
+    */
+    NOTIFY_INLINE auto set_button_label(const char* format, ...) -> void
+    {
+        NOTIFY_FORMAT(this->set_button_label, format);
+    }
+
+	NOTIFY_INLINE auto set_window_flags(ImGuiWindowFlags flags) -> void { this->window_flags = flags; }
 public:
 	// Getters
 
-	NOTIFY_INLINE auto get_title() -> char* { return this->title; };
+
+	NOTIFY_INLINE auto get_window_flags() -> const ImGuiWindowFlags& { return this->window_flags; }
+
+	NOTIFY_INLINE auto get_show_dismiss_button() -> const bool { return this->show_dismiss_button; }
+
+	NOTIFY_INLINE auto get_title() -> const char* { return this->title; };
 
 	NOTIFY_INLINE auto get_default_title() -> const char*
 	{
-		if (!strlen(this->title))
+		if (!NOTIFY_NULL_OR_EMPTY(this->title))
 		{
 			switch (this->type)
 			{
 			case ImGuiToastType_None:
-				return NULL;
+				return nullptr;
 			case ImGuiToastType_Success:
 				return "Success";
 			case ImGuiToastType_Warning:
@@ -143,7 +169,7 @@ public:
 			case ImGuiToastType_Info:
 				return "Info";
 			default:
-				return NULL;
+				return nullptr;
 			}
 		}
 
@@ -182,7 +208,7 @@ public:
 		switch (type)
 		{
 			case ImGuiToastType_None:
-				return NULL;
+				return nullptr;
 			case ImGuiToastType_Success:
 				return ICON_MDI_CHECK_CIRCLE;
 			case ImGuiToastType_Warning:
@@ -192,7 +218,7 @@ public:
 			case ImGuiToastType_Info:
 				return ICON_MDI_INFORMATION;
 			default:
-				return NULL;
+				return nullptr;
 		}
 	}
 
@@ -382,6 +408,13 @@ namespace ImGui
 				continue;
 			}
 
+			#if NOTIFY_RENDER_LIMIT > 0
+				if (i > NOTIFY_RENDER_LIMIT)
+				{
+					continue;
+				}
+			#endif
+
 			// Get icon, title and other data
 			const auto icon = current_toast->get_icon();
 			const auto title = current_toast->get_title();
@@ -402,10 +435,17 @@ namespace ImGui
 			//SetNextWindowSizeConstraints(ImVec2(180, 0), ImVec2(FLT_MAX, FLT_MAX	));
 			ImVec2 window_pos = vp_pos + ImVec2(vp_size.x - NOTIFY_PADDING_X, vp_size.y - NOTIFY_PADDING_Y - height);
 			SetNextWindowPos(window_pos, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
-			Begin(window_name, NULL, NOTIFY_TOAST_FLAGS);
+			
+			// Set notification window flags
+            if (!current_toast->get_show_dismiss_button())
+            {
+                current_toast->set_window_flags(NOTIFY_TOAST_FLAGS | ImGuiWindowFlags_NoInputs);
+            }
+			Begin(window_name, nullptr, current_toast->get_window_flags());
 
 			// Here we render the toast content
 			{
+				ImGui::BeginGroup();
 				PushTextWrapPos(vp_size.x / 3.f); // We want to support multi-line text, this will wrap the text after 1/3 of the screen width
 
 				bool was_title_rendered = false;
@@ -437,6 +477,7 @@ namespace ImGui
 					was_title_rendered = true;
 				}
 
+
 				// In case ANYTHING was rendered in the top, we want to add a small padding so the text (or icon) looks centered vertically
 				if (was_title_rendered && !NOTIFY_NULL_OR_EMPTY(content))
 				{
@@ -464,6 +505,23 @@ namespace ImGui
 				}
 
 				PopTextWrapPos();
+				ImGui::EndGroup();
+
+				
+				// If a dismiss button is enabled
+                if (current_toast->get_show_dismiss_button())
+                {
+                    // If a title or content is set, we want to render the button on the same line
+                    if (was_title_rendered || !NOTIFY_NULL_OR_EMPTY(content) || current_toast->has_draw_callback())
+                    {
+                        SameLine();
+                    }
+                    // If the button is pressed, we want to remove the notification
+                    if (SmallButton(ICON_MDI_CLOSE))
+                    {
+                        RemoveNotification(i);
+                    }
+                }
 			}
 
 			// Save height for next toasts

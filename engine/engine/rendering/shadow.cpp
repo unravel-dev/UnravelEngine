@@ -1762,7 +1762,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     float screenView[16];
     bx::mtxIdentity(screenView);
 
-    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, homogeneousDepth);
+    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, gfx::get_caps()->homogeneousDepth);
 
     /// begin generating
     gfx::render_pass shadowmap_pass_0("shadowmap_pass_0");
@@ -2258,8 +2258,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
             any_rendered = true;
 
-            // if bounds are fully inside this split we dont need to render it to the next one
-            if(query == math::volume_query::inside)
+            // For CSM (directional lights), if bounds are fully inside this cascade
+            // we don't need to render it to farther cascades (they are nested by distance).
+            // For point/spot lights, faces cover different directions, so an object
+            // must be rendered to ALL faces where it is visible.
+            if(LightType::DirectionalLight == settings_.m_lightType
+               && query == math::volume_query::inside)
             {
                 break;
             }

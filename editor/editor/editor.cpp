@@ -13,6 +13,7 @@
 #include "hub/hub.h"
 #include "imgui/imgui_interface.h"
 #include "system/project_manager.h"
+#include "system/version_manager.h"
 #include <filedialog/filedialog.h>
 
 
@@ -67,6 +68,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<picking_manager>();
     ctx.add<thumbnail_manager>();
     ctx.add<asset_watcher>();
+    ctx.add<version_manager>();
 
     return true;
 }
@@ -141,6 +143,12 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    if(!ctx.get_cached<version_manager>().init(ctx))
+    {
+        print_init_error(ctx);
+        return false;
+    }
+
     return true;
 }
 
@@ -194,6 +202,11 @@ auto editor::deinit() -> bool
         return false;
     }
 
+    if(!ctx.get_cached<version_manager>().deinit(ctx))
+    {
+        return false;
+    }
+
     {
         auto& aw = ctx.get_cached<asset_watcher>();
         aw.unwatch_assets(ctx, "editor:/");
@@ -215,6 +228,7 @@ auto editor::destroy() -> bool
     ctx.remove<imgui_interface>();
 
     ctx.remove<project_manager>();
+    ctx.remove<version_manager>();
 
     ctx.remove<ui_events>();
 
