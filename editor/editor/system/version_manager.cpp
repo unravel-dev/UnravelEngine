@@ -685,9 +685,9 @@ static void print_releases_and_assets(const std::vector<GitHubRelease>& releases
     }
 }
 
-auto check_for_update() -> bool
+auto check_for_update(bool force_check = false) -> bool
 {
-    if(!should_check_github())
+    if(!should_check_github() && !force_check)
     {
         APPLOG_TRACE("Skipping GitHub update check (last check was less than 6 hours ago).");
         return false;
@@ -711,8 +711,11 @@ auto check_for_update() -> bool
         return false;
     }
 
-    // Record the successful check time regardless of whether an update exists
-    write_last_check_time();
+    if(force_check)
+    {
+        write_last_check_time();
+    }
+ 
 
     // Print everything we got (versions + artifacts)
     print_releases_and_assets(fetch_result.releases);
@@ -744,7 +747,7 @@ auto version_manager::init(rtti::context& ctx) -> bool
     tpp::async(
         []()
         {
-            return check_for_update();
+            return should_check_github();
         })
         .then(tpp::this_thread::get_id(),
               [](auto result)
@@ -755,6 +758,13 @@ auto version_manager::init(rtti::context& ctx) -> bool
                     ImGuiToast toast(ImGuiToastType_Warning, 99999);
                     toast.set_title("New version available.");
                     toast.set_show_dismiss_button(true);
+                    toast.set_on_dismiss(
+                        []()
+                        {
+                            // Write the last check time to the cfg file
+                            write_last_check_time();
+                        }
+                    );
                     toast.set_draw_callback(
                         [](const ImGuiToast& toast, float opacity, const ImVec4& text_color)
                         {
@@ -771,5 +781,47 @@ auto version_manager::init(rtti::context& ctx) -> bool
 auto version_manager::deinit(rtti::context& ctx) -> bool
 {
     return true;
+}
+
+void version_manager::check_for_update_async()
+{
+    tpp::async(
+        []()
+        {
+            return check_for_update(true);
+        })
+        .then(tpp::this_thread::get_id(),
+              [](auto result)
+              {
+                  auto has_update = result.get();
+                  if(has_update)
+                  {
+                    ImGuiToast toast(ImGuiToastType_Warning, 99999);
+                    toast.set_title("New version available.");
+                    toast.set_show_dismiss_button(true);
+                    toast.set_on_dismiss(
+                        []()
+                        {
+                            // Write the last check time to the cfg file
+                            write_last_check_time();
+                        }
+                    );
+                    toast.set_draw_callback(
+                        [](const ImGuiToast& toast, float opacity, const ImVec4& text_color)
+                        {
+                            ImGui::Text("Download from ");
+                            ImGui::SameLine();
+                            ImGui::TextLinkOpenURL("Releases.", "https://github.com/unravel-dev/UnravelEngine/releases");
+                        });
+                    ImGui::PushNotification(toast);
+                  }
+                  else
+                  {
+                    ImGuiToast toast(ImGuiToastType_Warning, 2000);
+                    toast.set_title("There are no updates available.");
+                    toast.set_content("You are using the latest version.");
+                    ImGui::PushNotification(toast);
+                  }
+              });
 }
 } // namespace unravel

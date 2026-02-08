@@ -6,7 +6,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/shortcuts.h>
 #include <editor/system/project_manager.h>
-
+#include <editor/system/version_manager.h>
 
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
@@ -251,6 +251,12 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Help"))
         {
+            if(ImGui::MenuItem("Check for Updates..."))
+            {
+                auto& vm = ctx.get_cached<version_manager>();
+                vm.check_for_update_async();
+            }
+            ImGui::Separator();
             if(ImGui::MenuItem("About"))
             {
                 show_about_window_ = true;

@@ -108,6 +108,7 @@ private:
 	ImGuiToastDrawCallback draw_callback = nullptr;
 	ImGuiWindowFlags	window_flags = NOTIFY_TOAST_FLAGS;
 	bool			show_dismiss_button = NOTIFY_USE_DISMISS_BUTTON;
+	std::function<void()> on_dismiss = nullptr;
 
 	
 private:
@@ -116,6 +117,7 @@ private:
 	NOTIFY_INLINE auto set_title(const char* format, va_list args) { vsnprintf(this->title, sizeof(this->title), format, args); }
 
 	NOTIFY_INLINE auto set_content(const char* format, va_list args) { vsnprintf(this->content, sizeof(this->content), format, args); }
+
 
 public:
 	uint64_t		unique_id = 0;
@@ -130,6 +132,7 @@ public:
 
 	NOTIFY_INLINE auto set_show_dismiss_button(const bool& show) -> void { this->show_dismiss_button = show; }
 
+	NOTIFY_INLINE auto set_on_dismiss(const std::function<void()>& callback) -> void { this->on_dismiss = callback; }
 	    /**
      * @brief Set the label for the button in the notification.
      * 
@@ -145,7 +148,8 @@ public:
 public:
 	// Getters
 
-
+	NOTIFY_INLINE auto get_on_dismiss() -> const std::function<void()>& { return this->on_dismiss; }
+	
 	NOTIFY_INLINE auto get_window_flags() -> const ImGuiWindowFlags& { return this->window_flags; }
 
 	NOTIFY_INLINE auto get_show_dismiss_button() -> const bool { return this->show_dismiss_button; }
@@ -519,6 +523,10 @@ namespace ImGui
                     // If the button is pressed, we want to remove the notification
                     if (SmallButton(ICON_MDI_CLOSE))
                     {
+                        if(current_toast->get_on_dismiss())
+                        {
+                            current_toast->get_on_dismiss()();
+                        }
                         RemoveNotification(i);
                     }
                 }
