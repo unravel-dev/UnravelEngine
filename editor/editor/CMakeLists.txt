@@ -17,7 +17,7 @@ target_link_libraries(${target_name} PUBLIC
     engine
     imgui 
     filedialog 
-    httplib
+    # httplib
 )
 
 

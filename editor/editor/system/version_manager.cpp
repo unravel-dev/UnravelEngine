@@ -17,8 +17,8 @@
 
 #include <logging/logging.h>
 #include <ser20/external/simdjson/simdjson.h>
-#define CPPHTTPLIB_OPENSSL_SUPPORT 1
-#include <httplib.h>
+// #define CPPHTTPLIB_OPENSSL_SUPPORT 1
+// #include <httplib.h>
 #include <fstream>
 #include <filesystem/filesystem.h>
 #include <engine/assets/impl/asset_writer.h>
@@ -489,86 +489,87 @@ struct FetchResult
 // Returns newest-first as GitHub provides.
 static auto fetch_github_releases(const GitHubClientConfig& cfg) -> FetchResult
 {
-    httplib::SSLClient cli(cfg.host);
-    cli.set_follow_location(true);
+    // httplib::SSLClient cli(cfg.host);
+    // cli.set_follow_location(true);
 
-    auto timeout = std::chrono::seconds(10);
-    cli.set_max_timeout(std::chrono::milliseconds(timeout).count());
-    httplib::Headers headers = {{"User-Agent", "UnravelLauncher"}, {"Accept", "application/vnd.github+json"}};
-    if(!cfg.token.empty())
-    {
-        headers.emplace("Authorization", "Bearer " + cfg.token);
-    }
+    // auto timeout = std::chrono::seconds(10);
+    // cli.set_max_timeout(std::chrono::milliseconds(timeout).count());
+    // httplib::Headers headers = {{"User-Agent", "UnravelLauncher"}, {"Accept", "application/vnd.github+json"}};
+    // if(!cfg.token.empty())
+    // {
+    //     headers.emplace("Authorization", "Bearer " + cfg.token);
+    // }
 
-    FetchResult result;
-    int page = 1;
-    simdjson::dom::parser parser;
+    // FetchResult result;
+    // int page = 1;
+    // simdjson::dom::parser parser;
 
-    while(true)
-    {
-        std::string path = "/repos/" + cfg.owner + "/" + cfg.repo +
-                           "/releases?per_page=" + std::to_string(cfg.per_page) + "&page=" + std::to_string(page);
+    // while(true)
+    // {
+    //     std::string path = "/repos/" + cfg.owner + "/" + cfg.repo +
+    //                        "/releases?per_page=" + std::to_string(cfg.per_page) + "&page=" + std::to_string(page);
 
-        auto res = cli.Get(path.c_str(), headers);
-        if(!res)
-        {
-            result.error_message = "HTTP request failed (no response) for " + path;
-            return result;
-        }
-        if(res->status != 200)
-        {
-            result.error_message = "GitHub API error " + std::to_string(res->status) + " for " + path +
-                                   " body: " + res->body;
-            return result;
-        }
+    //     auto res = cli.Get(path.c_str(), headers);
+    //     if(!res)
+    //     {
+    //         result.error_message = "HTTP request failed (no response) for " + path;
+    //         return result;
+    //     }
+    //     if(res->status != 200)
+    //     {
+    //         result.error_message = "GitHub API error " + std::to_string(res->status) + " for " + path +
+    //                                " body: " + res->body;
+    //         return result;
+    //     }
 
-        auto remaining = res->get_header_value("X-RateLimit-Remaining");
-        auto reset     = res->get_header_value("X-RateLimit-Reset");
+    //     auto remaining = res->get_header_value("X-RateLimit-Remaining");
+    //     auto reset     = res->get_header_value("X-RateLimit-Reset");
 
-        APPLOG_TRACE("GitHub Rate Limit: Remaining: {}", remaining);
-        APPLOG_TRACE("GitHub Rate Limit: Reset: {}", reset);
+    //     APPLOG_TRACE("GitHub Rate Limit: Remaining: {}", remaining);
+    //     APPLOG_TRACE("GitHub Rate Limit: Reset: {}", reset);
 
-        simdjson::dom::element j;
-        auto error = parser.parse(res->body).get(j);
-        if(error != simdjson::SUCCESS)
-        {
-            result.error_message = "Failed to parse JSON for " + path + ": " + simdjson::error_message(error);
-            return result;
-        }
+    //     simdjson::dom::element j;
+    //     auto error = parser.parse(res->body).get(j);
+    //     if(error != simdjson::SUCCESS)
+    //     {
+    //         result.error_message = "Failed to parse JSON for " + path + ": " + simdjson::error_message(error);
+    //         return result;
+    //     }
         
-        if(j.type() != simdjson::dom::element_type::ARRAY)
-        {
-            result.error_message = "Unexpected JSON (expected array) for " + path;
-            return result;
-        }
+    //     if(j.type() != simdjson::dom::element_type::ARRAY)
+    //     {
+    //         result.error_message = "Unexpected JSON (expected array) for " + path;
+    //         return result;
+    //     }
 
-        size_t array_size = 0;
-        for(const auto& r : j)
-        {
-            array_size++;
-            GitHubRelease rel = parse_release_json(r);
+    //     size_t array_size = 0;
+    //     for(const auto& r : j)
+    //     {
+    //         array_size++;
+    //         GitHubRelease rel = parse_release_json(r);
 
-            if(!cfg.include_drafts && rel.draft)
-                continue;
-            if(!cfg.include_prereleases && rel.prerelease)
-                continue;
+    //         if(!cfg.include_drafts && rel.draft)
+    //             continue;
+    //         if(!cfg.include_prereleases && rel.prerelease)
+    //             continue;
 
-            result.releases.push_back(std::move(rel));
-        }
+    //         result.releases.push_back(std::move(rel));
+    //     }
 
-        if(array_size == 0)
-            break;
+    //     if(array_size == 0)
+    //         break;
 
-        // If less than per_page, no more pages.
-        if(static_cast<int>(array_size) < cfg.per_page)
-            break;
+    //     // If less than per_page, no more pages.
+    //     if(static_cast<int>(array_size) < cfg.per_page)
+    //         break;
 
-        ++page;
-        // (Optional) hard cap to prevent runaway
-        if(page > 50)
-            break;
-    } 
-    return result;
+    //     ++page;
+    //     // (Optional) hard cap to prevent runaway
+    //     if(page > 50)
+    //         break;
+    // } 
+    // return result;
+    return {};
 }
 
 // Extract the best version from a release (checks both tag_name and asset names).
@@ -693,6 +694,11 @@ auto check_for_update(bool force_check = false) -> bool
         return false;
     }
 
+    if(force_check)
+    {
+        write_last_check_time();
+    }
+
     GitHubClientConfig cfg;
     cfg.owner = "unravel-dev";
     cfg.repo = "UnravelEngine";
@@ -711,11 +717,6 @@ auto check_for_update(bool force_check = false) -> bool
         return false;
     }
 
-    if(force_check)
-    {
-        write_last_check_time();
-    }
- 
 
     // Print everything we got (versions + artifacts)
     print_releases_and_assets(fetch_result.releases);
