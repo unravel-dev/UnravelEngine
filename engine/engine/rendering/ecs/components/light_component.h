@@ -120,6 +120,54 @@ public:
      */
     void set_turbidity(float turbidity);
 
+    /**
+     * @brief Gets the cloud coverage value.
+     * @return The current cloud coverage value [0.0 = clear sky, 1.0 = overcast].
+     */
+    auto get_cloud_coverage() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud coverage value.
+     * @param[in] coverage The cloud coverage value to set, in the range 0.0f-1.0f.
+     */
+    void set_cloud_coverage(float coverage);
+
+    /**
+     * @brief Gets the cloud altitude value.
+     * @return The current cloud altitude value in world units.
+     */
+    auto get_cloud_altitude() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud altitude value.
+     * @param[in] altitude The cloud altitude value to set, in world units.
+     */
+    void set_cloud_altitude(float altitude);
+
+    /**
+     * @brief Gets the cloud speed multiplier.
+     * @return The current cloud speed multiplier.
+     */
+    auto get_cloud_speed() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud speed multiplier.
+     * @param[in] speed The cloud speed multiplier to set.
+     */
+    void set_cloud_speed(float speed);
+
+    /**
+     * @brief Gets the cloud density multiplier.
+     * @return The current cloud density multiplier.
+     */
+    auto get_cloud_density() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud density multiplier.
+     * @param[in] density The cloud density multiplier to set.
+     */
+    void set_cloud_density(float density);
+
     auto get_cubemap() const noexcept -> const asset_handle<gfx::texture>&
     {
         return cubemap_;
@@ -139,6 +187,26 @@ private:
      * @brief The current turbidity value.
      */
     float turbidity_{1.9};
+
+    /**
+     * @brief Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
+     */
+    float cloud_coverage_{0.45f};
+
+    /**
+     * @brief Cloud layer altitude in world units. Higher = smaller clouds, further apart.
+     */
+    float cloud_altitude_{3000.0f};
+
+    /**
+     * @brief Wind speed multiplier for cloud animation.
+     */
+    float cloud_speed_{1.0f};
+
+    /**
+     * @brief Cloud density/opacity multiplier.
+     */
+    float cloud_density_{1.0f};
 
     //
     asset_handle<gfx::texture> cubemap_;

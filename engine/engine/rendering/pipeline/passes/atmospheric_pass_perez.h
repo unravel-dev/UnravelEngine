@@ -149,6 +149,15 @@ public:
 
         // [1.9 - 10.0f]
         float turbidity = 1.9f;
+
+        /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
+        float cloud_coverage = 0.45f;
+        /// Cloud layer altitude in world units. Higher = smaller clouds, further apart.
+        float cloud_altitude = 3000.0f;
+        /// Wind speed multiplier for cloud animation.
+        float cloud_speed = 1.0f;
+        /// Cloud density/opacity multiplier.
+        float cloud_density = 1.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -166,6 +175,7 @@ private:
             cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr u_sunLuminance;
@@ -175,6 +185,7 @@ private:
 
         gfx::program::uniform_ptr u_parameters;
         gfx::program::uniform_ptr u_perezCoeff;
+        gfx::program::uniform_ptr u_cloudParams;
 
         std::unique_ptr<gpu_program> program;
 
@@ -188,6 +199,7 @@ private:
 
     float hour_{};
     float time_scale_{1.0f};
+    float cloud_time_{}; ///< Accumulated elapsed time (seconds) for cloud animation.
 
 };
 } // namespace unravel

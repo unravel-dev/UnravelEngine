@@ -295,10 +295,28 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
         math::vec3 sky_luminance_rgb(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
 
-        float exposition[4] = {0.02f, 3.0f, 0.1f, hour_};
+        // Adapt exposition based on time of day.
+        // The Perez model produces much higher luminance values at low
+        // sun angles (sunrise/sunset) due to the circumsolar function.
+        // Reducing exposition during those periods keeps the sky balanced
+        // for the tonemapper.
+        float base_exposition = 0.1f;
+        float sun_altitude = sun_dir.y; // -1 = directly below, 0 = horizon, 1 = zenith
+        // Smoothly reduce exposition when sun is near the horizon (altitude ~0).
+        // At zenith the factor is 1.0, at horizon it drops to ~0.35.
+        float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+        float adapted_exposition = base_exposition * altitude_factor;
+
+        float exposition[4] = {0.02f, 3.0f, adapted_exposition, hour_};
         float perezCoeff[4 * 5];
         ANONYMOUS::compute_perez_coeff(params.turbidity, perezCoeff);
 
+
+        // Accumulate real elapsed time for smooth cloud animation (not tied to hour-of-day)
+        cloud_time_ += dt.count() * params.cloud_speed;
+
+        // Cloud parameters: x = coverage, y = altitude, z = accumulated cloud time, w = density
+        float cloud_params[4] = {params.cloud_coverage, params.cloud_altitude, cloud_time_, params.cloud_density};
 
         gfx::set_uniform(atmospheric_program_.u_sunLuminance, sun_luminance_rgb);
         gfx::set_uniform(atmospheric_program_.u_skyLuminanceXYZ, sky_luminance_xyz);
@@ -306,6 +324,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         gfx::set_uniform(atmospheric_program_.u_sunDirection, sun_dir);
         gfx::set_uniform(atmospheric_program_.u_parameters, exposition);
         gfx::set_uniform(atmospheric_program_.u_perezCoeff, perezCoeff, 5);
+        gfx::set_uniform(atmospheric_program_.u_cloudParams, cloud_params);
 
 
         irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));

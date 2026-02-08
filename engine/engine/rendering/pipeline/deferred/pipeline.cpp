@@ -1188,6 +1188,10 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
                     params_perez.light_direction = world_transform.z_unit_axis();
                     params_perez.turbidity = light_comp_ref.get_turbidity();
+                    params_perez.cloud_coverage = light_comp_ref.get_cloud_coverage();
+                    params_perez.cloud_altitude = light_comp_ref.get_cloud_altitude();
+                    params_perez.cloud_speed = light_comp_ref.get_cloud_speed();
+                    params_perez.cloud_density = light_comp_ref.get_cloud_density();
                 }
             }
         });

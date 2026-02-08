@@ -61,6 +61,12 @@ REFLECT(skylight_component)
         return data->get_mode() != skylight_component::sky_mode::skybox;
     });
 
+    auto perez_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
+    {
+        auto data = obj.try_cast<skylight_component>();
+        return data->get_mode() == skylight_component::sky_mode::perez;
+    });
+
     // Register skylight_component::sky_mode enum with entt
     entt::meta_factory<skylight_component::sky_mode>{}
         .type("sky_mode"_hs)
@@ -111,6 +117,39 @@ REFLECT(skylight_component)
             entt::attribute{"tooltip", "Adjusts the clarity of the atmosphere. Lower values (1.9) result in a clear, blue sky, while higher values (up to 10) create a hazy, diffused appearance with more scattering of light.."},
             entt::attribute{"predicate", dynamic_sky_predicate_entt}, 
         })
+        .data<&skylight_component::set_cloud_coverage, &skylight_component::get_cloud_coverage>("cloud_coverage"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_coverage"},
+            entt::attribute{"pretty_name", "Cloud Coverage"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "Controls cloud density. 0.0 = clear sky, 1.0 = overcast. Higher values create more clouds by lowering the density threshold."},
+            entt::attribute{"predicate", perez_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_altitude, &skylight_component::get_cloud_altitude>("cloud_altitude"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_altitude"},
+            entt::attribute{"pretty_name", "Cloud Altitude"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"tooltip", "Cloud layer altitude in world units. Higher values create smaller, more distant clouds."},
+            entt::attribute{"predicate", perez_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_speed"},
+            entt::attribute{"pretty_name", "Cloud Speed"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"tooltip", "Wind speed multiplier for cloud animation. Controls how fast clouds drift across the sky."},
+            entt::attribute{"predicate", perez_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_density, &skylight_component::get_cloud_density>("cloud_density"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_density"},
+            entt::attribute{"pretty_name", "Cloud Density"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"tooltip", "Cloud opacity multiplier. Higher values make clouds more opaque and visible."},
+            entt::attribute{"predicate", perez_predicate_entt},
+        })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cubemap"},
@@ -123,6 +162,10 @@ SAVE(skylight_component)
 {
     try_save(ar, ser20::make_nvp("mode", obj.get_mode()));
     try_save(ar, ser20::make_nvp("turbidity", obj.get_turbidity()));
+    try_save(ar, ser20::make_nvp("cloud_coverage", obj.get_cloud_coverage()));
+    try_save(ar, ser20::make_nvp("cloud_altitude", obj.get_cloud_altitude()));
+    try_save(ar, ser20::make_nvp("cloud_speed", obj.get_cloud_speed()));
+    try_save(ar, ser20::make_nvp("cloud_density", obj.get_cloud_density()));
     try_save(ar, ser20::make_nvp("cubemap", obj.get_cubemap()));
 }
 SAVE_INSTANTIATE(skylight_component, ser20::oarchive_associative_t);
@@ -140,6 +183,30 @@ LOAD(skylight_component)
     if(try_load(ar, ser20::make_nvp("turbidity", turbidity)))
     {
         obj.set_turbidity(turbidity);
+    }
+
+    float cloud_coverage{};
+    if(try_load(ar, ser20::make_nvp("cloud_coverage", cloud_coverage)))
+    {
+        obj.set_cloud_coverage(cloud_coverage);
+    }
+
+    float cloud_altitude{};
+    if(try_load(ar, ser20::make_nvp("cloud_altitude", cloud_altitude)))
+    {
+        obj.set_cloud_altitude(cloud_altitude);
+    }
+
+    float cloud_speed{};
+    if(try_load(ar, ser20::make_nvp("cloud_speed", cloud_speed)))
+    {
+        obj.set_cloud_speed(cloud_speed);
+    }
+
+    float cloud_density{};
+    if(try_load(ar, ser20::make_nvp("cloud_density", cloud_density)))
+    {
+        obj.set_cloud_density(cloud_density);
     }
 
     asset_handle<gfx::texture> cubemap;

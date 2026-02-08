@@ -151,4 +151,44 @@ void skylight_component::set_turbidity(float turbidity)
     turbidity_ = math::clamp(turbidity, 1.9f, 10.0f);
 }
 
+auto skylight_component::get_cloud_coverage() const noexcept -> float
+{
+    return cloud_coverage_;
+}
+
+void skylight_component::set_cloud_coverage(float coverage)
+{
+    cloud_coverage_ = math::clamp(coverage, 0.0f, 1.0f);
+}
+
+auto skylight_component::get_cloud_altitude() const noexcept -> float
+{
+    return cloud_altitude_;
+}
+
+void skylight_component::set_cloud_altitude(float altitude)
+{
+    cloud_altitude_ = math::max(altitude, 0.0f);
+}
+
+auto skylight_component::get_cloud_speed() const noexcept -> float
+{
+    return cloud_speed_;
+}
+
+void skylight_component::set_cloud_speed(float speed)
+{
+    cloud_speed_ = math::max(speed, 0.0f);
+}
+
+auto skylight_component::get_cloud_density() const noexcept -> float
+{
+    return cloud_density_;
+}
+
+void skylight_component::set_cloud_density(float density)
+{
+    cloud_density_ = math::max(density, 0.0f);
+}
+
 } // namespace unravel

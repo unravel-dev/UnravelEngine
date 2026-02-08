@@ -48,22 +48,32 @@ void main()
 	vec3 D = u_perezCoeff[3].xyz;
 	vec3 E = u_perezCoeff[4].xyz;
 
-	float costeta = max(dot(v_viewDir, skyDir), 0.001);
+	float costeta = max(dot(v_viewDir, skyDir), 0.01);
 	float cosgamma = clamp(dot(v_viewDir, lightDir), -0.9999, 0.9999);
-	float cosgammas = dot(skyDir, lightDir);
+	float cosgammas = clamp(dot(skyDir, lightDir), -0.9999, 0.9999);
 
 	vec3 P = Perez(A,B,C,D,E, costeta, cosgamma);
 	vec3 P0 = Perez(A,B,C,D,E, 1.0, cosgammas);
 
+	// Clamp the P/P0 ratio to prevent luminance blow-up at low sun angles.
+	// The Perez model produces extreme values in the circumsolar region
+	// near the horizon which overwhelms tonemapping.
+	vec3 ratio = P / max(P0, vec3_splat(0.0001));
+	ratio = min(ratio, vec3_splat(12.0));
+
+	float denom = u_skyLuminanceXYZ.x + u_skyLuminanceXYZ.y + u_skyLuminanceXYZ.z;
+	denom = max(denom, 0.0001);
 	vec3 skyColorxyY = vec3(
-		  u_skyLuminanceXYZ.x / (u_skyLuminanceXYZ.x+u_skyLuminanceXYZ.y + u_skyLuminanceXYZ.z)
-		, u_skyLuminanceXYZ.y / (u_skyLuminanceXYZ.x+u_skyLuminanceXYZ.y + u_skyLuminanceXYZ.z)
+		  u_skyLuminanceXYZ.x / denom
+		, u_skyLuminanceXYZ.y / denom
 		, u_skyLuminanceXYZ.y
 		);
 
-	vec3 Yp = skyColorxyY * P / P0;
+	vec3 Yp = skyColorxyY * ratio;
 
-	vec3 skyColorXYZ = vec3(Yp.x * Yp.z / Yp.y,Yp.z, (1.0 - Yp.x- Yp.y)*Yp.z/Yp.y);
+	// Guard against division by near-zero y chromaticity
+	float yp_y_safe = max(Yp.y, 0.0001);
+	vec3 skyColorXYZ = vec3(Yp.x * Yp.z / yp_y_safe, Yp.z, (1.0 - Yp.x - Yp.y) * Yp.z / yp_y_safe);
 
-	v_skyColor = convertXYZ2RGB(skyColorXYZ * u_exposition);
+	v_skyColor = max(convertXYZ2RGB(skyColorXYZ * u_exposition), vec3_splat(0.0));
 }
