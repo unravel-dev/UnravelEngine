@@ -284,6 +284,218 @@ REFLECT(light)
             entt::attribute{"pretty_name", "Esm"} 
         });
 
+    // Predicates for sm_impl types
+    auto sm_impl_hard_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::shadowmap_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == sm_impl::hard;
+        });
+    auto sm_impl_pcf_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::shadowmap_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == sm_impl::pcf;
+        });
+    auto sm_impl_pcss_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::shadowmap_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == sm_impl::pcss;
+        });
+    auto sm_impl_vsm_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::shadowmap_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == sm_impl::vsm;
+        });
+    auto sm_impl_esm_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::shadowmap_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == sm_impl::esm;
+        });
+
+    // Reflection for hard_impl_params
+    entt::meta_factory<light::shadowmap_params::hard_impl_params>{}
+        .type("light::shadowmap_params::hard_impl_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hard_impl_params"},
+            entt::attribute{"pretty_name", "Hard Implementation Params"},
+        });
+
+    // Reflection for pcf_impl_params
+    entt::meta_factory<light::shadowmap_params::pcf_impl_params>{}
+        .type("light::shadowmap_params::pcf_impl_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcf_impl_params"},
+            entt::attribute{"pretty_name", "PCF Implementation Params"},
+        })
+        .data<&light::shadowmap_params::pcf_impl_params::x_offset>("x_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "x_offset"},
+            entt::attribute{"pretty_name", "X Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Offset along the x-axis for PCF sampling."},
+        })
+        .data<&light::shadowmap_params::pcf_impl_params::y_offset>("y_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "y_offset"},
+            entt::attribute{"pretty_name", "Y Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Offset along the y-axis for PCF sampling."},
+        });
+
+    // Reflection for pcss_impl_params
+    entt::meta_factory<light::shadowmap_params::pcss_impl_params>{}
+        .type("light::shadowmap_params::pcss_impl_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcss_impl_params"},
+            entt::attribute{"pretty_name", "PCSS Implementation Params"},
+        })
+        .data<&light::shadowmap_params::pcss_impl_params::penumbra_x_offset>("penumbra_x_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "penumbra_x_offset"},
+            entt::attribute{"pretty_name", "Penumbra X Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Offset along the x-axis for PCSS sampling."},
+        })
+        .data<&light::shadowmap_params::pcss_impl_params::penumbra_y_offset>("penumbra_y_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "penumbra_y_offset"},
+            entt::attribute{"pretty_name", "Penumbra Y Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Offset along the y-axis for PCSS sampling."},
+        });
+
+    // Reflection for vsm_impl_params
+    entt::meta_factory<light::shadowmap_params::vsm_impl_params>{}
+        .type("light::shadowmap_params::vsm_impl_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vsm_impl_params"},
+            entt::attribute{"pretty_name", "VSM Implementation Params"},
+        })
+        .data<&light::shadowmap_params::vsm_impl_params::min_variance>("min_variance"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_variance"},
+            entt::attribute{"pretty_name", "Min Variance"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 0.1f},
+            entt::attribute{"step", 0.00001f},
+            entt::attribute{"tooltip", "Minimum variance for VSM filtering."},
+        })
+        .data<&light::shadowmap_params::vsm_impl_params::depth_multiplier>("depth_multiplier"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_multiplier"},
+            entt::attribute{"pretty_name", "Depth Multiplier"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 1000.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"tooltip", "Depth multiplier for VSM."},
+        })
+        .data<&light::shadowmap_params::vsm_impl_params::do_blur>("do_blur"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "do_blur"},
+            entt::attribute{"pretty_name", "Blur Shadow Map"},
+            entt::attribute{"tooltip", "Whether to blur the shadow map."},
+        })
+        .data<&light::shadowmap_params::vsm_impl_params::blur_x_offset>("blur_x_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_x_offset"},
+            entt::attribute{"pretty_name", "Blur X Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Blur offset along the x-axis."},
+        })
+        .data<&light::shadowmap_params::vsm_impl_params::blur_y_offset>("blur_y_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_y_offset"},
+            entt::attribute{"pretty_name", "Blur Y Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Blur offset along the y-axis."},
+        });
+
+    // Reflection for esm_impl_params
+    entt::meta_factory<light::shadowmap_params::esm_impl_params>{}
+        .type("light::shadowmap_params::esm_impl_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "esm_impl_params"},
+            entt::attribute{"pretty_name", "ESM Implementation Params"},
+        })
+        .data<&light::shadowmap_params::esm_impl_params::hardness>("hardness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hardness"},
+            entt::attribute{"pretty_name", "ESM Hardness"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "ESM hardness parameter."},
+        })
+        .data<&light::shadowmap_params::esm_impl_params::depth_multiplier>("depth_multiplier"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_multiplier"},
+            entt::attribute{"pretty_name", "Depth Multiplier"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 15000.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"tooltip", "Depth multiplier for ESM."},
+        })
+        .data<&light::shadowmap_params::esm_impl_params::do_blur>("do_blur"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "do_blur"},
+            entt::attribute{"pretty_name", "Blur Shadow Map"},
+            entt::attribute{"tooltip", "Whether to blur the shadow map."},
+        })
+        .data<&light::shadowmap_params::esm_impl_params::blur_x_offset>("blur_x_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_x_offset"},
+            entt::attribute{"pretty_name", "Blur X Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Blur offset along the x-axis."},
+        })
+        .data<&light::shadowmap_params::esm_impl_params::blur_y_offset>("blur_y_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blur_y_offset"},
+            entt::attribute{"pretty_name", "Blur Y Offset"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 3.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Blur offset along the y-axis."},
+        });
+
     entt::meta_factory<sm_resolution>{}
         .type("sm_resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -374,6 +586,41 @@ REFLECT(light)
             entt::attribute{"name", "show_coverage"},
             entt::attribute{"pretty_name", "Show Coverage"},
             entt::attribute{"tooltip", "Show shadowmap coverage in view."},
+        })
+        .data<&light::shadowmap_params::hard>("hard"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hard"},
+            entt::attribute{"pretty_name", "Hard"},
+            // entt::attribute{"flattable", true},
+            entt::attribute{"predicate", sm_impl_hard_predicate_entt},
+        })
+        .data<&light::shadowmap_params::pcf>("pcf"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcf"},
+            entt::attribute{"pretty_name", "PCF"},
+            // entt::attribute{"flattable", true},
+            entt::attribute{"predicate", sm_impl_pcf_predicate_entt},
+        })
+        .data<&light::shadowmap_params::pcss>("pcss"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcss"},
+            entt::attribute{"pretty_name", "PCSS"},
+            // entt::attribute{"flattable", true},
+            entt::attribute{"predicate", sm_impl_pcss_predicate_entt},
+        })
+        .data<&light::shadowmap_params::vsm>("vsm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vsm"},
+            entt::attribute{"pretty_name", "VSM"},
+            // entt::attribute{"flattable", true},
+            entt::attribute{"predicate", sm_impl_vsm_predicate_entt},
+        })
+        .data<&light::shadowmap_params::esm>("esm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "esm"},
+            entt::attribute{"pretty_name", "ESM"},
+            // entt::attribute{"flattable", true},
+            entt::attribute{"predicate", sm_impl_esm_predicate_entt},
         });
 
 
@@ -521,8 +768,45 @@ SAVE(light::shadowmap_params)
     try_save(ar, ser20::make_nvp("normal_bias", obj.normal_bias));
     try_save(ar, ser20::make_nvp("near_plane", obj.near_plane));
     try_save(ar, ser20::make_nvp("far_plane", obj.far_plane));
+    try_save(ar, ser20::make_nvp("show_coverage", obj.show_coverage));
 
-
+    // Serialize union members based on type
+    switch(obj.type)
+    {
+        case sm_impl::hard:
+            // Hard shadows don't have parameters
+            break;
+        case sm_impl::pcf:
+            try_save(ar, ser20::make_nvp("pcf_x_offset", obj.pcf.x_offset));
+            try_save(ar, ser20::make_nvp("pcf_y_offset", obj.pcf.y_offset));
+            break;
+        case sm_impl::pcss:
+            try_save(ar, ser20::make_nvp("pcss_penumbra_x_offset", obj.pcss.penumbra_x_offset));
+            try_save(ar, ser20::make_nvp("pcss_penumbra_y_offset", obj.pcss.penumbra_y_offset));
+            break;
+        case sm_impl::vsm:
+            try_save(ar, ser20::make_nvp("vsm_min_variance", obj.vsm.min_variance));
+            try_save(ar, ser20::make_nvp("vsm_depth_multiplier", obj.vsm.depth_multiplier));
+            try_save(ar, ser20::make_nvp("vsm_do_blur", obj.vsm.do_blur));
+            if(obj.vsm.do_blur)
+            {
+                try_save(ar, ser20::make_nvp("vsm_blur_x_offset", obj.vsm.blur_x_offset));
+                try_save(ar, ser20::make_nvp("vsm_blur_y_offset", obj.vsm.blur_y_offset));
+            }
+            break;
+        case sm_impl::esm:
+            try_save(ar, ser20::make_nvp("esm_hardness", obj.esm.hardness));
+            try_save(ar, ser20::make_nvp("esm_depth_multiplier", obj.esm.depth_multiplier));
+            try_save(ar, ser20::make_nvp("esm_do_blur", obj.esm.do_blur));
+            if(obj.esm.do_blur)
+            {
+                try_save(ar, ser20::make_nvp("esm_blur_x_offset", obj.esm.blur_x_offset));
+                try_save(ar, ser20::make_nvp("esm_blur_y_offset", obj.esm.blur_y_offset));
+            }
+            break;
+        default:
+            break;
+    }
 }
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_binary_t);
@@ -612,6 +896,46 @@ LOAD(light::shadowmap_params)
     try_load(ar, ser20::make_nvp("normal_bias", obj.normal_bias));
     try_load(ar, ser20::make_nvp("near_plane", obj.near_plane));
     try_load(ar, ser20::make_nvp("far_plane", obj.far_plane));
+    try_load(ar, ser20::make_nvp("show_coverage", obj.show_coverage));
+
+    // Initialize union based on type
+    switch(obj.type)
+    {
+        case sm_impl::hard:
+            // Hard shadows don't have parameters
+            break;
+        case sm_impl::pcf:
+            try_load(ar, ser20::make_nvp("pcf_x_offset", obj.pcf.x_offset));
+            try_load(ar, ser20::make_nvp("pcf_y_offset", obj.pcf.y_offset));
+            break;
+        case sm_impl::pcss:
+            try_load(ar, ser20::make_nvp("pcss_penumbra_x_offset", obj.pcss.penumbra_x_offset));
+            try_load(ar, ser20::make_nvp("pcss_penumbra_y_offset", obj.pcss.penumbra_y_offset));
+            break;
+        case sm_impl::vsm:
+            try_load(ar, ser20::make_nvp("vsm_min_variance", obj.vsm.min_variance));
+            try_load(ar, ser20::make_nvp("vsm_depth_multiplier", obj.vsm.depth_multiplier));
+            try_load(ar, ser20::make_nvp("vsm_do_blur", obj.vsm.do_blur));
+            if(obj.vsm.do_blur)
+            {
+                try_load(ar, ser20::make_nvp("vsm_blur_x_offset", obj.vsm.blur_x_offset));
+                try_load(ar, ser20::make_nvp("vsm_blur_y_offset", obj.vsm.blur_y_offset));
+            }
+            break;
+        case sm_impl::esm:
+            try_load(ar, ser20::make_nvp("esm_hardness", obj.esm.hardness));
+            try_load(ar, ser20::make_nvp("esm_depth_multiplier", obj.esm.depth_multiplier));
+            try_load(ar, ser20::make_nvp("esm_do_blur", obj.esm.do_blur));
+            if(obj.esm.do_blur)
+            {
+                try_load(ar, ser20::make_nvp("esm_blur_x_offset", obj.esm.blur_x_offset));
+                try_load(ar, ser20::make_nvp("esm_blur_y_offset", obj.esm.blur_y_offset));
+            }
+            break;
+        default:
+            // Default to PCF if type is unknown
+            break;
+    }
 }
 LOAD_INSTANTIATE(light::shadowmap_params, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::shadowmap_params, ser20::oarchive_binary_t);

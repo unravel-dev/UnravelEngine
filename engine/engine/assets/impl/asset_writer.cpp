@@ -78,38 +78,32 @@ auto sync_file(const fs::path& temp, fs::error_code& ec) noexcept -> bool
                                nullptr);
         if(h == INVALID_HANDLE_VALUE)
         {
-            ec = fs::error_code(GetLastError(), std::system_category());
-            fs::remove(temp, ec);
+            ec = fs::error_code(static_cast<int>(GetLastError()), std::system_category());
             return false;
         }
         if(!FlushFileBuffers(h))
         {
-            ec = fs::error_code(GetLastError(), std::system_category());
+            ec = fs::error_code(static_cast<int>(GetLastError()), std::system_category());
             CloseHandle(h);
-            fs::remove(temp, ec);
             return false;
         }
         CloseHandle(h);
     }
 #else
-
     int fd = ::open(temp.c_str(), O_RDWR);
     if(fd < 0)
     {
         ec = fs::error_code(errno, std::generic_category());
-        fs::remove(temp, ec);
         return false;
     }
     if(::fsync(fd) < 0)
     {
         ec = fs::error_code(errno, std::generic_category());
         ::close(fd);
-        fs::remove(temp, ec);
         return false;
     }
     ::close(fd);
 #endif
-
     return true;
 }
 
@@ -148,6 +142,25 @@ auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noex
 }
 
 //------------------------------------------------------------------------------
+// Try to remove a temporary file with retries for transient locks (e.g.
+// antivirus scanning on Windows). Returns true if the file was removed.
+//------------------------------------------------------------------------------
+auto remove_temp_with_retry(const fs::path& temp, int max_retries = 5, int base_delay_ms = 10) noexcept -> bool
+{
+    fs::error_code remove_ec;
+    for(int i = 0; i < max_retries; ++i)
+    {
+        fs::remove(temp, remove_ec);
+        if(!remove_ec || !fs::exists(temp, remove_ec))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(base_delay_ms * (1 << i)));
+    }
+    return false;
+}
+
+//------------------------------------------------------------------------------
 // Atomically copy src -> dst via:
 //   1) copy_file(src, temp)
 //   2) flush temp to disk
@@ -171,28 +184,30 @@ auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& 
         return false;
     }
 
-    // 3) generate a unique temp filename
+    // 2) generate a unique temp filename
     fs::path temp;
     if(!make_temp_path(dst.parent_path(), temp, ec))
         return false;
 
+    // 3) copy to temp
     fs::copy_file(src, temp, fs::copy_options::overwrite_existing, ec);
     if(ec)
     {
-        fs::remove(temp, ec);
+        remove_temp_with_retry(temp);
         return false;
     }
 
+    // 4) flush temp to disk
     if(!sync_file(temp, ec))
     {
-        fs::remove(temp, ec);
+        remove_temp_with_retry(temp);
         return false;
     }
 
     // 5) finally swap it in place
     if(!atomic_rename_file(temp, dst, ec))
     {
-        fs::remove(temp, ec);
+        remove_temp_with_retry(temp);
         return false;
     }
 
@@ -203,36 +218,57 @@ void atomic_write_file(const fs::path& dst,
                        const std::function<void(const fs::path&)>& callback,
                        fs::error_code& ec) noexcept
 {
-    fs::error_code err;
+    ec.clear();
+
+    // 1) generate a unique temp filename
 #ifdef ATOMIC_SAVE
     fs::path temp;
-    make_temp_path(dst.parent_path(), temp, err);
+    if(!make_temp_path(dst.parent_path(), temp, ec))
+    {
+        return;
+    }
 #else
-    fs::path temp = fs::temp_directory_path(err);
+    fs::path temp = fs::temp_directory_path(ec);
+    if(ec)
+    {
+        return;
+    }
     temp /= "." + hpp::to_string(generate_uuid()) + ".temp";
 #endif
 
+    // 2) write content via callback
     callback(temp);
 
-#ifdef ATOMIC_SAVE
-    sync_file(temp, err);
-    atomic_rename_file(temp, dst, err);
-#else
-    fs::copy_file(temp, dst, err);
-#endif
-    fs::remove(temp, err);
-
-
-    if(err)
+    // 3) verify the callback produced a file
+    if(!fs::exists(temp, ec) || ec)
     {
-        // APPLOG_ERROR("Failed to remove temporary file: {} with error: {}", temp.string(), err.message());
-        fs::remove(temp, err);
+        if(!ec)
+            ec = std::make_error_code(std::errc::no_such_file_or_directory);
+        remove_temp_with_retry(temp);
+        return;
     }
 
-    // if(fs::exists(dst, err) && err)
-    // {
-    //     APPLOG_ERROR("Failed to remove temporary file: {}", dst.string());
-    // }
+#ifdef ATOMIC_SAVE
+    // 4) flush temp to disk
+    if(!sync_file(temp, ec))
+    {
+        remove_temp_with_retry(temp);
+        return;
+    }
+
+    // 5) atomically rename temp -> dst
+    if(!atomic_rename_file(temp, dst, ec))
+    {
+        remove_temp_with_retry(temp);
+        return;
+    }
+    // temp was renamed to dst — no removal needed
+#else
+    // 4) copy temp to dst
+    fs::copy_file(temp, dst, fs::copy_options::overwrite_existing, ec);
+    // 5) always clean up temp in the non-atomic path
+    remove_temp_with_retry(temp);
+#endif
 }
 } // namespace asset_writer
 } // namespace unravel

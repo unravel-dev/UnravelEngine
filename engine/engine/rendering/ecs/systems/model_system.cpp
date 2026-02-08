@@ -664,6 +664,7 @@ void model_system::on_frame_update(scene& scn, delta_t dt)
 void model_system::on_frame_before_render(scene& scn, delta_t dt)
 {
     APP_SCOPE_PERF("Model/Skinning");
+    static const std::string thread_name = "Model/Skinning Pool Thread";
     auto view = scn.registry->view<transform_component, model_component, active_component>();
 
     auto frame = gfx::get_render_frame();
@@ -675,7 +676,7 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                   [&](entt::entity entity)
                   {
                       // This is needed as we call .get on the model inside the update_armature
-                      tpp::this_thread::register_this_thread();
+                      tpp::this_thread::register_this_thread(thread_name, true);
 
                       auto& model_comp = view.get<model_component>(entity);
 

@@ -123,6 +123,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
 {
     APP_SCOPE_PERF("Animation/System Update");
 
+    static const std::string thread_name = "Animation/System Update Thread";
     auto& ctx = engine::context();
     auto& th = ctx.get_cached<threader>();
     // Create a view for entities with transform_component and submesh_component
@@ -136,7 +137,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                   [&](entt::entity entity)
                   {
                       // This is needed as we call .get on the animations inside the player
-                      tpp::this_thread::register_this_thread();
+                      tpp::this_thread::register_this_thread(thread_name, true);
 
                       auto& animation_comp = view.get<animation_component>(entity);
                       auto& model_comp = view.get<model_component>(entity);

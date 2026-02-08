@@ -1165,13 +1165,41 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     SET_CLAMPED_VAL(currentSmSettings->m_bias, l.shadow_params.bias);
     SET_CLAMPED_VAL(currentSmSettings->m_normalOffset, l.shadow_params.normal_bias);
 
-    // currentSmSettings->m_doBlur = l.shadow_params.impl.do_blur;
-    // SET_VAL(currentSmSettings->m_xNum, l.shadow_params.impl.blur_x_num);
-    // SET_VAL(currentSmSettings->m_yNum, l.shadow_params.impl.blur_y_num);
-    // SET_VAL(currentSmSettings->m_xOffset, l.shadow_params.impl.blur_x_offset);
-    // SET_VAL(currentSmSettings->m_yOffset, l.shadow_params.impl.blur_y_offset);
-    // SET_VAL(currentSmSettings->m_customParam0, l.shadow_params.impl.hardness);
-    // SET_VAL(currentSmSettings->m_customParam1, l.shadow_params.impl.depth_multiplier);
+    switch(l.shadow_params.type)
+    {
+        case sm_impl::hard:
+            currentSmSettings->m_doBlur = false;
+
+            SET_CLAMPED_VAL(currentSmSettings->m_xOffset, 1);
+            SET_CLAMPED_VAL(currentSmSettings->m_yOffset, 1);
+            break;
+        case sm_impl::pcf:
+            currentSmSettings->m_doBlur = false;
+            SET_CLAMPED_VAL(currentSmSettings->m_xOffset, l.shadow_params.pcf.x_offset);
+            SET_CLAMPED_VAL(currentSmSettings->m_yOffset, l.shadow_params.pcf.y_offset);
+            break;
+        case sm_impl::pcss:
+            currentSmSettings->m_doBlur = false;
+            SET_CLAMPED_VAL(currentSmSettings->m_xOffset, l.shadow_params.pcss.penumbra_x_offset);
+            SET_CLAMPED_VAL(currentSmSettings->m_yOffset, l.shadow_params.pcss.penumbra_y_offset);
+            break;
+        case sm_impl::vsm:
+            currentSmSettings->m_doBlur = l.shadow_params.vsm.do_blur;
+            SET_CLAMPED_VAL(currentSmSettings->m_customParam0, l.shadow_params.vsm.min_variance);
+            SET_CLAMPED_VAL(currentSmSettings->m_customParam1, l.shadow_params.vsm.depth_multiplier);
+            SET_CLAMPED_VAL(currentSmSettings->m_xOffset, l.shadow_params.vsm.blur_x_offset);
+            SET_CLAMPED_VAL(currentSmSettings->m_yOffset, l.shadow_params.vsm.blur_y_offset);
+            break;
+        case sm_impl::esm:
+            currentSmSettings->m_doBlur = l.shadow_params.esm.do_blur;
+            SET_CLAMPED_VAL(currentSmSettings->m_customParam0, l.shadow_params.esm.hardness);
+            SET_CLAMPED_VAL(currentSmSettings->m_customParam1, l.shadow_params.esm.depth_multiplier);
+            SET_CLAMPED_VAL(currentSmSettings->m_xOffset, l.shadow_params.esm.blur_x_offset);
+            SET_CLAMPED_VAL(currentSmSettings->m_yOffset, l.shadow_params.esm.blur_y_offset);
+            break;
+        default:
+            break;
+    }
 
     switch(l.type)
     {

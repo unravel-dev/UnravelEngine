@@ -2,7 +2,6 @@
 
 #include <base/platform/thread.hpp>
 #include <logging/logging.h>
-
 namespace unravel
 {
 threader::threader()

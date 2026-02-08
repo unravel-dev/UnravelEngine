@@ -234,28 +234,82 @@ struct light
         /// Normal bias for shadow mapping.
         float normal_bias{0.015f};
 
+        /**
+         * @brief Struct representing implementation parameters for hard shadow mapping.
+         */
+        struct hard_impl_params
+        {
+            // Hard shadows don't require any special parameters
+        };
 
-        // struct impl_params
-        // {
-        //     /// Custom parameter 0 for shadow mapping.
-        //     float hardness{};
-        //     /// Custom parameter 1 for shadow mapping.
-        //     float depth_multiplier{};
-        //     /// Number of shadow maps along the x-axis.
-        //     float blur_x_num{2};
-        //     /// Number of shadow maps along the y-axis.
-        //     float blur_y_num{2};
-        //     /// Offset along the x-axis for shadow mapping.
-        //     float blur_x_offset{1};
-        //     /// Offset along the y-axis for shadow mapping.
-        //     float blur_y_offset{1};
-        //     /// Whether to perform blur on the shadow map.
-        //     bool do_blur{true};
-        // } impl;
+        /**
+         * @brief Struct representing implementation parameters for PCF shadow mapping.
+         */
+        struct pcf_impl_params
+        {
+            /// Offset along the x-axis for PCF sampling.
+            float x_offset{1.0f};
+            /// Offset along the y-axis for PCF sampling.
+            float y_offset{1.0f};
+        };
+
+        /**
+         * @brief Struct representing implementation parameters for PCSS shadow mapping.
+         */
+        struct pcss_impl_params
+        {
+            /// Offset along the x-axis for PCSS sampling.
+            float penumbra_x_offset{1.0f};
+            /// Offset along the y-axis for PCSS sampling.
+            float penumbra_y_offset{1.0f};
+        };
+
+        /**
+         * @brief Struct representing implementation parameters for VSM shadow mapping.
+         */
+        struct vsm_impl_params
+        {
+            /// Minimum variance for VSM filtering.
+            float min_variance{0.02f};
+            /// Depth multiplier for VSM.
+            float depth_multiplier{450.0f};
+            /// Whether to blur the shadow map.
+            bool do_blur{true};
+            /// Blur offset along the x-axis.
+            float blur_x_offset{1.0f};
+            /// Blur offset along the y-axis.
+            float blur_y_offset{1.0f};
+        };
+
+        /**
+         * @brief Struct representing implementation parameters for ESM shadow mapping.
+         */
+        struct esm_impl_params
+        {
+            /// ESM hardness parameter.
+            float hardness{0.7f};
+            /// Depth multiplier for ESM.
+            float depth_multiplier{9000.0f};
+            /// Whether to blur the shadow map.
+            bool do_blur{true};
+            /// Blur offset along the x-axis.
+            float blur_x_offset{1.0f};
+            /// Blur offset along the y-axis.
+            float blur_y_offset{1.0f};
+        };
+
+    
+        hard_impl_params hard;
+        pcf_impl_params pcf;
+        pcss_impl_params pcss;
+        vsm_impl_params vsm;
+        esm_impl_params esm;
 
 
         /// Whether to show shadow map coverage.
         bool show_coverage{false};
+
+       
 
     } shadow_params;
 

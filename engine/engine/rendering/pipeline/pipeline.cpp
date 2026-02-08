@@ -65,7 +65,8 @@ void pipeline::gather_visible_models(scene& scn,
 {
     
     APP_SCOPE_PERF(cam ? "Rendering/Cull   Models" : "Rendering/Gather Models");
-
+    static const std::string thread_name = "Rendering/Gather Models Thread";
+    tpp::this_thread::register_this_thread(thread_name, true);
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
     
     moodycamel::ConcurrentQueue<std::pair<entt::entity, lod_data>> queue;
@@ -85,7 +86,7 @@ void pipeline::gather_visible_models(scene& scn,
         view.end(),
         [&](auto entity)
         {
-            tpp::this_thread::register_this_thread();
+            tpp::this_thread::register_this_thread(thread_name, true);
 
             auto&& [transform_comp, model_comp, layer_comp, active_comp] = view.get(entity);
             
