@@ -124,7 +124,7 @@ REFLECT(skylight_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip", "Controls cloud density. 0.0 = clear sky, 1.0 = overcast. Higher values create more clouds by lowering the density threshold."},
-            entt::attribute{"predicate", perez_predicate_entt},
+            entt::attribute{"predicate", dynamic_sky_predicate_entt},
         })
         .data<&skylight_component::set_cloud_altitude, &skylight_component::get_cloud_altitude>("cloud_altitude"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -132,7 +132,7 @@ REFLECT(skylight_component)
             entt::attribute{"pretty_name", "Cloud Altitude"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"tooltip", "Cloud layer altitude in world units. Higher values create smaller, more distant clouds."},
-            entt::attribute{"predicate", perez_predicate_entt},
+            entt::attribute{"predicate", dynamic_sky_predicate_entt},
         })
         .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -140,15 +140,16 @@ REFLECT(skylight_component)
             entt::attribute{"pretty_name", "Cloud Speed"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"tooltip", "Wind speed multiplier for cloud animation. Controls how fast clouds drift across the sky."},
-            entt::attribute{"predicate", perez_predicate_entt},
+            entt::attribute{"predicate", dynamic_sky_predicate_entt},
         })
         .data<&skylight_component::set_cloud_density, &skylight_component::get_cloud_density>("cloud_density"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_density"},
             entt::attribute{"pretty_name", "Cloud Density"},
             entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.05f},
             entt::attribute{"tooltip", "Cloud opacity multiplier. Higher values make clouds more opaque and visible."},
-            entt::attribute{"predicate", perez_predicate_entt},
+            entt::attribute{"predicate", dynamic_sky_predicate_entt},
         })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)
         .custom<entt::attributes>(entt::attributes{

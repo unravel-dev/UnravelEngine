@@ -1421,4 +1421,13 @@ bool ReorderableList(
     ImGui::EndChild();
     return changed;
 }
+
+void OpenInShell(const char* url)
+{
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    if(g.PlatformIO.Platform_OpenInShellFn != nullptr)
+    {
+        g.PlatformIO.Platform_OpenInShellFn(&g, url);
+    }
+}
 } // namespace ImGui

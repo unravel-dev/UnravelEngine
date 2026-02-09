@@ -75,8 +75,8 @@ void atmospheric_pass::run(gfx::frame_buffer::ptr input, const camera& camera, g
         math::vec3 kr_hazy(0.05f, 0.1f, 0.25f);
         math::vec3 u_kr = math::mix(kr_clear, kr_hazy, t);
 
-        float rayleigh_brightness_clear = 9.0f;
-        float rayleigh_brightness_hazy = 5.0f; // Example value, adjust as needed
+        float rayleigh_brightness_clear = 1.0f;
+        float rayleigh_brightness_hazy = 0.5f; // Example value, adjust as needed
         float u_rayleigh_brightness = math::mix(rayleigh_brightness_clear, rayleigh_brightness_hazy, t);
 
         float mie_brightness_clear = 0.1f;
@@ -127,11 +127,15 @@ void atmospheric_pass::run(gfx::frame_buffer::ptr input, const camera& camera, g
         math::vec4 u_turbidity_parameters2(u_rayleigh_brightness, u_mie_brightness, u_spot_brightness, u_spot_distance);
         math::vec4 u_turbidity_parameters3(u_rayleigh_collection_power, u_mie_collection_power, 0.0f, 0.0f);
 
+        // Cloud parameters: x = coverage, y = altitude, z = accumulated cloud time, w = density
+        float cloud_params[4] = {params.cloud_coverage, params.cloud_altitude, params.cloud_time, params.cloud_density};
+
         gfx::set_uniform(atmospheric_program_.u_parameters, u_parameters);
         gfx::set_uniform(atmospheric_program_.u_kr_and_intensity, u_kr_and_intensity);
         gfx::set_uniform(atmospheric_program_.u_turbidity_parameters1, u_turbidity_parameters1);
         gfx::set_uniform(atmospheric_program_.u_turbidity_parameters2, u_turbidity_parameters2);
         gfx::set_uniform(atmospheric_program_.u_turbidity_parameters3, u_turbidity_parameters3);
+        gfx::set_uniform(atmospheric_program_.u_cloud_params, cloud_params);
 
         irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

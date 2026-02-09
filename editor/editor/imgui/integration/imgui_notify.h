@@ -58,6 +58,7 @@
 typedef int ImGuiToastType;
 typedef int ImGuiToastPhase;
 typedef int ImGuiToastPos;
+typedef int ImGuiToastHorizontalPos;
 
 // Forward declaration
 class ImGuiToast;
@@ -97,6 +98,13 @@ enum ImGuiToastPos_
 	ImGuiToastPos_COUNT
 };
 
+enum ImGuiToastHorizontalPos_
+{
+	ImGuiToastHorizontalPos_Left,
+	ImGuiToastHorizontalPos_Right,
+	ImGuiToastHorizontalPos_COUNT
+};
+
 class ImGuiToast
 {
 private:
@@ -109,6 +117,8 @@ private:
 	ImGuiWindowFlags	window_flags = NOTIFY_TOAST_FLAGS;
 	bool			show_dismiss_button = NOTIFY_USE_DISMISS_BUTTON;
 	std::function<void()> on_dismiss = nullptr;
+	ImGuiToastHorizontalPos horizontal_pos = ImGuiToastHorizontalPos_Right;
+	ImVec2			frame_padding = ImVec2(20.0f, 20.0f);
 
 	
 private:
@@ -145,11 +155,17 @@ public:
     }
 
 	NOTIFY_INLINE auto set_window_flags(ImGuiWindowFlags flags) -> void { this->window_flags = flags; }
+
+	NOTIFY_INLINE auto set_horizontal_pos(const ImGuiToastHorizontalPos& pos) -> void { IM_ASSERT(pos < ImGuiToastHorizontalPos_COUNT); this->horizontal_pos = pos; }
+
+	NOTIFY_INLINE auto set_frame_padding(const ImVec2& frame_padding) -> void { this->frame_padding = frame_padding; }
+
+	NOTIFY_INLINE auto set_frame_padding(float x, float y) -> void { this->frame_padding = ImVec2(x, y); }
 public:
 	// Getters
 
 	NOTIFY_INLINE auto get_on_dismiss() -> const std::function<void()>& { return this->on_dismiss; }
-	
+
 	NOTIFY_INLINE auto get_window_flags() -> const ImGuiWindowFlags& { return this->window_flags; }
 
 	NOTIFY_INLINE auto get_show_dismiss_button() -> const bool { return this->show_dismiss_button; }
@@ -236,6 +252,10 @@ public:
 	NOTIFY_INLINE auto get_draw_callback() -> const ImGuiToastDrawCallback& { return this->draw_callback; };
 
 	NOTIFY_INLINE auto has_draw_callback() -> bool { return this->draw_callback != nullptr; };
+
+	NOTIFY_INLINE auto get_horizontal_pos() -> const ImGuiToastHorizontalPos& { return this->horizontal_pos; };
+
+	NOTIFY_INLINE auto get_frame_padding() -> const ImVec2& { return this->frame_padding; };
 
 	NOTIFY_INLINE auto get_elapsed_time() { return get_tick_count() - this->creation_time; }
 
@@ -399,7 +419,8 @@ namespace ImGui
 		const auto vp_pos = GetMainViewport()->Pos;
 		const auto vp_size = GetMainViewport()->Size;
 
-		float height = 0.f;
+		float height_left = 0.f;
+		float height_right = 0.f;
 
 		for (auto i = 0; i < std::min<size_t>(notifications.size(), NOTIFY_MAX_TOASTS); i++)
 		{
@@ -425,6 +446,7 @@ namespace ImGui
 			const auto content = current_toast->get_content();
 			const auto default_title = current_toast->get_default_title();
 			const auto opacity = current_toast->get_fade_percent(); // Get opacity based of the current phase
+			const auto horizontal_pos = current_toast->get_horizontal_pos();
 
 			// Window rendering
 			auto text_color = current_toast->get_color();
@@ -437,16 +459,36 @@ namespace ImGui
 			//PushStyleColor(ImGuiCol_Text, text_color);
 			SetNextWindowBgAlpha(opacity);
 			//SetNextWindowSizeConstraints(ImVec2(180, 0), ImVec2(FLT_MAX, FLT_MAX	));
-			ImVec2 window_pos = vp_pos + ImVec2(vp_size.x - NOTIFY_PADDING_X, vp_size.y - NOTIFY_PADDING_Y - height);
-			SetNextWindowPos(window_pos, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+			
+			// Calculate window position based on horizontal position
+			ImVec2 window_pos;
+			ImVec2 pivot;
+			float* current_height;
+			const ImVec2& toast_frame_padding = current_toast->get_frame_padding();
+			
+			if (horizontal_pos == ImGuiToastHorizontalPos_Left)
+			{
+				window_pos = vp_pos + ImVec2(NOTIFY_PADDING_X, vp_size.y - NOTIFY_PADDING_Y - height_left);
+				pivot = ImVec2(0.0f, 1.0f);
+				current_height = &height_left;
+			}
+			else
+			{
+				window_pos = vp_pos + ImVec2(vp_size.x - NOTIFY_PADDING_X, vp_size.y - NOTIFY_PADDING_Y - height_right);
+				pivot = ImVec2(1.0f, 1.0f);
+				current_height = &height_right;
+			}
+			
+			SetNextWindowPos(window_pos, ImGuiCond_Always, pivot);
 			
 			// Set notification window flags
             if (!current_toast->get_show_dismiss_button())
             {
                 current_toast->set_window_flags(NOTIFY_TOAST_FLAGS | ImGuiWindowFlags_NoInputs);
             }
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, toast_frame_padding);
 			Begin(window_name, nullptr, current_toast->get_window_flags());
-
+			PopStyleVar();
 			// Here we render the toast content
 			{
 				ImGui::BeginGroup();
@@ -458,8 +500,9 @@ namespace ImGui
 				if (!NOTIFY_NULL_OR_EMPTY(icon))
 				{
 					//Text(icon); // Render icon text
+					ImGui::AlignTextToFramePadding();
 					TextColored(text_color, "%s", icon);
-					was_title_rendered = true;
+					// was_title_rendered = true;
 				}
 
 				// If a title is set
@@ -469,6 +512,7 @@ namespace ImGui
 					if (!NOTIFY_NULL_OR_EMPTY(icon))
 						SameLine();
 
+					ImGui::AlignTextToFramePadding();
 					Text("%s",title); // Render title text
 					was_title_rendered = true;
 				}
@@ -477,6 +521,7 @@ namespace ImGui
 					if (!NOTIFY_NULL_OR_EMPTY(icon))
 						SameLine();
 
+					ImGui::AlignTextToFramePadding();
 					Text("%s", default_title); // Render default title text (ImGuiToastType_Success -> "Success", etc...)
 					was_title_rendered = true;
 				}
@@ -498,14 +543,22 @@ namespace ImGui
 #endif
 					}
 
+					ImGui::AlignTextToFramePadding();
 					Text("%s", content); // Render content text
 				}
 
 				// If a draw callback is set, call it after the text content
 				if (current_toast->has_draw_callback())
 				{
+					if(!was_title_rendered)
+					{
+						SameLine();
+					}
+
+					ImGui::BeginGroup();
 					// Call the custom draw callback for additional rendering
 					current_toast->get_draw_callback()(*current_toast, opacity, text_color);
+					ImGui::EndGroup();
 				}
 
 				PopTextWrapPos();
@@ -521,7 +574,7 @@ namespace ImGui
                         SameLine();
                     }
                     // If the button is pressed, we want to remove the notification
-                    if (SmallButton(ICON_MDI_CLOSE))
+                    if (Button(ICON_MDI_CLOSE))
                     {
                         if(current_toast->get_on_dismiss())
                         {
@@ -532,8 +585,8 @@ namespace ImGui
                 }
 			}
 
-			// Save height for next toasts
-			height += GetWindowHeight() + NOTIFY_PADDING_MESSAGE_Y;
+			// Save height for next toasts in the same stack
+			*current_height += GetWindowHeight() + NOTIFY_PADDING_MESSAGE_Y;
 
 			// End
 			End();

@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
+#include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <ospp/event.h>
 
@@ -160,6 +161,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<transform_system>();
     ctx.add<camera_system>();
     ctx.add<reflection_probe_system>();
+    ctx.add<skylight_system>();
     ctx.add<model_system>();
     ctx.add<animation_system>();
     ctx.add<particle_system>();
@@ -230,6 +232,12 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
     }
 
     if(!ctx.get_cached<reflection_probe_system>().init(ctx))
+    {
+        print_init_error(ctx);
+        return false;
+    }
+
+    if(!ctx.get_cached<skylight_system>().init(ctx))
     {
         print_init_error(ctx);
         return false;
@@ -327,6 +335,11 @@ auto engine::deinit() -> bool
     }
 
     if(!ctx.get_cached<reflection_probe_system>().deinit(ctx))
+    {
+        return false;
+    }
+
+    if(!ctx.get_cached<skylight_system>().deinit(ctx))
     {
         return false;
     }

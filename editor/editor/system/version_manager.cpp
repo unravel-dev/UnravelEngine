@@ -1,4 +1,5 @@
 #include "version_manager.h"
+#include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "imgui/imgui.h"
 #include "threadpp/future.hpp"
 #include <context/context.hpp>
@@ -757,8 +758,9 @@ auto version_manager::init(rtti::context& ctx) -> bool
                   if(has_update)
                   {
                     ImGuiToast toast(ImGuiToastType_Warning, 99999);
-                    toast.set_title("New version available.");
+                    // toast.set_title("New version available.");
                     toast.set_show_dismiss_button(true);
+                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
                     toast.set_on_dismiss(
                         []()
                         {
@@ -769,9 +771,12 @@ auto version_manager::init(rtti::context& ctx) -> bool
                     toast.set_draw_callback(
                         [](const ImGuiToast& toast, float opacity, const ImVec4& text_color)
                         {
-                            ImGui::Text("Download from ");
+                            ImGui::TextColored(text_color, "New update available!");
                             ImGui::SameLine();
-                            ImGui::TextLinkOpenURL("Releases.", "https://github.com/unravel-dev/UnravelEngine/releases");
+                            if(ImGui::Button("Install Now"))
+                            {
+                                ImGui::OpenInShell("https://github.com/unravel-dev/UnravelEngine/releases");
+                            }
                         });
                     ImGui::PushNotification(toast);
                   }

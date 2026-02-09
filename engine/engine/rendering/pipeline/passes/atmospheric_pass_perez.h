@@ -154,8 +154,8 @@ public:
         float cloud_coverage = 0.45f;
         /// Cloud layer altitude in world units. Higher = smaller clouds, further apart.
         float cloud_altitude = 3000.0f;
-        /// Wind speed multiplier for cloud animation.
-        float cloud_speed = 1.0f;
+        /// Accumulated elapsed time (seconds) for cloud animation.
+        float cloud_time = 0.0f;
         /// Cloud density/opacity multiplier.
         float cloud_density = 1.0f;
     };
@@ -197,9 +197,6 @@ private:
 
     detail::sun_controller sun_;
 
-    float hour_{};
-    float time_scale_{1.0f};
-    float cloud_time_{}; ///< Accumulated elapsed time (seconds) for cloud animation.
 
 };
 } // namespace unravel

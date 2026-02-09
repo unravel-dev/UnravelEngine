@@ -262,9 +262,9 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
                                  delta_t dt,
                                  const run_params& params)
 {
-    hour_ += time_scale_ * dt.count();
-    hour_ = bx::mod(hour_, 24.0f);
-    sun_.update(hour_);
+    // hour_ += time_scale_ * dt.count();
+    // hour_ = bx::mod(hour_, 24.0f);
+    // sun_.update(hour_);
 
     const auto& view = camera.get_view_relative();
     const auto& proj = camera.get_projection();
@@ -280,17 +280,17 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         atmospheric_program_.program->begin();
 
         math::vec3 sun_dir(-params.light_direction.x, -params.light_direction.y, -params.light_direction.z);
-        hour_ = ANONYMOUS::hour_of_day(-params.light_direction);
+        auto hour = ANONYMOUS::hour_of_day(-params.light_direction);
         // APPLOG_TRACE("Time Of Day {}", hour_);
 
         ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
         ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
 
-        auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour_);
+        auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
         auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
         math::vec3 sun_luminance_rgb(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
 
-        auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour_);
+        auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
         math::vec3 sky_luminance_xyz(skyLuminanceXYZ.x, skyLuminanceXYZ.y, skyLuminanceXYZ.z);
         auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
         math::vec3 sky_luminance_rgb(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
@@ -307,16 +307,13 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
         float adapted_exposition = base_exposition * altitude_factor;
 
-        float exposition[4] = {0.02f, 3.0f, adapted_exposition, hour_};
+        float exposition[4] = {0.02f, 3.0f, adapted_exposition, hour};
         float perezCoeff[4 * 5];
         ANONYMOUS::compute_perez_coeff(params.turbidity, perezCoeff);
 
 
-        // Accumulate real elapsed time for smooth cloud animation (not tied to hour-of-day)
-        cloud_time_ += dt.count() * params.cloud_speed;
-
         // Cloud parameters: x = coverage, y = altitude, z = accumulated cloud time, w = density
-        float cloud_params[4] = {params.cloud_coverage, params.cloud_altitude, cloud_time_, params.cloud_density};
+        float cloud_params[4] = {params.cloud_coverage, params.cloud_altitude, params.cloud_time, params.cloud_density};
 
         gfx::set_uniform(atmospheric_program_.u_sunLuminance, sun_luminance_rgb);
         gfx::set_uniform(atmospheric_program_.u_skyLuminanceXYZ, sky_luminance_xyz);

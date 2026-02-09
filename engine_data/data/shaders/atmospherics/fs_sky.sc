@@ -73,6 +73,131 @@ float fbm(vec2 p, int octaves)
     return value;
 }
 
+// ----------------------------- Stars ----------------------------------------
+
+// 2D hash returning vec2 (for star sub-cell position)
+vec2 hash2(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.xx + p3.yz) * p3.zy);
+}
+
+vec3 render_stars(vec3 sky_color, vec3 view_dir, vec3 light_dir)
+{
+    // Stars only above the horizon
+    if(view_dir.y < 0.0)
+    {
+        return sky_color;
+    }
+
+    // ---- Night visibility ----
+    // Stars fade in as the sun drops below the horizon.
+    // lightDir.y < 0 means sun is below horizon (night).
+    float night_factor = saturate(-light_dir.y * 4.0 - 0.1);
+    if(night_factor < 0.001)
+    {
+        return sky_color;
+    }
+
+    // ---- Sky sphere grid ----
+    // Project view direction onto a stable 2D coordinate using
+    // spherical mapping. We use (atan2, acos) for a uniform grid.
+    float phi = atan2(view_dir.z, view_dir.x);         // -PI to PI
+    float theta = acos(clamp(view_dir.y, -1.0, 1.0));  // 0 to PI
+
+    // Grid density: higher = more potential star cells = denser star field
+    float grid_scale = 20.0;
+    vec2 grid_uv = vec2(phi, theta) * grid_scale;
+    vec2 cell_id = floor(grid_uv);
+    vec2 cell_fract = fract(grid_uv);
+
+    vec3 star_contribution = vec3_splat(0.0);
+
+    // Check the current cell and its 8 neighbors so stars near
+    // cell borders aren't clipped
+    for(int ox = -1; ox <= 1; ox++)
+    {
+        for(int oy = -1; oy <= 1; oy++)
+        {
+            vec2 neighbor = vec2(float(ox), float(oy));
+            vec2 current_cell = cell_id + neighbor;
+
+            // Hash the cell to decide if it has a star (~8% chance)
+            float star_chance = hash(current_cell * 1.73);
+            if(star_chance > 0.08)
+            {
+                continue;
+            }
+
+            // Sub-cell position: where exactly the star sits within the cell
+            vec2 star_pos = hash2(current_cell * 2.41) * 0.8 + 0.1; // keep away from edges
+            vec2 diff = (neighbor + star_pos) - cell_fract;
+
+            // Star size: tiny bright point
+            float dist_sq = dot(diff, diff);
+            float star_radius = 0.06;
+            float star_point = exp(-dist_sq / (star_radius * star_radius));
+
+            // ---- Brightness distribution (power law) ----
+            // Most stars are dim, few are bright. Mimics real magnitude distribution.
+            float mag_rand = hash(current_cell * 3.17);
+            float brightness = pow(mag_rand, 5.0) * 0.8 + 0.05; // range ~0.05 to 0.85
+
+            // A few very bright stars
+            if(mag_rand > 0.97)
+            {
+                brightness = 1.2;
+                star_radius = 0.08; // slightly larger
+                star_point = exp(-dist_sq / (star_radius * star_radius));
+            }
+
+            // ---- Star color (spectral class) ----
+            // Hash determines color temperature:
+            // Blue-white (O/B), White (A/F), Yellow (G), Orange-Red (K/M)
+            float color_rand = hash(current_cell * 4.93);
+            vec3 star_color;
+            if(color_rand < 0.15)
+            {
+                star_color = vec3(0.7, 0.8, 1.0);  // Blue-white (hot stars)
+            }
+            else if(color_rand < 0.55)
+            {
+                star_color = vec3(1.0, 1.0, 1.0);  // White
+            }
+            else if(color_rand < 0.80)
+            {
+                star_color = vec3(1.0, 0.95, 0.8); // Yellow-white (sun-like)
+            }
+            else if(color_rand < 0.92)
+            {
+                star_color = vec3(1.0, 0.85, 0.6); // Orange
+            }
+            else
+            {
+                star_color = vec3(1.0, 0.7, 0.5);  // Red-orange (cool stars)
+            }
+
+            // ---- Twinkling (atmospheric scintillation) ----
+            // Slow, subtle brightness variation
+            float twinkle = value_noise(current_cell * 0.5 + vec2(u_cloud_time * 0.8, u_cloud_time * 0.6));
+            twinkle = mix(0.7, 1.0, twinkle); // range 0.7-1.0, subtle
+
+            star_contribution += star_color * star_point * brightness * twinkle;
+        }
+    }
+
+    // ---- Atmospheric extinction ----
+    // Stars near the horizon are dimmed by thicker atmosphere
+    float extinction = smoothstep(0.0, 0.25, view_dir.y);
+
+    // ---- Final star brightness ----
+    // Scale for visibility, modulated by night, extinction, and exposition
+    star_contribution *= night_factor * extinction * u_exposition * 3.0;
+
+    return sky_color + star_contribution;
+}
+
 // ----------------------------- Cloud rendering ------------------------------
 
 vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_height_01)
@@ -83,11 +208,23 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_heigh
         return sky_color;
     }
 
-    // Ray-plane intersection: find where the view ray hits the cloud layer
-    float t = u_cloud_altitude / eye_dir.y;
+    // ---- Cloud UV with dome curvature ----
+    // Standard flat-plane intersection divides by eye_dir.y, which goes to
+    // infinity at the horizon. Adding a small curvature term bends the flat
+    // plane into a dome: at zenith (y=1) the effect is negligible, but near
+    // the horizon (y→0) it prevents infinite stretching and makes clouds
+    // appear to curve away naturally.
+    // Smooth dome curvature: sqrt(y^2 + eps^2) acts as a soft floor on y.
+    // At zenith (y=1): sqrt(1+0.01) ≈ 1.005 → virtually unchanged.
+    // At 45° (y=0.7): sqrt(0.49+0.01) ≈ 0.707 → virtually unchanged.
+    // At horizon (y→0): sqrt(0+0.01) = 0.1 → finite instead of infinity.
+    // Only the last few degrees near the horizon are affected.
+    float dome_eps = 0.2;
+    float y_dome = sqrt(eye_dir.y * eye_dir.y + dome_eps * dome_eps);
+    float t = u_cloud_altitude / y_dome;
     vec2 cloud_uv = eye_dir.xz * t;
 
-    // Animate with wind (slow drift) using accumulated real time from CPU
+    // Animate with wind
     float wind_time = u_cloud_time * 0.4;
     cloud_uv += vec2(wind_time * 12.0, wind_time * 5.0);
 
@@ -98,23 +235,20 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_heigh
     float noise = fbm(uv, 5);
 
     // Shape the clouds: coverage controls the threshold
-    // Higher coverage = lower threshold = more clouds
     float threshold = 1.0 - u_cloud_coverage;
     float cloud = smoothstep(threshold, threshold + 0.25, noise);
     cloud *= u_cloud_density;
 
-    // Fade clouds near the horizon to avoid a hard seam and
-    // simulate atmospheric haze obscuring distant clouds
-    float horizon_fade = smoothstep(0.01, 0.2, eye_dir.y);
+    // Fade clouds near the horizon to simulate atmospheric haze
+    float horizon_fade = smoothstep(0.01, 0.15, eye_dir.y);
     cloud *= horizon_fade;
 
     // ---- Cloud lighting ----
 
-    // Base brightness from sun angle (higher sun = brighter clouds)
+    // Base brightness from sun angle
     float ndotl = saturate(dot(vec3(0.0, 1.0, 0.0), light_dir));
 
-    // Directional shading: clouds facing the sun are brighter
-    // Use a slightly offset UV to fake light penetration
+    // Directional shading: offset UV toward the sun to fake light penetration
     vec2 light_offset = light_dir.xz * 0.002;
     float noise_lit = fbm(uv + light_offset, 3);
     float light_diff = saturate(noise - noise_lit);
@@ -169,9 +303,12 @@ void main()
     float mie_strength = mix(0.3, 0.02, sun_height);
     vec3 mie_color = mie_tint * mie * mie_strength;
 
+    // Stars (rendered behind sun and clouds, only visible at night)
+    vec3 color = render_stars(v_skyColor, viewDir, lightDir);
+
     // Combine sun disc and Mie halo
     vec3 sun_color = u_sunLuminance.xyz * u_exposition * (sun2 + mie_color);
-    vec3 color = v_skyColor + sun_color;
+    color += sun_color;
 
     // Procedural clouds
     color = render_clouds(color, viewDir, lightDir, sun_height);

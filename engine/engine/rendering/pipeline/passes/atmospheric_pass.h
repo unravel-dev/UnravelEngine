@@ -16,6 +16,15 @@ public:
 
         // [1.9 - 10.0f]
         float turbidity = 1.9f;
+
+        /// Cloud coverage factor [0, 1].
+        float cloud_coverage = 0.5f;
+        /// Cloud altitude in world units.
+        float cloud_altitude = 3000.0f;
+        /// Accumulated elapsed time (seconds) for cloud animation.
+        float cloud_time = 0.0f;
+        /// Cloud density/opacity multiplier.
+        float cloud_density = 1.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -31,7 +40,7 @@ private:
             cache_uniform(program.get(), u_turbidity_parameters1, "u_turbidity_parameters1", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_turbidity_parameters2, "u_turbidity_parameters2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_turbidity_parameters3, "u_turbidity_parameters3", gfx::uniform_type::Vec4);
-
+            cache_uniform(program.get(), u_cloud_params, "u_cloud_params", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr u_parameters;
@@ -39,6 +48,7 @@ private:
         gfx::program::uniform_ptr u_turbidity_parameters1;
         gfx::program::uniform_ptr u_turbidity_parameters2;
         gfx::program::uniform_ptr u_turbidity_parameters3;
+        gfx::program::uniform_ptr u_cloud_params;
 
 
         std::unique_ptr<gpu_program> program;

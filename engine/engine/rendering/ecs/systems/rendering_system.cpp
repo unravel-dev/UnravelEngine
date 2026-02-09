@@ -18,6 +18,7 @@
 #include <engine/rendering/ecs/systems/camera_system.h>
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <engine/rendering/ecs/systems/skylight_system.h>
 
 namespace unravel
 {
@@ -53,6 +54,7 @@ void rendering_system::on_frame_update(scene& scn, delta_t dt)
     ctx.get_cached<model_system>().on_frame_update(scn, dt);
     ctx.get_cached<animation_system>().on_frame_update(scn, dt);
     ctx.get_cached<reflection_probe_system>().on_frame_update(scn, dt);
+    ctx.get_cached<skylight_system>().on_frame_update(scn, dt);
 }
 
 void rendering_system::on_frame_before_render(scene& scn, delta_t dt)

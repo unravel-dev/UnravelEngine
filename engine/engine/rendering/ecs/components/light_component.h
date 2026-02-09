@@ -177,6 +177,20 @@ public:
         cubemap_ = cubemap;
     }
 
+    /**
+     * @brief Gets the accumulated time for cloud animation.
+     * @return The accumulated time for cloud animation.
+     */
+    auto get_cloud_time() const noexcept -> float
+    {
+        return cloud_time_;
+    }
+
+    void update(delta_t dt)
+    {
+        cloud_time_ += dt.count() * cloud_speed_;
+    }
+
 private:
     /**
      * @brief The current sky mode.
@@ -207,6 +221,11 @@ private:
      * @brief Cloud density/opacity multiplier.
      */
     float cloud_density_{1.0f};
+
+    /**
+     * @brief Accumulated time for cloud animation.
+     */
+    float cloud_time_{0.0f};
 
     //
     asset_handle<gfx::texture> cubemap_;
