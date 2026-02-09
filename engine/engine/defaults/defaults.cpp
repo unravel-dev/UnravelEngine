@@ -495,7 +495,7 @@ auto defaults::create_light_entity(rtti::context& ctx, scene& scn, light_type ty
 
     if(type == light_type::directional)
     {
-        light_data.ambient_intensity = 0.2f;
+        light_data.ambient_intensity = 0.15f;
     }
 
 
