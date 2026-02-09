@@ -72,6 +72,71 @@ vec3 ComputeDiffuseColor(vec3 BaseColor, float Metallic)
     return BaseColor - BaseColor * Metallic;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Shading parameterisation utilities
+
+float F0ToDielectricSpecular(float F0)
+{
+    return saturate(F0 / 0.08f);
+}
+
+float F0RGBToF0(vec3 F0)
+{
+    return max(max(F0.x, F0.y), F0.z);
+}
+
+float F0RGBToDielectricSpecular(vec3 F0)
+{
+    return F0ToDielectricSpecular(F0RGBToF0(F0));
+}
+
+// [Burley, "Extending the Disney BRDF to a BSDF with Integrated Subsurface Scattering"]
+float DielectricF0ToIor(float F0)
+{
+    return 2.0f / (1.0f - sqrt(min(F0, 0.99f))) - 1.0f;
+}
+
+float DielectricIorToF0(float Ior)
+{
+    float F0Sqrt = (Ior - 1.0f) / (Ior + 1.0f);
+    return F0Sqrt * F0Sqrt;
+}
+
+// Anything with F0 less than 2% is physically impossible and is instead considered to be shadowing.
+// See F_Schlick implementation.
+float F0ToMicroOcclusion(float F0)
+{
+    return saturate(50.0f * F0);
+}
+
+vec3 F0ToMicroOcclusion(vec3 F0)
+{
+    return saturate(50.0f * F0);
+}
+
+float F0RGBToMicroOcclusion(vec3 F0)
+{
+    return F0ToMicroOcclusion(F0RGBToF0(F0));
+}
+
+float MakeRoughnessSafe(float Roughness)
+{
+    return max(Roughness, 0.002f);
+}
+
+float F0ToMetallic(float F0)
+{
+    // Approximate the metallic input from F0 with a small lerp region
+    float FullMetalBeginF0 = 0.08f;
+    float FullMetalEndF0   = 0.4f;
+    return saturate((F0 - FullMetalBeginF0) / (FullMetalEndF0 - FullMetalBeginF0));
+}
+
+float F0RGBToMetallic(vec3 F0)
+{
+    return F0ToMetallic(F0RGBToF0(F0));
+}
+
 void EncodeGBuffer(in GBufferData data, inout vec4 result[4])
 {
     result[0] = vec4(data.base_color, data.ambient_occlusion);
@@ -435,6 +500,8 @@ struct BxDFContext
 
 void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 {
+	//Context.NoL = dot(N, L);
+    //Context.NoV = dot(N, V);
     Context.NoL = saturate( dot(N, L) );
     Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
     Context.VoL = dot(V, L);
@@ -452,14 +519,14 @@ void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 
 void Init( inout BxDFContext Context, vec3 N, vec3 X, vec3 Y, vec3 V, vec3 L )
 {
+	//Context.NoL = dot(N, L);
+    //Context.NoV = dot(N, V);
     Context.NoL = saturate( dot(N, L) );
     Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
     Context.VoL = dot(V, L);
     float InvLenH = inversesqrt( 2 + 2 * Context.VoL );
     Context.NoH = saturate( ( Context.NoL + Context.NoV ) * InvLenH );
     Context.VoH = saturate( InvLenH + InvLenH * Context.VoL );
-    //NoL = saturate( NoL );
-    //NoV = saturate( abs( NoV ) + 1e-5 );
 
     Context.XoV = dot(X, V);
     Context.XoL = dot(X, L);
@@ -471,15 +538,14 @@ void Init( inout BxDFContext Context, vec3 N, vec3 X, vec3 Y, vec3 V, vec3 L )
 
 void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 {
+	//Context.NoL = NoL;
+    //Context.NoV = dot(N, V);	
     Context.NoL = saturate(NoL);
     Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
     Context.VoL = dot(V, L);
     vec3 H = normalize(vec3(V + L));
     Context.NoH = max(0, dot(N, H));
     Context.VoH = max(0, dot(V, H));
-
-    //NoL = saturate( NoL );
-    //NoV = saturate( abs( NoV ) + 1e-5 );
 
     Context.XoV = 0.0f;
     Context.XoL = 0.0f;
@@ -515,6 +581,7 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 // 1: Burley
 // 2: Oren-Nayar
 // 3: Gotanda
+// 4: GGX_Rough
 #define PHYSICAL_DIFFUSE	0
 
 // Microfacet distribution function
@@ -534,7 +601,7 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 // 7: Cloth
 // 8: Asikhimin
 // 9: Charlie
-#define PHYSICAL_SPEC_V		4
+#define PHYSICAL_SPEC_V		5
 
 // Fresnel
 // 0: None
@@ -550,7 +617,7 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 
 
 #define PI 3.1415926535
-#define RECIP_PI 1.0 / PI
+#define RECIP_PI (1.0 / PI)
 #define RADIANS_PER_DEGREE 0.0174532925
 #define DEGREES_PER_RADIAN 57.2957795
 /*=============================================================================
@@ -612,43 +679,90 @@ vec3 Diffuse_Gotanda( vec3 DiffuseColor, float Roughness, float NoV, float NoL, 
 #endif
 }
 
-// [ Chan 2018, "Material Advances in Call of Duty: WWII" ]
-// It has been extended here to fade out retro reflectivity contribution from area light in order to avoid visual artefacts.
-vec3 Diffuse_Chan( vec3 DiffuseColor, float a2, float NoV, float NoL, float VoH, float NoH, float RetroReflectivityWeight)
+// [Portsmouth et al. 2025, "EON: A Practical Energy-Preserving Rough Diffuse BRDF"]
+vec3 Diffuse_EON( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoL )
 {
-    // We saturate each input to avoid out of range negative values which would result in weird darkening at the edge of meshes (resulting from tangent space interpolation).
-    NoV = saturate(NoV);
-    NoL = saturate(NoL);
-    VoH = saturate(VoH);
-    NoH = saturate(NoH);
+	// Albedo inversion for EON model to maintain a consistent color with lambert
+	vec3 Rho = DiffuseColor * (1.0 + (0.189468 - 0.189468 * DiffuseColor) * Roughness);
 
-    // a2 = 2 / ( 1 + exp2( 18 * g )
-    float g = saturate( (1.0 / 18.0) * log2( 2 * rcp(a2) - 1 ) );
+	// This is the main shaping term from the Oren-Nayar model (with tweaks by Fujii)
+	float S = VoL - NoV * NoL;
+	float SOverT = max(S * rcp(max(1e-6, max(NoV, NoL))), S);
+	const float constant1_FON = 0.5f - 2.0f / (3.0f * PI);
+	// AF = rcp(1 + Roughness * constant1_FON) is nearly a straight line, so approximate it as such
+	float AF = 1 - Roughness * (1 - 1 / (1 + constant1_FON));
+	float f_ss = AF * (1 + Roughness * SOverT);
 
-    float F0 = VoH + Pow5( 1 - VoH );
-    float FdV = 1 - 0.75 * Pow5( 1 - NoV );
-    float FdL = 1 - 0.75 * Pow5( 1 - NoL );
-
-    // Rough (F0) to smooth (FdV * FdL) response interpolation
-    float Fd = mix( F0, FdV * FdL, saturate( 2.2 * g - 0.5 ) );
-
-    // Retro reflectivity contribution.
-    float Fb = ( (34.5 * g - 59 ) * g + 24.5 ) * VoH * exp2( -max( 73.2 * g - 21.2, 8.9 ) * sqrt( NoH ) );
-    // It fades out when lights become area lights in order to avoid visual artefacts.
-    Fb *= RetroReflectivityWeight;
-
-    float Lobe = (1 / PI) * (Fd + Fb);
-
-    // We clamp the BRDF lobe value to an arbitrary value of 1 to get some practical benefits at high roughness:
-    // - This is to avoid too bright edges when using normal map on a mesh and the local bases, L, N and V ends up in an top emisphere setup.
-    // - This maintains the full proper rough look of a sphere when not using normal maps.
-    // - This also fixes the furnace test returning too much energy at the edge of a mesh.
-    Lobe = min(1.0, Lobe);
-
-    return DiffuseColor * Lobe;
+	// 4th Order approximation from the paper is a bit too heavy, first order seems to work just as well
+	const float g1 = 0.262048f;
+	float GoverPi_V = g1 - g1 * NoV;
+	// Use (1 - Eo) only as a non-reciprocal approach to energy conservation
+	float f_ms = 1.0f - AF * (1 + Roughness * GoverPi_V);
+	// The Rho_ms term from the paper can be approximated as just Rho^2
+	return Rho * (f_ss + Rho * f_ms) * (1.0 / PI);
 }
 
-vec3 Diffuse( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH )
+#define ROUGH_DIFFUSE_BRDF_VERSION 2
+// This models a rough surface that has a GGX NDF where each microfacet has a lambertian response. Various models have been proposed
+// to try and approximate this behavior.
+vec3 Diffuse_GGX_Rough( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH, float NoH, float RetroReflectivityWeight )
+{
+	// We saturate each input to avoid out of range negative values which would result in weird darkening at the edge of meshes (resulting from tangent space interpolation).
+	NoV = saturate(NoV);
+	NoL = saturate(NoL);
+	VoH = saturate(VoH);
+	NoH = saturate(NoH);
+#if ROUGH_DIFFUSE_BRDF_VERSION == 3
+	// It turns out the EON model in the range [0, 0.4] is nearly a perfect match to a ground truth
+	// simulation of diffuse microfacets oriented with a GGX NDF.
+	float VoL = 2 * VoH * VoH - 1;		// double angle identity to keep signature above consistent with other models
+	return Diffuse_EON(DiffuseColor, RetroReflectivityWeight * Roughness * 0.4, NoV, NoL, VoL);
+#elif ROUGH_DIFFUSE_BRDF_VERSION == 2
+	// [ Chan 2024, "Multiscattering Diffuse and Specular BRDFs", Unpublished manuscript ]
+	Roughness *= RetroReflectivityWeight;
+	float Alpha = Roughness * Roughness;
+	// The original writeup uses an FSmooth term inspired by Burley diffuse to balance energy between spec/diffuse.
+	// However in our implementation the energy balance between diffuse and spec is handled externally, so we stick
+	// to a plain lambertian for the Roughness=0 limit.
+	float FSmooth = 1;
+	float Scale = max(0.55 - 0.2 * Roughness, 1.25 - 1.6 * Roughness);
+	float Bias = saturate(4 * Alpha);
+	float FRough = Scale * (NoH + Bias) * rcp(NoH + 0.025) * VoH * VoH;
+	float DiffuseSS = mix(FSmooth, FRough, Roughness);
+	float DiffuseMS = Alpha * 0.38;
+	return (1 / PI) * DiffuseColor * (DiffuseSS + DiffuseMS);
+#else
+	// [ Chan 2018, "Material Advances in Call of Duty: WWII" ]
+	// It has been extended here to fade out retro reflectivity contribution from area light in order to avoid visual artefacts.
+	float a2 = Pow4(Roughness);
+	// a2 = 2 / ( 1 + exp2( 18 * g )
+	float g = saturate( (1.0 / 18.0) * log2( 2 * rcp(a2) - 1 ) );
+
+	float F0 = VoH + Pow5( 1 - VoH );
+	float FdV = 1 - 0.75 * Pow5( 1 - NoV );
+	float FdL = 1 - 0.75 * Pow5( 1 - NoL );
+
+	// Rough (F0) to smooth (FdV * FdL) response interpolation
+	float Fd = mix( F0, FdV * FdL, saturate( 2.2 * g - 0.5 ) );
+
+	// Retro reflectivity contribution.
+	float Fb = ( (34.5 * g - 59 ) * g + 24.5 ) * VoH * exp2( -max( 73.2 * g - 21.2, 8.9 ) * sqrtFast( NoH ) );
+	// It fades out when lights become area lights in order to avoid visual artefacts.
+	Fb *= RetroReflectivityWeight;
+
+	float Lobe = (1 / PI) * (Fd + Fb);
+
+	// We clamp the BRDF lobe value to an arbitrary value of 1 to get some practical benefits at high roughness:
+	// - This is to avoid too bright edges when using normal map on a mesh and the local bases, L, N and V ends up in an top emisphere setup.
+	// - This maintains the full proper rough look of a sphere when not using normal maps.
+	// - This also fixes the furnace test returning too much energy at the edge of a mesh.
+	Lobe = min(1.0, Lobe);
+
+	return DiffuseColor * Lobe;
+#endif
+}
+
+vec3 Diffuse( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH, float NoH, float RetroReflectivityWeight )
 {
 #if   PHYSICAL_DIFFUSE == 0
     return Diffuse_Lambert( DiffuseColor );
@@ -658,8 +772,8 @@ vec3 Diffuse( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float Vo
     return Diffuse_OrenNayar( DiffuseColor, Roughness, NoV, NoL, VoH );
 #elif PHYSICAL_DIFFUSE == 3
     return Diffuse_Gotanda( DiffuseColor, Roughness, NoV, NoL, VoH );
-//#elif PHYSICAL_DIFFUSE == 4
-//    return Diffuse_Chan( DiffuseColor, Roughness, NoV, NoL, VoH );
+#elif PHYSICAL_DIFFUSE == 4
+    return Diffuse_GGX_Rough( DiffuseColor, Roughness, NoV, NoL, VoH, NoH, RetroReflectivityWeight );
 #endif
 }
 
@@ -736,7 +850,8 @@ float Vis_Neumann( float NoV, float NoL )
 // [Kelemen 2001, "A microfacet based coupled specular-matte brdf model with importance sampling"]
 float Vis_Kelemen( float VoH )
 {
-    return rcp( 4.0f * VoH * VoH );
+    // +1e-5 to prevent NaN when VoH == 0 (matches UE5 safety guard)
+    return rcp( 4.0f * VoH * VoH + 1e-5 );
 }
 
 // Tuned to match behavior of G_Smith
@@ -774,8 +889,12 @@ float Vis_SmithJointApprox( float Roughness, float NoV, float NoL )
 
 float Vis_CookTorrance(float Roughness, float NoV, float NoL, float VoH, float NoH )
 {
-    float a = Square( Roughness );
-    return min(1.0f, min((2.0f * NoH * NoV)/VoH, (2.0f * NoH * NoL)/ VoH));
+    // Original Cook-Torrance (1982) geometric attenuation.
+    // The G term does not depend on roughness; roughness enters via the NDF (D term).
+    // Vis = G / (4 * NoV * NoL) to match the other Vis_* functions.
+    // Guard against division by zero at the terminator (NoL=0).
+    float G = min(1.0f, min((2.0f * NoH * NoV) / VoH, (2.0f * NoH * NoL) / VoH));
+    return G / (4.0f * max(NoV * NoL, 1e-8f));
 }
 
 
@@ -853,13 +972,13 @@ vec3 F_Schlick( vec3 SpecularColor, float VoH )
     //return Fc + (1 - Fc) * SpecularColor;		// 1 add, 3 mad
 
     // Anything less than 2% is physically impossible and is instead considered to be shadowing
-    return saturate( 50.0f * SpecularColor.g ) * Fc + (1.0f - Fc) * SpecularColor;
+    return F0RGBToMicroOcclusion(SpecularColor) * Fc + (1.0f - Fc) * SpecularColor;
 }
 
 vec3 F_Fresnel( vec3 SpecularColor, float VoH )
 {
 
-    vec3 SpecularColorSqrt = sqrt( clamp( vec3(0.0f, 0.0f, 0.0f), vec3(0.99f, 0.99f, 0.99f), SpecularColor ) );
+    vec3 SpecularColorSqrt = sqrt( clamp( SpecularColor, vec3(0.0f, 0.0f, 0.0f), vec3(0.99f, 0.99f, 0.99f) ) );
     vec3 n = ( 1.0f + SpecularColorSqrt ) / ( 1.0f - SpecularColorSqrt );
     vec3 g = sqrt( n*n + VoH*VoH - 1.0f );
     return 0.5f * Square( (g - VoH) / (g + VoH) ) * ( 1.0f + Square( ((g+VoH)*VoH - 1.0f) / ((g-VoH)*VoH + 1.0f) ) );
@@ -911,7 +1030,7 @@ vec3 EnvBRDF( vec3 SpecularColor, float Roughness, float NoV, sampler2D BRDFInte
 {
     // Anything less than 2% is physically impossible and is instead considered to be shadowing
     // Note: this is needed for the 'specular' show flag to work, since it uses a SpecularColor of 0
-    float F90 = saturate( 50.0 * SpecularColor.g );
+    float F90 = F0RGBToMicroOcclusion(SpecularColor);
 
     return EnvBRDF(SpecularColor, vec3_splat(F90), Roughness, NoV, BRDFIntegrationMap);
 }
@@ -941,7 +1060,7 @@ vec3 EnvBRDFApprox( vec3 SpecularColor, float Roughness, float NoV )
 {
     // Anything less than 2% is physically impossible and is instead considered to be shadowing
     // Note: this is needed for the 'specular' show flag to work, since it uses a SpecularColor of 0
-    float F90 = saturate( 50.0 * SpecularColor.g );
+    float F90 = F0RGBToMicroOcclusion(SpecularColor);
 
     return EnvBRDFApprox(SpecularColor, vec3_splat(F90), Roughness, NoV);
 }
@@ -1076,7 +1195,7 @@ FBxDFEnergyTerms ComputeGGXSpecEnergyTerms(float Roughness, float NoV, vec3 F0, 
 
 FBxDFEnergyTerms ComputeGGXSpecEnergyTerms(float Roughness, float NoV, vec3 F0)
 {
-    float F90 = saturate(50.0 * F0.g); // See F_Schlick implementation
+    float F90 = F0RGBToMicroOcclusion(F0);
     return ComputeGGXSpecEnergyTerms(Roughness, NoV, F0, vec3_splat(F90));
 }
 
@@ -1106,22 +1225,12 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
     return EnergyTerms.W;
 }
 
-struct SurfaceShading
-{
-    vec3 direct;
-    vec3 indirect;
-};
-
-SurfaceShading StandardShading(
+// Direct lighting only — microfacet specular + diffuse BRDF, per-light evaluation.
+vec3 StandardShadingDirect(
  vec3 DiffuseColor,
- vec3 IndirectDiffuse,
  vec3 SpecularColor,
- vec3 IndirectSpecular,
- sampler2D BRDFIntegrationMap,
  vec3 LobeRoughness,
  vec3 LobeEnergy,
- float Metalness,
- float AO,
  vec3 L,
  vec3 V,
  vec3 N )
@@ -1129,33 +1238,62 @@ SurfaceShading StandardShading(
     BxDFContext context;
     Init(context, N, V, L);
 
-    float Roughness = LobeRoughness[1];
+    float Roughness = MakeRoughnessSafe(LobeRoughness[1]);
     // Generalized microfacet specular
     float D = Distribution( Roughness, context.NoH ) * LobeEnergy[1];
     float Vis = Visibility( Roughness, context.NoV, context.NoL, context.VoH, context.NoH );
     vec3 F = Fresnel( SpecularColor, context.VoH );
 
-    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, context.NoV, context.NoL, context.VoH ) * LobeEnergy[2];
-
-    float RoughnessSq = Roughness * Roughness;
-    float SpecularOcclusion = GetSpecularOcclusion(context.NoV, RoughnessSq, AO);
-
+	float RetroReflectivityWeight = 1.0;
+    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, context.NoV, context.NoL, context.VoH, context.NoH, RetroReflectivityWeight ) * LobeEnergy[2];
 
 #if USE_ENERGY_CONSERVATION > 0
     FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, context.NoV, SpecularColor);
-    vec3 EnvBRDFValue = SpecularEnergyTerms.E; // EnvBRDF accounting for multiple scattering when enabled
     float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
     vec3 EnergyConservationFactor = ComputeEnergyConservation(SpecularEnergyTerms);
 #else
-    vec3 EnvBRDFValue = GetEnvBRDF(SpecularColor, Roughness, context.NoV, BRDFIntegrationMap);
     float EnergyPreservationFactor = 1.0f;
     vec3 EnergyConservationFactor = vec3_splat(1.0f);
 #endif
 
-    SurfaceShading shading;
-    shading.indirect = (DiffuseColor * IndirectDiffuse) + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
-    shading.direct = (DiffuseLighting * EnergyPreservationFactor) + (D * Vis) * F * EnergyConservationFactor;
-    return shading;
+    // Specular terminator fade: smoothly attenuate specular near the shadow terminator
+    // to prevent the bright fringe artifact caused by D spiking at grazing light angles.
+    float specularTerminatorFade = saturate(context.NoL / 0.04f);
+    specularTerminatorFade = specularTerminatorFade * specularTerminatorFade;
+
+    return (DiffuseLighting * EnergyPreservationFactor) + (D * Vis) * F * EnergyConservationFactor * specularTerminatorFade;
+}
+
+// Indirect lighting only — environment BRDF + indirect diffuse, evaluated once per pixel.
+// AO is applied only here (not in direct). EnergyPreservationFactor accounts for
+// specular layer absorbing energy from the diffuse layer.
+vec3 StandardShadingIndirect(
+ vec3 DiffuseColor,
+ vec3 IndirectDiffuse,
+ vec3 SpecularColor,
+ vec3 IndirectSpecular,
+ sampler2D BRDFIntegrationMap,
+ float Roughness,
+ float AO,
+ vec3 V,
+ vec3 N )
+{
+    Roughness = MakeRoughnessSafe(Roughness);
+    float NoV = saturate( abs( dot(N, V) ) + 1e-5 );
+
+    float RoughnessSq = Roughness * Roughness;
+    float SpecularOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, AO);
+
+#if USE_ENERGY_CONSERVATION > 0
+    FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);
+    vec3 EnvBRDFValue = SpecularEnergyTerms.E;
+    float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
+#else
+    vec3 EnvBRDFValue = GetEnvBRDF(SpecularColor, Roughness, NoV, BRDFIntegrationMap);
+    float EnergyPreservationFactor = 1.0f;
+#endif
+
+    return (DiffuseColor * AO * IndirectDiffuse * EnergyPreservationFactor) + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
 }
 
 
@@ -1164,7 +1302,7 @@ vec3 SubsurfaceShading( vec3 SubsurfaceColor, float Opacity, float AO, vec3 L, v
     vec3 H = normalize(V + L);
     // to get an effect when you see through the material
     // hard coded pow constant
-    float InScatter = pow(saturate(dot(L, -V)), 12.0f) * mix(3.0f, 0.1f, Opacity);
+    float InScatter = saturate(pow(saturate(dot(L, -V)), 12.0f) * mix(3.0f, 0.1f, Opacity));
     // wrap around lighting, /(PI*2) to be energy consistent (hack do get some view dependnt and light dependent effect)
     // Opacity of 0 gives no normal dependent lighting, Opacity of 1 gives strong normal contribution
     float NormalContribution = saturate(dot(N, H) * Opacity + 1.0f - Opacity);

@@ -321,9 +321,9 @@ public:
 		memset(this->content, 0, sizeof(this->content));
 	}
 
-	ImGuiToast(ImGuiToastType type, const char* format, ...) : ImGuiToast(type) { NOTIFY_FORMAT(this->set_content, format); }
+	ImGuiToast(ImGuiToastType type, const char* format, ...) : ImGuiToast(type) { NOTIFY_FORMAT(this->set_title, format); }
 
-	ImGuiToast(ImGuiToastType type, int dismiss_time, const char* format, ...) : ImGuiToast(type, dismiss_time) { NOTIFY_FORMAT(this->set_content, format); }
+	ImGuiToast(ImGuiToastType type, int dismiss_time, const char* format, ...) : ImGuiToast(type, dismiss_time) { NOTIFY_FORMAT(this->set_title, format); }
 
 	// Constructor with draw callback
 	ImGuiToast(ImGuiToastType type, const ImGuiToastDrawCallback& callback, int dismiss_time = NOTIFY_DEFAULT_DISMISS)

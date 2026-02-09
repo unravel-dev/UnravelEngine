@@ -343,16 +343,15 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
-    vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
     vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
     clip = clipTransform(clip);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     vec3 lobe_roughness = vec3(0.0f, data.roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
-    float indirect_intensity = u_light_data.w;
-    vec3 specular_color = data.specular_color * data.ambient_occlusion;
-    vec3 diffuse_color = data.diffuse_color * data.ambient_occlusion;
+    // Use unmodified colors for direct lighting — AO is applied only to indirect terms inside StandardShading
+    vec3 specular_color = data.specular_color;
+    vec3 diffuse_color = data.diffuse_color;
 
 
 #if DIRECTIONAL_LIGHT
@@ -360,13 +359,11 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 #else
     vec3 vector_to_light = u_light_position.xyz - world_position;
 #endif
-    vec3 indirect_diffuse = diffuse_color * indirect_intensity;
     float distance_sqr = dot( vector_to_light, vector_to_light );
     vec3 N = data.world_normal;
     vec3 V = normalize(u_camera_position.xyz - world_position);
     vec3 L = vector_to_light / sqrt( distance_sqr );
     float NoL = saturate( dot(N, L) );
-    float distance_attenuation = 1.0f;
 
 #if POINT_LIGHT
     vec3 vector_to_light_over_radius = vector_to_light / u_light_data.x;
@@ -385,22 +382,47 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
     float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
     float subsurface_shadow = 1.0f;
-    float surface_attenuation = (intensity * distance_attenuation * light_radius_mask * light_falloff) * surface_shadow;
-    float subsurface_attenuation = (distance_attenuation * light_radius_mask * light_falloff) * subsurface_shadow;
+    float surface_attenuation = (intensity * light_radius_mask * light_falloff) * surface_shadow;
+    float subsurface_attenuation = (intensity * light_radius_mask * light_falloff) * subsurface_shadow;
 
     vec3 energy = AreaLightSpecular(0.0f, 0.0f, normalize(vector_to_light), lobe_roughness, vector_to_light, L, V, N);
-    SurfaceShading surface_lighting = StandardShading(diffuse_color, indirect_diffuse, specular_color, indirect_specular, s_tex6, lobe_roughness, energy, data.metalness, data.ambient_occlusion, L, V, N);
-    vec3 direct_surface_lighting = surface_lighting.direct;
-    vec3 indirect_surface_lighting = surface_lighting.indirect;
+    vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N);
     //vec3 subsurface_lighting = SubsurfaceShadingTwoSided(data.subsurface_color, L, V, N);
     vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, L, V, N);
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
-    vec3 lighting = surface_multiplier * direct_surface_lighting + (subsurface_lighting + indirect_surface_lighting) * subsurface_multiplier + data.emissive_color + colorCoverage * u_shadowMapShowCoverage;
+    // Only direct lighting — indirect and emissive are handled in a separate fullscreen pass
+    vec3 lighting = surface_multiplier * direct_surface_lighting
+                  + subsurface_lighting * subsurface_multiplier
+                  + colorCoverage * u_shadowMapShowCoverage;
 
     vec4 result;
     result.xyz = lighting;
+    result.w = 1.0f;
+    return result;
+}
+
+// Separate indirect lighting + emissive pass (rendered once as a fullscreen quad, not per-light)
+vec4 pbr_indirect(vec2 texcoord0)
+{
+    GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
+    vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
+    vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
+    clip = clipTransform(clip);
+    vec3 world_position = clipToWorld(u_invViewProj, clip);
+    float indirect_intensity = u_light_data.w;
+
+    vec3 N = data.world_normal;
+    vec3 V = normalize(u_camera_position.xyz - world_position);
+
+    // Indirect diffuse carries only irradiance — StandardShadingIndirect applies DiffuseColor and AO
+    vec3 indirect_diffuse = vec3_splat(indirect_intensity);
+
+    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, data.roughness, data.ambient_occlusion, V, N);
+
+    vec4 result;
+    result.xyz = indirect_lighting + data.emissive_color;
     result.w = 1.0f;
     return result;
 }

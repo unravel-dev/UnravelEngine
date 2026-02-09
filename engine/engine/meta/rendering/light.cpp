@@ -645,7 +645,7 @@ REFLECT(light)
             entt::attribute{"name", "ambient_intensity"},
             entt::attribute{"pretty_name", "Ambient Intensity"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 0.5f},
+            entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
         })
         .data<&light::type>("type"_hs)

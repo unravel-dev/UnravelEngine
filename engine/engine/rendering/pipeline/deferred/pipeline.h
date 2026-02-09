@@ -229,6 +229,29 @@ private:
         std::shared_ptr<gpu_program> program;
     };
 
+    struct indirect_lighting_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_light_data, "u_light_data", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_camera_position, "u_camera_position", gfx::uniform_type::Vec4);
+
+            cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
+        }
+        gfx::program::uniform_ptr u_light_data;
+        gfx::program::uniform_ptr u_camera_position;
+        std::array<gfx::program::uniform_ptr, 7> s_tex;
+
+        std::unique_ptr<gpu_program> program;
+
+    } indirect_lighting_program_;
+
     struct debug_visualization_program : uniforms_cache
     {
         void cache_uniforms()

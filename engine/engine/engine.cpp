@@ -334,12 +334,12 @@ auto engine::deinit() -> bool
         return false;
     }
 
-    if(!ctx.get_cached<reflection_probe_system>().deinit(ctx))
+    if(!ctx.get_cached<skylight_system>().deinit(ctx))
     {
         return false;
     }
 
-    if(!ctx.get_cached<skylight_system>().deinit(ctx))
+    if(!ctx.get_cached<reflection_probe_system>().deinit(ctx))
     {
         return false;
     }
@@ -405,6 +405,7 @@ auto engine::destroy() -> bool
     ctx.remove<physics_system>();
     ctx.remove<animation_system>();
     ctx.remove<model_system>();
+    ctx.remove<skylight_system>();
     ctx.remove<reflection_probe_system>();
     ctx.remove<camera_system>();
     ctx.remove<transform_system>();
