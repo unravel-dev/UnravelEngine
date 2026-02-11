@@ -14,6 +14,7 @@
 #include <monopp/mono_property_invoker.h>
 #include <monopp/mono_list.h>
 #include <monopp/mono_array.h>
+#include <monopp/mono_gc_handle.h>
 
 #include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/core/math/quaternion.hpp>
@@ -624,13 +625,14 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
     ser20::size_type size{};
     try_load(ar, ser20::make_nvp("size", size));
     obj.container.resize(static_cast<std::size_t>(size));
+    std::vector<mono::mono_object_pinned_ptr> element_pins;
+    element_pins.reserve(obj.container.size());
     for(auto& v : obj.container)
     {
         v = obj.type.new_instance();
+        element_pins.push_back(mono::make_object_pinned(v));
     }
-
     {
-
         serialization::path_skip_segment_guard guard(true);
         try_load(ar, ser20::make_nvp("container", obj.container));
     }
@@ -853,13 +855,15 @@ SAVE(mono::mono_object)
                         mono::mono_array<mono::mono_object> array(collection_obj);
                         auto pinned_array = mono::make_array_pinned(array);
                         auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
+                        auto element_pins = mono::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
                     else if(field_type.is_list())
                     {
                         mono::mono_list<mono::mono_object> list(collection_obj);
                         auto pinned_list = mono::make_list_pinned(list);
-                        auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();    
+                        auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();
+                        auto element_pins = mono::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
                 }
@@ -916,6 +920,7 @@ SAVE(mono::mono_object)
                         mono::mono_array<mono::mono_object> array(collection_obj);
                         auto pinned_array = mono::make_array_pinned(array);
                         auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
+                        auto element_pins = mono::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                     else if(prop_type.is_list())
@@ -923,6 +928,7 @@ SAVE(mono::mono_object)
                         mono::mono_list<mono::mono_object> list(collection_obj);
                         auto pinned_list = mono::make_list_pinned(list);
                         auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();
+                        auto element_pins = mono::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                 }
@@ -1148,6 +1154,7 @@ LOAD(mono::mono_object)
                 mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
                 if(try_load(ar, ser20::make_nvp(field.get_name(), vec)))
                 {
+                    auto element_pins = mono::pin_vector_elements(vec.container);
                     if(field_type.is_array())
                     {
                         mono::mono_array<mono::mono_object> array(vec.container, vec.type);
@@ -1201,6 +1208,7 @@ LOAD(mono::mono_object)
                 mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
                 if(try_load(ar, ser20::make_nvp(prop.get_name(), vec)))
                 {
+                    auto element_pins = mono::pin_vector_elements(vec.container);
                     if(prop_type.is_array())
                     {
                         mono::mono_array<mono::mono_object> array(vec.container, vec.type);
