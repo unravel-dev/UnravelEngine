@@ -297,11 +297,19 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         }
         else if(ImGui::IsCombinationKeyPressed(shortcuts::undo, true))
         {
-            ctx.get_cached<editing_manager>().undo();
+            bool any_popup_open = ImGui::IsPopupOpen((ImGuiID)0, ImGuiPopupFlags_AnyPopupId);
+            if(!any_popup_open)
+            {
+                ctx.get_cached<editing_manager>().undo();
+            }
         }
         else if(ImGui::IsCombinationKeyPressed(shortcuts::undo_history))
         {
-            parent_->get_undo_redo_panel().show(true);
+            bool any_popup_open = ImGui::IsPopupOpen((ImGuiID)0, ImGuiPopupFlags_AnyPopupId);
+            if(!any_popup_open)
+            {
+                parent_->get_undo_redo_panel().show(true);
+            }
         }
         else if(ImGui::IsCombinationKeyPressed(shortcuts::recompile_ui))
         {

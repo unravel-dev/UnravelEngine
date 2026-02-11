@@ -602,17 +602,17 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy comp_var_proxy;
+                    comp_var_proxy.impl->parent = var_proxy.impl;
                     comp_var_proxy.impl->type_name = entt::get_pretty_name(type);
-                    comp_var_proxy.impl->get_name = [parent_proxy = var_proxy, pretty_name]()
+                    comp_var_proxy.impl->name = [&]()
                     {
-                        auto name = parent_proxy.impl->get_name();
+                        const auto& name = var_proxy.impl->name;
                         if(name.empty())
                         {
                             return pretty_name;
                         }
                         return fmt::format("{}/{}", name, pretty_name);
-                    };
-                    comp_var_proxy.impl->name = comp_var_proxy.impl->get_name();
+                    }();
                     comp_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
                     {
                         entt::meta_any var;
@@ -743,16 +743,16 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     }
 
                     meta_any_proxy obj_proxy;
-                    obj_proxy.impl->get_name = [parent_proxy = var_proxy, pretty_name]()
+                    obj_proxy.impl->parent = var_proxy.impl;
+                    obj_proxy.impl->name = [&]()
                     {
-                        auto name = parent_proxy.impl->get_name();
+                        const auto& name = var_proxy.impl->name;
                         if(name.empty())
                         {
                             return pretty_name;
                         }
                         return fmt::format("{}/{}", name, pretty_name);
-                    };
-                    obj_proxy.impl->name = obj_proxy.impl->get_name();
+                    }();
                     obj_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;

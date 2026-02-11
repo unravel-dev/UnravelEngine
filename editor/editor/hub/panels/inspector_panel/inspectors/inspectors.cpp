@@ -99,7 +99,7 @@ auto focus_property_on_undo_redo(rtti::context& ctx,
 auto add_property_action(rtti::context& ctx,
                          prefab_override_context& override_ctx,
                          inspect_result& result,
-                         const meta_any_proxy& var_proxy,
+                         meta_any_proxy& var_proxy,
                          const entt::meta_any& old_var,
                          const entt::meta_any& new_var,
                          const entt::meta_custom& custom) -> bool
@@ -716,6 +716,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     {
         if(result.changed)
         {
+
             add_property_action(ctx, override_ctx, result, prop_proxy, prop_old_var, prop_var, prop.custom());
         }
 
@@ -852,17 +853,17 @@ auto inspect_array(rtti::context& ctx,
 
 
                     meta_any_proxy value_proxy;
+                    value_proxy.impl->parent = var_proxy.impl;
                     value_proxy.impl->type_name = entt::get_pretty_name(value.type());
-                    value_proxy.impl->get_name = [var_proxy, i]()
+                    value_proxy.impl->name = [&]()
                     {
-                        auto name = var_proxy.impl->get_name();
+                        const auto& name = var_proxy.impl->name;
                         if(name.empty())
                         {
                             return fmt::format("[{}]", i);
                         }
                         return fmt::format("{}[{}]", name, i);
-                    };
-                    value_proxy.impl->name = value_proxy.impl->get_name();
+                    }();
                     value_proxy.impl->getter = [parent_proxy = var_proxy, i](entt::meta_any& result)
                     {
                         entt::meta_any var;
@@ -1173,13 +1174,10 @@ auto inspect_var(rtti::context& ctx,
     auto type = var.type();
 
     meta_any_proxy derived_var_proxy;
+    derived_var_proxy.impl->parent = var_proxy.impl;
     derived_var_proxy.impl->type_name = entt::get_pretty_name(var.type());
-    derived_var_proxy.impl->get_name = [parent_proxy = var_proxy]()
-    {
-        return parent_proxy.impl->get_name();
-    };
-    derived_var_proxy.impl->name = derived_var_proxy.impl->get_name();
-    derived_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
+    derived_var_proxy.impl->name = var_proxy.impl->name;
+    derived_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result) -> bool
     {      
         if(parent_proxy.impl->getter(result) && result)
         {

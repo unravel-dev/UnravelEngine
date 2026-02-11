@@ -25,6 +25,9 @@ struct editing_action_t : crtp_meta_type<editing_action_t>
     virtual void merge_with(const editing_action_t& previous) {} // Default: no merge implementation
     virtual auto is_valid() const -> bool { return true; } // Default: actions are valid
     virtual void draw_in_inspector(rtti::context& ctx) {} // Default: no inspector drawing
+    /// Called after first execution to release scope-bound references.
+    /// Actions holding proxies should switch to resolver-based access.
+    virtual void detach() {}
     
     // Note: Common merge checks (type equality, operation_id validation) are handled by undo_redo_stack.
     // Individual is_mergeable() implementations only need to check action-specific criteria.

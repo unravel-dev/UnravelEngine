@@ -109,18 +109,18 @@ template<typename Invoker>
 auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field) -> meta_any_proxy
 {
     meta_any_proxy nested_proxy;
+    nested_proxy.impl->parent = obj_proxy.impl;
     auto field_name = mutable_field.get_name();
     nested_proxy.impl->type_name = mutable_field.get_type().get_fullname();
-    nested_proxy.impl->get_name = [obj_proxy, field_name]()
+    nested_proxy.impl->name = [&]()
     {
-        auto parent_name = obj_proxy.impl->get_name();
+        const auto& parent_name = obj_proxy.impl->name;
         if(parent_name.empty())
         {
             return field_name;
         }
         return fmt::format("{}/{}", parent_name, field_name);
-    };
-    nested_proxy.impl->name = nested_proxy.impl->get_name();
+    }();
     
     nested_proxy.impl->getter = [obj_proxy, field_name](entt::meta_any& result) mutable
     {
@@ -190,18 +190,18 @@ template<typename Invoker>
 auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_property) -> meta_any_proxy
 {
     meta_any_proxy nested_proxy;
+    nested_proxy.impl->parent = obj_proxy.impl;
     auto prop_name = mutable_property.get_name();
     nested_proxy.impl->type_name = mutable_property.get_type().get_fullname();
-    nested_proxy.impl->get_name = [obj_proxy, prop_name]()
+    nested_proxy.impl->name = [&]()
     {
-        auto parent_name = obj_proxy.impl->get_name();
+        const auto& parent_name = obj_proxy.impl->name;
         if(parent_name.empty())
         {
             return prop_name;
         }
         return fmt::format("{}/{}", parent_name, prop_name);
-    };
-    nested_proxy.impl->name = nested_proxy.impl->get_name();
+    }();
 
     nested_proxy.impl->getter = [obj_proxy, prop_name](entt::meta_any& result) mutable
     {
@@ -361,18 +361,18 @@ template<typename T, typename ProxyType>
 auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_proxy) -> meta_any_proxy
 {
     meta_any_proxy field_proxy;
+    field_proxy.impl->parent = obj_proxy.impl;
     field_proxy.impl->type_name = script_proxy.get_type().get_fullname();
 
-    field_proxy.impl->get_name = [obj_proxy, script_proxy]()
+    field_proxy.impl->name = [&]()
     {
-        auto parent_name = obj_proxy.impl->get_name();
+        const auto& parent_name = obj_proxy.impl->name;
         if(parent_name.empty())
         {
             return script_proxy.get_name();
         }
         return fmt::format("{}/{}", parent_name, script_proxy.get_name());
-    };
-    field_proxy.impl->name = field_proxy.impl->get_name();
+    }();
 
     field_proxy.impl->getter = [obj_proxy, script_proxy](entt::meta_any& result) mutable
     {
@@ -432,20 +432,20 @@ template<typename Invoker>
 auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field, rtti::context& ctx) -> meta_any_proxy
 {
     meta_any_proxy handle_proxy;
+    handle_proxy.impl->parent = obj_proxy.impl;
     auto field_name = mutable_field.get_name();
     constexpr bool is_property = std::is_base_of<mono::mono_property, Invoker>::value;
     
     handle_proxy.impl->type_name = mutable_field.get_type().get_fullname();
-    handle_proxy.impl->get_name = [obj_proxy, field_name]()
+    handle_proxy.impl->name = [&]()
     {
-        auto parent_name = obj_proxy.impl->get_name();
+        const auto& parent_name = obj_proxy.impl->name;
         if(parent_name.empty())
         {
             return field_name;
         }
         return fmt::format("{}/{}", parent_name, field_name);
-    };
-    handle_proxy.impl->name = handle_proxy.impl->get_name();
+    }();
     
     handle_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
     {
@@ -533,19 +533,19 @@ template<typename T, typename Invoker>
 auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mutable_field, rtti::context& ctx) -> meta_any_proxy
 {
     meta_any_proxy asset_proxy;
+    asset_proxy.impl->parent = obj_proxy.impl;
     auto field_name = mutable_field.get_name();
     
     asset_proxy.impl->type_name = mutable_field.get_type().get_fullname();
-    asset_proxy.impl->get_name = [obj_proxy, field_name]()
+    asset_proxy.impl->name = [&]()
     {
-        auto parent_name = obj_proxy.impl->get_name();
+        const auto& parent_name = obj_proxy.impl->name;
         if(parent_name.empty())
         {
             return field_name;
         }
         return fmt::format("{}/{}", parent_name, field_name);
-    };
-    asset_proxy.impl->name = asset_proxy.impl->get_name();
+    }();
     asset_proxy.impl->getter = [obj_proxy, field_name, &ctx](entt::meta_any& result) mutable
     {
         entt::meta_any obj_var;
@@ -660,14 +660,11 @@ struct mono_inspector
 
         // Create a proxy that can get/set the value directly from/to the mono_object
         meta_any_proxy value_proxy;
+        value_proxy.impl->parent = obj_proxy.impl;
         value_proxy.impl->type_name = type.get_fullname();
-        value_proxy.impl->get_name = [parent_proxy = obj_proxy]()
-        {
-            return parent_proxy.impl->get_name();
-        };
-        value_proxy.impl->name = value_proxy.impl->get_name();
+        value_proxy.impl->name = obj_proxy.impl->name;
         
-        value_proxy.impl->getter = [parent_proxy = obj_proxy](entt::meta_any& result) mutable
+        value_proxy.impl->getter = [parent_proxy = obj_proxy](entt::meta_any& result) mutable -> bool
         {
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
@@ -1297,13 +1294,10 @@ struct mono_inspector<entt::handle>
         
         // Create a proxy that can get/set the handle value directly from/to the mono_object
         meta_any_proxy handle_proxy;
+        handle_proxy.impl->parent = obj_proxy.impl;
         handle_proxy.impl->type_name = obj.get_type().get_fullname();
-        handle_proxy.impl->get_name = [obj_proxy]()
-        {
-            return obj_proxy.impl->get_name();
-        };
-        handle_proxy.impl->name = handle_proxy.impl->get_name();
-        handle_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
+        handle_proxy.impl->name = obj_proxy.impl->name;
+        handle_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable -> bool
         {
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
@@ -1457,13 +1451,10 @@ struct mono_inspector<asset_handle<T>>
         
         // Create a proxy that can get/set the asset handle value directly from/to the mono_object
         meta_any_proxy asset_proxy;
+        asset_proxy.impl->parent = obj_proxy.impl;
         asset_proxy.impl->type_name = obj.get_type().get_fullname();
-        asset_proxy.impl->get_name = [obj_proxy]()
-        {
-            return obj_proxy.impl->get_name();
-        };
-        asset_proxy.impl->name = asset_proxy.impl->get_name();
-        asset_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable
+        asset_proxy.impl->name = obj_proxy.impl->name;
+        asset_proxy.impl->getter = [obj_proxy, &ctx](entt::meta_any& result) mutable -> bool
         {
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
@@ -1649,18 +1640,18 @@ struct mono_inspector_collection
         
         
         meta_any_proxy collection_proxy;
+        collection_proxy.impl->parent = obj_proxy.impl;
         collection_proxy.impl->type_name = collection_type.get_fullname();
-        collection_proxy.impl->get_name = [obj_proxy, mutable_field]()
+        collection_proxy.impl->name = [&]()
         {
-            auto parent_name = obj_proxy.impl->get_name();
+            const auto& parent_name = obj_proxy.impl->name;
             auto field_name = mutable_field.get_name();
             if(parent_name.empty())
             {
                 return field_name;
             }
             return fmt::format("{}/{}", parent_name, field_name);
-        };
-        collection_proxy.impl->name = collection_proxy.impl->get_name();
+        }();
         collection_proxy.impl->getter = [obj_proxy, mutable_field, is_array, is_list](entt::meta_any& result) mutable
         {
             entt::meta_any obj_var;
@@ -1679,12 +1670,7 @@ struct mono_inspector_collection
                 {
                     auto array = mono::mono_array<mono::mono_object>(collection_obj);
                     auto array_vec = array.to_vector();
-                    std::vector<mono::mono_object_pinned_ptr> pinned_vec;
-                    pinned_vec.reserve(array_vec.size());
-                    for(const auto& elem : array_vec)
-                    {
-                        pinned_vec.push_back(mono::make_object_pinned(elem));
-                    }
+                    auto pinned_vec = mono::pin_vector_elements(array_vec);
                     result = pinned_vec;
                     return true;
                 }
@@ -1692,12 +1678,7 @@ struct mono_inspector_collection
                 {
                     auto list = mono::mono_list<mono::mono_object>(collection_obj);
                     auto list_vec = list.to_vector();
-                    std::vector<mono::mono_object_pinned_ptr> pinned_vec;
-                    pinned_vec.reserve(list_vec.size());
-                    for(const auto& elem : list_vec)
-                    {
-                        pinned_vec.push_back(mono::make_object_pinned(elem));
-                    }
+                    auto pinned_vec = mono::pin_vector_elements(list_vec);
                     result = pinned_vec;
                     return true;
                 }
@@ -1801,29 +1782,17 @@ struct mono_inspector_collection
                 mono::mono_array<mono::mono_object> array(val);
                 push_mono_type(array.get_element_type());
                 auto array_vec = array.to_vector();
-                std::vector<mono::mono_object_pinned_ptr> pinned_vec;
-                pinned_vec.reserve(array_vec.size());
-                for(const auto& elem : array_vec)
-                {
-                    pinned_vec.push_back(mono::make_object_pinned(elem));
-                }
+                auto pinned_vec = mono::pin_vector_elements(array_vec);
                 entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
-
                 pop_mono_type();
-
             }
             else if (is_list)
             {
                 mono::mono_list<mono::mono_object> list(val);
                 push_mono_type(list.get_element_type());
                 auto list_vec = list.to_vector();
-                std::vector<mono::mono_object_pinned_ptr> pinned_vec;
-                pinned_vec.reserve(list_vec.size());
-                for(const auto& elem : list_vec)
-                {
-                    pinned_vec.push_back(mono::make_object_pinned(elem));
-                }
+                auto pinned_vec = mono::pin_vector_elements(list_vec);
                 entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
                 pop_mono_type();
@@ -1878,13 +1847,10 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
 
     meta_any_proxy obj_proxy;
+    obj_proxy.impl->parent = var_proxy.impl;
     obj_proxy.impl->type_name = entt::get_pretty_name(var.type());
-    obj_proxy.impl->get_name = [parent_proxy = var_proxy]()
-    {
-        return parent_proxy.impl->get_name();
-    };
-    obj_proxy.impl->name = obj_proxy.impl->get_name();
-    obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
+    obj_proxy.impl->name = var_proxy.impl->name;
+    obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result) -> bool
     {
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
@@ -1937,7 +1903,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         entt::meta_any unknown_var = entt::forward_as_meta(unknown_text);
         auto unknown_var_proxy = make_proxy(unknown_var);
         {
-            property_layout layout(unknown_var_proxy.impl->get_name());
+            property_layout layout(unknown_var_proxy.impl->name);
             result |= inspect_var(ctx, unknown_var, unknown_var_proxy, field_info);
         }
         return result;
@@ -2492,13 +2458,10 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
                                            const entt::meta_custom& custom) -> inspect_result
 {
     meta_any_proxy obj_proxy;
+    obj_proxy.impl->parent = var_proxy.impl;
     obj_proxy.impl->type_name = entt::get_pretty_name(var.type());
-    obj_proxy.impl->get_name = [parent_proxy = var_proxy]()
-    {
-        return parent_proxy.impl->get_name();
-    };
-    obj_proxy.impl->name = obj_proxy.impl->get_name();
-    obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
+    obj_proxy.impl->name = var_proxy.impl->name;
+    obj_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result) -> bool
     {
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)

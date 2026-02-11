@@ -86,17 +86,17 @@ auto inspector_physics_compound_shape::inspect(rtti::context& ctx,
     {
         using shape_type = std::decay_t<decltype(shape_ref)>;
         meta_any_proxy shape_proxy;
+        shape_proxy.impl->parent = var_proxy.impl;
         shape_proxy.impl->type_name = entt::get_pretty_name(entt::resolve<shape_type>());
-        shape_proxy.impl->get_name = [ prop_name, prop_pretty_name, parent_proxy = var_proxy]()
+        shape_proxy.impl->name = [&]()
         {
-            auto name = parent_proxy.impl->get_name();
+            const auto& name = var_proxy.impl->name;
             if(name.empty())
             {
                 return prop_pretty_name;
             }
             return fmt::format("{}/{}", name, prop_pretty_name);
-        };
-        shape_proxy.impl->name = shape_proxy.impl->get_name();
+        }();
         shape_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
         {
             entt::meta_any parent_var;

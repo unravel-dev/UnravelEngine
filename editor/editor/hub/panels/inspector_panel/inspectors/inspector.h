@@ -211,9 +211,43 @@ struct meta_any_proxy
     */
     struct meta_any_proxy_impl
     {
+        
+        /// Points to the root proxy's impl in a proxy chain.
+        /// Allows detaching the root from any proxy in the chain
+        /// (e.g., from the leaf proxy stored in an action).
+        std::shared_ptr<meta_any_proxy_impl> parent;
+
         std::string type_name;
 
         std::string name;
+
+
+        auto get(entt::meta_any& result) -> bool
+        {
+            return getter(result);
+        }
+
+        auto set(meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) -> bool
+        {
+            return setter(proxy, value, execution_count);
+        }
+
+        void detach()
+        {
+            if(resolver)
+            {
+                getter = resolver;
+            }
+
+            if(parent)
+            {
+                parent->detach();
+            }
+        }
+
+
+        std::function<bool(entt::meta_any&)> resolver;
+
         /// Function to retrieve the current value by evaluating the property path
         /// Returns false if any step in the path is invalid (safe failure)
         std::function<bool(entt::meta_any&)> getter;
@@ -222,13 +256,19 @@ struct meta_any_proxy
         /// execution_count tracks undo/redo cycles to avoid duplicate recordings
         std::function<bool(meta_any_proxy& proxy, const entt::meta_any&, uint64_t execution_count)> setter;
 
-        /// Function to get the property path as a string for debugging and error reporting
-        std::function<std::string()> get_name;
     };
 
     /// Shared implementation allows copying proxies without duplicating the path logic
     /// Multiple proxies can safely reference the same property access method
     std::shared_ptr<meta_any_proxy_impl> impl = std::make_shared<meta_any_proxy_impl>();
+
+
+    /// Detach the root proxy, switching from reference-based to resolver-based access.
+    /// Safe to call multiple times; no-op if no resolver is set.
+    void detach()
+    {
+        impl->detach();
+    }
 };
 
 /**

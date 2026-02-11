@@ -805,7 +805,7 @@ void editing_manager::do_action(const std::string& name, const std::function<voi
 
 void editing_manager::do_action(const std::string& name, std::shared_ptr<editing_action_t> action)
 {
-    return add_action(name, action, true);
+    add_action(name, action, true);
 }
 
 void editing_manager::queue_action(const std::string& name, const std::function<void()>& action)
@@ -820,7 +820,7 @@ void editing_manager::queue_action(const std::string& name, const std::function<
 
 void editing_manager::queue_action(const std::string& name, std::shared_ptr<editing_action_t> action)
 {
-    return add_action(name, action, false);
+    add_action(name, action, false);
 }
 
 
@@ -848,6 +848,11 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
     else
     {
         action->undoable = undo_stack_enabled.top();
+    }
+
+    if(!immediate)
+    {
+        action->detach();
     }
     
     // Queue the action for execution (don't execute immediately)

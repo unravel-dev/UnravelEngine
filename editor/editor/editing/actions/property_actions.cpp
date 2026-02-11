@@ -9,9 +9,9 @@ property_action_t::property_action_t(meta_any_proxy inst, const entt::meta_any& 
     : instance(inst), old_value(old_val), new_value(new_val), custom(custom), on_success(on_success)
 {
     
-    if(inst.impl->get_name)
+    if(!inst.impl->name.empty())
     {
-        name = inst.impl->get_name();
+        name = inst.impl->name;
     }
     else
     {
@@ -28,6 +28,12 @@ void property_action_t::do_action()
             on_success();
         }
     }
+    // After first execution, switch to resolver-based access.
+    // The original references will go out of scope after this frame.
+    if(execution_count <= 1)
+    {
+        detach();
+    }
 }
 
 void property_action_t::undo_action()
@@ -39,6 +45,11 @@ void property_action_t::undo_action()
             on_success();
         }
     }
+}
+
+void property_action_t::detach()
+{
+    instance.detach();
 }
 
 auto property_action_t::is_mergeable(const editing_action_t& previous) const -> bool

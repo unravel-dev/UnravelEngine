@@ -305,25 +305,26 @@ void inspector::after_inspect(const entt::meta_data& prop)
 auto make_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
 {
     meta_any_proxy proxy;
+    proxy.impl->parent = nullptr;
     proxy.impl->type_name = entt::get_pretty_name(var.type());
-    proxy.impl->get_name = [name]()
-    {
-        return name;
-    };
     proxy.impl->name = name;
+    proxy.impl->resolver = [var](entt::meta_any& result) mutable
+    {
+        result = var;
+        return true;
+    };
     proxy.impl->getter = [var = var.as_ref()](entt::meta_any& result) mutable
     {
         result = var.as_ref();
         return true;
     };
-    proxy.impl->setter = [var = var.as_ref()](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    proxy.impl->setter = [](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
-        // entt::meta_any var;
-        // if(proxy.impl->getter(var) && var)
-        // {
-        //     return var.assign(value);
-        // }
-        var.assign(value);
+        entt::meta_any var;
+        if(proxy.impl->getter(var) && var)
+        {
+            return var.assign(value);
+        }
         return false;
     };
     return proxy;
@@ -332,17 +333,17 @@ auto make_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
 auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy
 {
     meta_any_proxy prop_proxy;
+    prop_proxy.impl->parent = var_proxy.impl;
     prop_proxy.impl->type_name = entt::get_pretty_name(prop.type());
-    prop_proxy.impl->get_name = [var_proxy, prop]()
+    prop_proxy.impl->name = [&]()
     {
-        auto name = var_proxy.impl->get_name();
+        const auto& name = var_proxy.impl->name;
         if(name.empty())
         {
             return entt::get_pretty_name(prop);
         }
         return fmt::format("{}/{}", name, entt::get_pretty_name(prop));
-    };
-    prop_proxy.impl->name = prop_proxy.impl->get_name();
+    }();
     prop_proxy.impl->getter = [parent_proxy = var_proxy, prop](entt::meta_any& result)
     {
         entt::meta_any var;
