@@ -1304,8 +1304,8 @@ void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _h
 
 auto get_renderer_filename_extension(renderer_type _type) -> const std::string&
 {
-    static const std::map<renderer_type, std::string> types = {{renderer_type::Direct3D11, ".dx11"},
-                                                               {renderer_type::Direct3D12, ".dx12"},
+    static const std::map<renderer_type, std::string> types = {{renderer_type::Direct3D11, ".dxbc"},
+                                                               {renderer_type::Direct3D12, ".dxbc"},
                                                                {renderer_type::Gnm, ".pssl"},
                                                                {renderer_type::Metal, ".metal"},
                                                                {renderer_type::Nvn, ".nvn"},
@@ -1330,16 +1330,16 @@ auto get_current_renderer_filename_extension() -> const std::string&
     return get_renderer_filename_extension(bgfx::getRendererType());
 }
 
-auto get_renderer_platform_supported_filename_extensions() ->const std::vector<std::string>&
+auto get_renderer_platform_supported_filename_extensions() -> const std::set<std::string>&
 {
 #if BX_PLATFORM_WINDOWS
-    static const std::vector<std::string> supported = {get_renderer_filename_extension(renderer_type::Direct3D11),
+    static const std::set<std::string> supported = {get_renderer_filename_extension(renderer_type::Direct3D11),
                                                        get_renderer_filename_extension(renderer_type::Direct3D12),
                                                        get_renderer_filename_extension(renderer_type::OpenGL),
                                                        get_renderer_filename_extension(renderer_type::Vulkan)};
     return supported;
 #else
-    static const std::vector<std::string> supported = {get_current_renderer_filename_extension()};
+    static const std::set<std::string> supported = {get_current_renderer_filename_extension()};
     return supported;
 #endif
 }

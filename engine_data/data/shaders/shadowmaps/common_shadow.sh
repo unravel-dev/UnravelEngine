@@ -346,7 +346,7 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     vec2 searchRadiusUV = vec2_splat(searchRadiusTexels) * _texelSize * _cascadeScale;
 
     // Penumbra scale. Amplifies depth ratio into UV (same convention as before).
-	vec2 penumbraScale = _pcssParams.zw * pow(_cascadeScale, 0.8) * 4.0;
+	vec2 penumbraScale = _pcssParams.zw * pow(_cascadeScale, 0.8) * 2.0;
 	
 
     // Maximum filter radius in texels; converted to UV via _texelSize (like PCF).

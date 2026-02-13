@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <set>
 
 namespace gfx
 {
@@ -666,7 +667,7 @@ void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _h
 
 const std::string& get_renderer_filename_extension(renderer_type _type);
 const std::string& get_current_renderer_filename_extension();
-const std::vector<std::string>& get_renderer_platform_supported_filename_extensions();
+const std::set<std::string>& get_renderer_platform_supported_filename_extensions();
 renderer_type get_renderer_based_on_filename_extension(const std::string& _type);
 
 bool is_supported(uint64_t flag);

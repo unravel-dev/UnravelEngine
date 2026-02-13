@@ -129,7 +129,12 @@ auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noex
     if(!fs::is_directory(dir, ec) || ec)
         return false;
 
-    out = dir / ("." + hpp::to_string(generate_uuid()) + ".temp");
+    while(true)
+    {
+        out = dir / ("." + hpp::to_string(generate_uuid()) + ".temp");
+        if(!fs::exists(out, ec) || ec)
+            break;
+    }
     // while(true)
     // {
     //     out = dir / ("." + generate_random_string(16) + ".temp");

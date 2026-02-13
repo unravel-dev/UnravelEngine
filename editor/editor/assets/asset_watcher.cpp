@@ -574,13 +574,17 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
         }
     };
 
+    const auto& platform_supported = gfx::get_renderer_platform_supported_filename_extensions();
+    std::vector<std::string> supported_extensions;
+    supported_extensions.reserve(platform_supported.size());
+    for(const auto& extension : platform_supported)
+    {
+        supported_extensions.push_back(".asset" + extension);
+    }
     for(const auto& type : ex::get_suported_formats<gfx::shader>())
     {
         syncer.set_mapping(type + ".meta",
-                           {".asset.dx11",
-                            ".asset.dx12",
-                            ".asset.gl",
-                            ".asset.spirv"},
+                           supported_extensions,
                            on_modified,
                            on_modified,
                            on_removed,

@@ -597,14 +597,23 @@ auto write_manifest_file(const fs::path& input_path, const fs::path& output_path
     manifest.compute_source_sha(input_path);
     auto manifest_path = get_manifest_path(output_path);
 
-    fs::error_code err;
-    bool success = true;
-    asset_writer::atomic_write_file(manifest_path, [&](const fs::path& temp_manifest_path) 
-    {
-        success = save_manifest(temp_manifest_path, manifest);
-    }, err);
+    bool ok = false;
 
-    return !err && success;
+    int attempts = 0;
+    while(!ok && attempts < 3)
+    {
+        fs::error_code err;
+        bool success = true;
+        asset_writer::atomic_write_file(manifest_path, [&](const fs::path& temp_manifest_path) 
+        {
+            success = save_manifest(temp_manifest_path, manifest);
+        }, err);
+        ok = !err && success;
+        attempts++;
+    }
+    
+
+    return ok;
 }
 
 auto write_minified_file(const fs::path& input_path, const fs::path& output_path) -> bool
