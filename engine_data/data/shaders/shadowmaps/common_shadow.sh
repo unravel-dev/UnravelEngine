@@ -167,20 +167,20 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
     return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
 }
 
-float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation)
+float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation, float _cascadeScale)
 {
-    vec2 offset = filterRadius * _pcfParams.zw * _texelSize * _shadowCoord.w;
+    vec2 offset = filterRadius * _pcfParams.zw * _texelSize * _shadowCoord.w * _cascadeScale;
 
     return PCFLodOffset(_sampler, lod, offset, _shadowCoord, _bias, _texelSize, _diskRotation);
 }
 
-float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 fragCoord)
+float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale)
 {
     // Per-pixel Poisson disk rotation from shadow map texel coordinates
     vec2 noiseCoord = fragCoord;//(_shadowCoord.xy / _shadowCoord.w) * (1.0 / _texelSize.x);
     float angle = interleavedGradientNoise(noiseCoord) * 6.283185;
     vec2 diskRotation = vec2(sin(angle), cos(angle));
-    return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _pcfParams, _texelSize, diskRotation);
+    return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _pcfParams, _texelSize, diskRotation, _cascadeScale);
 }
 
 float VSM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultiplier, float _minVariance)
@@ -335,22 +335,22 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
 
 
 
-float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams, vec2 _texelSize, vec2 fragCoord)
+float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale)
 {
     // -----------------------------------------------------------------------
     // PCSS Parameters
     // -----------------------------------------------------------------------
 
-    // Blocker search radius in UV space (~10 texels on 1024 map).
-    float searchRadiusUV = 0.01;
+    // Blocker search radius in texels, converted to UV via _texelSize (like PCF).
+    float searchRadiusTexels = 10.0;
+    vec2 searchRadiusUV = vec2_splat(searchRadiusTexels) * _texelSize * _cascadeScale;
 
-    // Penumbra scale. Amplifies the squared depth ratio into a UV-space
-    // filter radius. Higher = softer shadows at distance.
-    float penumbraScaleX = _pcssParams.z;
-    float penumbraScaleY = _pcssParams.w;
+    // Penumbra scale. Amplifies depth ratio into UV (same convention as before).
+	vec2 penumbraScale = _pcssParams.zw * pow(_cascadeScale, 0.8) * 4.0;
+	
 
-    // Maximum filter radius in UV space (~50 texels on 1024 map).
-    float maxFilterRadius = 0.05;
+    // Maximum filter radius in texels; converted to UV via _texelSize (like PCF).
+    float maxFilterRadiusUV = 50.0 * _texelSize.x * _cascadeScale;
 
     // -----------------------------------------------------------------------
     // Per-pixel Poisson disk rotation (Interleaved Gradient Noise)
@@ -366,7 +366,7 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     // -----------------------------------------------------------------------
     // Step 1: Blocker Search
     // -----------------------------------------------------------------------
-    vec3 blockerResult = findBlocker(_sampler, _shadowCoord, vec2(searchRadiusUV, searchRadiusUV), _bias, diskRotation);
+    vec3 blockerResult = findBlocker(_sampler, _shadowCoord, searchRadiusUV, _bias, diskRotation);
     float avgBlockerDepth = blockerResult.x;
     float blockerRatio = blockerResult.z;
 
@@ -380,21 +380,22 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     //
     //   penumbraWidth = lightSize * (d_receiver - d_blocker) / d_blocker
     //
-    // The depth gap at contact equals the object's thickness along the
-    // light direction. For curved objects (spheres, characters), the gap
-    // varies across the shadow giving the contact-hardening gradient.
-    // For flat objects (cubes), the gap is constant → uniform penumbra.
+    // penumbraScale produces UV; clamp to texel-based max for resolution independence.
+    // Scale penumbra by _cascadeScale so far cascades use proportionally smaller
+    // UV offsets (each texel covers more world space), keeping softness consistent.
     // -----------------------------------------------------------------------
-    float depthParam =  max(0.0, receiverDepth - avgBlockerDepth) / avgBlockerDepth;
-    float penumbraWidth = penumbraScaleX * depthParam;
-    float penumbraHeight = penumbraScaleY * depthParam;
-    float filterRadiusU = clamp(penumbraWidth, 0.0, maxFilterRadius);
-    float filterRadiusV = clamp(penumbraHeight, 0.0, maxFilterRadius);
+    float depthParam =  max(0.0, receiverDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.001);
+    vec2 penumbraUV = penumbraScale * depthParam;
+    float filterRadiusU = clamp(penumbraUV.x, 0.0, maxFilterRadiusUV);
+    float filterRadiusV = clamp(penumbraUV.y, 0.0, maxFilterRadiusUV);
+
+    // Offset in UV, scaled by _shadowCoord.w for consistency with PCF
+    vec2 offset = vec2(filterRadiusU, filterRadiusV) * _shadowCoord.w;
 
     // -----------------------------------------------------------------------
     // Step 3: Percentage-Closer Filtering
     // -----------------------------------------------------------------------
-    float visibility = PCFLodOffset(_sampler, 0.0, vec2(filterRadiusU, filterRadiusV), _shadowCoord, _bias, _texelSize, diskRotation);
+    float visibility = PCFLodOffset(_sampler, 0.0, offset, _shadowCoord, _bias, _texelSize, diskRotation);
 
     // -----------------------------------------------------------------------
     // Step 4: Edge fade based on blocker ratio

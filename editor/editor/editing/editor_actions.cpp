@@ -1442,7 +1442,8 @@ void editor_actions::recompile_shaders(const std::string& group)
     fs::watcher::pause();
     for(auto& asset : shaders)
     {
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+        fs::error_code ec;
+        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
         fs::watcher::touch(path, false);
     }
     fs::watcher::resume();
@@ -1456,7 +1457,8 @@ void editor_actions::recompile_textures(const std::string& group)
     fs::watcher::pause();
     for(auto& asset : textures)
     {
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+        fs::error_code ec;
+        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
         fs::watcher::touch(path, false);
     }
     fs::watcher::resume();
@@ -1471,7 +1473,8 @@ void editor_actions::recompile_ui(const std::string& group)
         auto assets = am.get_assets<ui_tree>(group);
         for(auto& asset : assets)
         {
-            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+            fs::error_code ec;
+            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
             fs::watcher::touch(path, false);
         }
     }
@@ -1479,7 +1482,8 @@ void editor_actions::recompile_ui(const std::string& group)
         auto assets = am.get_assets<style_sheet>(group);
         for(auto& asset : assets)
         {
-            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+            fs::error_code ec;
+            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
             fs::watcher::touch(path, false);
         }
     }
@@ -1494,7 +1498,8 @@ void editor_actions::recompile_scripts(const std::string& group)
     fs::watcher::pause();
     for(auto& asset : scripts)
     {
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string());
+        fs::error_code ec;
+        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
         fs::watcher::touch(path, false);
     }
     fs::watcher::resume();

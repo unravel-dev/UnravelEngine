@@ -561,7 +561,7 @@ REFLECT(light)
             entt::attribute{"name", "normal_bias"},
             entt::attribute{"pretty_name", "Normal Bias"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 0.25f},
+            entt::attribute{"max", 0.5f},
             entt::attribute{"step", 0.00001f},
             entt::attribute{"tooltip", "Shadowmap normal bias offset"},
         })

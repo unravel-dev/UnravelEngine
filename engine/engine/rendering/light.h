@@ -230,9 +230,9 @@ struct light
         /// Far plane distance for shadow mapping.
         float far_plane{550.0f};
         /// Bias for shadow mapping.
-        float bias{0.00110f};
+        float bias{0.00100f};
         /// Normal bias for shadow mapping.
-        float normal_bias{0.015f};
+        float normal_bias{0.1300f};
 
         /**
          * @brief Struct representing implementation parameters for hard shadow mapping.
