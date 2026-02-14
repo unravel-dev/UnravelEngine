@@ -10,14 +10,13 @@ namespace unravel
 auto prefilter_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-  
-    
-    // Load compute shader version
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/prefilter/cs_prefilter.sc");
     cs_.program = std::make_unique<gpu_program>(cs);
     cs_.cache_uniforms();
-    
-    return cs_.program->is_valid();
+    auto cs_mip = am.get_asset<gfx::shader>("engine:/data/shaders/prefilter/cs_mip_downsample.sc");
+    mip_downsample_.program = std::make_unique<gpu_program>(cs_mip);
+    mip_downsample_.cache_uniforms();
+    return cs_.program->is_valid() && mip_downsample_.program->is_valid();
 }
 
 auto prefilter_pass::run(const run_params& params) -> gfx::texture::ptr
@@ -30,6 +29,15 @@ auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
     // Prepare output cubemap
     const auto& ti = params.output_cube->info;
     uint8_t max_mips = ti.numMips;
+
+    if(bgfx::getRendererType() == bgfx::RendererType::Direct3D12)
+    {
+        APP_SCOPE_PERF("Rendering/Env Mip Gen Pass");
+        for(uint8_t face = 0; face < 6; ++face)
+        {
+            generate_mips(params.input_faces[face]);
+        }
+    }
 
     // Simple copy if disabled
     {
@@ -54,7 +62,7 @@ auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
 
         if(!params.apply_prefilter)
         {
-            return params.output_cube;
+            return output_cube;
         }
     }
 
@@ -110,6 +118,34 @@ auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
     }
 
     return params.output_cube_prefiltered;
+}
+
+void prefilter_pass::generate_mips(const gfx::texture::ptr& texture)
+{
+    uint8_t num_mips = texture->info.numMips;
+    if(num_mips <= 1)
+    {
+        return;
+    }
+    for(uint8_t mip = 1; mip < num_mips; ++mip)
+    {
+        uint16_t w = texture->info.width >> mip;
+        uint16_t h = texture->info.height >> mip;
+        if(w == 0 || h == 0)
+        {
+            break;
+        }
+        gfx::render_pass pass("mip_downsample_pass");
+        mip_downsample_.program->begin();
+        gfx::set_image(0, texture->native_handle(), mip - 1, bgfx::Access::Read);
+        gfx::set_image(1, texture->native_handle(), mip, bgfx::Access::Write);
+        float params_data[4] = {float(w), float(h), 0.0f, 0.0f};
+        gfx::set_uniform(mip_downsample_.u_params, params_data);
+        uint32_t gx = (w + 7) / 8;
+        uint32_t gy = (h + 7) / 8;
+        bgfx::dispatch(pass.id, mip_downsample_.program->native_handle(), gx, gy, 1);
+        mip_downsample_.program->end();
+    }
 }
 
 } // namespace unravel

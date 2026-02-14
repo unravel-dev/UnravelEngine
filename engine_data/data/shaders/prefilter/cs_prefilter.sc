@@ -14,7 +14,7 @@
 SAMPLERCUBE(s_env, 0);
 
 // Output prefiltered cubemap as 2D array (6 faces)
-IMAGE2D_ARRAY_WO(i_output, rgba16f, 1);
+IMAGE2D_ARRAY_WO(i_output, rgba8, 1);
 
 // Uniforms: x=mipIdx, y=faceIdx, z=cubeSize, w=numMips
 uniform vec4 u_data;

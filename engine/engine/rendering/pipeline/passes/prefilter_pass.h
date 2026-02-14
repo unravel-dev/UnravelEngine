@@ -31,6 +31,7 @@ public:
     auto run_compute(const run_params& params) -> gfx::texture::ptr;
 
 private:
+    void generate_mips(const gfx::texture::ptr& texture);
 
     struct cs_prog : uniforms_cache
     {
@@ -44,6 +45,17 @@ private:
         gfx::program::uniform_ptr u_data; ///< vec4: x=mipIdx, y=faceIdx, z=cubeSize, w=numMips
         std::unique_ptr<gpu_program> program;
     } cs_;
+
+    struct mip_downsample_prog : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
+        }
+
+        gfx::program::uniform_ptr u_params;  ///< vec4: x=width, y=height
+        std::unique_ptr<gpu_program> program;
+    } mip_downsample_;
 
     gfx::texture::ptr output_cube_; ///< Cached output cubemap
 };

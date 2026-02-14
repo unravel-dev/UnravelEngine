@@ -117,7 +117,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
                                                  true,
                                                  1,
                                                  gfx::texture_format::RGBA8,
-                                                 BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT);
+                                                 BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
         }
 
         gfx::fbo_attachment att;
