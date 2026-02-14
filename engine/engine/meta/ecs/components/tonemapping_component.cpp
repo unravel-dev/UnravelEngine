@@ -34,25 +34,50 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"name", "reinhard_lum"},
             entt::attribute{"pretty_name", "Reinhard Lum"},
         })
-        .data<tonemapping_method::duiker>("duiker"_hs)
+        .data<tonemapping_method::hable>("hable"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "duiker"},
-            entt::attribute{"pretty_name", "Dukier"},
-        })
-        .data<tonemapping_method::aces>("aces"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "aces"},
-            entt::attribute{"pretty_name", "Aces"},
-        })
-        .data<tonemapping_method::aces_lum>("aces_lum"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "aces_lum"},
-            entt::attribute{"pretty_name", "Aces Lum"},
+            entt::attribute{"name", "hable"},
+            entt::attribute{"pretty_name", "Hable"},
         })
         .data<tonemapping_method::filmic>("filmic"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "filmic"},
             entt::attribute{"pretty_name", "Filmic"},
+        })
+        .data<tonemapping_method::aces>("aces"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "aces"},
+            entt::attribute{"pretty_name", "ACES"},
+        })
+        .data<tonemapping_method::aces_lum>("aces_lum"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "aces_lum"},
+            entt::attribute{"pretty_name", "ACES Lum"},
+        })
+        .data<tonemapping_method::reinhard2>("reinhard2"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reinhard2"},
+            entt::attribute{"pretty_name", "Reinhard2"},
+        })
+        .data<tonemapping_method::unreal3>("unreal3"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "unreal3"},
+            entt::attribute{"pretty_name", "Unreal3"},
+        })
+        .data<tonemapping_method::lottes>("lottes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lottes"},
+            entt::attribute{"pretty_name", "Lottes"},
+        })
+        .data<tonemapping_method::uchimura>("uchimura"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "uchimura"},
+            entt::attribute{"pretty_name", "Uchimura"},
+        })
+        .data<tonemapping_method::neutral>("neutral"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "neutral"},
+            entt::attribute{"pretty_name", "Neutral"},
         });
 
     // Register tonemapping_pass::settings class with entt

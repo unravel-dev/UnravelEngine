@@ -7,10 +7,14 @@
 #define TONEMAP_REINHARD 2
 #define TONEMAP_REINHARD_LUM 3
 #define TONEMAP_HABLE 4
-#define TONEMAP_DUIKER 5
+#define TONEMAP_FILMIC 5
 #define TONEMAP_ACES 6
 #define TONEMAP_ACES_LUM 7
-#define TONEMAP_FILMIC 8
+#define TONEMAP_REINHARD2 8
+#define TONEMAP_UNREAL3 9
+#define TONEMAP_LOTTES 10
+#define TONEMAP_UCHIMURA 11
+#define TONEMAP_NEUTRAL 12
 
 vec3 linear_to_srgb(vec3 color)
 {
@@ -45,7 +49,7 @@ float luminance(vec3 RGB)
     return 0.2126 * RGB.r + 0.7152 * RGB.g + 0.0722 * RGB.b;
 }
 
-// Reinhard, Hable, Duiken taken from:
+// Reinhard, Hable, Filmic taken from:
 // http://filmicworlds.com/blog/filmic-tonemapping-operators/
 
 // Exponential tone mapping
@@ -102,10 +106,10 @@ vec3 tonemap_hable(vec3 color)
     return hable_map(ExposureBias * color) / whiteScale;
 }
 
-// Mimics response curve of Kodak film
-// Haarm-Pieter Duiker
+// Filmic / Hejl-Burgess-Dawson
+// Mimics response curve of Kodak film, Haarm-Pieter Duiker
 // approximation by Hejl/Burgess-Dawson (pow 1/2.2 baked in)
-vec3 tonemap_duiker(vec3 color)
+vec3 tonemap_filmic(vec3 color)
 {
     vec3 x = max(color - 0.004, 0.0);
     vec3 result = (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
@@ -162,6 +166,76 @@ vec3 tonemap_aces_luminance(vec3 color)
     return saturate((x * (a * x + b)) / (x * (c * x + d ) + e));
 }
 
+// Reinhard Extended (with white point)
+// https://github.com/dmnsgn/glsl-tone-map
+vec3 tonemap_reinhard2(vec3 color)
+{
+    const float L_white = 4.0;
+    return (color * (1.0 + color / (L_white * L_white))) / (1.0 + color);
+}
+
+// Unreal 3, Documentation: "Color Grading"
+// Gamma 2.2 correction is baked in, do not apply linear_to_srgb
+vec3 tonemap_unreal3(vec3 color)
+{
+    return color / (color + 0.155) * 1.019;
+}
+
+// Lottes 2016, "Advanced Techniques and Optimization of HDR Color Pipelines"
+vec3 tonemap_lottes(vec3 color)
+{
+    vec3 a = vec3_splat(1.6);
+    vec3 d = vec3_splat(0.977);
+    vec3 hdrMax = vec3_splat(8.0);
+    vec3 midIn = vec3_splat(0.18);
+    vec3 midOut = vec3_splat(0.267);
+    vec3 b = (-pow(midIn, a) + pow(hdrMax, a) * midOut) / ((pow(hdrMax, a * d) - pow(midIn, a * d)) * midOut);
+    vec3 c = (pow(hdrMax, a * d) * pow(midIn, a) - pow(hdrMax, a) * pow(midIn, a * d) * midOut) / ((pow(hdrMax, a * d) - pow(midIn, a * d)) * midOut);
+    return pow(color, a) / (pow(color, a * d) * b + c);
+}
+
+
+// Uchimura 2017, "HDR theory and practice"
+vec3 tonemap_uchimura(vec3 x, float P, float a, float m, float l, float c, float b)
+{
+    float l0 = ((P - m) * l) / a;
+    float S0 = m + l0;
+    float S1 = m + a * l0;
+    float C2 = (a * P) / (P - S1);
+    float CP = -C2 / P;
+    vec3 w0 = vec3_splat(1.0) - smoothstep(0.0, m, x);
+    vec3 w2 = step(m + l0, x);
+    vec3 w1 = vec3_splat(1.0) - w0 - w2;
+    vec3 T = m * pow(x / m, vec3_splat(c)) + b;
+    vec3 S = P - (P - S1) * exp(CP * (x - S0));
+    vec3 L = m + a * (x - m);
+    return T * w0 + L * w1 + S * w2;
+}
+
+vec3 tonemap_uchimura(vec3 color)
+{
+    return tonemap_uchimura(color, 1.0, 1.0, 0.22, 0.4, 1.33, 0.0);
+}
+
+
+// Khronos PBR Neutral Tone Mapper
+vec3 tonemap_neutral(vec3 color)
+{
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    float x = min(min(color.r, color.g), color.b);
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+    float peak = max(max(color.r, color.g), color.b);
+    if(peak < startCompression)
+        return color;
+    const float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, vec3_splat(newPeak), g);
+}
+
 // ============================================================================
 // MAIN TONEMAPPING FUNCTIONS
 // ============================================================================
@@ -195,9 +269,9 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     {
         tonemapped_color = linear_to_srgb(tonemap_hable(color));
     }
-    else if(method == TONEMAP_DUIKER)
+    else if(method == TONEMAP_FILMIC)
     {
-        tonemapped_color = tonemap_duiker(color);
+        tonemapped_color = tonemap_filmic(color);
     }
     else if(method == TONEMAP_ACES)
     {
@@ -207,9 +281,25 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     {
         tonemapped_color = linear_to_srgb(tonemap_aces_luminance(color));
     }
-    else if(method == TONEMAP_FILMIC)
+    else if(method == TONEMAP_REINHARD2)
     {
-        tonemapped_color = toFilmic(color);
+        tonemapped_color = linear_to_srgb(tonemap_reinhard2(color));
+    }
+    else if(method == TONEMAP_UNREAL3)
+    {
+        tonemapped_color = saturate(tonemap_unreal3(color));
+    }
+    else if(method == TONEMAP_LOTTES)
+    {
+        tonemapped_color = linear_to_srgb(saturate(tonemap_lottes(color)));
+    }
+    else if(method == TONEMAP_UCHIMURA)
+    {
+        tonemapped_color = linear_to_srgb(saturate(tonemap_uchimura(color)));
+    }
+    else if(method == TONEMAP_NEUTRAL)
+    {
+        tonemapped_color = linear_to_srgb(saturate(tonemap_neutral(color)));
     }
     else
     {

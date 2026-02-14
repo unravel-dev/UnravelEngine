@@ -14,10 +14,14 @@ enum class tonemapping_method : uint8_t
     reinhard,
     reinhard_lum,
     hable,
-    duiker,
+    filmic,
     aces,
     aces_lum,
-    filmic
+    reinhard2,
+    unreal3,
+    lottes,
+    uchimura,
+    neutral
 };
 
 class tonemapping_pass
@@ -26,7 +30,7 @@ public:
     struct settings
     {
         float exposure = 1.0f;
-        tonemapping_method method = tonemapping_method::aces;
+        tonemapping_method method = tonemapping_method::aces_lum;
     };
 
     struct run_params
