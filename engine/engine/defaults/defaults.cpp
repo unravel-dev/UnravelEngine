@@ -11,6 +11,7 @@
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
+#include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
@@ -536,6 +537,7 @@ auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::s
 
     object.emplace<camera_component>();
     object.emplace<assao_component>();
+    // object.emplace<bloom_component>();
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();
     object.emplace<ssr_component>();

@@ -635,7 +635,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
 
 void draw_window_context_menu(rtti::context& ctx, imgui_panels* panels)
 {
-    if(!ImGui::BeginPopupContextWindowEx())
+    if(!ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight))
     {
         return;
     }

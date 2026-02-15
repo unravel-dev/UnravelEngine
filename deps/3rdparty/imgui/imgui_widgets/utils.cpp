@@ -1045,27 +1045,27 @@ void ActiveItemWrapMousePos(const ImVec2& wrap_rect_min, const ImVec2& wrap_rect
     }
 }
 
-bool BeginPopupContextWindowEx(const char* str_id, ImGuiPopupFlags popup_flags)
-{
-    ImGuiContext& g = *ImGui::GetCurrentContext();
-    ImGuiWindow* window = g.CurrentWindow;
-    if(!str_id)
-        str_id = "window_context";
-    ImGuiID id = window->GetID(str_id);
+// bool BeginPopupContextWindowEx(const char* str_id, ImGuiPopupFlags popup_flags)
+// {
+//     ImGuiContext& g = *ImGui::GetCurrentContext();
+//     ImGuiWindow* window = g.CurrentWindow;
+//     if(!str_id)
+//         str_id = "window_context";
+//     ImGuiID id = window->GetID(str_id);
 
-    auto pos = ImGui::GetWindowPos();
-    auto size = ImGui::GetWindowSize();
-    ImRect r(pos, pos + size);
+//     auto pos = ImGui::GetWindowPos();
+//     auto size = ImGui::GetWindowSize();
+//     ImRect r(pos, pos + size);
 
-    int mouse_button = (popup_flags & ImGuiPopupFlags_MouseButtonMask_);
-    if(r.Contains(ImGui::GetIO().MouseClickedPos[mouse_button]) && ImGui::IsMouseReleased(mouse_button) &&
-       ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup))
-        if(!(popup_flags & ImGuiPopupFlags_NoOpenOverItems) || !ImGui::IsAnyItemHovered())
-            ImGui::OpenPopupEx(id, popup_flags);
-    return ImGui::BeginPopupEx(id,
-                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
-                                   ImGuiWindowFlags_NoSavedSettings);
-}
+//     int mouse_button = (popup_flags & ImGuiPopupFlags_MouseButtonMask_);
+//     if(r.Contains(ImGui::GetIO().MouseClickedPos[mouse_button]) && ImGui::IsMouseReleased(mouse_button) &&
+//        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+//         if(!(popup_flags & ImGuiPopupFlags_NoOpenOverItems) || !ImGui::IsAnyItemHovered())
+//             ImGui::OpenPopupEx(id, popup_flags);
+//     return ImGui::BeginPopupEx(id,
+//                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+//                                    ImGuiWindowFlags_NoSavedSettings);
+// }
 
 void SetNextWindowViewportToCurrent()
 {

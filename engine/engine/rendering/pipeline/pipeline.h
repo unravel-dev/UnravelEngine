@@ -18,6 +18,7 @@
 #include "passes/hiz_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
+#include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
 
 
@@ -100,6 +101,7 @@ public:
         visibility_flags vflags = visibility_query::not_specified;
 
         std::function<void(assao_pass::run_params& params)> fill_assao_params;
+        std::function<void(bloom_pass::run_params& params)> fill_bloom_params;
         std::function<void(tonemapping_pass::run_params& params)> fill_hdr_params;
         std::function<void(fxaa_pass::run_params& params)> fill_fxaa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
@@ -189,6 +191,7 @@ protected:
     atmospheric_pass_perez atmospheric_pass_perez_{};
     atmospheric_pass_skybox atmospheric_pass_skybox_{};
     assao_pass assao_pass_{};
+    bloom_pass bloom_pass_{};
     fxaa_pass fxaa_pass_{};
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};

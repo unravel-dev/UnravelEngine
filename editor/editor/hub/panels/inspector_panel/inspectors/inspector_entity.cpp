@@ -118,6 +118,10 @@ auto get_component_icon() -> std::string
         return ICON_MDI_SCRIPT;
     }
     // Post-processing effects (using similar icons for consistency)
+    else if constexpr(std::is_same<T, bloom_component>::value)
+    {
+        return ICON_MDI_WHITE_BALANCE_SUNNY;
+    }
     else if constexpr(std::is_same<T, tonemapping_component>::value)
     {
         return ICON_MDI_BRIGHTNESS_5;
@@ -222,7 +226,7 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
     }
 
     bool is_popup_open = ImGui::IsPopupOpen(popup_str);
-    if(is_popup_open && ImGui::BeginPopupContextWindowEx(popup_str))
+    if(is_popup_open && ImGui::BeginPopupContextWindow(popup_str, ImGuiPopupFlags_MouseButtonRight))
     {
         bool removal_allowed = callbacks.can_remove();
         if(ImGui::MenuItem("Reset", nullptr, false, removal_allowed))

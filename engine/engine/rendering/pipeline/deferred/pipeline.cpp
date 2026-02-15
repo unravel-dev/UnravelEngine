@@ -578,6 +578,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         run_particle_pass(scn, camera, rview, target);
     }
 
+    target = run_bloom_pass(rview, target, params);
+
     target = run_tonemapping_pass(rview, target, output, params);
 
     run_fxaa_pass(rview, target, output, params);
@@ -1336,6 +1338,20 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
     rparams.fill_fxaa_params(params);
 
     return fxaa_pass_.run(rview, params);
+}
+
+auto deferred::run_bloom_pass(gfx::render_view& rview,
+                              const gfx::frame_buffer::ptr& input,
+                              const run_params& rparams) -> gfx::frame_buffer::ptr
+{
+    if(!rparams.fill_bloom_params || !rparams.fill_hdr_params)
+    {
+        return input;
+    }
+    bloom_pass::run_params params;
+    params.input = input;
+    rparams.fill_bloom_params(params);
+    return bloom_pass_.run(rview, params);
 }
 
 auto deferred::run_tonemapping_pass(gfx::render_view& rview,

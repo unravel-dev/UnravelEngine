@@ -948,7 +948,7 @@ void content_browser_panel::context_menu(rtti::context& ctx, bool use_context_it
     }
     else
     {
-        popup_opened = ImGui::BeginPopupContextWindowEx();
+        popup_opened = ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight);
     }
     
     if (popup_opened)

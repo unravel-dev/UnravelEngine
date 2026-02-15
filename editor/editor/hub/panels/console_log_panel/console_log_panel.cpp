@@ -277,7 +277,7 @@ void console_log_panel::draw()
     // does. Or split your data into fixed height items to allow random-seeking into your list.
 
     ImGui::BeginChild("ScrollingRegion", avail * ImVec2(1.0f, 0.8f), ImGuiChildFlags_ResizeY);
-    if(ImGui::BeginPopupContextWindowEx())
+    if(ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight))
     {
         if(ImGui::Selectable("Clear"))
             clear_log();

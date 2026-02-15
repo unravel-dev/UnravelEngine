@@ -10,6 +10,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 
 #include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
@@ -33,6 +34,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     atmospheric_pass_.init(ctx);
     atmospheric_pass_perez_.init(ctx);
     atmospheric_pass_skybox_.init(ctx);
+    bloom_pass_.init(ctx);
     fxaa_pass_.init(ctx);
     tonemapping_pass_.init(ctx);
     assao_pass_.init(ctx);
@@ -174,6 +176,16 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
     
+    if(auto bloom_comp = camera_ent.try_get<bloom_component>(); bloom_comp && bloom_comp->enabled)
+    {
+        params.fill_bloom_params = [camera_ent](bloom_pass::run_params& params)
+        {
+            if(auto bloom_comp = camera_ent.try_get<bloom_component>())
+            {
+                params.config = bloom_comp->settings;
+            }
+        };
+    }
     if(auto tonemapping_comp = camera_ent.try_get<tonemapping_component>(); tonemapping_comp && tonemapping_comp->enabled)
     {
         params.fill_hdr_params = [camera_ent](tonemapping_pass::run_params& params)

@@ -263,9 +263,6 @@ IMGUI_API void WrapMousePos();
 IMGUI_API void ActiveItemWrapMousePos();
 IMGUI_API void ActiveItemWrapMousePos(const ImVec2& wrap_rect_min, const ImVec2& wrap_rect_max);
 
-
-IMGUI_API bool BeginPopupContextWindowEx(const char* str_id = nullptr, ImGuiPopupFlags popup_flags = 1);
-
 struct IMGUI_API ImRange
 {
     float min{};
