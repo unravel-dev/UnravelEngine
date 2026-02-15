@@ -13,6 +13,7 @@
 #include "physics_component.hpp"
 #include "prefab_component.hpp"
 #include "reflection_probe_component.hpp"
+#include "volume_component.hpp"
 #include "test_component.hpp"
 #include "transform_component.hpp"
 #include "script_component.hpp"
@@ -42,6 +43,7 @@ using all_serializeable_components = std::tuple<
     bone_component,
     submesh_component,
     camera_component,
+    volume_component,
     assao_component,
     bloom_component,
     tonemapping_component,
@@ -71,6 +73,7 @@ using all_inspectable_components = std::tuple<
     bone_component,
     submesh_component,
     camera_component,
+    volume_component,
     assao_component,
     bloom_component,
     tonemapping_component,
@@ -92,6 +95,7 @@ using all_addable_components = std::tuple<
     model_component,
     animation_component,
     camera_component,
+    volume_component,
     assao_component,
     bloom_component,
     tonemapping_component,

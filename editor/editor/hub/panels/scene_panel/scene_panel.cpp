@@ -1548,6 +1548,7 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
         ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
         ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);
         ImGui::Checkbox("Reflection Probe Gizmos", &em.gizmos.show_reflection_probe);
+        ImGui::Checkbox("Volume Gizmos", &em.gizmos.show_volume);
         ImGui::Checkbox("Text Gizmos", &em.gizmos.show_text);
         ImGui::Checkbox("Particle Emitter Gizmos", &em.gizmos.show_particle_emitter);
         ImGui::Checkbox("Component Gizmos", &em.gizmos.show_component_gizmos);

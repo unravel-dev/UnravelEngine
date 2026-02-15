@@ -210,6 +210,24 @@ void create_camera_entity(rtti::context& ctx, imgui_panels* panels, entt::handle
     });
 }
 
+void create_volume_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Create Volume Entity",
+        [&ctx, panels, parent_entity]() mutable
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* active_scene = em.get_active_scene(ctx);
+        auto object = defaults::create_volume_entity(ctx, *active_scene, "Volume");
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
+        em.select(object);
+        start_editing_label(ctx, panels, object);
+    });
+}
+
 void create_audio_source_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
@@ -536,6 +554,11 @@ void draw_common_menu_items(rtti::context& ctx, imgui_panels* panels, entt::hand
     if(ImGui::MenuItem("Camera"))
     {
         create_camera_entity(ctx, panels, parent_entity);
+    }
+
+    if(ImGui::MenuItem("Volume"))
+    {
+        create_volume_entity(ctx, panels, parent_entity);
     }
 
     if(ImGui::MenuItem("Audio Source"))

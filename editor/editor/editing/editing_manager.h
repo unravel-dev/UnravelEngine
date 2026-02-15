@@ -71,6 +71,7 @@ struct editing_manager
         bool show_camera {true};
         bool show_light {true};
         bool show_reflection_probe {true};
+        bool show_volume {true};
         bool show_model {true};
         bool show_model_bounds {false};
         bool show_model_local_bounds {false};

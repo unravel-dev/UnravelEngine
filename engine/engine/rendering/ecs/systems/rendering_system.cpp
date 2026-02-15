@@ -85,7 +85,7 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
 
-    auto params = pipeline->create_run_params(camera_ent);
+    auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
 
     auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
 
@@ -119,7 +119,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
 
-    auto params = pipeline->create_run_params(camera_ent);
+    auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
 
     pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
  

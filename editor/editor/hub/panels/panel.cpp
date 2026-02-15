@@ -136,6 +136,12 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
     ImBox::RenderMessageBoxes();
     ImGui::PopStyleVar(1); // Don't forget to Pop()
     ImGui::PopStyleColor(1);
+
+    if(ImGui::IsKeyPressed(ImGuiKey_F11))
+    {
+        ImGuiToast toast(ImGuiToastType_Info, "Hello, world!");
+        ImGui::PushNotification(toast);
+    }
 }
 
 auto imgui_panels::get_deploy_panel() -> deploy_panel&

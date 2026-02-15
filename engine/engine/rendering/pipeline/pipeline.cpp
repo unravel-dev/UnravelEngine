@@ -14,6 +14,7 @@
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
+#include <engine/rendering/pipeline/volume_resolver.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
  
@@ -227,6 +228,48 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
 
+    return params;
+}
+
+auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const camera* cam) const -> rendering::pipeline::run_params
+{
+    auto params = create_run_params(camera_ent);
+    if(!scn || !cam)
+    {
+        return params;
+    }
+    auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
+    const bool has_any_volume = resolved.has_bloom || resolved.has_tonemapping || resolved.has_fxaa ||
+                                resolved.has_ssr || resolved.has_assao;
+    if(!has_any_volume)
+    {
+        return params;
+    }
+    params.volume_settings = resolved;
+    if(resolved.has_bloom)
+    {
+        bloom_pass::settings s = resolved.bloom;
+        params.fill_bloom_params = [s](bloom_pass::run_params& p) { p.config = s; };
+    }
+    if(resolved.has_tonemapping)
+    {
+        tonemapping_pass::settings s = resolved.tonemapping;
+        params.fill_hdr_params = [s](tonemapping_pass::run_params& p) { p.config = s; };
+    }
+    if(resolved.has_fxaa)
+    {
+        params.fill_fxaa_params = [](fxaa_pass::run_params&) {};
+    }
+    if(resolved.has_ssr)
+    {
+        ssr_pass::ssr_settings s = resolved.ssr;
+        params.fill_ssr_params = [s](ssr_pass::run_params& p) { p.settings = s; };
+    }
+    if(resolved.has_assao)
+    {
+        assao_pass::settings s = resolved.assao;
+        params.fill_assao_params = [s](assao_pass::run_params& p) { p.params = s; };
+    }
     return params;
 }
 

@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include "engine/rendering/camera.h"
+#include "engine/rendering/ecs/components/volume_component.h"
 #include "engine/rendering/reflection_probe.h"
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -148,6 +149,14 @@ struct defaults
      */
     static auto create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
+    /**
+     * @brief Creates a post process volume entity.
+     * @param ctx The context for creation.
+     * @param scn The scene to create the entity in.
+     * @param name The name of the post process volume entity.
+     * @return A handle to the created entity.
+     */
+    static auto create_volume_entity(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode = volume_mode::local) -> entt::handle;
     /**
      * @brief Creates a UI document entity.
      * @param ctx The context for creation.

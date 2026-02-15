@@ -172,6 +172,51 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
+    if(e.all_of<volume_component>() && em.gizmos.show_volume)
+    {
+        const auto& volume_comp = e.get<volume_component>();
+        if(volume_comp.mode == volume_mode::local)
+        {
+            const auto& volume = volume_comp.get_local_bounds();
+            DebugDrawEncoderScopePush scope(dd.encoder);
+            dd.encoder.pushTransform((const float*)world_transform);
+            dd.encoder.setColor(0x11ffff00);
+            dd.encoder.setWireframe(false);
+
+            dd.encoder.setState(true, false, true);
+
+            {
+
+                bx::Aabb aabb;
+                aabb.min = to_bx(volume.min);
+                aabb.max = to_bx(volume.max);
+                dd.encoder.draw(aabb);
+            }
+            {
+                dd.encoder.setColor(0xff00ff00);
+
+                dd.encoder.setWireframe(true);
+                bx::Aabb aabb;
+                aabb.min = to_bx(volume.min);
+                aabb.max = to_bx(volume.max);
+                dd.encoder.draw(aabb);
+            }
+            {
+                dd.encoder.setWireframe(false);
+                dd.encoder.setColor(0x1100ff00);
+
+                bx::Aabb aabb;
+                aabb.min = to_bx(volume.min - volume_comp.blend_distance);
+                aabb.max = to_bx(volume.max + volume_comp.blend_distance);
+                dd.encoder.draw(aabb);
+            }
+
+            dd.encoder.setState(false, false, true);
+
+            dd.encoder.popTransform();
+        }
+    }
+
     if(e.all_of<model_component>() && em.gizmos.show_model)
     {
         const auto& frustum = cam.get_frustum();
@@ -652,9 +697,9 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
 
     if(icon)
     {
-        dd.encoder.setState(em.billboard_data.depth_aware, false, false);
-
+        dd.encoder.setState(em.billboard_data.depth_aware, false, true);
         col.value.a = alpha;
+
         col.value *= tint;
         dd.encoder.setColor(col);
 
@@ -666,7 +711,7 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
                             em.billboard_data.size);
         dd.encoder.setColor(0xffffffff);
 
-        dd.encoder.setState(true, true, false);
+        dd.encoder.setState(true, true, true);
     }
 }
 } // namespace unravel

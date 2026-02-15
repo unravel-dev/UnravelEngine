@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 
@@ -528,6 +529,20 @@ auto defaults::create_reflection_probe_entity(rtti::context& ctx, scene& scn, pr
     return object;
 }
 
+auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    auto& volume_comp = object.emplace<volume_component>();
+    volume_comp.mode = mode;
+
+    object.emplace<assao_component>();
+    // object.emplace<bloom_component>();
+    object.emplace<tonemapping_component>();
+    object.emplace<fxaa_component>();
+    object.emplace<ssr_component>();
+    return object;
+}
+
 auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
     auto object = scn.create_entity(name);
@@ -536,11 +551,7 @@ auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::s
     transf_comp.set_position_local({0.0f, 1.0f, -10.0f});
 
     object.emplace<camera_component>();
-    object.emplace<assao_component>();
-    // object.emplace<bloom_component>();
-    object.emplace<tonemapping_component>();
-    object.emplace<fxaa_component>();
-    object.emplace<ssr_component>();
+
 
     return object;
 }
@@ -594,10 +605,17 @@ void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
         probe.sphere_data.range = 1000.0f;
         reflection_comp.set_probe(probe);
     }
+    
+    {
+        auto object = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+    }
 }
 
 void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& scn)
 {
+    {
+        auto object = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+    }
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
         object.emplace<skylight_component>();
@@ -618,6 +636,7 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
     -> entt::handle
 {
     auto camera = create_camera_entity(ctx, scn, "Main Camera");
+    auto post_process_volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
     {
         auto assao_comp = camera.try_get<assao_component>();
         if(assao_comp)

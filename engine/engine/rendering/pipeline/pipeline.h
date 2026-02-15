@@ -20,7 +20,7 @@
 #include "passes/ssr_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
-
+#include "volume_resolver.h"
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -105,6 +105,8 @@ public:
         std::function<void(tonemapping_pass::run_params& params)> fill_hdr_params;
         std::function<void(fxaa_pass::run_params& params)> fill_fxaa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
+
+        std::optional<resolved_post_process_settings> volume_settings;
     };
 
     pipeline() = default;
@@ -178,6 +180,7 @@ public:
                                const gfx::frame_buffer::ptr& output);
 
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
+    virtual auto create_run_params(entt::handle camera_ent, scene* scn, const camera* cam) const -> rendering::pipeline::run_params;
 
     auto get_stats() -> pipeline_stats&
     {
