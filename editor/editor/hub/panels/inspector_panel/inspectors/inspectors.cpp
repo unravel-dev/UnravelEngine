@@ -23,6 +23,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/scripting/ecs/components/script_component.h>
+#include <engine/ui/ecs/components/ui_document_component.h>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -402,6 +403,11 @@ void prefab_override_context::mark_active_as_changed(entt::handle entity)
 void prefab_override_context::mark_text_area_as_changed(entt::handle entity)
 {
     mark_property_as_changed(entity, entt::resolve<text_component>(), "area");
+}
+
+void prefab_override_context::mark_ui_document_size_as_changed(entt::handle entity)
+{
+    mark_property_as_changed(entity, entt::resolve<ui_document_component>(), "size");
 }
 
 void prefab_override_context::mark_material_as_changed(entt::handle entity)
@@ -1269,6 +1275,10 @@ auto inspect_var_properties_impl(rtti::context& ctx,
         for(auto kvp : properties)
         {
             const auto& prop = kvp.second;
+            if(!entt::is_property_visible(var, prop))
+            {
+                continue;
+            }
             // figure out the group name ("" if none)
             auto group = entt::get_attribute_as<std::string>(prop, "group");
 

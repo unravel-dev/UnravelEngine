@@ -19,6 +19,8 @@
 #include <graphics/frame_buffer.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/assets/asset_handle.h>
+#include "RmlUi_Backend_Engine.h"
+#include "RmlUi_RenderLayerStack.h"
 
 #include <bx/handlealloc.h>
 #include <bitset>
@@ -241,23 +243,15 @@ public:
     explicit operator bool() const { return is_initialized_; }
 
     /**
-     * @brief Set viewport dimensions
-     * @param viewport_width Width in pixels
-     * @param viewport_height Height in pixels
-     * @param viewport_offset_x X offset (default 0)
-     * @param viewport_offset_y Y offset (default 0)
-     */
-    void set_viewport(int viewport_width, int viewport_height, int viewport_offset_x = 0, int viewport_offset_y = 0);
-
-    /**
      * @brief Setup bgfx state for RmlUi rendering
+     * @param state Per-frame state (viewport, framebuffer, etc.)
      */
-    void begin_frame();
+    void begin_frame(RmlUi_FrameState& state);
 
     /**
-     * @brief Finish frame and restore previous state
+     * @brief Finish frame and present to the framebuffer specified in begin_frame state
      */
-    void end_frame(const gfx::frame_buffer::ptr& framebuffer = nullptr);
+    void end_frame();
 
     /**
      * @brief Clear the current render target
@@ -344,88 +338,6 @@ private:
         gfx::frame_buffer::ptr generated_framebuffer_ptr; // Keep framebuffer alive when texture is render target
     };
 
-    struct LayerFramebuffer
-    {
-        uint64_t layer_id = 0;                 // Unique identifier for this layer
-        gfx::frame_buffer::ptr framebuffer;
-        int samples = 1;                       // MSAA sample count (needed for blit operations)
-        bool needs_rebind = true;
-        gfx::view_id pass_id = 0;
-        
-        auto is_valid() const -> bool { return framebuffer && framebuffer->is_valid(); }
-        
-        // Convenience methods to get info from framebuffer
-        auto get_size() const -> usize32_t
-        { 
-            if (!framebuffer)
-            {
-                return {0, 0};
-            }
-                
-            return framebuffer->get_size();
-        }
-        
-        auto get_color_texture() const -> gfx::texture::ptr
-        {
-            return framebuffer ? framebuffer->get_texture(0) : nullptr;
-        }
-        
-        auto get_depth_texture() const -> gfx::texture::ptr
-        {
-            return framebuffer && framebuffer->get_attachment_count() > 1 ? framebuffer->get_texture(1) : nullptr;
-        }
-    };
-
-    // Layer stack management (similar to GL implementation)
-    class RenderLayerStack {
-    public:
-        RenderLayerStack();
-        ~RenderLayerStack();
-
-        // Push a new layer. All references to previously retrieved layers are invalidated.
-        auto push_layer() -> Rml::LayerHandle;
-
-        // Pop the top layer. All references to previously retrieved layers are invalidated.
-        void pop_layer();
-
-        auto get_layer(Rml::LayerHandle layer) const -> const LayerFramebuffer&;
-        auto get_layer(Rml::LayerHandle layer) -> LayerFramebuffer&;
-
-        auto get_top_layer() const -> const LayerFramebuffer&;
-        auto get_top_layer() -> LayerFramebuffer&;
-
-        auto get_top_layer_handle() const -> Rml::LayerHandle;
-        auto get_top_layer_handle() -> Rml::LayerHandle;
-        auto get_layers_size() const -> int { return layers_size_; }
-
-        auto get_postprocess_primary() -> const LayerFramebuffer& { return ensure_framebuffer_postprocess(0); }
-        auto get_postprocess_secondary() -> const LayerFramebuffer& { return ensure_framebuffer_postprocess(1); }
-        auto get_postprocess_tertiary() -> const LayerFramebuffer& { return ensure_framebuffer_postprocess(2); }
-        auto get_blend_mask() -> const LayerFramebuffer& { return ensure_framebuffer_postprocess(3); }
-
-        void swap_postprocess_primary_secondary();
-
-        void begin_frame(int new_width, int new_height);
-        void end_frame();
-
-    private:
-
-        void destroy_framebuffers();
-        auto ensure_framebuffer_postprocess(int index) -> const LayerFramebuffer&;
-        auto create_layer_framebuffer(int width, int height, int samples, bool with_depth_stencil, gfx::texture::ptr depth_texture) -> LayerFramebuffer;
-        void destroy_layer_framebuffer(LayerFramebuffer& fb);
-
-        int width_ = 0;
-        int height_ = 0;
-        uint64_t next_layer_id_ = 1;  // Next unique layer ID to assign
-
-        // The number of active layers is manually tracked since we re-use the framebuffers stored in the fb_layers stack.
-        int layers_size_ = 0;
-
-        std::vector<LayerFramebuffer> fb_layers_;
-        std::vector<LayerFramebuffer> fb_postprocess_;
-    };
-
     enum class FilterType { Invalid = 0, Passthrough, Blur, DropShadow, ColorMatrix, MaskImage };
     
     struct CompiledFilter
@@ -475,9 +387,10 @@ private:
     void submit_transform_uniform(Rml::Vector2f translation);
     void set_scissor();
     void set_view_scissor(gfx::view_id pass_id, const Rml::Rectanglei& region);
+    auto get_viewport_size() const -> Rml::Vector2i;
 
-    // Layer management - now handled by RenderLayerStack
-    RenderLayerStack render_layers_;
+    // Layer management - pointer to stack from frame state (set in begin_frame)
+    RmlUi_RenderLayerStack* render_layers_ = nullptr;
 
     // Blend mode conversion
     auto convert_blend_mode(Rml::BlendMode blend_mode) -> uint64_t;
@@ -494,7 +407,7 @@ private:
 
     // Filter rendering
     void render_filters(Rml::Span<const Rml::CompiledFilterHandle> filter_handles);
-    void render_blur(float sigma, const LayerFramebuffer& source_destination, const LayerFramebuffer& temp, Rml::Rectanglei window_region);
+    void render_blur(float sigma, const RmlUi_LayerFramebuffer& source_destination, const RmlUi_LayerFramebuffer& temp, Rml::Rectanglei window_region);
     void sigma_to_parameters(const float desired_sigma, int& out_pass_level, float& out_sigma);
     void set_blur_weights(float sigma);
     void set_tex_coord_limits(Rml::Rectanglei region, Rml::Vector2i framebuffer_size);
@@ -511,11 +424,8 @@ private:
     rtti::context* ctx_ = nullptr;
     bool is_initialized_ = false;
 
-    // Viewport
-    int viewport_width_ = 0;
-    int viewport_height_ = 0;
-    int viewport_offset_x_ = 0;
-    int viewport_offset_y_ = 0;
+    // Current frame state (set in begin_frame, used until end_frame)
+    RmlUi_FrameState* frame_state_ = nullptr;
 
     // Transform matrices
     Rml::Matrix4f transform_;

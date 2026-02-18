@@ -9,6 +9,7 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/meta/ecs/components/script_component.hpp>
+#include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/engine.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -385,6 +386,65 @@ void entity_set_text_bounds_action_t::draw_in_inspector(rtti::context& ctx)
     entt::meta_any old_area_any = old_area;
     entt::meta_any new_area_any = new_area;
     draw_in_inspector_impl(ctx, old_area_any, new_area_any, {});
+}
+
+
+entity_set_ui_document_component_bounds_action_t::entity_set_ui_document_component_bounds_action_t(entt::handle ent, const usize32_t& old_size, const usize32_t& new_size)
+    : entity(ent), old_size(old_size), new_size(new_size)
+{
+    name = "Set UI Document Component Bounds";
+}
+
+void entity_set_ui_document_component_bounds_action_t::do_action()
+{
+    if (entity && entity.all_of<ui_document_component>())
+    {
+        // Update the text area
+        auto ui_document_comp = entity.try_get<ui_document_component>();
+        if (ui_document_comp)
+        {
+            ui_document_comp->size = new_size;
+            prefab_override_context::mark_ui_document_size_as_changed(entity);
+        }
+    }
+}
+
+void entity_set_ui_document_component_bounds_action_t::undo_action()
+{
+    if (entity && entity.all_of<ui_document_component>())
+    {
+        // Restore the text area
+        auto ui_document_comp = entity.try_get<ui_document_component>();
+        if (ui_document_comp)
+        {
+            ui_document_comp->size = old_size;
+            prefab_override_context::mark_ui_document_size_as_changed(entity);
+        }
+    }
+}
+
+auto entity_set_ui_document_component_bounds_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    const auto& prev = static_cast<const entity_set_ui_document_component_bounds_action_t&>(previous);
+    return entity == prev.entity;
+}
+
+void entity_set_ui_document_component_bounds_action_t::merge_with(const editing_action_t& previous)
+{
+    const auto& prev = static_cast<const entity_set_ui_document_component_bounds_action_t&>(previous);
+    old_size = prev.old_size;
+}
+
+auto entity_set_ui_document_component_bounds_action_t::is_valid() const -> bool
+{
+    return entity.valid() && entity.all_of<ui_document_component>();
+}
+
+void entity_set_ui_document_component_bounds_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    entt::meta_any old_size_any = old_size;
+    entt::meta_any new_size_any = new_size;
+    draw_in_inspector_impl(ctx, old_size_any, new_size_any, {});
 }
 
 // Script component action implementations

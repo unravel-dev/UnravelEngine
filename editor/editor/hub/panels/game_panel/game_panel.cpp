@@ -12,8 +12,6 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/settings/settings.h>
 #include <editor/system/project_manager.h>
-#include <engine/ui/ecs/systems/ui_system.h>
-
 
 namespace unravel
 {
@@ -54,8 +52,7 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
     auto& scene = ec.get_scene();
     auto& path = ctx.get_cached<rendering_system>();
 
-    auto output = path.render_scene(scene, dt);
-    ctx.get_cached<ui_system>().on_frame_render(output, dt);
+    path.render_scene(scene, dt);
 
     is_visible_force_ = false;
 }

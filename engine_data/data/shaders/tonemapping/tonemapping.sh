@@ -15,6 +15,34 @@
 #define TONEMAP_LOTTES 10
 #define TONEMAP_UCHIMURA 11
 #define TONEMAP_NEUTRAL 12
+#define TONEMAP_AGX 13
+#define TONEMAP_AGX_GOLDEN 14
+#define TONEMAP_AGX_PUNCHY 15
+
+
+#if BGFX_SHADER_MATRIX_COLUMN_MAJOR
+#define mtxFromRows3(_0, _1, _2) transpose(mat3(_0, _1, _2) )
+#else
+#define mtxFromRows3(_0, _1, _2) mat3(_0, _1, _2)
+#endif
+
+#if BGFX_SHADER_MATRIX_COLUMN_MAJOR
+#define mtxFromRows4(_0, _1, _2, _3) transpose(mat4(_0, _1, _2, _3) )
+#else
+#define mtxFromRows4(_0, _1, _2, _3) mat4(_0, _1, _2, _3)
+#endif
+
+#if BGFX_SHADER_MATRIX_COLUMN_MAJOR
+#define mtxFromCols3(_0, _1, _2) mat3(_0, _1, _2)
+#else
+#define mtxFromCols3(_0, _1, _2) transpose(mat3(_0, _1, _2) )
+#endif
+
+#if BGFX_SHADER_MATRIX_COLUMN_MAJOR
+#define mtxFromCols4(_0, _1, _2, _3) mat4(_0, _1, _2, _3)
+#else
+#define mtxFromCols4(_0, _1, _2, _3) transpose(mat4(_0, _1, _2, _3) )
+#endif
 
 vec3 linear_to_srgb(vec3 color)
 {
@@ -124,14 +152,14 @@ vec3 tonemap_aces(vec3 color)
 {
     // sRGB => XYZ => D65_2_D60 => AP1 => RRT_SAT
     // sRGB refers to gamut, not display transform
-    mat3 ACESInputMat = mtxFromCols(
+    CONST(mat3) ACESInputMat = mtxFromCols3(
         vec3(0.59719, 0.07600, 0.02840),
         vec3(0.35458, 0.90834, 0.13383),
         vec3(0.04823, 0.01566, 0.83777)
     );
 
     // ODT_SAT => XYZ => D60_2_D65 => sRGB
-    mat3 ACESOutputMat = mtxFromCols(
+    CONST(mat3) ACESOutputMat = mtxFromCols3(
         vec3(1.60475, -0.10208, -0.00327),
         vec3(-0.53108, 1.10813, -0.07276),
         vec3(-0.07367, -0.00605, 1.07602)
@@ -218,6 +246,84 @@ vec3 tonemap_uchimura(vec3 color)
 }
 
 
+// AgX tonemapping (Missing Deadlines / Benjamin Wrensch)
+// https://iolite-engine.com/blog_posts/minimal_agx_implementation
+// https://github.com/sobotka/AgX
+// Matrices from Troy Sobotka's AgX OCIO config
+vec3 agx_default_contrast_approx(vec3 x)
+{
+    vec3 x2 = x * x;
+    vec3 x4 = x2 * x2;
+    return + 15.5 * x4 * x2
+           - 40.14 * x4 * x
+           + 31.96 * x4
+           - 6.868 * x2 * x
+           + 0.4298 * x2
+           + 0.1191 * x
+           - 0.00232;
+}
+
+
+
+vec3 agx_core(vec3 val, vec3 slope, vec3 offset, vec3 power, float saturation)
+{
+    // AgX inset matrix (Rec709/sRGB)
+    CONST(mat3) agx_mat = mtxFromRows3(
+        vec3(0.842479062253094, 0.0784335999999992, 0.0792237451477643),
+        vec3(0.0423282422610123, 0.878468636469772, 0.0791661274605434),
+        vec3(0.0423756549057051, 0.0784336, 0.879142973793104)
+    );
+    // AgX outset matrix (inverse)
+    CONST(mat3) agx_mat_inv = mtxFromRows3(
+        vec3(1.19687900512017, -0.0980208811401368, -0.0990297440797205),
+        vec3(-0.0528968517574562, 1.15190312990417, -0.0989611768448433),
+        vec3(-0.0529716355144438, -0.0980434501171241, 1.15107367264116)
+    );
+
+    const float min_ev = -12.47393;
+    const float max_ev = 4.026069;
+    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+
+    // Input transform (inset)
+    val = mul(agx_mat, val);
+    //val = max(val, vec3_splat(1e-10));
+
+    // Log2 space encoding
+    val = clamp(log2(val), min_ev, max_ev);
+    val = (val - min_ev) / (max_ev - min_ev);
+    //val = clamp(val, 0.0, 1.0);
+
+    // Sigmoid (contrast) approximation
+    val = agx_default_contrast_approx(val);
+
+    // ASC CDL look
+    val = pow(val * slope + offset, power);
+    float luma = dot(val, lw);
+    val = luma + saturation * (val - luma);
+
+    // Inverse input transform (outset)
+    val = mul(agx_mat_inv, val);
+
+    // sRGB EOTF (output linear for display)
+    val = pow(max(val, vec3_splat(0.0)), vec3_splat(2.2));
+    return saturate(val);
+}
+
+vec3 tonemap_agx(vec3 color)
+{
+    return agx_core(color, vec3_splat(1.0), vec3_splat(0.0), vec3_splat(1.0), 1.0);
+}
+
+vec3 tonemap_agx_golden(vec3 color)
+{
+    return agx_core(color, vec3(1.0, 0.9, 0.5), vec3_splat(0.0), vec3_splat(0.8), 0.8);
+}
+
+vec3 tonemap_agx_punchy(vec3 color)
+{
+    return agx_core(color, vec3_splat(1.0), vec3_splat(0.0), vec3_splat(1.35), 1.4);
+}
+
 // Khronos PBR Neutral Tone Mapper
 vec3 tonemap_neutral(vec3 color)
 {
@@ -271,7 +377,7 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     }
     else if(method == TONEMAP_FILMIC)
     {
-        tonemapped_color = tonemap_filmic(color);
+        tonemapped_color = linear_to_srgb(tonemap_filmic(color));
     }
     else if(method == TONEMAP_ACES)
     {
@@ -300,6 +406,18 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     else if(method == TONEMAP_NEUTRAL)
     {
         tonemapped_color = linear_to_srgb(saturate(tonemap_neutral(color)));
+    }
+    else if(method == TONEMAP_AGX)
+    {
+        tonemapped_color = linear_to_srgb(tonemap_agx(color));
+    }
+    else if(method == TONEMAP_AGX_GOLDEN)
+    {
+        tonemapped_color = linear_to_srgb(tonemap_agx_golden(color));
+    }
+    else if(method == TONEMAP_AGX_PUNCHY)
+    {
+        tonemapped_color = linear_to_srgb(tonemap_agx_punchy(color));
     }
     else
     {

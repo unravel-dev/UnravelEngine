@@ -5,7 +5,7 @@
 #include <context/context.hpp>
 #include <ospp/event.h>
 #include <hpp/utility.hpp>
-
+#include <engine/ecs/scene.h>
 #include <string>
 #include <entt/entt.hpp>
 #include <graphics/frame_buffer.h>
@@ -55,14 +55,15 @@ struct ui_system
      * @param ctx Engine context
      * @param dt Delta time since last frame
      */
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt);
 
     /**
-     * @brief Render UI (called every frame after update)
+     * @brief Render UI (updates documents and renders). Call from render path with the active camera.
      * @param output Output frame buffer
+     * @param camera_entity Camera entity for viewport and world-space input (can be null)
      * @param dt Delta time since last frame
      */
-    void on_frame_render(const gfx::frame_buffer::ptr& output, delta_t dt);
+    void on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt);
 
     /**
      * @brief Get the main RmlUi context
@@ -91,27 +92,33 @@ struct ui_system
 
 private:
     /**
-     * @brief Update all UI document components (load documents, manage lifecycle)
+     * @brief Update all UI document components (load documents, manage lifecycle, process input)
      * @param ctx Engine context
+     * @param camera_entity Camera entity for viewport and world-space input (can be null)
      */
-    void update_ui_document_components(rtti::context& ctx);
+    void update_ui_document_components(rtti::context& ctx, scene& scn, entt::handle camera_entity);
     
     /**
      * @brief Load a UI document for a specific component
+     * @param entity Entity owning the component
      * @param component The ui_document_component to load the document for
+     * @param reload_stylesheet Whether to reload stylesheet
      * @return True if loading was successful, false otherwise
      */
-    auto load_ui_document(ui_document_component& component, bool reload_stylesheet = false) -> bool;
+    auto load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet = false) -> bool;
 
 
 
-    auto is_root_element(rtti::context& ctx, Rml::Element* element) -> bool;
+    auto is_root_element(scene& scn, Rml::Element* element) -> bool;
 
     void load_font(const std::string& path);
-    
-    Rml::Context* ui_context_ = nullptr;
-    std::shared_ptr<int> sentinel_ = std::make_shared<int>();
 
+    /// Ensure framebuffer exists for document; create or resize if needed
+    void ensure_document_framebuffer(ui_document_component& comp);
+
+    /// Debug/legacy context (empty, used for RmlUi debugger)
+    Rml::Context* debug_context_ = nullptr;
+    std::shared_ptr<int> sentinel_ = std::make_shared<int>();
     std::set<std::string> fonts_loaded_;
 };
 

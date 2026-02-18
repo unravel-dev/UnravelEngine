@@ -129,6 +129,22 @@ struct entity_set_text_bounds_action_t : crtp_meta_type<entity_set_text_bounds_a
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
+struct entity_set_ui_document_component_bounds_action_t : crtp_meta_type<entity_set_ui_document_component_bounds_action_t, editing_action_t>
+{
+    entt::handle entity{};
+    usize32_t old_size{};
+    usize32_t new_size{};
+
+    entity_set_ui_document_component_bounds_action_t(entt::handle ent, const usize32_t& old_size, const usize32_t& new_size);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
 // Script component specific actions
 struct entity_add_script_component_action_t : crtp_meta_type<entity_add_script_component_action_t, editing_action_t>
 {

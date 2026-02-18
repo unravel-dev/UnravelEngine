@@ -21,7 +21,10 @@ enum class tonemapping_method : uint8_t
     unreal3,
     lottes,
     uchimura,
-    neutral
+    neutral,
+    agx,
+    agx_golden,
+    agx_punchy
 };
 
 class tonemapping_pass

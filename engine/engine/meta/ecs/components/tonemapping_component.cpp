@@ -78,6 +78,21 @@ REFLECT_INLINE(tonemapping_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "neutral"},
             entt::attribute{"pretty_name", "Neutral"},
+        })
+        .data<tonemapping_method::agx>("agx"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "agx"},
+            entt::attribute{"pretty_name", "AgX"},
+        })
+        .data<tonemapping_method::agx_golden>("agx_golden"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "agx_golden"},
+            entt::attribute{"pretty_name", "AgX Golden"},
+        })
+        .data<tonemapping_method::agx_punchy>("agx_punchy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "agx_punchy"},
+            entt::attribute{"pretty_name", "AgX Punchy"},
         });
 
     // Register tonemapping_pass::settings class with entt

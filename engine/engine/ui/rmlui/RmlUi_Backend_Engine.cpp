@@ -82,10 +82,6 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
         return false;
     }
 
-    // Set viewport size
-    data->render_interface.set_viewport(width, height);
-
-
     data->initialized = true;
     return true;
 }
@@ -155,27 +151,19 @@ void request_exit()
     }
 }
 
-void begin_frame()
+void begin_frame(RmlUi_FrameState& state)
 {
     if (data && data->initialized)
     {
-        data->render_interface.begin_frame();
+        data->render_interface.begin_frame(state);
     }
 }
 
-void present_frame(const gfx::frame_buffer::ptr& framebuffer)
+void end_frame()
 {
     if (data && data->initialized)
     {
-        data->render_interface.end_frame(framebuffer);
-    }
-}
-
-void set_viewport(int width, int height)
-{
-    if (data && data->initialized)
-    {
-        data->render_interface.set_viewport(width, height);
+        data->render_interface.end_frame();
     }
 }
 

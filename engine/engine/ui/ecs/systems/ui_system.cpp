@@ -4,10 +4,10 @@
 #include "../../rmlui/RmlUi_FileInterface.h"
 #include "../../rmlui/RmlUi_RenderInterface.h"
 #include "../components/ui_document_component.h"
+#include "entt/entity/fwd.hpp"
 #include "filesystem/filesystem.h"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/epsilon.hpp"
-
 
 #include <engine/events.h>
 #include <engine/input/input.h>
@@ -16,7 +16,6 @@
 #include <engine/ecs/components/transform_component.h>
 
 #include <logging/logging.h>
-
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Core.h>
@@ -34,6 +33,10 @@
 #include <string_utils/utils.h>
 #include <engine/assets/impl/asset_extensions.h>
 
+#include <graphics/texture.h>
+
+#include <algorithm>
+#include <vector>
 
 namespace unravel
 {
@@ -43,10 +46,8 @@ auto ui_system::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    // Connect to engine events
+    // Connect to engine events (UI update/render is done in rendering_system::render_scene)
     auto& ev = ctx.get_cached<events>();
-    ev.on_frame_update.connect(sentinel_, 500, this, &ui_system::on_frame_update);
-    // ev.on_frame_render.connect(sentinel_, -100, this, &ui_system::on_frame_render); // Render UI last
     ev.on_os_event.connect(sentinel_, 100, this, &ui_system::on_os_event);
 
     // Initialize RmlUi backend
@@ -71,21 +72,15 @@ auto ui_system::init(rtti::context& ctx) -> bool
         }
     }
 
-    // Create RmlUi context
-    ui_context_ = Rml::CreateContext("main", Rml::Vector2i(width, height));
-    if(!ui_context_)
+    // Create debug context (empty, used for RmlUi debugger)
+    debug_context_ = Rml::CreateContext("main", Rml::Vector2i(width, height));
+    if(!debug_context_)
     {
-        APPLOG_ERROR("Failed to create RmlUi context");
+        APPLOG_ERROR("Failed to create RmlUi debug context");
         RmlUi_Backend_Engine::shutdown();
         return false;
     }
-
-    // auto primary_display = os::display::get_primary_display_index();
-    // auto scale = os::display::get_content_scale(primary_display);
-    // ui_context_->SetDensityIndependentPixelRatio(scale);
-
-    Rml::Debugger::Initialise(ui_context_);
-
+    Rml::Debugger::Initialise(debug_context_);
     APPLOG_INFO("UI system initialized successfully ({}x{})", width, height);
 
     // Register component callbacks
@@ -101,109 +96,112 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    // Remove RmlUi context
-    if(ui_context_)
-    {
+    auto& ecs_system = ctx.get_cached<ecs>();
+    auto& scene = ecs_system.get_scene();
+    auto& registry = *scene.registry;
 
-        auto& ecs_system = ctx.get_cached<ecs>();
-        auto& scene = ecs_system.get_scene();
-        auto& registry = *scene.registry;
-    
-        // Iterate over all entities with ui_document_component
-        auto view = registry.view<ui_document_component>();
-    
-        for(auto entity : view)
+    auto view = registry.view<ui_document_component>();
+    for(auto entity : view)
+    {
+        auto& ui_comp = view.get<ui_document_component>(entity);
+        if(ui_comp.context)
         {
-            auto& ui_comp = view.get<ui_document_component>(entity);
             if(ui_comp.document)
             {
                 ui_comp.document->Close();
                 ui_comp.document = nullptr;
             }
+            Rml::RemoveContext(ui_comp.context->GetName());
+            ui_comp.context = nullptr;
         }
-
-
-        Rml::RemoveContext("main");
-        ui_context_ = nullptr;
     }
 
+    if(debug_context_)
+    {
+        Rml::RemoveContext("main");
+        debug_context_ = nullptr;
+    }
     Rml::Debugger::Shutdown();
-
-    // Shutdown RmlUi backend
     RmlUi_Backend_Engine::shutdown();
-
     APPLOG_INFO("UI system deinitialized successfully");
     return true;
 }
 
-void ui_system::on_frame_update(rtti::context& ctx, delta_t dt)
+void ui_system::on_frame_update(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt)
 {
-    if(!ui_context_)
-    {
-        return;
-    }
-
-    APP_SCOPE_PERF("UI/System Update");
-
-    // Process all UI document components
-    update_ui_document_components(ctx);
-
-    // Update RmlUi context
-    ui_context_->Update();
+    update_ui_document_components(ctx, scn, camera_entity);
 }
 
-void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, delta_t dt)
+void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
 {
-    if(!ui_context_)
+    if(!output)
     {
         return;
     }
-
     APP_SCOPE_PERF("UI/System Render");
 
-    // Begin UI rendering
-    RmlUi_Backend_Engine::begin_frame();
+    scn.registry->view<ui_document_component, active_component>().each(
+        [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
+        {
+            if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
+            {
+                return;
+            }
 
-    // Render RmlUi context
-    ui_context_->Render();
+            if(!ui_comp.document->IsVisible())
+            {
+                return;
+            }
 
-    RmlUi_Backend_Engine::present_frame(output);
+
+            gfx::frame_buffer::ptr target = output;
+
+            if(ui_comp.render_mode == ui_render_mode::world_space)
+            {
+                ensure_document_framebuffer(ui_comp);
+                if(!ui_comp.framebuffer || !ui_comp.framebuffer->is_valid())
+                {
+                    return;
+                }
+                target = ui_comp.framebuffer;
+            }
+
+            if(!ui_comp.render_layer_stack)
+            {
+                ui_comp.render_layer_stack = std::make_shared<RmlUi_RenderLayerStack>();
+            }
+
+            auto sz = target->get_size();
+            RmlUi_FrameState frame_state;
+            frame_state.viewport_width = static_cast<int>(sz.width);
+            frame_state.viewport_height = static_cast<int>(sz.height);
+            frame_state.framebuffer = target;
+            frame_state.clear_to_transparent = (ui_comp.render_mode == ui_render_mode::world_space);
+            frame_state.render_layers = ui_comp.render_layer_stack;
+
+            RmlUi_Backend_Engine::begin_frame(frame_state);
+            ui_comp.context->SetDimensions(Rml::Vector2i(frame_state.viewport_width, frame_state.viewport_height));
+            ui_comp.context->Update();
+            ui_comp.context->Render();
+            RmlUi_Backend_Engine::end_frame();
+        });
 }
 
 
 auto ui_system::get_context() -> Rml::Context*
 {
-    return ui_context_;
+    return debug_context_;
 }
 
 
 void ui_system::on_os_event(rtti::context& ctx, os::event& event)
 {
-    if(!ui_context_)
+    if(!ctx.has<renderer>() || !ctx.has<ecs>())
     {
         return;
     }
 
-    // Get engine window for event processing
-    if(!ctx.has<renderer>())
-    {
-        return;
-    }
-
-
-    // Forward event to RmlUi
-    if(RmlEngine::input_event_handler(ui_context_, event))
-    {
-        if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
-        {
-            auto hover_element = ui_context_->GetHoverElement();
-            if(!is_root_element(ctx, hover_element))
-            {
-                event = {};
-            }
-        }
-    }
-
+    
     if(event.type == os::events::key_down)
     {
         if(event.key.code == os::key::code::f2)
@@ -232,32 +230,43 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
             // ui_context_->SetDensityIndependentPixelRatio(scale);
         }
     }
+
+    auto& ecs_system = ctx.get_cached<ecs>();
+    auto& scene = ecs_system.get_scene();
+
+    scene.registry->view<ui_document_component, active_component>().each(
+        [&](entt::entity, ui_document_component& ui_comp, active_component& active)
+        {
+            if(ui_comp.context && ui_comp.is_enabled())
+            {
+                if(RmlEngine::input_event_handler(ui_comp.context, event))
+                {
+                    if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
+                    {
+                        auto hover_element = ui_comp.context->GetHoverElement();
+                        if(!is_root_element(scene, hover_element))
+                        {
+                            event = {};
+                        }
+                    }
+                }
+            }
+        });
+
 }
 
-auto ui_system::is_root_element(rtti::context& ctx, Rml::Element* element) -> bool
+auto ui_system::is_root_element(scene& scn, Rml::Element* element) -> bool
 {
-    if(!ui_context_)
-    {
-        return false;
-    }
-
     if(!element)
     {
         return false;
     }
-
     if(element->GetTagName() == "#root")
     {
         return true;
     }
 
-    auto& ecs_system = ctx.get_cached<ecs>();
-    auto& scene = ecs_system.get_scene();
-    auto& registry = *scene.registry;
-
-    // Iterate over all entities with ui_document_component
-    auto view = registry.view<ui_document_component>();
-
+    auto view = scn.registry->view<ui_document_component>();
     for(auto entity : view)
     {
         auto& ui_comp = view.get<ui_document_component>(entity);
@@ -278,11 +287,6 @@ void ui_system::load_font(const std::string& path)
 
 void ui_system::load_fonts()
 {
-    if(!ui_context_)
-    {
-        return;
-    }
-
     // Load font
     load_font("engine:/data/fonts/Inter/static/28pt/Inter-Thin.ttf");
     load_font("engine:/data/fonts/Inter/static/28pt/Inter-ThinItalic.ttf");
@@ -314,26 +318,29 @@ void ui_system::on_create_component(entt::registry& r, entt::entity e)
 void ui_system::on_load_component(entt::registry& r, entt::entity e)
 {
     auto& component = r.get<ui_document_component>(e);
-
-    // Load document if not already loaded
     if(!component.is_loaded())
     {
         auto& ctx = engine::context();
         auto& system = ctx.get_cached<ui_system>();
-
-            // Update RmlUi context
-        system.load_ui_document(component, true);
+        system.load_ui_document(e, component, true);
     }
 }
 
 void ui_system::on_destroy_component(entt::registry& r, entt::entity e)
 {
     auto& component = r.get<ui_document_component>(e);
-    if(component.document)
+    if(component.context)
     {
-        component.document->Close();
-        component.document = nullptr;
+        if(component.document)
+        {
+            component.document->Close();
+            component.document = nullptr;
+        }
+        Rml::RemoveContext(component.context->GetName());
+        component.context = nullptr;
     }
+    component.framebuffer.reset();
+    component.render_layer_stack.reset();
 }
 
 void ui_system::register_component_callbacks(rtti::context& ctx)
@@ -344,128 +351,171 @@ void ui_system::register_component_callbacks(rtti::context& ctx)
     APPLOG_INFO("UI component callbacks registered");
 }
 
-void ui_system::update_ui_document_components(rtti::context& ctx)
+void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, entt::handle camera_entity)
 {
-    if(!ctx.has<ecs>())
-    {
-        return;
-    }
-
-
     auto& ev = ctx.get_cached<events>();
+    auto& camera_comp = camera_entity.get<camera_component>();
 
-    auto& input = ctx.get_cached<input_system>();
-    if(input.manager.is_input_allowed())
+    const auto& cam = camera_comp.get_camera();
+
+    float dp_ratio = 1.0f;
+  
+    auto viewport = camera_comp.get_viewport_size();
+    auto viewport_width = static_cast<int>(viewport.width);
+    auto viewport_height = static_cast<int>(viewport.height);
+  
+    if(ctx.has<input_system>())
     {
-        auto mouse_delta_x = input.manager.get_mouse().get_axis_value(0);
-        auto mouse_delta_y = input.manager.get_mouse().get_axis_value(1);
-
-        if(math::epsilonNotEqual(mouse_delta_x, 0.0f, math::epsilon<float>()) || math::epsilonNotEqual(mouse_delta_y, 0.0f, math::epsilon<float>()))
+        auto& input = ctx.get_cached<input_system>();
+        auto work_zone = input.manager.get_work_zone();
+        if(work_zone.w > 0 && work_zone.h > 0)
         {
-            auto mouse_x = input.manager.get_mouse().get_position().x;
-            auto mouse_y = input.manager.get_mouse().get_position().y;
-            ui_context_->ProcessMouseMove(mouse_x, mouse_y, 0);
-        }    
+            dp_ratio = (static_cast<float>(viewport_width) / static_cast<float>(work_zone.w) +
+                        static_cast<float>(viewport_height) / static_cast<float>(work_zone.h)) *
+                       0.5f;
+        }
     }
 
 
-    auto& ecs_system = ctx.get_cached<ecs>();
-    auto& scene = ecs_system.get_scene();
-    auto& registry = *scene.registry;
-
-    registry.view<camera_component>().each(
-        [&](auto e, auto&& camera)
-        {
-            auto viewport = camera.get_viewport_size();
-
-
-            auto& input = ctx.get_cached<input_system>();
-            auto work_zone = input.manager.get_work_zone();
-
-            RmlUi_Backend_Engine::set_viewport(viewport.width, viewport.height);
-            ui_context_->SetDimensions(Rml::Vector2i(viewport.width, viewport.height));
-
-            
-            // Match UI physical size to window
-            float ratio_x = static_cast<float>( viewport.width) / static_cast<float>(work_zone.w);
-            float ratio_y = static_cast<float>( viewport.height) / static_cast<float>(work_zone.h);
-            ui_context_->SetDensityIndependentPixelRatio((ratio_x + ratio_y) * 0.5f); // usually same ratio both axes
-
-            
-        });
-
-    // Iterate over all entities with ui_document_component
-    auto view = registry.view<ui_document_component>();
-
-    for(auto entity : view)
+    struct world_space_doc
     {
-        auto& ui_comp = view.get<ui_document_component>(entity);
+        entt::handle handle;
+        float distance;
+    };
+    std::vector<world_space_doc> world_space_docs;
 
-        bool active = registry.all_of<active_component>(entity);
-        
-        if(!ev.is_playing)
+    scn.registry->view<ui_document_component>().each(
+        [&](entt::entity entity, ui_document_component& ui_comp)
         {
-            if(ui_comp.version != ui_comp.asset.version())
+            auto handle = scn.create_handle(entity);
+            bool active = handle.all_of<active_component>();
+
+            if(!ev.is_playing && ui_comp.version != ui_comp.asset.version())
             {
                 if(ui_comp.document)
                 {
                     ui_comp.document->Close();
                     ui_comp.document = nullptr;
                 }
+                if(ui_comp.context)
+                {
+                    Rml::RemoveContext(ui_comp.context->GetName());
+                    ui_comp.context = nullptr;
+                }
             }
-        }
 
-        // Load document if not already loaded
-        if(!ui_comp.is_loaded())
-        {
-            load_ui_document(ui_comp, true);
-        }
-
-        if(!ui_comp.document)
-        {
-            continue;
-        }
-
-        // Handle deferred stylesheet reload
-        if(ui_comp.needs_stylesheet_reload && ui_comp.document)
-        {
-            ui_comp.document->ReloadStyleSheet();
-            ui_comp.needs_stylesheet_reload = false;
-        }
-
-        bool active_and_enabled = active && ui_comp.is_enabled();
-        if(active_and_enabled)
-        {
-            if(!ui_comp.document->IsVisible())
+            if(!ui_comp.is_loaded())
             {
-                ui_comp.document->Show();
+                load_ui_document(entity, ui_comp, true);
             }
-        }
-        else
-        {
-            if( ui_comp.document->IsVisible())
-            {
-                ui_comp.document->Hide();
-            }
-        }
 
+            if(!ui_comp.document || !ui_comp.context)
+            {
+                return;
+            }
+
+            if(ui_comp.needs_stylesheet_reload)
+            {
+                ui_comp.document->ReloadStyleSheet();
+                ui_comp.needs_stylesheet_reload = false;
+            }
+
+            int doc_w = (ui_comp.render_mode == ui_render_mode::screen_space_overlay) ? viewport_width : static_cast<int>(ui_comp.size.width);
+            int doc_h = (ui_comp.render_mode == ui_render_mode::screen_space_overlay) ? viewport_height : static_cast<int>(ui_comp.size.height);
+
+            if(ui_comp.render_mode == ui_render_mode::world_space)
+            {
+                const auto scale = ui_comp.get_world_space_scale();
+                dp_ratio = (scale.x + scale.y) * 0.5f;
+            }
+            ui_comp.context->SetDimensions(Rml::Vector2i(doc_w, doc_h));
+            ui_comp.context->SetDensityIndependentPixelRatio(dp_ratio);
+            ui_comp.context->Update();
+
+            if(ctx.has<input_system>())
+            {
+                auto& input = ctx.get_cached<input_system>();
+                if(input.manager.is_input_allowed())
+                {
+                    if(ui_comp.render_mode == ui_render_mode::screen_space_overlay)
+                    {
+                        auto mouse_x = input.manager.get_mouse().get_position().x;
+                        auto mouse_y = input.manager.get_mouse().get_position().y;
+                        ui_comp.context->ProcessMouseMove(mouse_x, mouse_y, 0);
+                    }
+                    else if(ui_comp.render_mode == ui_render_mode::world_space)
+                    {
+                        auto& transform = handle.get<transform_component>();
+                        float dist = math::distance(cam.get_position(), transform.get_position_global());
+                        world_space_docs.push_back({handle, dist});
+                    }
+                }
+            }
+
+            bool active_and_enabled = active && ui_comp.is_enabled();
+            if(active_and_enabled)
+            {
+                if(!ui_comp.document->IsVisible())
+                {
+                    ui_comp.document->Show();
+                }
+            }
+            else
+            {
+                if(ui_comp.document->IsVisible())
+                {
+                    ui_comp.document->Hide();
+                }
+            }
+        });
+
+    if(ctx.has<input_system>() && !world_space_docs.empty())
+    {
+        auto& input = ctx.get_cached<input_system>();
+        if(input.manager.is_input_allowed())
+        {
+            std::sort(world_space_docs.begin(), world_space_docs.end(),
+                      [](const world_space_doc& a, const world_space_doc& b) { return a.distance < b.distance; });
+
+            auto mouse_x = input.manager.get_mouse().get_position().x;
+            auto mouse_y = input.manager.get_mouse().get_position().y;
+            bool hit_found = false;
+
+            for(const auto& entry : world_space_docs)
+            {
+                auto& ui_comp = entry.handle.get<ui_document_component>();
+                if(!ui_comp.context)
+                    continue;
+
+                int px = -1;
+                int py = -1;
+                if(!hit_found)
+                {
+                    auto& transform = entry.handle.get<transform_component>();
+                    const auto scale = ui_comp.get_world_space_scale();
+                    const auto quad_transform = transform.get_transform_global() * math::transform::scaling(scale);
+                    math::vec2 pixel;
+                    if(cam.project_to_quad(math::vec2(mouse_x, mouse_y), quad_transform, ui_comp.size.width,
+                                          ui_comp.size.height, pixel))
+                    {
+                        px = static_cast<int>(pixel.x);
+                        py = static_cast<int>(pixel.y);
+                        hit_found = true;
+                    }
+                }
+                ui_comp.context->ProcessMouseMove(px, py, 0);
+            }
+        }
     }
 }
 
-auto ui_system::load_ui_document(ui_document_component& component, bool reload_stylesheet) -> bool
+auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet) -> bool
 {
-    if(!ui_context_)
-    {
-        APPLOG_ERROR("Cannot load UI document: RmlUi context not available");
-        return false;
-    }
-
     if(!component.asset)
     {
         APPLOG_WARNING("Cannot load document: asset is empty");
         return false;
     }
-
     auto asset = component.asset.get();
     if(!asset)
     {
@@ -473,14 +523,23 @@ auto ui_system::load_ui_document(ui_document_component& component, bool reload_s
         return false;
     }
 
-    // auto compiled_path = resolve_compiled_key(component.asset.id());
-            
-    auto real = fs::resolve_protocol(component.asset.id());
+    if(!component.context)
+    {
+        Rml::String context_name = "doc_" + std::to_string(entt::to_integral(entity));
+        int w = (component.render_mode == ui_render_mode::screen_space_overlay) ? 1024 : static_cast<int>(component.size.width);
+        int h = (component.render_mode == ui_render_mode::screen_space_overlay) ? 768 : static_cast<int>(component.size.height);
+        component.context = Rml::CreateContext(context_name, Rml::Vector2i(w, h));
+        if(!component.context)
+        {
+            APPLOG_ERROR("Failed to create RmlUi context for document");
+            return false;
+        }
+    }
 
+    auto real = fs::resolve_protocol(component.asset.id());
     Rml::String url_safe_path = Rml::StringUtilities::Replace(real.string(), ':', '|');
 
-    // Load the document using the existing load_document method
-    auto raw_document = ui_context_->LoadDocumentFromMemory(asset->content, url_safe_path);
+    auto raw_document = component.context->LoadDocumentFromMemory(asset->content, url_safe_path);
     if(!raw_document)
     {
         APPLOG_ERROR("Failed to load UI document: {}", component.asset.id());
@@ -493,19 +552,50 @@ auto ui_system::load_ui_document(ui_document_component& component, bool reload_s
     {
         component.document->Close();
     }
-    // Create shared_ptr with custom deleter that properly closes the document
     component.document = raw_document;
     component.version = component.asset.version();
-    
-    // Defer stylesheet reload to next frame when document context is fully established
-    // This prevents the "Unable to open file ." error that occurs during component creation
+
     if(reload_stylesheet)
     {
-        // Schedule stylesheet reload for next update cycle
         component.needs_stylesheet_reload = true;
     }
-    
+
     return true;
+}
+
+void ui_system::ensure_document_framebuffer(ui_document_component& comp)
+{
+    if(comp.framebuffer && comp.framebuffer->is_valid())
+    {
+        auto sz = comp.framebuffer->get_size();
+        if(sz.width == comp.size.width && sz.height == comp.size.height)
+        {
+            return;
+        }
+    }
+
+    uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    auto color_texture = std::make_shared<gfx::texture>(static_cast<uint16_t>(comp.size.width),
+                                                        static_cast<uint16_t>(comp.size.height),
+                                                        false,
+                                                        1,
+                                                        gfx::texture_format::RGBA8,
+                                                        texture_flags);
+
+    if(!color_texture->is_valid())
+    {
+        APPLOG_ERROR("Failed to create UI document color texture");
+        return;
+    }
+
+    std::vector<gfx::texture::ptr> textures;
+    textures.push_back(color_texture);
+    comp.framebuffer = std::make_shared<gfx::frame_buffer>(textures);
+    if(!comp.framebuffer->is_valid())
+    {
+        APPLOG_ERROR("Failed to create UI document framebuffer");
+        comp.framebuffer.reset();
+    }
 }
 
 } // namespace unravel

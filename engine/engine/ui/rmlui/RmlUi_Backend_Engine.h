@@ -16,11 +16,27 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <graphics/frame_buffer.h>
+#include "RmlUi_RenderLayerStack.h"
 
 namespace unravel
 {
 
 using KeyDownCallback = bool (*)(Rml::Context* context, Rml::Input::KeyIdentifier key, int key_modifier, float native_dp_ratio, bool priority);
+
+/**
+ * @struct RmlUi_FrameState
+ * @brief Per-frame state passed to begin_frame. Contains all mutable state for the render pass.
+ */
+struct RmlUi_FrameState
+{
+    int viewport_width = 0;
+    int viewport_height = 0;
+    int viewport_offset_x = 0;
+    int viewport_offset_y = 0;
+    gfx::frame_buffer::ptr framebuffer;
+    bool clear_to_transparent = false;
+    std::shared_ptr<RmlUi_RenderLayerStack> render_layers;
+};
 
 /**
  * @namespace RmlUi_Backend_Engine
@@ -76,21 +92,15 @@ void request_exit();
 /**
  * @brief Prepare render state for RmlUi rendering
  * Call this before rendering RmlUi context
+ * @param state Per-frame state (viewport, framebuffer, etc.)
  */
-void begin_frame();
+void begin_frame(RmlUi_FrameState& state);
 
 /**
- * @brief Present the rendered frame
+ * @brief Finish frame and present to the framebuffer specified in begin_frame state
  * Call this after rendering RmlUi context
  */
-void present_frame(const gfx::frame_buffer::ptr& framebuffer);
-
-/**
- * @brief Update viewport size (call on window resize)
- * @param width New viewport width
- * @param height New viewport height
- */
-void set_viewport(int width, int height);
+void end_frame();
 
 } // namespace RmlUi_Backend_Engine
 

@@ -8,6 +8,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
+#include <engine/ui/ecs/components/ui_document_component.h>
 
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
@@ -17,7 +18,11 @@
 #include <engine/rendering/pipeline/volume_resolver.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
- 
+#include <RmlUi/Core/ElementDocument.h>
+
+#include <graphics/graphics.h>
+#include <graphics/vertex_decl.h>
+
 #include <engine/profiler/profiler.h>
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
@@ -55,6 +60,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
     particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
+    world_quad_program_ = load_program("vs_world_quad", "rmlui/fs_rmlui_passthrough");
 
     return true;
 }
@@ -281,7 +287,6 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     const auto& proj = camera.get_projection();
     auto& fbo = rview.fbo_get("OBUFFER_DEPTH");
 
-
     gfx::render_pass pass("ui_elements_pass");
     pass.bind(fbo.get());
     pass.set_view_proj(view, proj);
@@ -299,6 +304,35 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
 
             text_comp.submit(pass.id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
         });
+
+    // World-space UI documents: draw quad with framebuffer texture
+    if(world_quad_program_ && world_quad_program_->begin())
+    {
+        constexpr uint64_t world_ui_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |// BGFX_STATE_WRITE_Z |
+                                            BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_NORMAL;
+
+        scn.registry->view<transform_component, ui_document_component, active_component>().each(
+            [&](auto e, auto&& transform_comp, auto&& ui_comp, auto&&)
+            {
+                if(ui_comp.render_mode != ui_render_mode::world_space)
+                {
+                    return;
+                }
+                if(!ui_comp.is_enabled() || !ui_comp.framebuffer || !ui_comp.document || !ui_comp.document->IsVisible())
+                {
+                    return;
+                }
+
+                const auto scale = ui_comp.get_world_space_scale();
+                const auto model = transform_comp.get_transform_global() * math::transform::scaling(scale);
+                auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
+                gfx::set_state(topology | world_ui_state);
+                world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
+                gfx::set_world_transform(model);
+                gfx::submit(pass.id, world_quad_program_->native_handle());
+            });
+        world_quad_program_->end();
+    }
 
     gfx::discard();
 }

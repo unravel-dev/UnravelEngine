@@ -203,6 +203,7 @@ protected:
     std::unique_ptr<gpu_program> particle_program_{};
     std::unique_ptr<gpu_program> particle_program_instanced_{};
     std::unique_ptr<gpu_program> particle_program_instanced_mask_{};
+    std::unique_ptr<gpu_program> world_quad_program_{};
 
     pipeline_stats stats_{};
 };

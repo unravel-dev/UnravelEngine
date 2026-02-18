@@ -16,6 +16,7 @@
 #include <engine/rendering/model.h>
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/ecs/components/prefab_component.h>
+#include <engine/ui/ecs/components/ui_document_component.h>
 namespace unravel
 {
 
@@ -543,6 +544,34 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     }
                     const auto& world_transform = transform_comp.get_transform_global();
                     auto bbox = text_comp.get_bounds();
+
+                    if(!pick_camera.test_obb(bbox, world_transform))
+                    {
+                        return;
+                    }
+
+                    auto id = ENTT_ID_TYPE(e);
+                    math::color color(id);
+
+                    dd.encoder.setColor(color);
+                    dd.encoder.setState(true, true, false, true, false);
+
+                    dd.encoder.pushTransform((const float*)world_transform);
+                    bx::Aabb aabb;
+                    aabb.min = to_bx(bbox.min);
+                    aabb.max = to_bx(bbox.max);
+                    dd.encoder.draw(aabb);
+                    dd.encoder.popTransform();
+                });
+
+            target_scene->registry->view<transform_component, ui_document_component, active_component>().each(
+                [&](auto e, auto&& transform_comp, auto&& ui_document_comp, auto&& active)
+                {
+                    const auto& world_transform = transform_comp.get_transform_global();
+                    auto size = ui_document_comp.get_world_space_scale();
+                    math::bbox bbox;
+                    bbox.min = math::vec3(-size.x * 0.5f, -size.y * 0.5f, 0.0f);
+                    bbox.max = math::vec3(size.x * 0.5f, size.y * 0.5f, 0.0f);
 
                     if(!pick_camera.test_obb(bbox, world_transform))
                     {

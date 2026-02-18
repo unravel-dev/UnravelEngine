@@ -1,6 +1,7 @@
 #include "rendering_system.h"
 #include "particle_system.h"
 
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
@@ -91,17 +92,22 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
 
     render_debug(camera_ent);
 
+
     return result;
 }
 
 auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer::ptr
 {
+    auto& ctx = engine::context();
+
     gfx::frame_buffer::ptr output{};
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
+            ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             output = render_scene(handle, camera_comp, scn, dt);
+            ctx.get_cached<ui_system>().on_frame_render(output, scn, dt);
             return;
         });
 
@@ -128,12 +134,16 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
 
 void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
 {
+    auto& ctx = engine::context();
 
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
+            ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             render_scene(output, handle, camera_comp, scn, dt);
+            ctx.get_cached<ui_system>().on_frame_render(output, scn, dt);
+        
         });
 }
 

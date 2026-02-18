@@ -1,4 +1,5 @@
 #include "camera.h"
+#include "base/basetypes.hpp"
 
 #include <graphics/graphics.h>
 
@@ -569,6 +570,34 @@ auto camera::viewport_to_world(const math::vec2& point, const math::plane& pl, m
     world_pos = pick_ray_origin + (pick_ray_dir * distance);
 
     // Success!
+    return true;
+}
+
+auto camera::project_to_quad(const math::vec2& viewport_point,
+                          const math::transform& quad_transform,
+                          uint32_t quad_width,
+                          uint32_t quad_height,
+                          math::vec2& pixel_out) const -> bool
+{
+    const math::vec3 quad_center = quad_transform.get_position();
+    const math::vec3 quad_normal = quad_transform.z_unit_axis();
+    const auto plane = math::plane::from_point_normal(quad_center, quad_normal);
+
+    math::vec3 world_pos;
+    if(!viewport_to_world(viewport_point, plane, world_pos, false))
+    {
+        pixel_out = math::vec2(-1.0f, -1.0f);
+        return false;
+    }
+
+    const math::vec3 local = quad_transform.inverse_transform_coord(world_pos);
+    if(local.x < -0.5f || local.x > 0.5f || local.y < -0.5f || local.y > 0.5f)
+    {
+        pixel_out = math::vec2(-1.0f, -1.0f);
+        return false;
+    }
+    pixel_out.x = (local.x + 0.5f) * static_cast<float>(quad_width);
+    pixel_out.y = (0.5f - local.y) * static_cast<float>(quad_height);
     return true;
 }
 

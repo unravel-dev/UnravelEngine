@@ -23,7 +23,7 @@
 
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
-
+#include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/material.h>
@@ -559,25 +559,23 @@ void setup_gizmo_pivot(bool gizmo_at_center,
     }
 }
 
-auto handle_text_component_bounds_manipulation(entt::handle active_selection,
-                                               const camera_component& camera_comp,
-                                               editing_manager& em,
-                                               float* snap,
-                                               float bounds_snap_data[3],
-                                               float* bounds_snap) -> bool
+struct bounds_manipulation_result_t
 {
-    auto text_comp = active_selection.try_get<text_component>();
-    if(!text_comp)
-    {
-        return false;
-    }
+    fsize_t initial_area{};
+    math::vec3 initial_position{};
 
-    auto area = text_comp->get_area();
-    if(!area.is_valid())
-    {
-        return false;
-    }
+    fsize_t new_area{};
+    math::vec3 new_position{};
+};
 
+auto handle_component_bounds_manipulation(entt::handle active_selection,
+                                          fsize_t area,
+                                          const camera_component& camera_comp,
+                                          editing_manager& em,
+                                          float* snap,
+                                          float bounds_snap_data[3],
+                                          float* bounds_snap) -> hpp::optional<bounds_manipulation_result_t>
+{
     auto& transform_comp = active_selection.get<transform_component>();
     const auto& camera = camera_comp.get_camera();
     
@@ -621,28 +619,120 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
         // Create new area and position
         fsize_t new_area{scale.x, scale.y};
         math::vec3 new_position = trans;
-        
-        // Create composite action with both text bounds and transform changes
-        auto composite_action = std::make_shared<composite_action_t>();
-        
-        // Add text bounds action
-        composite_action->add_sub_action(std::make_shared<entity_set_text_bounds_action_t>(
-            active_selection, initial_area, new_area));
-        
-        // Add global transform action for the center entity
-        composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
-            active_selection, initial_position, new_position));
-        
-        // Execute the composite action
-        em.push_undo_stack_enabled(true);
-        em.do_action("Text Bounds Manipulation", composite_action);
-        em.pop_undo_stack_enabled();
-
-        return true;
+        bounds_manipulation_result_t result;
+        result.initial_area = initial_area;
+        result.initial_position = initial_position;
+        result.new_area = new_area;
+        result.new_position = new_position;
+        return result;
     }
 
-    return false;
+    return hpp::nullopt;
 }
+
+
+auto handle_text_component_bounds_manipulation(entt::handle active_selection,
+                                               const camera_component& camera_comp,
+                                               editing_manager& em,
+                                               float* snap,
+                                               float bounds_snap_data[3],
+                                               float* bounds_snap) -> bool
+{
+    auto text_comp = active_selection.try_get<text_component>();
+    if(!text_comp)
+    {
+        return false;
+    }
+
+    auto area = text_comp->get_area();
+    if(!area.is_valid())
+    {
+        return false;
+    }
+
+    auto result = handle_component_bounds_manipulation(active_selection, area, camera_comp, em, snap, bounds_snap_data, bounds_snap);
+    if(!result)
+    {
+        return false;
+    }
+
+    const auto& initial_area = result->initial_area;
+    const auto& initial_position = result->initial_position;
+    const auto& new_area = result->new_area;
+    const auto& new_position = result->new_position;
+
+    // Create composite action with both text bounds and transform changes
+    auto composite_action = std::make_shared<composite_action_t>();
+    
+    // Add text bounds action
+    composite_action->add_sub_action(std::make_shared<entity_set_text_bounds_action_t>(
+        active_selection, initial_area, new_area));
+    
+    // Add global transform action for the center entity
+    composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
+        active_selection, initial_position, new_position));
+    
+    // Execute the composite action
+    em.push_undo_stack_enabled(true);
+    em.do_action("Text Bounds Manipulation", composite_action);
+    em.pop_undo_stack_enabled();
+
+    return true;
+  
+}
+
+auto handle_ui_document_component_bounds_manipulation(entt::handle active_selection,
+                                               const camera_component& camera_comp,
+                                               editing_manager& em,
+                                               float* snap,
+                                               float bounds_snap_data[3],
+                                               float* bounds_snap) -> bool
+{
+    auto ui_document_comp = active_selection.try_get<ui_document_component>();
+    if(!ui_document_comp)
+    {
+        return false;
+    }
+
+    if(!ui_document_comp->size.is_valid())
+    {
+        return false;
+    }
+    auto area = ui_document_comp->get_world_space_scale();
+
+    auto result = handle_component_bounds_manipulation(active_selection, fsize_t(area.x, area.y), camera_comp, em, snap, bounds_snap_data, bounds_snap);
+    if(!result)
+    {
+        return false;
+    }
+
+    const auto& initial_area = result->initial_area;
+    const auto& initial_position = result->initial_position;
+    const auto& new_area = fsize_t(result->new_area.width * ui_document_comp->pixels_per_world_unit, result->new_area.height * ui_document_comp->pixels_per_world_unit);
+    const auto& new_position = result->new_position;
+
+    // Create composite action with both text bounds and transform changes
+    auto composite_action = std::make_shared<composite_action_t>();
+    
+    usize32_t initial_area_size = usize32_t(initial_area.width, initial_area.height);
+    usize32_t new_area_size = usize32_t(new_area.width, new_area.height);
+    // Add text bounds action
+    composite_action->add_sub_action(std::make_shared<entity_set_ui_document_component_bounds_action_t>(
+        active_selection, initial_area_size, new_area_size));
+    
+    // Add global transform action for the center entity
+    composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
+        active_selection, initial_position, new_position));
+    
+    // Execute the composite action
+    em.push_undo_stack_enabled(true);
+    em.do_action("UI Document Size Manipulation", composite_action);
+    em.pop_undo_stack_enabled();
+
+    return true;
+  
+}
+
 
 auto handle_inverse_kinematics(entt::handle selection, entt::handle center, editing_manager& em) -> bool
 {
@@ -830,6 +920,13 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
                                                  snap,
                                                  bounds_snap_data,
                                                  bounds_snap);
+
+        bounds_changed = handle_ui_document_component_bounds_manipulation(*active_sel,
+                                                    camera_comp,
+                                                    em,
+                                                    snap,
+                                                    bounds_snap_data,
+                                                    bounds_snap);
     }
     
     int movetype = ImGuizmo::MT_NONE;

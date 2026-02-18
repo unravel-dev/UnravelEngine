@@ -6,7 +6,6 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
-#include <engine/ui/ecs/systems/ui_system.h>
 #include <logging/logging.h>
 
 namespace unravel
@@ -79,7 +78,6 @@ void runner::on_frame_render(rtti::context& ctx, delta_t dt)
     auto window = rend.get_main_window();
 
     path.render_scene(window->get_surface(), scene, dt);
-    ctx.get_cached<ui_system>().on_frame_render(window->get_surface(), dt);
 }
 
 void runner::on_play_begin(rtti::context& ctx)

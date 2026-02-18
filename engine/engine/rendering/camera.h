@@ -315,6 +315,26 @@ public:
         -> bool;
 
     /**
+     * @brief Raycasts from viewport point onto a quad plane and returns pixel coordinates.
+     *
+     * Projects the viewport point through the camera onto the quad's plane, then converts
+     * the world intersection to local quad space and finally to document pixel coordinates.
+     * Assumes the quad is a unit quad (-0.5 to 0.5) scaled by the transform.
+     *
+     * @param viewport_point The viewport/screen position.
+     * @param quad_transform The quad's model transform (world * scale for world size).
+     * @param quad_width The quad width in pixels.
+     * @param quad_height The quad height in pixels.
+     * @param pixel_out The output pixel coordinates (0..width, 0..height), or (-1,-1) if no hit.
+     * @return true if the ray hit the quad plane, false otherwise.
+     */
+    auto project_to_quad(const math::vec2& viewport_point,
+                     const math::transform& quad_transform,
+                     uint32_t quad_width,
+                     uint32_t quad_height,
+                     math::vec2& pixel_out) const -> bool;
+
+    /**
      * @brief Converts a screen position into a world space intersection point on a major axis plane.
      *
      * @param point The screen position.

@@ -214,7 +214,7 @@ struct prefab_override_context
      * @param entity Entity whose text area was modified
      */
     static void mark_text_area_as_changed(entt::handle entity);
-    
+    static void mark_ui_document_size_as_changed(entt::handle entity);
     /**
      * @brief Marks material as changed in prefab override system
      * @param entity Entity whose material was modified

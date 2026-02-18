@@ -383,7 +383,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 lobe_roughness = vec3(0.0f, data.roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
-    // Use unmodified colors for direct lighting — AO is applied only to indirect terms inside StandardShading
+    // AO is applied to both direct and indirect lighting for depth in crevices
     vec3 specular_color = data.specular_color;
     vec3 diffuse_color = data.diffuse_color;
 
@@ -426,8 +426,9 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
-    // Only direct lighting — indirect and emissive are handled in a separate fullscreen pass
-    vec3 lighting = surface_multiplier * direct_surface_lighting
+    // Direct lighting with AO — indirect and emissive are handled in a separate fullscreen pass
+    vec3 direct_lighting = surface_multiplier * direct_surface_lighting * data.ambient_occlusion;
+    vec3 lighting = direct_lighting
                   + subsurface_lighting * subsurface_multiplier
                   + colorCoverage * u_shadowMapShowCoverage;
 
