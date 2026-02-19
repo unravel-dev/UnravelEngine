@@ -12,6 +12,7 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/settings/settings.h>
 #include <editor/system/project_manager.h>
+#include <engine/ui/ecs/systems/ui_system.h>
 
 namespace unravel
 {
@@ -251,6 +252,25 @@ void game_panel::draw_menubar(rtti::context& ctx)
             ImGui::EndMenu();
         }
         ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");
+
+        auto& ui    = ctx.get_cached<ui_system>();
+        bool debugger_enabled = ui.is_debugger_enabled();
+        const char* modes[] = {ICON_MDI_BUG_CHECK " UI Debugger", ICON_MDI_BUG " UI Debugger"};
+        const char* debugger_preview = modes[int(!debugger_enabled)];
+
+        if(debugger_enabled)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+        }
+        if(ImGui::MenuItem(debugger_preview, "", debugger_enabled))
+        {
+            ui.set_debugger_enabled(!debugger_enabled);
+        }
+        if(debugger_enabled)
+        {
+            ImGui::PopStyleColor();
+        }
+        ImGui::SetItemTooltipEx("%s", debugger_enabled ? "Hide UI Debugger" : "Show UI Debugger");
 
         ImGui::PushFont(ImGui::Font::Mono);
         auto& io = ImGui::GetIO();

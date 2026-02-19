@@ -314,11 +314,19 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         scn.registry->view<transform_component, ui_document_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& ui_comp, auto&&)
             {
+                auto handle = scn.create_handle(e);
                 if(ui_comp.render_mode != ui_render_mode::world_space)
                 {
                     return;
                 }
                 if(!ui_comp.is_enabled() || !ui_comp.framebuffer || !ui_comp.document || !ui_comp.document->IsVisible())
+                {
+                    return;
+                }
+
+                const auto& world_transform = transform_comp.get_transform_global();
+                auto bbox = ui_comp.get_bounds();
+                if(!camera.test_obb(bbox, world_transform))
                 {
                     return;
                 }

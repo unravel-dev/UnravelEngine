@@ -39,10 +39,7 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
     ctx.add<runner>(ctx);
 
-    fs::path binary_path = fs::resolve_protocol("binary:/");
-    fs::path app_data = binary_path / "data" / "app";
-
-    parser.set_optional<std::string>("a", "appdata", app_data.string(), "Application data directory. Defaults to binary directory.");
+    parser.set_optional<std::string>("a", "appdata", "", "Application data directory. Defaults to binary directory.");
 
 
     return true;
@@ -115,12 +112,14 @@ auto game::init_assets(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     if(!appdata.empty())
     {
         fs::path app_data = appdata;
-        fs::add_path_protocol("app", app_data);
+        fs::add_path_protocol("engine", app_data / "engine");
+        fs::add_path_protocol("app", app_data / "app");
     }
     else
     {
-        APPLOG_CRITICAL("Failed to get appdata path.");
-        return false;
+        fs::path binary_path = fs::resolve_protocol("binary:/");
+        fs::path app_data = binary_path / "data" / "app";
+        fs::add_path_protocol("app", app_data);
     }
 
     auto& am = ctx.get_cached<asset_manager>();

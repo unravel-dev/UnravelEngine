@@ -107,7 +107,7 @@ auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer
             auto handle = scn.create_handle(e);
             ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             output = render_scene(handle, camera_comp, scn, dt);
-            ctx.get_cached<ui_system>().on_frame_render(output, scn, dt);
+            ctx.get_cached<ui_system>().on_frame_render(output, handle, scn, dt);
             return;
         });
 
@@ -142,7 +142,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene&
             auto handle = scn.create_handle(e);
             ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             render_scene(output, handle, camera_comp, scn, dt);
-            ctx.get_cached<ui_system>().on_frame_render(output, scn, dt);
+            ctx.get_cached<ui_system>().on_frame_render(output, handle, scn, dt);
         
         });
 }

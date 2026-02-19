@@ -6,9 +6,11 @@
 #include <ospp/event.h>
 #include <hpp/utility.hpp>
 #include <engine/ecs/scene.h>
+#include <math/math.h>
 #include <string>
 #include <entt/entt.hpp>
 #include <graphics/frame_buffer.h>
+#include <engine/ui/rmlui/RmlUi_RenderLayerStack.h>
 
 // Forward declarations
 namespace Rml
@@ -63,13 +65,7 @@ struct ui_system
      * @param camera_entity Camera entity for viewport and world-space input (can be null)
      * @param dt Delta time since last frame
      */
-    void on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt);
-
-    /**
-     * @brief Get the main RmlUi context
-     * @return Pointer to RmlUi context, or nullptr if not initialized
-     */
-    auto get_context() -> Rml::Context*;
+    void on_frame_render(const gfx::frame_buffer::ptr& output, entt::handle camera_entity, scene& scn, delta_t dt);
 
 
     /**
@@ -90,6 +86,8 @@ struct ui_system
      */
     void register_component_callbacks(rtti::context& ctx);
 
+    auto is_debugger_enabled() const -> bool;
+    void set_debugger_enabled(bool enabled);
 private:
     /**
      * @brief Update all UI document components (load documents, manage lifecycle, process input)
@@ -109,15 +107,21 @@ private:
 
 
 
-    auto is_root_element(scene& scn, Rml::Element* element) -> bool;
+    auto is_not_root_element(scene& scn, Rml::Element* element) -> bool;
 
     void load_font(const std::string& path);
 
     /// Ensure framebuffer exists for document; create or resize if needed
     void ensure_document_framebuffer(ui_document_component& comp);
 
-    /// Debug/legacy context (empty, used for RmlUi debugger)
+
+    auto process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool;
+
+    auto process_event(scene& scn, Rml::Context* context, os::event& event) -> bool;
+    /// Debug/legacy context (empty, used for RmlUi debugger host - menu, info, log)
     Rml::Context* debug_context_ = nullptr;
+    std::shared_ptr<RmlUi_RenderLayerStack> debug_render_layer_stack_ = nullptr;
+
     std::shared_ptr<int> sentinel_ = std::make_shared<int>();
     std::set<std::string> fonts_loaded_;
 };

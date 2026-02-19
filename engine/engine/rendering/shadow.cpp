@@ -448,7 +448,7 @@ void shadowmap_generator::init(rtti::context& ctx)
                       &shadow_map_mtx_[ShadowMapRenderTargets::Second][0],
                       &shadow_map_mtx_[ShadowMapRenderTargets::Third][0],
                       &shadow_map_mtx_[ShadowMapRenderTargets::Fourth][0]);
-    uniforms_.submitConstUniforms();
+    // uniforms_.submitConstUniforms();
 
     // clang-format off
     // Settings.
@@ -1078,7 +1078,8 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
     {
         return;
     }
-    uniforms_.submitPerFrameUniforms();
+    // uniforms_.submitConstUniforms();
+    // uniforms_.submitPerFrameUniforms();
     uniforms_.submitPerDrawUniforms();
 
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
@@ -2009,7 +2010,8 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     ShadowMapSettings* currentSmSettings =
         &sm_settings_[settings_.m_lightType][settings_.m_depthImpl][settings_.m_smImpl];
 
-    uniforms_.submitPerFrameUniforms();
+    // uniforms_.submitConstUniforms();
+    // uniforms_.submitPerFrameUniforms();
 
     bool anythingDrawn = false;
     // Craft shadow map.

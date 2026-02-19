@@ -8,6 +8,7 @@
 #include "filesystem/filesystem.h"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/epsilon.hpp"
+#include "hpp/small_vector.hpp"
 
 #include <engine/events.h>
 #include <engine/input/input.h>
@@ -29,6 +30,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
+#include <math/math.h>
 
 #include <string_utils/utils.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -40,7 +42,24 @@
 
 namespace unravel
 {
+namespace
+{
+    Rml::Context* debug_target_context_ = nullptr;
 
+    auto remove_context(Rml::Context* context) -> void
+    {
+        if(debug_target_context_ == context)
+        {
+            debug_target_context_ = nullptr;
+            Rml::Debugger::SetContext(nullptr);
+        }
+        if(context)
+        {
+            Rml::RemoveContext(context->GetName());
+            context = nullptr;
+        }
+    }
+}
 
 auto ui_system::init(rtti::context& ctx) -> bool
 {
@@ -73,7 +92,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
     }
 
     // Create debug context (empty, used for RmlUi debugger)
-    debug_context_ = Rml::CreateContext("main", Rml::Vector2i(width, height));
+    debug_context_ = Rml::CreateContext("debug", Rml::Vector2i(width, height));
     if(!debug_context_)
     {
         APPLOG_ERROR("Failed to create RmlUi debug context");
@@ -81,8 +100,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
         return false;
     }
     Rml::Debugger::Initialise(debug_context_);
-    APPLOG_INFO("UI system initialized successfully ({}x{})", width, height);
-
+    debug_render_layer_stack_ = std::make_shared<RmlUi_RenderLayerStack>();
     // Register component callbacks
     register_component_callbacks(ctx);
 
@@ -111,14 +129,15 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
                 ui_comp.document->Close();
                 ui_comp.document = nullptr;
             }
-            Rml::RemoveContext(ui_comp.context->GetName());
+            remove_context(ui_comp.context);
             ui_comp.context = nullptr;
         }
     }
 
+    debug_target_context_ = nullptr;
     if(debug_context_)
     {
-        Rml::RemoveContext("main");
+        remove_context(debug_context_);
         debug_context_ = nullptr;
     }
     Rml::Debugger::Shutdown();
@@ -132,7 +151,7 @@ void ui_system::on_frame_update(rtti::context& ctx, entt::handle camera_entity, 
     update_ui_document_components(ctx, scn, camera_entity);
 }
 
-void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
+void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, entt::handle camera_entity, scene& scn, delta_t dt)
 {
     if(!output)
     {
@@ -140,9 +159,14 @@ void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn
     }
     APP_SCOPE_PERF("UI/System Render");
 
+
+    auto& camera_comp = camera_entity.get<camera_component>();
+    const auto& camera = camera_comp.get_camera();
+
     scn.registry->view<ui_document_component, active_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
         {
+            auto handle = scn.create_handle(entity);
             if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
             {
                 return;
@@ -158,7 +182,16 @@ void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn
 
             if(ui_comp.render_mode == ui_render_mode::world_space)
             {
+                auto& transform_comp = handle.get<transform_component>();
+                const auto& world_transform = transform_comp.get_transform_global();
+                auto bbox = ui_comp.get_bounds();
+                if(!camera.test_obb(bbox, world_transform))
+                {
+                    return;
+                }
+
                 ensure_document_framebuffer(ui_comp);
+
                 if(!ui_comp.framebuffer || !ui_comp.framebuffer->is_valid())
                 {
                     return;
@@ -185,31 +218,29 @@ void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, scene& scn
             ui_comp.context->Render();
             RmlUi_Backend_Engine::end_frame();
         });
-}
-
-
-auto ui_system::get_context() -> Rml::Context*
-{
-    return debug_context_;
+    if(debug_context_)
+    {
+        auto sz = output->get_size();
+        RmlUi_FrameState frame_state;
+        frame_state.viewport_width = static_cast<int>(sz.width);
+        frame_state.viewport_height = static_cast<int>(sz.height);
+        frame_state.framebuffer = output;
+        frame_state.clear_to_transparent = false;
+        frame_state.render_layers = debug_render_layer_stack_;
+        RmlUi_Backend_Engine::begin_frame(frame_state);
+        debug_context_->SetDimensions(Rml::Vector2i(frame_state.viewport_width, frame_state.viewport_height));
+        debug_context_->Update();
+        debug_context_->Render();
+        RmlUi_Backend_Engine::end_frame();
+    }
 }
 
 
 void ui_system::on_os_event(rtti::context& ctx, os::event& event)
 {
-    if(!ctx.has<renderer>() || !ctx.has<ecs>())
-    {
-        return;
-    }
 
-    
-    if(event.type == os::events::key_down)
-    {
-        if(event.key.code == os::key::code::f2)
-        {
-            bool new_visible = !Rml::Debugger::IsVisible();
-            Rml::Debugger::SetVisible(new_visible);
-        }
-    }
+    auto& ecs_system = ctx.get_cached<ecs>();
+    auto& scene = ecs_system.get_scene();
 
     if(event.type == os::events::display_content_scale_changed)
     {
@@ -230,32 +261,28 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
             // ui_context_->SetDensityIndependentPixelRatio(scale);
         }
     }
-
-    auto& ecs_system = ctx.get_cached<ecs>();
-    auto& scene = ecs_system.get_scene();
-
+    if(Rml::Debugger::IsVisible() && debug_context_)
+    {
+        if(process_event(scene, debug_context_, event))
+        {
+            event = {};
+        }
+    }
     scene.registry->view<ui_document_component, active_component>().each(
         [&](entt::entity, ui_document_component& ui_comp, active_component& active)
         {
             if(ui_comp.context && ui_comp.is_enabled())
             {
-                if(RmlEngine::input_event_handler(ui_comp.context, event))
+                if(process_event(scene, ui_comp.context, event))
                 {
-                    if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
-                    {
-                        auto hover_element = ui_comp.context->GetHoverElement();
-                        if(!is_root_element(scene, hover_element))
-                        {
-                            event = {};
-                        }
-                    }
+                    event = {};
                 }
             }
         });
 
 }
 
-auto ui_system::is_root_element(scene& scn, Rml::Element* element) -> bool
+auto ui_system::is_not_root_element(scene& scn, Rml::Element* element) -> bool
 {
     if(!element)
     {
@@ -263,7 +290,7 @@ auto ui_system::is_root_element(scene& scn, Rml::Element* element) -> bool
     }
     if(element->GetTagName() == "#root")
     {
-        return true;
+        return false;
     }
 
     auto view = scn.registry->view<ui_document_component>();
@@ -272,10 +299,10 @@ auto ui_system::is_root_element(scene& scn, Rml::Element* element) -> bool
         auto& ui_comp = view.get<ui_document_component>(entity);
         if(ui_comp.document == element)
         {
-            return true;
+            return false;
         }
     }
-    return false;
+    return true;
 }
 
 void ui_system::load_font(const std::string& path)
@@ -336,7 +363,8 @@ void ui_system::on_destroy_component(entt::registry& r, entt::entity e)
             component.document->Close();
             component.document = nullptr;
         }
-        Rml::RemoveContext(component.context->GetName());
+
+        remove_context(component.context);
         component.context = nullptr;
     }
     component.framebuffer.reset();
@@ -351,12 +379,71 @@ void ui_system::register_component_callbacks(rtti::context& ctx)
     APPLOG_INFO("UI component callbacks registered");
 }
 
+auto ui_system::is_debugger_enabled() const -> bool
+{
+    return Rml::Debugger::IsVisible();
+}
+void ui_system::set_debugger_enabled(bool enabled)
+{
+    Rml::Debugger::SetVisible(enabled);
+}
+
+auto ui_system::process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool
+{
+    if(!context->ProcessMouseMove(x, y, 0))
+    {
+        auto hover_element = context->GetHoverElement();
+        if(is_not_root_element(scn, hover_element))
+        {
+            if(debug_target_context_ != context)
+            {
+                debug_target_context_ = context;
+                Rml::Debugger::SetContext(context);
+            }
+
+            return true;
+        }
+    }
+    return false;
+}
+
+auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& event) -> bool
+{
+    if(!context)
+    {
+        return false;
+    }
+    if(RmlEngine::input_event_handler(context, event))
+    {
+        if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
+        {
+            auto hover_element = context->GetHoverElement();
+            if(is_not_root_element(scn, hover_element))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, entt::handle camera_entity)
 {
     auto& ev = ctx.get_cached<events>();
     auto& camera_comp = camera_entity.get<camera_component>();
 
     const auto& cam = camera_comp.get_camera();
+    auto& input = ctx.get_cached<input_system>();
+
+    if(Rml::Debugger::IsVisible() && debug_context_)
+    {
+        if(input.manager.is_input_allowed())
+        {
+            auto mouse_x = input.manager.get_mouse().get_position().x;
+            auto mouse_y = input.manager.get_mouse().get_position().y;
+            debug_context_->ProcessMouseMove(static_cast<int>(mouse_x), static_cast<int>(mouse_y), 0);
+        }
+    }
 
     float dp_ratio = 1.0f;
   
@@ -364,9 +451,7 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
     auto viewport_width = static_cast<int>(viewport.width);
     auto viewport_height = static_cast<int>(viewport.height);
   
-    if(ctx.has<input_system>())
     {
-        auto& input = ctx.get_cached<input_system>();
         auto work_zone = input.manager.get_work_zone();
         if(work_zone.w > 0 && work_zone.h > 0)
         {
@@ -382,7 +467,9 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
         entt::handle handle;
         float distance;
     };
-    std::vector<world_space_doc> world_space_docs;
+    hpp::small_vector<world_space_doc> world_space_docs;
+
+    bool hit_found = false;
 
     scn.registry->view<ui_document_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp)
@@ -399,8 +486,10 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
                 }
                 if(ui_comp.context)
                 {
-                    Rml::RemoveContext(ui_comp.context->GetName());
+
+                    remove_context(ui_comp.context);
                     ui_comp.context = nullptr;
+
                 }
             }
 
@@ -425,8 +514,7 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
 
             if(ui_comp.render_mode == ui_render_mode::world_space)
             {
-                const auto scale = ui_comp.get_world_space_scale();
-                dp_ratio = (scale.x + scale.y) * 0.5f;
+                dp_ratio = 1.0f;
             }
             ui_comp.context->SetDimensions(Rml::Vector2i(doc_w, doc_h));
             ui_comp.context->SetDensityIndependentPixelRatio(dp_ratio);
@@ -441,7 +529,13 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
                     {
                         auto mouse_x = input.manager.get_mouse().get_position().x;
                         auto mouse_y = input.manager.get_mouse().get_position().y;
-                        ui_comp.context->ProcessMouseMove(mouse_x, mouse_y, 0);
+
+
+                        if(process_mouse_move(scn, ui_comp.context, static_cast<int>(mouse_x), static_cast<int>(mouse_y)))
+                        {
+                            hit_found = true;
+                        }
+                        
                     }
                     else if(ui_comp.render_mode == ui_render_mode::world_space)
                     {
@@ -479,7 +573,6 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
 
             auto mouse_x = input.manager.get_mouse().get_position().x;
             auto mouse_y = input.manager.get_mouse().get_position().y;
-            bool hit_found = false;
 
             for(const auto& entry : world_space_docs)
             {
@@ -500,10 +593,14 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
                     {
                         px = static_cast<int>(pixel.x);
                         py = static_cast<int>(pixel.y);
-                        hit_found = true;
                     }
                 }
-                ui_comp.context->ProcessMouseMove(px, py, 0);
+
+                if(process_mouse_move(scn, ui_comp.context, px, py))
+                {
+                    hit_found = true;
+                }
+
             }
         }
     }

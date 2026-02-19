@@ -371,7 +371,6 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 
     copy_compiled_lib(app_script_lib_temp, app_script_lib);
 
-    if(!is_deploy_mode)
     {
         auto& am = ctx.get_cached<asset_manager>();
         auto assets = am.get_assets<script>("app");
@@ -381,6 +380,8 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
             return result;
         }
     }
+
+
 
     APPLOG_TRACE("------------------------------------------------");
     APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));

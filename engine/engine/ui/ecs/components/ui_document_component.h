@@ -65,10 +65,13 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
     /// Render layer stack for this document (owned by component, used during render pass)
     std::shared_ptr<RmlUi_RenderLayerStack> render_layer_stack;
 
-    auto get_world_space_scale() const -> math::vec2
-    {
-        return {static_cast<float>(size.width) / pixels_per_world_unit, static_cast<float>(size.height) / pixels_per_world_unit};
-    }
+    auto get_world_space_scale() const -> math::vec2;
+
+        /**
+     * @brief Gets the bounding box of the document
+     * @return The bounding box in local space
+     */
+     auto get_bounds() const -> math::bbox;
     /**
      * @brief Check if document is currently loaded
      * @return True if document is loaded and valid
