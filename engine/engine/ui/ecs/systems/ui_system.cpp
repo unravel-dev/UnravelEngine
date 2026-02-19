@@ -238,29 +238,9 @@ void ui_system::on_frame_render(const gfx::frame_buffer::ptr& output, entt::hand
 
 void ui_system::on_os_event(rtti::context& ctx, os::event& event)
 {
-
     auto& ecs_system = ctx.get_cached<ecs>();
     auto& scene = ecs_system.get_scene();
 
-    if(event.type == os::events::display_content_scale_changed)
-    {
-        // const auto& rend = ctx.get_cached<renderer>();
-        // const auto& window = rend.get_main_window();
-        // auto scale = window->get_window().get_display_scale();
-        // ui_context_->SetDensityIndependentPixelRatio(scale);
-
-    }
-
-    if(event.type == os::events::window)
-    {
-        if(event.window.type == os::window_event_id::size_changed)
-        {
-            // const auto& rend = ctx.get_cached<renderer>();
-            // const auto& window = rend.get_main_window();
-            // auto scale = window->get_window().get_display_scale();
-            // ui_context_->SetDensityIndependentPixelRatio(scale);
-        }
-    }
     if(Rml::Debugger::IsVisible() && debug_context_)
     {
         if(process_event(scene, debug_context_, event))

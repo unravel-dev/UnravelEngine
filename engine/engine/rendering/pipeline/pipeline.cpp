@@ -60,7 +60,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
     particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
-    world_quad_program_ = load_program("vs_world_quad", "rmlui/fs_rmlui_passthrough");
+    world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
 
     return true;
 }
@@ -308,7 +308,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     // World-space UI documents: draw quad with framebuffer texture
     if(world_quad_program_ && world_quad_program_->begin())
     {
-        constexpr uint64_t world_ui_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |// BGFX_STATE_WRITE_Z |
+        constexpr uint64_t world_ui_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z |
                                             BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_NORMAL;
 
         scn.registry->view<transform_component, ui_document_component, active_component>().each(
