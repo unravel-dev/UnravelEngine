@@ -913,29 +913,37 @@ auto deferred::run_lighting_pass(scene& scn,
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
     // --- Indirect lighting pass (once, not per-light) ---
-    // Only directional lights drive ambient/indirect intensity (they represent the sun/sky).
+    // Only directional lights drive ambient/indirect intensity and color (they represent the sun/sky).
     // Point and spot lights are local emitters and don't contribute to global ambient.
     // The ambient intensity is modulated by the sun's elevation angle so that it
     // naturally fades during sunset and reaches zero at night (civil twilight end).
     float global_ambient_intensity = 0.0f;
+    math::vec3 global_ambient_color = {1.0f, 1.0f, 1.0f};
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
             const auto& light = light_comp_ref.get_light();
-            if(light.type == light_type::directional && light.ambient_intensity > global_ambient_intensity)
+            if(light.type != light_type::directional)
             {
-                const auto& world_transform = transform_comp_ref.get_transform_global();
-                const auto& light_dir = world_transform.z_unit_axis();
+                return;
+            }
 
-                // Sun elevation: -light_dir.y gives 1.0 at zenith, 0.0 at horizon, negative below
-                float sun_elevation = -light_dir.y;
+            const auto& world_transform = transform_comp_ref.get_transform_global();
+            const auto& light_dir = world_transform.z_unit_axis();
 
-                // Smooth ramp: full ambient above ~10° (sin≈0.17), zero below ~6° below horizon (sin≈-0.1)
-                float ambient_factor = math::clamp((sun_elevation + 0.1f) / 0.27f, 0.0f, 1.0f);
-                // Smoothstep for a natural transition
-                ambient_factor = ambient_factor * ambient_factor * (3.0f - 2.0f * ambient_factor);
+            // Sun elevation: -light_dir.y gives 1.0 at zenith, 0.0 at horizon, negative below
+            float sun_elevation = -light_dir.y;
 
-                global_ambient_intensity = light.ambient_intensity * ambient_factor;
+            // Smooth ramp: full ambient above ~10° (sin≈0.17), zero below ~6° below horizon (sin≈-0.1)
+            float ambient_factor = math::clamp((sun_elevation + 0.1f) / 0.27f, 0.0f, 1.0f);
+            // Smoothstep for a natural transition
+            ambient_factor = ambient_factor * ambient_factor * (3.0f - 2.0f * ambient_factor);
+
+            float candidate_ambient_intensity = light.ambient_intensity * ambient_factor;
+            if(candidate_ambient_intensity > global_ambient_intensity)
+            {
+                global_ambient_intensity = candidate_ambient_intensity;
+                global_ambient_color = {light.color.value.r, light.color.value.g, light.color.value.b};
             }
         });
 
@@ -943,7 +951,7 @@ auto deferred::run_lighting_pass(scene& scn,
         const auto& iprogram = indirect_lighting_program_;
         iprogram.program->begin();
 
-        float light_data[4] = {0.0f, 0.0f, 0.0f, global_ambient_intensity};
+        float light_data[4] = {global_ambient_color.x, global_ambient_color.y, global_ambient_color.z, global_ambient_intensity};
         gfx::set_uniform(iprogram.u_light_data, light_data);
         gfx::set_uniform(iprogram.u_camera_position, camera_pos);
 

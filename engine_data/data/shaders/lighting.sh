@@ -325,6 +325,12 @@ float Square( float x )
     return x*x;
 }
 
+float Pow4( float x )
+{
+    float xx = x*x;
+    return xx * xx;
+}
+
 vec2 Square( vec2 x )
 {
     return x*x;
@@ -616,6 +622,10 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 #define USE_ENERGY_CONSERVATION 1
 
 
+#ifndef APPLY_AO_TO_DIRECT
+#define APPLY_AO_TO_DIRECT 1
+#endif
+
 #define PI 3.1415926535
 #define RECIP_PI (1.0 / PI)
 #define RADIANS_PER_DEGREE 0.0174532925
@@ -746,7 +756,7 @@ vec3 Diffuse_GGX_Rough( vec3 DiffuseColor, float Roughness, float NoV, float NoL
 	float Fd = mix( F0, FdV * FdL, saturate( 2.2 * g - 0.5 ) );
 
 	// Retro reflectivity contribution.
-	float Fb = ( (34.5 * g - 59 ) * g + 24.5 ) * VoH * exp2( -max( 73.2 * g - 21.2, 8.9 ) * sqrtFast( NoH ) );
+	float Fb = ( (34.5 * g - 59 ) * g + 24.5 ) * VoH * exp2( -max( 73.2 * g - 21.2, 8.9 ) * sqrt( NoH ) );
 	// It fades out when lights become area lights in order to avoid visual artefacts.
 	Fb *= RetroReflectivityWeight;
 
@@ -1226,6 +1236,7 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
 }
 
 // Direct lighting only — microfacet specular + diffuse BRDF, per-light evaluation.
+// AO is applied to diffuse; SpecularOcclusion (derived from NoV, Roughness, AO) is applied to specular for crevice consistency.
 vec3 StandardShadingDirect(
  vec3 DiffuseColor,
  vec3 SpecularColor,
@@ -1233,12 +1244,20 @@ vec3 StandardShadingDirect(
  vec3 LobeEnergy,
  vec3 L,
  vec3 V,
- vec3 N )
+ vec3 N,
+ float AO )
 {
     BxDFContext context;
     Init(context, N, V, L);
 
     float Roughness = MakeRoughnessSafe(LobeRoughness[1]);
+    float RoughnessSq = Roughness * Roughness;
+#if APPLY_AO_TO_DIRECT
+    float SpecularOcclusion = GetSpecularOcclusion(context.NoV, RoughnessSq, AO);
+#else
+    float SpecularOcclusion = 1.0f;
+#endif
+
     // Generalized microfacet specular
     float D = Distribution( Roughness, context.NoH ) * LobeEnergy[1];
     float Vis = Visibility( Roughness, context.NoV, context.NoL, context.VoH, context.NoH );
@@ -1261,12 +1280,17 @@ vec3 StandardShadingDirect(
     float specularTerminatorFade = saturate(context.NoL / 0.04f);
     specularTerminatorFade = specularTerminatorFade * specularTerminatorFade;
 
-    return (DiffuseLighting * EnergyPreservationFactor) + (D * Vis) * F * EnergyConservationFactor * specularTerminatorFade;
+#if APPLY_AO_TO_DIRECT
+    float DirectAO = AO;
+#else
+    float DirectAO = 1.0f;
+#endif
+
+    return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + (D * Vis) * F * EnergyConservationFactor * specularTerminatorFade * SpecularOcclusion;
 }
 
 // Indirect lighting only — environment BRDF + indirect diffuse, evaluated once per pixel.
-// AO is applied only here (not in direct). EnergyPreservationFactor accounts for
-// specular layer absorbing energy from the diffuse layer.
+// EnergyPreservationFactor accounts for specular layer absorbing energy from the diffuse layer.
 vec3 StandardShadingIndirect(
  vec3 DiffuseColor,
  vec3 IndirectDiffuse,

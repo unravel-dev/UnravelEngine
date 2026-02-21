@@ -420,14 +420,14 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float subsurface_attenuation = (intensity * light_radius_mask * light_falloff) * subsurface_shadow;
 
     vec3 energy = AreaLightSpecular(0.0f, 0.0f, normalize(vector_to_light), lobe_roughness, vector_to_light, L, V, N);
-    vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N);
+    vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N, data.ambient_occlusion);
     //vec3 subsurface_lighting = SubsurfaceShadingTwoSided(data.subsurface_color, L, V, N);
     vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, L, V, N);
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
-    // Direct lighting with AO — indirect and emissive are handled in a separate fullscreen pass
-    vec3 direct_lighting = surface_multiplier * direct_surface_lighting * data.ambient_occlusion;
+    // Direct lighting — AO and SO are applied inside StandardShadingDirect; indirect and emissive in separate pass
+    vec3 direct_lighting = surface_multiplier * direct_surface_lighting;
     vec3 lighting = direct_lighting
                   + subsurface_lighting * subsurface_multiplier
                   + colorCoverage * u_shadowMapShowCoverage;
@@ -446,13 +446,14 @@ vec4 pbr_indirect(vec2 texcoord0)
     vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
     clip = clipTransform(clip);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
+    vec3 indirect_color = u_light_data.xyz;
     float indirect_intensity = u_light_data.w;
 
     vec3 N = data.world_normal;
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    // Indirect diffuse carries only irradiance — StandardShadingIndirect applies DiffuseColor and AO
-    vec3 indirect_diffuse = vec3_splat(indirect_intensity);
+    // Indirect diffuse: color and intensity from directional light (sun/sky); StandardShadingIndirect applies DiffuseColor and AO
+    vec3 indirect_diffuse = indirect_color * indirect_intensity;
 
     vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, data.roughness, data.ambient_occlusion, V, N);
 
