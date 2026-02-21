@@ -16,4 +16,21 @@ void compute_perez_luminance(const math::vec3& light_direction,
                              math::vec3& out_sky_luminance_rgb,
                              math::vec3& out_sun_luminance_rgb);
 
+/**
+ * @brief Full Perez params for irradiance SH compute shader (mode 1).
+ */
+struct irradiance_perez_params
+{
+    math::vec3 sun_direction;
+    math::vec3 sky_luminance_rgb;
+    math::vec3 sun_luminance_rgb;
+    math::vec3 sky_luminance_xyz;
+    float exposition;
+    float perez_coeff[5][4];
+};
+
+void compute_irradiance_perez_params(const math::vec3& light_direction,
+                                     float turbidity,
+                                     irradiance_perez_params& out);
+
 } // namespace unravel

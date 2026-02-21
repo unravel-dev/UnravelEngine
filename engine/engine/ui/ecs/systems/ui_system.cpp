@@ -329,7 +329,7 @@ void ui_system::on_load_component(entt::registry& r, entt::entity e)
     {
         auto& ctx = engine::context();
         auto& system = ctx.get_cached<ui_system>();
-        system.load_ui_document(e, component, true);
+        system.load_ui_document(e, component, true, true);
     }
 }
 
@@ -475,7 +475,7 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
 
             if(!ui_comp.is_loaded())
             {
-                load_ui_document(entity, ui_comp, true);
+                load_ui_document(entity, ui_comp, true, false);
             }
 
             if(!ui_comp.document || !ui_comp.context)
@@ -586,17 +586,23 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
     }
 }
 
-auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet) -> bool
+auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet, bool log_error) -> bool
 {
     if(!component.asset)
     {
-        APPLOG_WARNING("Cannot load document: asset is empty");
+        if(log_error)
+        {
+            APPLOG_WARNING("Cannot load document: asset is empty");
+        }
         return false;
     }
     auto asset = component.asset.get();
     if(!asset)
     {
-        APPLOG_WARNING("Cannot load document: document_path is empty");
+        if(log_error)
+        {
+            APPLOG_WARNING("Cannot load document: document_path is empty");
+        }
         return false;
     }
 
@@ -608,7 +614,10 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
         component.context = Rml::CreateContext(context_name, Rml::Vector2i(w, h));
         if(!component.context)
         {
-            APPLOG_ERROR("Failed to create RmlUi context for document");
+            if(log_error)
+            {
+                APPLOG_ERROR("Failed to create RmlUi context for document");
+            }
             return false;
         }
     }
@@ -619,7 +628,10 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
     auto raw_document = component.context->LoadDocumentFromMemory(asset->content, url_safe_path);
     if(!raw_document)
     {
-        APPLOG_ERROR("Failed to load UI document: {}", component.asset.id());
+        if(log_error)
+        {
+            APPLOG_ERROR("Failed to load UI document: {}", component.asset.id());
+        }
         return false;
     }
 

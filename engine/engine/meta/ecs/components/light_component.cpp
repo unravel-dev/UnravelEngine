@@ -101,13 +101,13 @@ REFLECT(skylight_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "uniform"},
             entt::attribute{"pretty_name", "Uniform"},
-            entt::attribute{"tooltip", "Uniform ambient from Perez luminance (perez, standard) or directional light (skybox)."},
+            entt::attribute{"tooltip", "Uniform ambient from Perez luminance (perez, standard)."},
         })
         .data<skylight_component::irradiance_quality::normal_dependent>("normal_dependent"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "normal_dependent"},
             entt::attribute{"pretty_name", "Normal-Dependent"},
-            entt::attribute{"tooltip", "Normal-dependent irradiance via spherical harmonics (future)."},
+            entt::attribute{"tooltip", "Normal-dependent irradiance via spherical harmonics."},
         });
 
     // Register skylight_component class with entt
@@ -171,25 +171,25 @@ REFLECT(skylight_component)
             entt::attribute{"tooltip", "Cloud opacity multiplier. Higher values make clouds more opaque and visible."},
             entt::attribute{"predicate", dynamic_sky_predicate_entt},
         })
-        .data<&skylight_component::set_ambient_intensity, &skylight_component::get_ambient_intensity>("ambient_intensity"_hs)
+        .data<&skylight_component::set_irradiance_intensity, &skylight_component::get_irradiance_intensity>("irradiance_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "ambient_intensity"},
-            entt::attribute{"pretty_name", "Ambient Intensity"},
+            entt::attribute{"name", "irradiance_intensity"},
+            entt::attribute{"pretty_name", "Irradiance Intensity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Strength of indirect diffuse lighting from the sky."},
         })
-        .data<&skylight_component::set_ambient_color, &skylight_component::get_ambient_color>("ambient_color"_hs)
+        .data<&skylight_component::set_irradiance_tint, &skylight_component::get_irradiance_tint>("irradiance_tint"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "ambient_color"},
-            entt::attribute{"pretty_name", "Ambient Color"},
-            entt::attribute{"tooltip", "Optional tint override for ambient (white = use sky-derived color)."},
+            entt::attribute{"name", "irradiance_tint"},
+            entt::attribute{"pretty_name", "Irradiance Tint"},
+            entt::attribute{"tooltip", "Optional tint override for irradiance (white = use sky-derived color)."},
         })
         .data<&skylight_component::set_irradiance_quality, &skylight_component::get_irradiance_quality>("irradiance_quality"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "irradiance_quality"},
-            entt::attribute{"pretty_name", "Quality"},
+            entt::attribute{"pretty_name", "IrradianceQuality"},
             entt::attribute{"tooltip", "Quality of irradiance for indirect diffuse lighting."},
         })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)
@@ -208,8 +208,8 @@ SAVE(skylight_component)
     try_save(ar, ser20::make_nvp("cloud_altitude", obj.get_cloud_altitude()));
     try_save(ar, ser20::make_nvp("cloud_speed", obj.get_cloud_speed()));
     try_save(ar, ser20::make_nvp("cloud_density", obj.get_cloud_density()));
-    try_save(ar, ser20::make_nvp("ambient_intensity", obj.get_ambient_intensity()));
-    try_save(ar, ser20::make_nvp("ambient_color", obj.get_ambient_color()));
+    try_save(ar, ser20::make_nvp("irradiance_intensity", obj.get_irradiance_intensity()));
+    try_save(ar, ser20::make_nvp("irradiance_tint", obj.get_irradiance_tint()));
     try_save(ar, ser20::make_nvp("irradiance_quality", obj.get_irradiance_quality()));
     try_save(ar, ser20::make_nvp("cubemap", obj.get_cubemap()));
 }
@@ -254,16 +254,16 @@ LOAD(skylight_component)
         obj.set_cloud_density(cloud_density);
     }
 
-    float ambient_intensity{};
-    if(try_load(ar, ser20::make_nvp("ambient_intensity", ambient_intensity)))
+    float irradiance_intensity{};
+    if(try_load(ar, ser20::make_nvp("irradiance_intensity", irradiance_intensity)))
     {
-        obj.set_ambient_intensity(ambient_intensity);
+        obj.set_irradiance_intensity(irradiance_intensity);
     }
 
-    math::color ambient_color;
-    if(try_load(ar, ser20::make_nvp("ambient_color", ambient_color)))
+    math::color irradiance_tint;
+    if(try_load(ar, ser20::make_nvp("irradiance_tint", irradiance_tint)))
     {
-        obj.set_ambient_color(ambient_color);
+        obj.set_irradiance_tint(irradiance_tint);
     }
 
     skylight_component::irradiance_quality irradiance_quality{skylight_component::irradiance_quality::uniform};

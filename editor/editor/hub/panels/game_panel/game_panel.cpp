@@ -241,14 +241,15 @@ void game_panel::draw_menubar(rtti::context& ctx)
             ImGui::RadioButton("Base Color", &visualize_passes_, 0);
             ImGui::RadioButton("Diffuse Color", &visualize_passes_, 1);
             ImGui::RadioButton("Specular Color", &visualize_passes_, 2);
-            ImGui::RadioButton("Indirect Specular Color", &visualize_passes_, 3);
-            ImGui::RadioButton("Ambient Occlusion", &visualize_passes_, 4);
-            ImGui::RadioButton("Normals (World Space)", &visualize_passes_, 5);
-            ImGui::RadioButton("Roughness", &visualize_passes_, 6);
-            ImGui::RadioButton("Metalness", &visualize_passes_, 7);
-            ImGui::RadioButton("Emissive Color", &visualize_passes_, 8);
-            ImGui::RadioButton("Subsurface Color", &visualize_passes_, 9);
-            ImGui::RadioButton("Depth", &visualize_passes_, 10);
+            ImGui::RadioButton("Radiance", &visualize_passes_, 3);
+            ImGui::RadioButton("Irradiance", &visualize_passes_, 4);
+            ImGui::RadioButton("Ambient Occlusion", &visualize_passes_, 5);
+            ImGui::RadioButton("Normals (World Space)", &visualize_passes_, 6);
+            ImGui::RadioButton("Roughness", &visualize_passes_, 7);
+            ImGui::RadioButton("Metalness", &visualize_passes_, 8);
+            ImGui::RadioButton("Emissive Color", &visualize_passes_, 9);
+            ImGui::RadioButton("Subsurface Color", &visualize_passes_, 10);
+            ImGui::RadioButton("Depth", &visualize_passes_, 11);
             ImGui::EndMenu();
         }
         ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");

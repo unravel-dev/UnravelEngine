@@ -181,28 +181,28 @@ public:
     void set_cloud_density(float density);
 
     /**
-     * @brief Gets the ambient intensity (strength of indirect diffuse).
-     * @return The ambient intensity value.
+     * @brief Gets the irradiance intensity (strength of indirect diffuse).
+     * @return The irradiance intensity value.
      */
-    auto get_ambient_intensity() const noexcept -> float;
+    auto get_irradiance_intensity() const noexcept -> float;
 
     /**
-     * @brief Sets the ambient intensity.
-     * @param[in] intensity The ambient intensity to set.
+     * @brief Sets the irradiance intensity.
+     * @param[in] intensity The irradiance intensity to set.
      */
-    void set_ambient_intensity(float intensity);
+    void set_irradiance_intensity(float intensity);
 
     /**
-     * @brief Gets the optional ambient color tint override (default from sky when white).
-     * @return The ambient color tint.
+     * @brief Gets the optional irradiance tint override (default from sky when white).
+     * @return The irradiance tint.
      */
-    auto get_ambient_color() const noexcept -> const math::color&;
+    auto get_irradiance_tint() const noexcept -> const math::color&;
 
     /**
-     * @brief Sets the ambient color tint override.
-     * @param[in] color The ambient color to set (white = use sky-derived color).
+     * @brief Sets the irradiance tint override.
+     * @param[in] color The irradiance tint to set (white = use sky-derived color).
      */
-    void set_ambient_color(const math::color& color);
+    void set_irradiance_tint(const math::color& color);
 
     /**
      * @brief Gets the irradiance quality for indirect diffuse.
@@ -278,12 +278,12 @@ private:
     /**
      * @brief Strength of indirect diffuse lighting.
      */
-    float ambient_intensity_{0.15f};
+    float irradiance_intensity_{0.15f};
 
     /**
-     * @brief Optional tint override for ambient (white = use sky-derived color).
+     * @brief Optional tint override for irradiance (white = use sky-derived color).
      */
-    math::color ambient_color_{1.0f, 1.0f, 1.0f, 1.0f};
+    math::color irradiance_tint_{1.0f, 1.0f, 1.0f, 1.0f};
 
     /**
      * @brief Quality of irradiance for indirect diffuse.

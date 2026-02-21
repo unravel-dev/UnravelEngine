@@ -9,6 +9,7 @@ SAMPLER2D(s_tex2, 2);
 SAMPLER2D(s_tex3, 3);
 SAMPLER2D(s_tex4, 4);
 SAMPLER2D(s_tex5, 5);
+SAMPLER2D(s_tex6, 6);
 
 uniform vec4 u_params;
 
@@ -17,22 +18,20 @@ uniform vec4 u_params;
 #define BASE_COLOR 0
 #define DIFFUSE_COLOR 1
 #define SPECULAR_COLOR 2
-#define INDIRECT_SPECULAR_COLOR 3
-#define AMBIENT_OCCLUSION 4
-#define WORLD_NORMAL 5
-#define ROUGHNESS 6
-#define METALNESS 7
-#define EMISSIVE_COLOR 8
-#define SUBSURFACE_COLOR 9
-#define DEPTH 10
+#define RADIANCE 3
+#define IRRADIANCE 4
+#define AMBIENT_OCCLUSION 5
+#define WORLD_NORMAL 6
+#define ROUGHNESS 7
+#define METALNESS 8
+#define EMISSIVE_COLOR 9
+#define SUBSURFACE_COLOR 10
+#define DEPTH 11
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
-    vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
-
 	vec3 color = vec3(0.0f, 0.0f, 0.0f);
-
 
     if(u_mode == BASE_COLOR)
     {
@@ -46,9 +45,9 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         color = data.specular_color;
     }
-    else if(u_mode == INDIRECT_SPECULAR_COLOR)
+    else if(u_mode == RADIANCE)
     {
-        color = indirect_specular;
+        color = texture2D(s_tex5, texcoord0).xyz;
     }
     else if(u_mode == AMBIENT_OCCLUSION)
     {
@@ -77,6 +76,10 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == DEPTH)
     {
         color = vec3_splat(data.depth);
+    }
+    else if(u_mode == IRRADIANCE)
+    {
+        color = eval_irradiance_sh(s_tex6, data.world_normal);
     }
 
     return vec4(color, 1.0f);

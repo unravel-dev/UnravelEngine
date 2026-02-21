@@ -79,7 +79,6 @@ public:
     auto run_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
         -> gfx::frame_buffer::ptr;
 
-
     void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt);
 
     auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
@@ -233,6 +232,33 @@ private:
         std::shared_ptr<gpu_program> program;
     };
 
+    struct irradiance_compute_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_mode, "u_mode", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sun_direction, "u_sun_direction", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sky_luminance, "u_sky_luminance", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sun_luminance, "u_sun_luminance", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_exposition, "u_exposition", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", gfx::uniform_type::Vec4, 5);
+            cache_uniform(program.get(), s_env, "s_env", gfx::uniform_type::Sampler);
+        }
+        gfx::program::uniform_ptr u_mode;
+        gfx::program::uniform_ptr u_irradiance_tint_intensity;
+        gfx::program::uniform_ptr u_sun_direction;
+        gfx::program::uniform_ptr u_sky_luminance;
+        gfx::program::uniform_ptr u_sun_luminance;
+        gfx::program::uniform_ptr u_sky_luminance_xyz;
+        gfx::program::uniform_ptr u_exposition;
+        gfx::program::uniform_ptr u_perez_coeff;
+        gfx::program::uniform_ptr s_env;
+
+        std::unique_ptr<gpu_program> program;
+    } irradiance_compute_program_;
+
     struct indirect_lighting_program : uniforms_cache
     {
         void cache_uniforms()
@@ -247,10 +273,12 @@ private:
             cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
+        gfx::program::uniform_ptr s_irradiance;
 
         std::unique_ptr<gpu_program> program;
 
@@ -267,14 +295,23 @@ private:
             cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_params;
-        std::array<gfx::program::uniform_ptr, 6> s_tex;
+        std::array<gfx::program::uniform_ptr, 7> s_tex;
 
         std::unique_ptr<gpu_program> program;
 
     } debug_visualization_program_;
+
+    struct irradiance_pass_result
+    {
+        gfx::texture::ptr irradiance_tex;
+        math::vec3 global_color = {1.0f, 1.0f, 1.0f};
+        float global_intensity = 0.0f;
+    };
+    auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
 
     auto get_light_program(const light& l) const -> const color_lighting&;
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;

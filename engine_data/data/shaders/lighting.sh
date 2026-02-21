@@ -630,6 +630,33 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 #define RECIP_PI (1.0 / PI)
 #define RADIANS_PER_DEGREE 0.0174532925
 #define DEGREES_PER_RADIAN 57.2957795
+
+// Evaluate irradiance from SH coefficients (9 coeffs per channel) stored in 2D texture.
+// Layout: texel (k, ch) = coeff k for channel ch. Cosine lobe (Lambert) with A0=PI, A1=2*PI/3, A2=PI*0.25.
+vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
+{
+    float x = N.x, y = N.y, z = N.z;
+    float A0 = PI, A1 = (2.0 * PI) / 3.0, A2 = PI * 0.25;
+    float lobe[9];
+    lobe[0] = A0 * 0.282095;
+    lobe[1] = A1 * 0.488603 * y;
+    lobe[2] = A1 * 0.488603 * z;
+    lobe[3] = A1 * 0.488603 * x;
+    lobe[4] = A2 * 1.092548 * x * z;
+    lobe[5] = A2 * 1.092548 * y * z;
+    lobe[6] = A2 * 1.092548 * x * y;
+    lobe[7] = A2 * 0.315392 * (3.0 * z * z - 1.0);
+    lobe[8] = A2 * 0.546274 * (x * x - y * y);
+    vec3 irradiance = vec3(0.0, 0.0, 0.0);
+    for(int k = 0; k < 9; k++)
+    {
+        irradiance.r += texelFetch(coeff_tex, ivec2(k, 0), 0).r * lobe[k];
+        irradiance.g += texelFetch(coeff_tex, ivec2(k, 1), 0).r * lobe[k];
+        irradiance.b += texelFetch(coeff_tex, ivec2(k, 2), 0).r * lobe[k];
+    }
+    return irradiance;
+}
+
 /*=============================================================================
     BRDF: Diffuse functions.
 =============================================================================*/

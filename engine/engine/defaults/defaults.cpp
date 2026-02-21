@@ -518,7 +518,6 @@ auto defaults::create_reflection_probe_entity(rtti::context& ctx, scene& scn, pr
     auto& reflection_comp = object.get_or_emplace<reflection_probe_component>();
     reflection_comp.set_probe(probe);
 
-    object.emplace<tonemapping_component>();
 
     return object;
 }
@@ -613,7 +612,7 @@ void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& sc
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
         auto& skylight = object.get_or_emplace<skylight_component>();
-        skylight.set_ambient_intensity(0.15f);
+        skylight.set_irradiance_intensity(0.15f);
     }
 
     {
@@ -667,7 +666,7 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
         light_comp.set_light(light);
 
         auto& skylight = object.get_or_emplace<skylight_component>();
-        skylight.set_ambient_intensity(0.15f);
+        skylight.set_irradiance_intensity(0.15f);
     }
 
     {

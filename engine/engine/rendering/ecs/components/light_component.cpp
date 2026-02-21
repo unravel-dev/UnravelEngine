@@ -191,24 +191,24 @@ void skylight_component::set_cloud_density(float density)
     cloud_density_ = math::max(density, 0.0f);
 }
 
-auto skylight_component::get_ambient_intensity() const noexcept -> float
+auto skylight_component::get_irradiance_intensity() const noexcept -> float
 {
-    return ambient_intensity_;
+    return irradiance_intensity_;
 }
 
-void skylight_component::set_ambient_intensity(float intensity)
+void skylight_component::set_irradiance_intensity(float intensity)
 {
-    ambient_intensity_ = math::max(intensity, 0.0f);
+    irradiance_intensity_ = math::max(intensity, 0.0f);
 }
 
-auto skylight_component::get_ambient_color() const noexcept -> const math::color&
+auto skylight_component::get_irradiance_tint() const noexcept -> const math::color&
 {
-    return ambient_color_;
+    return irradiance_tint_;
 }
 
-void skylight_component::set_ambient_color(const math::color& color)
+void skylight_component::set_irradiance_tint(const math::color& color)
 {
-    ambient_color_ = color;
+    irradiance_tint_ = color;
 }
 
 auto skylight_component::get_irradiance_quality() const noexcept -> irradiance_quality

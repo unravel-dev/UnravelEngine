@@ -103,7 +103,7 @@ private:
      * @param reload_stylesheet Whether to reload stylesheet
      * @return True if loading was successful, false otherwise
      */
-    auto load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet = false) -> bool;
+    auto load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet = false, bool log_error = true) -> bool;
 
 
 

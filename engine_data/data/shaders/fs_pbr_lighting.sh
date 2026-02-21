@@ -19,11 +19,14 @@ uniform vec4 u_light_color_intensity;
 uniform vec4 u_light_data;
 uniform vec4 u_camera_position;
 
-
+#if PBR_INDIRECT
+SAMPLER2D(s_irradiance, 7);
+#else
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
 SAMPLER2D(s_shadowMap2, 9);
 SAMPLER2D(s_shadowMap3, 10);
+#endif
 
 uniform vec4 u_params0;
 uniform vec4 u_params1;
@@ -438,6 +441,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     return result;
 }
 
+#if PBR_INDIRECT
 // Separate indirect lighting + emissive pass (rendered once as a fullscreen quad, not per-light)
 vec4 pbr_indirect(vec2 texcoord0)
 {
@@ -452,8 +456,7 @@ vec4 pbr_indirect(vec2 texcoord0)
     vec3 N = data.world_normal;
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    // Indirect diffuse: color and intensity from directional light (sun/sky); StandardShadingIndirect applies DiffuseColor and AO
-    vec3 indirect_diffuse = indirect_color * indirect_intensity;
+    vec3 indirect_diffuse = eval_irradiance_sh(s_irradiance, N);
 
     vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, data.roughness, data.ambient_occlusion, V, N);
 
@@ -462,5 +465,6 @@ vec4 pbr_indirect(vec2 texcoord0)
     result.w = 1.0f;
     return result;
 }
+#endif
 
 #endif // __PBRLIGHTING_SH__

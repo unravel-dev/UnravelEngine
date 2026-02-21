@@ -355,4 +355,33 @@ void compute_perez_luminance(const math::vec3& light_direction,
     out_sky_luminance_rgb = math::vec3(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
 }
 
+void compute_irradiance_perez_params(const math::vec3& light_direction,
+                                     float turbidity,
+                                     irradiance_perez_params& out)
+{
+    math::vec3 sun_dir(-light_direction.x, -light_direction.y, -light_direction.z);
+    sun_dir = math::normalize(sun_dir);
+
+    auto hour = ANONYMOUS::hour_of_day(-light_direction);
+    ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
+    ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
+    auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
+    auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
+    out.sun_luminance_rgb = math::vec3(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
+
+    auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
+    out.sky_luminance_xyz =
+        math::vec3(skyLuminanceXYZ.x, skyLuminanceXYZ.y, skyLuminanceXYZ.z);
+    auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
+    out.sky_luminance_rgb = math::vec3(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
+
+    out.sun_direction = sun_dir;
+
+    float sun_altitude = sun_dir.y;
+    float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+    out.exposition = 0.1f * altitude_factor;
+
+    ANONYMOUS::compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);
+}
+
 } // namespace unravel

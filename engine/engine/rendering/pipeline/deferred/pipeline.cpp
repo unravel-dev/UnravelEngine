@@ -235,6 +235,23 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     return fbo;
 }
 
+auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::texture::ptr&
+{
+    auto& tex = rview.tex_get_or_emplace("IRRADIANCE_SH");
+    if(!tex || tex->get_size().width != 9 || tex->get_size().height != 3)
+    {
+        tex = std::make_shared<gfx::texture>(9,
+                                             3,
+                                             false,
+                                             1,
+                                             gfx::texture_format::R32F,
+                                             BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
+                                                 BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_U_CLAMP |
+                                                 BGFX_SAMPLER_V_CLAMP);
+    }
+    return tex;
+}
+
 auto should_rebuild_shadows(const shadow::shadow_map_models_t& visibility_set,
                             const light& light,
                             const math::bbox& light_bounds,
@@ -370,7 +387,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
                         pflags |= pipeline_steps::geometry_pass;
                     }
 
-                    auto params = create_run_params(handle);
+                    auto params = create_run_params(handle, &scn, &camera);
                     params.vflags = vflags;
 
                     run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params, pflags);
@@ -888,6 +905,205 @@ void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
     assao_pass_.run(camera, rview, params);
 }
 
+auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> deferred::irradiance_pass_result
+{
+    APP_SCOPE_PERF("Rendering/Irradiance Pass");
+
+    irradiance_pass_result result;
+
+    if(irradiance_compute_program_.program && irradiance_compute_program_.program->is_valid())
+    {
+        const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
+
+        struct skylight_params
+        {
+            float intensity = 0.0f;
+            float sun_weight = 1.0f;
+            float exposition = 0.1f;
+            math::vec3 color = {1.0f, 1.0f, 1.0f};
+            math::vec3 tint = {1.0f, 1.0f, 1.0f};
+            math::vec3 light_dir;
+            irradiance_perez_params perez;
+            bool use_perez = false;
+            bool is_skybox = false;
+            asset_handle<gfx::texture> cubemap;
+        };
+        skylight_params dominant;
+
+        scn.registry->view<transform_component, skylight_component, active_component>().each(
+            [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
+            {
+                const auto& skylight = skylight_comp_ref;
+                float irradiance_intensity = skylight.get_irradiance_intensity();
+                if(irradiance_intensity <= 0.0f)
+                    return;
+
+                const auto& world_transform = transform_comp_ref.get_transform_global();
+                math::vec3 light_dir = world_transform.z_unit_axis();
+                math::vec3 irradiance_color = {1.0f, 1.0f, 1.0f};
+                bool use_perez = false;
+                bool is_skybox = (skylight.get_mode() == skylight_component::sky_mode::skybox);
+                float sun_weight = 1.0f;
+
+                if(!is_skybox)
+                {
+                    float sun_elevation = -light_dir.y;
+                    // sun_weight: 0 at horizon, 1 at zenith. Smooth ramp over ~20° to avoid near-1 at low angles.
+                    float x = math::clamp(sun_elevation / 0.35f, 0.0f, 1.0f);
+                    sun_weight = x * x * (3.0f - 2.0f * x);
+                }
+                float exposition = 0.1f;
+                if(!is_skybox && skylight.get_irradiance_quality() == skylight_component::irradiance_quality::normal_dependent)
+                {
+                    use_perez = true;
+                    compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), dominant.perez);
+                    compute_perez_luminance(light_dir, dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb);
+                    irradiance_color = glm::mix(dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb, sun_weight);
+                    exposition = dominant.perez.exposition;
+                }
+                else
+                {
+                    if(!is_skybox)
+                    {
+                        math::vec3 sky_luminance_rgb;
+                        math::vec3 sun_luminance_rgb;
+                        compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
+                        // Uniform mode approximates integrated Perez irradiance with a single color.
+                        // Perez integral (sky + circumsolar + sun disc) yields ~4–5× zenith luminance.
+                        // mix(sky, sun, sun_weight * 0.25) empirically matches normal-dependent at same intensity.
+                        irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb,
+                                                    sun_weight * 0.25f);
+                        float sun_altitude = -light_dir.y;
+                        float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+                        exposition = 0.1f * altitude_factor;
+                    }
+                }
+
+                const auto& tint = skylight.get_irradiance_tint();
+                math::vec3 tint_vec = {tint.value.r, tint.value.g, tint.value.b};
+                irradiance_color.x *= tint_vec.x;
+                irradiance_color.y *= tint_vec.y;
+                irradiance_color.z *= tint_vec.z;
+
+                if(irradiance_intensity > dominant.intensity)
+                {
+                    dominant.intensity = irradiance_intensity;
+                    dominant.color = irradiance_color;
+                    dominant.tint = tint_vec;
+                    dominant.light_dir = light_dir;
+                    dominant.use_perez = use_perez;
+                    dominant.is_skybox = is_skybox;
+                    dominant.sun_weight = sun_weight;
+                    dominant.exposition = exposition;
+                    dominant.cubemap = is_skybox ? skylight.get_cubemap() : asset_handle<gfx::texture>{};
+                }
+            });
+
+        gfx::render_pass irr_pass("irradiance_compute_pass");
+        irradiance_compute_program_.program->begin();
+        gfx::set_image(0, irradiance_tex->native_handle(), 0, bgfx::Access::Write);
+
+        int mode = 0;
+        float ambient_vec[4];
+        if(dominant.use_perez)
+        {
+            ambient_vec[0] = dominant.tint.x;
+            ambient_vec[1] = dominant.tint.y;
+            ambient_vec[2] = dominant.tint.z;
+            ambient_vec[3] = dominant.intensity;
+        }
+        else
+        {
+            ambient_vec[0] = dominant.color.x;
+            ambient_vec[1] = dominant.color.y;
+            ambient_vec[2] = dominant.color.z;
+            ambient_vec[3] = dominant.intensity;
+        }
+        auto cubemap_tex = dominant.cubemap.get();
+        const bool use_cubemap = dominant.is_skybox && cubemap_tex && cubemap_tex->info.cubeMap;
+
+        // Perez/uniform use physical luminance (exposition-scaled); cubemaps are typically
+        // pre-baked in display range. Boost intensity for non-cubemap modes so shadow fill
+        // matches cubemap at the same user-facing intensity.
+        constexpr float ambient_intensity_boost = 2.0f;
+        if(!use_cubemap)
+            ambient_vec[3] *= ambient_intensity_boost;
+
+        gfx::set_uniform(irradiance_compute_program_.u_irradiance_tint_intensity, ambient_vec);
+
+        // exposition: scale ambient to display range (matches atmospheric sky, ~0.1 at noon)
+        float exp_vec[4] = {dominant.exposition, 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(irradiance_compute_program_.u_exposition, exp_vec);
+
+        if(dominant.intensity > 0.0f && dominant.use_perez)
+        {
+            mode = 1;
+            gfx::set_uniform(irradiance_compute_program_.u_sun_direction, dominant.perez.sun_direction);
+            gfx::set_uniform(irradiance_compute_program_.u_sky_luminance, dominant.perez.sky_luminance_rgb);
+            gfx::set_uniform(irradiance_compute_program_.u_sun_luminance, dominant.perez.sun_luminance_rgb);
+            gfx::set_uniform(irradiance_compute_program_.u_sky_luminance_xyz, dominant.perez.sky_luminance_xyz);
+            gfx::set_uniform(irradiance_compute_program_.u_perez_coeff, &dominant.perez.perez_coeff[0][0], 5);
+        }
+        else if(use_cubemap)
+        {
+            mode = 2;
+            gfx::set_texture(irradiance_compute_program_.s_env, 1, cubemap_tex);
+        }
+
+        // x=mode, y=sun_weight (applied in shader for all modes)
+        float mode_vec[4] = {float(mode), dominant.sun_weight, 0.0f, 0.0f};
+        gfx::set_uniform(irradiance_compute_program_.u_mode, mode_vec);
+
+        bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
+        irradiance_compute_program_.program->end();
+
+        result.irradiance_tex = irradiance_tex;
+        result.global_color = dominant.color;
+        result.global_intensity = dominant.intensity;
+    }
+    else
+    {
+        // Fallback when irradiance compute is unavailable: still create/bind texture (zeros)
+        const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
+        result.irradiance_tex = irradiance_tex;
+        scn.registry->view<transform_component, skylight_component, active_component>().each(
+            [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
+            {
+                const auto& skylight = skylight_comp_ref;
+                if(skylight.get_irradiance_quality() != skylight_component::irradiance_quality::uniform)
+                    return;
+                float irradiance_intensity = skylight.get_irradiance_intensity();
+                if(irradiance_intensity <= 0.0f)
+                    return;
+                const auto& world_transform = transform_comp_ref.get_transform_global();
+                math::vec3 light_dir = world_transform.z_unit_axis();
+                math::vec3 irradiance_color = {1.0f, 1.0f, 1.0f};
+                if(skylight.get_mode() != skylight_component::sky_mode::skybox)
+                {
+                    math::vec3 sky_luminance_rgb;
+                    math::vec3 sun_luminance_rgb;
+                    compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
+                    float sun_elevation = -light_dir.y;
+                    float x = math::clamp(sun_elevation / 0.35f, 0.0f, 1.0f);
+                    float sun_weight = x * x * (3.0f - 2.0f * x);
+                    irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight);
+                    irradiance_intensity *= sun_weight;
+                }
+                const auto& tint = skylight.get_irradiance_tint();
+                irradiance_color.x *= tint.value.r;
+                irradiance_color.y *= tint.value.g;
+                irradiance_color.z *= tint.value.b;
+                if(irradiance_intensity > result.global_intensity)
+                {
+                    result.global_intensity = irradiance_intensity;
+                    result.global_color = irradiance_color;
+                }
+            });
+    }
+
+    return result;
+}
+
 auto deferred::run_lighting_pass(scene& scn,
                                  const camera& camera,
                                  gfx::render_view& rview,
@@ -913,59 +1129,14 @@ auto deferred::run_lighting_pass(scene& scn,
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
+    const auto irradiance_result = run_irradiance_pass(scn, rview);
+
     // --- Indirect lighting pass (once, not per-light) ---
-    // Ambient/indirect comes from skylight component. If no skylight, use neutral fallback.
-    // irradiance_quality::uniform: Perez luminance (perez/standard) or directional light (skybox).
-    // irradiance_quality::normal_dependent: fall back to uniform until implemented.
-    float global_ambient_intensity = 0.0f;
-    math::vec3 global_ambient_color = {1.0f, 1.0f, 1.0f};
-    scn.registry->view<transform_component, skylight_component, active_component>().each(
-        [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
-        {
-            const auto& skylight = skylight_comp_ref;
-            auto quality = skylight.get_irradiance_quality();
-            if(quality != skylight_component::irradiance_quality::uniform)
-            {
-                return;
-            }
-            float ambient_intensity = skylight.get_ambient_intensity();
-            if(ambient_intensity <= 0.0f)
-            {
-                return;
-            }
-            const auto& world_transform = transform_comp_ref.get_transform_global();
-            math::vec3 ambient_color = {1.0f, 1.0f, 1.0f};
-            math::vec3 light_dir = world_transform.z_unit_axis();
-            if(skylight.get_mode() != skylight_component::sky_mode::skybox)
-            {
-                math::vec3 sky_luminance_rgb;
-                math::vec3 sun_luminance_rgb;
-                compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
-                float sun_elevation = -light_dir.y;
-                float sun_weight = math::clamp((sun_elevation + 0.1f) / 0.27f, 0.0f, 1.0f);
-                sun_weight = sun_weight * sun_weight * (3.0f - 2.0f * sun_weight) * 0.25f;
-                ambient_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight);
-                ambient_intensity = ambient_intensity * sun_weight;
-            }
-
-            
-            const auto& tint = skylight.get_ambient_color();
-            ambient_color.x *= tint.value.r;
-            ambient_color.y *= tint.value.g;
-            ambient_color.z *= tint.value.b;
-            float candidate_ambient_intensity = ambient_intensity;
-            if(candidate_ambient_intensity > global_ambient_intensity)
-            {
-                global_ambient_intensity = candidate_ambient_intensity;
-                global_ambient_color = ambient_color;
-            }
-        });
-
     {
         const auto& iprogram = indirect_lighting_program_;
         iprogram.program->begin();
 
-        float light_data[4] = {global_ambient_color.x, global_ambient_color.y, global_ambient_color.z, global_ambient_intensity};
+        float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
         gfx::set_uniform(iprogram.u_light_data, light_data);
         gfx::set_uniform(iprogram.u_camera_position, camera_pos);
 
@@ -978,6 +1149,10 @@ auto deferred::run_lighting_pass(scene& scn,
         i++;
         gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
         i++;
+        if(irradiance_result.irradiance_tex && iprogram.s_irradiance)
+        {
+            gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
+        }
 
         auto topology = gfx::clip_quad(1.0f);
         gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
@@ -1408,7 +1583,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto& proj = camera.get_projection();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
-    // const auto& lbuffer = rview.fbo_get("LBUFFER");
+    const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
     gfx::render_pass pass("debug_visualization_pass");
     pass.bind(output.get());
@@ -1429,6 +1604,8 @@ void deferred::run_debug_visualization_pass(const camera& camera,
         gfx::set_texture(debug_visualization_program_.s_tex[i], i, gbuffer->get_texture(i));
     }
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, rbuffer);
+    ++i;
+    gfx::set_texture(debug_visualization_program_.s_tex[i], i, irradiance_tex);
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
@@ -1499,6 +1676,13 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     indirect_lighting_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light");
     indirect_lighting_program_.cache_uniforms();
+
+    auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
+    if(cs_irradiance)
+    {
+        irradiance_compute_program_.program = std::make_unique<gpu_program>(cs_irradiance);
+        irradiance_compute_program_.cache_uniforms();
+    }
 
     debug_visualization_program_.program = load_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
     debug_visualization_program_.cache_uniforms();
