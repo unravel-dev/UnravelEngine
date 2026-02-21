@@ -1,5 +1,6 @@
 #include "atmospheric_pass_perez.h"
 #include <engine/assets/asset_manager.h>
+#include <engine/rendering/perez_luminance.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 
@@ -338,4 +339,20 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
 
     gfx::discard();
 }
+
+void compute_perez_luminance(const math::vec3& light_direction,
+                             math::vec3& out_sky_luminance_rgb,
+                             math::vec3& out_sun_luminance_rgb)
+{
+    auto hour = ANONYMOUS::hour_of_day(-light_direction);
+    ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
+    ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
+    auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
+    auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
+    out_sun_luminance_rgb = math::vec3(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
+    auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
+    auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
+    out_sky_luminance_rgb = math::vec3(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
+}
+
 } // namespace unravel

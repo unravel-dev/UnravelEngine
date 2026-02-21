@@ -495,12 +495,6 @@ auto defaults::create_light_entity(rtti::context& ctx, scene& scn, light_type ty
     light_data.color = math::color(255, 244, 214, 255);
     light_data.type = type;
 
-    if(type == light_type::directional)
-    {
-        light_data.ambient_intensity = 0.15f;
-    }
-
-
     auto& light_comp = object.get_or_emplace<light_component>();
     light_comp.set_light(light_data);
 
@@ -618,7 +612,8 @@ void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& sc
     }
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
-        object.emplace<skylight_component>();
+        auto& skylight = object.get_or_emplace<skylight_component>();
+        skylight.set_ambient_intensity(0.15f);
     }
 
     {
@@ -671,7 +666,8 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
         light.casts_shadows = false;
         light_comp.set_light(light);
 
-        object.emplace<skylight_component>();
+        auto& skylight = object.get_or_emplace<skylight_component>();
+        skylight.set_ambient_intensity(0.15f);
     }
 
     {

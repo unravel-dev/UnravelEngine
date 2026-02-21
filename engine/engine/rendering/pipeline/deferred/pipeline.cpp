@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
+#include <engine/rendering/perez_luminance.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
@@ -913,37 +914,50 @@ auto deferred::run_lighting_pass(scene& scn,
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
     // --- Indirect lighting pass (once, not per-light) ---
-    // Only directional lights drive ambient/indirect intensity and color (they represent the sun/sky).
-    // Point and spot lights are local emitters and don't contribute to global ambient.
-    // The ambient intensity is modulated by the sun's elevation angle so that it
-    // naturally fades during sunset and reaches zero at night (civil twilight end).
+    // Ambient/indirect comes from skylight component. If no skylight, use neutral fallback.
+    // irradiance_quality::uniform: Perez luminance (perez/standard) or directional light (skybox).
+    // irradiance_quality::normal_dependent: fall back to uniform until implemented.
     float global_ambient_intensity = 0.0f;
     math::vec3 global_ambient_color = {1.0f, 1.0f, 1.0f};
-    scn.registry->view<transform_component, light_component, active_component>().each(
-        [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
+    scn.registry->view<transform_component, skylight_component, active_component>().each(
+        [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
         {
-            const auto& light = light_comp_ref.get_light();
-            if(light.type != light_type::directional)
+            const auto& skylight = skylight_comp_ref;
+            auto quality = skylight.get_irradiance_quality();
+            if(quality != skylight_component::irradiance_quality::uniform)
             {
                 return;
             }
-
+            float ambient_intensity = skylight.get_ambient_intensity();
+            if(ambient_intensity <= 0.0f)
+            {
+                return;
+            }
             const auto& world_transform = transform_comp_ref.get_transform_global();
-            const auto& light_dir = world_transform.z_unit_axis();
+            math::vec3 ambient_color = {1.0f, 1.0f, 1.0f};
+            math::vec3 light_dir = world_transform.z_unit_axis();
+            if(skylight.get_mode() != skylight_component::sky_mode::skybox)
+            {
+                math::vec3 sky_luminance_rgb;
+                math::vec3 sun_luminance_rgb;
+                compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
+                float sun_elevation = -light_dir.y;
+                float sun_weight = math::clamp((sun_elevation + 0.1f) / 0.27f, 0.0f, 1.0f);
+                sun_weight = sun_weight * sun_weight * (3.0f - 2.0f * sun_weight) * 0.25f;
+                ambient_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight);
+                ambient_intensity = ambient_intensity * sun_weight;
+            }
 
-            // Sun elevation: -light_dir.y gives 1.0 at zenith, 0.0 at horizon, negative below
-            float sun_elevation = -light_dir.y;
-
-            // Smooth ramp: full ambient above ~10° (sin≈0.17), zero below ~6° below horizon (sin≈-0.1)
-            float ambient_factor = math::clamp((sun_elevation + 0.1f) / 0.27f, 0.0f, 1.0f);
-            // Smoothstep for a natural transition
-            ambient_factor = ambient_factor * ambient_factor * (3.0f - 2.0f * ambient_factor);
-
-            float candidate_ambient_intensity = light.ambient_intensity * ambient_factor;
+            
+            const auto& tint = skylight.get_ambient_color();
+            ambient_color.x *= tint.value.r;
+            ambient_color.y *= tint.value.g;
+            ambient_color.z *= tint.value.b;
+            float candidate_ambient_intensity = ambient_intensity;
             if(candidate_ambient_intensity > global_ambient_intensity)
             {
                 global_ambient_intensity = candidate_ambient_intensity;
-                global_ambient_color = {light.color.value.r, light.color.value.g, light.color.value.b};
+                global_ambient_color = ambient_color;
             }
         });
 
@@ -1009,7 +1023,7 @@ auto deferred::run_lighting_pass(scene& scn,
 
             if(light.type == light_type::directional)
             {
-                float light_data[4] = {0.0f, 0.0f, 0.0f, light.ambient_intensity};
+                float light_data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -1019,7 +1033,7 @@ auto deferred::run_lighting_pass(scene& scn,
                 float light_data[4] = {light.point_data.range,
                                        light.point_data.exponent_falloff,
                                        0.0f,
-                                       light.ambient_intensity};
+                                       0.0f};
 
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -1030,7 +1044,7 @@ auto deferred::run_lighting_pass(scene& scn,
                 float light_data[4] = {light.spot_data.get_range(),
                                        math::cos(math::radians(light.spot_data.get_inner_angle() * 0.5f)),
                                        math::cos(math::radians(light.spot_data.get_outer_angle() * 0.5f)),
-                                       light.ambient_intensity};
+                                       0.0f};
 
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_position, light_position);

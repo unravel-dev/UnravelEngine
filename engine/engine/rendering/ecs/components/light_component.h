@@ -97,6 +97,18 @@ public:
     };
 
     /**
+     * @enum irradiance_quality
+     * @brief Quality of irradiance for indirect diffuse lighting.
+     */
+    enum class irradiance_quality
+    {
+        /// Uniform ambient (Perez luminance or directional light color)
+        uniform,
+        /// Normal-dependent via spherical harmonics (future)
+        normal_dependent,
+    };
+
+    /**
      * @brief Gets the current sky mode.
      * @return A constant reference to the current sky mode.
      */
@@ -168,6 +180,42 @@ public:
      */
     void set_cloud_density(float density);
 
+    /**
+     * @brief Gets the ambient intensity (strength of indirect diffuse).
+     * @return The ambient intensity value.
+     */
+    auto get_ambient_intensity() const noexcept -> float;
+
+    /**
+     * @brief Sets the ambient intensity.
+     * @param[in] intensity The ambient intensity to set.
+     */
+    void set_ambient_intensity(float intensity);
+
+    /**
+     * @brief Gets the optional ambient color tint override (default from sky when white).
+     * @return The ambient color tint.
+     */
+    auto get_ambient_color() const noexcept -> const math::color&;
+
+    /**
+     * @brief Sets the ambient color tint override.
+     * @param[in] color The ambient color to set (white = use sky-derived color).
+     */
+    void set_ambient_color(const math::color& color);
+
+    /**
+     * @brief Gets the irradiance quality for indirect diffuse.
+     * @return The irradiance quality.
+     */
+    auto get_irradiance_quality() const noexcept -> irradiance_quality;
+
+    /**
+     * @brief Sets the irradiance quality.
+     * @param[in] quality The irradiance quality to set.
+     */
+    void set_irradiance_quality(irradiance_quality quality);
+
     auto get_cubemap() const noexcept -> const asset_handle<gfx::texture>&
     {
         return cubemap_;
@@ -227,7 +275,21 @@ private:
      */
     float cloud_time_{0.0f};
 
-    //
+    /**
+     * @brief Strength of indirect diffuse lighting.
+     */
+    float ambient_intensity_{0.15f};
+
+    /**
+     * @brief Optional tint override for ambient (white = use sky-derived color).
+     */
+    math::color ambient_color_{1.0f, 1.0f, 1.0f, 1.0f};
+
+    /**
+     * @brief Quality of irradiance for indirect diffuse.
+     */
+    irradiance_quality irradiance_quality_{irradiance_quality::uniform};
+
     asset_handle<gfx::texture> cubemap_;
 };
 

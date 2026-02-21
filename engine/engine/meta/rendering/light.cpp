@@ -640,14 +640,6 @@ REFLECT(light)
             entt::attribute{"name", "intensity"},
             entt::attribute{"pretty_name", "Intensity"} 
         })
-        .data<&light::ambient_intensity>("ambient_intensity"_hs)
-        .custom<entt::attributes>(entt::attributes{ 
-            entt::attribute{"name", "ambient_intensity"},
-            entt::attribute{"pretty_name", "Ambient Intensity"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.01f},
-        })
         .data<&light::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "type"},
@@ -815,7 +807,6 @@ SAVE(light)
 {
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
-    try_save(ar, ser20::make_nvp("ambient_intensity", obj.ambient_intensity));
     try_save(ar, ser20::make_nvp("color", obj.color));
     try_save(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
 
@@ -944,7 +935,6 @@ LOAD(light)
 {
     try_load(ar, ser20::make_nvp("type", obj.type));
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
-    try_load(ar, ser20::make_nvp("ambient_intensity", obj.ambient_intensity));
     try_load(ar, ser20::make_nvp("color", obj.color));
     try_load(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
     try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));

@@ -191,4 +191,34 @@ void skylight_component::set_cloud_density(float density)
     cloud_density_ = math::max(density, 0.0f);
 }
 
+auto skylight_component::get_ambient_intensity() const noexcept -> float
+{
+    return ambient_intensity_;
+}
+
+void skylight_component::set_ambient_intensity(float intensity)
+{
+    ambient_intensity_ = math::max(intensity, 0.0f);
+}
+
+auto skylight_component::get_ambient_color() const noexcept -> const math::color&
+{
+    return ambient_color_;
+}
+
+void skylight_component::set_ambient_color(const math::color& color)
+{
+    ambient_color_ = color;
+}
+
+auto skylight_component::get_irradiance_quality() const noexcept -> irradiance_quality
+{
+    return irradiance_quality_;
+}
+
+void skylight_component::set_irradiance_quality(irradiance_quality quality)
+{
+    irradiance_quality_ = quality;
+}
+
 } // namespace unravel

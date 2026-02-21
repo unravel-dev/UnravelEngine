@@ -208,9 +208,6 @@ struct light
     /// The intensity of the light.
     float intensity = 2.5f;
 
-    /// The ambient intensity of the light.
-    float ambient_intensity = 0.0f;
-
     /// Whether the light casts shadows.
     bool casts_shadows{true};
 
