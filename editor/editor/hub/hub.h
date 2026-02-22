@@ -33,14 +33,21 @@ private:
     void render_projects_list_view(rtti::context& ctx);
     void render_new_project_creator_view(rtti::context& ctx);
     void render_project_remover_view(rtti::context& ctx);
-    
+    void render_project_samples_view(rtti::context& ctx);
     // Draw a project card with consistent styling
-    auto draw_project_card(const std::string& id, 
-                          const std::string& name, 
-                          const std::string& directory, 
-                          const std::chrono::system_clock::time_point& last_modified,
-                          bool is_selected = false,
-                          bool enable_interaction = true,
+    auto draw_project_card(const std::string& id,
+                           const std::string& name,
+                           const std::string& directory,
+                           const std::chrono::system_clock::time_point& last_modified,
+                           bool is_selected = false,
+                           bool enable_interaction = true,
+                           float form_width = 0.0f) -> bool;
+
+    // Draw a sample card (name, description, opens url on click)
+    auto draw_sample_card(const std::string& id,
+                          const std::string& name,
+                          const std::string& description,
+                          const std::string& url,
                           float form_width = 0.0f) -> bool;
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
@@ -51,7 +58,8 @@ private:
     {
         projects_list,
         new_project_creator,
-        project_remover
+        project_remover,
+        project_samples
     };
 
     view_state current_view_{view_state::projects_list};

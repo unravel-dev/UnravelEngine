@@ -260,6 +260,78 @@ auto hub::draw_project_card(const std::string& id,
     return is_hovered && enable_interaction;
 }
 
+auto hub::draw_sample_card(const std::string& id,
+                          const std::string& name,
+                          const std::string& description,
+                          const std::string& url,
+                          float form_width) -> bool
+{
+    ImVec2 card_size(form_width, 0);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 12));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetColorU32(ImGuiCol_FrameBg, 0.6f));
+
+    bool is_hovered = false;
+
+    if(ImGui::BeginChild(id.c_str(), card_size, ImGuiChildFlags_FrameStyle | ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY))
+    {
+        is_hovered = ImGui::IsWindowHovered();
+
+        if(is_hovered)
+        {
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            ImVec2 p_min = ImGui::GetWindowPos();
+            ImVec2 p_max = ImVec2(p_min.x + ImGui::GetWindowSize().x, p_min.y + ImGui::GetWindowSize().y);
+            draw_list->AddRectFilled(p_min, p_max, ImGui::GetColorU32(ImGuiCol_ButtonHovered, 0.4f), 8.0f);
+            draw_list->AddRect(p_min, p_max, ImGui::GetColorU32(ImGuiCol_ButtonActive, 0.6f), 8.0f, 0, 2.0f);
+        }
+
+        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosY() + 4));
+        ImGui::BeginGroup();
+        {
+            ImGui::PushFont(ImGui::Font::Black);
+            ImGui::PushWindowFontScale(1.2);
+            if(is_hovered)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_ButtonActive));
+                ImGui::Text("%s", name.c_str());
+                ImGui::PopStyleColor();
+            }
+            else
+            {
+                ImGui::Text("%s", name.c_str());
+            }
+            ImGui::PopWindowFontScale();
+            ImGui::PopFont();
+
+            ImGui::Spacing();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.9f));
+            ImGui::TextWrapped("%s", description.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndGroup();
+    }
+    ImGui::EndChild();
+
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor();
+
+    if(is_hovered && ImGui::IsMouseClicked(0))
+    {
+        ImGui::OpenInShell(url.c_str());
+    }
+
+    if(is_hovered)
+    {
+        ImGui::SetItemTooltipEx("Click to open download link: %s", url.c_str());
+    }
+
+    return is_hovered;
+}
+
 hub::hub(rtti::context& ctx)
 {
     auto& ui_ev = ctx.get_cached<ui_events>();
@@ -463,6 +535,9 @@ void hub::on_start_page_render(rtti::context& ctx)
                 break;
             case view_state::project_remover:
                 render_project_remover_view(ctx);
+                break;
+            case view_state::project_samples:
+                render_project_samples_view(ctx);
                 break;
         }
 
@@ -760,6 +835,15 @@ void hub::render_projects_list_view(rtti::context& ctx)
             ImGui::SetItemTooltipEx("Remove: %s", project_name.c_str());
         }
         
+        ImGui::Spacing();
+        
+        // Samples button
+        if(ImGui::Button("Samples", ImVec2(sidebar_width, 35)))
+        {
+            current_view_ = view_state::project_samples;
+        }
+        ImGui::SetItemTooltipEx("Browse sample projects to download");
+        
         ImGui::PopStyleVar();
         
         ImGui::Spacing();
@@ -773,6 +857,73 @@ void hub::render_projects_list_view(rtti::context& ctx)
         ImGui::PopStyleColor();
     }
     ImGui::EndGroup();
+}
+
+void hub::render_project_samples_view(rtti::context& ctx)
+{
+    struct sample_item
+    {
+        const char* name;
+        const char* description;
+        const char* url;
+    };
+
+    static const sample_item samples[] = {
+        {"Demo Project",
+         "Full demo project with PBR rendering, physics, audio, and scripting examples.",
+         "https://github.com/unravel-dev/DemoProject"},
+        {"UnravelEngine Repository",
+         "Source code and documentation for the UnravelEngine.",
+         "https://github.com/unravel-dev/UnravelEngine"},
+        {"Engine API Docs",
+         "C++ engine API documentation.",
+         "https://unravel-dev.github.io/UnravelEngine/engine-api/html/"},
+        {"Scripting API Docs",
+         "C# scripting API documentation.",
+         "https://unravel-dev.github.io/UnravelEngine/script-api/html/"},
+    };
+
+    // Header with back button
+    ImGui::BeginGroup();
+    {
+        ImGui::PushFont(ImGui::Font::Black);
+        ImGui::Text("Samples");
+        ImGui::PopFont();
+
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 80);
+        if(ImGui::Button("Back", ImVec2(80, 0)))
+        {
+            current_view_ = view_state::projects_list;
+        }
+    }
+    ImGui::EndGroup();
+
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.8f));
+    ImGui::Text("Click a sample to open its download or documentation link in your browser.");
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 16.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 12.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetColorU32(ImGuiCol_WindowBg, 0.8f));
+
+    float content_width = ImGui::GetContentRegionAvail().x;
+
+    if(ImGui::BeginChild("samples_content", ImVec2(content_width, ImGui::GetContentRegionAvail().y - 24), ImGuiChildFlags_Borders))
+    {
+        for(size_t i = 0; i < std::size(samples); ++i)
+        {
+            const auto& s = samples[i];
+            draw_sample_card(fmt::format("sample_card_{}", i), s.name, s.description, s.url, content_width - 32.0f);
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 void hub::render_new_project_creator_view(rtti::context& ctx)

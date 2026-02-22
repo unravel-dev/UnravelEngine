@@ -465,6 +465,10 @@ void handle_view_manipulator(entt::handle editor_camera, const camera_component&
 
 void handle_gizmo_shortcuts(editing_manager& em)
 {
+    if(!ImGui::IsWindowFocused())
+    {
+        return;
+    }
     if(ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsAnyItemActive() || ImGuizmo::IsUsing())
     {
         return;

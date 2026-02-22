@@ -804,6 +804,7 @@ void version_manager::check_for_update_async()
                   {
                     ImGuiToast toast(ImGuiToastType_Warning, 99999);
                     toast.set_title("New version available.");
+                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
                     toast.set_show_dismiss_button(true);
                     toast.set_on_dismiss(
                         []()
@@ -826,6 +827,8 @@ void version_manager::check_for_update_async()
                     ImGuiToast toast(ImGuiToastType_Warning, 2000);
                     toast.set_title("There are no updates available.");
                     toast.set_content("You are using the latest version.");
+                    toast.set_horizontal_pos(ImGuiToastHorizontalPos_Left);
+
                     ImGui::PushNotification(toast);
                   }
               });
