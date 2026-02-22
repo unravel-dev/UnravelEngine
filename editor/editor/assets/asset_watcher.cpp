@@ -569,6 +569,7 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                                               priority,
                                               [&am, ref_path, output]()
                                               {
+                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", ex::get_type<gfx::shader>(), output.string()));
                                                   asset_compiler::compile<gfx::shader>(am, ref_path, output);
                                               });
             }
