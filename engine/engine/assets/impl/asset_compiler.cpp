@@ -73,11 +73,7 @@ auto run_process(const std::string& process,
                  bool check_retcode,
                  std::string& err) -> bool
 {
-    auto now = std::chrono::high_resolution_clock::now();
     auto result = subprocess::call(process, args_array);
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - now);
-    APPLOG_TRACE("Process {} took {} ", process, duration);
     err = result.out_output;
 
     if(!result.err_output.empty())

@@ -19,12 +19,12 @@ auto prefilter_pass::init(rtti::context& ctx) -> bool
     return cs_.program->is_valid() && mip_downsample_.program->is_valid();
 }
 
-auto prefilter_pass::run(const run_params& params) -> gfx::texture::ptr
+auto prefilter_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
-    return run_compute(params);
+    return run_compute(rview, params);
 }
 
-auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
+auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
     // Prepare output cubemap
     const auto& ti = params.output_cube->info;

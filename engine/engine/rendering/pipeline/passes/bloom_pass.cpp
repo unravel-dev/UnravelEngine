@@ -55,7 +55,8 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
     }
 }
 
-auto bloom_pass::create_or_update_output_fb(const gfx::frame_buffer::ptr& input,
+auto bloom_pass::create_or_update_output_fb(gfx::render_view& rview,
+                                            const gfx::frame_buffer::ptr& input,
                                             const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr
 {
     if(output)
@@ -63,22 +64,23 @@ auto bloom_pass::create_or_update_output_fb(const gfx::frame_buffer::ptr& input,
         return output;
     }
     auto input_sz = input->get_size();
-    if(!output_ || input_sz != output_->get_size())
+    auto& output_tex = rview.tex_get_or_emplace("BLOOM_OUTPUT");
+    if(!output_tex || output_tex->get_size() != input_sz)
     {
-        if(output_)
-        {
-            output_.reset();
-        }
-        auto output_tex = std::make_shared<gfx::texture>(input_sz.width,
-                                                         input_sz.height,
-                                                         false,
-                                                         1,
-                                                         gfx::texture_format::RGBA16F,
-                                                         BGFX_TEXTURE_RT);
-        output_ = std::make_shared<gfx::frame_buffer>();
-        output_->populate({output_tex});
+        output_tex = std::make_shared<gfx::texture>(input_sz.width,
+                                                    input_sz.height,
+                                                    false,
+                                                    1,
+                                                    gfx::texture_format::RGBA16F,
+                                                    BGFX_TEXTURE_RT);
     }
-    return output_;
+    auto& output_fbo = rview.fbo_get_or_emplace("BLOOM_OUTPUT");
+    if(!output_fbo || output_fbo->get_size() != input_sz)
+    {
+        output_fbo = std::make_shared<gfx::frame_buffer>();
+        output_fbo->populate({output_tex});
+    }
+    return output_fbo;
 }
 
 auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
@@ -212,7 +214,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         upsample_program_.program->end();
     }
 
-    auto output = create_or_update_output_fb(input, params.output);
+    auto output = create_or_update_output_fb(rview, input, params.output);
 
     gfx::render_pass pass("bloom_combine");
     pass.bind(output.get());

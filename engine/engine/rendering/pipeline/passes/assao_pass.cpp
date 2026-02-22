@@ -3,6 +3,7 @@
 #include <engine/assets/asset_manager.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <string>
 
 namespace unravel
 {
@@ -109,15 +110,32 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
     m_settings = params.params;
 
     const auto size = params.depth->get_size();
+    const int32_t width = static_cast<int32_t>(size.width);
+    const int32_t height = static_cast<int32_t>(size.height);
 
-    m_width = size.width;
-    m_height = size.height;
+    dimensions dims;
+    const int32_t border = 0;
+    dims.size[0] = width + 2 * border;
+    dims.size[1] = height + 2 * border;
+    dims.halfSize[0] = (dims.size[0] + 1) / 2;
+    dims.halfSize[1] = (dims.size[1] + 1) / 2;
+    dims.quarterSize[0] = (dims.halfSize[0] + 1) / 2;
+    dims.quarterSize[1] = (dims.halfSize[1] + 1) / 2;
+    vec4iSet(dims.fullResOutScissorRect, border, border, width + border, height + border);
+    vec4iSet(dims.halfResOutScissorRect,
+             dims.fullResOutScissorRect[0] / 2,
+             dims.fullResOutScissorRect[1] / 2,
+             (dims.fullResOutScissorRect[2] + 1) / 2,
+             (dims.fullResOutScissorRect[3] + 1) / 2);
+    const int32_t blurEnlarge =
+        cMaxBlurPassCount + bx::max(0, cMaxBlurPassCount - 2);
+    vec4iSet(dims.halfResOutScissorRect,
+             bx::max(0, dims.halfResOutScissorRect[0] - blurEnlarge),
+             bx::max(0, dims.halfResOutScissorRect[1] - blurEnlarge),
+             bx::min(dims.halfSize[0], dims.halfResOutScissorRect[2] + blurEnlarge),
+             bx::min(dims.halfSize[1], dims.halfResOutScissorRect[3] + blurEnlarge));
 
-    if(m_size[0] != (int32_t)m_width - 2 * m_border || m_size[1] != (int32_t)m_height - 2 * m_border)
-    {
-        destroy_frame_buffers();
-        create_frame_buffers();
-    }
+    create_or_update_frame_buffers(rview, dims);
 
     const float* viewMtx = cam.get_view();
     float projMtx[16];
@@ -128,22 +146,35 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
     if(cam.get_projection_mode() == projection_mode::perspective)
     {
         auto fovy = cam.get_fov();
-        bx::mtxProj(projMtx, fovy, float(m_size[0]) / float(m_size[1]), n, f, false);
+        bx::mtxProj(projMtx, fovy, float(dims.size[0]) / float(dims.size[1]), n, f, false);
     }
     else
     {
         float zoom = cam.get_zoom_factor();
-        const frect_t rect = {-(float(m_size[0]) / 2.0f) * zoom,
-                              (float(m_size[1]) / 2.0f) * zoom,
-                              (float(m_size[0]) / 2.0f) * zoom,
-                              -(float(m_size[1]) / 2.0f) * zoom};
+        const frect_t rect = {-(float(dims.size[0]) / 2.0f) * zoom,
+                              (float(dims.size[1]) / 2.0f) * zoom,
+                              (float(dims.size[0]) / 2.0f) * zoom,
+                              -(float(dims.size[1]) / 2.0f) * zoom};
 
         bx::mtxOrtho(projMtx, rect.left, rect.right, rect.bottom, rect.top, n, f, 0, false);
     }
 
     // ASSAO passes
 #if USE_ASSAO == 0
-    update_uniforms(0, viewMtx, projMtx);
+    const auto& halfDepths0 = rview.tex_get("ASSAO_HALF_DEPTH_0");
+    const auto& halfDepths1 = rview.tex_get("ASSAO_HALF_DEPTH_1");
+    const auto& halfDepths2 = rview.tex_get("ASSAO_HALF_DEPTH_2");
+    const auto& halfDepths3 = rview.tex_get("ASSAO_HALF_DEPTH_3");
+    const gfx::texture::ptr halfDepthsArr[4] = {halfDepths0, halfDepths1, halfDepths2, halfDepths3};
+    const auto& pingPongA = rview.tex_get("ASSAO_PING_PONG_A");
+    const auto& pingPongB = rview.tex_get("ASSAO_PING_PONG_B");
+    const auto& finalResults = rview.tex_get("ASSAO_FINAL_RESULTS");
+    const auto& normals = rview.tex_get("ASSAO_NORMALS");
+    const auto& importanceMap = rview.tex_get("ASSAO_IMPORTANCE_MAP");
+    const auto& importanceMapPong = rview.tex_get("ASSAO_IMPORTANCE_MAP_PONG");
+    const auto& aoMap = rview.tex_get("ASSAO_AO_MAP");
+
+    update_uniforms(0, viewMtx, projMtx, dims);
 
     gfx::render_pass pass("assao_pass");
     auto view = pass.id;
@@ -154,52 +185,58 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
         if(m_settings.generate_normals)
         {
-            bgfx::setImage(5, m_normals, 0, bgfx::Access::Write);
+            bgfx::setImage(5, normals->native_handle(), 0, bgfx::Access::Write);
         }
 
         if(m_settings.quality_level < 0)
         {
             for(int32_t j = 0; j < 2; ++j)
             {
-                bgfx::setImage((uint8_t)(j + 1), m_halfDepths[j == 0 ? 0 : 3], 0, bgfx::Access::Write);
+                bgfx::setImage((uint8_t)(j + 1),
+                              (j == 0 ? halfDepths0 : halfDepths3)->native_handle(),
+                              0,
+                              bgfx::Access::Write);
             }
 
             bgfx::dispatch(view,
                            m_settings.generate_normals ? m_prepareDepthsAndNormalsHalfProgram
                                                        : m_prepareDepthsHalfProgram,
-                           (m_halfSize[0] + 7) / 8,
-                           (m_halfSize[1] + 7) / 8);
+                           (dims.halfSize[0] + 7) / 8,
+                           (dims.halfSize[1] + 7) / 8);
         }
         else
         {
-            for(int32_t j = 0; j < 4; ++j)
-            {
-                bgfx::setImage((uint8_t)(j + 1), m_halfDepths[j], 0, bgfx::Access::Write);
-            }
+            bgfx::setImage(1, halfDepths0->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setImage(2, halfDepths1->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setImage(3, halfDepths2->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setImage(4, halfDepths3->native_handle(), 0, bgfx::Access::Write);
 
             bgfx::dispatch(view,
                            m_settings.generate_normals ? m_prepareDepthsAndNormalsProgram : m_prepareDepthsProgram,
-                           (m_halfSize[0] + 7) / 8,
-                           (m_halfSize[1] + 7) / 8);
+                           (dims.halfSize[0] + 7) / 8,
+                           (dims.halfSize[1] + 7) / 8);
         }
     }
 
     // only do mipmaps for higher quality levels (not beneficial on quality level 1, and detrimental on quality level 0)
     if(m_settings.quality_level > 1)
     {
-        uint16_t mipWidth = (uint16_t)m_halfSize[0];
-        uint16_t mipHeight = (uint16_t)m_halfSize[1];
+        uint16_t mipWidth = (uint16_t)dims.halfSize[0];
+        uint16_t mipHeight = (uint16_t)dims.halfSize[1];
 
         for(uint8_t i = 1; i < SSAO_DEPTH_MIP_LEVELS; i++)
         {
             mipWidth = (uint16_t)bx::max(1, mipWidth >> 1);
             mipHeight = (uint16_t)bx::max(1, mipHeight >> 1);
 
-            for(uint8_t j = 0; j < 4; ++j)
-            {
-                bgfx::setImage(j, m_halfDepths[j], i - 1, bgfx::Access::Read);
-                bgfx::setImage(j + 4, m_halfDepths[j], i, bgfx::Access::Write);
-            }
+            bgfx::setImage(0, halfDepths0->native_handle(), i - 1, bgfx::Access::Read);
+            bgfx::setImage(4, halfDepths0->native_handle(), i, bgfx::Access::Write);
+            bgfx::setImage(1, halfDepths1->native_handle(), i - 1, bgfx::Access::Read);
+            bgfx::setImage(5, halfDepths1->native_handle(), i, bgfx::Access::Write);
+            bgfx::setImage(2, halfDepths2->native_handle(), i - 1, bgfx::Access::Read);
+            bgfx::setImage(6, halfDepths2->native_handle(), i, bgfx::Access::Write);
+            bgfx::setImage(3, halfDepths3->native_handle(), i - 1, bgfx::Access::Read);
+            bgfx::setImage(7, halfDepths3->native_handle(), i, bgfx::Access::Write);
 
             m_uniforms.submit();
             float rect[4] = {0.0f, 0.0f, (float)mipWidth, (float)mipHeight};
@@ -229,12 +266,12 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
         int32_t passCount = 4;
 
-        int32_t halfResNumX = (m_halfResOutScissorRect[2] - m_halfResOutScissorRect[0] + 7) / 8;
-        int32_t halfResNumY = (m_halfResOutScissorRect[3] - m_halfResOutScissorRect[1] + 7) / 8;
-        float halfResRect[4] = {(float)m_halfResOutScissorRect[0],
-                                (float)m_halfResOutScissorRect[1],
-                                (float)m_halfResOutScissorRect[2],
-                                (float)m_halfResOutScissorRect[3]};
+        int32_t halfResNumX = (dims.halfResOutScissorRect[2] - dims.halfResOutScissorRect[0] + 7) / 8;
+        int32_t halfResNumY = (dims.halfResOutScissorRect[3] - dims.halfResOutScissorRect[1] + 7) / 8;
+        float halfResRect[4] = {(float)dims.halfResOutScissorRect[0],
+                                (float)dims.halfResOutScissorRect[1],
+                                (float)dims.halfResOutScissorRect[2],
+                                (float)dims.halfResOutScissorRect[3]};
 
         for(int32_t pass = 0; pass < passCount; pass++)
         {
@@ -265,22 +302,31 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                 blurPasses = bx::min(1, m_settings.blur_pass_count);
             }
 
-            update_uniforms(pass, viewMtx, projMtx);
+            update_uniforms(pass, viewMtx, projMtx, dims);
 
-            bgfx::TextureHandle pPingRT = m_pingPongHalfResultA;
-            bgfx::TextureHandle pPongRT = m_pingPongHalfResultB;
+            bgfx::TextureHandle pPingRT = pingPongA->native_handle();
+            bgfx::TextureHandle pPongRT = pingPongB->native_handle();
 
             // Generate
             {
-                bgfx::setImage(6, blurPasses == 0 ? m_finalResults : pPingRT, 0, bgfx::Access::Write);
+                bgfx::setImage(6,
+                              blurPasses == 0 ? finalResults->native_handle() : pPingRT,
+                              0,
+                              bgfx::Access::Write);
 
                 bgfx::setUniform(u_rect, halfResRect);
 
-                bgfx::setTexture(0, s_viewspaceDepthSource, m_halfDepths[pass], SAMPLER_POINT_CLAMP);
-                bgfx::setTexture(1, s_viewspaceDepthSourceMirror, m_halfDepths[pass], SAMPLER_POINT_MIRROR);
+                bgfx::setTexture(0,
+                                 s_viewspaceDepthSource,
+                                 halfDepthsArr[pass]->native_handle(),
+                                 SAMPLER_POINT_CLAMP);
+                bgfx::setTexture(1,
+                                 s_viewspaceDepthSourceMirror,
+                                 halfDepthsArr[pass]->native_handle(),
+                                 SAMPLER_POINT_MIRROR);
                 if(m_settings.generate_normals)
                 {
-                    bgfx::setImage(2, m_normals, 0, bgfx::Access::Read);
+                    bgfx::setImage(2, normals->native_handle(), 0, bgfx::Access::Read);
                 }
                 else
                 {
@@ -290,8 +336,8 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                 if(!adaptiveBasePass && (m_settings.quality_level == 3))
                 {
                     bgfx::setBuffer(3, m_loadCounter, bgfx::Access::Read);
-                    bgfx::setTexture(4, s_importanceMap, m_importanceMap, SAMPLER_LINEAR_CLAMP);
-                    bgfx::setImage(5, m_finalResults, 0, bgfx::Access::Read);
+                    bgfx::setTexture(4, s_importanceMap, importanceMap->native_handle(), SAMPLER_LINEAR_CLAMP);
+                    bgfx::setImage(5, finalResults->native_handle(), 0, bgfx::Access::Read);
                 }
 
                 bgfx::ProgramHandle programsNormal[5] = {m_generateQ0Program,
@@ -335,7 +381,10 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
                     bgfx::setUniform(u_rect, halfResRect);
 
-                    bgfx::setImage(0, i == (blurPasses - 1) ? m_finalResults : pPongRT, 0, bgfx::Access::Write);
+                    bgfx::setImage(0,
+                                   i == (blurPasses - 1) ? finalResults->native_handle() : pPongRT,
+                                   0,
+                                   bgfx::Access::Write);
                     bgfx::setTexture(1,
                                      s_blurInput,
                                      pPingRT,
@@ -371,47 +420,46 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
         if(ssaoPass == 0 && m_settings.quality_level == 3)
         { // Generate importance map
             m_uniforms.submit();
-            bgfx::setImage(0, m_importanceMap, 0, bgfx::Access::Write);
-            bgfx::setTexture(1, s_finalSSAO, m_finalResults, SAMPLER_POINT_CLAMP);
+            bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setTexture(1, s_finalSSAO, finalResults->native_handle(), SAMPLER_POINT_CLAMP);
             bgfx::dispatch(view,
                            m_generateImportanceMapProgram,
-                           (m_quarterSize[0] + 7) / 8,
-                           (m_quarterSize[1] + 7) / 8);
+                           (dims.quarterSize[0] + 7) / 8,
+                           (dims.quarterSize[1] + 7) / 8);
 
             m_uniforms.submit();
-            bgfx::setImage(0, m_importanceMapPong, 0, bgfx::Access::Write);
-            bgfx::setTexture(1, s_importanceMap, m_importanceMap);
+            bgfx::setImage(0, importanceMapPong->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setTexture(1, s_importanceMap, importanceMap->native_handle());
             bgfx::dispatch(view,
                            m_postprocessImportanceMapAProgram,
-                           (m_quarterSize[0] + 7) / 8,
-                           (m_quarterSize[1] + 7) / 8);
+                           (dims.quarterSize[0] + 7) / 8,
+                           (dims.quarterSize[1] + 7) / 8);
 
             bgfx::setBuffer(0, m_loadCounter, bgfx::Access::ReadWrite);
             bgfx::dispatch(view, m_loadCounterClearProgram, 1, 1);
 
             m_uniforms.submit();
-            bgfx::setImage(0, m_importanceMap, 0, bgfx::Access::Write);
-            bgfx::setTexture(1, s_importanceMap, m_importanceMapPong);
+            bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
+            bgfx::setTexture(1, s_importanceMap, importanceMapPong->native_handle());
             bgfx::setBuffer(2, m_loadCounter, bgfx::Access::ReadWrite);
             bgfx::dispatch(view,
                            m_postprocessImportanceMapBProgram,
-                           (m_quarterSize[0] + 7) / 8,
-                           (m_quarterSize[1] + 7) / 8);
+                           (dims.quarterSize[0] + 7) / 8,
+                           (dims.quarterSize[1] + 7) / 8);
         }
     }
 
     // Apply
     {
-        // select 4 deinterleaved AO textures (texture array)
-        bgfx::setImage(0, m_aoMap, 0, bgfx::Access::Write);
-        bgfx::setTexture(1, s_finalSSAO, m_finalResults);
+        bgfx::setImage(0, aoMap->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setTexture(1, s_finalSSAO, finalResults->native_handle());
 
         m_uniforms.submit();
 
-        float rect[4] = {(float)m_fullResOutScissorRect[0],
-                         (float)m_fullResOutScissorRect[1],
-                         (float)m_fullResOutScissorRect[2],
-                         (float)m_fullResOutScissorRect[3]};
+        float rect[4] = {(float)dims.fullResOutScissorRect[0],
+                         (float)dims.fullResOutScissorRect[1],
+                         (float)dims.fullResOutScissorRect[2],
+                         (float)dims.fullResOutScissorRect[3]};
         bgfx::setUniform(u_rect, rect);
 
         bgfx::ProgramHandle program;
@@ -423,18 +471,19 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             program = m_applyProgram;
         bgfx::dispatch(view,
                        program,
-                       (m_fullResOutScissorRect[2] - m_fullResOutScissorRect[0] + 7) / 8,
-                       (m_fullResOutScissorRect[3] - m_fullResOutScissorRect[1] + 7) / 8);
+                       (dims.fullResOutScissorRect[2] - dims.fullResOutScissorRect[0] + 7) / 8,
+                       (dims.fullResOutScissorRect[3] - dims.fullResOutScissorRect[1] + 7) / 8);
     }
 
 #endif
 
     {
         gfx::render_pass pass("update g_buffer ao pass");
+        const auto& aoMapTex = rview.tex_get("ASSAO_AO_MAP");
         bgfx::setImage(0, params.color_ao->native_handle(), 0, bgfx::Access::ReadWrite);
-        bgfx::setImage(1, m_aoMap, 0, bgfx::Access::Read);
+        bgfx::setImage(1, aoMapTex->native_handle(), 0, bgfx::Access::Read);
 
-        bgfx::dispatch(pass.id, m_updateGBufferProgram, (m_size[0] + 7) / 8, (m_size[1] + 7) / 8);
+        bgfx::dispatch(pass.id, m_updateGBufferProgram, (dims.size[0] + 7) / 8, (dims.size[1] + 7) / 8);
     }
 
     gfx::discard();
@@ -459,125 +508,117 @@ auto assao_pass::shutdown() -> int32_t
     bgfx::destroy(s_importanceMap);
 
     bgfx::destroy(m_loadCounter);
-    destroy_frame_buffers();
 
     m_programs.clear();
 
     return 0;
 }
 
-void assao_pass::create_frame_buffers()
+void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const dimensions& dims)
 {
-    m_border = 0;
-
-    m_size[0] = m_width + 2 * m_border;
-    m_size[1] = m_height + 2 * m_border;
-    m_halfSize[0] = (m_size[0] + 1) / 2;
-    m_halfSize[1] = (m_size[1] + 1) / 2;
-    m_quarterSize[0] = (m_halfSize[0] + 1) / 2;
-    m_quarterSize[1] = (m_halfSize[1] + 1) / 2;
-
-    vec4iSet(m_fullResOutScissorRect, m_border, m_border, m_width + m_border, m_height + m_border);
-    vec4iSet(m_halfResOutScissorRect,
-             m_fullResOutScissorRect[0] / 2,
-             m_fullResOutScissorRect[1] / 2,
-             (m_fullResOutScissorRect[2] + 1) / 2,
-             (m_fullResOutScissorRect[3] + 1) / 2);
-
-    int32_t blurEnlarge =
-        cMaxBlurPassCount + bx::max(0, cMaxBlurPassCount - 2); // +1 for max normal blurs, +2 for wide blurs
-    vec4iSet(m_halfResOutScissorRect,
-             bx::max(0, m_halfResOutScissorRect[0] - blurEnlarge),
-             bx::max(0, m_halfResOutScissorRect[1] - blurEnlarge),
-             bx::min(m_halfSize[0], m_halfResOutScissorRect[2] + blurEnlarge),
-             bx::min(m_halfSize[1], m_halfResOutScissorRect[3] + blurEnlarge));
-
-    // Make gbuffer and related textures
+    const uint64_t halfDepthFlags = BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP;
+    const usize32_t halfSz{static_cast<uint32_t>(dims.halfSize[0]),
+                          static_cast<uint32_t>(dims.halfSize[1])};
+    const usize32_t fullSz{static_cast<uint32_t>(dims.size[0]),
+                          static_cast<uint32_t>(dims.size[1])};
+    const usize32_t quarterSz{static_cast<uint32_t>(dims.quarterSize[0]),
+                              static_cast<uint32_t>(dims.quarterSize[1])};
 
     for(int32_t i = 0; i < 4; i++)
     {
-        m_halfDepths[i] = bgfx::createTexture2D(uint16_t(m_halfSize[0]),
-                                                uint16_t(m_halfSize[1]),
-                                                true,
-                                                1,
-                                                bgfx::TextureFormat::R16F,
-                                                BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
+        auto key = "ASSAO_HALF_DEPTH_" + std::to_string(i);
+        auto& tex = rview.tex_get_or_emplace(key);
+        if(!tex || tex->get_size() != halfSz)
+        {
+            tex = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
+                                                 uint16_t(dims.halfSize[1]),
+                                                 true,
+                                                 1,
+                                                 gfx::texture_format::R16F,
+                                                 halfDepthFlags);
+        }
     }
 
-    m_pingPongHalfResultA = bgfx::createTexture2D(uint16_t(m_halfSize[0]),
-                                                  uint16_t(m_halfSize[1]),
+    auto& pingA = rview.tex_get_or_emplace("ASSAO_PING_PONG_A");
+    if(!pingA || pingA->get_size() != halfSz)
+    {
+        pingA = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
+                                               uint16_t(dims.halfSize[1]),
+                                               false,
+                                               2,
+                                               gfx::texture_format::RG8,
+                                               BGFX_TEXTURE_COMPUTE_WRITE);
+    }
+    auto& pingB = rview.tex_get_or_emplace("ASSAO_PING_PONG_B");
+    if(!pingB || pingB->get_size() != halfSz)
+    {
+        pingB = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
+                                               uint16_t(dims.halfSize[1]),
+                                               false,
+                                               2,
+                                               gfx::texture_format::RG8,
+                                               BGFX_TEXTURE_COMPUTE_WRITE);
+    }
+
+    auto& finalRes = rview.tex_get_or_emplace("ASSAO_FINAL_RESULTS");
+    if(!finalRes || finalRes->get_size() != halfSz)
+    {
+        finalRes = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
+                                                  uint16_t(dims.halfSize[1]),
                                                   false,
-                                                  2,
-                                                  bgfx::TextureFormat::RG8,
-                                                  BGFX_TEXTURE_COMPUTE_WRITE);
-    m_pingPongHalfResultB = bgfx::createTexture2D(uint16_t(m_halfSize[0]),
-                                                  uint16_t(m_halfSize[1]),
-                                                  false,
-                                                  2,
-                                                  bgfx::TextureFormat::RG8,
-                                                  BGFX_TEXTURE_COMPUTE_WRITE);
+                                                  4,
+                                                  gfx::texture_format::RG8,
+                                                  BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
+    }
 
-    m_finalResults = bgfx::createTexture2D(uint16_t(m_halfSize[0]),
-                                           uint16_t(m_halfSize[1]),
-                                           false,
-                                           4,
-                                           bgfx::TextureFormat::RG8,
-                                           BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
+    auto& normals = rview.tex_get_or_emplace("ASSAO_NORMALS");
+    if(!normals || normals->get_size() != fullSz)
+    {
+        normals = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
+                                                 uint16_t(dims.size[1]),
+                                                 false,
+                                                 1,
+                                                 gfx::texture_format::RGBA8,
+                                                 BGFX_TEXTURE_COMPUTE_WRITE);
+    }
 
-    m_normals = bgfx::createTexture2D(uint16_t(m_size[0]),
-                                      uint16_t(m_size[1]),
-                                      false,
-                                      1,
-                                      bgfx::TextureFormat::RGBA8,
-                                      BGFX_TEXTURE_COMPUTE_WRITE);
+    auto& importanceMap = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP");
+    if(!importanceMap || importanceMap->get_size() != quarterSz)
+    {
+        importanceMap = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
+                                                       uint16_t(dims.quarterSize[1]),
+                                                       false,
+                                                       1,
+                                                       gfx::texture_format::R8,
+                                                       BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
+    }
+    auto& importanceMapPong = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP_PONG");
+    if(!importanceMapPong || importanceMapPong->get_size() != quarterSz)
+    {
+        importanceMapPong = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
+                                                          uint16_t(dims.quarterSize[1]),
+                                                           false,
+                                                           1,
+                                                           gfx::texture_format::R8,
+                                                           BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
+    }
 
-    m_importanceMap = bgfx::createTexture2D(uint16_t(m_quarterSize[0]),
-                                            uint16_t(m_quarterSize[1]),
-                                            false,
-                                            1,
-                                            bgfx::TextureFormat::R8,
-                                            BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
-    m_importanceMapPong = bgfx::createTexture2D(uint16_t(m_quarterSize[0]),
-                                                uint16_t(m_quarterSize[1]),
-                                                false,
-                                                1,
-                                                bgfx::TextureFormat::R8,
-                                                BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
-
-    m_aoMap = bgfx::createTexture2D(uint16_t(m_size[0]),
-                                    uint16_t(m_size[1]),
-                                    false,
-                                    1,
-                                    bgfx::TextureFormat::R8,
-                                    BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
+    auto& aoMap = rview.tex_get_or_emplace("ASSAO_AO_MAP");
+    if(!aoMap || aoMap->get_size() != fullSz)
+    {
+        aoMap = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
+                                               uint16_t(dims.size[1]),
+                                               false,
+                                               1,
+                                               gfx::texture_format::R8,
+                                               BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
+    }
 }
 
-void assao_pass::destroy_frame_buffers()
+void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* proj, const dimensions& dims)
 {
-    if(!bgfx::isValid(m_aoMap))
-    {
-        return;
-    }
-
-    for(uint32_t ii = 0; ii < BX_COUNTOF(m_halfDepths); ++ii)
-    {
-        bgfx::destroy(m_halfDepths[ii]);
-    }
-
-    bgfx::destroy(m_pingPongHalfResultA);
-    bgfx::destroy(m_pingPongHalfResultB);
-    bgfx::destroy(m_finalResults);
-    bgfx::destroy(m_normals);
-    bgfx::destroy(m_aoMap);
-
-    bgfx::destroy(m_importanceMap);
-    bgfx::destroy(m_importanceMapPong);
-}
-
-void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* proj)
-{
-    vec2Set(m_uniforms.m_viewportPixelSize, 1.0f / (float)m_size[0], 1.0f / (float)m_size[1]);
-    vec2Set(m_uniforms.m_halfViewportPixelSize, 1.0f / (float)m_halfSize[0], 1.0f / (float)m_halfSize[1]);
+    vec2Set(m_uniforms.m_viewportPixelSize, 1.0f / (float)dims.size[0], 1.0f / (float)dims.size[1]);
+    vec2Set(m_uniforms.m_halfViewportPixelSize, 1.0f / (float)dims.halfSize[0], 1.0f / (float)dims.halfSize[1]);
 
     vec2Set(m_uniforms.m_viewport2xPixelSize,
             m_uniforms.m_viewportPixelSize[0] * 2.0f,
@@ -633,7 +674,7 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
 
     // used to get average load per pixel; 9.0 is there to compensate for only doing every 9th InterlockedAdd in
     // PSPostprocessImportanceMapB for performance reasons
-    m_uniforms.m_loadCounterAvgDiv = 9.0f / (float)(m_quarterSize[0] * m_quarterSize[1] * 255.0);
+    m_uniforms.m_loadCounterAvgDiv = 9.0f / (float)(dims.quarterSize[0] * dims.quarterSize[1] * 255.0);
 
     // Special settings for lowest quality level - just nerf the effect a tiny bit
     if(m_settings.quality_level <= 0)
@@ -658,20 +699,20 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     {
         vec2Set(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), 1.0f - (float)(_pass / 2));
         vec2Set(m_uniforms.m_perPassFullResUVOffset,
-                ((_pass % 2) - 0.0f) / m_size[0],
-                (1.0f - ((_pass / 2) - 0.0f)) / m_size[1]);
+                ((_pass % 2) - 0.0f) / dims.size[0],
+                (1.0f - ((_pass / 2) - 0.0f)) / dims.size[1]);
     }
     else
     {
         vec2Set(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), (float)(_pass / 2));
         vec2Set(m_uniforms.m_perPassFullResUVOffset,
-                ((_pass % 2) - 0.0f) / m_size[0],
-                ((_pass / 2) - 0.0f) / m_size[1]);
+                ((_pass % 2) - 0.0f) / dims.size[0],
+                ((_pass / 2) - 0.0f) / dims.size[1]);
     }
 
     m_uniforms.m_invSharpness = bx::clamp(1.0f - m_settings.sharpness, 0.0f, 1.0f);
     m_uniforms.m_passIndex = (float)_pass;
-    vec2Set(m_uniforms.m_quarterResPixelSize, 1.0f / (float)m_quarterSize[0], 1.0f / (float)m_quarterSize[1]);
+    vec2Set(m_uniforms.m_quarterResPixelSize, 1.0f / (float)dims.quarterSize[0], 1.0f / (float)dims.quarterSize[1]);
 
     float additionalAngleOffset =
         m_settings.temporal_supersampling_angle_offset; // if using temporal supersampling approach (like "Progressive

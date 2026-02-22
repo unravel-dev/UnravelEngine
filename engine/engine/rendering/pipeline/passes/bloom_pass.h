@@ -35,7 +35,8 @@ private:
     auto create_or_resize_mip_chain(gfx::render_view& rview,
                                     const usize32_t& viewport_size,
                                     int mip_count) -> void;
-    auto create_or_update_output_fb(const gfx::frame_buffer::ptr& input,
+    auto create_or_update_output_fb(gfx::render_view& rview,
+                                    const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
 
     struct downsample_program : uniforms_cache
@@ -77,8 +78,6 @@ private:
         gfx::program::uniform_ptr s_bloom;
         std::unique_ptr<gpu_program> program;
     } combine_program_;
-
-    gfx::frame_buffer::ptr output_;
 };
 
 } // namespace unravel

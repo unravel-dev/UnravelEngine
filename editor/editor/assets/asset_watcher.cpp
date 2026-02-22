@@ -494,6 +494,7 @@ static void add_to_syncer(rtti::context& ctx,
                 auto task = ts.pool->schedule(get_job_name<T>(),
                                               [&am, ref_path, output]()
                                               {
+                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", ex::get_type<T>(), output.string()));
                                                   asset_compiler::compile<T>(am, ref_path, output);
                                               });
             }

@@ -1,4 +1,5 @@
 #include "asset_manager.h"
+#include "filesystem/filesystem.h"
 #include "impl/asset_reader.h"
 #include "impl/importers/mesh_importer.h"
 
@@ -223,9 +224,10 @@ auto asset_manager::generate_metadata(const fs::path& p) const -> asset_meta
 {
     asset_meta meta;
     meta.type = p.extension().string();
-
+    auto protocol = fs::extract_protocol(p);
     // embedded assets which must generate uid based on their name.
-    if(meta.type.empty())
+    // All assets except application assets must generate uid based on their name.
+    if(meta.type.empty() || protocol != "app")
     {
         meta.uid = generate_uuid(p.generic_string());
     }

@@ -178,12 +178,18 @@ index_buffer_handle create_index_buffer(const memory_view* _mem, uint16_t _flags
 void destroy(index_buffer_handle _handle);
 
 /**/
+void set_name(index_buffer_handle _handle, const char* _name, int32_t _len = INT32_MAX);
+
+/**/
 vertex_buffer_handle create_vertex_buffer(const memory_view* _mem,
                                           const vertex_layout& _decl,
                                           uint16_t _flags = BGFX_BUFFER_NONE);
 
 /**/
 void destroy(vertex_buffer_handle _handle);
+
+/**/
+void set_name(vertex_buffer_handle _handle, const char* _name, int32_t _len = INT32_MAX);
 
 /**/
 dynamic_index_buffer_handle create_dynamic_index_buffer(uint32_t _num, uint16_t _flags = BGFX_BUFFER_NONE);

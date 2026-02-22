@@ -25,74 +25,45 @@ auto blit_pass::init(rtti::context& ctx) -> bool
     return true;
 }
 
-auto blit_pass::create_or_update_output_fb(const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output)
+auto blit_pass::create_or_update_output_fb(gfx::render_view& rview,
+                                           const gfx::frame_buffer::ptr& input,
+                                           const gfx::frame_buffer::ptr& output)
     -> gfx::frame_buffer::ptr
 {
-    // If the caller provided an output framebuffer, just return it.
     if(output)
     {
         return output;
     }
-
-    // Otherwise, we need to create or recreate our own internal FB to match `input`.
     auto input_sz = input->get_size();
-    auto input_tex = input->get_texture();      // returns a gfx::texture::ptr
-    auto input_format = input_tex->info.format; // gfx::texture_format
-
-    bool needs_recreate = false;
-    if(!output_)
+    auto input_tex = input->get_texture();
+    auto input_format = input_tex->info.format;
+    auto& output_tex = rview.tex_get_or_emplace("BLIT_OUTPUT");
+    if(!output_tex || output_tex->get_size() != input_sz || output_tex->info.format != input_format)
     {
-        needs_recreate = true;
+        output_tex = std::make_shared<gfx::texture>(input_sz.width,
+                                                    input_sz.height,
+                                                    false,
+                                                    1,
+                                                    input_format,
+                                                    BGFX_TEXTURE_RT);
     }
-    else
+    auto& output_fbo = rview.fbo_get_or_emplace("BLIT_OUTPUT");
+    if(!output_fbo || output_fbo->get_size() != input_sz)
     {
-        auto out_sz = output_->get_size();
-        auto out_format = output_->get_texture()->info.format;
-        if(out_sz != input_sz || out_format != input_format)
-        {
-            needs_recreate = true;
-        }
+        output_fbo = std::make_shared<gfx::frame_buffer>();
+        output_fbo->populate({output_tex});
     }
-
-    if(!needs_recreate)
-    {
-        return output_;
-    }
-
-    // Destroy old output_ if it existed:
-    if(output_)
-    {
-        output_.reset();
-    }
-
-    // Create a new texture with same size/format as input
-    // Note: we pass BGFX_TEXTURE_RT to mark it as a render target.
-    auto output_tex = std::make_shared<gfx::texture>(input_sz.width,
-                                                     input_sz.height,
-                                                     false,          // no generate mips
-                                                     1,              // one layer
-                                                     input_format,   // same format as input
-                                                     BGFX_TEXTURE_RT // render‐target flag
-    );
-
-    // Create a new framebuffer wrapping that texture.
-    output_ = std::make_shared<gfx::frame_buffer>();
-    output_->populate({output_tex});
-
-    return output_;
+    return output_fbo;
 }
 
-auto blit_pass::run(const run_params& params) -> gfx::frame_buffer::ptr
+auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
-    // 1) Ensure we have a valid input FB
     const auto& input_fb = params.input;
     if(!input_fb)
     {
         return nullptr;
     }
-
-    // 2) Either use the provided output FB, or create/match one internally
-    auto actual_output = create_or_update_output_fb(input_fb, params.output);
+    auto actual_output = create_or_update_output_fb(rview, input_fb, params.output);
 
     // 3) Begin a named render pass for clarity/debug (optional)
     gfx::render_pass pass("blit_pass");

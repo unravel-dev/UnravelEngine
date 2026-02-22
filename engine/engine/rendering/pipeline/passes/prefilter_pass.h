@@ -5,6 +5,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <graphics/render_pass.h>
+#include <graphics/render_view.h>
 #include <graphics/texture.h>
 
 namespace unravel
@@ -25,10 +26,10 @@ public:
     auto init(rtti::context& ctx) -> bool;
 
     /// Execute prefilter. Returns the filtered cubemap (output_cube or created internally).
-    auto run(const run_params& params) -> gfx::texture::ptr;
+    auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
     /// Execute prefilter using compute shader. Returns the filtered cubemap.
-    auto run_compute(const run_params& params) -> gfx::texture::ptr;
+    auto run_compute(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
 private:
     void generate_mips(const gfx::texture::ptr& texture);
@@ -56,8 +57,6 @@ private:
         gfx::program::uniform_ptr u_params;  ///< vec4: x=width, y=height
         std::unique_ptr<gpu_program> program;
     } mip_downsample_;
-
-    gfx::texture::ptr output_cube_; ///< Cached output cubemap
 };
 
 } // namespace unravel

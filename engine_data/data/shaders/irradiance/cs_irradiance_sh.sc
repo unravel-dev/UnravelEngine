@@ -159,11 +159,9 @@ void main()
         return;
     }
     // Perez (mode 1) or environment cubemap (mode 2): project radiance L(omega) to SH.
-    // Monte Carlo with Hammersley low-discrepancy sampling. Use hemisphere only (y>=0):
-    // Perez sky and skybox have zero/low radiance below horizon; full-sphere wastes half
-    // the samples and yields ~2x darker irradiance than uniform/skybox.
+    // Monte Carlo with Hammersley low-discrepancy sampling.
     int num_samples = 64;
-    const float d_omega = (4.0 * 3.14159265) / float(num_samples);  // hemisphere solid angle
+    const float PI = 3.14159265;
     vec3 tint_scale = u_irradiance_tint_intensity.xyz * u_irradiance_tint_intensity.w * sun_weight;
 
     vec3 light_dir;
@@ -181,6 +179,13 @@ void main()
         sky_color_xyY = vec3(u_sky_luminance_xyz.x / denom, u_sky_luminance_xyz.y / denom, u_sky_luminance_xyz.y);
     }
 
+    // Perez: sky dome only, zero radiance below horizon. Use hemisphere sampling.
+    // Cubemap: typically sky-only; use hemisphere for consistency (full sphere if map has ground).
+    const bool use_hemisphere = (mode == 1);
+    const float d_omega = use_hemisphere
+        ? (2.0 * PI) / float(num_samples)   // hemisphere solid angle
+        : (4.0 * PI) / float(num_samples); // full sphere
+
     vec3 sh_coeff[9];
     for(int k = 0; k < 9; k++)
         sh_coeff[k] = vec3_splat(0.0);
@@ -189,7 +194,7 @@ void main()
     for(int i = 0; i < num_samples; i++)
     {
         vec2 E = Hammersley(i, num_samples);
-        vec3 dir = HammersleyToSphere(E);
+        vec3 dir = use_hemisphere ? HammersleyToHemisphere(E) : HammersleyToSphere(E);
         vec3 radiance;
         if(mode == 1)
             radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);

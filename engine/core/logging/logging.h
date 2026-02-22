@@ -53,6 +53,31 @@ struct logging
 
 
 template<spdlog::level::level_enum lvl = spdlog::level::debug, typename T = std::chrono::microseconds>
+struct log_duration
+{
+    using clock_t = std::chrono::high_resolution_clock;
+    using timepoint_t = clock_t::time_point;
+
+    timepoint_t start = clock_t::now();
+    std::string func_{};
+
+    log_duration(const std::string& func, hpp::source_location loc = hpp::source_location::current())
+        : func_(func)
+    {
+
+    }
+
+    ~log_duration()
+    {
+        auto end = clock_t::now();
+        auto dur = std::chrono::duration_cast<T>(end - start);
+
+        SPDLOG_LOGGER_CALL(spdlog::get(APPLOG), lvl, "{} : {}", func_, dur);
+    }
+
+};
+
+template<spdlog::level::level_enum lvl = spdlog::level::debug, typename T = std::chrono::microseconds>
 struct log_stopwatch
 {
     using clock_t = std::chrono::high_resolution_clock;
@@ -94,6 +119,16 @@ struct log_stopwatch
 #define APPLOG_INFO_PERF_NAMED(T, name) log_stopwatch<spdlog::level::info, T> APPLOG_UNIQUE_VAR(_test)(name);
 #define APPLOG_TRACE_PERF_NAMED(T, name) log_stopwatch<spdlog::level::trace, T> APPLOG_UNIQUE_VAR(_test)(name);
 #define APPLOG_DEBUG_PERF_NAMED(T, name) log_stopwatch<spdlog::level::trace, T> APPLOG_UNIQUE_VAR(_test)(name);
+
+
+#define APPLOG_INFO_PERF_ALLOC(T) log_duration<spdlog::level::info, T> APPLOG_UNIQUE_VAR(_test)(__func__);
+#define APPLOG_TRACE_PERF_ALLOC(T) log_duration<spdlog::level::trace, T> APPLOG_UNIQUE_VAR(_test)(__func__);
+#define APPLOG_DEBUG_PERF_ALLOC(T) log_duration<spdlog::level::debug, T> APPLOG_UNIQUE_VAR(_test)(__func__);
+
+
+#define APPLOG_INFO_PERF_NAMED_ALLOC(T, name) log_duration<spdlog::level::info, T> APPLOG_UNIQUE_VAR(_test)(name);
+#define APPLOG_TRACE_PERF_NAMED_ALLOC(T, name) log_duration<spdlog::level::trace, T> APPLOG_UNIQUE_VAR(_test)(name);
+#define APPLOG_DEBUG_PERF_NAMED_ALLOC(T, name) log_duration<spdlog::level::trace, T> APPLOG_UNIQUE_VAR(_test)(name);
 
 
 } // namespace unravel

@@ -410,7 +410,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
                     prefilter_params.output_cube = env_cube;
                     prefilter_params.output_cube_prefiltered = env_cube_prefiltered;
 
-                    prefilter_pass_.run(prefilter_params);
+                    prefilter_pass_.run(reflection_probe_comp.get_render_view(0), prefilter_params);
                 }
 
                 gfx::render_pass::pop_scope();
@@ -522,7 +522,7 @@ void deferred::run_pipeline(const gfx::frame_buffer::ptr& output,
     blit_pass::run_params pass_params;
     pass_params.input = obuffer;
     pass_params.output = output;
-    blit_pass_.run(pass_params);
+    blit_pass_.run(rview, pass_params);
 }
 
 void deferred::set_debug_pass(int pass)

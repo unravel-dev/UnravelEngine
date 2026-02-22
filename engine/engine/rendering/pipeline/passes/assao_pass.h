@@ -144,9 +144,16 @@ public:
     auto shutdown() -> int32_t;
 
 private:
-    void create_frame_buffers();
-    void destroy_frame_buffers();
-    void update_uniforms(int32_t _pass, const float* view, const float* proj);
+    struct dimensions
+    {
+        int32_t size[2]{};
+        int32_t halfSize[2]{};
+        int32_t quarterSize[2]{};
+        int32_t fullResOutScissorRect[4]{};
+        int32_t halfResOutScissorRect[4]{};
+    };
+    void create_or_update_frame_buffers(gfx::render_view& rview, const dimensions& dims);
+    void update_uniforms(int32_t _pass, const float* view, const float* proj, const dimensions& dims);
 
     struct uniforms
     {
@@ -242,34 +249,10 @@ private:
     bgfx::UniformHandle s_viewspaceDepthSourceMirror{bgfx::kInvalidHandle};
     bgfx::UniformHandle s_importanceMap{bgfx::kInvalidHandle};
 
-    // Various render targets
-    bgfx::TextureHandle m_halfDepths[4]{{bgfx::kInvalidHandle},
-                                        {bgfx::kInvalidHandle},
-                                        {bgfx::kInvalidHandle},
-                                        {bgfx::kInvalidHandle}};
-    bgfx::TextureHandle m_pingPongHalfResultA{bgfx::kInvalidHandle};
-    bgfx::TextureHandle m_pingPongHalfResultB{bgfx::kInvalidHandle};
-    bgfx::TextureHandle m_finalResults{bgfx::kInvalidHandle};
-    bgfx::TextureHandle m_aoMap{bgfx::kInvalidHandle};
-    bgfx::TextureHandle m_normals{bgfx::kInvalidHandle};
-
-    // Only needed for quality level 3 (adaptive quality)
-    bgfx::TextureHandle m_importanceMap{bgfx::kInvalidHandle};
-    bgfx::TextureHandle m_importanceMapPong{bgfx::kInvalidHandle};
     bgfx::DynamicIndexBufferHandle m_loadCounter{bgfx::kInvalidHandle};
 
     settings m_settings{};
     uniforms m_uniforms{};
-
-    uint32_t m_width{};
-    uint32_t m_height{};
-
-    int32_t m_size[2]{};
-    int32_t m_halfSize[2]{};
-    int32_t m_quarterSize[2]{};
-    int32_t m_fullResOutScissorRect[4]{};
-    int32_t m_halfResOutScissorRect[4]{};
-    int32_t m_border{};
 
     std::vector<gpu_program::ptr> m_programs;
 };

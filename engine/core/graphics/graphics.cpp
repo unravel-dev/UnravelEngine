@@ -387,6 +387,11 @@ index_buffer_handle create_index_buffer(const memory_view* _mem, uint16_t _flags
     return bgfx::createIndexBuffer(_mem, _flags);
 }
 
+void set_name(index_buffer_handle _handle, const char* _name, int32_t _len)
+{
+    bgfx::setName(_handle, _name, _len);
+}
+
 void destroy(index_buffer_handle _handle)
 {
     bgfx::destroy(_handle);
@@ -400,6 +405,11 @@ vertex_buffer_handle create_vertex_buffer(const memory_view* _mem, const vertex_
 void destroy(vertex_buffer_handle _handle)
 {
     bgfx::destroy(_handle);
+}
+
+void set_name(vertex_buffer_handle _handle, const char* _name, int32_t _len)
+{
+    bgfx::setName(_handle, _name, _len);
 }
 
 dynamic_index_buffer_handle create_dynamic_index_buffer(uint32_t _num, uint16_t _flags)

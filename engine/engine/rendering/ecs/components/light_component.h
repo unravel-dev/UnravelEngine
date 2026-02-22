@@ -104,7 +104,7 @@ public:
     {
         /// Uniform ambient (Perez luminance or directional light color)
         uniform,
-        /// Normal-dependent via spherical harmonics (future)
+        /// Normal-dependent via spherical harmonics
         normal_dependent,
     };
 
@@ -288,7 +288,7 @@ private:
     /**
      * @brief Quality of irradiance for indirect diffuse.
      */
-    irradiance_quality irradiance_quality_{irradiance_quality::uniform};
+    irradiance_quality irradiance_quality_{irradiance_quality::normal_dependent};
 
     asset_handle<gfx::texture> cubemap_;
 };

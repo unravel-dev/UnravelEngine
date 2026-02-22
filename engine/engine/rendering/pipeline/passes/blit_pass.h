@@ -23,12 +23,13 @@ public:
     auto init(rtti::context& ctx) -> bool;
 
            /// Executes the blit: copies `params.input` → `params.output`. Returns the actual output framebuffer.
-    auto run(const run_params& params) -> gfx::frame_buffer::ptr;
+    auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
 private:
     /// If `output` is non-null and matches size/format of `input`, returns `output`.
-    /// Otherwise creates (or recreates) a matching framebuffer in `output_` and returns that.
-    auto create_or_update_output_fb(const gfx::frame_buffer::ptr& input,
+    /// Otherwise creates (or recreates) a matching framebuffer in `rview` and returns that.
+    auto create_or_update_output_fb(gfx::render_view& rview,
+                                    const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& output)
         -> gfx::frame_buffer::ptr;
 
@@ -43,8 +44,6 @@ private:
         gfx::program::uniform_ptr s_input;            ///< sampler2D uniform name = "s_input"
         std::unique_ptr<gpu_program> program;         ///< The compiled VS/FS program
     } blit_program_;
-
-    gfx::frame_buffer::ptr output_;  ///< Internally cached output FB if none supplied
 };
 
 } // namespace unravel

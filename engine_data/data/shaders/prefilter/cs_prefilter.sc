@@ -34,19 +34,36 @@ vec2 Hammersley(int i, int N)
     return vec2(float(i)/float(N), RadicalInverse_VdC(uint(i)));
 }
 
+// [Frisvad 2012] Orthonormal basis from unit vector. No discontinuity at N.z=0,
+// handles N.z < -0.9999999. Avoids NaNs from cross(up,N) when N is near poles.
+void TangentFrame(vec3 N, out vec3 T, out vec3 B)
+{
+    if (N.z < -0.9999999)
+    {
+        T = vec3(0.0, -1.0, 0.0);
+        B = vec3(-1.0, 0.0, 0.0);
+    }
+    else
+    {
+        float a = 1.0 / (1.0 + N.z);
+        float b = -N.x * N.y * a;
+        T = vec3(1.0 - N.x * N.x * a, b, -N.x);
+        B = vec3(b, 1.0 - N.y * N.y * a, -N.y);
+    }
+}
+
 vec3 ImportanceSampleGGX(vec2 E, vec3 N, float a2)
 {
     float phi = 2.0 * PI * E.x;
     float cosT = sqrt((1.0 - E.y) / (1.0 + (a2 - 1.0) * E.y));
-    float sinT = sqrt(1.0 - cosT*cosT);
+    float sinT = sqrt(1.0 - cosT * cosT);
     vec3 H;
     H.x = cos(phi) * sinT;
     H.y = sin(phi) * sinT;
     H.z = cosT;
-    vec3 up = abs(N.z) < 0.999 ? vec3(0,0,1) : vec3(1,0,0);
-    vec3 tangent = normalize(cross(up, N));
-    vec3 bitan = cross(N, tangent);
-    return normalize(tangent * H.x + bitan * H.y + N * H.z);
+    vec3 T, B;
+    TangentFrame(N, T, B);
+    return normalize(T * H.x + B * H.y + N * H.z);
 }
 
 // Map 2D uv to cubemap vector for face index
@@ -102,8 +119,8 @@ void main()
         return;
     }
     
-    // Determine sample count based on roughness
-    int samples = (roughness < 0.1) ? 32 : 64;
+    // Sample count: more for mid/high roughness where GGX lobe is wide
+    int samples = (roughness < 0.1) ? 32 : (roughness < 0.5) ? 64 : 128;
     
     float SolidAngleTexel = 4.0 * PI / (6.0 * float(cubeSize * cubeSize));
     vec3 result = vec3_splat(0.0);
@@ -133,7 +150,7 @@ void main()
         }
     }
     
-    result /= totalWeight;
+    result /= max(totalWeight, 1e-6);
     
     // Store result in output cubemap array
     imageStore(i_output, ivec3(coord.xy, face), vec4(result, 1.0));

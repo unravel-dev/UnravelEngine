@@ -48,7 +48,9 @@ public:
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
 private:
-    auto create_or_update_output_fb(const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
+    auto create_or_update_output_fb(gfx::render_view& rview,
+                                    const gfx::frame_buffer::ptr& input,
+                                    const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
 
     struct tonemapping_program : uniforms_cache
     {
@@ -64,8 +66,5 @@ private:
         std::unique_ptr<gpu_program> program;
 
     } tonemapping_program_;
-
-    gfx::frame_buffer::ptr output_;
-
 };
 } // namespace unravel

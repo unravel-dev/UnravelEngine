@@ -489,14 +489,12 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
                 ui_comp.needs_stylesheet_reload = false;
             }
 
-            int doc_w = (ui_comp.render_mode == ui_render_mode::screen_space_overlay) ? viewport_width : static_cast<int>(ui_comp.size.width);
-            int doc_h = (ui_comp.render_mode == ui_render_mode::screen_space_overlay) ? viewport_height : static_cast<int>(ui_comp.size.height);
-
+            Rml::Vector2i doc_size(viewport_width, viewport_height);
             if(ui_comp.render_mode == ui_render_mode::world_space)
             {
-                dp_ratio = 1.0f;
+                doc_size = Rml::Vector2i(static_cast<int>(ui_comp.size.width), static_cast<int>(ui_comp.size.height));
             }
-            ui_comp.context->SetDimensions(Rml::Vector2i(doc_w, doc_h));
+            ui_comp.context->SetDimensions(doc_size);
             ui_comp.context->SetDensityIndependentPixelRatio(dp_ratio);
             ui_comp.context->Update();
 

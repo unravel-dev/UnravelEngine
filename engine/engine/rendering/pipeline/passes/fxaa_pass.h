@@ -25,7 +25,9 @@ public:
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
 private:
-    auto create_or_update_output_fb(const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output)
+    auto create_or_update_output_fb(gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& input,
+                                   const gfx::frame_buffer::ptr& output)
         -> gfx::frame_buffer::ptr;
     // Encapsulate the GPU program + any uniforms we might need.
     struct fxaa_program : uniforms_cache
@@ -42,8 +44,6 @@ private:
         gfx::program::uniform_ptr s_input;
         std::unique_ptr<gpu_program> program;
     } fxaa_program_;
-
-    gfx::frame_buffer::ptr output_;
 };
 
 } // namespace unravel

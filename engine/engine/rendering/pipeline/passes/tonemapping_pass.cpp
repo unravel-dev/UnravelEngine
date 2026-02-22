@@ -19,54 +19,35 @@ auto tonemapping_pass::init(rtti::context& ctx) -> bool
     return true;
 }
 
-auto tonemapping_pass::create_or_update_output_fb(const gfx::frame_buffer::ptr& input,
+auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
+                                                  const gfx::frame_buffer::ptr& input,
                                                   const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr
 {
     if(output)
     {
         return output;
     }
-    // 1) Get the size & format from the input
     auto input_sz = input->get_size();
-    auto input_format = input->get_texture(0)->info.format;
     // This is presumably your engine’s method to get the bgfx::TextureFormat.
     // If your engine uses something else, adapt accordingly.
 
-    // 2) Compare with our stored (lastWidth_, lastHeight_, lastFormat_)
-    bool needs_recreate = false;
-
-    if(!output_ || input_sz != output_->get_size())
+    auto& output_tex = rview.tex_get_or_emplace("TONEMAPPING_OUTPUT");
+    if(!output_tex || output_tex->get_size() != input_sz)
     {
-        needs_recreate = true;
+        output_tex = std::make_shared<gfx::texture>(input_sz.width,
+                                                    input_sz.height,
+                                                    false,
+                                                    1,
+                                                    gfx::texture_format::RGBA8,
+                                                    BGFX_TEXTURE_RT);
     }
-
-    // 3) If no changes, do nothing
-    if(!needs_recreate)
-        return output_;
-
-    // 4) Otherwise, destroy old outputFb_ if it exists
-    if(output_)
+    auto& output_fbo = rview.fbo_get_or_emplace("TONEMAPPING_OUTPUT");
+    if(!output_fbo || output_fbo->get_size() != input_sz)
     {
-        output_.reset(); // or however your engine releases a frame_buffer
+        output_fbo = std::make_shared<gfx::frame_buffer>();
+        output_fbo->populate({output_tex});
     }
-
-    // 5) Create a new texture with the same size/format
-    //    Then create a new framebuffer that wraps it.
-    //    Pseudocode: your engine might differ in how it creates textures/FBs.
-    auto output_tex = std::make_shared<gfx::texture>(input_sz.width,
-                                                     input_sz.height,
-                                                     false,
-                                                     1,
-                                                     gfx::texture_format::RGBA8,
-                                                     BGFX_TEXTURE_RT);
-
-    // Potentially also create a depth buffer, if needed.
-    // If you just need color output, that might be optional.
-
-    output_ = std::make_shared<gfx::frame_buffer>();
-    output_->populate({output_tex});
-
-    return output_;
+    return output_fbo;
 }
 
 auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
@@ -126,7 +107,7 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     //     }
     // }
     const auto& input = params.input;
-    auto output = create_or_update_output_fb(params.input, params.output);
+    auto output = create_or_update_output_fb(rview, params.input, params.output);
 
     gfx::render_pass pass("output_buffer_fill");
     pass.bind(output.get());

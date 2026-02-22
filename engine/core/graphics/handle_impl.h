@@ -2,6 +2,7 @@
 
 #include "graphics.h"
 #include <memory>
+#include <hpp/string_view.hpp>
 
 namespace gfx
 {
@@ -46,6 +47,11 @@ public:
     {
         T invalid = {bgfx::kInvalidHandle};
         return invalid;
+    }
+
+    void set_name(const hpp::string_view& _name)
+    {
+        gfx::set_name(handle_, _name.data(), static_cast<int32_t>(_name.size()));
     }
 
 protected:
