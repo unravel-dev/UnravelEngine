@@ -220,6 +220,10 @@ public:
     // Render mode
     void set_render_mode(RenderMode::Enum mode);
     auto get_render_mode() const -> RenderMode::Enum;
+    
+    // Blend mode
+    void set_blend_mode(BlendMode::Enum mode);
+    auto get_blend_mode() const -> BlendMode::Enum;
 
     // Texture sheet animation properties
     void set_texture_sheet_tiles(math::vec2 tiles);

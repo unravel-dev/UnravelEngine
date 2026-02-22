@@ -2379,6 +2379,23 @@ void internal_m2n_particle_emitter_set_loop(entt::entity id, bool loop)
     }
 }
 
+auto internal_m2n_particle_emitter_get_blend_mode(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_blend_mode());
+    }
+    return static_cast<int>(BlendMode::Normal);
+}
+
+void internal_m2n_particle_emitter_set_blend_mode(entt::entity id, int mode)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_blend_mode(static_cast<BlendMode::Enum>(mode));
+    }
+}
+
 //------------------------------
 auto internal_m2n_text_get_text(entt::entity id) -> const std::string&
 {
@@ -4824,6 +4841,10 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               internal_call(internal_m2n_particle_emitter_get_loop));
         reg.add_internal_call("internal_m2n_particle_emitter_set_loop", 
                               internal_call(internal_m2n_particle_emitter_set_loop));
+        reg.add_internal_call("internal_m2n_particle_emitter_get_blend_mode", 
+                              internal_call(internal_m2n_particle_emitter_get_blend_mode));
+        reg.add_internal_call("internal_m2n_particle_emitter_set_blend_mode", 
+                              internal_call(internal_m2n_particle_emitter_set_blend_mode));
     }
 
     {

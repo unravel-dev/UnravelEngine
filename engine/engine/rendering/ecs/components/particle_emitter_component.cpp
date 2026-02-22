@@ -538,6 +538,16 @@ auto particle_emitter_component::get_render_mode() const -> RenderMode::Enum
     return uniforms_.m_renderMode;
 }
 
+void particle_emitter_component::set_blend_mode(BlendMode::Enum mode)
+{
+    uniforms_.m_blendMode = mode;
+}
+
+auto particle_emitter_component::get_blend_mode() const -> BlendMode::Enum
+{
+    return uniforms_.m_blendMode;
+}
+
 void particle_emitter_component::set_texture_sheet_tiles(math::vec2 tiles)
 {
     uniforms_.m_texSheetTiles = math::vec2(math::max(tiles.x, 1.0f), math::max(tiles.y, 1.0f));

@@ -272,6 +272,28 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Vertical Billboard"},
         });
 
+    entt::meta_factory<BlendMode::Enum>{}
+        .type("BlendMode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "BlendMode"},
+            entt::attribute{"pretty_name", "Blend Mode"},
+        })
+        .data<BlendMode::Normal>("Normal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Normal"},
+            entt::attribute{"pretty_name", "Normal"},
+        })
+        .data<BlendMode::Additive>("Additive"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Additive"},
+            entt::attribute{"pretty_name", "Additive"},
+        })
+        .data<BlendMode::Multiply>("Multiply"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "Multiply"},
+            entt::attribute{"pretty_name", "Multiply"},
+        });
+
     entt::meta_factory<particle_emitter_component>{}
         .type("particle_emitter_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -559,6 +581,13 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "Render orientation mode. Billboard = always face camera, Horizontal = rotate around Y axis only (stay horizontal), Vertical = stay vertical (perpendicular to ground)."},
             entt::attribute{"group", "Rendering"},
         })
+        .data<&particle_emitter_component::set_blend_mode, &particle_emitter_component::get_blend_mode>("blend_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_mode"},
+            entt::attribute{"pretty_name", "Blend Mode"},
+            entt::attribute{"tooltip", "How particles blend with the scene. Normal = alpha transparency, Additive = glowing/fire effects, Multiply = darkening/smoke."},
+            entt::attribute{"group", "Rendering"},
+        })
         .data<&particle_emitter_component::set_texture_sheet_tiles, &particle_emitter_component::get_texture_sheet_tiles>("texture_sheet_tiles"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_sheet_tiles"},
@@ -631,6 +660,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("texture", obj.get_texture()));
     try_save(ar, ser20::make_nvp("texture_mode", obj.get_texture_mode()));
     try_save(ar, ser20::make_nvp("render_mode", obj.get_render_mode()));
+    try_save(ar, ser20::make_nvp("blend_mode", obj.get_blend_mode()));
     
     // Texture sheet animation
     try_save(ar, ser20::make_nvp("texture_sheet_tiles", obj.get_texture_sheet_tiles()));
@@ -860,6 +890,11 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("render_mode", render_mode)))
     {
         obj.set_render_mode(render_mode);
+    }
+    BlendMode::Enum blend_mode{BlendMode::Normal};
+    if(try_load(ar, ser20::make_nvp("blend_mode", blend_mode)))
+    {
+        obj.set_blend_mode(blend_mode);
     }
     // Backward compatibility: also check for old "billboard_mode" name
     RenderMode::Enum billboard_mode{RenderMode::Billboard};

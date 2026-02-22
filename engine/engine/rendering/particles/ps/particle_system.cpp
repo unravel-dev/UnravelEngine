@@ -126,6 +126,7 @@ void EmitterUniforms::reset()
     m_texSheetRandomize = false; // Default: all particles start at frame 0
     
     m_renderMode = RenderMode::Billboard; // Default: always face camera
+    m_blendMode = BlendMode::Normal;      // Default: alpha blending
     m_billboardRight = math::vec3(1.0f, 0.0f, 0.0f); // Will be updated from camera
     m_billboardUp = math::vec3(0.0f, 1.0f, 0.0f);    // Will be updated from camera
     
@@ -196,6 +197,7 @@ struct Emitter
         
         texture_mode_ = TextureMode::MultiChannel;
         render_mode_ = RenderMode::Billboard;
+        blend_mode_ = BlendMode::Normal;
         billboard_right_ = math::vec3(1.0f, 0.0f, 0.0f);
         billboard_up_ = math::vec3(0.0f, 1.0f, 0.0f);
         particle_scale_3d_ = math::vec3(1.0f, 1.0f, 1.0f);
@@ -462,6 +464,7 @@ struct Emitter
 		// Cache texture mode, render mode, 3D scale, and pivot for rendering
 		texture_mode_ = uniforms_.m_textureMode;
 		render_mode_ = uniforms_.m_renderMode;
+		blend_mode_ = uniforms_.m_blendMode;
 		particle_scale_3d_ = uniforms_.m_initialScale3D;
 		pivot_ = uniforms_.m_pivot;
 
@@ -979,6 +982,9 @@ struct Emitter
     // Cached render mode for rendering
     RenderMode::Enum render_mode_;
     
+    // Cached blend mode for rendering
+    BlendMode::Enum blend_mode_;
+    
     // Cached billboard vectors (calculated from render mode and camera)
     math::vec3 billboard_right_;
     math::vec3 billboard_up_;
@@ -1114,9 +1120,13 @@ struct ParticleSystem
 
 		APP_SCOPE_PERF("Rendering/Particle Pass/Render Batched Emitters");
 
-        // Separate emitters by texture mode for batching
-        std::vector<EmitterHandle> multiChannelEmitters;
-        std::vector<EmitterHandle> maskEmitters;
+        // Separate emitters by texture mode and blend mode for batching
+        std::vector<EmitterHandle> multiChannelNormal;
+        std::vector<EmitterHandle> multiChannelAdditive;
+        std::vector<EmitterHandle> multiChannelMultiply;
+        std::vector<EmitterHandle> maskNormal;
+        std::vector<EmitterHandle> maskAdditive;
+        std::vector<EmitterHandle> maskMultiply;
         
         uint32_t totalParticles = 0;
         
@@ -1128,15 +1138,25 @@ struct ParticleSystem
             }
             
             const Emitter& emitter = m_emitter[_handles[i].idx];
+            const bool isMask = (emitter.texture_mode_ == TextureMode::Mask);
             
-            // Use cached texture mode to group emitters
-            if(emitter.texture_mode_ == TextureMode::Mask)
+            if(isMask)
             {
-                maskEmitters.push_back(_handles[i]);
+                switch(emitter.blend_mode_)
+                {
+                    case BlendMode::Additive: maskAdditive.push_back(_handles[i]); break;
+                    case BlendMode::Multiply: maskMultiply.push_back(_handles[i]); break;
+                    default: maskNormal.push_back(_handles[i]); break;
+                }
             }
             else
             {
-                multiChannelEmitters.push_back(_handles[i]);
+                switch(emitter.blend_mode_)
+                {
+                    case BlendMode::Additive: multiChannelAdditive.push_back(_handles[i]); break;
+                    case BlendMode::Multiply: multiChannelMultiply.push_back(_handles[i]); break;
+                    default: multiChannelNormal.push_back(_handles[i]); break;
+                }
             }
             
             totalParticles += emitter.num_particles_;
@@ -1147,27 +1167,23 @@ struct ParticleSystem
             return 0; // No particles to render
         }
 
+        auto renderBatch = [&](const std::vector<EmitterHandle>& handles, bgfx::ProgramHandle program, BlendMode::Enum blendMode)
+        {
+            if(handles.empty()) return 0u;
+            uint64_t blendState = (blendMode == BlendMode::Additive) ? BGFX_STATE_BLEND_ADD :
+                                  (blendMode == BlendMode::Multiply) ? BGFX_STATE_BLEND_MULTIPLY :
+                                  BGFX_STATE_BLEND_NORMAL;
+            return renderEmitterBatchByMode(handles.data(), static_cast<uint32_t>(handles.size()),
+                _view, program, _mtxView, _eye, _texture, blendState);
+        };
+
         uint32_t renderedParticles = 0;
-        
-        // Render MultiChannel emitters
-        if(!multiChannelEmitters.empty())
-        {
-            renderedParticles += renderEmitterBatchByMode(
-                multiChannelEmitters.data(), 
-                static_cast<uint32_t>(multiChannelEmitters.size()),
-                _view, _programMultiChannel, _mtxView, _eye, _texture
-            );
-        }
-        
-        // Render Mask emitters
-        if(!maskEmitters.empty())
-        {
-            renderedParticles += renderEmitterBatchByMode(
-                maskEmitters.data(), 
-                static_cast<uint32_t>(maskEmitters.size()),
-                _view, _programMask, _mtxView, _eye, _texture
-            );
-        }
+        renderedParticles += renderBatch(multiChannelNormal, _programMultiChannel, BlendMode::Normal);
+        renderedParticles += renderBatch(multiChannelAdditive, _programMultiChannel, BlendMode::Additive);
+        renderedParticles += renderBatch(multiChannelMultiply, _programMultiChannel, BlendMode::Multiply);
+        renderedParticles += renderBatch(maskNormal, _programMask, BlendMode::Normal);
+        renderedParticles += renderBatch(maskAdditive, _programMask, BlendMode::Additive);
+        renderedParticles += renderBatch(maskMultiply, _programMask, BlendMode::Multiply);
 
 		return renderedParticles;
     }
@@ -1175,7 +1191,7 @@ struct ParticleSystem
     uint32_t renderEmitterBatchByMode(const EmitterHandle* _handles, uint32_t _count, 
                            uint8_t _view, bgfx::ProgramHandle _program, 
                            const float* _mtxView, const math::vec3& _eye, 
-                           bgfx::TextureHandle _texture)
+                           bgfx::TextureHandle _texture, uint64_t _blendState)
     {
         // Count total particles for this batch
         uint32_t totalParticles = 0;
@@ -1239,7 +1255,7 @@ struct ParticleSystem
         // Set render state and texture
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
                        BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
-                       BGFX_STATE_BLEND_NORMAL);
+                       _blendState);
         bgfx::setTexture(0, s_texColor, _texture);
         
         // Set billboard vectors as uniforms (vec4 for alignment)

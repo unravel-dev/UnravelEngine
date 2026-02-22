@@ -95,6 +95,16 @@ struct RenderMode
 	};
 };
 
+struct BlendMode
+{
+	enum Enum
+	{
+		Normal,
+		Additive,
+		Multiply,
+	};
+};
+
 struct EmitterUniforms
 {
 	void reset();
@@ -145,6 +155,7 @@ struct EmitterUniforms
 
 	TextureMode::Enum m_textureMode; // Texture mode (MultiChannel or Mask)
 	RenderMode::Enum m_renderMode; // Render mode (Billboard, Horizontal, or Vertical)
+	BlendMode::Enum m_blendMode;   // Blend mode (Normal, Additive, Multiply)
 	
 	// Billboard vectors (calculated from render mode and camera)
 	math::vec3 m_billboardRight; // Right vector for billboarding
