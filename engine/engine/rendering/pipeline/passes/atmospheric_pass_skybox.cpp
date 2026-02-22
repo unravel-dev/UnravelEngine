@@ -101,6 +101,9 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
 
     gfx::set_texture(program_.u_texCube, 0, cubemap);
 
+    float sky_brightness_vec[4] = {params.sky_brightness, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_sky_brightness, sky_brightness_vec);
+
     // 4) The critical part: Use DEPTH_TEST_EQUAL, so we only fill the background
     uint64_t state =
         BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |

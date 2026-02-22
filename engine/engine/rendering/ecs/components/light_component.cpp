@@ -221,4 +221,14 @@ void skylight_component::set_irradiance_quality(irradiance_quality quality)
     irradiance_quality_ = quality;
 }
 
+auto skylight_component::get_sky_brightness() const noexcept -> float
+{
+    return sky_brightness_;
+}
+
+void skylight_component::set_sky_brightness(float brightness)
+{
+    sky_brightness_ = math::max(brightness, 0.0f);
+}
+
 } // namespace unravel

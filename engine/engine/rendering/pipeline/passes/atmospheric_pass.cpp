@@ -118,7 +118,7 @@ void atmospheric_pass::run(gfx::frame_buffer::ptr input, const camera& camera, g
 
         float intensity_clear = 1.8f;
         float intensity_hazy = 0.8f;
-        float u_intensity = math::mix(intensity_clear, intensity_hazy, t);
+        float u_intensity = math::mix(intensity_clear, intensity_hazy, t) * params.sky_brightness;
 
         math::vec4 u_parameters(params.light_direction, hour);
 

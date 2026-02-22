@@ -128,6 +128,15 @@ REFLECT(skylight_component)
             entt::attribute{"name", "mode"},
             entt::attribute{"pretty_name", "Mode"},
         })
+        .data<&skylight_component::set_sky_brightness, &skylight_component::get_sky_brightness>("sky_brightness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sky_brightness"},
+            entt::attribute{"pretty_name", "Sky Brightness"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip", "Brightness multiplier for sky and irradiance (1.0 = neutral)."},
+        })
         .data<&skylight_component::set_turbidity, &skylight_component::get_turbidity>("turbidity"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "turbidity"},
@@ -203,6 +212,7 @@ REFLECT(skylight_component)
 SAVE(skylight_component)
 {
     try_save(ar, ser20::make_nvp("mode", obj.get_mode()));
+    try_save(ar, ser20::make_nvp("sky_brightness", obj.get_sky_brightness()));
     try_save(ar, ser20::make_nvp("turbidity", obj.get_turbidity()));
     try_save(ar, ser20::make_nvp("cloud_coverage", obj.get_cloud_coverage()));
     try_save(ar, ser20::make_nvp("cloud_altitude", obj.get_cloud_altitude()));
@@ -218,10 +228,16 @@ SAVE_INSTANTIATE(skylight_component, ser20::oarchive_binary_t);
 
 LOAD(skylight_component)
 {
-    skylight_component::sky_mode mode;
+    skylight_component::sky_mode mode{skylight_component::sky_mode::perez};
     if(try_load(ar, ser20::make_nvp("mode", mode)))
     {
         obj.set_mode(mode);
+    }
+
+    float sky_brightness{1.0f};
+    if(try_load(ar, ser20::make_nvp("sky_brightness", sky_brightness)))
+    {
+        obj.set_sky_brightness(sky_brightness);
     }
 
     float turbidity{};

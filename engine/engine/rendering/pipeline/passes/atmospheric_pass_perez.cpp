@@ -280,48 +280,22 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     {
         atmospheric_program_.program->begin();
 
-        math::vec3 sun_dir(-params.light_direction.x, -params.light_direction.y, -params.light_direction.z);
-        auto hour = ANONYMOUS::hour_of_day(-params.light_direction);
-        // APPLOG_TRACE("Time Of Day {}", hour_);
+        irradiance_perez_params perez;
+        compute_irradiance_perez_params(params.light_direction, params.turbidity, perez);
+        perez.exposition *= params.sky_brightness;
 
-        ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
-        ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
-
-        auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
-        auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
-        math::vec3 sun_luminance_rgb(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
-
-        auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
-        math::vec3 sky_luminance_xyz(skyLuminanceXYZ.x, skyLuminanceXYZ.y, skyLuminanceXYZ.z);
-        auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
-        math::vec3 sky_luminance_rgb(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
-
-        // Adapt exposition based on time of day.
-        // The Perez model produces much higher luminance values at low
-        // sun angles (sunrise/sunset) due to the circumsolar function.
-        // Reducing exposition during those periods keeps the sky balanced
-        // for the tonemapper.
-        float base_exposition = 0.1f;
-        float sun_altitude = sun_dir.y; // -1 = directly below, 0 = horizon, 1 = zenith
-        // Smoothly reduce exposition when sun is near the horizon (altitude ~0).
-        // At zenith the factor is 1.0, at horizon it drops to ~0.35.
-        float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
-        float adapted_exposition = base_exposition * altitude_factor;
-
-        float exposition[4] = {0.02f, 3.0f, adapted_exposition, hour};
-        float perezCoeff[4 * 5];
-        ANONYMOUS::compute_perez_coeff(params.turbidity, perezCoeff);
-
+        float hour = ANONYMOUS::hour_of_day(-params.light_direction);
+        float exposition[4] = {0.02f, 3.0f, perez.exposition, hour};
 
         // Cloud parameters: x = coverage, y = altitude, z = accumulated cloud time, w = density
         float cloud_params[4] = {params.cloud_coverage, params.cloud_altitude, params.cloud_time, params.cloud_density};
 
-        gfx::set_uniform(atmospheric_program_.u_sunLuminance, sun_luminance_rgb);
-        gfx::set_uniform(atmospheric_program_.u_skyLuminanceXYZ, sky_luminance_xyz);
-        gfx::set_uniform(atmospheric_program_.u_skyLuminance, sky_luminance_rgb);
-        gfx::set_uniform(atmospheric_program_.u_sunDirection, sun_dir);
+        gfx::set_uniform(atmospheric_program_.u_sunLuminance, perez.sun_luminance_rgb);
+        gfx::set_uniform(atmospheric_program_.u_skyLuminanceXYZ, perez.sky_luminance_xyz);
+        gfx::set_uniform(atmospheric_program_.u_skyLuminance, perez.sky_luminance_rgb);
+        gfx::set_uniform(atmospheric_program_.u_sunDirection, perez.sun_direction);
         gfx::set_uniform(atmospheric_program_.u_parameters, exposition);
-        gfx::set_uniform(atmospheric_program_.u_perezCoeff, perezCoeff, 5);
+        gfx::set_uniform(atmospheric_program_.u_perezCoeff, &perez.perez_coeff[0][0], 5);
         gfx::set_uniform(atmospheric_program_.u_cloudParams, cloud_params);
 
 
@@ -378,7 +352,8 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
     out.sun_direction = sun_dir;
 
     float sun_altitude = sun_dir.y;
-    float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+    // At zenith use 1.0, at horizon use 0.6 (was 0.35) for more vibrant sunsets
+    float altitude_factor = bx::lerp(0.6f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
     out.exposition = 0.1f * altitude_factor;
 
     ANONYMOUS::compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);

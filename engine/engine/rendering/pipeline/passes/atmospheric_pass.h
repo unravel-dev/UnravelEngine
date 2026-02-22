@@ -25,6 +25,8 @@ public:
         float cloud_time = 0.0f;
         /// Cloud density/opacity multiplier.
         float cloud_density = 1.0f;
+        /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
+        float sky_brightness = 1.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;

@@ -216,6 +216,18 @@ public:
      */
     void set_irradiance_quality(irradiance_quality quality);
 
+    /**
+     * @brief Gets the sky brightness multiplier (affects atmospheric pass and irradiance).
+     * @return The sky brightness value (1.0 = neutral).
+     */
+    auto get_sky_brightness() const noexcept -> float;
+
+    /**
+     * @brief Sets the sky brightness multiplier.
+     * @param[in] brightness The sky brightness to set (1.0 = neutral, &gt;1 brighter, &lt;1 darker).
+     */
+    void set_sky_brightness(float brightness);
+
     auto get_cubemap() const noexcept -> const asset_handle<gfx::texture>&
     {
         return cubemap_;
@@ -253,12 +265,12 @@ private:
     /**
      * @brief Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
      */
-    float cloud_coverage_{0.45f};
+    float cloud_coverage_{0.6f};
 
     /**
      * @brief Cloud layer altitude in world units. Higher = smaller clouds, further apart.
      */
-    float cloud_altitude_{3000.0f};
+    float cloud_altitude_{7500.0f};
 
     /**
      * @brief Wind speed multiplier for cloud animation.
@@ -289,6 +301,11 @@ private:
      * @brief Quality of irradiance for indirect diffuse.
      */
     irradiance_quality irradiance_quality_{irradiance_quality::normal_dependent};
+
+    /**
+     * @brief Sky brightness multiplier (1.0 = neutral). Affects atmospheric pass and irradiance.
+     */
+    float sky_brightness_{1.0f};
 
     asset_handle<gfx::texture> cubemap_;
 };

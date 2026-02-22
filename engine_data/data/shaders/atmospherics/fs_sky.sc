@@ -243,6 +243,13 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_heigh
     float horizon_fade = smoothstep(0.01, 0.15, eye_dir.y);
     cloud *= horizon_fade;
 
+    // ---- Volumetric density: raw thickness for darker cores, lighter edges ----
+    // 0 at cloud edge (thin), 1 at cloud core (thick) - thick areas absorb more light
+    float raw_density = saturate((noise - threshold) / 0.25);
+    // Detail noise for internal variation: darker and lighter spots within the cloud
+    float detail_noise = fbm(uv * 2.8 + vec2(17.3, 41.7), 4);
+    float detail_variation = mix(0.05, 10.15, detail_noise);
+
     // ---- Cloud lighting ----
 
     // Base brightness from sun angle
@@ -253,8 +260,8 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_heigh
     float noise_lit = fbm(uv + light_offset, 3);
     float light_diff = saturate(noise - noise_lit);
 
-    // Dark side (shadow) and lit side colors
-    vec3 cloud_dark = vec3(0.45, 0.5, 0.55);
+    // Dark side (shadow) and lit side colors - shadow picks up sky blue
+    vec3 cloud_dark = vec3(0.42, 0.48, 0.56);
     vec3 cloud_lit = vec3(1.0, 1.0, 1.0);
 
     // At sunset, tint lit side with warm sun color
@@ -268,10 +275,25 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_heigh
     float brightness = mix(0.3, 1.0, ndotl);
     vec3 cloud_color = mix(cloud_dark, cloud_lit, saturate(light_diff * 2.5 + 0.3)) * brightness;
 
-    // Silver lining: bright edge when looking near the sun through thin cloud edges
+    // Night darkening: clouds become silhouettes when sun is below horizon
+    float night_factor = saturate(-light_dir.y * 3.0 - 0.2);
+    float night_darken = 1.0 - night_factor * 0.90;
+    cloud_color *= night_darken;
+
+    // Volumetric darkening: dense core absorbs light, thin edges let it through
+    float volume_shadow = mix(0.35, 1.0, 1.0 - raw_density * 0.85);
+    cloud_color *= volume_shadow * detail_variation;
+
+    // Silver lining and backlit glow: when sun is behind clouds, they brighten from transmitted light
+    // Fade out at night - no sun to backlight
+    float day_factor = 1.0 - night_factor;
     float view_sun = saturate(dot(eye_dir, light_dir));
-    float silver = pow(view_sun, 8.0) * 0.3 * (1.0 - cloud * 0.5);
+    // Silver lining: bright halo when looking at sun through thin cloud edges
+    float silver = pow(view_sun, 8.0) * 0.3 * (1.0 - cloud * 0.5) * day_factor;
     cloud_color += vec3_splat(silver);
+    // Backlit clouds: clouds glow when sun is behind them (realistic light transmission)
+    float backlit_glow = pow(view_sun, 5.0) * cloud * 0.6 * day_factor;
+    cloud_color += backlit_glow * sunset_tint;
 
     // Scale cloud color by exposition for HDR consistency
     cloud_color *= u_exposition * 8.0;
@@ -312,6 +334,10 @@ void main()
 
     // Procedural clouds
     color = render_clouds(color, viewDir, lightDir, sun_height);
+
+    // Zenith gradient: slightly darker/deeper blue toward zenith (matches clear-sky reference)
+    float zenith_darken = 1.0 - 0.08 * max(viewDir.y, 0.0);
+    color *= zenith_darken;
 
     // Ground color blending
     const vec3 u_ground_color = vec3(0.63, 0.6, 0.57);

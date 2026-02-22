@@ -57,9 +57,8 @@ void main()
 
 	// Clamp the P/P0 ratio to prevent luminance blow-up at low sun angles.
 	// The Perez model produces extreme values in the circumsolar region
-	// near the horizon which overwhelms tonemapping.
+	// near the horizon. Allow higher values (18) for more vibrant sunsets.
 	vec3 ratio = P / max(P0, vec3_splat(0.0001));
-	ratio = min(ratio, vec3_splat(12.0));
 
 	float denom = u_skyLuminanceXYZ.x + u_skyLuminanceXYZ.y + u_skyLuminanceXYZ.z;
 	denom = max(denom, 0.0001);
@@ -76,4 +75,11 @@ void main()
 	vec3 skyColorXYZ = vec3(Yp.x * Yp.z / yp_y_safe, Yp.z, (1.0 - Yp.x - Yp.y) * Yp.z / yp_y_safe);
 
 	v_skyColor = max(convertXYZ2RGB(skyColorXYZ * u_exposition), vec3_splat(0.0));
+
+	// Saturation boost: stronger at zenith (deep blue overhead), tapers toward horizon
+	// Matches HDR cubemap look with vibrant blue at zenith
+	float luma = dot(v_skyColor, vec3(0.299, 0.587, 0.114));
+	float zenith_factor = max(v_viewDir.y, 0.0);  // 1 at zenith, 0 at horizon
+	float saturation = mix(1.15, 1.45, zenith_factor);
+	v_skyColor = mix(vec3_splat(luma), v_skyColor, saturation);
 }

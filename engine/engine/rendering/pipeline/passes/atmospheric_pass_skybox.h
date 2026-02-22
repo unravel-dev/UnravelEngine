@@ -17,6 +17,8 @@ public:
     struct run_params
     {
         asset_handle<gfx::texture> cubemap;
+        /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
+        float sky_brightness = 1.0f;
     };
     bool init(rtti::context& ctx);
 
@@ -28,11 +30,12 @@ private:
     {
         void cache_uniforms()
         {
-            // Typically the sampler is named something like s_texCube
             cache_uniform(program.get(), u_texCube, "s_texCube", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_sky_brightness, "u_sky_brightness", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr u_texCube;
+        gfx::program::uniform_ptr u_sky_brightness;
         std::unique_ptr<gpu_program> program;
     } program_;
 

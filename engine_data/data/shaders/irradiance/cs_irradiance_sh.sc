@@ -97,7 +97,7 @@ vec3 sample_perez_sky(vec3 dir, vec3 P0_inv, vec3 sky_color_xyY, vec3 light_dir)
     float costeta = max(dot(dir, sky_dir), 0.01);
     float cosgamma = clamp(dot(dir, light_dir), -0.9999, 0.9999);
     vec3 P = Perez(A, B, C, D, E, costeta, cosgamma);
-    vec3 ratio = min(P * P0_inv, vec3_splat(12.0));
+    vec3 ratio = P * P0_inv;
     vec3 Yp = sky_color_xyY * ratio;
     float yp_y_safe = max(Yp.y, 0.0001);
     vec3 sky_color_xyz = vec3(Yp.x * Yp.z / yp_y_safe, Yp.z, (1.0 - Yp.x - Yp.y) * Yp.z / yp_y_safe);
@@ -105,7 +105,13 @@ vec3 sample_perez_sky(vec3 dir, vec3 P0_inv, vec3 sky_color_xyY, vec3 light_dir)
     float sun_cos = dot(dir, light_dir);
     float sun_disc = exp(-2.0 * (1.0 - sun_cos) / 0.02);
     vec3 sun_color = u_sun_luminance.xyz * u_exposition.x * sun_disc;
-    return (sky_color + sun_color) * u_exposition.x;
+    vec3 irradiance = (sky_color + sun_color) * u_exposition.x;
+    // Saturation boost to match visible sky (1.15 at horizon, 1.45 at zenith)
+    float luma = dot(irradiance, vec3(0.299, 0.587, 0.114));
+    float zenith_factor = max(dir.y, 0.0);
+    float saturation = mix(1.15, 1.45, zenith_factor);
+    irradiance = mix(vec3_splat(luma), irradiance, saturation);
+    return irradiance;
 }
 
 // SH basis for L0-L2 evaluated at direction n

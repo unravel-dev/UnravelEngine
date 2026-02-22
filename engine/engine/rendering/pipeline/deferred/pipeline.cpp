@@ -920,6 +920,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             float intensity = 0.0f;
             float sun_weight = 1.0f;
             float exposition = 0.1f;
+            float sky_brightness = 1.0f;
             math::vec3 color = {1.0f, 1.0f, 1.0f};
             math::vec3 tint = {1.0f, 1.0f, 1.0f};
             math::vec3 light_dir;
@@ -974,10 +975,13 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                         irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb,
                                                     sun_weight * 0.25f);
                         float sun_altitude = -light_dir.y;
-                        float altitude_factor = bx::lerp(0.35f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+                        float altitude_factor = bx::lerp(0.6f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
                         exposition = 0.1f * altitude_factor;
                     }
                 }
+
+                float sky_brightness = skylight.get_sky_brightness();
+                exposition *= sky_brightness;
 
                 const auto& tint = skylight.get_irradiance_tint();
                 math::vec3 tint_vec = {tint.value.r, tint.value.g, tint.value.b};
@@ -995,6 +999,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     dominant.is_skybox = is_skybox;
                     dominant.sun_weight = sun_weight;
                     dominant.exposition = exposition;
+                    dominant.sky_brightness = sky_brightness;
                     dominant.cubemap = is_skybox ? skylight.get_cubemap() : asset_handle<gfx::texture>{};
                 }
             });
@@ -1028,11 +1033,14 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         constexpr float ambient_intensity_boost = 2.0f;
         if(!use_cubemap)
             ambient_vec[3] *= ambient_intensity_boost;
+        else
+            ambient_vec[3] *= dominant.sky_brightness;
 
         gfx::set_uniform(irradiance_compute_program_.u_irradiance_tint_intensity, ambient_vec);
 
-        // exposition: scale ambient to display range (matches atmospheric sky, ~0.1 at noon)
-        float exp_vec[4] = {dominant.exposition, 0.0f, 0.0f, 0.0f};
+        // exposition: scale ambient to display range (matches atmospheric sky, ~0.1 at noon).
+        float exp_val = dominant.exposition;
+        float exp_vec[4] = {exp_val, 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_exposition, exp_vec);
 
         if(dominant.intensity > 0.0f && dominant.use_perez)
@@ -1441,6 +1449,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                     params.cloud_altitude = light_comp_ref.get_cloud_altitude();
                     params.cloud_density = light_comp_ref.get_cloud_density();
                     params.cloud_time = light_comp_ref.get_cloud_time();
+                    params.sky_brightness = light_comp_ref.get_sky_brightness();
 
                     params_perez.light_direction = world_transform.z_unit_axis();
                     params_perez.turbidity = light_comp_ref.get_turbidity();
@@ -1448,8 +1457,10 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                     params_perez.cloud_altitude = light_comp_ref.get_cloud_altitude();
                     params_perez.cloud_density = light_comp_ref.get_cloud_density();
                     params_perez.cloud_time = light_comp_ref.get_cloud_time();
+                    params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
                 }
             }
+            params_skybox.sky_brightness = light_comp_ref.get_sky_brightness();
         });
 
     if(!found_sun)
