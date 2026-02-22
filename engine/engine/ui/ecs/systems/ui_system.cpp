@@ -240,26 +240,59 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
 {
     auto& ecs_system = ctx.get_cached<ecs>();
     auto& scene = ecs_system.get_scene();
+    auto& input = ctx.get_cached<input_system>();
+    bool is_input_allowed = input.manager.is_input_allowed();
+    Rml::Context* target_context = nullptr;
 
-    if(Rml::Debugger::IsVisible() && debug_context_)
+    if(is_input_allowed)
     {
-        if(process_event(scene, debug_context_, event))
+        if(Rml::Debugger::IsVisible() && debug_context_)
         {
-            event = {};
-        }
-    }
-    scene.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity, ui_document_component& ui_comp, active_component& active)
-        {
-            if(ui_comp.context && ui_comp.is_enabled())
+            if(process_event(scene, debug_context_, event))
             {
-                if(process_event(scene, ui_comp.context, event))
-                {
-                    event = {};
-                }
+                target_context = debug_context_;
             }
-        });
+        }
+        
+        scene.registry->view<ui_document_component, active_component>().each(
+            [&](entt::entity, ui_document_component& ui_comp, active_component& active)
+            {
+                if(ui_comp.context && ui_comp.is_enabled())
+                {
+                    if(process_event(scene, ui_comp.context, event))
+                    {
+                        target_context = ui_comp.context;
+                    }
+                }
+            });
+    }
+    
 
+    if(target_context || !is_input_allowed)
+    {
+
+        if(event.type == os::events::mouse_button)
+        {
+            scene.registry->view<ui_document_component>().each(
+                [&](entt::entity, ui_document_component& ui_comp)
+                {
+                 
+                    if(ui_comp.context && (ui_comp.context != target_context || !is_input_allowed))
+                    {
+                        ui_comp.context->ProcessMouseLeave();
+    
+                        auto focus_element = ui_comp.context->GetFocusElement();
+                        if(focus_element)
+                        {
+                            //context->ProcessMouseLeave();
+                            focus_element->Blur();
+                        }
+                    }
+                });
+        }
+        
+        event = {};
+    }
 }
 
 auto ui_system::is_not_root_element(scene& scn, Rml::Element* element) -> bool
@@ -498,31 +531,30 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
             ui_comp.context->SetDensityIndependentPixelRatio(dp_ratio);
             ui_comp.context->Update();
 
-            if(ctx.has<input_system>())
+          
+            auto& input = ctx.get_cached<input_system>();
+            if(input.manager.is_input_allowed())
             {
-                auto& input = ctx.get_cached<input_system>();
-                if(input.manager.is_input_allowed())
+                if(ui_comp.render_mode == ui_render_mode::screen_space_overlay)
                 {
-                    if(ui_comp.render_mode == ui_render_mode::screen_space_overlay)
-                    {
-                        auto mouse_x = input.manager.get_mouse().get_position().x;
-                        auto mouse_y = input.manager.get_mouse().get_position().y;
+                    auto mouse_x = input.manager.get_mouse().get_position().x;
+                    auto mouse_y = input.manager.get_mouse().get_position().y;
 
 
-                        if(process_mouse_move(scn, ui_comp.context, static_cast<int>(mouse_x), static_cast<int>(mouse_y)))
-                        {
-                            hit_found = true;
-                        }
-                        
-                    }
-                    else if(ui_comp.render_mode == ui_render_mode::world_space)
+                    if(process_mouse_move(scn, ui_comp.context, static_cast<int>(mouse_x), static_cast<int>(mouse_y)))
                     {
-                        auto& transform = handle.get<transform_component>();
-                        float dist = math::distance(cam.get_position(), transform.get_position_global());
-                        world_space_docs.push_back({handle, dist});
+                        hit_found = true;
                     }
+                    
+                }
+                else if(ui_comp.render_mode == ui_render_mode::world_space)
+                {
+                    auto& transform = handle.get<transform_component>();
+                    float dist = math::distance(cam.get_position(), transform.get_position_global());
+                    world_space_docs.push_back({handle, dist});
                 }
             }
+            
 
             bool active_and_enabled = active && ui_comp.is_enabled();
             if(active_and_enabled)
@@ -541,9 +573,8 @@ void ui_system::update_ui_document_components(rtti::context& ctx, scene& scn, en
             }
         });
 
-    if(ctx.has<input_system>() && !world_space_docs.empty())
+    if(!world_space_docs.empty())
     {
-        auto& input = ctx.get_cached<input_system>();
         if(input.manager.is_input_allowed())
         {
             std::sort(world_space_docs.begin(), world_space_docs.end(),

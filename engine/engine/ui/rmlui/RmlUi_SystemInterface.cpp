@@ -18,6 +18,8 @@
 #include <ospp/mouse.h>
 #include <engine/input/action_map/key.hpp>
 
+#include <libunibreak/unibreakdef.h>
+
 namespace unravel
 {
 
@@ -227,12 +229,17 @@ auto input_event_handler(Rml::Context* context, const os::event& event) -> bool
         
         case os::events::text_input:
         {
-            // Convert text input to RmlUi character events
-            for (char c : event.text.text)
+            size_t index = 0;
+            while(true)
             {
-                if (c != 0)
+                utf32_t c = ub_get_next_char_utf8(reinterpret_cast<const utf8_t*>(event.text.text.data()), event.text.text.size(), &index);
+                if(c != EOS)
                 {
-                    handled = context->ProcessTextInput(c) || handled;
+                    handled = context->ProcessTextInput(static_cast<Rml::Character>(c)) || handled;
+                }
+                else
+                {
+                    break;
                 }
             }
             break;
