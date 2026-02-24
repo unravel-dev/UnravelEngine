@@ -73,19 +73,27 @@ public:
 
     /**
      * @brief Renders the scene and returns the frame buffer.
+     * @param camera_ent Camera entity
+     * @param comp Camera component
      * @param scn The scene to render.
      * @param dt The delta time.
+     * @param render_screen_space If true, render screen-space UI to output; if false, only world-space UI
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
-    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt) -> gfx::frame_buffer::ptr;
+    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt,
+                     bool render_screen_space = true) -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the scene to the specified output.
      * @param output The output frame buffer.
+     * @param camera_ent Camera entity
+     * @param comp Camera component
      * @param scn The scene to render.
      * @param dt The delta time.
+     * @param render_screen_space If true, render screen-space UI to output; if false, only world-space UI
      */
-    void render_scene(const gfx::frame_buffer::ptr& output, entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt);
+    void render_scene(const gfx::frame_buffer::ptr& output, entt::handle camera_ent, camera_component& comp, scene& scn,
+                     delta_t dt, bool render_screen_space = true);
 
     void add_debugdraw_call(const std::function<void(gfx::dd_raii& dd)>& callback);
 

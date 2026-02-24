@@ -491,10 +491,12 @@ static void add_to_syncer(rtti::context& ctx,
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
-                auto task = ts.pool->schedule(get_job_name<T>(),
-                                              [&am, ref_path, output]()
+
+                auto job_name = fmt::format("Compiling {}", ex::get_type<T>());
+                auto task = ts.pool->schedule(job_name,
+                                              [&am, ref_path, output, job_name]()
                                               {
-                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", ex::get_type<T>(), output.string()));
+                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
                                                   asset_compiler::compile<T>(am, ref_path, output);
                                               });
             }
@@ -565,11 +567,12 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 bool high_priority = gfx::get_current_renderer_filename_extension() == extension;
                 tpp::priority::group priority = high_priority ? tpp::priority::normal() : tpp::priority::low();
 
-                auto task = ts.pool->schedule(get_job_name<gfx::shader>() + "(" + extension + ")",
+                auto job_name = fmt::format("Compiling {}", ex::get_type<gfx::shader>() + "(" + extension + ")");
+                auto task = ts.pool->schedule(job_name,
                                               priority,
-                                              [&am, ref_path, output]()
+                                              [&am, ref_path, output, job_name]()
                                               {
-                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", ex::get_type<gfx::shader>(), output.string()));
+                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
                                                   asset_compiler::compile<gfx::shader>(am, ref_path, output);
                                               });
             }

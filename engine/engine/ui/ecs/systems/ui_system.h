@@ -22,6 +22,7 @@ namespace Rml
 
 namespace unravel
 {
+    class camera;
     struct ui_document_component;
 
 /**
@@ -60,12 +61,25 @@ struct ui_system
     void on_frame_update(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt);
 
     /**
-     * @brief Render UI (updates documents and renders). Call from render path with the active camera.
-     * @param output Output frame buffer
-     * @param camera_entity Camera entity for viewport and world-space input (can be null)
+     * @brief Render world-space UI documents (to their framebuffers). Call from render path with the active camera.
+     * @param ctx Engine context for input
+     * @param camera_entity Camera entity for culling
+     * @param scn Scene containing UI documents
      * @param dt Delta time since last frame
      */
-    void on_frame_render(const gfx::frame_buffer::ptr& output, entt::handle camera_entity, scene& scn, delta_t dt);
+    void render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt, bool process_input = true);
+
+    /**
+     * @brief Render screen-space overlay UI documents to output. Call from render path (game panel only).
+     * @param ctx Engine context for input
+     * @param output Output frame buffer
+     * @param camera_entity Camera entity for viewport
+     * @param scn Scene containing UI documents
+     * @param dt Delta time since last frame
+     */
+    void render_screen_space(rtti::context& ctx, const gfx::frame_buffer::ptr& output, entt::handle camera_entity,
+                            scene& scn, delta_t dt, bool process_input = true);
+
 
 
     /**
@@ -90,11 +104,37 @@ struct ui_system
     void set_debugger_enabled(bool enabled);
 private:
     /**
-     * @brief Update all UI document components (load documents, manage lifecycle, process input)
+     * @brief Update UI documents (load, reload, visibility). No camera dependency.
      * @param ctx Engine context
-     * @param camera_entity Camera entity for viewport and world-space input (can be null)
+     * @param scn Scene containing UI documents
      */
-    void update_ui_document_components(rtti::context& ctx, scene& scn, entt::handle camera_entity);
+    void update_ui_documents(rtti::context& ctx, scene& scn);
+
+    /**
+     * @brief Update a single world-space document (dimensions, density, input). Call from render path, back-to-front.
+     * @param ctx Engine context for input
+     * @param scn Scene for process_mouse_move
+     * @param handle Entity handle with ui_document_component and transform_component
+     * @param comp UI document component
+     * @param cam Camera for projection
+     * @param dp_ratio Density-independent pixel ratio
+     * @param hit_found In/out: true if a closer doc already consumed the mouse
+     */
+    void update_world_space_document(rtti::context& ctx, scene& scn, entt::handle handle, ui_document_component& comp,
+                                    const camera& cam, float dp_ratio, bool process_input, bool& hit_found);
+
+    /**
+     * @brief Update a single screen-space document (dimensions, density, input). Call from render path.
+     * @param ctx Engine context for input
+     * @param comp UI document component
+     * @param viewport_width Viewport width
+     * @param viewport_height Viewport height
+     * @param dp_ratio Density-independent pixel ratio
+     * @param scn Scene for process_mouse_move
+     * @param hit_found In/out: true if a previous doc already consumed the mouse
+     */
+    void update_screen_space_document(rtti::context& ctx, Rml::Context* context, int viewport_width,
+                                     int viewport_height, float dp_ratio, scene& scn, bool process_input, bool& hit_found);
     
     /**
      * @brief Load a UI document for a specific component

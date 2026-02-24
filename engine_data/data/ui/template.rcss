@@ -1,18 +1,109 @@
-/* New Style Sheet */
+/* New Style Sheet - fill the entire UI document frame (vw/vh = viewport = document size) */
+html, body {
+	width: 100vw;
+	height: 100vh;
+	margin: 0;
+	box-sizing: border-box;
+}
+
 body {
-    font-family: Inter;
+	font-family: Inter 28pt;
 	font-size: 25px;
-    margin: 0;
-    padding: 20px;
-    background-color: rgba(0,0,0,0);
+	padding: 20dp;
+	background-color: rgba(0,0,0,0);
 }
 
 h1 {
-    color: #333;
-    margin-bottom: 16px;
+	color: #333;
+	margin-bottom: 16dp;
+}
+
+h2 {
+	color: #333;
+	margin-top: 24dp;
+}
+
+h3 {
+	color: #555;
+	margin-top: 20dp;
+	margin-bottom: 8dp;
 }
 
 p {
-    color: #666;
-    line-height: 1.6;
+	color: #666;
+	line-height: 1.6;
+}
+
+.container {
+	width: 100vw;
+	box-sizing: border-box;
+}
+
+/* Two-column layout - fill the frame width */
+.columns {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: nowrap;
+	width: 100%;
+	gap: 40dp;
+	margin-top: 16dp;
+	box-sizing: border-box;
+}
+
+.column-left {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.column-right {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+/* Form group: constrain width so slider isn't full-width */
+.form-group {
+	max-width: 280dp;
+}
+
+
+/* Checkbox and radio: flex layout so control sits beside label text */
+label {
+	display: flex;
+	align-items: center;
+	gap: 8dp;
+	margin-bottom: 8dp;
+	cursor: pointer;
+}
+
+label input.checkbox,
+label input.radio {
+	margin-bottom: 0;
+	flex-shrink: 0;
+}
+
+/* Right column: compact layout */
+.column-right progress {
+	width: 100%;
+	max-width: 200dp;
+}
+
+.column-right textarea {
+	width: 100%;
+	max-width: 220dp;
+	min-height: 4em;
+}
+
+/* Table: borders and header row */
+.template-table {
+	margin-top: 8dp;
+	max-width: 320dp;
+}
+.template-table td {
+	border: 1dp #cccccc;
+	padding: 8dp 12dp;
+}
+.template-table tr:first-child td {
+	background-color: #e8e8e8;
+	color: #333;
+	font-weight: bold;
 }

@@ -62,6 +62,9 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
     /// Framebuffer for world-space render-to-texture (owned by component)
     gfx::frame_buffer::ptr framebuffer;
 
+    /// Last frame this world-space document was rendered (for render-once-per-frame)
+    uint32_t last_render_frame = 0;
+
     /// Render layer stack for this document (owned by component, used during render pass)
     std::shared_ptr<RmlUi_RenderLayerStack> render_layer_stack;
 

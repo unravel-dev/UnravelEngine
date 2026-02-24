@@ -1382,7 +1382,7 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
 
     if(target_scene)
     {
-        path.render_scene(handle, camera_comp, *target_scene, dt);
+        path.render_scene(handle, camera_comp, *target_scene, dt, false);
         gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }
 }

@@ -2,25 +2,69 @@
 <head>
     <title>New UI Document</title>
     <link type="text/rcss" href="engine:/data/ui/rml.rcss"/>
+    <link type="text/rcss" href="engine:/data/ui/template.rcss"/>
 </head>
 <body>
     <div class="container">
         <h1>Hello World</h1>
         <p>This is a new UI document with some common elements.</p>
-        
-        <h2>Buttons</h2>
-        <button>Primary Button</button>
-        <button>Another Button</button>
-        
-        <h3>Form Example</h3>
-        <input type="text" placeholder="Enter text here"/>
-        <select>
-            <option>Option 1</option>
-            <option>Option 2</option>
-        </select>
-        
-        <h3>Text Formatting</h3>
-        <p>This paragraph has <strong>bold text</strong> and <em>italic text</em>.</p>
+
+        <div class="columns">
+            <div class="column-left">
+                <h2>Buttons</h2>
+                <button>Primary Button</button>
+                <button>Another Button</button>
+
+                <h3>Form Example</h3>
+                <div class="form-group">
+                    <input type="text" placeholder="Enter text here"/>
+                    <input type="password" placeholder="Enter password here"/>
+
+                    <select>
+                        <option>Option 1</option>
+                        <option>Option 2</option>
+                    </select>
+                    <label><input type="checkbox"/><span>Checkbox option</span></label>
+                    <label><input type="radio" name="demo"/><span>Radio A</span></label>
+                    <label><input type="radio" name="demo"/><span>Radio B</span></label>
+                    <input type="range" min="0" max="100" value="50"/>
+                </div>
+
+                <h3>Text Formatting</h3>
+                <p>This paragraph has <strong>bold text</strong> and <em>italic text</em>. <a href="#">Link example</a></p>
+            </div>
+
+            <div class="column-right">
+                <h3>Progress</h3>
+                <progress value="0.65"/>
+
+                <h3>Textarea</h3>
+                <textarea rows="3" placeholder="Multi-line input..."/>
+
+                <h3>Disabled State</h3>
+                <input type="button" value="Disabled Button" disabled/>
+
+                <h3>Table Example</h3>
+                <table class="template-table">
+                    <tr>
+                        <td><strong>Name</strong></td>
+                        <td><strong>Value</strong></td>
+                    </tr>
+                    <tr>
+                        <td>Item A</td>
+                        <td>100</td>
+                    </tr>
+                    <tr>
+                        <td>Item B</td>
+                        <td>250</td>
+                    </tr>
+                    <tr>
+                        <td>Item C</td>
+                        <td>75</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
     </div>
 </body>
 </html>

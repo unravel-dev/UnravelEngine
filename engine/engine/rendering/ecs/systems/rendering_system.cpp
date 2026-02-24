@@ -78,39 +78,41 @@ void rendering_system::on_play_begin(hpp::span<const entt::handle> entities, del
     ctx.get_cached<reflection_probe_system>().on_play_begin(entities, dt);
 }
 
-auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt)
-    -> gfx::frame_buffer::ptr
+auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt,
+                                    bool render_screen_space) -> gfx::frame_buffer::ptr
 {
+    auto& ctx = engine::context();
     auto& pipeline_data = camera_comp.get_pipeline_data();
     auto& camera = pipeline_data.get_camera();
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
 
+
+    bool process_input = render_screen_space;
+    ctx.get_cached<ui_system>().render_world_space(ctx, camera_ent, scn, dt, process_input);
+
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
-
     auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
-
     render_debug(camera_ent);
-
-
+    if(render_screen_space)
+    {
+        ctx.get_cached<ui_system>().render_screen_space(ctx, result, camera_ent, scn, dt, process_input);
+    }
     return result;
 }
 
 auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer::ptr
 {
     auto& ctx = engine::context();
-
     gfx::frame_buffer::ptr output{};
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
             ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
-            output = render_scene(handle, camera_comp, scn, dt);
-            ctx.get_cached<ui_system>().on_frame_render(output, handle, scn, dt);
+            output = render_scene(handle, camera_comp, scn, dt, true);
             return;
         });
-
     return output;
 }
 
@@ -118,32 +120,36 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
                                     entt::handle camera_ent,
                                     camera_component& camera_comp,
                                     scene& scn,
-                                    delta_t dt)
+                                    delta_t dt,
+                                    bool render_screen_space)
 {
+    auto& ctx = engine::context();
     auto& pipeline_data = camera_comp.get_pipeline_data();
     auto& camera = pipeline_data.get_camera();
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
 
-    auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
+    bool process_input = render_screen_space;
+    ctx.get_cached<ui_system>().render_world_space(ctx, camera_ent, scn, dt, process_input);
 
+    auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
     pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
- 
     render_debug(camera_ent);
+    if(render_screen_space)
+    {
+        ctx.get_cached<ui_system>().render_screen_space(ctx, output, camera_ent, scn, dt, process_input);
+    }
 }
 
 void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
 {
     auto& ctx = engine::context();
-
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
             ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
-            render_scene(output, handle, camera_comp, scn, dt);
-            ctx.get_cached<ui_system>().on_frame_render(output, handle, scn, dt);
-        
+            render_scene(output, handle, camera_comp, scn, dt, true);
         });
 }
 

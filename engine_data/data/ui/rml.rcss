@@ -72,7 +72,20 @@ pre
 
 hr
 {
-	border-width: 1px;
+	border-width: 1dp;
+}
+
+a
+{
+	color: #4a90e2;
+}
+a:hover
+{
+	color: #357abd;
+}
+a:active
+{
+	color: #2e6bb8;
 }
 
 table
@@ -104,18 +117,16 @@ thead, tbody, tfoot
 	display: table-row-group;
 }
 
-progress
-{
+progress {
 	box-sizing: border-box;
-    display: inline-block;
-    height: 1em;
-    width: 10em;
-
+	display: inline-block;
+	height: 1em;
+	width: 10em;
 	border-radius: 5dp;
 	border: 2dp #555555FF;
 }
 
-progress fill{
+progress fill {
 	background-color: #4a90e2;
 }
 
@@ -129,24 +140,148 @@ input, textarea, select, option {
 	box-sizing: border-box;
 }
 
-
-
-scrollbarvertical {
-	z-index: 100;
-	margin-top: 75dp;
-	margin-bottom: 20dp;
-	margin-right: 0dp;
-	width: 0dp;
+input.text, input.password {
+	height: 2em;
+	padding: 0.25em 0.5em;
+	border: 1dp #c0c0c0;
+	border-radius: 2dp;
+	cursor: text;
+	text-align: left;
 }
-scrollbarvertical sliderbar {
-	margin-left: -14dp;
-	width: 12dp;
-	min-height: 25dp;
-	background: #d3e9ea66;
+input.text:focus-visible, input.password:focus-visible {
+	border-color: #4a90e2;
+}
+
+textarea {
+	min-height: 4em;
+	padding: 0.25em 0.5em;
+	border: 1dp #c0c0c0;
+	border-radius: 2dp;
+	cursor: text;
+	text-align: left;
+	line-height: 1.4;
+}
+textarea:focus-visible {
+	border-color: #4a90e2;
+}
+
+/* Select (dropdown) - Browser-like defaults: single border, value left, arrow right, subtle option highlight */
+select {
+	width: 12em;
+	height: 2em;
+	display: flex;
+	flex-direction: row-reverse;
+	border: 1dp #c0c0c0;
+	border-radius: 2dp;
+	background-color: white;
+}
+
+/* Value display - selected option text */
+select selectvalue {
+	flex: 1;
+	min-width: 0;
+	height: auto;
+	min-height: 1.5em;
+	padding: 0.2em 0.5em;
+	background-color: white;
+}
+
+/* Arrow area - browser typically uses ~20dp grey block on the right */
+select selectarrow {
+	width: 20dp;
+	flex: none;
+	height: 100%;
+	background-color: #f0f0f0;
+	border-left: 1dp #c0c0c0;
+}
+
+select selectarrow:hover,
+select:focus-visible selectarrow {
+	background-color: #e8e8e8;
+}
+
+select selectarrow:active,
+select selectarrow:checked {
+	background-color: #e0e0e0;
+}
+
+/* Dropdown list - appears below, flush with select */
+select selectbox {
+	margin-left: 0;
+	margin-top: 0;
+	width: 100%;
+	min-width: 10em;
+	padding: 2dp;
+	background-color: white;
+	border: 1dp #c0c0c0;
+	border-radius: 2dp;
+}
+
+select selectbox option {
+	width: auto;
+	padding: 0.25em 0.5em;
+	background-color: transparent;
+}
+
+select selectbox option:hover {
+	background-color: #f0f0f0;
+}
+
+select selectbox option:checked {
+	background-color: #e8e8e8;
+}
+
+
+
+/* Vertical scrollbar */
+scrollbarvertical {
+	width: 16dp;
+}
+scrollbarvertical slidertrack {
+	background-color: #e8e8e8;
+	border: 1dp #cccccc;
 	border-radius: 4dp;
 }
-scrollbarvertical sliderbar:hover, scrollbarvertical sliderbar:active {
-	background: #d3e9eaaa;
+scrollbarvertical sliderbar {
+	margin-left: 2dp;
+	width: 10dp;
+	min-height: 25dp;
+	background-color: #c0c0c0;
+	border-radius: 4dp;
+}
+scrollbarvertical sliderbar:hover {
+	background-color: #b0b0b0;
+}
+scrollbarvertical sliderbar:active {
+	background-color: #a0a0a0;
+}
+
+/* Horizontal scrollbar */
+scrollbarhorizontal {
+	height: 16dp;
+}
+scrollbarhorizontal slidertrack {
+	background-color: #e8e8e8;
+	border: 1dp #cccccc;
+	border-radius: 4dp;
+	height: 14dp;
+}
+scrollbarhorizontal sliderbar {
+	margin-top: 2dp;
+	height: 10dp;
+	min-width: 25dp;
+	background-color: #c0c0c0;
+	border-radius: 4dp;
+}
+scrollbarhorizontal sliderbar:hover {
+	background-color: #b0b0b0;
+}
+scrollbarhorizontal sliderbar:active {
+	background-color: #a0a0a0;
+}
+
+scrollbarcorner {
+	background-color: #cccccc;
 }
 
 input.range {
@@ -156,27 +291,27 @@ input.range {
 	border-radius: 5dp;
 }
 
-input.range:disabled { 
+input.range:disabled {
 	opacity: 0.3;
 }
 
 input.range slidertrack {
 	background-color: #ffffff;
-  	border-radius: 5dp;
+	border-radius: 5dp;
 }
 
 input.range sliderbar {
 	width: 25dp;
-  	height: 25dp;
- 	margin-top: -5px;
+	height: 25dp;
+	margin-top: -5dp;
 	border-radius: 5dp;
 }
 
-input.range:hover sliderbar { 
- 	background-color: #357abd;
+input.range:hover sliderbar {
+	background-color: #357abd;
 }
 
-input.range sliderbar:active { 
+input.range sliderbar:active {
 	background-color: #2e6bb8;
 }
 
@@ -185,9 +320,9 @@ input.range sliderbar, input.range sliderbar:disabled {
 }
 
 input.range sliderprogress {
-  	background-color: #4a90e2;
-  	border-top-left-radius: 5dp;
-  	border-bottom-left-radius: 5dp;
+	background-color: #4a90e2;
+	border-top-left-radius: 5dp;
+	border-bottom-left-radius: 5dp;
 }
 
 input.range:hover sliderprogress {
@@ -201,12 +336,22 @@ input.range sliderarrowdec, input.range sliderarrowinc {
 	width: 0dp;
 	height: 0dp;
 }
-input.range sliderarrowdec { border-radius: 2dp 0 0 2dp; }
-input.range sliderarrowinc { border-radius: 0 2dp 2dp 0; }
-input.range sliderarrowdec:hover,    input.range sliderarrowinc:hover    { background-color: #dddddd; }
-input.range sliderarrowdec:active,   input.range sliderarrowinc:active   { background-color: #eeeeee; }
-input.range sliderarrowdec,          input.range sliderarrowinc,
-input.range sliderarrowdec:disabled, input.range sliderarrowinc:disabled { background-color: #cccccc; }
+input.range sliderarrowdec {
+	border-radius: 2dp 0 0 2dp;
+}
+input.range sliderarrowinc {
+	border-radius: 0 2dp 2dp 0;
+}
+input.range sliderarrowdec:hover, input.range sliderarrowinc:hover {
+	background-color: #dddddd;
+}
+input.range sliderarrowdec:active, input.range sliderarrowinc:active {
+	background-color: #eeeeee;
+}
+input.range sliderarrowdec, input.range sliderarrowinc,
+input.range sliderarrowdec:disabled, input.range sliderarrowinc:disabled {
+	background-color: #cccccc;
+}
 
 
 input.radio, input.checkbox {
@@ -219,12 +364,20 @@ input.radio, input.checkbox {
 input.radio {
 	border-radius: 8dp;
 }
-input.radio:hover,   input.checkbox:hover   { background-color: #ff3; }
-input.radio:active,  input.checkbox:active  { background-color: #ddd; }
-input.radio:checked, input.checkbox:checked { background-color: #555; }
+input.radio:hover, input.checkbox:hover {
+	background-color: #e8e8e8;
+}
+input.radio:active, input.checkbox:active {
+	background-color: #ddd;
+}
+input.radio:checked, input.checkbox:checked {
+	background-color: #555;
+}
 
 
-button {
+button,
+input.button,
+input.submit {
 	font-size: 1rem;
 	font-weight: bold;
 	padding: 0.5rem 1rem;
@@ -233,9 +386,34 @@ button {
 	text-align: center;
 	display: inline-block;
 	transition: background-color 0.2s;
-
+}
+button:hover,
+input.button:hover,
+input.submit:hover {
+	background-color: #0056b3;
+}
+button:active,
+input.button:active,
+input.submit:active {
+	background-color: #004a99;
+}
+button:focus-visible,
+input.button:focus-visible,
+input.submit:focus-visible {
+	box-shadow: 0 0 0 2dp #4a90e2;
 }
 
-button:hover {
-	background-color: #0056b3;
+/* Disabled state: visually distinct (greyed out, no hover) */
+button:disabled,
+input.button:disabled,
+input.submit:disabled {
+	opacity: 0.55;
+	background-color: #6c757d;
+	color: #e0e0e0;
+	cursor: unavailable;
+}
+button:disabled:hover,
+input.button:disabled:hover,
+input.submit:disabled:hover {
+	background-color: #6c757d;
 }
