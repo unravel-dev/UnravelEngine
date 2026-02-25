@@ -185,51 +185,96 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         if(ImGui::BeginMenu("Developer"))
         {
 
-
-
-            // if(ImGui::BeginMenu("Assets"))
-            // {
-            //     if(ImGui::MenuItem("Recreate Meta Files"))
-            //     {
-            //         auto& am = ctx.get_cached<asset_watcher>();
-            //         am.recreate_meta_files(ctx, "engine:/");
-            //     }
-            //     ImGui::EndMenu();
-            // }
-
-            if(ImGui::BeginMenu("Recompile"))
+            if(ImGui::BeginMenu("Assets"))
             {
-                if(ImGui::MenuItem("Shaders"))
+
+                if(ImGui::BeginMenu("Regenerate"))
                 {
-                    editor_actions::recompile_shaders();
+                    if(ImGui::MenuItem("Meta(Engine)"))
+                    {
+                        auto& am = ctx.get_cached<asset_watcher>();
+                        am.recreate_meta_files(ctx, "engine:/");
+                    }
+                    if(ImGui::MenuItem("Meta(Editor)"))
+                    {
+                        auto& am = ctx.get_cached<asset_watcher>();
+                        am.recreate_meta_files(ctx, "editor:/");
+                    }
+                    ImGui::EndMenu();
                 }
 
-                if(ImGui::MenuItem("Textures"))
+                if(ImGui::BeginMenu("Recompile"))
                 {
-                    editor_actions::recompile_textures();
-                }
+                    if(ImGui::MenuItem("Shaders (Engine)"))
+                    {
+                        editor_actions::recompile_shaders("engine:/");
+                    }
 
-                if(ImGui::MenuItem("UI", ImGui::GetKeyCombinationName(shortcuts::recompile_ui).c_str()))
-                {
-                    editor_actions::recompile_ui();
-                }
+                    if(ImGui::MenuItem("Shaders (Editor)"))
+                    {
+                        editor_actions::recompile_shaders("editor:/");
+                    }
 
-                if(ImGui::MenuItem("Scripts"))
-                {
-                    editor_actions::recompile_scripts();
-                }
+                    if(ImGui::MenuItem("Shaders (Project)"))
+                    {
+                        editor_actions::recompile_shaders("app");
+                    }
 
-                if(ImGui::MenuItem("All"))
-                {
-                    editor_actions::recompile_all();
-                }
+                    if(ImGui::MenuItem("Textures (Engine)"))
+                    {
+                        editor_actions::recompile_textures();
+                    }
 
-                if(ImGui::MenuItem("All (Project)"))
-                {
-                    editor_actions::recompile_all("app");
+                    if(ImGui::MenuItem("Textures (Editor)"))
+                    {
+                        editor_actions::recompile_textures();
+                    }
+
+                    if(ImGui::MenuItem("Textures (Project)"))
+                    {
+                        editor_actions::recompile_textures("app");
+                    }
+
+                    if(ImGui::MenuItem("UI", ImGui::GetKeyCombinationName(shortcuts::recompile_ui).c_str()))
+                    {
+                        editor_actions::recompile_ui();
+                    }
+
+                    if(ImGui::MenuItem("Scripts (Engine)"))
+                    {
+                        editor_actions::recompile_scripts("engine:/");
+                    }
+
+                    if(ImGui::MenuItem("Scripts (Editor)"))
+                    {
+                        editor_actions::recompile_scripts("editor:/");
+                    }
+
+                    if(ImGui::MenuItem("Scripts (Project)"))
+                    {
+                        editor_actions::recompile_scripts("app");
+                    }
+
+                    if(ImGui::MenuItem("All (Engine)"))
+                    {
+                        editor_actions::recompile_all("engine:/");
+                    }
+
+                    if(ImGui::MenuItem("All (Editor)"))
+                    {
+                        editor_actions::recompile_all("editor:/");
+                    }
+
+                    if(ImGui::MenuItem("All (Project)"))
+                    {
+                        editor_actions::recompile_all("app");
+                    }
+                    ImGui::EndMenu();
                 }
                 ImGui::EndMenu();
             }
+
+            
 
             if(ImGui::BeginMenu("Crash"))
             {

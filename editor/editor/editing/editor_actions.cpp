@@ -1506,9 +1506,16 @@ void editor_actions::recompile_scripts(const std::string& group)
 }
 void editor_actions::recompile_all(const std::string& group)
 {
-    recompile_shaders(group);
-    recompile_textures(group);
-    recompile_scripts(group);
-    recompile_ui(group);
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+    auto assets = am.get_all_assets(group);
+    fs::watcher::pause();
+    for(auto& asset : assets)
+    {
+        fs::error_code ec;
+        auto path = fs::absolute(fs::resolve_protocol(asset).string(), ec);
+        fs::watcher::touch(path, false);
+    }
+    fs::watcher::resume();
 }
 } // namespace unravel

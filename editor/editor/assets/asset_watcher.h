@@ -49,5 +49,8 @@ private:
     std::map<std::string, watched> watched_protocols_{};
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
+    std::mutex recreate_meta_files_queue_mutex_{};
+    std::map<std::string, bool> recreate_meta_files_queue_{};
+
 };
 } // namespace unravel

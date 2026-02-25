@@ -77,6 +77,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
         APPLOG_ERROR("Failed to initialize RmlUi backend");
         return false;
     }
+    
 
     // Create main UI context
     // Get viewport size from renderer
@@ -148,10 +149,48 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void ui_system::on_frame_update(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt)
+void ui_system::update_ui_document_common(entt::handle handle, ui_document_component& ui_comp, bool is_playing)
 {
-    update_ui_documents(ctx, scn);
-}
+    bool active = handle.all_of<active_component>();
+    if(!is_playing && ui_comp.version != ui_comp.asset.version())
+    {
+        if(ui_comp.document)
+        {
+            ui_comp.document->Close();
+            ui_comp.document = nullptr;
+        }
+        if(ui_comp.context)
+        {
+            remove_context(ui_comp.context);
+            ui_comp.context = nullptr;
+        }
+    }
+    if(!ui_comp.is_loaded())
+    {
+        load_ui_document(handle, ui_comp, false);
+    }
+    if(!ui_comp.document || !ui_comp.context)
+    {
+        return;
+    }
+
+    bool active_and_enabled = active && ui_comp.is_enabled();
+    if(active_and_enabled)
+    {
+        if(!ui_comp.document->IsVisible())
+        {
+            ui_comp.document->Show();
+        }
+    }
+    else
+    {
+        if(ui_comp.document->IsVisible())
+        {
+            ui_comp.document->Hide();
+        }
+    }
+}                                 
+
 
 void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt::handle handle, ui_document_component& comp,
                                             const camera& cam, float dp_ratio, bool process_input, bool& hit_found)
@@ -212,21 +251,39 @@ void ui_system::update_screen_space_document(rtti::context& ctx, Rml::Context* c
     }
 }
 
-void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt, bool process_input)
+void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input)
 {
-    APP_SCOPE_PERF("UI/Render World Space");
-    const auto current_frame = static_cast<uint64_t>(gfx::get_render_frame());
+    APP_SCOPE_PERF("UI/Update World Space");
     auto& camera_comp = camera_entity.get<camera_component>();
     const auto& cam = camera_comp.get_camera();
+    auto& input = ctx.get_cached<input_system>();
     float dp_ratio = 1.0f;
+    auto viewport = camera_comp.get_viewport_size();
+    auto viewport_width = static_cast<int>(viewport.width);
+    auto viewport_height = static_cast<int>(viewport.height);
+    {
+        auto work_zone = input.manager.get_work_zone();
+        if(work_zone.w > 0 && work_zone.h > 0)
+        {
+            dp_ratio = (static_cast<float>(viewport_width) / static_cast<float>(work_zone.w) +
+                        static_cast<float>(viewport_height) / static_cast<float>(work_zone.h)) *
+                       0.5f;
+        }
+    }
+    auto& ev = ctx.get_cached<events>();
+    bool is_playing = ev.is_playing;
 
-    struct visible_doc
+    
+    /// State between update_world_space and render_world_space
+    struct world_space_doc
     {
         entt::handle handle;
         ui_document_component* comp = nullptr;
         float distance = 0.0f;
     };
-    hpp::small_vector<visible_doc> visible;
+    std::vector<world_space_doc> world_space_visible;
+
+
     scn.registry->view<ui_document_component, active_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
         {
@@ -234,6 +291,8 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
             {
                 return;
             }
+            auto handle = scn.create_handle(entity);
+            update_ui_document_common(handle, ui_comp, is_playing);
             if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
             {
                 return;
@@ -242,7 +301,6 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
             {
                 return;
             }
-            auto handle = scn.create_handle(entity);
             auto& transform_comp = handle.get<transform_component>();
             const auto& world_transform = transform_comp.get_transform_global();
             auto bbox = ui_comp.get_bounds();
@@ -251,27 +309,53 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
                 return;
             }
             float dist = math::distance(cam.get_position(), transform_comp.get_position_global());
-            visible.push_back({handle, &ui_comp, dist});
+            world_space_visible.push_back({handle, &ui_comp, dist});
         });
-    std::sort(visible.begin(), visible.end(),
-              [](const visible_doc& a, const visible_doc& b) { return a.distance < b.distance; });
+    std::sort(world_space_visible.begin(), world_space_visible.end(),
+              [](const world_space_doc& a, const world_space_doc& b) { return a.distance < b.distance; });
     bool hit_found = false;
-    for(const auto& entry : visible)
+    for(const auto& entry : world_space_visible)
     {
         auto& ui_comp = *entry.comp;
         auto handle = entry.handle;
-
         update_world_space_document(ctx, scn, handle, ui_comp, cam, dp_ratio, process_input, hit_found);
+    }
+    process_input = !hit_found;
+}
 
+void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt)
+{
+    APP_SCOPE_PERF("UI/Render World Space");
+    (void)ctx;
+    (void)camera_entity;
+    (void)dt;
+    const auto current_frame = static_cast<uint64_t>(gfx::get_render_frame());
+
+
+    scn.registry->view<ui_document_component, active_component>().each(
+    [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
+    {
+        if(ui_comp.render_mode != ui_render_mode::world_space)
+        {
+            return;
+        }
+        if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
+        {
+            return;
+        }
+        if(!ui_comp.document->IsVisible())
+        {
+            return;
+        }
         if(ui_comp.last_render_frame == current_frame)
         {
-            continue;
+            return;
         }
         ui_comp.last_render_frame = current_frame;
         ensure_document_framebuffer(ui_comp);
         if(!ui_comp.framebuffer || !ui_comp.framebuffer->is_valid())
         {
-            continue;
+            return;
         }
         if(!ui_comp.render_layer_stack)
         {
@@ -288,30 +372,28 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
         ui_comp.context->Update();
         ui_comp.context->Render();
         RmlUi_Backend_Engine::end_frame();
-    }
+    });
 }
 
-void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer::ptr& output,
-                                   entt::handle camera_entity, scene& scn, delta_t dt, bool process_input)
+void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input)
 {
-    if(!output)
-    {
-        return;
-    }
-    APP_SCOPE_PERF("UI/Render Screen Space");
+    APP_SCOPE_PERF("UI/Update Screen Space");
     auto& camera_comp = camera_entity.get<camera_component>();
     auto& input = ctx.get_cached<input_system>();
-    float dp_ratio = 1.0f;
+    auto& ev = ctx.get_cached<events>();
+    bool is_playing = ev.is_playing;
+    float screen_space_dp_ratio = 1.0f;
     auto viewport = camera_comp.get_viewport_size();
-    auto viewport_width = static_cast<int>(viewport.width);
-    auto viewport_height = static_cast<int>(viewport.height);
+    float screen_space_viewport_width = static_cast<int>(viewport.width);
+    float screen_space_viewport_height = static_cast<int>(viewport.height);
     {
         auto work_zone = input.manager.get_work_zone();
         if(work_zone.w > 0 && work_zone.h > 0)
         {
-            dp_ratio = (static_cast<float>(viewport_width) / static_cast<float>(work_zone.w) +
-                        static_cast<float>(viewport_height) / static_cast<float>(work_zone.h)) *
-                       0.5f;
+            screen_space_dp_ratio =
+                (static_cast<float>(screen_space_viewport_width) / static_cast<float>(work_zone.w) +
+                 static_cast<float>(screen_space_viewport_height) / static_cast<float>(work_zone.h)) *
+                0.5f;
         }
     }
     bool hit_found = false;
@@ -322,6 +404,8 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
             {
                 return;
             }
+            auto handle = scn.create_handle(entity);
+            update_ui_document_common(handle, ui_comp, is_playing);
             if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
             {
                 return;
@@ -330,23 +414,63 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
             {
                 return;
             }
-            if(!ui_comp.render_layer_stack)
-            {
-                ui_comp.render_layer_stack = std::make_shared<RmlUi_RenderLayerStack>();
-            }
-            auto sz = output->get_size();
-            RmlUi_FrameState frame_state;
-            frame_state.viewport_width = static_cast<int>(sz.width);
-            frame_state.viewport_height = static_cast<int>(sz.height);
-            frame_state.framebuffer = output;
-            frame_state.clear_to_transparent = false;
-            frame_state.render_layers = ui_comp.render_layer_stack;
-            RmlUi_Backend_Engine::begin_frame(frame_state);
-            update_screen_space_document(ctx, ui_comp.context, viewport_width, viewport_height, dp_ratio, scn, process_input, hit_found);
-            ui_comp.context->Update();
-            ui_comp.context->Render();
-            RmlUi_Backend_Engine::end_frame();
+            update_screen_space_document(ctx, ui_comp.context, screen_space_viewport_width,
+                                        screen_space_viewport_height, screen_space_dp_ratio, scn, process_input,
+                                        hit_found);
         });
+    if(debug_context_)
+    {
+        update_screen_space_document(ctx, debug_context_, screen_space_viewport_width,
+                                    screen_space_viewport_height, screen_space_dp_ratio, scn, process_input,
+                                    hit_found);
+    }
+
+    process_input = !hit_found;
+}
+
+void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer::ptr& output,
+                                   entt::handle camera_entity, scene& scn, delta_t dt)
+{
+    if(!output)
+    {
+        return;
+    }
+    APP_SCOPE_PERF("UI/Render Screen Space");
+    (void)ctx;
+    (void)camera_entity;
+    (void)dt;
+    scn.registry->view<ui_document_component, active_component>().each(
+        [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
+    {
+        if(ui_comp.render_mode != ui_render_mode::screen_space_overlay)
+        {
+            return;
+        }
+        if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
+        {
+            return;
+        }
+        if(!ui_comp.document->IsVisible())
+        {
+            return;
+        }
+
+        if(!ui_comp.render_layer_stack)
+        {
+            ui_comp.render_layer_stack = std::make_shared<RmlUi_RenderLayerStack>();
+        }
+        auto sz = output->get_size();
+        RmlUi_FrameState frame_state;
+        frame_state.viewport_width = static_cast<int>(sz.width);
+        frame_state.viewport_height = static_cast<int>(sz.height);
+        frame_state.framebuffer = output;
+        frame_state.clear_to_transparent = false;
+        frame_state.render_layers = ui_comp.render_layer_stack;
+        RmlUi_Backend_Engine::begin_frame(frame_state);
+        ui_comp.context->Update();
+        ui_comp.context->Render();
+        RmlUi_Backend_Engine::end_frame();
+    });
     if(debug_context_)
     {
         auto sz = output->get_size();
@@ -357,8 +481,6 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
         frame_state.clear_to_transparent = false;
         frame_state.render_layers = debug_render_layer_stack_;
         RmlUi_Backend_Engine::begin_frame(frame_state);
-        update_screen_space_document(ctx, debug_context_, viewport_width, viewport_height, dp_ratio, scn, process_input, hit_found);
-
         debug_context_->Update();
         debug_context_->Render();
         RmlUi_Backend_Engine::end_frame();
@@ -490,7 +612,7 @@ void ui_system::on_load_component(entt::registry& r, entt::entity e)
     {
         auto& ctx = engine::context();
         auto& system = ctx.get_cached<ui_system>();
-        system.load_ui_document(e, component, true, true);
+        system.load_ui_document(e, component, true);
     }
 }
 
@@ -571,16 +693,7 @@ auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& even
 void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
 {
     auto& ev = ctx.get_cached<events>();
-    auto& input = ctx.get_cached<input_system>();
-    if(Rml::Debugger::IsVisible() && debug_context_)
-    {
-        if(input.manager.is_input_allowed())
-        {
-            auto mouse_x = input.manager.get_mouse().get_position().x;
-            auto mouse_y = input.manager.get_mouse().get_position().y;
-            debug_context_->ProcessMouseMove(static_cast<int>(mouse_x), static_cast<int>(mouse_y), 0);
-        }
-    }
+
     scn.registry->view<ui_document_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp)
         {
@@ -601,17 +714,13 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
             }
             if(!ui_comp.is_loaded())
             {
-                load_ui_document(entity, ui_comp, true, false);
+                load_ui_document(entity, ui_comp, false);
             }
             if(!ui_comp.document || !ui_comp.context)
             {
                 return;
             }
-            if(ui_comp.needs_stylesheet_reload)
-            {
-                ui_comp.document->ReloadStyleSheet();
-                ui_comp.needs_stylesheet_reload = false;
-            }
+
             bool active_and_enabled = active && ui_comp.is_enabled();
             if(active_and_enabled)
             {
@@ -630,7 +739,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
         });
 }
 
-auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet, bool log_error) -> bool
+auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool log_error) -> bool
 {
     if(!component.asset)
     {
@@ -687,11 +796,6 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
     }
     component.document = raw_document;
     component.version = component.asset.version();
-
-    if(reload_stylesheet)
-    {
-        component.needs_stylesheet_reload = true;
-    }
 
     return true;
 }

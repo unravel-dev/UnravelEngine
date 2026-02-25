@@ -87,16 +87,19 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
 
-
+    auto& ui = ctx.get_cached<ui_system>();
     bool process_input = render_screen_space;
-    ctx.get_cached<ui_system>().render_world_space(ctx, camera_ent, scn, dt, process_input);
+    ui.update_screen_space(ctx, camera_ent, scn, process_input);
+    ui.update_world_space(ctx, camera_ent, scn, process_input);
+
+    ui.render_world_space(ctx, camera_ent, scn, dt);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
     auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
     if(render_screen_space)
     {
-        ctx.get_cached<ui_system>().render_screen_space(ctx, result, camera_ent, scn, dt, process_input);
+        ui.render_screen_space(ctx, result, camera_ent, scn, dt);
     }
     return result;
 }
@@ -109,7 +112,6 @@ auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
-            ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             output = render_scene(handle, camera_comp, scn, dt, true);
             return;
         });
@@ -128,16 +130,20 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     auto& camera = pipeline_data.get_camera();
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
+    auto& ui = ctx.get_cached<ui_system>();
 
     bool process_input = render_screen_space;
-    ctx.get_cached<ui_system>().render_world_space(ctx, camera_ent, scn, dt, process_input);
+    ui.update_screen_space(ctx, camera_ent, scn, process_input);
+    ui.update_world_space(ctx, camera_ent, scn, process_input);
+
+    ui.render_world_space(ctx, camera_ent, scn, dt);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
     pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
     if(render_screen_space)
     {
-        ctx.get_cached<ui_system>().render_screen_space(ctx, output, camera_ent, scn, dt, process_input);
+        ui.render_screen_space(ctx, output, camera_ent, scn, dt);
     }
 }
 
@@ -148,7 +154,6 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene&
         [&](auto e, auto&& camera_comp)
         {
             auto handle = scn.create_handle(e);
-            ctx.get_cached<ui_system>().on_frame_update(ctx, handle, scn, dt);
             render_scene(output, handle, camera_comp, scn, dt, true);
         });
 }

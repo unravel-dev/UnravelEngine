@@ -7,6 +7,7 @@ html, body {
 	font-family: Inter 28pt;
 	font-size: 22dp;
 	color: #f0f0f0;
+	margin: 0;
 }
 
 
@@ -14,8 +15,31 @@ body, div,
 h1, h2, h3, h4,
 h5, h6, p,
 hr, pre,
+ul, ol,
 tabset tabs
 {
+	display: block;
+}
+
+span {
+	display: inline;
+}
+
+img {
+	display: inline-block;
+}
+
+label {
+	display: inline;
+	cursor: pointer;
+}
+
+ul, ol {
+	margin: 1em 0;
+	padding-left: 2em;
+}
+
+li {
 	display: block;
 }
 
@@ -78,6 +102,7 @@ hr
 a
 {
 	color: #4a90e2;
+	text-decoration: underline;
 }
 a:hover
 {
@@ -86,6 +111,10 @@ a:hover
 a:active
 {
 	color: #2e6bb8;
+}
+a:visited
+{
+	color: #551a8b;
 }
 
 table
@@ -151,6 +180,15 @@ input.text, input.password {
 input.text:focus-visible, input.password:focus-visible {
 	border-color: #4a90e2;
 }
+input.text:disabled, input.password:disabled {
+	opacity: 0.55;
+	cursor: unavailable;
+	background-color: #e9ecef;
+}
+
+input.text::placeholder, input.password::placeholder {
+	color: #888;
+}
 
 textarea {
 	min-height: 4em;
@@ -163,6 +201,15 @@ textarea {
 }
 textarea:focus-visible {
 	border-color: #4a90e2;
+}
+textarea:disabled {
+	opacity: 0.55;
+	cursor: unavailable;
+	background-color: #e9ecef;
+}
+
+textarea::placeholder {
+	color: #888;
 }
 
 /* Select (dropdown) - Browser-like defaults: single border, value left, arrow right, subtle option highlight */
@@ -377,15 +424,20 @@ input.radio:checked, input.checkbox:checked {
 
 button,
 input.button,
-input.submit {
+input.submit,
+input.reset {
 	font-size: 1rem;
 	font-weight: bold;
 	padding: 0.5rem 1rem;
-	background-color: #007bff;
-	color: white;
 	text-align: center;
 	display: inline-block;
 	transition: background-color 0.2s;
+}
+button,
+input.button,
+input.submit {
+	background-color: #007bff;
+	color: white;
 }
 button:hover,
 input.button:hover,
@@ -399,7 +451,8 @@ input.submit:active {
 }
 button:focus-visible,
 input.button:focus-visible,
-input.submit:focus-visible {
+input.submit:focus-visible,
+input.reset:focus-visible {
 	box-shadow: 0 0 0 2dp #4a90e2;
 }
 
@@ -415,5 +468,26 @@ input.submit:disabled {
 button:disabled:hover,
 input.button:disabled:hover,
 input.submit:disabled:hover {
+	background-color: #6c757d;
+}
+
+/* Reset button - neutral grey, distinct from submit */
+input.reset {
+	background-color: #6c757d;
+	color: white;
+}
+input.reset:hover {
+	background-color: #5a6268;
+}
+input.reset:active {
+	background-color: #545b62;
+}
+input.reset:disabled {
+	opacity: 0.55;
+	background-color: #6c757d;
+	color: #e0e0e0;
+	cursor: unavailable;
+}
+input.reset:disabled:hover {
 	background-color: #6c757d;
 }

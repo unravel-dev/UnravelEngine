@@ -1,5 +1,6 @@
 #pragma once
 
+#include "entt/entity/fwd.hpp"
 #include <engine/engine_export.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -8,6 +9,7 @@
 #include <engine/ecs/scene.h>
 #include <math/math.h>
 #include <string>
+#include <vector>
 #include <entt/entt.hpp>
 #include <graphics/frame_buffer.h>
 #include <engine/ui/rmlui/RmlUi_RenderLayerStack.h>
@@ -54,31 +56,25 @@ struct ui_system
     auto deinit(rtti::context& ctx) -> bool;
 
     /**
-     * @brief Update UI system (called every frame)
-     * @param ctx Engine context
-     * @param dt Delta time since last frame
+     * @brief Update world-space UI documents (common + world-space specific). Call before render_world_space.
      */
-    void on_frame_update(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt);
+    void update_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input);
 
     /**
-     * @brief Render world-space UI documents (to their framebuffers). Call from render path with the active camera.
-     * @param ctx Engine context for input
-     * @param camera_entity Camera entity for culling
-     * @param scn Scene containing UI documents
-     * @param dt Delta time since last frame
+     * @brief Render world-space UI documents (sort + frame-state render). Call after update_world_space.
      */
-    void render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt, bool process_input = true);
+    void render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt);
 
     /**
-     * @brief Render screen-space overlay UI documents to output. Call from render path (game panel only).
-     * @param ctx Engine context for input
-     * @param output Output frame buffer
-     * @param camera_entity Camera entity for viewport
-     * @param scn Scene containing UI documents
-     * @param dt Delta time since last frame
+     * @brief Update screen-space UI documents (common + screen-space specific). Call before render_screen_space.
+     */
+    void update_screen_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input);
+
+    /**
+     * @brief Render screen-space overlay UI documents to output. Call after update_screen_space.
      */
     void render_screen_space(rtti::context& ctx, const gfx::frame_buffer::ptr& output, entt::handle camera_entity,
-                            scene& scn, delta_t dt, bool process_input = true);
+                            scene& scn, delta_t dt);
 
 
 
@@ -103,6 +99,7 @@ struct ui_system
     auto is_debugger_enabled() const -> bool;
     void set_debugger_enabled(bool enabled);
 private:
+
     /**
      * @brief Update UI documents (load, reload, visibility). No camera dependency.
      * @param ctx Engine context
@@ -136,14 +133,15 @@ private:
     void update_screen_space_document(rtti::context& ctx, Rml::Context* context, int viewport_width,
                                      int viewport_height, float dp_ratio, scene& scn, bool process_input, bool& hit_found);
     
+
+    void update_ui_document_common(entt::handle handle, ui_document_component& ui_comp, bool is_playing);                                 
     /**
      * @brief Load a UI document for a specific component
      * @param entity Entity owning the component
      * @param component The ui_document_component to load the document for
-     * @param reload_stylesheet Whether to reload stylesheet
      * @return True if loading was successful, false otherwise
      */
-    auto load_ui_document(entt::entity entity, ui_document_component& component, bool reload_stylesheet = false, bool log_error = true) -> bool;
+    auto load_ui_document(entt::entity entity, ui_document_component& component, bool log_error = true) -> bool;
 
 
 
@@ -161,6 +159,7 @@ private:
     /// Debug/legacy context (empty, used for RmlUi debugger host - menu, info, log)
     Rml::Context* debug_context_ = nullptr;
     std::shared_ptr<RmlUi_RenderLayerStack> debug_render_layer_stack_ = nullptr;
+
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>();
     std::set<std::string> fonts_loaded_;

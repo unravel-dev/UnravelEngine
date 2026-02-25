@@ -10,6 +10,9 @@
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Log.h>
+#include <RmlUi/Core/Plugin.h>
+#include <RmlUi/Core/StyleSheetContainer.h>
+#include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Debugger/Debugger.h>
 
 #include <logging/logging.h>
@@ -23,9 +26,35 @@ namespace RmlUi_Backend_Engine
 
 namespace
 {
+    
+    struct PreloadStylesheetPlugin : public Rml::Plugin
+    {
+        Rml::SharedPtr<Rml::StyleSheetContainer> default_stylesheet = nullptr;
+
+        void set_default_stylesheet(Rml::SharedPtr<Rml::StyleSheetContainer> stylesheet) 
+        {
+            default_stylesheet = std::move(stylesheet);
+        }
+
+        void OnDocumentLoad(Rml::ElementDocument* document) 
+        {
+            // Inject user agent stylesheet for default style
+            if (default_stylesheet) 
+            {
+                Rml::SharedPtr<Rml::StyleSheetContainer> new_stylesheet = std::make_shared<Rml::StyleSheetContainer>();
+                new_stylesheet->MergeStyleSheetContainer(*default_stylesheet);
+                if (document->GetStyleSheetContainer()) 
+                {
+                    new_stylesheet->MergeStyleSheetContainer(*document->GetStyleSheetContainer());
+                }
+                document->SetStyleSheetContainer(new_stylesheet);
+            }
+        }
+    };
     // Global backend data
     struct BackendData
     {
+        std::unique_ptr<PreloadStylesheetPlugin> unravel_plugin = nullptr;
         RmlUi_SystemInterface system_interface;
         RmlUi_RenderInterface render_interface;
         RmlUi_FileInterface file_interface;
@@ -35,6 +64,7 @@ namespace
     };
 
     std::unique_ptr<BackendData> data;
+
 }
 
 auto initialize(rtti::context& ctx, const char* window_name, int width, int height) -> bool
@@ -49,6 +79,7 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
 
     data = std::make_unique<BackendData>();
     data->engine_ctx = &ctx;
+
 
     // Initialize system interface
     if (!data->system_interface.init(ctx))
@@ -72,6 +103,7 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
     Rml::SetRenderInterface(&data->render_interface);
     Rml::SetFileInterface(&data->file_interface);
 
+
     // Initialize RmlUi core
     if (!Rml::Initialise())
     {
@@ -81,6 +113,14 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
         data.reset();
         return false;
     }
+
+        
+    data->unravel_plugin = std::make_unique<PreloadStylesheetPlugin>();
+    auto path = fs::resolve_protocol("engine:/data/ui/rml.rcss");
+    Rml::SharedPtr<Rml::StyleSheetContainer> ss = Rml::Factory::InstanceStyleSheetFile(path.string());
+    data->unravel_plugin->set_default_stylesheet(ss);
+    // Register Unravel plugin
+    Rml::RegisterPlugin(data->unravel_plugin.get());
 
     data->initialized = true;
     return true;
@@ -98,6 +138,9 @@ void shutdown()
 
     if (data->initialized)
     {
+        // Unregister Unravel plugin
+        Rml::UnregisterPlugin(data->unravel_plugin.get());
+        data->unravel_plugin.reset();
         // Shutdown RmlUi core
         Rml::Shutdown();
 

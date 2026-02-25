@@ -669,7 +669,7 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
     };
 
     const auto on_file_modified =
-        [&am](const std::string& ext, const auto& ref_path, const auto& synced_paths, bool is_initial_listing)
+        [&am, this](const std::string& ext, const auto& ref_path, const auto& synced_paths, bool is_initial_listing)
     {
         for(const auto& synced_path : synced_paths)
         {
@@ -680,10 +680,33 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
                 load_from_file(synced_path.string(), meta);
             }
 
-            if(meta.uid.is_nil())
+            bool recreate_meta_file = false;
+            {
+                std::lock_guard<std::mutex> lock(recreate_meta_files_queue_mutex_);
+                if(!recreate_meta_files_queue_.empty())
+                {
+                    auto it = recreate_meta_files_queue_.find(ref_path.string());
+                    if(it != recreate_meta_files_queue_.end())
+                    {
+                        recreate_meta_files_queue_.erase(it);
+                        
+                        recreate_meta_file = true;
+                    }
+                }
+            }
+            
+
+            if(meta.uid.is_nil() || recreate_meta_file)
             {
                 auto key = fs::convert_to_protocol(ref_path).generic_string();
-                meta = am.generate_metadata(key);
+                auto new_meta = am.generate_metadata(key);
+
+                if(new_meta.uid != meta.uid)
+                {
+                    am.remove_asset_info_for_path(ref_path);
+                    meta = new_meta;
+                }
+
             }
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 
@@ -893,14 +916,21 @@ void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protoc
 
 void asset_watcher::recreate_meta_files(rtti::context& ctx, const std::string& protocol)
 {
-    // auto& am = ctx.get_cached<asset_manager>();
-    // auto assets = am.get_all_assets(protocol);
-    // for(auto& asset : assets)
-    // {
-    //     // recreate_meta_files_queue_[asset] = true;
-    //     std::cout << asset << std::endl;
-    // }
-    
+    auto& am = ctx.get_cached<asset_manager>();
+    auto assets = am.get_all_assets(protocol);
+
+    std::lock_guard<std::mutex> lock(recreate_meta_files_queue_mutex_);
+    for(auto& asset : assets)
+    {
+
+        auto path = fs::resolve_protocol(asset);
+        recreate_meta_files_queue_[path.string()] = true;
+    }
+
+    for(auto& kvp : recreate_meta_files_queue_)
+    {
+        fs::watcher::touch(fs::resolve_protocol(kvp.first), false);
+    }
 }
 
 } // namespace unravel
