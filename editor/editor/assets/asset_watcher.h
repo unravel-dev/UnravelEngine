@@ -20,6 +20,8 @@ public:
     void watch_assets(rtti::context& ctx, const std::string& protocol, bool wait = false);
     void unwatch_assets(rtti::context& ctx, const std::string& protocol);
 
+    void recreate_meta_files(rtti::context& ctx, const std::string& protocol);
+
 private:
     void on_os_event(rtti::context& ctx, os::event& e);
 

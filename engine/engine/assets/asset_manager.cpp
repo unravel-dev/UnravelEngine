@@ -156,6 +156,27 @@ void asset_manager::unload_group(const std::string& group)
     }
 }
 
+auto asset_manager::get_all_assets(const std::string& group) const -> std::vector<std::string>
+{
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    auto protocol = fs::extract_protocol(fs::path(group));
+
+    std::vector<std::string> result;
+    for(auto& kvp : databases_)
+    {
+        if(kvp.first != protocol)
+        {
+            continue;
+        }
+        auto& db = kvp.second;
+        for(auto& kvp : db.get_database())
+        {
+            result.push_back(kvp.second.location);
+        }
+    }
+    return result;
+}
+
 auto asset_manager::get_database(const std::string& key) -> asset_database&
 {
     auto protocol = fs::extract_protocol(fs::path(key));

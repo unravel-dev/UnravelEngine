@@ -7,6 +7,7 @@
 #include <editor/shortcuts.h>
 #include <editor/system/project_manager.h>
 #include <editor/system/version_manager.h>
+#include <editor/assets/asset_watcher.h>
 
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
@@ -183,22 +184,18 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Developer"))
         {
-            if(ImGui::BeginMenu("Crash"))
-            {
-                if(ImGui::MenuItem("Abort"))
-                {
-                    std::abort();
-                }
-                if(ImGui::MenuItem("Terminate"))
-                {
-                    std::terminate();
-                }
-                if(ImGui::MenuItem("Segmentation Fault"))
-                {
-                    *(volatile int*)0 = 0;
-                }
-                ImGui::EndMenu();
-            }
+
+
+
+            // if(ImGui::BeginMenu("Assets"))
+            // {
+            //     if(ImGui::MenuItem("Recreate Meta Files"))
+            //     {
+            //         auto& am = ctx.get_cached<asset_watcher>();
+            //         am.recreate_meta_files(ctx, "engine:/");
+            //     }
+            //     ImGui::EndMenu();
+            // }
 
             if(ImGui::BeginMenu("Recompile"))
             {
@@ -230,6 +227,23 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 if(ImGui::MenuItem("All (Project)"))
                 {
                     editor_actions::recompile_all("app");
+                }
+                ImGui::EndMenu();
+            }
+
+            if(ImGui::BeginMenu("Crash"))
+            {
+                if(ImGui::MenuItem("Abort"))
+                {
+                    std::abort();
+                }
+                if(ImGui::MenuItem("Terminate"))
+                {
+                    std::terminate();
+                }
+                if(ImGui::MenuItem("Segmentation Fault"))
+                {
+                    *(volatile int*)0 = 0;
                 }
                 ImGui::EndMenu();
             }

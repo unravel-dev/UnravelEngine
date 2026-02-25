@@ -891,4 +891,16 @@ void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protoc
     am.unload_group(protocol);
 }
 
+void asset_watcher::recreate_meta_files(rtti::context& ctx, const std::string& protocol)
+{
+    // auto& am = ctx.get_cached<asset_manager>();
+    // auto assets = am.get_all_assets(protocol);
+    // for(auto& asset : assets)
+    // {
+    //     // recreate_meta_files_queue_[asset] = true;
+    //     std::cout << asset << std::endl;
+    // }
+    
+}
+
 } // namespace unravel

@@ -308,6 +308,11 @@ public:
         }
     }
 
+    /**
+     * @brief Gets all assets.
+     * @return A vector of handles to the assets.
+     */
+    auto get_all_assets(const std::string& group) const -> std::vector<std::string>;
 private:
     /**
      * @brief Gets the asset database for a specified group.

@@ -160,16 +160,6 @@ public:
     using database_t = std::map<hpp::uuid, meta>;
 
     /**
-     * @brief Generates a UUID based on the file path.
-     * @param p The file path.
-     * @return The generated UUID.
-     */
-    static auto generate_id(const fs::path& p) -> hpp::uuid
-    {
-        return generate_uuid();//p.generic_string());
-    }
-
-    /**
      * @brief Gets the entire asset database.
      * @return A constant reference to the asset database.
      */
