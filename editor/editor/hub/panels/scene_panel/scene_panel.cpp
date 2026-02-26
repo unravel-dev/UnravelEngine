@@ -710,7 +710,7 @@ auto handle_ui_document_component_bounds_manipulation(entt::handle active_select
         return false;
     }
 
-    const auto& initial_area = result->initial_area;
+    const auto& initial_area = fsize_t(result->initial_area.width * ui_document_comp->pixels_per_world_unit, result->initial_area.height * ui_document_comp->pixels_per_world_unit);
     const auto& initial_position = result->initial_position;
     const auto& new_area = fsize_t(result->new_area.width * ui_document_comp->pixels_per_world_unit, result->new_area.height * ui_document_comp->pixels_per_world_unit);
     const auto& new_position = result->new_position;
