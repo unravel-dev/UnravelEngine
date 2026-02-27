@@ -257,19 +257,10 @@ void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entit
     auto& camera_comp = camera_entity.get<camera_component>();
     const auto& cam = camera_comp.get_camera();
     auto& input = ctx.get_cached<input_system>();
+
+    // world space ui does not depend on the viewport size, so we can use a fixed dp_ratio
     float dp_ratio = 1.0f;
-    auto viewport = camera_comp.get_viewport_size();
-    auto viewport_width = static_cast<int>(viewport.width);
-    auto viewport_height = static_cast<int>(viewport.height);
-    {
-        auto work_zone = input.manager.get_work_zone();
-        if(work_zone.w > 0 && work_zone.h > 0)
-        {
-            dp_ratio = (static_cast<float>(viewport_width) / static_cast<float>(work_zone.w) +
-                        static_cast<float>(viewport_height) / static_cast<float>(work_zone.h)) *
-                       0.5f;
-        }
-    }
+   
     auto& ev = ctx.get_cached<events>();
     bool is_playing = ev.is_playing;
 
@@ -320,7 +311,11 @@ void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entit
         auto handle = entry.handle;
         update_world_space_document(ctx, scn, handle, ui_comp, cam, dp_ratio, process_input, hit_found);
     }
-    process_input = !hit_found;
+
+    if(process_input)
+    {
+        process_input = !hit_found;
+    }
 }
 
 void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt)
@@ -420,12 +415,16 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
         });
     if(debug_context_)
     {
+        bool debug_hit_found = false;
         update_screen_space_document(ctx, debug_context_, screen_space_viewport_width,
                                     screen_space_viewport_height, screen_space_dp_ratio, scn, process_input,
-                                    hit_found);
+                                    debug_hit_found);
     }
 
-    process_input = !hit_found;
+    if(process_input)
+    {
+        process_input = !hit_found;
+    }
 }
 
 void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer::ptr& output,
@@ -576,27 +575,16 @@ void ui_system::load_font(const std::string& path)
 }
 
 void ui_system::load_fonts()
-{
-    // Load font
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Thin.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ThinItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraLight.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraLightItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Light.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-LightItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Regular.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Italic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Medium.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-MediumItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-SemiBold.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-SemiBoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Bold.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-BoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraBold.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-ExtraBoldItalic.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-Black.ttf");
-    load_font("engine:/data/fonts/Inter/static/28pt/Inter-BlackItalic.ttf");
 
+{
+    load_font("engine:/data/fonts/Inter/InterVariable.ttf");
+    load_font("engine:/data/fonts/Inter/InterVariable-Italic.ttf");
+
+    load_font("engine:/data/fonts/OpenSans/OpenSans-VariableFont_wdth,wght.ttf");
+    load_font("engine:/data/fonts/OpenSans/OpenSans-Italic-VariableFont_wdth,wght.ttf");
+
+    load_font("engine:/data/fonts/RobotoMono/RobotoMono-VariableFont_wght.ttf");
+    load_font("engine:/data/fonts/RobotoMono/RobotoMono-Italic-VariableFont_wght.ttf");
 }
 
 void ui_system::on_create_component(entt::registry& r, entt::entity e)

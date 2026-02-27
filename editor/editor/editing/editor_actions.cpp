@@ -305,9 +305,13 @@ void generate_workspace_file(const std::string& file_path,
         }
     }
 
-    // Close the files.exclude object and the settings object
+    // Close the files.exclude object and add files.associations
     json_stream << "\n";
-    json_stream << "        }\n"; // End of "files.exclude"
+    json_stream << "        },\n"; // End of "files.exclude"
+    json_stream << "        \"files.associations\": {\n";
+    json_stream << "            \"*.rcss\": \"css\",\n";
+    json_stream << "            \"*.rhtml\": \"html\"\n";
+    json_stream << "        }\n";
     json_stream << "    }\n";     // End of "settings"
 
     // Add the "extensions" section
@@ -1348,14 +1352,14 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         .then(tpp::this_thread::get_id(),
               [params, executable_path](auto f)
               {
-                  if(params.deploy_and_run)
-                  {
-                      run_project(executable_path);
-                  }
-                  else
-                  {
-                      fs::show_in_graphical_env(params.deploy_location);
-                  }
+                        if(params.deploy_and_run)
+                        {
+                            run_project(executable_path);
+                        }
+                        else
+                        {
+                            fs::show_in_graphical_env(params.deploy_location);
+                        }
               });
 
     return jobs;

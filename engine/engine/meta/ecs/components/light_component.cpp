@@ -198,7 +198,7 @@ REFLECT(skylight_component)
         .data<&skylight_component::set_irradiance_quality, &skylight_component::get_irradiance_quality>("irradiance_quality"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "irradiance_quality"},
-            entt::attribute{"pretty_name", "IrradianceQuality"},
+            entt::attribute{"pretty_name", "Irradiance Quality"},
             entt::attribute{"tooltip", "Quality of irradiance for indirect diffuse lighting."},
         })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)

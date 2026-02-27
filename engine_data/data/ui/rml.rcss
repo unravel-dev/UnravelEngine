@@ -4,7 +4,10 @@
 
 /* Base font settings */
 html, body {
-	font-family: Inter 28pt;
+	font-family: 'Inter Variable';
+	/*font-family: 'Open Sans';*/
+	/* font-family: 'Roboto Mono'; */
+
 	font-size: 22dp;
 	color: #f0f0f0;
 	margin: 0;
