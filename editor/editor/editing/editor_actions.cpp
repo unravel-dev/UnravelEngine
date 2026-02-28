@@ -1105,6 +1105,16 @@ void editor_actions::run_project(const fs::path& executable_path)
     subprocess::call(executable_path.string());
 }
 
+auto editor_actions::can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& settings = pm.get_settings();
+    bool valid_location = fs::is_directory(params.deploy_location);
+    bool valid_startup_scene = settings.standalone.startup_scene.is_valid();
+    return valid_location && valid_startup_scene;
+}
+
+
 auto editor_actions::deploy_project(rtti::context& ctx,
                                     const deploy_settings& params) -> std::map<std::string, tpp::shared_future<void>>
 {

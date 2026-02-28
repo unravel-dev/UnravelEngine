@@ -22,6 +22,10 @@
 #include "passes/tonemapping_pass.h"
 #include "volume_resolver.h"
 
+#include <engine/ui/ecs/components/ui_document_component.h>
+#include <engine/rendering/ecs/components/text_component.h>
+#include <engine/ecs/components/transform_component.h>
+
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 
@@ -206,6 +210,10 @@ protected:
     std::unique_ptr<gpu_program> world_quad_program_{};
 
     pipeline_stats stats_{};
+
+
+    entt::registry cache_registry_;
+    entt::entity cache_entity_;
 };
 } // namespace rendering
 } // namespace unravel

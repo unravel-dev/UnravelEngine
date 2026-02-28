@@ -19,6 +19,9 @@ public:
 
     void show(bool s);
 
+    void deploy_and_run(rtti::context& ctx, const deploy_settings& params);
+    auto is_deploying() const -> bool;
+
 private:
     void draw_ui(rtti::context& ctx);
     auto get_progress() const -> float;

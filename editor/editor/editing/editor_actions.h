@@ -28,6 +28,7 @@ struct editor_actions
     static void run_project(const fs::path& executable_path);
     static auto deploy_project(rtti::context& ctx, const deploy_settings& params)
         -> std::map<std::string, tpp::shared_future<void>>;
+    static auto can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool;
 
 
     static void recompile_shaders(const std::string& group = "");

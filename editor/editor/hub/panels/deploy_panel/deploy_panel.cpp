@@ -19,7 +19,11 @@ deploy_panel::deploy_panel(imgui_panels* parent) : parent_(parent)
 void deploy_panel::show(bool s)
 {
     show_request_ = s;
-    deploy_jobs_.clear();
+
+    if(!s)
+    {
+        deploy_jobs_.clear();
+    }
 }
 
 void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
@@ -62,6 +66,27 @@ auto deploy_panel::get_progress() const -> float
     return float(ready) / float(deploy_jobs_.size());
 }
 
+
+auto deploy_panel::is_deploying() const -> bool
+{
+    float progress = get_progress();
+    bool is_in_progress = progress < 0.99f;
+    return is_in_progress;
+}
+
+void deploy_panel::deploy_and_run(rtti::context& ctx, const deploy_settings& params)
+{
+    bool is_in_progress = is_deploying();
+    if(!is_in_progress && editor_actions::can_deploy_project(ctx, params))
+    {
+        deploy_jobs_ = editor_actions::deploy_project(ctx, params);
+    }
+    else
+    {
+        show(true);
+    }
+}
+
 void deploy_panel::draw_ui(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
@@ -83,12 +108,8 @@ void deploy_panel::draw_ui(rtti::context& ctx)
         pm.save_deploy_settings();
     }
 
-    float progress = get_progress();
-    bool is_in_progress = progress < 0.99f;
-    bool valid_location = fs::is_directory(deploy_settings.deploy_location);
-    bool valid_startup_scene = settings.standalone.startup_scene.is_valid();
-    bool can_deploy = valid_location && valid_startup_scene && !is_in_progress;
-    if(can_deploy)
+    bool is_in_progress = is_deploying();
+    if(!is_in_progress && editor_actions::can_deploy_project(ctx, deploy_settings))
     {
         ImGui::AlignedItem(0.5f,
                            ImGui::GetContentRegionAvail().x,
@@ -111,7 +132,7 @@ void deploy_panel::draw_ui(rtti::context& ctx)
                            sz,
                            [&]()
                            {
-                               ImGui::ProgressBar(progress, ImVec2(sz, 0.0f));
+                               ImGui::ProgressBar(get_progress(), ImVec2(sz, 0.0f));
                            });
 
         for(const auto& kvp : deploy_jobs_)

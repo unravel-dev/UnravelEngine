@@ -299,7 +299,7 @@ void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entit
             {
                 return;
             }
-            float dist = math::distance(cam.get_position(), transform_comp.get_position_global());
+            float dist = math::distance2(cam.get_position(), transform_comp.get_position_global());
             world_space_visible.push_back({handle, &ui_comp, dist});
         });
     std::sort(world_space_visible.begin(), world_space_visible.end(),

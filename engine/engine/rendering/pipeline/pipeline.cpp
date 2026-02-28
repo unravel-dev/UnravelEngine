@@ -1,6 +1,7 @@
 #include "pipeline.h"
 #include "bx/bx.h"
 #include "engine/rendering/camera.h"
+#include "glm/ext.hpp"
 #include <engine/rendering/batch_collector.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
@@ -35,6 +36,8 @@ namespace rendering
 {
 auto pipeline::init(rtti::context& ctx) -> bool
 {
+    cache_entity_ = cache_registry_.create();
+
     prefilter_pass_.init(ctx);
     blit_pass_.init(ctx);
     atmospheric_pass_.init(ctx);
@@ -291,19 +294,20 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     pass.bind(fbo.get());
     pass.set_view_proj(view, proj);
 
-    scn.registry->view<transform_component, text_component, active_component>().each(
-        [&](auto e, auto&& transform_comp, auto&& text_comp, auto&& active)
-        {
-            const auto& world_transform = transform_comp.get_transform_global();
-            auto bbox = text_comp.get_bounds();
 
-            if(!camera.test_obb(bbox, world_transform))
-            {
-                return;
-            }
-
-            text_comp.submit(pass.id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
-        });
+    struct world_space_ui_entry
+    {
+        entt::handle handle;
+        ui_document_component* comp = nullptr;
+        transform_component* transform_comp = nullptr;
+        float distance = 0.0f;
+    };
+    struct world_space_ui_cache
+    {
+        std::vector<world_space_ui_entry> entries;
+    };
+    auto& ui_cache = cache_registry_.get_or_emplace<world_space_ui_cache>(cache_entity_);
+    ui_cache.entries.clear();
 
     // World-space UI documents: draw quad with framebuffer texture
     if(world_quad_program_ && world_quad_program_->begin())
@@ -314,7 +318,6 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         scn.registry->view<transform_component, ui_document_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& ui_comp, auto&&)
             {
-                auto handle = scn.create_handle(e);
                 if(ui_comp.render_mode != ui_render_mode::world_space)
                 {
                     return;
@@ -330,17 +333,81 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
                 {
                     return;
                 }
-
-                const auto scale = ui_comp.get_world_space_scale();
-                const auto model = transform_comp.get_transform_global() * math::transform::scaling(scale);
-                auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
-                gfx::set_state(topology | world_ui_state);
-                world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
-                gfx::set_world_transform(model);
-                gfx::submit(pass.id, world_quad_program_->native_handle());
+                auto handle = scn.create_handle(e);
+                float dist = math::distance2(camera.get_position(), world_transform.get_position());
+                ui_cache.entries.push_back({handle, &ui_comp, &transform_comp, dist});
             });
+
+        std::sort(ui_cache.entries.begin(), ui_cache.entries.end(), [](const world_space_ui_entry& a, const world_space_ui_entry& b)
+        {
+            return a.distance > b.distance;
+        });
+
+        for(const auto& entry : ui_cache.entries)
+        {
+            auto& ui_comp = *entry.comp;
+            auto handle = entry.handle;
+            const auto& world_transform = entry.transform_comp->get_transform_global();
+            const auto scale = ui_comp.get_world_space_scale();
+            const auto model = world_transform * math::transform::scaling(scale);
+            auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
+            gfx::set_state(topology | world_ui_state);
+            world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
+            gfx::set_world_transform(model);
+            gfx::submit(pass.id, world_quad_program_->native_handle());        }
+
+        ui_cache.entries.clear();
+
         world_quad_program_->end();
     }
+
+    
+    struct world_space_text_entry
+    {
+        entt::handle handle;
+        text_component* comp = nullptr;
+        transform_component* transform_comp = nullptr;
+        float distance = 0.0f;
+    };
+    struct world_space_text_cache
+    {
+        std::vector<world_space_text_entry> entries;
+    };
+    
+    //this approach preserves the capacities of the vector
+    auto& text_cache = cache_registry_.get_or_emplace<world_space_text_cache>(cache_entity_);
+    text_cache.entries.clear();
+
+    scn.registry->view<transform_component, text_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& text_comp, auto&& active)
+        {
+            const auto& world_transform = transform_comp.get_transform_global();
+            auto bbox = text_comp.get_bounds();
+
+            if(!camera.test_obb(bbox, world_transform))
+            {
+                return;
+            }
+
+            float dist = math::distance2(camera.get_position(), world_transform.get_position());
+            auto handle = scn.create_handle(e);
+            text_cache.entries.push_back({handle, &text_comp, &transform_comp, dist});
+        });
+
+    std::sort(text_cache.entries.begin(), text_cache.entries.end(), [](const world_space_text_entry& a, const world_space_text_entry& b)
+    {
+        return a.distance > b.distance;
+    });
+
+    for(const auto& entry : text_cache.entries)
+    {
+        auto& text_comp = *entry.comp;
+        auto handle = entry.handle;
+        const auto& world_transform = entry.transform_comp->get_transform_global();
+        text_comp.submit(pass.id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
+    }
+
+    text_cache.entries.clear();
 
     gfx::discard();
 }

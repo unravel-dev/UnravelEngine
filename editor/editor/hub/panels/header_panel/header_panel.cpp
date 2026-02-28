@@ -431,6 +431,30 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
     const auto& style = ImGui::GetStyle();
     auto frame_padding = style.FramePadding;
     auto item_spacing = style.ItemSpacing;
+
+
+    {
+        bool is_deploying = parent_->get_deploy_panel().is_deploying();;
+        ImGui::BeginDisabled(is_deploying);
+
+        bool play_pressed_ex = ImGui::Button(ICON_MDI_PACKAGE);
+        ImGui::SetItemTooltipEx("%s", "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
+
+
+        ImGui::EndDisabled();
+        if(play_pressed_ex)
+        {
+            auto deploy_settings = pm.get_deploy_settings();
+            deploy_settings.deploy_and_run = true;
+            deploy_settings.deploy_dependencies = true;
+            parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
+
+        }
+
+        ImGui::SameLine();
+    }
+
+
     ImGui::AlignedItem(
         0.5f,
         width,
@@ -453,39 +477,6 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
 
             play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
 
-            // ImGui::SameLine();
-            // bool play_pressed_ex = ImGui::Button(ICON_MDI_PLAY_BOX);
-            // if(play_pressed_ex)
-            // {
-
-            //     auto& pm = ctx.get_cached<project_manager>();
-            //     auto& settings = pm.get_settings();
-            //     auto deploy_settings = pm.get_deploy_settings();
-            //     deploy_settings.deploy_and_run = true;
-            //     deploy_settings.deploy_dependencies = true;
-            //     bool valid_location = fs::is_directory(deploy_settings.deploy_location);
-
-            //     if(!valid_location)
-            //     {
-            //         fs::error_code ec;
-            //         auto temp_dir = fs::temp_directory_path(ec);
-            //         if(!ec)
-            //         {
-            //             deploy_settings.deploy_location = temp_dir;
-            //             valid_location = true;
-            //         }
-
-            //     }
-            //     bool valid_startup_scene = settings.standalone.startup_scene.is_valid();
-            //     bool can_deploy = valid_location && valid_startup_scene;
-            //     if(can_deploy)
-            //     {
-            //         editor_actions::deploy_project(ctx, deploy_settings);
-
-            //     }
-
-            // }
-
             if(has_errors && !ev.is_playing)
             {
                 play_pressed = false;
@@ -495,6 +486,11 @@ void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
             {
                 ev.toggle_play_mode(ctx);
             }
+
+            
+
+
+            
 
             ImGui::SameLine();
             if(ImGui::Button(ICON_MDI_PAUSE))

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "basic_component.h"
+#include "id_component.h"
 #include <engine/assets/asset_handle.h>
 #include <unordered_map>
 #include <string>
@@ -113,24 +114,9 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
  * @struct prefab_id_component
  * @brief Component that provides a unique identifier (UUID) for a prefab.
  */
- struct prefab_id_component
+ struct prefab_id_component : public id_component_base<prefab_id_component>
  {
-     void regenerate_id()
-     {
-         id = generate_uuid();
-     }
- 
-     void generate_if_nil()
-     {
-         if(id.is_nil()) 
-         {
-             id = generate_uuid();
-         }
-     }
-     /**
-      * @brief The unique identifier for the entity.
-      */
-     hpp::uuid id;
+
  };
  
 

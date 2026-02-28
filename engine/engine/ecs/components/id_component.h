@@ -6,12 +6,8 @@
 
 namespace unravel
 {
-
-/**
- * @struct id_component
- * @brief Component that provides a unique identifier (UUID) for an entity.
- */
-struct id_component
+template<typename T>
+struct id_component_base
 {
     void regenerate_id()
     {
@@ -29,6 +25,14 @@ struct id_component
      * @brief The unique identifier for the entity.
      */
     hpp::uuid id;
+};
+/**
+ * @struct id_component
+ * @brief Component that provides a unique identifier (UUID) for an entity.
+ */
+struct id_component : public id_component_base<id_component>
+{
+
 };
 
 } // namespace unravel
