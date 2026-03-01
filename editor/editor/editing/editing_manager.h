@@ -49,7 +49,7 @@ struct editing_manager
 
     struct grid
     {
-        float opacity = 1.0f;
+        float opacity = 0.75f;
         bool depth_aware {true};
     };
 

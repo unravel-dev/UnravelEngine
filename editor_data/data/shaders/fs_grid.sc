@@ -10,136 +10,98 @@ uniform vec4 u_params;
 #define u_camera_far    u_params.z
 #define u_grid_opacity  u_params.w
 
-vec4 grid (vec3 frag_position_3d, float scale, float thickness, float grid_alpha, float axis_alpha)
+vec4 grid(vec3 frag_pos, float scale, float grid_alpha, float axis_alpha)
 {
-	// dont want the grid to be infinite?
-	// 	uncomment this bit, set your boundaries to whatever you want
-	//if (frag_position_3d.x > 10.0f
-	//	|| frag_position_3d.x < -10.0f
-	//	|| frag_position_3d.z > 10.0f
-	//	|| frag_position_3d.z < -10.0f)
-	//{
-	//	return vec4 (0.0f, 0.0f, 0.0f, 0.0f);
-	//}
-
-	vec2 coord = frag_position_3d.xz / scale;
+	vec2 coord = frag_pos.xz / scale;
 	vec2 derivative = fwidth(coord);
-    
-    // Better anti-aliased grid calculation
-    vec2 grid = abs(fract(coord - vec2_splat(0.5)) - vec2_splat(0.5)) / derivative;
-    float ln = min(grid.x, grid.y);
-    
-    // Smooth the grid lines with proper thickness
-    float grid_opacity = 1.0 - min(ln, 1.0);
-    grid_opacity = smoothstep(0.0, thickness, grid_opacity);
-    
-	float minimum_z = min(derivative.y, 1.0f);
-	float minimum_x = min(derivative.x, 1.0f);
-    
-    float axisLineThreshold = thickness * scale * 1.5; // Made thicker
 
-	// Smooth axis line transitions with thicker lines
-    float x_axis_factor = 1.0 - smoothstep(0.0, axisLineThreshold * minimum_x, abs(frag_position_3d.x));
-    float z_axis_factor = 1.0 - smoothstep(0.0, axisLineThreshold * minimum_z, abs(frag_position_3d.z));
-    
-    // Start with grid color
-	vec4 color = vec4(1.0f, 1.0f, 1.0f, grid_alpha * grid_opacity);
-    
-	// x axis color (bright red) - when z is close to 0
-    vec3 x_axis_color = vec3(1.0f, 0.1f, 0.1f);
-    float x_axis_strength = z_axis_factor * axis_alpha;
+	vec2 grid_aa = abs(fract(coord - vec2_splat(0.5)) - vec2_splat(0.5)) / derivative;
+	float ln = min(grid_aa.x, grid_aa.y);
+	float line_mask = smoothstep(1.0, 0.0, ln);
 
-	// z axis color (bright green) - when x is close to 0
-    vec3 z_axis_color = vec3(0.1f, 1.0f, 0.1f);
-    float z_axis_strength = x_axis_factor * axis_alpha;
-    
-    // Apply axis colors with strong dominance
-    if (x_axis_strength > 0.1) 
-	{
-        color.rgb = x_axis_color;
-        color.a = max(color.a, x_axis_strength);
-    }
-    if (z_axis_strength > 0.1) 
-	{
-        color.rgb = z_axis_color;
-        color.a = max(color.a, z_axis_strength);
-    }
+	float min_dz = min(derivative.y, 1.0);
+	float min_dx = min(derivative.x, 1.0);
+	float axis_width = 1.5 * scale;
+
+	float z_near_zero = 1.0 - smoothstep(0.0, axis_width * min_dz, abs(frag_pos.z));
+	float x_near_zero = 1.0 - smoothstep(0.0, axis_width * min_dx, abs(frag_pos.x));
+
+	vec4 color = vec4(1.0, 1.0, 1.0, grid_alpha * line_mask);
+
+	// X axis (red, along z=0)
+	float x_axis_str = z_near_zero * axis_alpha;
+	color.rgb = mix(color.rgb, vec3(1.0, 0.15, 0.15), x_axis_str);
+	color.a = max(color.a, x_axis_str);
+
+	// Z axis (green, along x=0)
+	float z_axis_str = x_near_zero * axis_alpha;
+	color.rgb = mix(color.rgb, vec3(0.15, 1.0, 0.15), z_axis_str);
+	color.a = max(color.a, z_axis_str);
 
 	return color;
 }
 
-float compute_ndc_depth (vec3 position, in mat4 viewProj)
+float compute_ndc_depth(vec3 position, in mat4 viewProj)
 {
-	vec4 clip_space_position = mul(viewProj, vec4 (position.xyz, 1.0));
-    
-    float ndc_depth = clip_space_position.z / clip_space_position.w;
+	vec4 clip_pos = mul(viewProj, vec4(position.xyz, 1.0));
+	float ndc_depth = clip_pos.z / clip_pos.w;
 #if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_SPIRV
-    return ndc_depth;
+	return ndc_depth;
 #else
-    return (ndc_depth + 1.0f) * 0.5f;
+	return (ndc_depth + 1.0) * 0.5;
 #endif
 }
 
-float compute_depth (vec3 position, in mat4 viewProj)
+float compute_linear_depth(vec3 position, in mat4 viewProj)
 {
-	float near = u_camera_near;
-	float far = u_camera_far;
-	vec4 clip_space_position = mul(viewProj, vec4 (position.xyz, 1.0f));
-	float clip_space_depth = (clip_space_position.z / clip_space_position.w) * 2.0f - 1.0f;
-	float depth = (2.0f * near * far) / (far + near - clip_space_depth * (far - near));
-
-	return depth;
+	float near_val = u_camera_near;
+	float far_val = u_camera_far;
+	vec4 clip_pos = mul(viewProj, vec4(position.xyz, 1.0));
+	float ndc_z = (clip_pos.z / clip_pos.w) * 2.0 - 1.0;
+	float linear_z = (2.0 * near_val * far_val) / (far_val + near_val - ndc_z * (far_val - near_val));
+	return linear_z / far_val;
 }
-
-float compute_linear_depth (vec3 position, in mat4 viewProj)
-{
-	float far = u_camera_far;
-	float depth = compute_depth(position, viewProj);
-    // normalize
-	return depth / far;
-}
-
 
 void main()
 {
-	float t = (u_grid_height - v_near_point.y) / (v_far_point.y - v_near_point.y);
-	vec3 frag_position_3d = v_near_point + t * (v_far_point - v_near_point);
+	float denom = v_far_point.y - v_near_point.y;
+	float t = (u_grid_height - v_near_point.y) / denom;
+	vec3 frag_pos = v_near_point + t * (v_far_point - v_near_point);
 
-	gl_FragDepth = compute_ndc_depth(frag_position_3d, u_viewProj);
+	gl_FragDepth = compute_ndc_depth(frag_pos, u_viewProj) - 0.00008;
 
-	float linear_depth = compute_linear_depth (frag_position_3d, u_viewProj);
-	float fading = max (0, (0.5 - linear_depth)) * 1.1f;
+	float linear_depth = compute_linear_depth(frag_pos, u_viewProj);
 
+	// Smooth distance fade (smoothstep avoids the hard cutoff that caused visible edge)
+	float fading = 1.0 - smoothstep(0.1, 0.5, linear_depth);
 
-	float depth = compute_depth (frag_position_3d, u_viewProj);
+	// Grazing angle fade: when camera looks nearly parallel to the grid,
+	// the vertical component of the ray approaches zero, producing extreme
+	// intersection distances that cause flickering and bright bands.
+	float grazing = abs(denom) / length(v_far_point - v_near_point);
+	fading *= smoothstep(0.0, 0.05, grazing);
 
-	// Base grid with improved thickness scaling
-	vec4 color = grid (frag_position_3d, 1.0, 2.0 * fading, 0.3f, 0.7f);
+	// Branchless zero-out for behind-camera fragments
+	fading *= step(0.0, t);
 
-	// Multi-scale grids - maximum visibility
-	for(int i = 1; i <= 3; ++i)
+	// Base 1-unit grid
+	vec4 color = grid(frag_pos, 1.0, 0.3, 1.0);
+
+	// Multi-scale grids (10, 100, 1000 units)
+	for (int i = 1; i <= 3; ++i)
 	{
 		float range = pow(10.0, float(i));
-		
-		// Extremely generous distance-based fade
-		float distance_factor = length(frag_position_3d.xz);
-		float scale_fade = 1.0 - smoothstep(range * 0.05, range * 0.5, distance_factor);
-		scale_fade = clamp(scale_fade, 0.7, 1.0); // Always show at least 70%
-		
-		// Even thicker lines for maximum visibility
-		float scale_thickness = 4.0 * fading;
-		
-		vec4 scale_grid = grid(frag_position_3d, range, scale_thickness, 1.0f, 0.3);
-		
-		// Very strong additive blending
-		color += scale_grid * scale_fade;
+		float dist = length(frag_pos.xz);
+		float scale_fade = 1.0 - smoothstep(range * 1.0, range * 25.0, dist);
+
+		vec4 sg = grid(frag_pos, range, 0.5, 1.0);
+		float a = sg.a * scale_fade;
+
+		// Over-operator compositing instead of additive blending
+		color.rgb = mix(color.rgb, sg.rgb, a);
+		color.a = color.a + a * (1.0 - color.a);
 	}
 
-	// Branchless version
-	fading *= step(0.0f, t);
-	
-    color.a *= fading * u_grid_opacity;
-    float depthBias = 0.00005 * (1.0 + abs(dot(normalize(frag_position_3d), vec3(0, 1, 0))));
-    gl_FragDepth -= depthBias;
+	color.a *= fading * u_grid_opacity;
 	gl_FragColor = color;
 }

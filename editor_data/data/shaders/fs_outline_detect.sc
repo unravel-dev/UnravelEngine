@@ -32,7 +32,7 @@ void main()
 		{
 		    gl_FragColor = u_outline_color;
 			return;
-			}
 		}
+	}
 	discard;
 }
