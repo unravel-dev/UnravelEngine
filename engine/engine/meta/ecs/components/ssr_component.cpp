@@ -12,6 +12,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
     using fidelityfx_settings = ssr_pass::fidelityfx_ssr_settings;
     using cone_tracing_settings = ssr_pass::fidelityfx_ssr_settings::cone_tracing_settings;
     using temporal_settings = ssr_pass::fidelityfx_ssr_settings::temporal_settings;
+    using spatial_denoise_settings = ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings;
 
     auto cone_tracing_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
@@ -24,6 +25,15 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         if(auto data = obj.try_cast<fidelityfx_settings>())
         {
             return data->enable_temporal_accumulation;
+        }
+        return false;
+    });
+
+    auto spatial_denoise_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
+    {
+        if(auto data = obj.try_cast<fidelityfx_settings>())
+        {
+            return data->enable_spatial_denoise;
         }
         return false;
     });
@@ -118,7 +128,40 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"tooltip", "Maximum accumulation frames"},
         });
 
-    
+    // -------------------------------------------------------------------------
+    //  Spatial Denoise Settings  (a-trous wavelet filter before temporal resolve)
+    // -------------------------------------------------------------------------
+    entt::meta_factory<spatial_denoise_settings>{}
+        .type("ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings"},
+            entt::attribute{"pretty_name", "Spatial Denoise Settings"},
+        })
+        .data<&spatial_denoise_settings::depth_sigma>("depth_sigma"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depth_sigma"},
+            entt::attribute{"pretty_name", "Depth Sigma"},
+            entt::attribute{"min", 0.005f},
+            entt::attribute{"max", 0.05f},
+            entt::attribute{"tooltip", "Depth edge-stopping threshold. Lower = stricter edges, higher = looser"},
+        })
+        .data<&spatial_denoise_settings::normal_power>("normal_power"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_power"},
+            entt::attribute{"pretty_name", "Normal Power"},
+            entt::attribute{"min", 16.0f},
+            entt::attribute{"max", 128.0f},
+            entt::attribute{"tooltip", "Normal edge-stopping exponent. Higher = stricter edges"},
+        })
+        .data<&spatial_denoise_settings::luma_sigma>("luma_sigma"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "luma_sigma"},
+            entt::attribute{"pretty_name", "Luma Sigma"},
+            entt::attribute{"min", 0.3f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"tooltip", "Luminance edge-stopping threshold. Lower = sharper, higher = smoother"},
+        });
+
     entt::meta_factory<fidelityfx_settings>{}
         .type("ssr_pass::fidelityfx_ssr_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -195,20 +238,20 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"pretty_name", "Enable Half Res"},
             entt::attribute{"tooltip", "Enable half resolution for SSR buffers"},
         })
-        .data<&fidelityfx_settings::enable_cone_tracing>("enable_cone_tracing"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "enable_cone_tracing"},
-            entt::attribute{"pretty_name", "Enable Cone Tracing"},
-            entt::attribute{"tooltip", "Enable cone tracing for glossy reflections"},
-        })
-        .data<&fidelityfx_settings::cone_tracing>("cone_tracing"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cone_tracing"},
-            entt::attribute{"predicate", cone_tracing_predicate_entt},
-            entt::attribute{"pretty_name", "Cone Tracing"},
-            entt::attribute{"tooltip", "Cone tracing specific settings"},
-            entt::attribute{"flattable", true},
-        })
+        // .data<&fidelityfx_settings::enable_cone_tracing>("enable_cone_tracing"_hs)
+        // .custom<entt::attributes>(entt::attributes{
+        //     entt::attribute{"name", "enable_cone_tracing"},
+        //     entt::attribute{"pretty_name", "Enable Cone Tracing"},
+        //     entt::attribute{"tooltip", "Enable cone tracing for glossy reflections"},
+        // })
+        // .data<&fidelityfx_settings::cone_tracing>("cone_tracing"_hs)
+        // .custom<entt::attributes>(entt::attributes{
+        //     entt::attribute{"name", "cone_tracing"},
+        //     entt::attribute{"predicate", cone_tracing_predicate_entt},
+        //     entt::attribute{"pretty_name", "Cone Tracing"},
+        //     entt::attribute{"tooltip", "Cone tracing specific settings"},
+        //     entt::attribute{"flattable", true},
+        // })
         .data<&fidelityfx_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal_accumulation"},
@@ -221,6 +264,20 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"predicate", temporal_predicate_entt},
             entt::attribute{"pretty_name", "Temporal Accumulation"},
             entt::attribute{"tooltip", "Temporal accumulation settings"},
+            entt::attribute{"flattable", true},
+        })
+        .data<&fidelityfx_settings::enable_spatial_denoise>("enable_spatial_denoise"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_spatial_denoise"},
+            entt::attribute{"pretty_name", "Enable Spatial Denoise"},
+            entt::attribute{"tooltip", "Enable spatial denoising (a-trous wavelet) before temporal resolve"},
+        })
+        .data<&fidelityfx_settings::spatial_denoise>("spatial_denoise"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spatial_denoise"},
+            entt::attribute{"predicate", spatial_denoise_predicate_entt},
+            entt::attribute{"pretty_name", "Spatial Denoise"},
+            entt::attribute{"tooltip", "Spatial denoise settings (edge-preserving a-trous filter)"},
             entt::attribute{"flattable", true},
         });
 
@@ -290,6 +347,25 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings::temporal_settings)
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::temporal_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::temporal_settings, ser20::iarchive_binary_t);
 
+// Serialization for spatial_denoise_settings
+SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings)
+{
+    try_save(ar, ser20::make_nvp("depth_sigma", obj.depth_sigma));
+    try_save(ar, ser20::make_nvp("normal_power", obj.normal_power));
+    try_save(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
+}
+SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::oarchive_binary_t);
+
+LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings)
+{
+    try_load(ar, ser20::make_nvp("depth_sigma", obj.depth_sigma));
+    try_load(ar, ser20::make_nvp("normal_power", obj.normal_power));
+    try_load(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
+}
+LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::iarchive_binary_t);
+
 // Serialization for fidelityfx_ssr_settings
 SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings)
 {
@@ -306,6 +382,8 @@ SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_save(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
     try_save(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));
     try_save(ar, ser20::make_nvp("temporal", obj.temporal));
+    try_save(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
+    try_save(ar, ser20::make_nvp("spatial_denoise", obj.spatial_denoise));
 }
 SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings, ser20::oarchive_binary_t);
@@ -325,6 +403,8 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_load(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
     try_load(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));
     try_load(ar, ser20::make_nvp("temporal", obj.temporal));
+    try_load(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
+    try_load(ar, ser20::make_nvp("spatial_denoise", obj.spatial_denoise));
 }
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings, ser20::iarchive_binary_t);

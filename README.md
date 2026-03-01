@@ -58,7 +58,7 @@
 - **3D Audio** - Spatial audio with OpenAL Soft
 - **Animation System** - Skeletal and keyframe animations
 - **Robust Particle System** - Advanced particle effects and simulations
-- **Game UI** - HTML+CSS based UI system powered by RmlUi
+- **Game UI** - HTML+CSS based UI system powered by RmlUi with full World space support.
 - **Prefab System** - Reusable entity templates with overrides and updates
 - **ECS Architecture** - Entity-Component-System powered by EnTT
 - **Async Asset Loading** - Non-blocking resource management

@@ -685,6 +685,15 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
             else if(!is_flattable)
             {
                 
+                // ImGui::PushFont(ImGui::Font::Bold);
+                // {
+                //     ImGui::NewLine();
+                //     ImGui::SeparatorText(pretty_name.c_str());
+                //     ImGui::Spacing();
+                // } 
+                // ImGui::PopFont();
+                // result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
+
                 property_layout_group group(pretty_name);
 
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
@@ -1320,6 +1329,21 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             }
             else
             {
+
+                // ImGui::PushFont(ImGui::Font::Bold);
+                // {
+                //     ImGui::NewLine();
+                //     ImGui::Text("%s", group_name.c_str());
+                //     ImGui::Spacing();
+                // } 
+                // ImGui::PopFont();
+                // for(auto&& prop : props)
+                // {
+                //     ImGui::PushID(i);
+                //     result |= inspect_property(ctx, var, var_proxy, prop);
+                //     ImGui::PopID();
+                //     i++;
+                // }
                 property_layout_group group(group_name);
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
                 ImGui::BeginGroup();

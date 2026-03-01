@@ -39,7 +39,7 @@ public:
         };
 
         int max_steps = 64;                             ///< Maximum ray marching steps for hierarchical traversal
-        int max_rays = 8;                              ///< Maximum rays for rough surfaces (future: cone tracing)
+        int max_rays = 4;                              ///< Maximum rays for rough surfaces (future: cone tracing)
         float depth_tolerance = 0.1f;                   ///< Depth tolerance for hit validation
         float brightness = 1.0f;                        ///< Reflection brightness multiplier
         float facing_reflections_fading = 0.1f;         ///< Fade factor for camera-facing reflections
@@ -55,6 +55,17 @@ public:
         bool enable_temporal_accumulation = true;       ///< Enable temporal accumulation
         // Temporal accumulation parameters
         temporal_settings temporal;                      ///< Temporal accumulation settings
+
+        /// Spatial denoise parameters (a-trous wavelet filter between trace and temporal resolve)
+        struct spatial_denoise_settings
+        {
+            float depth_sigma = 0.02f;      ///< Depth edge-stopping threshold (0.005 strict – 0.05 loose)
+            float normal_power = 64.0f;     ///< Normal edge-stopping exponent (16 loose – 128 strict)
+            float luma_sigma = 1.0f;        ///< Luminance edge-stopping threshold (0.3 sharp – 2.0 smooth)
+        };
+
+        bool enable_spatial_denoise = false;             ///< Enable spatial denoising before temporal resolve
+        spatial_denoise_settings spatial_denoise;        ///< Spatial denoise settings
     };
 
     /// Combined SSR settings
@@ -109,6 +120,11 @@ public:
                                      const gfx::frame_buffer::ptr& g_buffer,
                                      const fidelityfx_ssr_settings& settings) -> gfx::texture::ptr;
 
+    /// Executes spatial denoise on SSR result before temporal resolve
+    auto run_spatial_denoise(gfx::render_view& rview,
+                             const gfx::frame_buffer::ptr& ssr_curr,
+                             const gfx::frame_buffer::ptr& g_buffer,
+                             const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr;
 
 private:
     /// Creates or updates the output framebuffer using the render_view
@@ -131,6 +147,11 @@ private:
     auto create_or_update_ssr_history_temp_fb(gfx::render_view& rview, 
                                               const gfx::frame_buffer::ptr& reference, 
                                               bool enable_half_res) -> gfx::frame_buffer::ptr;
+
+    /// Creates or updates the SSR denoised framebuffer for spatial denoising output
+    auto create_or_update_ssr_denoised_fb(gfx::render_view& rview,
+                                          const gfx::frame_buffer::ptr& reference,
+                                          bool enable_half_res) -> gfx::frame_buffer::ptr;
 
 
     // FidelityFX SSR Pixel Shader Program
@@ -242,6 +263,30 @@ private:
         }
     };
     blur_compute_program blur_compute_program_;
+
+    // Spatial denoise compute program for edge-preserving a-trous wavelet filtering
+    struct spatial_denoise_compute_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_denoise_params;  // x: step_size, y: depth_sigma, z: normal_power, w: luma_sigma
+        gfx::program::uniform_ptr s_ssr_input;        // Input SSR result (sampler)
+        gfx::program::uniform_ptr s_normal;           // Normal buffer
+        gfx::program::uniform_ptr s_depth;            // Depth buffer
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_denoise_params, "u_denoise_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_ssr_input, "s_ssr_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    };
+    spatial_denoise_compute_program spatial_denoise_compute_program_;
 
 };
 

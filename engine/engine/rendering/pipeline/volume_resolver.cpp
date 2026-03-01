@@ -45,49 +45,6 @@ auto compute_blend_factor(const math::bbox& world_bounds,
     return 1.0f - (dist_to_boundary / blend_distance);
 }
 
-void merge_bloom(bloom_pass::settings& result,
-                 const bloom_pass::settings& from,
-                 float contribution)
-{
-    result.threshold = std::lerp(result.threshold, from.threshold, contribution);
-    result.soft_knee = std::lerp(result.soft_knee, from.soft_knee, contribution);
-    result.clamp = std::lerp(result.clamp, from.clamp, contribution);
-    result.intensity = std::lerp(result.intensity, from.intensity, contribution);
-    result.mip_count = static_cast<int>(std::lround(std::lerp(float(result.mip_count), float(from.mip_count), contribution)));
-}
-
-void merge_tonemapping(tonemapping_pass::settings& result,
-                      const tonemapping_pass::settings& from,
-                      float contribution)
-{
-    result.exposure = std::lerp(result.exposure, from.exposure, contribution);
-    if(contribution >= 0.5f)
-    {
-        result.method = from.method;
-    }
-}
-
-void merge_assao(assao_pass::settings& result,
-                 const assao_pass::settings& from,
-                 float contribution)
-{
-    result.radius = std::lerp(result.radius, from.radius, contribution);
-    result.shadow_multiplier = std::lerp(result.shadow_multiplier, from.shadow_multiplier, contribution);
-    result.shadow_power = std::lerp(result.shadow_power, from.shadow_power, contribution);
-    result.shadow_clamp = std::lerp(result.shadow_clamp, from.shadow_clamp, contribution);
-    result.horizon_angle_threshold = std::lerp(result.horizon_angle_threshold, from.horizon_angle_threshold, contribution);
-    result.fade_out_from = std::lerp(result.fade_out_from, from.fade_out_from, contribution);
-    result.fade_out_to = std::lerp(result.fade_out_to, from.fade_out_to, contribution);
-    result.quality_level = contribution >= 0.5f ? from.quality_level : result.quality_level;
-    result.adaptive_quality_limit = std::lerp(result.adaptive_quality_limit, from.adaptive_quality_limit, contribution);
-    result.blur_pass_count = contribution >= 0.5f ? from.blur_pass_count : result.blur_pass_count;
-    result.sharpness = std::lerp(result.sharpness, from.sharpness, contribution);
-    result.temporal_supersampling_angle_offset = std::lerp(result.temporal_supersampling_angle_offset, from.temporal_supersampling_angle_offset, contribution);
-    result.temporal_supersampling_radius_offset = std::lerp(result.temporal_supersampling_radius_offset, from.temporal_supersampling_radius_offset, contribution);
-    result.detail_shadow_strength = std::lerp(result.detail_shadow_strength, from.detail_shadow_strength, contribution);
-    result.generate_normals = contribution >= 0.5f ? from.generate_normals : result.generate_normals;
-}
-
 } // namespace
 
 auto resolve_post_process_volumes(scene& scn,
@@ -135,69 +92,78 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_tonemapping = true;
     bool first_assao = true;
     bool first_ssr = true;
+    float bloom_enabled_sum = 0.0f;
+    float bloom_contrib_sum = 0.0f;
+    float tonemapping_enabled_sum = 0.0f;
+    float tonemapping_contrib_sum = 0.0f;
+    float fxaa_enabled_sum = 0.0f;
+    float fxaa_contrib_sum = 0.0f;
+    float ssr_enabled_sum = 0.0f;
+    float ssr_contrib_sum = 0.0f;
+    float assao_enabled_sum = 0.0f;
+    float assao_contrib_sum = 0.0f;
 
     for(const auto& c : contributions)
     {
         auto handle = scn.create_handle(c.entity);
         const float contrib = c.contribution;
 
-        if(auto* bloom = handle.try_get<bloom_component>(); bloom && bloom->enabled && contrib > 0.0f)
+        if(auto* bloom = handle.try_get<bloom_component>(); bloom && contrib > 0.0f)
         {
-            if(first_bloom)
+            bloom_enabled_sum += (bloom->enabled ? 1.0f : 0.0f) * contrib;
+            bloom_contrib_sum += contrib;
+            if(bloom->enabled)
             {
-                result.has_bloom = true;
-                result.bloom = bloom->settings;
+                bloom_component::merge_into(result.bloom, bloom->settings, contrib, first_bloom);
                 first_bloom = false;
             }
-            else
-            {
-                merge_bloom(result.bloom, bloom->settings, contrib);
-            }
         }
 
-        if(auto* tonemapping = handle.try_get<tonemapping_component>(); tonemapping && tonemapping->enabled && contrib > 0.0f)
+        if(auto* tonemapping = handle.try_get<tonemapping_component>(); tonemapping && contrib > 0.0f)
         {
-            if(first_tonemapping)
+            tonemapping_enabled_sum += (tonemapping->enabled ? 1.0f : 0.0f) * contrib;
+            tonemapping_contrib_sum += contrib;
+            if(tonemapping->enabled)
             {
-                result.has_tonemapping = true;
-                result.tonemapping = tonemapping->settings;
+                tonemapping_component::merge_into(result.tonemapping, tonemapping->settings, contrib, first_tonemapping);
                 first_tonemapping = false;
             }
-            else
-            {
-                merge_tonemapping(result.tonemapping, tonemapping->settings, contrib);
-            }
         }
 
-        if(auto* fxaa = handle.try_get<fxaa_component>(); fxaa && fxaa->enabled && contrib > 0.0f)
+        if(auto* fxaa = handle.try_get<fxaa_component>(); fxaa && contrib > 0.0f)
         {
-            result.has_fxaa = true;
+            fxaa_enabled_sum += (fxaa->enabled ? 1.0f : 0.0f) * contrib;
+            fxaa_contrib_sum += contrib;
         }
 
-        if(auto* ssr = handle.try_get<ssr_component>(); ssr && ssr->enabled && contrib > 0.0f)
+        if(auto* ssr = handle.try_get<ssr_component>(); ssr && contrib > 0.0f)
         {
-            if(first_ssr)
+            ssr_enabled_sum += (ssr->enabled ? 1.0f : 0.0f) * contrib;
+            ssr_contrib_sum += contrib;
+            if(ssr->enabled)
             {
-                result.has_ssr = true;
-                result.ssr = ssr->settings;
+                ssr_component::merge_into(result.ssr, ssr->settings, contrib, first_ssr);
                 first_ssr = false;
             }
         }
 
-        if(auto* assao = handle.try_get<assao_component>(); assao && assao->enabled && contrib > 0.0f)
+        if(auto* assao = handle.try_get<assao_component>(); assao && contrib > 0.0f)
         {
-            if(first_assao)
+            assao_enabled_sum += (assao->enabled ? 1.0f : 0.0f) * contrib;
+            assao_contrib_sum += contrib;
+            if(assao->enabled)
             {
-                result.has_assao = true;
-                result.assao = assao->settings;
+                assao_component::merge_into(result.assao, assao->settings, contrib, first_assao);
                 first_assao = false;
-            }
-            else
-            {
-                merge_assao(result.assao, assao->settings, contrib);
             }
         }
     }
+
+    result.has_bloom = bloom_contrib_sum > 0.0f && (bloom_enabled_sum / bloom_contrib_sum) > 0.5f;
+    result.has_tonemapping = tonemapping_contrib_sum > 0.0f && (tonemapping_enabled_sum / tonemapping_contrib_sum) > 0.5f;
+    result.has_fxaa = fxaa_contrib_sum > 0.0f && (fxaa_enabled_sum / fxaa_contrib_sum) > 0.5f;
+    result.has_ssr = ssr_contrib_sum > 0.0f && (ssr_enabled_sum / ssr_contrib_sum) > 0.5f;
+    result.has_assao = assao_contrib_sum > 0.0f && (assao_enabled_sum / assao_contrib_sum) > 0.5f;
 
     return result;
 }

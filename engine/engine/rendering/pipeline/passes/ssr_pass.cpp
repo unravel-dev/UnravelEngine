@@ -27,6 +27,9 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     // Load unified blur compute shader for cone tracing
     auto cs_ssr_blur = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_blur.sc");
 
+    // Load spatial denoise compute shader
+    auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.sc");
+
     // Create FidelityFX SSR programs
     fidelityfx_pixel_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_fidelityfx);
     fidelityfx_pixel_program_.cache_uniforms();
@@ -43,10 +46,14 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     blur_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_blur);
     blur_compute_program_.cache_uniforms();
 
+    // Create spatial denoise compute program
+    spatial_denoise_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_spatial_denoise);
+    spatial_denoise_compute_program_.cache_uniforms();
+
     // Validate all programs
     bool all_valid = fidelityfx_pixel_program_.is_valid() && temporal_resolve_program_.is_valid() &&
-                     composite_program_.is_valid() && blur_compute_program_.program &&
-                     blur_compute_program_.program->is_valid();
+                     composite_program_.is_valid() && blur_compute_program_.is_valid() &&
+                     spatial_denoise_compute_program_.is_valid();
 
     return all_valid;
 }
@@ -302,6 +309,81 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
     return blurred_tex;
 }
 
+auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
+                                                const gfx::frame_buffer::ptr& reference,
+                                                bool enable_half_res) -> gfx::frame_buffer::ptr
+{
+    auto ref_sz = reference->get_size();
+
+    uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
+    uint32_t target_height = static_cast<uint32_t>(ref_sz.height * (enable_half_res ? 0.5f : 1.0f));
+    target_width = target_width > 0 ? target_width : 1;
+    target_height = target_height > 0 ? target_height : 1;
+    usize32_t target_size{target_width, target_height};
+
+    auto& denoised_tex = rview.tex_get_or_emplace("SSR_DENOISED");
+    if(!denoised_tex ||
+       (denoised_tex && (denoised_tex->info.width != target_width || denoised_tex->info.height != target_height)))
+    {
+        denoised_tex = std::make_shared<gfx::texture>(target_width,
+                                                      target_height,
+                                                      false,
+                                                      1,
+                                                      gfx::texture_format::RGBA8,
+                                                      BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
+                                                          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    }
+
+    auto& denoised_fbo = rview.fbo_get_or_emplace("SSR_DENOISED");
+    if(!denoised_fbo || (denoised_fbo && denoised_fbo->get_size() != target_size))
+    {
+        denoised_fbo = std::make_shared<gfx::frame_buffer>();
+        denoised_fbo->populate({denoised_tex});
+    }
+
+    return denoised_fbo;
+}
+
+auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& ssr_curr,
+                                   const gfx::frame_buffer::ptr& g_buffer,
+                                   const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr
+{
+    if(!spatial_denoise_compute_program_.is_valid())
+    {
+        return ssr_curr;
+    }
+
+    APP_SCOPE_PERF("Rendering/SSR/Spatial Denoise Pass");
+
+    auto denoised_fbo = create_or_update_ssr_denoised_fb(rview, ssr_curr, false);
+    auto denoised_tex = denoised_fbo->get_texture();
+    auto ssr_size = denoised_fbo->get_size();
+
+    gfx::render_pass pass("ssr_spatial_denoise_pass");
+
+    spatial_denoise_compute_program_.program->begin();
+
+    gfx::set_texture(spatial_denoise_compute_program_.s_ssr_input, 0, ssr_curr->get_texture());
+    gfx::set_image(1, denoised_tex->native_handle(), 0, bgfx::Access::Write);
+    gfx::set_texture(spatial_denoise_compute_program_.s_normal, 2, g_buffer->get_texture(1));
+    gfx::set_texture(spatial_denoise_compute_program_.s_depth, 3, g_buffer->get_texture(4));
+
+    float denoise_params[4] = {1.0f,
+                                settings.spatial_denoise.depth_sigma,
+                                settings.spatial_denoise.normal_power,
+                                settings.spatial_denoise.luma_sigma};
+    gfx::set_uniform(spatial_denoise_compute_program_.u_denoise_params, denoise_params);
+
+    uint32_t groups_x = (ssr_size.width + 7) / 8;
+    uint32_t groups_y = (ssr_size.height + 7) / 8;
+    gfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), groups_x, groups_y, 1);
+
+    spatial_denoise_compute_program_.program->end();
+
+    return denoised_fbo;
+}
+
 auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
     // Pass 1: SSR Trace - generates SSR_CURR
@@ -311,9 +393,16 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
         return nullptr;
     }
 
-    // Pass 2: Temporal Resolve - reads SSR_CURR + SSR_HIST, writes new SSR_HIST
+    // Pass 1.5: Spatial Denoise (optional) - filters SSR_CURR before temporal resolve
+    auto temporal_input_fb = ssr_curr_fb;
+    if(params.settings.fidelityfx.enable_spatial_denoise)
+    {
+        temporal_input_fb = run_spatial_denoise(rview, ssr_curr_fb, params.g_buffer, params.settings.fidelityfx);
+    }
+
+    // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST
     auto ssr_history_fb =
-        run_temporal_resolve(rview, ssr_curr_fb, params.g_buffer, params.cam, params.settings.fidelityfx);
+        run_temporal_resolve(rview, temporal_input_fb, params.g_buffer, params.cam, params.settings.fidelityfx);
     if(!ssr_history_fb)
     {
         return ssr_curr_fb; // Fallback to current frame
@@ -434,8 +523,8 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     }
 
     // Create or update SSR history texture and temp framebuffer using helper functions (1.0f = full resolution)
-    auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, settings.enable_half_res);
-    auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, settings.enable_half_res);
+    auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, false);
+    auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, false);
 
     // ============================================================================
     // Temporal Resolve Pass

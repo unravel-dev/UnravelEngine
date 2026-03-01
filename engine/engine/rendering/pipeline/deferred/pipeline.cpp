@@ -1523,6 +1523,7 @@ auto deferred::run_ssr_pass(const camera& camera,
 
     // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
+    ssr_params.settings.fidelityfx.enable_half_res = false;
 
     return ssr_pass_.run(rview, ssr_params);
 }
