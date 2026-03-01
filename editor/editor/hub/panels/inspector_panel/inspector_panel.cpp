@@ -44,7 +44,7 @@ auto should_use_prefab_inspection(entt::meta_any& selected) -> bool
 auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object) -> void
 {
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
-    
+    auto& inspector_ctx = ctx.get_cached<inspector_context>();
     // Check if this object should use prefab inspection
     if(should_use_prefab_inspection(object))
     {
@@ -71,6 +71,7 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
     // Fall back to normal inspection (empty reference) 
     auto proxy = make_proxy(object, name);
     auto result = inspect_var(ctx, object, proxy);
+
 }
 
 } // namespace
@@ -82,12 +83,14 @@ inspector_panel::inspector_panel(imgui_panels* parent) : entity_panel(parent)
 void inspector_panel::init(rtti::context& ctx)
 {
     ctx.add<inspector_registry>();
+    ctx.add<inspector_context>();
     ctx.add<prefab_override_context>();
 }
 
 void inspector_panel::deinit(rtti::context& ctx)
 {
     ctx.remove<inspector_registry>();
+    ctx.remove<inspector_context>();
     ctx.remove<prefab_override_context>();
 }
 

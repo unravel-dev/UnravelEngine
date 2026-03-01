@@ -83,6 +83,11 @@ struct prefab_property_override
     }
 };
 
+struct inspector_context
+{
+    entt::registry* inspected_registry{};
+};
+
 /**
  * @brief Global context for tracking prefab override changes during inspection
  * 

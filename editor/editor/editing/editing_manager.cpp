@@ -385,22 +385,26 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
         return;
     }
 
-    auto& scn = ec.get_scene();
 
-    std::vector<entt::handle> affected_entities;
-    scn.registry->view<prefab_component>().each(
-        [&](auto e, auto&& prefab_comp)
-        {
-            auto entity = scn.create_handle(e);
-            if(prefab_comp.source == pfb)
-            {
-                affected_entities.emplace_back(entity);
-            }
-        });
-
-    for(auto& entity : affected_entities)
+    const auto& scenes = scene::get_all_scenes();
+    for(auto scn : scenes)
     {
-        sync_prefab_entity(ctx, entity, pfb);    
+
+        std::vector<entt::handle> affected_entities;
+        scn->registry->view<prefab_component>().each(
+            [&](auto e, auto&& prefab_comp)
+            {
+                auto entity = scn->create_handle(e);
+                if(prefab_comp.source == pfb)
+                {
+                    affected_entities.emplace_back(entity);
+                }
+            });
+
+        for(auto& entity : affected_entities)
+        {
+            sync_prefab_entity(ctx, entity, pfb);    
+        }
     }
 }
 
@@ -409,7 +413,6 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
     queue_action("Sync Prefab Entity",
         [&ctx, entity, pfb]() mutable
     {
-        auto& ec = ctx.get_cached<ecs>();
         auto& ev = ctx.get_cached<events>();
     
         if(ev.is_playing)
@@ -427,7 +430,6 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
             return;
         }
 
-        auto& scn = ec.get_scene();
         if(auto trans_comp = entity.template try_get<transform_component>())
         {
             auto parent = trans_comp->get_parent();
@@ -446,7 +448,7 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
             serialization::set_path_context(&path_ctx);
 
             
-            if(scn.instantiate_out(pfb, entity))
+            if(scene::instantiate_out(*entity.registry(), pfb, entity))
             {
                 auto& new_trans = entity.get<transform_component>();
                 new_trans.set_position_local(pos);

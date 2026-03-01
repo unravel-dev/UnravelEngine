@@ -16,6 +16,7 @@
 
 #include <hpp/type_name.hpp>
 #include <hpp/utility.hpp>
+#include <hpp/finally.hpp>
 #include <string_utils/utils.h>
 
 #include <imgui/imgui.h>
@@ -530,6 +531,18 @@ auto inspector_entity::inspect(rtti::context& ctx,
 {
     inspect_result result{};
     auto data = var.cast<entt::handle>();
+
+    if(data)
+    {
+        auto& inspector_ctx = ctx.get_cached<inspector_context>();
+        inspector_ctx.inspected_registry = data.registry();
+    }
+
+    auto cleanup = hpp::finally([&]()
+    {
+        auto& inspector_ctx = ctx.get_cached<inspector_context>();
+        inspector_ctx.inspected_registry = nullptr;
+    });
 
     if(info.is_property)
     {
