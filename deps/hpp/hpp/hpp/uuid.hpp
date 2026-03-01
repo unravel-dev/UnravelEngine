@@ -434,10 +434,8 @@ public:
 
 	[[nodiscard]] constexpr bool is_nil() const noexcept
 	{
-		for(size_t i = 0; i < data.size(); ++i)
-			if(data[i] != 0)
-				return false;
-		return true;
+		const constexpr std::array<value_type, 16> nil{{0}};
+		return data == nil;
 	}
 
 	void swap(uuid& other) noexcept

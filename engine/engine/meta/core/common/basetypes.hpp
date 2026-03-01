@@ -40,17 +40,16 @@ inline void SERIALIZE_FUNCTION_NAME(Archive& ar, range<T>& obj)
 template<typename Archive>
 inline auto SAVE_MINIMAL_FUNCTION_NAME(Archive& ar, const hpp::uuid& obj) -> std::string
 {
+    if(obj.is_nil())
+    {
+        return "nil";
+    }
     return hpp::to_string(obj);
-    //try_save(ar, ser20::make_nvp("data", hpp::to_string(obj)));
 }
 
 template<typename Archive>
 inline void LOAD_MINIMAL_FUNCTION_NAME(Archive& ar, hpp::uuid& obj, const std::string& suuid)
 {
-    //std::string suuid;
-
-    //try_load(ar, ser20::make_nvp("data", suuid));
-
     auto id = hpp::uuid::from_string(suuid);
     obj = id.value_or(hpp::uuid{});
 }

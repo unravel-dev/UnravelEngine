@@ -137,11 +137,12 @@ struct mono_saver<Archive, entt::entity>
         auto& ar = static_cast<Archive&>(arbase);
         auto val = invoker.get_value(obj);
 
-        auto& ctx = engine::context();
-        auto& ec = ctx.get_cached<ecs>();
-        auto& scene = ec.get_scene();
+
+        auto& save_ctx = get_save_context();
+        auto& registry = *save_ctx.save_source.registry();
+
         ser20::const_entity_handle_link e;
-        e.handle = scene.create_handle(val);
+        e.handle = entt::const_handle(registry, val);
 
         return try_save(ar, ser20::make_nvp(invoker.get_name(), e));
     }
@@ -153,11 +154,11 @@ struct mono_saver<Archive, entt::entity>
 
         auto entity = mono::mono_converter<entt::entity>::from_mono(obj.get_internal_ptr());
         
-        auto& ctx = engine::context();
-        auto& ec = ctx.get_cached<ecs>();
-        auto& scene = ec.get_scene();
+        auto& save_ctx = get_save_context();
+        auto& registry = *save_ctx.save_source.registry();
+
         ser20::const_entity_handle_link e;
-        e.handle = scene.create_handle(entity);
+        e.handle = entt::const_handle(registry, entity);
         
         return try_save(ar, ser20::make_nvp("value", e));
     }

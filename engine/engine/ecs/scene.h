@@ -100,6 +100,7 @@ struct scene
      * @return A handle to the instantiated entity.
      */
     auto instantiate_out(const asset_handle<prefab>& pfb, entt::handle&, bool call_callbacks = true) -> bool;
+    static auto instantiate_out(entt::registry& reg, const asset_handle<prefab>& pfb, entt::handle&, bool call_callbacks = true) -> bool;
     auto instantiate(const asset_handle<prefab>& pfb, bool call_callbacks = true) -> entt::handle;
     auto instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks = true) -> entt::handle;
 

@@ -64,7 +64,7 @@ struct load_context
 
     auto is_updating_prefab() const -> bool
     {
-        return !mapping_by_uid.empty();
+        return !mapping_by_prefab_uid.empty();
     }
 
 
@@ -75,14 +75,18 @@ struct load_context
     // The ids are not globally unique, so we need to map them to the handles
     std::map<entt::entity, entt::handle> mapping_by_eid;
 
-    struct uid_mapping_t
+    // The entity uids (from id_component) are globally unique, so we can use them to map entities
+    std::map<hpp::uuid, entt::handle> mapping_by_uid;
+
+    struct prefab_uid_mapping_t
     {
         entt::handle handle;
         bool consumed{};
     };
 
     // The uids are globally unique, so we can use them to map the entities
-    std::map<hpp::uuid, uid_mapping_t> mapping_by_uid;
+    std::map<hpp::uuid, prefab_uid_mapping_t> mapping_by_prefab_uid;
+
 };
 
 struct post_load_callbacks

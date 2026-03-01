@@ -148,7 +148,7 @@ void add_to_uid_mapping(entt::handle& obj, bool recursive = true)
     if(id_comp)
     {
         id_comp->generate_if_nil();
-        load_ctx.mapping_by_uid[id_comp->id].handle = obj;
+        load_ctx.mapping_by_prefab_uid[id_comp->id].handle = obj;
     }
 
 
@@ -156,7 +156,7 @@ void add_to_uid_mapping(entt::handle& obj, bool recursive = true)
     {
         for(auto& entity_uuid : prefab_comp->removed_entities)
         {
-            load_ctx.mapping_by_uid[entity_uuid].handle = {};
+            load_ctx.mapping_by_prefab_uid[entity_uuid].handle = {};
         }
     }
 
@@ -176,7 +176,7 @@ void cleanup_uid_mapping()
 {
     
     auto& load_ctx = get_load_context();
-    for(auto& [uid, mapping] : load_ctx.mapping_by_uid)
+    for(auto& [uid, mapping] : load_ctx.mapping_by_prefab_uid)
     {
         if(!mapping.consumed && mapping.handle)
         {
@@ -282,7 +282,7 @@ void save_entity_id(Archive& ar, const entt::const_handle& obj)
 }
 
 template<typename Archive>
-void save_entity_uid(Archive& ar, const entt::const_handle& obj)
+void save_entity_prefab_uid(Archive& ar, const entt::const_handle& obj)
 {
     if(obj)
     {
@@ -298,15 +298,36 @@ void save_entity_uid(Archive& ar, const entt::const_handle& obj)
 }
 
 template<typename Archive>
+void save_entity_uuid(Archive& ar, const entt::const_handle& obj)
+{
+    if(obj)
+    {
+        auto& id_comp = const_handle_cast(obj).get_or_emplace<id_component>();
+        id_comp.generate_if_nil();
+        try_save(ar, ser20::make_nvp("uid", id_comp.id));
+    }
+    else
+    {
+        try_save(ar, ser20::make_nvp("uid", hpp::uuid{}));
+    }
+}
+
+template<typename Archive>
 void save_entity(Archive& ar, const entt::const_handle& obj, entity_flags flags)
 {
     auto& save_ctx = get_save_context();
     if(save_ctx.is_saving_to_prefab())
     {
-        save_entity_uid(ar, obj);
+        save_entity_prefab_uid(ar, obj);
     }
-
-    save_entity_id(ar, obj);
+    if(!save_ctx.is_cloning())
+    {
+        save_entity_uuid(ar, obj);
+    }
+    else
+    {
+        save_entity_id(ar, obj);
+    }
 }
 
 template<typename Archive>
@@ -360,15 +381,15 @@ auto load_entity_from_id(Archive& ar, entt::handle& obj, entity_flags flags) -> 
 }
 
 template<typename Archive>
-auto load_entity_from_uid(Archive& ar, entt::handle& obj, entity_flags flags) -> bool
+auto load_entity_from_prefab_uid(Archive& ar, entt::handle& obj, entity_flags flags) -> bool
 {
     hpp::uuid uid;
     try_load(ar, ser20::make_nvp("prefab_uid", uid));
 
 
     auto& load_ctx = get_load_context();
-    auto it = load_ctx.mapping_by_uid.find(uid);
-    if(it != load_ctx.mapping_by_uid.end())
+    auto it = load_ctx.mapping_by_prefab_uid.find(uid);
+    if(it != load_ctx.mapping_by_prefab_uid.end())
     {
         // APPLOG_TRACE("found in cache entity from uid: {}", uid.to_string());
         obj = it->second.handle;
@@ -380,20 +401,67 @@ auto load_entity_from_uid(Archive& ar, entt::handle& obj, entity_flags flags) ->
 }
 
 template<typename Archive>
+auto load_entity_from_uuid(Archive& ar, entt::handle& obj, entity_flags flags) -> bool
+{
+    hpp::uuid uuid;
+    if(!try_load(ar, ser20::make_nvp("uid", uuid)))
+    {
+        return false;
+    }
+    if(uuid.is_nil())
+    {
+        return false;
+    }
+    auto& load_ctx = get_load_context();
+    auto it = load_ctx.mapping_by_uid.find(uuid);
+    if(it != load_ctx.mapping_by_uid.end())
+    {
+        obj = it->second;
+    }
+    else if(obj)
+    {
+        load_ctx.mapping_by_uid[uuid] = obj;
+    }
+    else
+    {
+        if(flags == entity_flags::resolve_with_existing)
+        {
+            auto view = load_ctx.reg->view<id_component>();
+            for(auto e : view)
+            {
+                if(view.get<id_component>(e).id == uuid)
+                {
+                    obj = entt::handle(*load_ctx.reg, e);
+                    load_ctx.mapping_by_uid[uuid] = obj;
+                    return true;
+                }
+            }
+            obj = {};
+            return false;
+        }
+        obj = entt::handle(*load_ctx.reg, load_ctx.reg->create());
+        load_ctx.mapping_by_uid[uuid] = obj;
+    }
+    return true;
+}
+
+template<typename Archive>
 void load_entity(Archive& ar, entt::handle& obj, entity_flags flags)
 {
     bool valid = false;
     auto& load_ctx = get_load_context();
     if(load_ctx.is_updating_prefab())
     {
-        valid = load_entity_from_uid(ar, obj, flags);
+        valid = load_entity_from_prefab_uid(ar, obj, flags);
     }
-
+    if(!valid && !load_ctx.is_cloning())
+    {
+        valid = load_entity_from_uuid(ar, obj, flags);
+    }
     if(!valid)
     {
         valid = load_entity_from_id(ar, obj, flags);
     }
-
     if(!valid)
     {
         obj = {};
@@ -432,17 +500,6 @@ auto should_save_component(const entt::const_handle& obj) -> bool
 template<typename Component>
 auto should_load_component(const entt::handle& obj) -> bool
 {
-    // if constexpr(std::is_same_v<Component, prefab_component>)
-    // {
-    //     return false;
-    // }
-    // else if constexpr(std::is_same_v<Component, prefab_id_component>)
-    // {
-        
-    //     return false;
-    // }
-
-
     return true;
 }
 
@@ -617,7 +674,11 @@ LOAD(entity_components<entt::handle>)
 
             }
             
-
+            if constexpr(std::is_same_v<ctype, id_component>)
+            {
+                auto& comp = obj.entity.get_or_emplace<ctype>();
+                comp.generate_if_nil();
+            }
             if constexpr(std::is_same_v<ctype, tag_component>)
             {
                 auto& comp = obj.entity.get_or_emplace<ctype>();
@@ -628,6 +689,7 @@ LOAD(entity_components<entt::handle>)
                 auto& comp = obj.entity.get_or_emplace<ctype>();
                 (void)comp;
             }
+            
 
     
         });
@@ -1003,6 +1065,19 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
     return result;
 }
 
+void regenerate_entity_uids(entt::handle obj)
+{
+    auto& id_comp = obj.get_or_emplace<id_component>();
+    id_comp.regenerate_id();
+    if(auto transform = obj.try_get<transform_component>())
+    {
+        for(auto child : transform->get_children())
+        {
+            regenerate_entity_uids(child);
+        }
+    }
+}
+
 auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle
 {
     reading = true;
@@ -1022,9 +1097,9 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
 
             obj = load_from_archive_start(ar, registry);
 
-          
             if(obj)
             {
+                regenerate_entity_uids(obj);
                 auto& pfb_comp = obj.get_or_emplace<prefab_component>();
                 pfb_comp.source = pfb;
             }
@@ -1061,6 +1136,7 @@ auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& regis
 
             if(obj)
             {
+                regenerate_entity_uids(obj);
                 auto& pfb_comp = obj.get_or_emplace<prefab_component>();
                 pfb_comp.source = pfb;
             }

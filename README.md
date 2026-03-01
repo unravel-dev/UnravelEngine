@@ -45,16 +45,22 @@
 - **Modern C++20** - Latest standards for performance and maintainability
 - **Action-Based Input** - Flexible input mapping for various devices
 - **Undo/Redo System** - Complete editor history management
+- **Asset Compilation** - Automatic compilation of source assets with import metadata
+- **Deploy Pipeline** - One-click project deployment
 
 ### 🎮 **Engine Capabilities**
 - **PBR Deferred Rendering** - Physically-based rendering pipeline
 - **Dynamic Shadows** - Realistic shadow casting with multiple techniques
 - **Reflection Probes** - Environment reflections and lighting
+- **Post-Processing Volumes** - Spatial volumes with Bloom, Tonemapping, FXAA, SSAO, and SSR; local/global modes with priority and blend transitions
+- **Skylight** - Atmospheric lighting with Perez sky model
 - **Physics Integration** - Powered by Bullet Physics
 - **3D Audio** - Spatial audio with OpenAL Soft
 - **Animation System** - Skeletal and keyframe animations
 - **Robust Particle System** - Advanced particle effects and simulations
 - **Game UI** - HTML+CSS based UI system powered by RmlUi
+- **Prefab System** - Reusable entity templates with overrides and updates
+- **ECS Architecture** - Entity-Component-System powered by EnTT
 - **Async Asset Loading** - Non-blocking resource management
 
 ### 📁 **Format Support**

@@ -231,11 +231,16 @@ auto scene::load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks
 }
 auto scene::instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e, bool call_callbacks) -> bool
 {
+    return instantiate_out(*registry, pfb, e, call_callbacks);
+}
+
+auto scene::instantiate_out(entt::registry& reg, const asset_handle<prefab>& pfb, entt::handle& e, bool call_callbacks) -> bool
+{
     if(call_callbacks)
     {
         push_on_load_callbacks({on_load_callback});
     }
-    bool result = load_from_prefab_out(pfb, *registry, e);
+    bool result = load_from_prefab_out(pfb, reg, e);
     if(call_callbacks)
     {
         pop_on_load_callbacks();
@@ -293,6 +298,7 @@ auto scene::create_entity(entt::registry& r, const std::string& name, entt::hand
     entt::handle ent(r, r.create());
     ent.emplace<tag_component>().name = !name.empty() ? name : "Entity";
     ent.emplace<layer_component>();
+    ent.emplace<id_component>().regenerate_id();
 
     auto& transform = ent.emplace<transform_component>();
     if(parent)

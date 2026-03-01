@@ -62,6 +62,7 @@ using all_serializeable_components = std::tuple<
     >;
 
 using all_inspectable_components = std::tuple<
+    id_component,
     tag_component,
     layer_component,
     prefab_component,
