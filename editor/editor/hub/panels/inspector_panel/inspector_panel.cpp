@@ -76,7 +76,7 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
 
 } // namespace
 
-inspector_panel::inspector_panel(imgui_panels* parent) : entity_panel(parent)
+inspector_panel::inspector_panel(imgui_panels* parent, const char* name) : entity_panel(parent, name)
 {
 }
 
@@ -94,84 +94,75 @@ void inspector_panel::deinit(rtti::context& ctx)
     ctx.remove<prefab_override_context>();
 }
 
-void inspector_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+void inspector_panel::draw_ui(rtti::context& ctx)
 {
-    entity_panel::on_frame_ui_render();
+    auto& em = ctx.get_cached<editing_manager>();
+    auto& selected = em.get_active_selection();
 
-    if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar))
+    if(ImGui::BeginMenuBar())
     {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
+        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
 
-        auto& em = ctx.get_cached<editing_manager>();
-        auto& selected = em.get_active_selection();
+        bool locked = !!locked_object_;
 
-        if(ImGui::BeginMenuBar())
+        if(ImGui::MenuItem(locked ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT, nullptr, locked))
         {
-            ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
-        
-            
-            bool locked = !!locked_object_;
+            locked = !locked;
 
-            if(ImGui::MenuItem(locked ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT, nullptr, locked))
+            if(locked)
             {
-                locked = !locked;
-
-                if(locked)
-                {
-                    locked_object_ = selected;
-                }
-                else
-                {
-                    locked_object_ = {};
-                }
+                locked_object_ = selected;
             }
-
-            ImGui::SetItemTooltipEx("%s", "Lock/Unlock Inspector");
-
-            if(ImGui::MenuItem(ICON_MDI_COGS, nullptr, debug_))
+            else
             {
-                debug_ = !debug_;
+                locked_object_ = {};
             }
-
-            ImGui::SetItemTooltipEx("%s", "Debug View");
-
-            ImGui::PopStyleColor(3);
-            
-            ImGui::EndMenuBar();
         }
 
-        if(debug_)
+        ImGui::SetItemTooltipEx("%s", "Lock/Unlock Inspector");
+
+        if(ImGui::MenuItem(ICON_MDI_COGS, nullptr, debug_))
         {
-            push_debug_view();
+            debug_ = !debug_;
         }
 
-        em.push_undo_stack_enabled(true);
+        ImGui::SetItemTooltipEx("%s", "Debug View");
 
-        auto selections_count = int(em.get_selections().size());
+        ImGui::PopStyleColor(3);
 
-        if(locked_object_)
-        {
-            inspect_object_with_prefab_check(ctx, locked_object_);
-        }
-        else if(em.get_selections().size() > 1)
-        {           
-            ImGui::Text("%d Items Selected.", selections_count);
-        }
-        else if(selected)
-        {
-            inspect_object_with_prefab_check(ctx, selected);
-        }
-
-        if(debug_)
-        {
-            pop_debug_view();
-        }
-
-        em.pop_undo_stack_enabled();
+        ImGui::EndMenuBar();
     }
-    ImGui::End();
+
+    if(debug_)
+    {
+        push_debug_view();
+    }
+
+    em.push_undo_stack_enabled(true);
+
+    auto selections_count = int(em.get_selections().size());
+
+    if(locked_object_)
+    {
+        inspect_object_with_prefab_check(ctx, locked_object_);
+    }
+    else if(em.get_selections().size() > 1)
+    {
+        ImGui::Text("%d Items Selected.", selections_count);
+    }
+    else if(selected)
+    {
+        inspect_object_with_prefab_check(ctx, selected);
+    }
+
+    if(debug_)
+    {
+        pop_debug_view();
+    }
+
+    em.pop_undo_stack_enabled();
 }
 
 } // namespace unravel

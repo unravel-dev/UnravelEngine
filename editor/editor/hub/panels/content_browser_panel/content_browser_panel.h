@@ -1,4 +1,5 @@
 #pragma once
+#include "../panel_base.h"
 #include <editor/imgui/integration/imgui.h>
 #include <filesystem/cache.hpp>
 
@@ -35,15 +36,18 @@ struct content_browser_item
 };
 
 
-class content_browser_panel
+class content_browser_panel : public panel_base
 {
 public:
-    content_browser_panel(imgui_panels* parent);
+    content_browser_panel(imgui_panels* parent, const char* name);
 
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
 
-    void on_frame_ui_render(rtti::context& ctx, const char* name);
+    void draw_ui(rtti::context& ctx) override;
+
+    auto get_window_flags() const -> ImGuiWindowFlags override;
+
 private:
     void draw(rtti::context& ctx);
     void draw_details(rtti::context& ctx, const fs::path& root_path);

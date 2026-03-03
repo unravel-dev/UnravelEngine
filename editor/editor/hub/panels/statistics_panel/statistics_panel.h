@@ -1,4 +1,5 @@
 #pragma once
+#include "../panel_base.h"
 #include <editor/imgui/integration/imgui.h>
 
 #include <base/basetypes.hpp>
@@ -17,9 +18,11 @@ namespace unravel
 /// memory usage, and GPU resource utilization for the engine.
 /// </summary>
 //-----------------------------------------------------------------------------
-class statistics_panel
+class statistics_panel : public panel_base
 {
 public:
+    explicit statistics_panel(const char* name);
+
     //-----------------------------------------------------------------------------
     /// <summary>
     /// Initialize the statistics panel.
@@ -61,29 +64,7 @@ public:
     /// <param name="ctx">The application context</param>
     /// <param name="name">The panel window name</param>
     //-----------------------------------------------------------------------------
-    auto on_frame_ui_render(rtti::context& ctx, const char* name) -> void;
-
-    //-----------------------------------------------------------------------------
-    /// <summary>
-    /// Set the visibility state of the panel.
-    /// </summary>
-    /// <param name="visible">True to make the panel visible</param>
-    //-----------------------------------------------------------------------------
-    auto set_visible(bool visible) -> void
-    {
-        is_visible_ = visible;
-    }
-
-    //-----------------------------------------------------------------------------
-    /// <summary>
-    /// Check if the panel is currently visible.
-    /// </summary>
-    /// <returns>True if the panel is visible</returns>
-    //-----------------------------------------------------------------------------
-    auto is_visible() const -> bool
-    {
-        return is_visible_;
-    }
+    void draw_ui(rtti::context& ctx) override;
 
 private:
     //-----------------------------------------------------------------------------
@@ -153,7 +134,6 @@ private:
     auto draw_render_target_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
     auto draw_texture_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;
 
-    bool is_visible_{false};
     bool enable_gpu_profiler_{false};
     bool show_editor_stats_{false}; // Disabled by default to focus on scene stats
 };

@@ -10,12 +10,12 @@ namespace unravel
 class inspector_panel : public entity_panel
 {
 public:
-    inspector_panel(imgui_panels* parent);
+    inspector_panel(imgui_panels* parent, const char* name);
 
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
 
-    void on_frame_ui_render(rtti::context& ctx, const char* name);
+    void draw_ui(rtti::context& ctx) override;
 
 private:
     entt::meta_any locked_object_;

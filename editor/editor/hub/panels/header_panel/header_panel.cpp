@@ -17,8 +17,8 @@
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
+#include <array>
 #include <exception>
-#include <filesystem>
 #include <simulation/simulation.h>
 #include <version/version.h>
 
@@ -302,10 +302,15 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_style_panel().show(true);
             }
+            if(ImGui::MenuItem("Layouts"))
+            {
+                parent_->get_layout_panel().focus();
+            }
             if(ImGui::MenuItem("Animation"))
             {
                 parent_->get_animation_panel().show(true);
             }
+
             ImGui::EndMenu();
         }
 
@@ -379,172 +384,198 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
     ImGui::EndChild();
 }
 
-void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
+void header_panel::draw_project_badge(rtti::context& ctx, 
+                                      const ImVec2& window_pos,
+                                      const ImVec2& window_size,
+                                      float header_size,
+                                      const ImVec2& item_spacing)
 {
+    auto& pm = ctx.get_cached<project_manager>();
     auto& ev = ctx.get_cached<events>();
-
-    float width = ImGui::GetContentRegionAvail().x;
-
-    auto window_pos = ImGui::GetWindowPos();
-    auto window_size = ImGui::GetWindowSize();
-    // Add a poly background for the logo.
-    const ImVec2 logo_bounds = ImVec2(500, header_size * 0.5f);
-    const ImVec2 logo_pos = ImVec2(window_pos.x + window_size.x * 0.5f - logo_bounds.x * 0.5f, window_pos.y);
-
-    ImVec2 points[5] = {ImVec2(logo_pos.x, logo_pos.y),
-                        ImVec2(logo_pos.x + 20, logo_pos.y + logo_bounds.y + 4),
-                        ImVec2(logo_pos.x + logo_bounds.x - 20, logo_pos.y + logo_bounds.y + 4),
-                        ImVec2(logo_pos.x + logo_bounds.x, logo_pos.y),
-                        ImVec2(logo_pos.x, logo_pos.y)};
-
-    const ImU32 poly_background = ImGui::GetColorU32(ImGuiCol_MenuBarBg);
-    auto poly_background_border_color = poly_background;
-
+    auto logo = fmt::format("{}", pm.get_name());
+    auto logo_size = ImGui::CalcTextSize(logo.c_str());
+    const float badge_h_pad = 30.0f;
+    const float badge_taper = 12.0f;
+    const float badge_width = logo_size.x + badge_h_pad * 2;
+    const float badge_height = header_size * 0.5f - item_spacing.y;
+    const ImVec2 badge_pos(window_pos.x + window_size.x * 0.5f - badge_width * 0.5f, window_pos.y);
+    std::array<ImVec2, 5> points = {
+        ImVec2(badge_pos.x, badge_pos.y),
+        ImVec2(badge_pos.x + badge_taper, badge_pos.y + badge_height),
+        ImVec2(badge_pos.x + badge_width - badge_taper, badge_pos.y + badge_height),
+        ImVec2(badge_pos.x + badge_width, badge_pos.y),
+        ImVec2(badge_pos.x, badge_pos.y)};
+    ImU32 badge_color = ImGui::GetColorU32(ImGuiCol_MenuBarBg);
     if(ev.is_playing)
     {
-        poly_background_border_color = ImGui::GetColorU32(ImVec4(0.0f, 0.5f, 0.0f, 0.5f));
+        badge_color = ImGui::GetColorU32(ImVec4(0.0f, 0.5f, 0.0f, 0.5f));
     }
     if(ev.is_paused)
     {
-        poly_background_border_color = ImGui::GetColorU32(ImVec4(0.6f, 0.3f, 0.0f, 0.5f));
+        badge_color = ImGui::GetColorU32(ImVec4(0.6f, 0.3f, 0.0f, 0.5f));
     }
+    ImGui::GetWindowDrawList()->AddConvexPolyFilled(points.data(), 5, badge_color);
+    const ImVec2 text_pos(badge_pos.x + badge_width * 0.5f - logo_size.x * 0.5f,
+                          badge_pos.y + (badge_height - logo_size.y) * 0.5f);
+    ImGui::GetWindowDrawList()->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), logo.c_str());
+}
 
-    ImGui::GetWindowDrawList()->AddConvexPolyFilled(&points[0], 5, poly_background_border_color);
-    // ImGui::GetWindowDrawList()->AddPolyline(&points[0], 4, poly_background_border_color, 0, 3);
-    // ImGui::GetWindowDrawList()->AddRectFilledMultiColor(logo_pos,
-    //                                                      logo_pos + logo_bounds,
-    //                                                      poly_background_border_color,
-    //                                                      poly_background_border_color,
-    //                                                      poly_background,
-    //                                                      poly_background);
-
+void header_panel::draw_left_zone(rtti::context& ctx)
+{
     auto& pm = ctx.get_cached<project_manager>();
-    auto logo = fmt::format("{}", pm.get_name());
-    auto logo_size = ImGui::CalcTextSize(logo.c_str());
-    // Add animated logo.
-    const ImVec2 logo_min = ImVec2(logo_pos.x + logo_bounds.x * 0.5f - logo_size.x * 0.5f,
-                                   logo_pos.y + (logo_bounds.y - logo_size.y) * 0.5f);
-    const ImVec2 logo_max = ImVec2(logo_min.x + logo_size.x, logo_min.y + logo_size.y);
-    auto logo_border_color = ImGui::GetColorU32(ImGuiCol_Text);
-    ImGui::GetWindowDrawList()->AddText(logo_min, logo_border_color, logo.c_str());
+    bool is_deploying = parent_->get_deploy_panel().is_deploying();
+    ImGui::BeginDisabled(is_deploying);
+    bool deploy_pressed = ImGui::Button(ICON_MDI_PACKAGE);
+    ImGui::SetItemTooltipEx("%s", "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
+    ImGui::EndDisabled();
+    if(deploy_pressed)
+    {
+        auto deploy_settings = pm.get_deploy_settings();
+        deploy_settings.deploy_and_run = true;
+        deploy_settings.deploy_dependencies = true;
+        parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
+    }
+    ImGui::SameLine();
+}
 
+auto header_panel::calc_right_zone_width(const ImVec2& frame_padding, const ImVec2& item_spacing) -> float
+{
+    float speed_icon = ImGui::CalcTextSize(ICON_MDI_PLAY_SPEED).x;
+    float slider = 100.0f;
+    float reset_btn = ImGui::CalcTextSize(ICON_MDI_UNDO_VARIANT).x + frame_padding.x * 2;
+    float vsync_box = ImGui::CalcTextSize("Vsync").x + frame_padding.x * 2 + ImGui::GetFrameHeight() + item_spacing.x;
+    float separator = item_spacing.x * 2 + 2.0f;
+    return speed_icon + item_spacing.x + slider + item_spacing.x + reset_btn +
+           separator + vsync_box + item_spacing.x;
+}
+
+auto header_panel::calc_center_zone_width(const ImVec2& frame_padding, const ImVec2& item_spacing) -> float
+{
+    float play_btns = ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x +
+                      frame_padding.x * 6 + item_spacing.x * 2;
+    float separator = item_spacing.x * 2 + 2.0f;
+    float debug_mode = get_debug_mode_size();
+    return play_btns + separator + debug_mode + item_spacing.x;
+}
+
+void header_panel::draw_center_zone(rtti::context& ctx)
+{
+    auto& ev = ctx.get_cached<events>();
+    ImGuiKeyChord key_chord = shortcuts::play_toggle;
+    bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
+    auto& scripting = ctx.get_cached<script_system>();
+    bool has_errors = scripting.has_compilation_errors();
+    if(ev.is_playing)
+    {
+        has_errors = false;
+    }
+    ImGui::BeginDisabled(has_errors);
+    ImGui::BeginGroup();
+    if(ev.is_playing)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.47f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.58f, 0.25f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.12f, 1.0f));
+    }
+    play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
+    if(ev.is_playing)
+    {
+        ImGui::PopStyleColor(3);
+    }
+    if(has_errors && !ev.is_playing)
+    {
+        play_pressed = false;
+    }
+    ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
+    if(play_pressed)
+    {
+        ev.toggle_play_mode(ctx);
+    }
+    ImGui::SameLine();
+    if(ev.is_paused)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.38f, 0.08f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.48f, 0.14f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.48f, 0.28f, 0.04f, 1.0f));
+    }
+    if(ImGui::Button(ICON_MDI_PAUSE))
+    {
+        ev.toggle_pause(ctx);
+    }
+    if(ev.is_paused)
+    {
+        ImGui::PopStyleColor(3);
+    }
+    ImGui::SameLine();
+    ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
+    if(ImGui::Button(ICON_MDI_SKIP_NEXT))
+    {
+        ev.skip_next_frame(ctx);
+    }
+    ImGui::PopItemFlag();
+    ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(ev.is_playing);
+    draw_debug_mode();
+    ImGui::EndDisabled();
+    ImGui::EndGroup();
+    ImGui::EndDisabled();
+    if(has_errors)
+    {
+        ImGui::SetItemTooltipEx("%s", "All compiler errors must be fixed before you can enter Play Mode!");
+    }
+}
+
+void header_panel::draw_right_zone(rtti::context& ctx)
+{
+    ImGui::BeginGroup();
+    auto& sim = ctx.get_cached<simulation>();
+    auto time_scale = sim.get_time_scale();
+    ImGui::Text(ICON_MDI_PLAY_SPEED);
+    ImGui::SetItemTooltipEx("%s", "Time scale");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    if(ImGui::SliderFloat("###Time Scale", &time_scale, 0.0f, 3.0f))
+    {
+        sim.set_time_scale(time_scale);
+    }
+    ImGui::SetItemTooltipEx("%s", "Time scale");
+    ImGui::SameLine();
+    if(ImGui::Button(ICON_MDI_UNDO_VARIANT))
+    {
+        sim.set_time_scale(1.0f);
+    }
+    ImGui::SetItemTooltipEx("Reset time scale to 1.0");
+    ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+    auto& rend = ctx.get_cached<renderer>();
+    auto vsync = rend.get_vsync();
+    if(ImGui::Checkbox("Vsync", &vsync))
+    {
+        rend.set_vsync(vsync);
+    }
+    ImGui::EndGroup();
+}
+
+void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
+{
+    auto window_pos = ImGui::GetWindowPos();
+    auto window_size = ImGui::GetWindowSize();
     const auto& style = ImGui::GetStyle();
     auto frame_padding = style.FramePadding;
     auto item_spacing = style.ItemSpacing;
-
-
-    {
-        bool is_deploying = parent_->get_deploy_panel().is_deploying();;
-        ImGui::BeginDisabled(is_deploying);
-
-        bool play_pressed_ex = ImGui::Button(ICON_MDI_PACKAGE);
-        ImGui::SetItemTooltipEx("%s", "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
-
-
-        ImGui::EndDisabled();
-        if(play_pressed_ex)
-        {
-            auto deploy_settings = pm.get_deploy_settings();
-            deploy_settings.deploy_and_run = true;
-            deploy_settings.deploy_dependencies = true;
-            parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
-
-        }
-
-        ImGui::SameLine();
-    }
-
-
-    ImGui::AlignedItem(
-        0.5f,
-        width,
-        ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x + frame_padding.x * 6 +
-            item_spacing.x * 3,
-        [&]()
-        {
-            ImGuiKeyChord key_chord = ev.is_playing ? shortcuts::play_toggle : shortcuts::play_toggle;
-            bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
-
-            auto& scripting = ctx.get_cached<script_system>();
-            bool has_errors = scripting.has_compilation_errors();
-
-            if(ev.is_playing)
-            {
-                has_errors = false;
-            }
-            ImGui::BeginDisabled(has_errors);
-            ImGui::BeginGroup();
-
-            play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
-
-            if(has_errors && !ev.is_playing)
-            {
-                play_pressed = false;
-            }
-            ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
-            if(play_pressed)
-            {
-                ev.toggle_play_mode(ctx);
-            }
-
-            
-
-
-            
-
-            ImGui::SameLine();
-            if(ImGui::Button(ICON_MDI_PAUSE))
-            {
-                bool was_playing = ev.is_playing;
-                ev.toggle_pause(ctx);
-            }
-
-            ImGui::SameLine();
-            ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
-            if(ImGui::Button(ICON_MDI_SKIP_NEXT))
-            {
-                ev.skip_next_frame(ctx);
-            }
-            ImGui::PopItemFlag();
-            ImGui::SameLine();
-
-            ImGui::BeginDisabled(ev.is_playing);
-            draw_debug_mode();
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-
-            auto& sim = ctx.get_cached<simulation>();
-
-            auto time_scale = sim.get_time_scale();
-            ImGui::SetNextItemWidth(100);
-            if(ImGui::SliderFloat("###Time Scale", &time_scale, 0.0f, 3.0f))
-            {
-                sim.set_time_scale(time_scale);
-            }
-            ImGui::SetItemTooltipEx("%s", "Time scale.");
-            ImGui::SameLine();
-            if(ImGui::Button(ICON_MDI_UNDO_VARIANT))
-            {
-                sim.set_time_scale(1.0f);
-            }
-            ImGui::SetItemTooltipEx("Reset time scale to 1.0");
-            ImGui::SameLine();
-
-            auto& rend = ctx.get_cached<renderer>();
-            auto vsync = rend.get_vsync();
-            if(ImGui::Checkbox("Vsync", &vsync))
-            {
-                rend.set_vsync(vsync);
-            }
-
-            ImGui::EndGroup();
-            ImGui::EndDisabled();
-
-            if(has_errors)
-            {
-                ImGui::SetItemTooltipEx("%s", "All compiler errors must be fixed before you can enter Play Mode!");
-            }
-        });
+    draw_project_badge(ctx, window_pos, window_size, header_size, item_spacing);
+    draw_left_zone(ctx);
+    float avail = ImGui::GetContentRegionAvail().x;
+    float right_zone_width = calc_right_zone_width(frame_padding, item_spacing);
+    float center_zone_width = calc_center_zone_width(frame_padding, item_spacing);
+    ImGui::AlignedItem(0.5f, avail, center_zone_width,
+                       [&]() -> void { draw_center_zone(ctx); });
+    ImGui::SameLine();
+    ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, right_zone_width,
+                       [&]() -> void { draw_right_zone(ctx); });
 }
 
 void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
@@ -573,7 +604,7 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
         // Draw a sep. child for the menu bar.
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         draw_menubar_child(ctx);
-        ImGui::NewLine();
+        // ImGui::NewLine();
         draw_play_toolbar(ctx, header_size);
         ImGui::PopStyleColor();
     }
@@ -582,6 +613,7 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
 
     // Draw the about window (will only be visible if show_about_window_ is true)
     draw_about_window(ctx);
+
 }
 
 void header_panel::draw_about_window(rtti::context& ctx)

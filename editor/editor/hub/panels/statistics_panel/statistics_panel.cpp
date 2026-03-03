@@ -45,6 +45,10 @@ namespace
     statistics_utils::sample_data texture_memory_samples;
 }
 
+statistics_panel::statistics_panel(const char* name) : panel_base(name)
+{
+}
+
 auto statistics_panel::init(rtti::context& ctx) -> void
 {
     // No specific initialization needed currently
@@ -65,14 +69,10 @@ auto statistics_panel::on_frame_render(rtti::context& ctx, delta_t dt) -> void
     // No per-frame render logic needed currently
 }
 
-auto statistics_panel::on_frame_ui_render(rtti::context& ctx, const char* name) -> void
+void statistics_panel::draw_ui(rtti::context& ctx)
 {
-    if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar))
-    {
-        draw_menubar(ctx);
-        draw_statistics_content();
-    }
-    ImGui::End();
+    draw_menubar(ctx);
+    draw_statistics_content();
 }
 
 auto statistics_panel::draw_menubar(rtti::context& ctx) -> void

@@ -16,10 +16,7 @@
 namespace unravel
 {
 
-entity_panel::entity_panel(imgui_panels* parent) : parent_(parent)
-{
-}
-void entity_panel::on_frame_ui_render()
+entity_panel::entity_panel(imgui_panels* parent, const char* name) : panel_base(name), parent_(parent)
 {
 }
 

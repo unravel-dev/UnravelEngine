@@ -30,6 +30,7 @@
 #define IMGUI_NOTIFY
 
 #include "imgui/imgui.h"
+#include "imgui/imgui_internal.h"
 #pragma once
 #include <vector>
 #include <chrono>
@@ -45,7 +46,7 @@
 #define NOTIFY_FADE_IN_OUT_TIME			150			// Fade in and out duration
 #define NOTIFY_DEFAULT_DISMISS			3000		// Auto dismiss after X ms (default, applied only of no data provided in constructors)
 #define NOTIFY_OPACITY					1.0f		// 0-1 Toast opacity
-#define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing
+#define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing
 // Comment out if you don't want any separator between title and content
 #define NOTIFY_USE_SEPARATOR
 #define NOTIFY_USE_DISMISS_BUTTON		false		// If true, a dismiss button will be rendered in the top right corner of the toast

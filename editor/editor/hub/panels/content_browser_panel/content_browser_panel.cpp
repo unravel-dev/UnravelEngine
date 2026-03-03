@@ -543,7 +543,7 @@ auto draw_item(const content_browser_item& item)
 }
 
 } // namespace
-content_browser_panel::content_browser_panel(imgui_panels* parent) : parent_(parent)
+content_browser_panel::content_browser_panel(imgui_panels* parent, const char* name) : panel_base(name), parent_(parent)
 {
 }
 void content_browser_panel::init(rtti::context& ctx)
@@ -555,17 +555,15 @@ void content_browser_panel::deinit(rtti::context& ctx)
     filter_ = {};
 }
 
-void content_browser_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+auto content_browser_panel::get_window_flags() const -> ImGuiWindowFlags
 {
-    if(ImGui::Begin(name, nullptr))
-    {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
+    return 0;
+}
 
-        draw(ctx);
-
-        handle_external_drop(ctx);
-    }
-    ImGui::End();
+void content_browser_panel::draw_ui(rtti::context& ctx)
+{
+    draw(ctx);
+    handle_external_drop(ctx);
 }
 
 void content_browser_panel::handle_external_drop(rtti::context& ctx)

@@ -31,6 +31,7 @@ void build_dockspace(ImGuiID dockspace_id /*, ImVec2 size*/)
     ImGui::DockBuilderDockWindow(HIERARCHY_VIEW, dock_left_id);
     ImGui::DockBuilderDockWindow(INSPECTOR_VIEW, dock_right_id);
     ImGui::DockBuilderDockWindow(STATISTICS_VIEW, dock_right_down_id);
+    ImGui::DockBuilderDockWindow(LAYOUTS_VIEW, dock_right_down_id);
 
     ImGui::DockBuilderDockWindow(CONSOLE_VIEW, dock_down_id);
 
@@ -48,7 +49,7 @@ void dockspace::on_frame_ui_render(float headerSize, float footerSize)
     ImGuiWindowFlags windowFlags = 0;
     windowFlags |=
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
-    windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoFocusOnAppearing;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 dockspaceSize = ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - headerSize - footerSize);
     const ImVec2 dockspacePos = ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + headerSize);
@@ -63,6 +64,7 @@ void dockspace::on_frame_ui_render(float headerSize, float footerSize)
     if(!ImGui::DockBuilderGetNode(dockspace_id))
     {
         build_dockspace(dockspace_id);
+        reset_focus_counter_ = -1;
     }
     ImGui::DockSpace(dockspace_id, dockspaceSize, dockspace_flags);
     ImGui::End();
@@ -72,12 +74,10 @@ void dockspace::on_frame_ui_render(float headerSize, float footerSize)
 
 void dockspace::execute_dock_builder_order_and_focus_workaround()
 {
-    // WARNING: BAD HABITS AHEAD!!!
-
     // only execute if we are in the second frame of our program
-    static int i = -1;
+    int& i = reset_focus_counter_;
 
-    static const std::vector<const char*> focused_dock_tabs{SCENE_VIEW, CONTENT_VIEW};
+    static const std::vector<const char*> focused_dock_tabs{SCENE_VIEW, CONTENT_VIEW, STATISTICS_VIEW};
 
     int tabs_count = int(focused_dock_tabs.size());
     if(i < tabs_count)
@@ -92,6 +92,8 @@ void dockspace::execute_dock_builder_order_and_focus_workaround()
 
         i++;
     }
+
+    
 }
 
 } // namespace unravel

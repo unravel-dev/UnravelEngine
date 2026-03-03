@@ -14,11 +14,14 @@ class scene;
 class hierarchy_panel : public entity_panel
 {
 public:
-    hierarchy_panel(imgui_panels* parent);
+    hierarchy_panel(imgui_panels* parent, const char* name);
 
     void init(rtti::context& ctx);
 
-    void on_frame_ui_render(rtti::context& ctx, const char* name);
+    void draw_ui(rtti::context& ctx) override;
+    void on_after_render(rtti::context& ctx) override;
+
+    auto get_window_flags() const -> ImGuiWindowFlags override;
 
 private:
     // UI drawing functions

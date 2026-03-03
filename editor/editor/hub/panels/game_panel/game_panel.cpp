@@ -17,6 +17,10 @@
 namespace unravel
 {
 
+game_panel::game_panel(const char* name) : panel_base(name)
+{
+}
+
 void game_panel::init(rtti::context& ctx)
 {
 }
@@ -45,7 +49,7 @@ void game_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
 
 void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 {
-    if(!is_visible_ && !is_visible_force_)
+    if(!is_visible() && !is_visible_force_)
     {
         return;
     }
@@ -58,33 +62,10 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
     is_visible_force_ = false;
 }
 
-void game_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+void game_panel::on_after_render(rtti::context& ctx)
 {
     auto& input = ctx.get_cached<input_system>();
-
-    bool allowed = true;
-    if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar))
-    {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
-
-        set_visible(true);
-        draw_ui(ctx);
-
-        allowed &= ImGui::IsWindowFocused();
-    }
-    else
-    {
-        allowed = false;
-        set_visible(false);
-    }
-    ImGui::End();
-
-    input.manager.set_is_input_allowed(allowed);
-}
-
-void game_panel::set_visible(bool visible)
-{
-    is_visible_ = visible;
+    input.manager.set_is_input_allowed(is_focused());
 }
 
 void game_panel::set_visible_force(bool visible)

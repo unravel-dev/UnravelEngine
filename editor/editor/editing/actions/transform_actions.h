@@ -91,5 +91,20 @@ struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
+struct transform_set_parent_action_t : crtp_meta_type<transform_set_parent_action_t, editing_action_t>
+{
+    entt::handle entity;
+    entt::handle old_parent;
+    entt::handle new_parent;
+
+    transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
 
 } // namespace unravel

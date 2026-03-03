@@ -60,6 +60,7 @@ inline constexpr ImGuiKey ik_fabrik = ImGuiKey_L;
 inline constexpr ImGuiKey ik_two_bone = ImGuiKey_M;
 
 // View operations
+inline const ImGuiKeyCombination scene_fullscreen_toggle = {ImGuiKey_LeftCtrl, ImGuiKey_Space};
 inline constexpr ImGuiKey focus_selected = ImGuiKey_F;
 inline const ImGuiKeyCombination frame_all = {ImGuiKey_LeftAlt, ImGuiKey_F};
 inline constexpr ImGuiKey toggle_gizmo_mode = ImGuiKey_Z;

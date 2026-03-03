@@ -11,20 +11,20 @@ class scene_panel : public entity_panel
 
 {
 public:
-    scene_panel(imgui_panels* parent);
+    scene_panel(imgui_panels* parent, const char* name);
 
     void init(rtti::context& ctx);
+
+    auto get_window_name() const -> const char* override;
     void deinit(rtti::context& ctx);
 
     void on_frame_update(rtti::context& ctx, delta_t dt);
     void on_frame_render(rtti::context& ctx, delta_t dt);
     void on_frame_before_render(rtti::context& ctx, delta_t dt);
-    void on_frame_ui_render(rtti::context& ctx, const char* name);
+    auto get_window_flags() const -> ImGuiWindowFlags override;
 
     auto get_camera() -> entt::handle;
     auto get_center() -> entt::handle;
-    void set_visible(bool visible);
-    auto is_focused() const -> bool;
 
     auto get_auto_save_prefab() const -> bool;
 
@@ -42,7 +42,7 @@ public:
 private:
     void draw_scene(rtti::context& ctx, delta_t dt);
 
-    void draw_ui(rtti::context& ctx);
+    void draw_ui(rtti::context& ctx) override;
     void draw_menubar(rtti::context& ctx);
     void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size);
 
@@ -73,8 +73,6 @@ private:
     // Handle prefab mode changes
     void handle_prefab_mode_changes(rtti::context& ctx);
 
-    bool is_visible_{};
-    bool is_focused_{};
     bool is_dragging_{};
     int visualize_passes_{-1};
     scene panel_scene_{"scene_panel"};
@@ -98,5 +96,7 @@ private:
     ImVec2 drag_start_pos_{};
     ImVec2 drag_current_pos_{};
     bool was_using_gizmo_{false};
+
+    std::string fullscreen_name_{};
 };
 } // namespace unravel

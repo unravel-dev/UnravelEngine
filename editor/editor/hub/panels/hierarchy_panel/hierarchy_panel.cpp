@@ -288,15 +288,10 @@ void handle_entity_drop(rtti::context& ctx, imgui_panels* panels, entt::handle t
     auto do_action = [&](entt::handle dropped)
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.queue_action("Drop Entity",
-            [&ctx, target_entity, dropped]() mutable
-        {
-            auto trans_comp = dropped.try_get<transform_component>();
-            if(trans_comp)
-            {
-                trans_comp->set_parent(target_entity);
-            }
-        });
+        auto action = std::make_shared<transform_set_parent_action_t>(dropped, dropped.get<transform_component>().get_parent(), target_entity);
+        em.push_undo_stack_enabled(true);
+        em.queue_action("", std::move(action));
+        em.pop_undo_stack_enabled();
     };
 
     if(em.is_selected(dropped_entity))
@@ -984,7 +979,7 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
 // Hierarchy Panel Implementation
 // ============================================================================
 
-hierarchy_panel::hierarchy_panel(imgui_panels* parent) : entity_panel(parent)
+hierarchy_panel::hierarchy_panel(imgui_panels* parent, const char* name) : entity_panel(parent, name)
 {
 }
 
@@ -1097,29 +1092,32 @@ void hierarchy_panel::handle_window_empty_click(rtti::context& ctx) const
     }
 }
 
-void hierarchy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+void hierarchy_panel::on_after_render(rtti::context& ctx)
 {
-    entity_panel::on_frame_ui_render();
-
-    if(ImGui::Begin(name))
-    {
-        draw_prefab_mode_header(ctx);
-
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                 ImGuiWindowFlags_NoSavedSettings;
-
-        if(ImGui::BeginChild("hierarchy_content", ImGui::GetContentRegionAvail(), 0, flags))
-        {
-            check_context_menu(ctx, parent_, {});
-            draw_scene_hierarchy(ctx);
-        }
-        ImGui::EndChild();
-        
-        check_drag(ctx, parent_, {});
-    }
-    ImGui::End();
-
+    (void)ctx;
     update_editing();
+}
+
+auto hierarchy_panel::get_window_flags() const -> ImGuiWindowFlags
+{
+    return 0;
+}
+
+void hierarchy_panel::draw_ui(rtti::context& ctx)
+{
+    draw_prefab_mode_header(ctx);
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                             ImGuiWindowFlags_NoSavedSettings;
+
+    if(ImGui::BeginChild("hierarchy_content", ImGui::GetContentRegionAvail(), 0, flags))
+    {
+        check_context_menu(ctx, parent_, {});
+        draw_scene_hierarchy(ctx);
+    }
+    ImGui::EndChild();
+
+    check_drag(ctx, parent_, {});
 }
 
 } // namespace unravel

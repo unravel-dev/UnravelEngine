@@ -13,4 +13,6 @@
 #define PROJECT_SETTINGS_VIEW     "Project Settings"
 #define EDITOR_SETTINGS_VIEW     "Editor Settings"
 
+#define LAYOUTS_VIEW    ICON_MDI_VIEW_DASHBOARD " Layouts"
+
 #define ANIMATION_VIEW     " Animation"

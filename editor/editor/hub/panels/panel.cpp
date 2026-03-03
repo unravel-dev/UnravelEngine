@@ -1,6 +1,8 @@
 #include "panel.h"
 #include "panels_defs.h"
 
+#include <filesystem/filesystem.h>
+
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <editor/imgui/integration/imgui_notify.h>
@@ -13,7 +15,7 @@ namespace unravel
 
 imgui_panels::imgui_panels()
 {
-    console_log_panel_ = std::make_shared<console_log_panel>();
+    console_log_panel_ = std::make_shared<console_log_panel>(CONSOLE_VIEW);
     console_log_panel_->set_level(spdlog::level::trace);
     get_mutable_logging_container()->add_sink(console_log_panel_);
 
@@ -21,18 +23,19 @@ imgui_panels::imgui_panels()
     footer_panel_ = std::make_unique<footer_panel>();
     cenral_dockspace_ = std::make_unique<dockspace>();
 
-    content_browser_panel_ = std::make_unique<content_browser_panel>(this);
-    hierarchy_panel_ = std::make_unique<hierarchy_panel>(this);
-    inspector_panel_ = std::make_unique<inspector_panel>(this);
-    scene_panel_ = std::make_unique<scene_panel>(this);
-    game_panel_ = std::make_unique<game_panel>();
-    statistics_panel_ = std::make_unique<statistics_panel>();
+    content_browser_panel_ = std::make_unique<content_browser_panel>(this, CONTENT_VIEW);
+    hierarchy_panel_ = std::make_unique<hierarchy_panel>(this, HIERARCHY_VIEW);
+    inspector_panel_ = std::make_unique<inspector_panel>(this, INSPECTOR_VIEW);
+    scene_panel_ = std::make_unique<scene_panel>(this, SCENE_VIEW);
+    game_panel_ = std::make_unique<game_panel>(GAME_VIEW);
+    statistics_panel_ = std::make_unique<statistics_panel>(STATISTICS_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
     project_settings_panel_ = std::make_unique<project_settings_panel>(this);
     editor_settings_panel_ = std::make_unique<editor_settings_panel>(this);
     style_panel_ = std::make_unique<style_panel>(this);
+    layout_panel_ = std::make_unique<layout_panel>(this, LAYOUTS_VIEW);
     undo_redo_panel_ = std::make_unique<undo_redo_panel>(this);
 }
 
@@ -52,6 +55,9 @@ void imgui_panels::init(rtti::context& ctx)
     game_panel_->init(ctx);
     statistics_panel_->init(ctx);
     animation_panel_->init(ctx);
+
+    auto layouts_dir = fs::resolve_protocol("editor:/settings/layouts");
+    layout_manager_.init(layouts_dir);
 }
 
 void imgui_panels::deinit(rtti::context& ctx)
@@ -85,41 +91,85 @@ void imgui_panels::on_frame_render(rtti::context& ctx, delta_t dt)
 void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 {
     auto footer_size = ImGui::GetFrameHeightWithSpacing();
-    auto header_size = ImGui::GetFrameHeightWithSpacing() * 3;
+    auto header_size = ImGui::GetFrameHeightWithSpacing() * 2;
+
+    if(ImGui::IsCombinationKeyPressed(shortcuts::scene_fullscreen_toggle))
+    {
+        std::vector<panel_base*> panels =
+        {
+            scene_panel_.get(),
+            game_panel_.get()
+        };
+        for(const auto& panel : panels)
+        {
+            if(panel->is_focused())
+            {
+                panel->toggle_fullscreen();
+    
+                if(panel->is_fullscreen())
+                {
+                    full_screen_panel_ = panel;
+                }
+                else
+                {
+                    full_screen_panel_ = nullptr;
+                }
+                panel->focus();
+            }
+        }
+        
+    }
 
     header_panel_->on_frame_ui_render(ctx, header_size);
 
-    cenral_dockspace_->on_frame_ui_render(header_size, footer_size);
+    if(full_screen_panel_ && full_screen_panel_->is_fullscreen())
+    {
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2 fullscreen_pos(viewport->WorkPos.x, viewport->WorkPos.y + header_size);
+        const ImVec2 fullscreen_size(viewport->WorkSize.x, viewport->WorkSize.y - header_size - footer_size);
+        ImGui::SetNextWindowPos(fullscreen_pos);
+        ImGui::SetNextWindowSize(fullscreen_size);
+        full_screen_panel_->on_frame_ui_render(ctx);
+    }
+    else
+    {
 
-    hierarchy_panel_->on_frame_ui_render(ctx, HIERARCHY_VIEW);
 
-    inspector_panel_->on_frame_ui_render(ctx, INSPECTOR_VIEW);
+        cenral_dockspace_->on_frame_ui_render(header_size, footer_size);
 
-    statistics_panel_->on_frame_ui_render(ctx, STATISTICS_VIEW);
+        hierarchy_panel_->on_frame_ui_render(ctx);
 
-    console_log_panel_->on_frame_ui_render(ctx, CONSOLE_VIEW);
+        inspector_panel_->on_frame_ui_render(ctx);
 
-    content_browser_panel_->on_frame_ui_render(ctx, CONTENT_VIEW);
+        statistics_panel_->on_frame_ui_render(ctx);
 
-    scene_panel_->on_frame_ui_render(ctx, SCENE_VIEW);
+        console_log_panel_->on_frame_ui_render(ctx);
 
-    game_panel_->on_frame_ui_render(ctx, GAME_VIEW);
+        content_browser_panel_->on_frame_ui_render(ctx);
 
-    animation_panel_->on_frame_ui_render(ctx, ANIMATION_VIEW);
+        scene_panel_->on_frame_ui_render(ctx);
 
-    deploy_panel_->on_frame_ui_render(ctx, DEPLOY_VIEW);
+        game_panel_->on_frame_ui_render(ctx);
 
-    project_settings_panel_->on_frame_ui_render(ctx, PROJECT_SETTINGS_VIEW);
+        layout_panel_->on_frame_ui_render(ctx);
 
-    editor_settings_panel_->on_frame_ui_render(ctx, EDITOR_SETTINGS_VIEW);
+        animation_panel_->on_frame_ui_render(ctx, ANIMATION_VIEW);
+
+        deploy_panel_->on_frame_ui_render(ctx, DEPLOY_VIEW);
+
+        project_settings_panel_->on_frame_ui_render(ctx, PROJECT_SETTINGS_VIEW);
+
+        editor_settings_panel_->on_frame_ui_render(ctx, EDITOR_SETTINGS_VIEW);
+    }
 
     footer_panel_->on_frame_ui_render(ctx,
-                                      footer_size,
-                                      [&]()
-                                      {
-                                          console_log_panel_->draw_last_log_button();
-                                      });
+        footer_size,
+        [&]()
+        {
+            console_log_panel_->draw_last_log_button();
+        });
     cenral_dockspace_->execute_dock_builder_order_and_focus_workaround();
+
 
     // Draw the style picker window if visible
     style_panel_->on_frame_ui_render();
@@ -222,6 +272,16 @@ void imgui_panels::clear_external_drop_files()
 auto imgui_panels::get_external_drop_files() const -> const std::vector<std::string>&
 {
     return external_drop_data_.drop_files;
+}
+
+auto imgui_panels::get_layout_manager() -> layout_manager&
+{
+    return layout_manager_;
+}
+
+auto imgui_panels::get_layout_panel() -> layout_panel&
+{
+    return *layout_panel_;
 }
 
 } // namespace unravel

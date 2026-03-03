@@ -65,7 +65,7 @@ void open_log_in_environment(const fs::path& entry, int line)
     }
 }
 
-console_log_panel::console_log_panel()
+console_log_panel::console_log_panel(const char* name) : panel_base(name)
 {
     set_pattern("[%H:%M:%S] %v");
 
@@ -208,15 +208,15 @@ auto console_log_panel::draw_log(const log_entry& msg, int num_lines) -> bool
     return clicked;
 }
 
-void console_log_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+auto console_log_panel::get_window_flags() const -> ImGuiWindowFlags
 {
-    name_ = name;
-    if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar))
-    {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
-        draw();
-    }
-    ImGui::End();
+    return ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar;
+}
+
+void console_log_panel::draw_ui(rtti::context& ctx)
+{
+    (void)ctx;
+    draw();
 }
 
 void console_log_panel::draw()
@@ -391,7 +391,7 @@ void console_log_panel::draw_last_log_button()
 
         if(ImGui::InvisibleButton("shortcut", ImGui::GetItemRectSize()))
         {
-            ImGui::FocusWindow(ImGui::FindWindowByName(name_.c_str()));
+            ImGui::FocusWindow(ImGui::FindWindowByName(get_name().c_str()));
         }
     }
 

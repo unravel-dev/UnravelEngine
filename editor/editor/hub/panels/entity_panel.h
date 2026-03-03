@@ -5,6 +5,7 @@
 
 #include <engine/ecs/ecs.h>
 
+#include "panel_base.h"
 #include <editor/imgui/integration/imgui.h>
 #include <editor/shortcuts.h>
 
@@ -12,15 +13,12 @@ namespace unravel
 {
 class imgui_panels;
 
-class entity_panel
+class entity_panel : public panel_base
 {
 public:
-    entity_panel(imgui_panels* parent);
+    entity_panel(imgui_panels* parent, const char* name);
 
-    ~entity_panel() = default;
-
-
-    void on_frame_ui_render();
+    virtual ~entity_panel() = default;
 
     void duplicate_entities(const std::vector<entt::handle>& entities);
 

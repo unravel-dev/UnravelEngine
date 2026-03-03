@@ -293,5 +293,63 @@ void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
     draw_in_inspector_impl(ctx, old_skew, new_skew, custom);
 }
 
+// Transform Set Parent Action Implementation
+transform_set_parent_action_t::transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p)
+    : entity(ent), old_parent(old_p), new_parent(new_p)
+{
+    if(new_parent)
+    {
+        name = "Set Parent";
+    }
+    else
+    {
+        name = "Remove Parent";
+    }
+}
+
+void transform_set_parent_action_t::do_action()
+{
+    if(entity)
+    {
+        if(auto transform = entity.try_get<transform_component>())
+        {
+            transform->set_parent(new_parent, true);
+            prefab_override_context::mark_transform_as_changed(entity, true, true, true, true);
+        }
+    }
+}
+
+void transform_set_parent_action_t::undo_action()
+{
+    if(entity)
+    {
+        if(auto transform = entity.try_get<transform_component>())
+        {
+            transform->set_parent(old_parent, true);
+            prefab_override_context::mark_transform_as_changed(entity, true, true, true, true);
+        }
+    }
+}
+
+auto transform_set_parent_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+void transform_set_parent_action_t::merge_with(const editing_action_t& previous) {}
+
+auto transform_set_parent_action_t::is_valid() const -> bool
+{
+    return entity.valid() && entity.try_get<transform_component>();
+}
+
+void transform_set_parent_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    auto custom = entt::make_custom<entt::attributes>(entt::attributes{
+        {"name", "parent"},
+        {"pretty_name", "Parent"}});
+    draw_in_inspector_impl(ctx, entt::meta_any{std::in_place_type<entt::handle>, old_parent},
+                          entt::meta_any{std::in_place_type<entt::handle>, new_parent}, custom);
+}
 
 } // namespace unravel

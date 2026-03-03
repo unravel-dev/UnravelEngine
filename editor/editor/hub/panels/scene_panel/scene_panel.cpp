@@ -1222,8 +1222,13 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
 // Scene Panel Implementation
 // ============================================================================
 
-scene_panel::scene_panel(imgui_panels* parent) : entity_panel(parent)
+scene_panel::scene_panel(imgui_panels* parent, const char* name) : entity_panel(parent, name), fullscreen_name_(get_name() + " (Fullscreen)")
 {
+}
+
+auto scene_panel::get_window_name() const -> const char*
+{
+    return is_fullscreen() ? fullscreen_name_.c_str() : panel_base::get_window_name();
 }
 
 void scene_panel::init(rtti::context& ctx)
@@ -1337,7 +1342,7 @@ void scene_panel::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     handle_prefab_mode_changes(ctx);
 
-    if(!is_visible_)
+    if(!is_visible())
     {
         return;
     }
@@ -1389,28 +1394,22 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
 
 void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 {
-    if(!is_visible_)
+    if(!is_visible())
     {
         return;
     }
     draw_scene(ctx, dt);
 }
 
-void scene_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
+auto scene_panel::get_window_flags() const -> ImGuiWindowFlags
 {
-    entity_panel::on_frame_ui_render();
-
-    if(ImGui::Begin(name, nullptr, ImGuiWindowFlags_MenuBar))
+    ImGuiWindowFlags flags = ImGuiWindowFlags_MenuBar;
+    if(is_fullscreen())
     {
-        is_focused_ = ImGui::IsWindowFocused();
-        set_visible(true);
-        draw_ui(ctx);
+        flags |= ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
     }
-    else
-    {
-        set_visible(false);
-    }
-    ImGui::End();
+    return flags;
 }
 
 auto scene_panel::get_camera() -> entt::handle
@@ -1433,16 +1432,6 @@ auto scene_panel::get_center() -> entt::handle
         center_entity = panel_scene_.create_handle(e);
     });
     return center_entity;
-}
-
-void scene_panel::set_visible(bool visible)
-{
-    is_visible_ = visible;
-}
-
-auto scene_panel::is_focused() const -> bool
-{
-    return is_focused_;
 }
 
 auto scene_panel::get_auto_save_prefab() const -> bool

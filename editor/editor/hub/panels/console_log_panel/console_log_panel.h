@@ -1,4 +1,5 @@
 #pragma once
+#include "../panel_base.h"
 #include <editor/imgui/integration/imgui.h>
 
 #include <hpp/optional.hpp>
@@ -15,7 +16,7 @@
 namespace unravel
 {
 
-class console_log_panel : public sinks::base_sink<std::mutex> //, public console
+class console_log_panel : public panel_base, public sinks::base_sink<std::mutex>
 {
 public:
     using mem_buf = hpp::small_vector<char, 250>;
@@ -40,11 +41,12 @@ public:
     using display_entries_t = hpp::small_vector<log_entry, 1024>;
     using entries_t = hpp::stack_ringbuffer<log_entry, 1024>;
 
-    console_log_panel();
+    explicit console_log_panel(const char* name);
     void sink_it_(const details::log_msg& msg) override;
     void flush_() override;
 
-    void on_frame_ui_render(rtti::context& ctx, const char* name);
+    void draw_ui(rtti::context& ctx) override;
+    auto get_window_flags() const -> ImGuiWindowFlags override;
     void draw();
 
     void draw_details();
@@ -80,7 +82,6 @@ private:
 
     uint64_t current_id_{};
     hpp::optional<log_entry> selected_log_{};
-    std::string name_;
 
     bool clear_on_play_{true};
     bool clear_on_recompile_{true};
