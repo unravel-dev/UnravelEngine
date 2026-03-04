@@ -29,6 +29,7 @@ struct events
     hpp::event<void(rtti::context&)> on_pause;
     hpp::event<void(rtti::context&)> on_resume;
     hpp::event<void(rtti::context&)> on_skip_next_frame;
+    hpp::event<void(rtti::context&)> on_project_opened;
 
     /// os events
     hpp::event<void(rtti::context&, os::event& e)> on_os_event;

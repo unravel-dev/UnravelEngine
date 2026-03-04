@@ -337,6 +337,7 @@ hub::hub(rtti::context& ctx)
     auto& ui_ev = ctx.get_cached<ui_events>();
     auto& ev = ctx.get_cached<events>();
 
+    ev.on_project_opened.connect(sentinel_, this, &hub::on_project_opened);
     ev.on_frame_update.connect(sentinel_, this, &hub::on_frame_update);
     ev.on_frame_before_render.connect(sentinel_, this, &hub::on_frame_before_render);
     ev.on_frame_render.connect(sentinel_, this, &hub::on_frame_render);
@@ -377,6 +378,11 @@ void hub::open_project_settings(rtti::context& ctx, const std::string& hint)
     }
 
     panels_.get_project_settings_panel().show(true, hint);
+}
+
+void hub::on_project_opened(rtti::context& ctx)
+{
+    panels_.get_dockspace().refresh();
 }
 
 void hub::on_frame_update(rtti::context& ctx, delta_t dt)
@@ -504,6 +510,7 @@ void hub::on_start_page_render(rtti::context& ctx)
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.08f, 1.0f));
 
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
     window_flags |=
@@ -511,17 +518,18 @@ void hub::on_start_page_render(rtti::context& ctx)
     window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
     ImGui::Begin("START PAGE", nullptr, window_flags);
     ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 
     ImGui::OpenPopup("PROJECTS");
-    
-    // Calculate popup size with proper margins - reduced size
+
     ImVec2 viewport_size = ImGui::GetMainViewport()->Size;
-    ImVec2 popup_size = ImVec2(viewport_size.x * 0.5f, viewport_size.y * 0.5f);
+    ImVec2 popup_size = ImVec2(viewport_size.x * 0.55f, viewport_size.y * 0.58f);
     ImGui::SetNextWindowSize(popup_size, ImGuiCond_Appearing);
 
-    // Add moderate padding to the popup window
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f, 28.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 10.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 10.0f);
+    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     
     if(ImGui::BeginPopupModal("PROJECTS", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar))
     {
@@ -544,7 +552,8 @@ void hub::on_start_page_render(rtti::context& ctx)
         ImGui::EndPopup();
     }
     
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 
     ImGui::End();
 }
@@ -559,26 +568,35 @@ void hub::render_projects_list_view(rtti::context& ctx)
         pm.open_project(ctx, path);
     };
 
-    // Header section with improved styling
-    ImGui::BeginGroup();
+    ImGui::PushFont(ImGui::Font::Bold);
     {
-   
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.8f));
-        ImGui::Text("Open an existing project or create a new one");
+        auto title_text = "Unravel Engine";
+        float title_w = ImGui::CalcTextSize(title_text).x;
+        float region_w = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (region_w - title_w) * 0.5f);
+        ImGui::TextUnformatted(title_text);
+    }
+    ImGui::PopFont();
+
+    ImGui::Spacing();
+
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f, 0.50f, 0.50f, 1.0f));
+        auto subtitle_text = "Open an existing project or create a new one";
+        float subtitle_w = ImGui::CalcTextSize(subtitle_text).x;
+        float region_w = ImGui::GetContentRegionAvail().x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (region_w - subtitle_w) * 0.5f);
+        ImGui::TextUnformatted(subtitle_text);
         ImGui::PopStyleColor();
     }
-    ImGui::EndGroup();
-    
-    ImGui::Spacing();
-    ImGui::Spacing();
-    
-    // Subtle separator with custom styling
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.3f));
+
+    ImGui::Spacing(); ImGui::Spacing();
+
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
     ImGui::Separator();
     ImGui::PopStyleColor();
-    
-    ImGui::Spacing();
-    ImGui::Spacing();
+
+    ImGui::Spacing(); ImGui::Spacing();
 
     // Main content area with improved sidebar layout
     float sidebar_width = 200.0f;

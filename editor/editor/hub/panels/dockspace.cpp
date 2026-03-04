@@ -64,12 +64,17 @@ void dockspace::on_frame_ui_render(float headerSize, float footerSize)
     if(!ImGui::DockBuilderGetNode(dockspace_id))
     {
         build_dockspace(dockspace_id);
-        reset_focus_counter_ = -1;
+        refresh();
     }
     ImGui::DockSpace(dockspace_id, dockspaceSize, dockspace_flags);
     ImGui::End();
 
     ImGui::PopStyleVar();
+}
+
+void dockspace::refresh()
+{
+    reset_focus_counter_ = -1;
 }
 
 void dockspace::execute_dock_builder_order_and_focus_workaround()

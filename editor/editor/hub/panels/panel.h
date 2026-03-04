@@ -50,6 +50,7 @@ public:
     auto get_style_panel() -> style_panel&;
     auto get_undo_redo_panel() -> undo_redo_panel&;
     auto get_animation_panel() -> animation_panel&;
+    auto get_dockspace() -> dockspace&;
     void set_external_drop_in_progress(bool in_progress);
 
     auto get_external_drop_in_progress() const -> bool;

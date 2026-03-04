@@ -89,7 +89,21 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    if(!ctx.get_cached<asset_watcher>().init(ctx))
+    // Phase 1: basic ImGui with embedded shaders/fonts only (no asset dependencies)
+    if(!ctx.get_cached<imgui_interface>().init_basic(ctx))
+    {
+        print_init_error(ctx);
+        return false;
+    }
+
+    // Engine assets with progress UI
+    auto& imgui = ctx.get_cached<imgui_interface>();
+    auto engine_progress = [&imgui, &ctx](size_t completed, size_t total, const std::string& job) -> void
+    {
+        imgui.render_loading_frame(ctx, "Compiling engine assets", completed, total, job);
+    };
+
+    if(!ctx.get_cached<asset_watcher>().init(ctx, engine_progress))
     {
         print_init_error(ctx);
         return false;
@@ -101,13 +115,18 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    // Editor assets with progress UI
     {
         auto& aw = ctx.get_cached<asset_watcher>();
-        aw.watch_assets(ctx, "editor:/", true);
+        auto editor_progress = [&imgui, &ctx](size_t completed, size_t total, const std::string& job) -> void
+        {
+            imgui.render_loading_frame(ctx, "Compiling editor assets", completed, total, job);
+        };
+        aw.watch_assets(ctx, "editor:/", true, editor_progress);
     }
 
-
-    if(!ctx.get_cached<imgui_interface>().init(ctx))
+    // Phase 2: cubemap shader program (editor:/ assets now compiled)
+    if(!ctx.get_cached<imgui_interface>().init_finalize(ctx))
     {
         print_init_error(ctx);
         return false;

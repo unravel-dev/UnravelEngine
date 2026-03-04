@@ -643,7 +643,8 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
                                       fs::syncer& syncer,
                                       const fs::path& data_dir,
                                       const fs::path& meta_dir,
-                                      bool wait)
+                                      bool wait,
+                                      const on_wait_progress_t& on_progress)
 {
     setup_directory(ctx, syncer);
     auto& am = ctx.get_cached<asset_manager>();
@@ -740,11 +741,16 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
     {
         auto& ts = ctx.get_cached<threader>();
         APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
-        hpp::source_location loc = hpp::source_location::current();
-        ts.pool->wait_all(tpp::priority::category::normal, [loc](const tpp::thread_pool::progress_info& info)
-        {
-            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
-        });
+
+        
+        ts.pool->wait_all(tpp::priority::category::normal,
+                          [&on_progress](const tpp::thread_pool::progress_info& info)
+                          {
+                              if(on_progress)
+                              {
+                                  on_progress(info.current_job, info.total_jobs, info.name);
+                              }
+                          });
     }
 }
 
@@ -753,7 +759,8 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
                                        fs::syncer& syncer,
                                        const fs::path& meta_dir,
                                        const fs::path& cache_dir,
-                                       bool wait)
+                                       bool wait,
+                                       const on_wait_progress_t& on_progress)
 {
     setup_directory(ctx, syncer);
 
@@ -805,10 +812,16 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         auto& ts = ctx.get_cached<threader>();
         APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
         hpp::source_location loc = hpp::source_location::current();
-        ts.pool->wait_all(tpp::priority::category::normal, [loc](const tpp::thread_pool::progress_info& info)
-        {
-            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
-        });
+        ts.pool->wait_all(tpp::priority::category::normal,
+                          [loc, &on_progress](const tpp::thread_pool::progress_info& info)
+                          {
+                              APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(),
+                                               "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
+                              if(on_progress)
+                              {
+                                  on_progress(info.current_job, info.total_jobs, info.name);
+                              }
+                          });
     }
 
     watch_synced<gfx::texture>(ctx, watchers, cache_dir);
@@ -857,14 +870,14 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
     }
 }
 
-auto asset_watcher::init(rtti::context& ctx) -> bool
+auto asset_watcher::init(rtti::context& ctx, const on_wait_progress_t& on_progress) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     auto& ev = ctx.get_cached<events>();
     ev.on_os_event.connect(sentinel_, 1000, this, &asset_watcher::on_os_event);
 
-    watch_assets(ctx, "engine:/", true);
+    watch_assets(ctx, "engine:/", true, on_progress);
 
     return true;
 }
@@ -877,7 +890,10 @@ auto asset_watcher::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void asset_watcher::watch_assets(rtti::context& ctx, const std::string& protocol, bool wait)
+void asset_watcher::watch_assets(rtti::context& ctx,
+                                 const std::string& protocol,
+                                 bool wait,
+                                 const on_wait_progress_t& on_progress)
 {
     auto& w = watched_protocols_[protocol];
 
@@ -890,14 +906,16 @@ void asset_watcher::watch_assets(rtti::context& ctx, const std::string& protocol
                       w.meta_syncer,
                       fs::resolve_protocol(data_protocol),
                       fs::resolve_protocol(meta_protocol),
-                      wait);
+                      wait,
+                      on_progress);
 
     setup_cache_syncer(ctx,
                        w.watchers,
                        w.cache_syncer,
                        fs::resolve_protocol(meta_protocol),
                        fs::resolve_protocol(cache_protocol),
-                       wait);
+                       wait,
+                       on_progress);
 }
 
 void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protocol)
@@ -912,6 +930,12 @@ void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protoc
 
     auto& am = ctx.get_cached<asset_manager>();
     am.unload_group(protocol);
+}
+
+auto asset_watcher::get_pending_jobs_count(rtti::context& ctx) const -> size_t
+{
+    auto& ts = ctx.get_cached<threader>();
+    return ts.pool->get_jobs_count();
 }
 
 void asset_watcher::recreate_meta_files(rtti::context& ctx, const std::string& protocol)

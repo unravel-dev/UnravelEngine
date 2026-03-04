@@ -18,6 +18,8 @@ public:
 
     void open_project_settings(rtti::context& ctx, const std::string& hint);
 private:
+
+    void on_project_opened(rtti::context& ctx);
     void on_frame_update(rtti::context& ctx, delta_t dt);
     void on_frame_before_render(rtti::context& ctx, delta_t dt);
     void on_frame_render(rtti::context& ctx, delta_t dt);

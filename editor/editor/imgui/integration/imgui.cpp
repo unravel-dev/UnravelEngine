@@ -256,7 +256,9 @@ struct OcornutImguiContext
                         {
                             const float lodEnabled[4] = {float(texture.s.mip), 1.0f, 0.0f, 0.0f};
                             gfx::set_uniform(u_imageLodEnabled, lodEnabled);
-                            program = m_cubemapImageProgram;
+                            program = (m_cubemapImageProgram.idx != gfx::invalid_handle)
+                                          ? m_cubemapImageProgram
+                                          : m_imageProgram;
                         }
 
                         if(texture.s.phandle.idx != gfx::invalid_handle)
@@ -371,12 +373,7 @@ struct OcornutImguiContext
         m_imageProgram = gfx::create_program(gfx::create_embedded_shader(s_embeddedShaders, type, "vs_imgui_image"),
                                              gfx::create_embedded_shader(s_embeddedShaders, type, "fs_imgui_image"),
                                              true);
-        auto& ctx = unravel::engine::context();
-        auto& am = ctx.get_cached<unravel::asset_manager>();
-        auto vs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/vs_imgui_cubemap_image.sc");
-        auto fs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/fs_imgui_cubemap_image.sc");
-
-        m_cubemapImageProgram = gfx::create_program(vs_imgui_cubemap_image.get()->native_handle(), fs_imgui_cubemap_image.get()->native_handle(), false);
+        m_cubemapImageProgram = {gfx::invalid_handle};
 
         m_layout.begin()
             .add(gfx::attribute::Position, 2, gfx::attribute_type::Float)
@@ -515,6 +512,17 @@ struct OcornutImguiContext
         ImGui_ImplOSPP_Init(window, render_callback, swap_callback);
     }
 
+    void createCubemapProgram()
+    {
+        auto& ctx = unravel::engine::context();
+        auto& am = ctx.get_cached<unravel::asset_manager>();
+        auto vs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/vs_imgui_cubemap_image.sc");
+        auto fs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/fs_imgui_cubemap_image.sc");
+        m_cubemapImageProgram = gfx::create_program(vs_imgui_cubemap_image.get()->native_handle(),
+                                                    fs_imgui_cubemap_image.get()->native_handle(),
+                                                    false);
+    }
+
     void destroy()
     {
         for(auto tex : ImGui::GetIO().Fonts->TexList)
@@ -531,7 +539,10 @@ struct OcornutImguiContext
 
         gfx::destroy(u_imageLodEnabled);
         gfx::destroy(m_imageProgram);
-        gfx::destroy(m_cubemapImageProgram);
+        if(m_cubemapImageProgram.idx != gfx::invalid_handle)
+        {
+            gfx::destroy(m_cubemapImageProgram);
+        }
         gfx::destroy(m_program);
 
         m_allocator = nullptr;
@@ -588,6 +599,11 @@ static void memFree(void* _ptr, void* _userData)
 void imguiCreate(unravel::render_window* window, float _fontSize, bx::AllocatorI* _allocator)
 {
     s_ctx.create(window, _fontSize, _allocator);
+}
+
+void imguiCreateCubemapProgram()
+{
+    s_ctx.createCubemapProgram();
 }
 
 void imguiDestroy()

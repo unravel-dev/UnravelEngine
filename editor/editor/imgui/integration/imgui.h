@@ -27,6 +27,7 @@ struct AllocatorI;
 }
 
 void imguiCreate(unravel::render_window* window, float _fontSize = 18.0f, bx::AllocatorI* _allocator = NULL);
+void imguiCreateCubemapProgram();
 void imguiDestroy();
 
 void imguiProcessEvent(os::event& e);

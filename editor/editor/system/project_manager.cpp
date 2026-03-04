@@ -3,6 +3,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <editor/meta/deploy/deploy.hpp>
 #include <editor/meta/settings/settings.hpp>
 #include <editor/meta/system/project_manager.hpp>
@@ -130,6 +131,9 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     {
         editor_actions::new_scene(ctx);
     }
+
+    auto& ev = ctx.get_cached<events>();
+    ev.on_project_opened.emit(ctx);
 
     return true;
 }

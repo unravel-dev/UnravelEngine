@@ -229,6 +229,11 @@ auto imgui_panels::get_style_panel() -> style_panel&
     return *style_panel_;
 }
 
+auto imgui_panels::get_dockspace() -> dockspace&
+{
+    return *cenral_dockspace_;
+}
+
 auto imgui_panels::get_animation_panel() -> animation_panel&
 {
     return *animation_panel_;
