@@ -1683,7 +1683,7 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
         }
     }
 
-    APPLOG_INFO("RmlUi shaders initialized successfully");
+    APPLOG_TRACE("RmlUi shaders initialized successfully");
     return true;
 }
 

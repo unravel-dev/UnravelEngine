@@ -19,7 +19,7 @@ public:
     asset_watcher();
     ~asset_watcher();
 
-    auto init(rtti::context& ctx, const on_wait_progress_t& on_progress = nullptr) -> bool;
+    auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
     void watch_assets(rtti::context& ctx,

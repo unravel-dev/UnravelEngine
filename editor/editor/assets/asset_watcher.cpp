@@ -743,7 +743,7 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
 
         
-        ts.pool->wait_all(tpp::priority::category::normal,
+        ts.pool->wait_all_polling(tpp::priority::category::normal,
                           [&on_progress](const tpp::thread_pool::progress_info& info)
                           {
                               if(on_progress)
@@ -812,11 +812,9 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         auto& ts = ctx.get_cached<threader>();
         APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
         hpp::source_location loc = hpp::source_location::current();
-        ts.pool->wait_all(tpp::priority::category::normal,
+        ts.pool->wait_all_polling(tpp::priority::category::normal,
                           [loc, &on_progress](const tpp::thread_pool::progress_info& info)
                           {
-                              APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(),
-                                               "Job {} - {} / {} completed", info.name, info.current_job, info.total_jobs);
                               if(on_progress)
                               {
                                   on_progress(info.current_job, info.total_jobs, info.name);
@@ -870,14 +868,12 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
     }
 }
 
-auto asset_watcher::init(rtti::context& ctx, const on_wait_progress_t& on_progress) -> bool
+auto asset_watcher::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     auto& ev = ctx.get_cached<events>();
     ev.on_os_event.connect(sentinel_, 1000, this, &asset_watcher::on_os_event);
-
-    watch_assets(ctx, "engine:/", true, on_progress);
 
     return true;
 }
@@ -886,7 +882,6 @@ auto asset_watcher::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    unwatch_assets(ctx, "engine:/");
     return true;
 }
 

@@ -8,12 +8,6 @@
 namespace unravel
 {
 
-struct init_error
-{
-    std::string category;
-    std::string msg;
-};
-
 struct engine
 {
     static auto create(rtti::context& ctx, cmd_line::parser& parser) -> bool;

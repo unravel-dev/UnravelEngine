@@ -2,6 +2,7 @@
 
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/loading_screen.h>
 #include <engine/rendering/renderer.h>
 #include <version/version.h>
 
@@ -19,21 +20,6 @@
 
 namespace unravel
 {
-namespace
-{
-void print_init_error(const rtti::context& ctx)
-{
-    if(ctx.has<init_error>())
-    {
-        const auto& error = ctx.get<init_error>();
-        native::message_box(error.msg,
-                            native::dialog_type::ok,
-                            native::icon_type::error,
-                            error.category);
-    }
-}
-
-}
 
 REFLECTION_REGISTRATION
 {
@@ -76,95 +62,115 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 auto editor::init(const cmd_line::parser& parser) -> bool
 {
     auto& ctx = engine::context();
+    auto& ls = ctx.get_cached<loading_screen>();
+
+    ls.set_on_fail([](const std::string& module, const std::string& message) -> void
+    {
+        native::message_box(message, native::dialog_type::ok, native::icon_type::error, module);
+    });
+    // --- Phase 1: core systems (no ImGui yet, console-only progress) ---
 
     if(!engine::init_core(parser))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!init_window(ctx))
+    ls.begin_module("Window");
+    if(!ls.check(init_window(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    // Phase 1: basic ImGui with embedded shaders/fonts only (no asset dependencies)
-    if(!ctx.get_cached<imgui_interface>().init_basic(ctx))
+    ls.begin_module("Editor UI");
+    if(!ls.check(ctx.get_cached<imgui_interface>().init_basic(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    // Engine assets with progress UI
+    // --- ImGui is now available: register the visual loading screen ---
+
     auto& imgui = ctx.get_cached<imgui_interface>();
-    auto engine_progress = [&imgui, &ctx](size_t completed, size_t total, const std::string& job) -> void
+    ls.set_visualizer([&imgui, &ctx](const loading_screen& screen) -> void
     {
-        imgui.render_loading_frame(ctx, "Compiling engine assets", completed, total, job);
-    };
+        imgui.render_loading_frame(ctx,
+                                   screen.current_module(),
+                                   screen.completed(),
+                                   screen.total(),
+                                   screen.current_job());
+    });
 
-    if(!ctx.get_cached<asset_watcher>().init(ctx, engine_progress))
+
+    // --- Phase 2: engine assets (visual progress bar) ---
+
+    ls.begin_module("Asset Watcher");
+    auto& aw = ctx.get_cached<asset_watcher>();
+    if(!ls.check(aw.init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
+    ls.begin_module("Engine Assets");
+    aw.watch_assets(ctx, "engine:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
+    {
+        ls.progress(completed, total, job);
+    });
+
+
+    // --- Phase 3: engine subsystems (visual module names) ---
 
     if(!engine::init_systems(parser))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    // Editor assets with progress UI
-    {
-        auto& aw = ctx.get_cached<asset_watcher>();
-        auto editor_progress = [&imgui, &ctx](size_t completed, size_t total, const std::string& job) -> void
-        {
-            imgui.render_loading_frame(ctx, "Compiling editor assets", completed, total, job);
-        };
-        aw.watch_assets(ctx, "editor:/", true, editor_progress);
-    }
+    // --- Phase 4: editor assets (visual progress bar) ---
 
-    // Phase 2: cubemap shader program (editor:/ assets now compiled)
-    if(!ctx.get_cached<imgui_interface>().init_finalize(ctx))
+    ls.begin_module("Editor Assets");
+    aw.watch_assets(ctx, "editor:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
     {
-        print_init_error(ctx);
+        ls.progress(completed, total, job);
+    });
+
+    // --- Phase 5: editor subsystems ---
+
+    ls.begin_module("Editor UI Finalize");
+    if(!ls.check(ctx.get_cached<imgui_interface>().init_finalize(ctx)))
+    {
         return false;
     }
 
-    if(!ctx.get_cached<hub>().init(ctx))
+    ls.begin_module("Hub");
+    if(!ls.check(ctx.get_cached<hub>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<editing_manager>().init(ctx))
+    ls.begin_module("Editing");
+    if(!ls.check(ctx.get_cached<editing_manager>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<picking_manager>().init(ctx))
+    ls.begin_module("Picking");
+    if(!ls.check(ctx.get_cached<picking_manager>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<thumbnail_manager>().init(ctx))
+    ls.begin_module("Thumbnails");
+    if(!ls.check(ctx.get_cached<thumbnail_manager>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<project_manager>().init(ctx, parser))
+    ls.begin_module("Project Manager");
+    if(!ls.check(ctx.get_cached<project_manager>().init(ctx, parser)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<version_manager>().init(ctx))
+    ls.begin_module("Version Manager");
+    if(!ls.check(ctx.get_cached<version_manager>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
@@ -186,10 +192,6 @@ auto editor::deinit() -> bool
 {
     auto& ctx = engine::context();
 
-    if(!ctx.get_cached<asset_watcher>().deinit(ctx))
-    {
-        return false;
-    }
 
     if(!ctx.get_cached<thumbnail_manager>().deinit(ctx))
     {
@@ -216,6 +218,12 @@ auto editor::deinit() -> bool
         return false;
     }
 
+    
+    if(!ctx.get_cached<asset_watcher>().deinit(ctx))
+    {
+        return false;
+    }
+
     if(!ctx.get_cached<project_manager>().deinit(ctx))
     {
         return false;
@@ -229,6 +237,7 @@ auto editor::deinit() -> bool
     {
         auto& aw = ctx.get_cached<asset_watcher>();
         aw.unwatch_assets(ctx, "editor:/");
+        aw.unwatch_assets(ctx, "engine:/");
     }
 
     return engine::deinit();

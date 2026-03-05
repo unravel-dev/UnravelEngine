@@ -5,6 +5,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/loading_screen.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/profiler/profiler.h>
 #include <engine/scripting/ecs/components/script_component.h>
@@ -216,10 +217,8 @@ auto script_system::init(rtti::context& ctx) -> bool
 
     if(!validate_paths(mono_paths))
     {
-        auto& error = ctx.add<init_error>();
-        error.category = "Mono C#";
-        error.msg = "Failed to locate Mono C#. Please install it from - https://www.mono-project.com/download/stable/";
-
+        ctx.get_cached<loading_screen>().fail(
+            "Failed to locate Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
         return false;
     }
 
@@ -269,10 +268,8 @@ auto script_system::init(rtti::context& ctx) -> bool
         return true;
     }
 
-    auto& error = ctx.add<init_error>();
-    error.category = "Mono C#";
-    error.msg = "Failed to initialize Mono C#. Please install it from - https://www.mono-project.com/download/stable/";
-
+    ctx.get_cached<loading_screen>().fail(
+        "Failed to initialize Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
     return false;
 }
 

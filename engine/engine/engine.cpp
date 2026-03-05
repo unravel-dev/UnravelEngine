@@ -1,6 +1,7 @@
 #include "engine.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
+#include <engine/loading_screen.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -59,15 +60,6 @@ void update_input_zone(const renderer& rend, input_system& input)
         window_zone.h = int(main_size.h);
 
         input.manager.set_window_zone(window_zone);
-    }
-}
-
-void print_init_error(const rtti::context& ctx)
-{
-    if(ctx.has<init_error>())
-    {
-        const auto& error = ctx.get<init_error>();
-        APPLOG_CRITICAL(error.msg);
     }
 }
 
@@ -139,6 +131,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     serialization::init();
 
     ctx.add<logging>();
+    ctx.add<loading_screen>();
 
     // Install engine crash handlers immediately after logging is available
     crash::install_handlers(crash::crash_handlers{
@@ -175,28 +168,29 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 auto engine::init_core(const cmd_line::parser& parser) -> bool
 {
     auto& ctx = engine::context();
+    auto& ls = ctx.get_cached<loading_screen>();
 
-    if(!ctx.get_cached<threader>().init(ctx))
+    ls.begin_module("Threading");
+    if(!ls.check(ctx.get_cached<threader>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<renderer>().init(ctx, parser))
+    ls.begin_module("Renderer");
+    if(!ls.check(ctx.get_cached<renderer>().init(ctx, parser)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<audio_system>().init(ctx))
+    ls.begin_module("Audio");
+    if(!ls.check(ctx.get_cached<audio_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<asset_manager>().init(ctx))
+    ls.begin_module("Assets");
+    if(!ls.check(ctx.get_cached<asset_manager>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
@@ -206,88 +200,89 @@ auto engine::init_core(const cmd_line::parser& parser) -> bool
 auto engine::init_systems(const cmd_line::parser& parser) -> bool
 {
     auto& ctx = engine::context();
+    auto& ls = ctx.get_cached<loading_screen>();
 
-    if(!ctx.get_cached<ecs>().init(ctx))
+    ls.begin_module("ECS");
+    if(!ls.check(ctx.get_cached<ecs>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<rendering_system>().init(ctx))
+    ls.begin_module("Rendering");
+    if(!ls.check(ctx.get_cached<rendering_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<transform_system>().init(ctx))
+    ls.begin_module("Transforms");
+    if(!ls.check(ctx.get_cached<transform_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<camera_system>().init(ctx))
+    ls.begin_module("Camera");
+    if(!ls.check(ctx.get_cached<camera_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<reflection_probe_system>().init(ctx))
+    ls.begin_module("Reflection Probes");
+    if(!ls.check(ctx.get_cached<reflection_probe_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<skylight_system>().init(ctx))
+    ls.begin_module("Sky Lighting");
+    if(!ls.check(ctx.get_cached<skylight_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<model_system>().init(ctx))
+    ls.begin_module("Models");
+    if(!ls.check(ctx.get_cached<model_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<animation_system>().init(ctx))
+    ls.begin_module("Animation");
+    if(!ls.check(ctx.get_cached<animation_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<physics_system>().init(ctx))
+    ls.begin_module("Physics");
+    if(!ls.check(ctx.get_cached<physics_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<particle_system>().init(ctx))
+    ls.begin_module("Particles");
+    if(!ls.check(ctx.get_cached<particle_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<input_system>().init(ctx))
+    ls.begin_module("Input");
+    if(!ls.check(ctx.get_cached<input_system>().init(ctx)))
     {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!ctx.get_cached<script_system>().init(ctx))
+    ls.begin_module("Scripting");
+    if(!ls.check(ctx.get_cached<script_system>().init(ctx)))
     {
-        print_init_error(ctx);
-        return false;
-    }
-  
-    if(!ctx.get_cached<ui_system>().init(ctx))
-    {
-        print_init_error(ctx);
         return false;
     }
 
-    if(!defaults::init(ctx))
+    ls.begin_module("UI");
+    if(!ls.check(ctx.get_cached<ui_system>().init(ctx)))
     {
-        print_init_error(ctx);
+        return false;
+    }
+
+    ls.begin_module("Defaults");
+    if(!ls.check(defaults::init(ctx)))
+    {
         return false;
     }
 
@@ -420,7 +415,7 @@ auto engine::destroy() -> bool
     ctx.remove<threader>();
     ctx.remove<logging>();
 
-    ctx.remove<init_error>();
+    ctx.remove<loading_screen>();
 
     bool empty = ctx.empty();
     if(!empty)

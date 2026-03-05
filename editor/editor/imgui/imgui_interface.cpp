@@ -78,17 +78,21 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
     auto& present_pass = window->begin_present_pass();
     present_pass.clear();
 
-    imguiBeginFrame(1.0f / 60.0f);
-    draw_loading_overlay(stage, completed, total, current_job);
+    for(int i = 0; i < 2; ++i)
+    {
+        imguiBeginFrame(1.0f / 60.0f);
+        draw_loading_overlay(stage, completed, total, current_job);
+    
+        auto& main_surface = window->get_surface();
+        gfx::render_pass pass("loading_imgui_pass");
+        pass.bind(main_surface.get());
+        imguiEndFrame(pass.id);
+    
+        gfx::render_pass end_pass(gfx::render_pass::get_max_pass_id(), "loading_backbuffer");
+        end_pass.bind();
+        gfx::frame();
+    }
 
-    auto& main_surface = window->get_surface();
-    gfx::render_pass pass("loading_imgui_pass");
-    pass.bind(main_surface.get());
-    imguiEndFrame(pass.id);
-
-    gfx::render_pass end_pass(gfx::render_pass::get_max_pass_id(), "loading_backbuffer");
-    end_pass.bind();
-    gfx::frame();
 }
 
 void imgui_interface::draw_loading_overlay(const std::string& stage,
@@ -133,17 +137,12 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
         ImGui::PushFont(ImGui::Font::Bold);
         auto title_text = "Unravel Engine";
         float title_width = ImGui::CalcTextSize(title_text).x;
-        ImGui::SetCursorPosX((card_width - title_width) * 0.5f);
-        ImGui::TextUnformatted(title_text);
 
-        auto spinner_size = ImGui::GetTextLineHeight();
-
-        ImGui::SameLine();
-        ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner", 
-            ImSpinner::Radius{spinner_size * 0.5f},
-            ImSpinner::Thickness{4.0f},
-            ImSpinner::Color{ImSpinner::white},
-            ImSpinner::Speed{6.0f});
+        ImGui::AlignedItem(0.5f, ImGui::GetContentRegionAvail().x, title_width, [&]() 
+        {
+            ImGui::TextUnformatted(title_text);
+        });
+      
         ImGui::PopFont();
 
         ImGui::Spacing();
@@ -161,6 +160,17 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
         // Stage name
         ImGui::PushFont(ImGui::Font::Medium);
         ImGui::TextUnformatted(stage.c_str());
+
+        auto spinner_size = ImGui::GetTextLineHeight();
+
+        ImGui::SameLine();
+        ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, spinner_size, [&]() {
+        ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner", 
+                ImSpinner::Radius{spinner_size * 0.5f},
+                ImSpinner::Thickness{4.0f},
+                ImSpinner::Color{ImSpinner::white},
+                ImSpinner::Speed{6.0f});
+        });
         ImGui::PopFont();
 
         ImGui::Spacing();
@@ -194,14 +204,7 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
 
         ImGui::Spacing();
 
-        // Progress count -- right-aligned
-        auto progress_text = fmt::format("{} / {}", completed, total);
-        float count_width = ImGui::CalcTextSize(progress_text.c_str()).x;
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - count_width);
-        ImGui::TextUnformatted(progress_text.c_str());
-        ImGui::PopStyleColor();
-
+        
         // Current job name
         if(!current_job.empty())
         {
@@ -209,6 +212,20 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
             ImGui::TextWrapped("%s", current_job.c_str());
             ImGui::PopStyleColor();
         }
+
+        if(total > 0)
+        {
+            ImGui::SameLine();
+            // Progress count -- right-aligned
+            auto progress_text = fmt::format("{} / {}", completed, total);
+            float count_width = ImGui::CalcTextSize(progress_text.c_str()).x;
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
+            ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, count_width, [&]() {
+                ImGui::TextUnformatted(progress_text.c_str());
+            });
+            ImGui::PopStyleColor();
+        }
+
     }
     ImGui::EndChild();
     ImGui::PopStyleColor(2);
