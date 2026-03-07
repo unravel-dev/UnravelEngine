@@ -656,10 +656,10 @@ vec3 GenerateReflectionRay(vec3 V, vec3 N, float roughness, vec2 texCoord, uint 
 	roughness = mix(0.0, MAX_ROUGHNESS, roughness);
 	
 #if HAMMERSLEY_TYPE == 1
-	vec2 Noise;
+	//vec2 Noise;
 	vec2 scaled_texcoord = texCoord * u_viewRect.zw;
-	Noise.x = InterleavedGradientNoise( scaled_texcoord, float(frame_index) );
-	Noise.y = InterleavedGradientNoise( scaled_texcoord, float(frame_index * 117) );
+	//Noise.x = InterleavedGradientNoise( scaled_texcoord, float(frame_index) );
+	//Noise.y = InterleavedGradientNoise( scaled_texcoord, float(frame_index * 117) );
 	uvec2 Random = Rand3DPCG16( ivec3( scaled_texcoord, frame_index ) ).xy;
 	vec2 E = Hammersley16( i, num_rays, Random );
 #else

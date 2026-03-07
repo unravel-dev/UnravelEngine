@@ -190,7 +190,9 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, col_framebg_hovered);
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, col_framebg_active);
 
+        ImGui::PushFont(ImGui::Font::SemiBold);
         open = ImGui::CollapsingHeader(fmt::format("     {}", name).c_str(), nullptr, ImGuiTreeNodeFlags_AllowOverlap);
+        ImGui::PopFont();
 
         ImGui::OpenPopupOnItemClick(popup_str);
         ImGui::PopStyleColor(3);

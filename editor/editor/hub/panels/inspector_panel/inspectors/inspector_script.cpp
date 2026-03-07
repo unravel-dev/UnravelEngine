@@ -1,6 +1,7 @@
 #include "inspector_script.h"
 #include "editor/imgui/integration/imgui.h"
 #include "entt/core/any.hpp"
+#include "imgui/imgui.h"
 #include "inspectors.h"
 #include <engine/assets/asset_manager.h>
 #include <monopp/mono_field_invoker.h>
@@ -2095,6 +2096,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
         bool include_base = true;
         auto fields = type.get_fields(      include_base);
+        int i = 0;
         for(auto& field : fields)
         {
             bool inspect_predicate = field.get_visibility() == mono::visibility::vis_public;
@@ -2119,8 +2121,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 {
                     ImGui::PushFont(ImGui::Font::Bold);
                     {
-                        ImGui::NewLine();
-                        ImGui::Text("%s", header.c_str());
+                        if(i != 0)
+                        {
+                            ImGui::NewLine();
+                        }
+                        ImGui::SeparatorText( header.c_str());
                         ImGui::Spacing();
                     }
                     ImGui::PopFont();
@@ -2225,6 +2230,8 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 override_ctx.pop_segment();
             }
             ImGui::PopReadonly();
+
+            i++;
         }
 
         using mono_property_inspector = std::function<inspect_result(rtti::context&,
@@ -2326,8 +2333,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 {
                     ImGui::PushFont(ImGui::Font::Bold);
                     {
-                        ImGui::NewLine();
-                        ImGui::Text("%s", header.c_str());
+                        if(i != 0)
+                        {
+                            ImGui::NewLine();
+                        }
+                        ImGui::SeparatorText(header.c_str());
                         ImGui::Spacing();
                     }
                     ImGui::PopFont();
@@ -2430,6 +2440,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 override_ctx.pop_segment();
             }
             ImGui::PopReadonly();
+            i++;
         }
     }
     else

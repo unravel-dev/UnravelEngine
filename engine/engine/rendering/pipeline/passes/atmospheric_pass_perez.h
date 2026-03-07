@@ -150,14 +150,22 @@ public:
         // [1.9 - 10.0f]
         float turbidity = 1.9f;
 
+        /// Cloud mode: 0=none, 1=flat, 2=volumetric.
+        int cloud_mode = 2;
         /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
-        float cloud_coverage = 0.45f;
-        /// Cloud layer altitude in world units. Higher = smaller clouds, further apart.
-        float cloud_altitude = 3000.0f;
+        float cloud_coverage = 0.6f;
+        /// Cloud base altitude in world units. Vol: slab bottom. Flat: projection height.
+        float cloud_base_altitude = 27500.0f;
+        /// Cloud top altitude in world units. Vol: slab top. Flat: ignored.
+        float cloud_top_altitude = 35000.0f;
         /// Accumulated elapsed time (seconds) for cloud animation.
         float cloud_time = 0.0f;
         /// Cloud density/opacity multiplier.
         float cloud_density = 1.0f;
+        /// Beer-Lambert extinction coefficient [0.01-0.5].
+        float cloud_absorption = 0.08f;
+        /// Light absorption / self-shadow strength [0.01-0.5].
+        float cloud_light_absorption = 0.10f;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
     };
@@ -178,6 +186,9 @@ private:
             cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_cloudTex, "s_cloudTex", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_sunLuminance;
@@ -188,17 +199,49 @@ private:
         gfx::program::uniform_ptr u_parameters;
         gfx::program::uniform_ptr u_perezCoeff;
         gfx::program::uniform_ptr u_cloudParams;
+        gfx::program::uniform_ptr u_cloudParams2;
+        gfx::program::uniform_ptr s_cloudTex;
+        gfx::program::uniform_ptr s_cloudNoise2D;
 
         std::unique_ptr<gpu_program> program;
 
     } atmospheric_program_;
+
+    struct cloud_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudHistory, "s_cloudHistory", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_cloudFrame, "u_cloudFrame", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", gfx::uniform_type::Mat4);
+        }
+
+        gfx::program::uniform_ptr u_skyLuminanceXYZ;
+        gfx::program::uniform_ptr u_sunDirection;
+        gfx::program::uniform_ptr u_parameters;
+        gfx::program::uniform_ptr u_perezCoeff;
+        gfx::program::uniform_ptr u_cloudParams;
+        gfx::program::uniform_ptr u_cloudParams2;
+        gfx::program::uniform_ptr u_cloudFrame;
+        gfx::program::uniform_ptr u_prevViewProj;
+        gfx::program::uniform_ptr s_cloudNoise;
+        gfx::program::uniform_ptr s_cloudHistory;
+
+        std::unique_ptr<gpu_program> program;
+
+    } cloud_program_;
 
 
     std::unique_ptr<gfx::vertex_buffer> vb_;
     std::unique_ptr<gfx::index_buffer> ib_;
 
     detail::sun_controller sun_;
-
-
 };
 } // namespace unravel

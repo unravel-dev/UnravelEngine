@@ -272,6 +272,15 @@ struct IMGUI_API ImRange
 IMGUI_API int PlotEx(ImGuiPlotType plot_type, const char* label, ImRange (*values_getter)(void* data, int idx), void* data, int values_count, int values_offset, const char* overlay_text, float scale_min, float scale_max, const ImVec2& size_arg);
 
 
+// A collapsing widget whose header looks like a SeparatorText.
+// Returns true when open (content should be drawn). No matching End call needed.
+// State is persisted per label ID using ImGuiStorage.
+// Supported flags:
+//   ImGuiTreeNodeFlags_DefaultOpen  - start expanded (default)
+//   ImGuiTreeNodeFlags_Leaf         - no arrow, always returns true (non-collapsible)
+IMGUI_API bool CollapsingSection(const char* label,
+                                 ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen);
+
 IMGUI_API bool ReorderableList(
     const char* label,
     int item_count,

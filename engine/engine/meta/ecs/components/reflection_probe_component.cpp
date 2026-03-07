@@ -30,7 +30,7 @@ REFLECT(reflection_probe_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "faces_per_frame"},
             entt::attribute{"pretty_name", "Faces Per Frame"},
-            entt::attribute{"min", 1},
+            entt::attribute{"min", 0},
             entt::attribute{"max", 6},
         })
         .data<&reflection_probe_component::set_apply_prefilter, &reflection_probe_component::get_apply_prefilter>("apply_prefilter"_hs)

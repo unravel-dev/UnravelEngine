@@ -1407,7 +1407,6 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 {
     APP_SCOPE_PERF("Rendering/Atmospheric Pass");
 
-    atmospheric_pass::run_params params;
     atmospheric_pass_perez::run_params params_perez;
     atmospheric_pass_skybox::run_params params_skybox;
 
@@ -1443,19 +1442,16 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                 if(light.type == light_type::directional)
                 {
                     const auto& world_transform = transform_comp_ref.get_transform_global();
-                    params.light_direction = world_transform.z_unit_axis();
-                    params.turbidity = light_comp_ref.get_turbidity();
-                    params.cloud_coverage = light_comp_ref.get_cloud_coverage();
-                    params.cloud_altitude = light_comp_ref.get_cloud_altitude();
-                    params.cloud_density = light_comp_ref.get_cloud_density();
-                    params.cloud_time = light_comp_ref.get_cloud_time();
-                    params.sky_brightness = light_comp_ref.get_sky_brightness();
-
+                    
                     params_perez.light_direction = world_transform.z_unit_axis();
                     params_perez.turbidity = light_comp_ref.get_turbidity();
+                    params_perez.cloud_mode = static_cast<int>(light_comp_ref.get_cloud_mode());
                     params_perez.cloud_coverage = light_comp_ref.get_cloud_coverage();
-                    params_perez.cloud_altitude = light_comp_ref.get_cloud_altitude();
+                    params_perez.cloud_base_altitude = light_comp_ref.get_cloud_base_altitude();
+                    params_perez.cloud_top_altitude = light_comp_ref.get_cloud_top_altitude();
                     params_perez.cloud_density = light_comp_ref.get_cloud_density();
+                    params_perez.cloud_absorption = light_comp_ref.get_cloud_absorption();
+                    params_perez.cloud_light_absorption = light_comp_ref.get_cloud_light_absorption();
                     params_perez.cloud_time = light_comp_ref.get_cloud_time();
                     params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
                 }
@@ -1476,14 +1472,11 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
     switch(mode)
     {
-        case skylight_component::sky_mode::perez:
-            atmospheric_pass_perez_.run(lbuffer_depth, c, rview, dt, params_perez);
-            break;
-        case unravel::skylight_component::sky_mode::standard:
-            atmospheric_pass_.run(lbuffer_depth, c, rview, dt, params);
+        case unravel::skylight_component::sky_mode::skybox:
+            atmospheric_pass_skybox_.run(lbuffer_depth, c, rview, dt, params_skybox);
             break;
         default:
-            atmospheric_pass_skybox_.run(lbuffer_depth, c, rview, dt, params_skybox);
+            atmospheric_pass_perez_.run(lbuffer_depth, c, rview, dt, params_perez);
             break;
     }
 

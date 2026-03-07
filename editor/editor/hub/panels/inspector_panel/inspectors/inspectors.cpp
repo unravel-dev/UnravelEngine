@@ -265,7 +265,7 @@ void prefab_override_context::push_segment(const std::string& segment, const std
 
     if(is_path_overridden())
     {
-        ImGui::PushFont(ImGui::Font::Bold);
+        ImGui::PushFont(ImGui::Font::ExtraBold);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
@@ -684,36 +684,34 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
             }
             else if(!is_flattable)
             {
-                
-                // ImGui::PushFont(ImGui::Font::Bold);
-                // {
-                //     ImGui::NewLine();
-                //     ImGui::SeparatorText(pretty_name.c_str());
-                //     ImGui::Spacing();
-                // } 
-                // ImGui::PopFont();
-                // result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
 
                 property_layout_group group(pretty_name);
 
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
                 ImGui::AlignTextToFramePadding();
                 ImGui::BeginGroup();
-                if(ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+
+                ImGui::PushFont(ImGui::Font::SemiBold);
+                bool open = ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                // bool open = ImGui::CollapsingSection(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                ImGui::PopFont();
+                if(open)
                 {
                     ImGui::TreePush(pretty_name.c_str());
+                    ImGui::PushID(pretty_name.c_str());
 
                     result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
 
-                    ImGui::TreePop();
-                    ImGui::TreePop();
+                    ImGui::PopID();
 
-                    ImGui::EndGroup();
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
+                    ImGui::TreePop();
+                    ImGui::TreePop();
                 }
-                else
+                ImGui::EndGroup();
+
+                if(open)
                 {
-                    ImGui::EndGroup();
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
                 }
             }
             else
@@ -975,7 +973,7 @@ auto inspect_array(rtti::context& ctx,
 
     }
     ImGui::EndGroup();
-    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
+    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
 
 
     return result;
@@ -1329,26 +1327,15 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             }
             else
             {
-
-                // ImGui::PushFont(ImGui::Font::Bold);
-                // {
-                //     ImGui::NewLine();
-                //     ImGui::Text("%s", group_name.c_str());
-                //     ImGui::Spacing();
-                // } 
-                // ImGui::PopFont();
-                // for(auto&& prop : props)
-                // {
-                //     ImGui::PushID(i);
-                //     result |= inspect_property(ctx, var, var_proxy, prop);
-                //     ImGui::PopID();
-                //     i++;
-                // }
                 property_layout_group group(group_name);
                 ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
                 ImGui::BeginGroup();
                 ImGui::AlignTextToFramePadding();
-                if(ImGui::TreeNodeEx(group_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+                ImGui::PushFont(ImGui::Font::SemiBold);
+                bool open = ImGui::TreeNodeEx(group_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                // bool open = ImGui::CollapsingSection(group_name.c_str());
+                ImGui::PopFont();
+                if(open)
                 {
                     ImGui::TreePush(group_name.c_str());
                     ImGui::PushID(group_name.c_str());
@@ -1364,13 +1351,12 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                     ImGui::TreePop();
 
                     ImGui::TreePop();
-
-                    ImGui::EndGroup();
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 2.0f);
                 }
-                else
+         
+                ImGui::EndGroup();
+                if(open)
                 {
-                    ImGui::EndGroup();
+                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
                 }
 
             }

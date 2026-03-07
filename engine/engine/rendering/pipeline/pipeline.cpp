@@ -40,7 +40,6 @@ auto pipeline::init(rtti::context& ctx) -> bool
 
     prefilter_pass_.init(ctx);
     blit_pass_.init(ctx);
-    atmospheric_pass_.init(ctx);
     atmospheric_pass_perez_.init(ctx);
     atmospheric_pass_skybox_.init(ctx);
     bloom_pass_.init(ctx);

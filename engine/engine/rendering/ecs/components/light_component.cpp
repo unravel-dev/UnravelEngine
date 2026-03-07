@@ -151,6 +151,16 @@ void skylight_component::set_turbidity(float turbidity)
     turbidity_ = math::clamp(turbidity, 1.9f, 10.0f);
 }
 
+auto skylight_component::get_cloud_mode() const noexcept -> skylight_component::cloud_mode
+{
+    return cloud_mode_;
+}
+
+void skylight_component::set_cloud_mode(cloud_mode mode)
+{
+    cloud_mode_ = mode;
+}
+
 auto skylight_component::get_cloud_coverage() const noexcept -> float
 {
     return cloud_coverage_;
@@ -161,14 +171,24 @@ void skylight_component::set_cloud_coverage(float coverage)
     cloud_coverage_ = math::clamp(coverage, 0.0f, 1.0f);
 }
 
-auto skylight_component::get_cloud_altitude() const noexcept -> float
+auto skylight_component::get_cloud_base_altitude() const noexcept -> float
 {
-    return cloud_altitude_;
+    return cloud_base_altitude_;
 }
 
-void skylight_component::set_cloud_altitude(float altitude)
+void skylight_component::set_cloud_base_altitude(float altitude)
 {
-    cloud_altitude_ = math::max(altitude, 0.0f);
+    cloud_base_altitude_ = math::max(altitude, 100.0f);
+}
+
+auto skylight_component::get_cloud_top_altitude() const noexcept -> float
+{
+    return cloud_top_altitude_;
+}
+
+void skylight_component::set_cloud_top_altitude(float altitude)
+{
+    cloud_top_altitude_ = math::max(altitude, cloud_base_altitude_ + 100.0f);
 }
 
 auto skylight_component::get_cloud_speed() const noexcept -> float
@@ -178,7 +198,7 @@ auto skylight_component::get_cloud_speed() const noexcept -> float
 
 void skylight_component::set_cloud_speed(float speed)
 {
-    cloud_speed_ = math::max(speed, 0.0f);
+    cloud_speed_ = math::clamp(speed, 0.0f, 200.0f);
 }
 
 auto skylight_component::get_cloud_density() const noexcept -> float
@@ -189,6 +209,26 @@ auto skylight_component::get_cloud_density() const noexcept -> float
 void skylight_component::set_cloud_density(float density)
 {
     cloud_density_ = math::max(density, 0.0f);
+}
+
+auto skylight_component::get_cloud_absorption() const noexcept -> float
+{
+    return cloud_absorption_;
+}
+
+void skylight_component::set_cloud_absorption(float absorption)
+{
+    cloud_absorption_ = math::clamp(absorption, 0.01f, 0.5f);
+}
+
+auto skylight_component::get_cloud_light_absorption() const noexcept -> float
+{
+    return cloud_light_absorption_;
+}
+
+void skylight_component::set_cloud_light_absorption(float absorption)
+{
+    cloud_light_absorption_ = math::clamp(absorption, 0.01f, 0.5f);
 }
 
 auto skylight_component::get_irradiance_intensity() const noexcept -> float

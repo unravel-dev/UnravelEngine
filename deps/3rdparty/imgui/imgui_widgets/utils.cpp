@@ -1409,4 +1409,95 @@ void OpenInShell(const char* url)
         g.PlatformIO.Platform_OpenInShellFn(&g, url);
     }
 }
+
+bool CollapsingSection(const char* label, ImGuiTreeNodeFlags flags)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = g.CurrentWindow;
+    if(window->SkipItems)
+        return false;
+
+    ImGuiStyle& style = g.Style;
+    const bool is_leaf = (flags & ImGuiTreeNodeFlags_Leaf) != 0;
+
+    const ImGuiID id = window->GetID(label);
+    ImGuiStorage* storage = GetStateStorage();
+    const bool default_open = (flags & ImGuiTreeNodeFlags_DefaultOpen) != 0;
+    bool is_open = is_leaf ? true : storage->GetBool(id, default_open);
+
+    const char* label_end = FindRenderedTextEnd(label);
+    const ImVec2 label_size = CalcTextSize(label, label_end, false);
+    const ImVec2 pos = window->DC.CursorPos;
+    const ImVec2 padding = style.SeparatorTextPadding;
+    const float separator_thickness = style.SeparatorTextBorderSize;
+
+    // Leaf nodes omit the arrow; collapsible nodes prefix arrow + inner spacing
+    const float arrow_w = is_leaf ? 0.0f : g.FontSize + style.ItemInnerSpacing.x;
+    const float combined_w = arrow_w + label_size.x;
+
+    const ImVec2 min_size(combined_w + padding.x * 2.0f,
+                          ImMax(label_size.y + padding.y * 2.0f, separator_thickness));
+    const ImRect bb(pos, ImVec2(window->WorkRect.Max.x, pos.y + min_size.y));
+    const float text_baseline_y =
+        ImTrunc((bb.GetHeight() - label_size.y) * style.SeparatorTextAlign.y + 0.99999f);
+
+    ItemSize(min_size, text_baseline_y);
+    if(!ItemAdd(bb, id))
+        return is_open;
+
+    bool hovered = false;
+    if(!is_leaf)
+    {
+        bool held;
+        const bool clicked = ButtonBehavior(bb, id, &hovered, &held);
+        if(clicked)
+        {
+            is_open = !is_open;
+            storage->SetBool(id, is_open);
+        }
+        if(hovered)
+            SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+
+    // Horizontal position of the block, aligned per SeparatorTextAlign.x
+    const float label_avail_w = ImMax(0.0f, (bb.Max.x - pos.x) - padding.x * 2.0f);
+    const float block_x =
+        pos.x + padding.x +
+        ImMax(0.0f, (label_avail_w - combined_w) * style.SeparatorTextAlign.x);
+
+    const ImVec2 label_pos(block_x + arrow_w, pos.y + text_baseline_y);
+
+    // Separator lines flanking the block
+    const float seps_y = ImTrunc((bb.Min.y + bb.Max.y) * 0.5f + 0.99999f);
+    const float sep1_x2 = block_x - style.ItemSpacing.x;
+    const float sep2_x1 = block_x + combined_w + style.ItemSpacing.x;
+    const ImU32 sep_col =
+        GetColorU32(hovered ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator);
+    if(separator_thickness > 0.0f)
+    {
+        if(sep1_x2 > pos.x)
+            window->DrawList->AddLine(ImVec2(pos.x, seps_y), ImVec2(sep1_x2, seps_y),
+                                      sep_col, separator_thickness);
+        if(bb.Max.x > sep2_x1)
+            window->DrawList->AddLine(ImVec2(sep2_x1, seps_y), ImVec2(bb.Max.x, seps_y),
+                                      sep_col, separator_thickness);
+    }
+
+    const ImU32 text_col = GetColorU32(ImGuiCol_Text);
+    if(!is_leaf)
+    {
+        const ImVec2 arrow_pos(block_x,
+                               pos.y + text_baseline_y + (label_size.y - g.FontSize) * 0.5f);
+        RenderArrow(window->DrawList, arrow_pos, text_col,
+                    is_open ? ImGuiDir_Down : ImGuiDir_Right, 1.0f);
+    }
+
+    if(label_size.x > 0.0f)
+        RenderTextEllipsis(window->DrawList, label_pos,
+                           ImVec2(bb.Max.x, bb.Max.y + style.ItemSpacing.y),
+                           bb.Max.x, label, label_end, &label_size);
+
+    return is_open;
+}
+
 } // namespace ImGui

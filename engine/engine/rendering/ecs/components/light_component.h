@@ -88,12 +88,12 @@ public:
      */
     enum class sky_mode
     {
-        /// Standard sky mode
-        standard,
+        /// Reserved sky mode
+        reserved_0 = 0,
         /// Perez sky mode
-        perez,
+        perez = 1,
         /// Skybox
-        skybox,
+        skybox = 2,
     };
 
     /**
@@ -106,6 +106,16 @@ public:
         uniform,
         /// Normal-dependent via spherical harmonics
         normal_dependent,
+    };
+
+    enum class cloud_mode
+    {
+        /// No clouds rendered
+        none = 0,
+        /// Flat projected clouds (cheap, single-sample scattering)
+        flat = 1,
+        /// Volumetric raymarched clouds (full scattering, half-res with temporal)
+        volumetric = 2,
     };
 
     /**
@@ -133,6 +143,18 @@ public:
     void set_turbidity(float turbidity);
 
     /**
+     * @brief Gets the cloud rendering mode.
+     * @return The current cloud mode (none, flat, volumetric).
+     */
+    auto get_cloud_mode() const noexcept -> cloud_mode;
+
+    /**
+     * @brief Sets the cloud rendering mode.
+     * @param[in] mode The cloud mode to set.
+     */
+    void set_cloud_mode(cloud_mode mode);
+
+    /**
      * @brief Gets the cloud coverage value.
      * @return The current cloud coverage value [0.0 = clear sky, 1.0 = overcast].
      */
@@ -145,16 +167,28 @@ public:
     void set_cloud_coverage(float coverage);
 
     /**
-     * @brief Gets the cloud altitude value.
-     * @return The current cloud altitude value in world units.
+     * @brief Gets the cloud base altitude in world units.
+     * @return The current cloud base altitude. Volumetric: slab bottom. Flat: projection height.
      */
-    auto get_cloud_altitude() const noexcept -> float;
+    auto get_cloud_base_altitude() const noexcept -> float;
 
     /**
-     * @brief Sets the cloud altitude value.
-     * @param[in] altitude The cloud altitude value to set, in world units.
+     * @brief Sets the cloud base altitude.
+     * @param[in] altitude The cloud base altitude to set, in world units.
      */
-    void set_cloud_altitude(float altitude);
+    void set_cloud_base_altitude(float altitude);
+
+    /**
+     * @brief Gets the cloud top altitude in world units (volumetric slab top).
+     * @return The current cloud top altitude. Flat clouds ignore this.
+     */
+    auto get_cloud_top_altitude() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud top altitude. Must be greater than base altitude.
+     * @param[in] altitude The cloud top altitude to set, in world units.
+     */
+    void set_cloud_top_altitude(float altitude);
 
     /**
      * @brief Gets the cloud speed multiplier.
@@ -179,6 +213,30 @@ public:
      * @param[in] density The cloud density multiplier to set.
      */
     void set_cloud_density(float density);
+
+    /**
+     * @brief Gets the cloud absorption coefficient (Beer-Lambert extinction).
+     * @return The current absorption value. Higher = more opaque clouds.
+     */
+    auto get_cloud_absorption() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud absorption coefficient.
+     * @param[in] absorption The absorption to set, in the range [0.01, 0.5].
+     */
+    void set_cloud_absorption(float absorption);
+
+    /**
+     * @brief Gets the cloud light absorption (self-shadow strength).
+     * @return The current light absorption value. Higher = darker shadowed sides.
+     */
+    auto get_cloud_light_absorption() const noexcept -> float;
+
+    /**
+     * @brief Sets the cloud light absorption (self-shadow strength).
+     * @param[in] absorption The light absorption to set, in the range [0.01, 0.5].
+     */
+    void set_cloud_light_absorption(float absorption);
 
     /**
      * @brief Gets the irradiance intensity (strength of indirect diffuse).
@@ -248,7 +306,11 @@ public:
 
     void update(delta_t dt)
     {
-        cloud_time_ += dt.count() * cloud_speed_;
+        // cloud_speed_ is in km/h. Convert to the noise-UV time scale used by
+        // the shader (cloud_time * 0.5 UV/s). Calibrated so that 10-20 km/h =
+        // gentle natural drift, ~100 km/h = strong visible wind.
+        constexpr float kmh_to_time_scale = 1.0f / 500.0f;
+        cloud_time_ += dt.count() * cloud_speed_ * kmh_to_time_scale;
     }
 
 private:
@@ -262,29 +324,31 @@ private:
      */
     float turbidity_{1.9};
 
-    /**
-     * @brief Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
-     */
+    /// Cloud rendering mode (none / flat / volumetric).
+    cloud_mode cloud_mode_{cloud_mode::volumetric};
+
+    /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
     float cloud_coverage_{0.6f};
 
-    /**
-     * @brief Cloud layer altitude in world units. Higher = smaller clouds, further apart.
-     */
-    float cloud_altitude_{7500.0f};
+    /// Cloud base altitude in world units. Vol: slab bottom. Flat: projection height.
+    float cloud_base_altitude_{27500.0f};
 
-    /**
-     * @brief Wind speed multiplier for cloud animation.
-     */
-    float cloud_speed_{1.0f};
+    /// Cloud top altitude in world units. Vol: slab top. Flat: ignored.
+    float cloud_top_altitude_{45000.0f};
 
-    /**
-     * @brief Cloud density/opacity multiplier.
-     */
+    /// Cloud wind speed in km/h [0–200]. ~10 = gentle drift, ~50 = strong wind, ~100+ = storm.
+    float cloud_speed_{20.0f};
+
+    /// Cloud density/opacity multiplier.
     float cloud_density_{1.0f};
 
-    /**
-     * @brief Accumulated time for cloud animation.
-     */
+    /// Beer-Lambert extinction coefficient [0.01-0.5]. Higher = more opaque.
+    float cloud_absorption_{0.08f};
+
+    /// Light absorption / self-shadow strength [0.01-0.5]. Higher = darker shadows.
+    float cloud_light_absorption_{0.10f};
+
+    /// Accumulated time for cloud animation.
     float cloud_time_{0.0f};
 
     /**

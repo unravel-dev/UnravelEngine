@@ -229,9 +229,10 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
     ImGui::AlignTextToFramePadding();
+    // ImGui::PushFont(ImGui::Font::Bold);
     open_ = ImGui::TreeNodeEx(name_.c_str(), flags | ImGuiTreeNodeFlags_AllowOverlap);
-
-               
+    // open_ = ImGui::CollapsingSection(name_.c_str(), flags | ImGuiTreeNodeFlags_AllowOverlap);
+    // ImGui::PopFont();           
     
     if(ImGui::BeginPopupContextItem(("Property Context Menu##" + name_).c_str()))
     {

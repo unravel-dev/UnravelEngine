@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/cloud_noise.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
@@ -232,6 +233,7 @@ auto defaults::deinit(rtti::context& ctx) -> bool
     }
     material::default_color_map() = {};
     material::default_normal_map() = {};
+    cloud_noise_textures::get().clear();
     return true;
 }
 
@@ -363,6 +365,8 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
 
         model::fallback_material() = asset;
     }
+
+    cloud_noise_textures::get().generate();
 
     return true;
 }

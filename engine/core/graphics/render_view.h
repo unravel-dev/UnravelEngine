@@ -22,9 +22,13 @@ public:
     auto tex_get(const hpp::string_view& id) const -> const texture::ptr&;
     auto tex_safe_get(const hpp::string_view& id) const -> const texture::ptr&;
 
+    auto data_get_or_emplace(const hpp::string_view& id, uint32_t default_val = 0) -> uint32_t&;
+    auto data_get(const hpp::string_view& id, uint32_t default_val = 0) const -> uint32_t;
+
 private:
     std::map<std::string, texture::ptr, std::less<>> textures_;
     std::map<std::string, frame_buffer::ptr, std::less<>> fbos_;
+    std::map<std::string, uint32_t, std::less<>> data_;
 };
 
 } // namespace gfx

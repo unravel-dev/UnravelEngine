@@ -66,4 +66,26 @@ auto render_view::fbo_safe_get(const hpp::string_view& id) const -> const frame_
     return empty;
 }
 
+auto render_view::data_get_or_emplace(const hpp::string_view& id, uint32_t default_val) -> uint32_t&
+{
+    auto it = data_.find(id);
+    if(it != data_.end())
+    {
+        return it->second;
+    }
+
+    return data_.emplace(std::string(id), default_val).first->second;
+}
+
+auto render_view::data_get(const hpp::string_view& id, uint32_t default_val) const -> uint32_t
+{
+    auto it = data_.find(id);
+    if(it != data_.end())
+    {
+        return it->second;
+    }
+
+    return default_val;
+}
+
 } // namespace gfx

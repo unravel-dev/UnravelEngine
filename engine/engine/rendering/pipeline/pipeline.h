@@ -10,7 +10,6 @@
 
 
 #include "passes/assao_pass.h"
-#include "passes/atmospheric_pass.h"
 #include "passes/atmospheric_pass_perez.h"
 #include "passes/atmospheric_pass_skybox.h"
 #include "passes/blit_pass.h"
@@ -194,7 +193,6 @@ public:
 protected:
     prefilter_pass prefilter_pass_{};
     blit_pass blit_pass_{};
-    atmospheric_pass atmospheric_pass_{};
     atmospheric_pass_perez atmospheric_pass_perez_{};
     atmospheric_pass_skybox atmospheric_pass_skybox_{};
     assao_pass assao_pass_{};

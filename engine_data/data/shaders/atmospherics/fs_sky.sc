@@ -1,21 +1,48 @@
-$input v_skyColor, v_screenPos, v_viewDir
+$input v_skyColor, v_clipPos, v_viewDir
 
 #include "../common.sh"
 
 uniform vec4 	u_parameters; // x - sun size, y - sun bloom, z - exposition, w - time
 uniform vec4 	u_sunDirection;
 uniform vec4 	u_sunLuminance;
-uniform vec4 	u_cloudParams; // x - coverage, y - altitude, z - speed, w - density
+uniform vec4 	u_cloudParams;  // x - coverage, y - base_altitude, z - time, w - density
+uniform vec4 	u_cloudParams2; // x - absorption, y - light_absorption, z - top_altitude, w - cloud_mode
 
 #define u_sun_size u_parameters.x
 #define u_sun_bloom u_parameters.y
 #define u_exposition u_parameters.z
 #define u_time u_parameters.w
 
-#define u_cloud_coverage u_cloudParams.x
-#define u_cloud_altitude u_cloudParams.y
-#define u_cloud_time u_cloudParams.z  // accumulated seconds, pre-scaled by speed on CPU
-#define u_cloud_density u_cloudParams.w
+#define u_cloud_coverage         u_cloudParams.x
+#define u_cloud_base_altitude    u_cloudParams.y
+#define u_cloud_time             u_cloudParams.z
+#define u_cloud_density          u_cloudParams.w
+
+#define u_cloud_absorption       u_cloudParams2.x
+#define u_cloud_light_absorption u_cloudParams2.y
+#define u_cloud_top_altitude     u_cloudParams2.z
+#define u_cloud_mode             u_cloudParams2.w
+
+#define CLOUD_MODE_NONE       0.0
+#define CLOUD_MODE_FLAT       1.0
+#define CLOUD_MODE_VOLUMETRIC 2.0
+
+SAMPLER2D(s_cloudTex, 0);
+SAMPLER2D(s_cloudNoise2D, 1);
+
+#define CLOUD_FLAT_PI            3.14159265
+#define CLOUD_FLAT_NOISE_PERIOD  6.0
+#define CLOUD_FLAT_WIND_SPEED    0.3
+#define CLOUD_FLAT_BASE_DENSITY  0.04
+#define CLOUD_FLAT_THICKNESS     1200.0
+#define CLOUD_FLAT_HG_FORWARD    0.45
+#define CLOUD_FLAT_HG_BACK      -0.15
+#define CLOUD_FLAT_HG_BLEND      0.65
+#define CLOUD_FLAT_AMBIENT       0.22
+#define CLOUD_FLAT_SUN_INTENSITY 16.0
+#define CLOUD_FLAT_HORIZON_FADE  0.05
+#define CLOUD_FLAT_DOME_EPS      0.2
+#define CLOUD_FLAT_UV_SCALE      0.00008
 
 // ----------------------------- Dithering helpers -----------------------------
 
@@ -198,108 +225,115 @@ vec3 render_stars(vec3 sky_color, vec3 view_dir, vec3 light_dir)
     return sky_color + star_contribution;
 }
 
-// ----------------------------- Cloud rendering ------------------------------
+// ----------------------------- Flat cloud scattering model -------------------
+// Adapted from the volumetric path (fs_cloud.sc) to run on a single projected
+// plane. Same phase function, extinction, and color model so both paths produce
+// visually consistent results at identical parameter values.
 
-vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir, float sun_height_01)
+float cloud_hg(float cos_theta, float g)
 {
-    // Only render clouds above the horizon
+    float g2 = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cos_theta;
+    return (1.0 - g2) / (4.0 * CLOUD_FLAT_PI * denom * sqrt(denom));
+}
+
+float cloud_dual_lobe_phase(float cos_theta)
+{
+    float hg_fwd  = cloud_hg(cos_theta, CLOUD_FLAT_HG_FORWARD);
+    float hg_back = cloud_hg(cos_theta, CLOUD_FLAT_HG_BACK);
+    return mix(hg_back, hg_fwd, CLOUD_FLAT_HG_BLEND);
+}
+
+float cloud_powder(float density, float cos_theta)
+{
+    float powder = 1.0 - exp(-density * 2.0);
+    float backlit = saturate(-cos_theta * 0.5 + 0.5);
+    return mix(1.0, powder * 2.0, backlit * 0.3);
+}
+
+vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
+{
     if(eye_dir.y < 0.01)
     {
         return sky_color;
     }
 
-    // ---- Cloud UV with dome curvature ----
-    // Standard flat-plane intersection divides by eye_dir.y, which goes to
-    // infinity at the horizon. Adding a small curvature term bends the flat
-    // plane into a dome: at zenith (y=1) the effect is negligible, but near
-    // the horizon (y→0) it prevents infinite stretching and makes clouds
-    // appear to curve away naturally.
-    // Smooth dome curvature: sqrt(y^2 + eps^2) acts as a soft floor on y.
-    // At zenith (y=1): sqrt(1+0.01) ≈ 1.005 → virtually unchanged.
-    // At 45° (y=0.7): sqrt(0.49+0.01) ≈ 0.707 → virtually unchanged.
-    // At horizon (y→0): sqrt(0+0.01) = 0.1 → finite instead of infinity.
-    // Only the last few degrees near the horizon are affected.
-    float dome_eps = 0.2;
-    float y_dome = sqrt(eye_dir.y * eye_dir.y + dome_eps * dome_eps);
-    float t = u_cloud_altitude / y_dome;
-    vec2 cloud_uv = eye_dir.xz * t;
+    // Dome-projected UV (soft floor on y prevents horizon blow-up)
+    float y_dome = sqrt(eye_dir.y * eye_dir.y + CLOUD_FLAT_DOME_EPS * CLOUD_FLAT_DOME_EPS);
+    float t_hit  = u_cloud_base_altitude / y_dome;
+    vec2  cloud_world = eye_dir.xz * t_hit;
 
-    // Animate with wind
-    float wind_time = u_cloud_time * 0.4;
-    cloud_uv += vec2(wind_time * 12.0, wind_time * 5.0);
+    // World-to-noise UV (same scale factor as volumetric: 0.00008 / period)
+    vec2 uv = cloud_world * CLOUD_FLAT_UV_SCALE / CLOUD_FLAT_NOISE_PERIOD;
 
-    // Scale UVs for cloud size
-    vec2 uv = cloud_uv * 0.0004;
+    // Wind animation: mirrors volumetric cloud_sample_pos() exactly.
+    // Vol: sp += time*speed*dir, then uvw = sp/period  →  net = time*speed*dir/period
+    // Flat: uv is already /period, so we must also divide the offset by period.
+    uv.x += u_cloud_time * CLOUD_FLAT_WIND_SPEED * 10.0 / CLOUD_FLAT_NOISE_PERIOD;
+    uv.y += u_cloud_time * CLOUD_FLAT_WIND_SPEED *  4.0 / CLOUD_FLAT_NOISE_PERIOD;
 
-    // Multi-octave noise for cloud shape
-    float noise = fbm(uv, 5);
+    // ---- Base shape from 2D noise texture (R channel) ----
+    float base_noise = texture2D(s_cloudNoise2D, uv).r;
+    float threshold  = 1.0 - u_cloud_coverage;
+    float density    = smoothstep(threshold, threshold + 0.4, base_noise);
 
-    // Shape the clouds: coverage controls the threshold
-    float threshold = 1.0 - u_cloud_coverage;
-    float cloud = smoothstep(threshold, threshold + 0.25, noise);
-    cloud *= u_cloud_density;
+    if(density < 0.001)
+    {
+        return sky_color;
+    }
 
-    // Fade clouds near the horizon to simulate atmospheric haze
-    float horizon_fade = smoothstep(0.01, 0.15, eye_dir.y);
-    cloud *= horizon_fade;
+    // ---- Detail erosion (same algorithm as volumetric sample_cloud_density_full) ----
+    vec2 detail_uv = uv * 5.0 + vec2(17.3, 41.7) / CLOUD_FLAT_NOISE_PERIOD;
+    vec4 dns       = texture2D(s_cloudNoise2D, detail_uv);
+    float detail   = dns.g * 0.625 + dns.b * 0.25 + dns.a * 0.125;
 
-    // ---- Volumetric density: raw thickness for darker cores, lighter edges ----
-    // 0 at cloud edge (thin), 1 at cloud core (thick) - thick areas absorb more light
-    float raw_density = saturate((noise - threshold) / 0.25);
-    // Detail noise for internal variation: darker and lighter spots within the cloud
-    float detail_noise = fbm(uv * 2.8 + vec2(17.3, 41.7), 4);
-    float detail_variation = mix(0.05, 10.15, detail_noise);
+    float edge_factor = 1.0 - density * density;
+    density = max(0.0, density - detail * 0.35 * edge_factor);
+    density *= u_cloud_density;
 
-    // ---- Cloud lighting ----
+    if(density < 0.001)
+    {
+        return sky_color;
+    }
 
-    // Base brightness from sun angle
-    float ndotl = saturate(dot(vec3(0.0, 1.0, 0.0), light_dir));
+    // ---- Fake light march: sample at sun-offset UV ----
+    // Same formula as volumetric: exp(-density * DENSITY * path * LIGHT_ABSORPT)
+    vec2  sun_uv      = uv + light_dir.xz * 0.0015;
+    float lit_noise   = texture2D(s_cloudNoise2D, sun_uv).r;
+    float lit_density = smoothstep(threshold, threshold + 0.4, lit_noise);
+    float shadow_od   = lit_density * CLOUD_FLAT_BASE_DENSITY * CLOUD_FLAT_THICKNESS * u_cloud_light_absorption;
+    float shadow      = exp(-shadow_od);
+    float ms          = exp(-shadow_od * 0.2) * 0.35;
+    shadow            = max(shadow, ms);
 
-    // Directional shading: offset UV toward the sun to fake light penetration
-    vec2 light_offset = light_dir.xz * 0.002;
-    float noise_lit = fbm(uv + light_offset, 3);
-    float light_diff = saturate(noise - noise_lit);
+    // ---- Phase function (identical to volumetric) ----
+    float cos_theta = dot(eye_dir, light_dir);
+    float phase     = cloud_dual_lobe_phase(cos_theta);
 
-    // Dark side (shadow) and lit side colors - shadow picks up sky blue
-    vec3 cloud_dark = vec3(0.42, 0.48, 0.56);
-    vec3 cloud_lit = vec3(1.0, 1.0, 1.0);
+    // Beer-Lambert: same formula as volumetric per-step extinction
+    // exp(-density * DENSITY_SCALE * effective_thickness * ABSORPT)
+    float optical_depth = density * CLOUD_FLAT_BASE_DENSITY * CLOUD_FLAT_THICKNESS * u_cloud_absorption;
+    float beer          = exp(-optical_depth);
+    float alpha         = 1.0 - beer;
 
-    // At sunset, tint lit side with warm sun color
-    vec3 sunset_tint = mix(vec3(1.0, 0.7, 0.45), vec3(1.0, 1.0, 1.0), sun_height_01);
-    cloud_lit *= sunset_tint;
+    // Powder effect
+    float powder = cloud_powder(density, cos_theta);
 
-    // Also warm up the dark side slightly at sunset (scattered light)
-    cloud_dark = mix(cloud_dark * vec3(1.0, 0.75, 0.6), cloud_dark, sun_height_01);
-
-    // Combine lit and dark based on light difference and overall sun brightness
-    float brightness = mix(0.3, 1.0, ndotl);
-    vec3 cloud_color = mix(cloud_dark, cloud_lit, saturate(light_diff * 2.5 + 0.3)) * brightness;
-
-    // Night darkening: clouds become silhouettes when sun is below horizon
+    // ---- Sun / ambient color (same model as volumetric) ----
+    float sun_height   = saturate(light_dir.y * 2.0 + 0.5);
+    vec3  sunset_tint  = mix(vec3(1.0, 0.7, 0.45), vec3(1.0, 1.0, 1.0), sun_height);
     float night_factor = saturate(-light_dir.y * 3.0 - 0.2);
-    float night_darken = 1.0 - night_factor * 0.90;
-    cloud_color *= night_darken;
+    vec3  sun_color    = sunset_tint * (1.0 - night_factor * 0.9);
+    vec3  ambient      = vec3(0.45, 0.55, 0.75) * CLOUD_FLAT_AMBIENT * (1.0 - night_factor * 0.8);
 
-    // Volumetric darkening: dense core absorbs light, thin edges let it through
-    float volume_shadow = mix(0.35, 1.0, 1.0 - raw_density * 0.85);
-    cloud_color *= volume_shadow * detail_variation;
+    vec3 cloud_color = sun_color * shadow * phase * CLOUD_FLAT_SUN_INTENSITY * powder + ambient;
+    cloud_color     *= u_exposition * 8.0;
 
-    // Silver lining and backlit glow: when sun is behind clouds, they brighten from transmitted light
-    // Fade out at night - no sun to backlight
-    float day_factor = 1.0 - night_factor;
-    float view_sun = saturate(dot(eye_dir, light_dir));
-    // Silver lining: bright halo when looking at sun through thin cloud edges
-    float silver = pow(view_sun, 8.0) * 0.3 * (1.0 - cloud * 0.5) * day_factor;
-    cloud_color += vec3_splat(silver);
-    // Backlit clouds: clouds glow when sun is behind them (realistic light transmission)
-    float backlit_glow = pow(view_sun, 5.0) * cloud * 0.6 * day_factor;
-    cloud_color += backlit_glow * sunset_tint;
+    // Horizon fade
+    float horizon = smoothstep(CLOUD_FLAT_HORIZON_FADE, 0.4, eye_dir.y);
+    alpha *= horizon;
 
-    // Scale cloud color by exposition for HDR consistency
-    cloud_color *= u_exposition * 8.0;
-
-    // Blend clouds over the sky
-    return mix(sky_color, cloud_color, saturate(cloud));
+    return mix(sky_color, cloud_color, saturate(alpha));
 }
 
 // ----------------------------- Main -----------------------------------------
@@ -332,8 +366,22 @@ void main()
     vec3 sun_color = u_sunLuminance.xyz * u_exposition * (sun2 + mie_color);
     color += sun_color;
 
-    // Procedural clouds
-    color = render_clouds(color, viewDir, lightDir, sun_height);
+    // Composite clouds based on cloud_mode
+    if(u_cloud_mode > CLOUD_MODE_NONE + 0.5)
+    {
+        if(u_cloud_mode > CLOUD_MODE_FLAT + 0.5)
+        {
+            // Volumetric: composite half-res pre-pass result
+            vec2 cloud_uv = clipToUv(v_clipPos * 0.5 + 0.5);
+            vec4 cloud_data = texture2D(s_cloudTex, cloud_uv);
+            color = color * cloud_data.a + cloud_data.rgb;
+        }
+        else
+        {
+            // Flat: single-sample scattering on projected dome
+            color = render_clouds(color, viewDir, lightDir);
+        }
+    }
 
     // Zenith gradient: slightly darker/deeper blue toward zenith (matches clear-sky reference)
     float zenith_darken = 1.0 - 0.08 * max(viewDir.y, 0.0);
@@ -347,7 +395,7 @@ void main()
     color = mix(color, ground_color, ground_mask);
 
     // Dithering to reduce color banding
-    float r = n4rand_ss(v_screenPos);
+    float r = n4rand_ss(v_clipPos);
     color += vec3(r, r, r) / 60.0;
 
     // Ensure no negative values reach the tonemapper

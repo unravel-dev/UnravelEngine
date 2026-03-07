@@ -453,6 +453,14 @@ vec3 clipTransform(vec3 clip)
 	return clip;
 }
 
+vec2 clipToUv(vec2 clip)
+{
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
+	clip.y = 1.0 - clip.y;
+#endif
+	return clip;
+}
+
 vec3 clipToWorld(mat4 _invViewProj, vec3 _clipPos)
 {
 	vec4 wpos = mul(_invViewProj, vec4(_clipPos, 1.0));
