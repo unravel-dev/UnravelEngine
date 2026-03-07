@@ -180,9 +180,25 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
 
     if(!tooltip_.empty())
     {
-        ImGui::SetItemTooltipEx("%s", tooltip_.c_str());
+        
+        auto tooltip_callback = [&]()
+        {
+            ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::PushFont(ImGui::Font::Bold);
+            ImGui::PushWindowFontScale(1.2f);
+            ImGui::Text("%s", name_.c_str());
+            ImGui::PopWindowFontScale();
+            ImGui::PopFont();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::Text("%s", tooltip_.c_str());
+            ImGui::PopStyleColor();
+        };
+        ImGui::ItemTooltipEx(tooltip_callback);
+
         ImGui::SameLine();
-        ImGui::HelpMarker(tooltip_.c_str());
+        ImGui::HelpMarker("(?)", true, tooltip_callback);
     }
 
   
@@ -252,9 +268,25 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
 
     if(!tooltip_.empty())
     {
-        ImGui::SetItemTooltipEx("%s", tooltip_.c_str());
+        
+        auto tooltip_callback = [&]()
+        {
+            ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::PushFont(ImGui::Font::Bold);
+            ImGui::PushWindowFontScale(1.2f);
+            ImGui::Text("%s", name_.c_str());
+            ImGui::PopWindowFontScale();
+            ImGui::PopFont();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::Text("%s", tooltip_.c_str());
+            ImGui::PopStyleColor();
+        };
+        ImGui::ItemTooltipEx(tooltip_callback);
+
         ImGui::SameLine();
-        ImGui::HelpMarker(tooltip_.c_str());
+        ImGui::HelpMarker("(?)", true, tooltip_callback);
     }
     
     prepare_for_item();

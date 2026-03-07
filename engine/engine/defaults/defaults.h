@@ -194,11 +194,29 @@ struct defaults
     static auto create_audio_source_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
+     * @brief Quality presets for new scene creation (low = less expensive, high = more expensive).
+     */
+    enum class scene_preset
+    {
+        low,
+        medium,
+        high
+    };
+
+    /**
      * @brief Creates a default 3D scene.
      * @param ctx The context for creation.
      * @param scn The scene to create.
      */
     static void create_default_3d_scene(rtti::context& ctx, scene& scn);
+
+    /**
+     * @brief Creates a 3D scene from a quality preset.
+     * @param ctx The context for creation.
+     * @param scn The scene to create.
+     * @param preset The quality preset (low/medium/high).
+     */
+    static void create_scene_from_preset(rtti::context& ctx, scene& scn, scene_preset preset);
 
 
     /**

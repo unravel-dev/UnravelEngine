@@ -1401,6 +1401,125 @@ bool ReorderableList(
     return changed;
 }
 
+bool KnobSliderScalar(const char* label,
+                      ImGuiDataType data_type,
+                      void* p_data,
+                      const void* p_min,
+                      const void* p_max,
+                      const char* format,
+                      ImGuiSliderFlags flags)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    if(window->SkipItems)
+        return false;
+
+    ImGuiContext& g = *GImGui;
+    const ImGuiStyle& style = g.Style;
+    const ImGuiID id = window->GetID(label);
+    const float w = CalcItemWidth();
+
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
+    const float frame_h = label_size.y + style.FramePadding.y * 2.0f;
+    const ImRect frame_bb(window->DC.CursorPos, window->DC.CursorPos + ImVec2(w, frame_h));
+    const ImRect total_bb(frame_bb.Min,
+                          frame_bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f,
+                                                0.0f));
+
+    const bool temp_input_allowed = (flags & ImGuiSliderFlags_NoInput) == 0;
+    ItemSize(total_bb, style.FramePadding.y);
+    if(!ItemAdd(total_bb, id, &frame_bb, temp_input_allowed ? ImGuiItemFlags_Inputable : 0))
+        return false;
+
+    if(format == NULL)
+        format = DataTypeGetInfo(data_type)->PrintFmt;
+
+    const bool hovered = ItemHoverable(frame_bb, id, g.LastItemData.ItemFlags);
+    bool temp_input_is_active = temp_input_allowed && TempInputIsActive(id);
+    if(!temp_input_is_active)
+    {
+        const bool clicked = hovered && IsMouseClicked(0, ImGuiInputFlags_None, id);
+        const bool make_active = (clicked || g.NavActivateId == id);
+        if(make_active && clicked)
+            SetKeyOwner(ImGuiKey_MouseLeft, id);
+        if(make_active && temp_input_allowed)
+            if((clicked && g.IO.KeyCtrl) ||
+               (g.NavActivateId == id && (g.NavActivateFlags & ImGuiActivateFlags_PreferInput)))
+                temp_input_is_active = true;
+        if(make_active)
+            memcpy(&g.ActiveIdValueOnActivation, p_data, DataTypeGetInfo(data_type)->Size);
+        if(make_active && !temp_input_is_active)
+        {
+            SetActiveID(id, window);
+            SetFocusID(id, window);
+            FocusWindow(window);
+            g.ActiveIdUsingNavDirMask |= (1 << ImGuiDir_Left) | (1 << ImGuiDir_Right);
+        }
+    }
+
+    if(temp_input_is_active)
+    {
+        const bool clamp_enabled = (flags & ImGuiSliderFlags_ClampOnInput) != 0;
+        return TempInputScalar(frame_bb, id, label, data_type, p_data, format,
+                               clamp_enabled ? p_min : NULL, clamp_enabled ? p_max : NULL);
+    }
+
+    // Slider behavior (computes grab_bb in frame_bb space)
+    ImRect grab_bb;
+    const bool value_changed =
+        SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
+    if(value_changed)
+        MarkItemEdited(id);
+
+    // -- Custom visuals: thin track + round knob --
+    const float knob_radius = frame_h * 0.35f;
+    const float track_h = ImMax(2.0f, frame_h * 0.14f);
+    const float track_y = frame_bb.GetCenter().y;
+    const float track_rounding = track_h * 0.5f;
+    const float knob_x_min = frame_bb.Min.x + knob_radius;
+    const float knob_x_max = frame_bb.Max.x - knob_radius;
+    float t = 0.0f;
+    if(grab_bb.Max.x > grab_bb.Min.x)
+    {
+        const float grab_padding = 2.0f;
+        const float grab_sz = grab_bb.GetWidth();
+        const float usable_min = frame_bb.Min.x + grab_padding + grab_sz * 0.5f;
+        const float usable_max = frame_bb.Max.x - grab_padding - grab_sz * 0.5f;
+        if(usable_max > usable_min)
+            t = ImClamp((grab_bb.GetCenter().x - usable_min) / (usable_max - usable_min), 0.0f, 1.0f);
+    }
+    const float knob_x = ImLerp(knob_x_min, knob_x_max, t);
+    const ImU32 track_bg_col = GetColorU32(ImGuiCol_FrameBg, 0.7f);
+    const ImU32 track_fill_col = GetColorU32(g.ActiveId == id  ? ImGuiCol_SliderGrabActive
+                                             : hovered         ? ImGuiCol_SliderGrabActive
+                                                               : ImGuiCol_SliderGrab);
+    const ImU32 knob_col = GetColorU32(g.ActiveId == id ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab);
+    window->DrawList->AddRectFilled(ImVec2(frame_bb.Min.x, track_y - track_h * 0.5f),
+                                    ImVec2(frame_bb.Max.x, track_y + track_h * 0.5f),
+                                    track_bg_col, track_rounding);
+    if(knob_x > frame_bb.Min.x + track_rounding)
+    {
+        window->DrawList->AddRectFilled(ImVec2(frame_bb.Min.x, track_y - track_h * 0.5f),
+                                        ImVec2(knob_x, track_y + track_h * 0.5f),
+                                        track_fill_col, track_rounding);
+    }
+    window->DrawList->AddCircleFilled(ImVec2(knob_x, track_y), knob_radius, knob_col);
+
+    // Value text (centered over the track)
+    char value_buf[64];
+    const char* value_buf_end =
+        value_buf + DataTypeFormatString(value_buf, IM_COUNTOF(value_buf), data_type, p_data, format);
+    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.5f, 0.5f));
+
+    // Label
+    if(label_size.x > 0.0f)
+        RenderText(ImVec2(frame_bb.Max.x + style.ItemInnerSpacing.x, frame_bb.Min.y + style.FramePadding.y),
+                   label);
+
+    RenderNavCursor(frame_bb, id);
+
+    return value_changed;
+}
+
 void OpenInShell(const char* url)
 {
     ImGuiContext& g = *ImGui::GetCurrentContext();

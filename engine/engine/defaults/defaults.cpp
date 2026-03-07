@@ -540,6 +540,20 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     return object;
 }
 
+namespace
+{
+auto create_volume_entity_minimal(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode)
+    -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    auto& volume_comp = object.emplace<volume_component>();
+    volume_comp.mode = mode;
+    object.emplace<tonemapping_component>();
+    object.emplace<fxaa_component>();
+    return object;
+}
+} // namespace
+
 auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
     auto object = scn.create_entity(name);
@@ -586,12 +600,42 @@ auto defaults::create_audio_source_entity(rtti::context& ctx, scene& scn, const 
 
 void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
 {
+    create_scene_from_preset(ctx, scn, scene_preset::medium);
+}
+
+void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_preset preset)
+{
     auto camera = create_camera_entity(ctx, scn, "Main Camera");
     camera.emplace<audio_listener_component>();
 
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
-        object.emplace<skylight_component>();
+        auto& skylight = object.emplace<skylight_component>();
+
+        if(preset == scene_preset::low)
+        {
+            skylight.set_cloud_mode(skylight_component::cloud_mode::none);
+        }
+        else if(preset == scene_preset::medium)
+        {
+            skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
+            skylight.set_cloud_speed(10.0f);
+        }
+        else
+        {
+            skylight.set_cloud_mode(skylight_component::cloud_mode::volumetric);
+            skylight.set_cloud_speed(10.0f);
+        }
+
+        if(preset != scene_preset::low)
+        {
+            auto& light_comp = object.get<light_component>();
+            auto light = light_comp.get_light();
+            light.shadow_params.type = sm_impl::pcss;
+
+
+            light_comp.set_light(light);
+        }
     }
 
     {
@@ -601,10 +645,27 @@ void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
         probe.method = reflect_method::environment;
         probe.sphere_data.range = 1000.0f;
         reflection_comp.set_probe(probe);
+        if(preset == scene_preset::low)
+        {
+            reflection_comp.set_faces_per_frame(0);
+        }
     }
-    
+
+    if(preset == scene_preset::low)
     {
-        auto object = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+        create_volume_entity_minimal(ctx, scn, "Volume Global", volume_mode::global);
+    }
+    else
+    {
+        auto volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+        if(preset == scene_preset::medium)
+        {
+            auto* ssr_comp = volume.try_get<ssr_component>();
+            if(ssr_comp)
+            {
+                ssr_comp->settings.fidelityfx.max_rays = 2;
+            }
+        }
     }
 }
 

@@ -337,7 +337,7 @@ private:
     float cloud_top_altitude_{45000.0f};
 
     /// Cloud wind speed in km/h [0–200]. ~10 = gentle drift, ~50 = strong wind, ~100+ = storm.
-    float cloud_speed_{20.0f};
+    float cloud_speed_{0.0f};
 
     /// Cloud density/opacity multiplier.
     float cloud_density_{1.0f};

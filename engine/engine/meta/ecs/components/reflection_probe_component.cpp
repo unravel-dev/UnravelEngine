@@ -30,6 +30,8 @@ REFLECT(reflection_probe_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "faces_per_frame"},
             entt::attribute{"pretty_name", "Faces Per Frame"},
+            entt::attribute{"group", "Update"},
+            entt::attribute{"tooltip", "The number of faces to update per frame. Lower values improve performance but introduce lag on the probe."},
             entt::attribute{"min", 0},
             entt::attribute{"max", 6},
         })
@@ -37,6 +39,7 @@ REFLECT(reflection_probe_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "apply_prefilter"},
             entt::attribute{"pretty_name", "Apply Prefilter"},
+            entt::attribute{"group", "Update"},
             entt::attribute{"tooltip", "Enables prefiltering which improves quality but may impact performance"},
         });
 }

@@ -221,6 +221,26 @@ IMGUI_API bool SliderScalarT(const char* label,
     return SliderScalar(label, GetDataType<T>(), p_data, &p_min, &p_max, format, flags);
 }
 
+// Thin-track slider with a round knob. Same behavior as SliderScalar (ctrl+click for input, etc.).
+IMGUI_API bool KnobSliderScalar(const char* label,
+                                ImGuiDataType data_type,
+                                void* p_data,
+                                const void* p_min,
+                                const void* p_max,
+                                const char* format = NULL,
+                                ImGuiSliderFlags flags = 0);
+
+template<typename T>
+IMGUI_API bool KnobSliderScalarT(const char* label,
+                                 T* p_data,
+                                 T p_min,
+                                 T p_max,
+                                 const char* format = NULL,
+                                 ImGuiSliderFlags flags = 0)
+{
+    return KnobSliderScalar(label, GetDataType<T>(), p_data, &p_min, &p_max, format, flags);
+}
+
 IMGUI_API void ItemBrowser(float item_width, size_t items_count, const std::function<void(int index)>& callback);
 
 struct IMGUI_API WindowTimeBlock

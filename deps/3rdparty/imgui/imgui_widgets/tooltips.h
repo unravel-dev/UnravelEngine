@@ -6,17 +6,8 @@ namespace ImGui
 IMGUI_API void HelpMarker(const char* desc);
 
 template<typename F>
-void HelpMarker(const char* help, bool disabled, F&& f)
+void ItemTooltipEx(F&& f)
 {
-    if(disabled)
-    {
-        ImGui::TextDisabled("%s", help);
-    }
-    else
-    {
-        ImGui::Text("%s", help);
-    }
-
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
         ImGui::SetNextWindowViewportToCurrent();
@@ -30,6 +21,21 @@ void HelpMarker(const char* help, bool disabled, F&& f)
     }
 }
 
+template<typename F>
+void HelpMarker(const char* help, bool disabled, F&& f)
+{
+    if(disabled)
+    {
+        ImGui::TextDisabled("%s", help);
+    }
+    else
+    {
+        ImGui::Text("%s", help);
+    }
+
+    ItemTooltipEx(std::forward<F>(f));
+}
+    
 IMGUI_API void AddItemTooltipEx(const char* fmt, ...) IM_FMTARGS(1);
 IMGUI_API void SetItemTooltipEx(const char* fmt, ...) IM_FMTARGS(1);                 // set a text-only tooltip if preceding item was hovered. override any previous call to SetTooltip().
 

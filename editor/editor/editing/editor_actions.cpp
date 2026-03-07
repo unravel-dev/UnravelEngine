@@ -2,6 +2,7 @@
 #include "engine/scripting/script.h"
 #include "engine/ui/ui_tree.h"
 
+#include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_notify.h>
@@ -930,13 +931,15 @@ auto editor_actions::new_scene(rtti::context& ctx) -> bool
         return false;
     }
     prompt_save_scene(ctx, [&ctx]() {
-        auto& em = ctx.get_cached<editing_manager>();
-        em.clear();
-    
-        auto& ec = ctx.get_cached<ecs>();
-        ec.unload_scene();
-    
-        defaults::create_default_3d_scene(ctx, ec.get_scene());
+        create_scene_modal::show([&ctx](defaults::scene_preset preset) {
+            auto& em = ctx.get_cached<editing_manager>();
+            em.clear();
+
+            auto& ec = ctx.get_cached<ecs>();
+            ec.unload_scene();
+
+            defaults::create_scene_from_preset(ctx, ec.get_scene(), preset);
+        });
     });
 
     return true;

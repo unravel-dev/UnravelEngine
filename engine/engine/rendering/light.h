@@ -258,7 +258,7 @@ struct light
             /// Offset along the x-axis for PCSS sampling.
             float penumbra_x_offset{1.0f};
             /// Offset along the y-axis for PCSS sampling.
-            float penumbra_y_offset{1.0f};
+            float penumbra_y_offset{1.5f};
         };
 
         /**
