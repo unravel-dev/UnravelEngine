@@ -1588,7 +1588,7 @@ void scene_panel::draw_grid_settings_menu(editing_manager& em)
 
         ImGui::TextUnformatted("Grid Visual");
         ImGui::LabelText("Plane", "%s", "X Z");
-        ImGui::SliderFloat("Opacity", &em.grid_data.opacity, 0.0f, 1.0f);
+        ImGui::KnobSliderScalarT("Opacity", &em.grid_data.opacity, 0.0f, 1.0f);
         ImGui::Checkbox("Depth Aware", &em.grid_data.depth_aware);
         ImGui::SetItemTooltipEx("%s", "Grid is depth aware.");
 
@@ -1617,8 +1617,8 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
         ImGui::PushItemWidth(100.0f);
 
         ImGui::TextUnformatted("Gizmos Visual");
-        ImGui::SliderFloat("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
-        ImGui::SliderFloat("Size", &em.billboard_data.size, 0.1f, 1.0f);
+        ImGui::KnobSliderScalarT("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
+        ImGui::KnobSliderScalarT("Size", &em.billboard_data.size, 0.1f, 1.0f);
 
         ImGui::Checkbox("Depth Aware", &em.billboard_data.depth_aware);
         ImGui::SetItemTooltipEx("%s", "Gizmos are depth aware.");

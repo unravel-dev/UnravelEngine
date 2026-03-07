@@ -267,8 +267,6 @@ auto inspect_scalar(rtti::context& ctx,
                 }
             }
 
-            // result.changed = ImGui::SliderScalarT("##", &data, min, max, format);
-
             result.changed = ImGui::KnobSliderScalarT("##", &data, min, max, format);
             result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
             ImGui::DrawItemActivityOutline();

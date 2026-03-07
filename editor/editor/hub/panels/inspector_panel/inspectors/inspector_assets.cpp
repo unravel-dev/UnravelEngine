@@ -407,7 +407,7 @@ void inspector_asset_handle_texture::draw_image(const asset_handle<gfx::texture>
         {
             if(tex->info.numMips > 1)
             {
-                ImGui::SliderInt("Mip", &inspected_mip_, 0, tex->info.numMips - 1);
+                ImGui::KnobSliderScalarT("Mip", &inspected_mip_, 0, tex->info.numMips - 1);
             }
         }
         return;
@@ -1120,7 +1120,7 @@ void inspector_asset_handle_audio_clip::inspect_clip(const std::shared_ptr<audio
 
     auto current_time = float(source_->get_playback_position().count());
 
-    if(ImGui::SliderFloat("##playing_offset", &current_time, 0.0f, total_time))
+    if(ImGui::KnobSliderScalarT("##playing_offset", &current_time, 0.0f, total_time))
     {
         source_->set_playback_position(audio::duration_t(current_time));
     }

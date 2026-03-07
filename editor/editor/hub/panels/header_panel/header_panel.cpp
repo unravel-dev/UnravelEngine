@@ -536,7 +536,7 @@ void header_panel::draw_right_zone(rtti::context& ctx)
     ImGui::SetItemTooltipEx("%s", "Time scale");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
-    if(ImGui::SliderFloat("###Time Scale", &time_scale, 0.0f, 3.0f))
+    if(ImGui::KnobSliderScalarT("###Time Scale", &time_scale, 0.0f, 3.0f))
     {
         sim.set_time_scale(time_scale);
     }

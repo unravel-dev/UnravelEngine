@@ -1488,11 +1488,15 @@ bool KnobSliderScalar(const char* label,
             t = ImClamp((grab_bb.GetCenter().x - usable_min) / (usable_max - usable_min), 0.0f, 1.0f);
     }
     const float knob_x = ImLerp(knob_x_min, knob_x_max, t);
-    const ImU32 track_bg_col = GetColorU32(ImGuiCol_FrameBg, 0.7f);
+    const ImU32 track_bg_col = GetColorU32(g.ActiveId == id ? ImGuiCol_FrameBgActive
+                                          : hovered          ? ImGuiCol_FrameBgHovered
+                                                             : ImGuiCol_FrameBg);
     const ImU32 track_fill_col = GetColorU32(g.ActiveId == id  ? ImGuiCol_SliderGrabActive
                                              : hovered         ? ImGuiCol_SliderGrabActive
                                                                : ImGuiCol_SliderGrab);
-    const ImU32 knob_col = GetColorU32(g.ActiveId == id ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab);
+    const ImU32 knob_col = GetColorU32(g.ActiveId == id  ? ImGuiCol_SliderGrabActive
+                                       : hovered         ? ImGuiCol_SliderGrabActive
+                                                         : ImGuiCol_SliderGrab);
     window->DrawList->AddRectFilled(ImVec2(frame_bb.Min.x, track_y - track_h * 0.5f),
                                     ImVec2(frame_bb.Max.x, track_y + track_h * 0.5f),
                                     track_bg_col, track_rounding);

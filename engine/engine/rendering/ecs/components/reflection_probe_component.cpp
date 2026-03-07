@@ -174,6 +174,9 @@ void reflection_probe_component::set_probe(const reflection_probe& probe)
     touch();
 
     probe_ = probe;
+
+    first_generation_ = true;
+    generated_faces_count_ = 0;
 }
 
 auto reflection_probe_component::already_generated() const -> bool
