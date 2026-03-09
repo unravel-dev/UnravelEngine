@@ -777,7 +777,7 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
     }
 
     raw_document->SetId("body");
-
+    raw_document->ReloadStyleSheet();
     if(component.document)
     {
         component.document->Close();

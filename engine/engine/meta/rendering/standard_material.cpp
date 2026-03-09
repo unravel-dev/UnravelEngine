@@ -119,7 +119,16 @@ SAVE(pbr_material)
     try_save(ar, ser20::make_nvp("base_color", obj.base_color_));
     try_save(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
     try_save(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
-    try_save(ar, ser20::make_nvp("surface_data", obj.surface_data_));
+
+    float roughness = obj.get_roughness();
+    float metalness = obj.get_metalness();
+    float bumpiness = obj.get_bumpiness();
+    float alpha_test_value = obj.get_alpha_test_value();
+    try_save(ar, ser20::make_nvp("roughness", roughness));
+    try_save(ar, ser20::make_nvp("metalness", metalness));
+    try_save(ar, ser20::make_nvp("bumpiness", bumpiness));
+    try_save(ar, ser20::make_nvp("alpha_test_value", alpha_test_value));
+
     try_save(ar, ser20::make_nvp("tiling", obj.tiling_));
     try_save(ar, ser20::make_nvp("dither_threshold", obj.dither_threshold_));
 
@@ -139,7 +148,39 @@ LOAD(pbr_material)
     try_load(ar, ser20::make_nvp("base_color", obj.base_color_));
     try_load(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
     try_load(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
-    try_load(ar, ser20::make_nvp("surface_data", obj.surface_data_));
+
+    math::vec4 surface_data{};
+    if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
+    {
+        obj.surface_data_ = surface_data;
+    }
+    else
+    {
+        float roughness = obj.get_roughness();
+        if(try_load(ar, ser20::make_nvp("roughness", roughness)))
+        {
+            obj.set_roughness(roughness);    
+        }
+
+        float metalness = obj.get_metalness();
+        if(try_load(ar, ser20::make_nvp("metalness", metalness)))
+        {
+            obj.set_metalness(metalness);
+        }
+    
+        float bumpiness = obj.get_bumpiness();
+        if(try_load(ar, ser20::make_nvp("bumpiness", bumpiness)))
+        {
+            obj.set_bumpiness(bumpiness);
+        }
+
+        float alpha_test_value = obj.get_alpha_test_value();
+        if(try_load(ar, ser20::make_nvp("alpha_test_value", alpha_test_value)))
+        {
+            obj.set_alpha_test_value(alpha_test_value);
+        }
+    }
+
     try_load(ar, ser20::make_nvp("tiling", obj.tiling_));
     try_load(ar, ser20::make_nvp("dither_threshold", obj.dither_threshold_));
 

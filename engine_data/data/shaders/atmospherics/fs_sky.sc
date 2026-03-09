@@ -35,7 +35,6 @@ SAMPLER2D(s_cloudNoise2D, 1);
 #define CLOUD_FLAT_NOISE_PERIOD  6.0
 #define CLOUD_FLAT_WIND_SPEED    0.3
 #define CLOUD_FLAT_BASE_DENSITY  0.04
-#define CLOUD_FLAT_THICKNESS     1200.0
 #define CLOUD_FLAT_HG_FORWARD    0.45
 #define CLOUD_FLAT_HG_BACK      -0.15
 #define CLOUD_FLAT_HG_BLEND      0.65
@@ -259,37 +258,40 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
         return sky_color;
     }
 
-    // Dome-projected UV (soft floor on y prevents horizon blow-up)
+    float layer_thickness = u_cloud_top_altitude - u_cloud_base_altitude;
+
+    // Dome-projected UV
     float y_dome = sqrt(eye_dir.y * eye_dir.y + CLOUD_FLAT_DOME_EPS * CLOUD_FLAT_DOME_EPS);
     float t_hit  = u_cloud_base_altitude / y_dome;
     vec2  cloud_world = eye_dir.xz * t_hit;
 
-    // World-to-noise UV (same scale factor as volumetric: 0.00008 / period)
     vec2 uv = cloud_world * CLOUD_FLAT_UV_SCALE / CLOUD_FLAT_NOISE_PERIOD;
-
-    // Wind animation: mirrors volumetric cloud_sample_pos() exactly.
-    // Vol: sp += time*speed*dir, then uvw = sp/period  →  net = time*speed*dir/period
-    // Flat: uv is already /period, so we must also divide the offset by period.
     uv.x += u_cloud_time * CLOUD_FLAT_WIND_SPEED * 10.0 / CLOUD_FLAT_NOISE_PERIOD;
     uv.y += u_cloud_time * CLOUD_FLAT_WIND_SPEED *  4.0 / CLOUD_FLAT_NOISE_PERIOD;
 
-    // ---- Base shape from 2D noise texture (R channel) ----
+    // Domain warping: distort UV with noise for organic, billowy shapes
+    vec2 warp_uv = uv * 1.3 + vec2(3.7, 7.1);
+    float warp_x = texture2D(s_cloudNoise2D, warp_uv).r - 0.5;
+    float warp_y = texture2D(s_cloudNoise2D, warp_uv + vec2(5.3, 2.9)).r - 0.5;
+    uv += vec2(warp_x, warp_y) * 0.08;
+
+    // Base shape with wider transition for soft edges
     float base_noise = texture2D(s_cloudNoise2D, uv).r;
     float threshold  = 1.0 - u_cloud_coverage;
-    float density    = smoothstep(threshold, threshold + 0.4, base_noise);
+    float density    = smoothstep(threshold - 0.05, threshold + 0.5, base_noise);
 
     if(density < 0.001)
     {
         return sky_color;
     }
 
-    // ---- Detail erosion (same algorithm as volumetric sample_cloud_density_full) ----
+    // Detail erosion
     vec2 detail_uv = uv * 5.0 + vec2(17.3, 41.7) / CLOUD_FLAT_NOISE_PERIOD;
     vec4 dns       = texture2D(s_cloudNoise2D, detail_uv);
     float detail   = dns.g * 0.625 + dns.b * 0.25 + dns.a * 0.125;
 
     float edge_factor = 1.0 - density * density;
-    density = max(0.0, density - detail * 0.35 * edge_factor);
+    density = max(0.0, density - detail * 0.2 * edge_factor);
     density *= u_cloud_density;
 
     if(density < 0.001)
@@ -297,30 +299,33 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
         return sky_color;
     }
 
-    // ---- Fake light march: sample at sun-offset UV ----
-    // Same formula as volumetric: exp(-density * DENSITY * path * LIGHT_ABSORPT)
+    // Effective thickness: ~5% of layer depth gives a natural alpha gradient.
+    // Full layer_thickness makes even tiny density fully opaque (hard contour edges).
+    // This approximates the partial-depth integration that volumetric gets from
+    // only a few ray-march steps contributing at cloud boundaries.
+    float effective_thickness = layer_thickness * 0.05;
+
+    // Fake light march at sun-offset UV
     vec2  sun_uv      = uv + light_dir.xz * 0.0015;
     float lit_noise   = texture2D(s_cloudNoise2D, sun_uv).r;
     float lit_density = smoothstep(threshold, threshold + 0.4, lit_noise);
-    float shadow_od   = lit_density * CLOUD_FLAT_BASE_DENSITY * CLOUD_FLAT_THICKNESS * u_cloud_light_absorption;
+    float shadow_od   = lit_density * CLOUD_FLAT_BASE_DENSITY * effective_thickness * u_cloud_light_absorption;
     float shadow      = exp(-shadow_od);
     float ms          = exp(-shadow_od * 0.2) * 0.35;
     shadow            = max(shadow, ms);
 
-    // ---- Phase function (identical to volumetric) ----
+    // Phase function
     float cos_theta = dot(eye_dir, light_dir);
     float phase     = cloud_dual_lobe_phase(cos_theta);
 
-    // Beer-Lambert: same formula as volumetric per-step extinction
-    // exp(-density * DENSITY_SCALE * effective_thickness * ABSORPT)
-    float optical_depth = density * CLOUD_FLAT_BASE_DENSITY * CLOUD_FLAT_THICKNESS * u_cloud_absorption;
+    // Beer-Lambert extinction
+    float optical_depth = density * CLOUD_FLAT_BASE_DENSITY * effective_thickness * u_cloud_absorption;
     float beer          = exp(-optical_depth);
     float alpha         = 1.0 - beer;
 
-    // Powder effect
     float powder = cloud_powder(density, cos_theta);
 
-    // ---- Sun / ambient color (Perez, same as volumetric) ----
+    // Sun / ambient color
     float night_factor = saturate(-light_dir.y * 3.0 - 0.2);
     vec3  sun_color    = saturate(u_sunLuminance.xyz) * (1.0 - night_factor * 0.9);
     vec3  ambient      = u_skyLuminance.xyz * CLOUD_FLAT_AMBIENT * (1.0 - night_factor * 0.8);

@@ -74,13 +74,6 @@ REFLECT(skylight_component)
             && data->get_cloud_mode() != skylight_component::cloud_mode::none;
     });
 
-    auto volumetric_cloud_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
-    {
-        auto data = obj.try_cast<skylight_component>();
-        return data->get_mode() != skylight_component::sky_mode::skybox
-            && data->get_cloud_mode() == skylight_component::cloud_mode::volumetric;
-    });
-
     // Register skylight_component::sky_mode enum with entt
     entt::meta_factory<skylight_component::sky_mode>{}
         .type("sky_mode"_hs)
@@ -223,7 +216,6 @@ REFLECT(skylight_component)
             entt::attribute{"max", 80000.0f},
             entt::attribute{"step", 500.0f},
             entt::attribute{"tooltip", "Cloud layer top altitude in world units. Only used by volumetric clouds (slab top). Flat clouds ignore this."},
-            entt::attribute{"predicate", volumetric_cloud_predicate_entt},
         })
         .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
         .custom<entt::attributes>(entt::attributes{
