@@ -351,6 +351,8 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         cloud_program_.program->begin();
 
         gfx::set_uniform(cloud_program_.u_skyLuminanceXYZ, perez.sky_luminance_xyz);
+        gfx::set_uniform(cloud_program_.u_skyLuminance, perez.sky_luminance_rgb);
+        gfx::set_uniform(cloud_program_.u_sunLuminance, perez.sun_luminance_rgb);
         gfx::set_uniform(cloud_program_.u_sunDirection, perez.sun_direction);
         gfx::set_uniform(cloud_program_.u_parameters, exposition);
         gfx::set_uniform(cloud_program_.u_perezCoeff, &perez.perez_coeff[0][0], 5);

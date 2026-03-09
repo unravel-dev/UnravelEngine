@@ -4,6 +4,8 @@ $input v_skyColor, v_clipPos, v_viewDir
 
 uniform vec4 u_parameters;
 uniform vec4 u_sunDirection;
+uniform vec4 u_sunLuminance;
+uniform vec4 u_skyLuminance;
 uniform vec4 u_cloudParams;
 uniform vec4 u_cloudParams2;
 uniform vec4 u_cloudFrame;
@@ -26,14 +28,14 @@ SAMPLER2D(s_cloudHistory, 1);
 
 #define CLOUD_VOL_BASE_DENSITY   0.04
 #define CLOUD_VOL_WIND_SPEED     0.3
-#define CLOUD_VOL_STEPS_MAX      16
+#define CLOUD_VOL_STEPS_MAX      32
 #define CLOUD_VOL_STEPS_MIN      8
 #define CLOUD_VOL_LIGHT_STEPS    1
 #define CLOUD_VOL_HG_FORWARD     0.45
 #define CLOUD_VOL_HG_BACK       -0.15
 #define CLOUD_VOL_HG_BLEND       0.65
 #define CLOUD_VOL_AMBIENT        0.22
-#define CLOUD_VOL_SUN_INTENSITY  16.0
+#define CLOUD_VOL_SUN_INTENSITY  24.0
 #define CLOUD_VOL_HORIZON_FADE   0.05
 #define CLOUD_VOL_HORIZON_SCALE  0.05
 #define CLOUD_VOL_UV_SCALE       0.00008
@@ -42,8 +44,14 @@ SAMPLER2D(s_cloudHistory, 1);
 #define CLOUD_PI 3.14159265
 #define CLOUD_NOISE_PERIOD 6.0
 
-// PCG-based 3D hash (16-bit quality per channel).
-// From "Hash Functions for GPU Rendering" — same as used in SSR FidelityFX.
+// Interleaved Gradient Noise (Jimenez 2014, "Next Generation Post Processing in Call of Duty").
+// Produces high-frequency spatially-uniform noise ideal for temporal accumulation.
+float InterleavedGradientNoise(vec2 pixel)
+{
+    return fract(52.9829189 * fract(0.06711056 * pixel.x + 0.00583715 * pixel.y));
+}
+
+// PCG hash for stable per-pixel spatial offset (breaks up banding at edges).
 uvec3 Rand3DPCG16(ivec3 p)
 {
     uvec3 v = uvec3(p);
@@ -208,12 +216,12 @@ void main()
 
     float ray_length = t_max - t_min;
     float layer_thickness = u_cloud_top_altitude - u_cloud_base_altitude;
-    float length_ratio = saturate(ray_length / (layer_thickness * 8.0));
-    int steps = CLOUD_VOL_STEPS_MIN + int(length_ratio * float(CLOUD_VOL_STEPS_MAX - CLOUD_VOL_STEPS_MIN));
+    float target_step = layer_thickness / float(CLOUD_VOL_STEPS_MIN);
+    int steps = clamp(int(ceil(ray_length / target_step)), CLOUD_VOL_STEPS_MIN, CLOUD_VOL_STEPS_MAX);
     float step_size = ray_length / float(steps);
 
-    uint rng = Rand3DPCG16(ivec3(gl_FragCoord.xy, int(u_cloudFrame.x))).x;
-    float jitter = float(rng) / 65535.0;
+    float ign = InterleavedGradientNoise(gl_FragCoord.xy);
+    float jitter = fract(ign + u_cloudFrame.y * 0.6180339887);
 
     float transmittance = 1.0;
     vec3 accum_light = vec3_splat(0.0);
@@ -221,11 +229,10 @@ void main()
     float cos_theta = dot(rd, lightDir);
     float phase = dual_lobe_phase(cos_theta);
 
-    float sun_height = saturate(lightDir.y * 2.0 + 0.5);
-    vec3 sunset_tint = mix(vec3(1.0, 0.7, 0.45), vec3(1.0, 1.0, 1.0), sun_height);
+
     float night_factor = saturate(-lightDir.y * 3.0 - 0.2);
-    vec3 sun_color = sunset_tint * (1.0 - night_factor * 0.9);
-    vec3 ambient_color = vec3(0.45, 0.55, 0.75) * CLOUD_VOL_AMBIENT * (1.0 - night_factor * 0.8);
+    vec3 sun_color = saturate(u_sunLuminance.xyz) * (1.0 - night_factor * 0.9);
+    vec3 ambient_color = u_skyLuminance.xyz * CLOUD_VOL_AMBIENT * (1.0 - night_factor * 0.8);
 
     for(int i = 0; i < steps; i++)
     {

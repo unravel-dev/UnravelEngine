@@ -168,6 +168,8 @@ public:
         float cloud_light_absorption = 0.10f;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
+        /// Irradiance intensity. Scales cloud ambient (sky-scattered light into clouds).
+        float irradiance_intensity = 0.15f;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -212,6 +214,8 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_skyLuminance, "u_skyLuminance", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sunLuminance, "u_sunLuminance", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
@@ -224,6 +228,8 @@ private:
         }
 
         gfx::program::uniform_ptr u_skyLuminanceXYZ;
+        gfx::program::uniform_ptr u_skyLuminance;
+        gfx::program::uniform_ptr u_sunLuminance;
         gfx::program::uniform_ptr u_sunDirection;
         gfx::program::uniform_ptr u_parameters;
         gfx::program::uniform_ptr u_perezCoeff;

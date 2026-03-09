@@ -242,6 +242,7 @@ REFLECT(skylight_component)
             entt::attribute{"pretty_name", "Cloud Density"},
             entt::attribute{"group", "Clouds"},
             entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 20.0f},
             entt::attribute{"step", 0.05f},
             entt::attribute{"tooltip", "Cloud opacity multiplier. Higher values make clouds more opaque and visible."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},

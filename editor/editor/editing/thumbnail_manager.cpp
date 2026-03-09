@@ -30,7 +30,7 @@ namespace
 {
 
 template<typename T>
-auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 1, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
+auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 2, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
 {
     auto& thumbnail = gen.thumbnails[asset.uid()];
     auto current_fbo = thumbnail.get();
@@ -42,25 +42,30 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             auto& scn = gen.get_scene();
             scn.unload();
             auto& ctx = engine::context();
-            bool focus_camera = frames == 1;
-            auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, {256, 256}, focus_camera);
+            auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, {256, 256}, false);
 
             auto& rpath = ctx.get_cached<rendering_system>();
             for(int i = 0; i < frames; i++)
             {
+                bool focus_camera = i == frames - 1;
+
                 rpath.on_frame_update(scn, dt);
                 rpath.on_frame_before_render(scn, dt);
+
+
             }
 
-            if(result.object && !focus_camera)
-            {
-                std::array<entt::handle, 1> entities = {result.object};
-                defaults::focus_camera_on_entities(result.camera, entities);
-            }
+         
+            defaults::focus_camera_on_3d_scene_for_asset_preview<T>(ctx, result);
 
             
-            auto new_fbo = rpath.render_scene(scn, dt);
-            thumbnail.set(new_fbo);
+            for(int i = 0; i < frames; i++)
+            {
+                auto new_fbo = rpath.render_scene(scn, dt);
+                thumbnail.set(new_fbo);
+
+            }
+
         }
         catch(const std::exception& e)
         {
@@ -76,7 +81,7 @@ auto get_thumbnail_impl(thumbnail_manager::generator& gen,
                         const asset_handle<T>& asset,
                         const asset_handle<gfx::texture>& transparent,
                         const asset_handle<gfx::texture>& loading,
-                        int frames = 1, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
+                        int frames = 2, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
 {
     if(!asset.is_valid())
     {

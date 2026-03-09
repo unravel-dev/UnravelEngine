@@ -1455,6 +1455,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                     params_perez.cloud_time = light_comp_ref.get_cloud_time();
                     params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
                 }
+                params_perez.irradiance_intensity = light_comp_ref.get_irradiance_intensity();
             }
             params_skybox.sky_brightness = light_comp_ref.get_sky_brightness();
         });

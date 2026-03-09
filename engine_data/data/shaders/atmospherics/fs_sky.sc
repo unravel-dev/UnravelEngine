@@ -2,11 +2,12 @@ $input v_skyColor, v_clipPos, v_viewDir
 
 #include "../common.sh"
 
-uniform vec4 	u_parameters; // x - sun size, y - sun bloom, z - exposition, w - time
+uniform vec4 	u_parameters;
 uniform vec4 	u_sunDirection;
+uniform vec4    u_skyLuminance;
 uniform vec4 	u_sunLuminance;
-uniform vec4 	u_cloudParams;  // x - coverage, y - base_altitude, z - time, w - density
-uniform vec4 	u_cloudParams2; // x - absorption, y - light_absorption, z - top_altitude, w - cloud_mode
+uniform vec4 	u_cloudParams;
+uniform vec4 	u_cloudParams2;
 
 #define u_sun_size u_parameters.x
 #define u_sun_bloom u_parameters.y
@@ -39,7 +40,7 @@ SAMPLER2D(s_cloudNoise2D, 1);
 #define CLOUD_FLAT_HG_BACK      -0.15
 #define CLOUD_FLAT_HG_BLEND      0.65
 #define CLOUD_FLAT_AMBIENT       0.22
-#define CLOUD_FLAT_SUN_INTENSITY 16.0
+#define CLOUD_FLAT_SUN_INTENSITY 24.0
 #define CLOUD_FLAT_HORIZON_FADE  0.05
 #define CLOUD_FLAT_DOME_EPS      0.2
 #define CLOUD_FLAT_UV_SCALE      0.00008
@@ -319,12 +320,10 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
     // Powder effect
     float powder = cloud_powder(density, cos_theta);
 
-    // ---- Sun / ambient color (same model as volumetric) ----
-    float sun_height   = saturate(light_dir.y * 2.0 + 0.5);
-    vec3  sunset_tint  = mix(vec3(1.0, 0.7, 0.45), vec3(1.0, 1.0, 1.0), sun_height);
+    // ---- Sun / ambient color (Perez, same as volumetric) ----
     float night_factor = saturate(-light_dir.y * 3.0 - 0.2);
-    vec3  sun_color    = sunset_tint * (1.0 - night_factor * 0.9);
-    vec3  ambient      = vec3(0.45, 0.55, 0.75) * CLOUD_FLAT_AMBIENT * (1.0 - night_factor * 0.8);
+    vec3  sun_color    = saturate(u_sunLuminance.xyz) * (1.0 - night_factor * 0.9);
+    vec3  ambient      = u_skyLuminance.xyz * CLOUD_FLAT_AMBIENT * (1.0 - night_factor * 0.8);
 
     vec3 cloud_color = sun_color * shadow * phase * CLOUD_FLAT_SUN_INTENSITY * powder + ambient;
     cloud_color     *= u_exposition * 8.0;

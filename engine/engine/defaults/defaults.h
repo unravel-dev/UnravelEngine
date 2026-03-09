@@ -271,6 +271,11 @@ struct defaults
                                                           const asset_handle<T>& asset,
                                                           const usize32_t& size, bool focus_camera = true) -> asset_preview_result;
 
+
+    template<typename T>
+    static void focus_camera_on_3d_scene_for_asset_preview(rtti::context& ctx,
+        const asset_preview_result& result);
+
     /**
      * @brief Creates a default 3D scene for editing.
      * @param ctx The context for creation.

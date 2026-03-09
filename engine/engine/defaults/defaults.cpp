@@ -696,19 +696,6 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
 {
     auto camera = create_camera_entity(ctx, scn, "Main Camera");
     auto post_process_volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
-    {
-        auto assao_comp = camera.try_get<assao_component>();
-        if(assao_comp)
-        {
-            assao_comp->enabled = false;
-        }
-
-        auto ssr_comp = camera.try_get<ssr_component>();
-        if(ssr_comp)
-        {
-            ssr_comp->enabled = false;
-        }
-    }
     
     {
         auto& transf_comp = camera.get<transform_component>();
@@ -744,6 +731,39 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
     }
 
     return camera;
+}
+
+template<>
+void defaults::focus_camera_on_3d_scene_for_asset_preview<material>(rtti::context& ctx, const asset_preview_result& result)
+{
+    auto bounds = calc_bounds_sphere_global(result.object, false);
+    focus_camera_on_bounds(result.camera, bounds, 0.0f);
+}
+
+template<>
+void defaults::focus_camera_on_3d_scene_for_asset_preview<mesh>(rtti::context& ctx, const asset_preview_result& result)
+{
+    auto bounds = calc_bounds_sphere_global(result.object);
+    if(bounds.radius < 1.0f)
+    {
+        float scale = 1.0f / bounds.radius;
+        result.object.get<transform_component>().scale_by_local(math::vec3(scale));
+    }
+
+    focus_camera_on_bounds(result.camera, calc_bounds_sphere_global(result.object), 0.0f);
+}
+
+template<>
+void defaults::focus_camera_on_3d_scene_for_asset_preview<prefab>(rtti::context& ctx, const asset_preview_result& result)
+{
+    auto bounds = calc_bounds_sphere_global(result.object);
+    if(bounds.radius < 1.0f)
+    {
+        float scale = 1.0f / bounds.radius;
+        result.object.get<transform_component>().scale_by_local(math::vec3(scale));
+    }
+
+    focus_camera_on_bounds(result.camera, calc_bounds_sphere_global(result.object), 0.0f);
 }
 
 template<>
