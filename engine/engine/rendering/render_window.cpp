@@ -43,6 +43,7 @@ void render_window::prepare_surface()
 
     if(needs_recreate)
     {
+        surface_.reset();
         surface_ = std::make_shared<gfx::frame_buffer>(window_.get_native_handle(),
                                                        static_cast<std::uint16_t>(size.w),
                                                        static_cast<std::uint16_t>(size.h));

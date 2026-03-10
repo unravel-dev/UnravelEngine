@@ -538,9 +538,14 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
                         }
                     }
                 });
+
+            if(target_context)
+            {
+                event = {};
+            }
+
         }
         
-        event = {};
     }
 }
 
