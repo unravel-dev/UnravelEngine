@@ -308,8 +308,11 @@ auto check_files_integrity(const std::string& key, const fs::path& entry_path) -
 
     if(!fs::exists(key_path, ec))
     {
-        APPLOG_WARNING("{} does not exist. Cleaning up cached...", key);
+        APPLOG_WARNING("{} does not exist. Cleaning up compiled...", key);
         fs::remove(entry_path, ec);
+        auto manifest_path = asset_compiler::get_manifest_path(entry_path);
+        fs::remove(manifest_path, ec);
+
 
         auto meta = get_meta_key(entry_path);
         auto meta_path = fs::resolve_protocol(meta);

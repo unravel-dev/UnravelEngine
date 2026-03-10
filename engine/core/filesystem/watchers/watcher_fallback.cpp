@@ -268,6 +268,7 @@ public:
             if(!fs::exists(fi.path, err))
             {
                 fi.status = watcher::entry_status::removed;
+                fi.event_time = std::chrono::system_clock::now();
                 entries.push_back(fi);
 
                 it = container.erase(it);

@@ -274,9 +274,6 @@ void main()
 
     vec2 uv = clipToUv(v_clipPos * 0.5 + 0.5);
 
-    // Camera-only reprojection (proven stable, for motion attenuation)
-    vec2 prev_uv_cam = ComputePreviousFrameUV(uv, 1.0);
-
     // Wind + camera reprojection (for history lookup)
     float cloud_mid_alt = (u_cloud_base_altitude + u_cloud_top_altitude) * 0.5;
     float t_hit = cloud_mid_alt / max(viewDir.y, 0.01);
