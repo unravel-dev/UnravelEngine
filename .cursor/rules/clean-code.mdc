@@ -1,4 +1,5 @@
 ---
+description: Clean code guidelines for writing and modifying source code. Apply when generating, editing, or reviewing code to ensure quality, readability, and maintainability.
 alwaysApply: false
 ---
 # Clean Code Guidelines
