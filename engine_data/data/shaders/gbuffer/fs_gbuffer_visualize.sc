@@ -10,6 +10,7 @@ SAMPLER2D(s_tex3, 3);
 SAMPLER2D(s_tex4, 4);
 SAMPLER2D(s_tex5, 5);
 SAMPLER2D(s_tex6, 6);
+SAMPLER2D(s_tex7, 7);
 
 uniform vec4 u_params;
 
@@ -27,6 +28,7 @@ uniform vec4 u_params;
 #define EMISSIVE_COLOR 9
 #define SUBSURFACE_COLOR 10
 #define DEPTH 11
+#define SSIL 12
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -80,6 +82,10 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == IRRADIANCE)
     {
         color = eval_irradiance_sh(s_tex6, data.world_normal);
+    }
+    else if(u_mode == SSIL)
+    {
+        color = texture2D(s_tex7, texcoord0).rgb;
     }
 
     return vec4(color, 1.0f);

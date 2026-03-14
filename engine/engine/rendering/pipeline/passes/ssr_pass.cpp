@@ -70,8 +70,7 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
 
     // Otherwise, use the render_view to get or create the SSR output framebuffer
     auto ref_sz = reference->get_size();
-    auto ref_tex = reference->get_texture();
-    auto ref_format = ref_tex->info.format;
+    auto ref_format = gfx::texture_format::RGBA8;
 
     auto& ssr_output_tex = rview.tex_get_or_emplace("SSR_OUTPUT");
     if(!ssr_output_tex || (ssr_output_tex && ssr_output_tex->get_size() != ref_sz) ||
@@ -79,11 +78,11 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     {
         ssr_output_tex = std::make_shared<gfx::texture>(ref_sz.width,
                                                         ref_sz.height,
-                                                        false,          // no generate mips
-                                                        1,              // one layer
-                                                        ref_format,     // same format as reference
-                                                        BGFX_TEXTURE_RT // render target flag
-        );
+                                                        false,
+                                                        1,
+                                                        ref_format,
+                                                        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                            BGFX_SAMPLER_V_CLAMP);
     }
 
     auto& ssr_output_fbo = rview.fbo_get_or_emplace("SSR_OUTPUT");
@@ -101,8 +100,7 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                             bool enable_half_res) -> gfx::frame_buffer::ptr
 {
     auto ref_sz = reference->get_size();
-    auto ref_tex = reference->get_texture();
-    auto ref_format = ref_tex->info.format;
+    auto ref_format = gfx::texture_format::RGBA8;
 
     // Calculate target size with multiplier
     uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
@@ -119,11 +117,11 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     {
         ssr_curr_tex = std::make_shared<gfx::texture>(target_width,
                                                       target_height,
-                                                      false,          // no generate mips
-                                                      1,              // one layer
-                                                      ref_format,     // same format as reference
-                                                      BGFX_TEXTURE_RT // render target flag
-        );
+                                                      false,
+                                                      1,
+                                                      ref_format,
+                                                      BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                          BGFX_SAMPLER_V_CLAMP);
     }
 
     auto& ssr_curr_fbo = rview.fbo_get_or_emplace("SSR_CURR");
@@ -142,8 +140,7 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
                                                 bool enable_half_res) -> gfx::texture::ptr
 {
     auto ref_sz = reference->get_size();
-    auto ref_tex = reference->get_texture();
-    auto ref_format = ref_tex->info.format;
+    auto ref_format = gfx::texture_format::RGBA8;
 
     // Calculate target size with multiplier
     uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
@@ -160,9 +157,9 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
     {
         history_tex = std::make_shared<gfx::texture>(target_width,
                                                      target_height,
-                                                     false,      // no generate mips
-                                                     1,          // one layer
-                                                     ref_format, // same format as reference
+                                                     false,
+                                                     1,
+                                                     ref_format,
                                                      BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                          BGFX_SAMPLER_V_CLAMP);
     }
@@ -175,8 +172,7 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
                                                     bool enable_half_res) -> gfx::frame_buffer::ptr
 {
     auto ref_sz = reference->get_size();
-    auto ref_tex = reference->get_texture();
-    auto ref_format = ref_tex->info.format;
+    auto ref_format = gfx::texture_format::RGBA8;
 
     // Calculate target size with multiplier
     uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
@@ -193,9 +189,9 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
     {
         temp_tex = std::make_shared<gfx::texture>(target_width,
                                                   target_height,
-                                                  false,      // no generate mips
-                                                  1,          // one layer
-                                                  ref_format, // same format as reference
+                                                  false,
+                                                  1,
+                                                  ref_format,
                                                   BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                       BGFX_SAMPLER_V_CLAMP);
     }
@@ -257,7 +253,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
                                                      input_size.height,
                                                      true,                       // has mips
                                                      1,                          // num layers
-                                                     gfx::texture_format::RGBA8, // format for HDR content
+                                                     gfx::texture_format::RGBA8,
                                                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                          BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
     }
@@ -523,8 +519,18 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     }
 
     // Create or update SSR history texture and temp framebuffer using helper functions (1.0f = full resolution)
+    auto old_history = rview.tex_safe_get("SSR_HISTORY");
     auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, false);
     auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, false);
+
+    // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
+    // Seed it with the current frame and skip temporal this frame.
+    if(history_tex != old_history)
+    {
+        gfx::render_pass blit_pass("ssr_history_init_blit_pass");
+        gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
+        return nullptr;
+    }
 
     // ============================================================================
     // Temporal Resolve Pass

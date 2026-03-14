@@ -5,6 +5,7 @@
 #include <engine/rendering/pipeline/passes/bloom_pass.h>
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
+#include <engine/rendering/pipeline/passes/ssil_pass.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
 #include <entt/entt.hpp>
 #include <math/math.h>
@@ -28,6 +29,8 @@ struct resolved_post_process_settings
     ssr_pass::ssr_settings ssr{};
     bool has_assao = false;
     assao_pass::settings assao{};
+    bool has_ssil = false;
+    ssil_pass::ssil_settings ssil{};
 };
 
 /**

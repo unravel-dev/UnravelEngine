@@ -11,6 +11,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
+#include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 
 #include <engine/engine.h>
@@ -155,6 +156,7 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& fbo = rview.fbo_get_or_emplace("LBUFFER");
+    auto& fbo_combined = rview.fbo_get_or_emplace("LBUFFER_COMBINED");
     if(needs_recreate(fbo, viewport_size))
     {
         auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
@@ -165,9 +167,19 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
                                                   1,
                                                   format,
                                                   BGFX_TEXTURE_RT);
-
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
+        
+        auto tex_unshadowed = std::make_shared<gfx::texture>(viewport_size.width,
+                                                              viewport_size.height,
+                                                              false,
+                                                              1,
+                                                              format,
+                                                              BGFX_TEXTURE_RT);
+                                                              
+        fbo_combined = std::make_shared<gfx::frame_buffer>();
+        fbo_combined->populate({tex, tex_unshadowed});
+
 
         auto& fbo_depth = rview.fbo_get_or_emplace("LBUFFER_DEPTH");
         fbo_depth = std::make_shared<gfx::frame_buffer>();
@@ -582,12 +594,24 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_reflection_probe_pass(scn, camera, rview, dt);
 
+    bool needs_hiz = apply_reflecitons && (params.fill_ssr_params || params.fill_ssil_params);
+    if(needs_hiz)
+    {
+        create_or_resize_hiz_buffer(rview, viewport_size);
+        run_hiz_pass(camera, rview, delta_t(0.0f));
+    }
+
+    // Direct lighting first so SSIL/SSR can trace against the current frame.
+    target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
+
     if(apply_reflecitons)
     {
         run_ssr_pass(camera, rview, target, params);
+        run_ssil_pass(camera, rview, params);
     }
 
-    target = run_lighting_pass(scn, camera, rview, apply_shadows, dt);
+    // Indirect lighting after SSIL so it can use the result.
+    target = run_indirect_lighting_pass(scn, camera, rview);
 
     target = run_atmospherics_pass(target, scn, camera, rview, dt);
 
@@ -610,6 +634,27 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         {
             run_debug_visualization_pass(camera, rview, output);
         }
+    }
+
+    // Snapshot current G-buffer depth for next frame's SSIL temporal reprojection validation.
+    // Must happen after all passes that read PREV_GBUFFER_DEPTH.
+    if(needs_hiz)
+    {
+        auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
+        auto& prev_depth = rview.tex_get_or_emplace("PREV_GBUFFER_DEPTH");
+        if(needs_recreate(prev_depth, viewport_size))
+        {
+            prev_depth = std::make_shared<gfx::texture>(viewport_size.width,
+                                                        viewport_size.height,
+                                                        false,
+                                                        1,
+                                                        gfx::texture_format::D32F,
+                                                        BGFX_TEXTURE_BLIT_DST);
+        }
+        gfx::render_pass blit_pass("prev_depth_blit_pass");
+        gfx::blit(blit_pass.id,
+                  prev_depth->native_handle(), 0, 0,
+                  depth_src->native_handle(), 0, 0);
     }
 }
 
@@ -1112,65 +1157,29 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
     return result;
 }
 
-auto deferred::run_lighting_pass(scene& scn,
-                                 const camera& camera,
-                                 gfx::render_view& rview,
-                                 bool apply_shadows,
-                                 delta_t dt) -> gfx::frame_buffer::ptr
+auto deferred::run_direct_lighting_pass(scene& scn,
+                                        const camera& camera,
+                                        gfx::render_view& rview,
+                                        bool apply_shadows,
+                                        delta_t dt) -> gfx::frame_buffer::ptr
 {
-    APP_SCOPE_PERF("Rendering/Lighting Pass");
+    APP_SCOPE_PERF("Rendering/Direct Lighting Pass");
 
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& camera_pos = camera.get_position();
 
-    const auto& viewport_size = camera.get_viewport_size();
-
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
+    const auto& lbuffer_combined = rview.fbo_get("LBUFFER_COMBINED");
 
-    const auto buffer_size = lbuffer->get_size();
+    const auto buffer_size = lbuffer_combined->get_size();
 
-    gfx::render_pass pass("light_buffer_pass");
-    pass.bind(lbuffer.get());
+    gfx::render_pass pass("direct_light_buffer_pass");
+    pass.bind(lbuffer_combined.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
-    const auto irradiance_result = run_irradiance_pass(scn, rview);
-
-    // --- Indirect lighting pass (once, not per-light) ---
-    {
-        const auto& iprogram = indirect_lighting_program_;
-        iprogram.program->begin();
-
-        float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
-        gfx::set_uniform(iprogram.u_light_data, light_data);
-        gfx::set_uniform(iprogram.u_camera_position, camera_pos);
-
-        size_t i = 0;
-        for(; i < gbuffer->get_attachment_count(); ++i)
-        {
-            gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
-        }
-        gfx::set_texture(iprogram.s_tex[i], i, rbuffer);
-        i++;
-        gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
-        i++;
-        if(irradiance_result.irradiance_tex && iprogram.s_irradiance)
-        {
-            gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
-        }
-
-        auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
-        gfx::submit(pass.id, iprogram.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
-
-        iprogram.program->end();
-    }
-
-    // --- Per-light direct lighting passes ---
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -1193,7 +1202,7 @@ auto deferred::run_lighting_pass(scene& scn,
                 return;
 
             
-            APP_SCOPE_PERF("Rendering/Lighting Pass/Per Light");
+            APP_SCOPE_PERF("Rendering/Direct Lighting Pass/Per Light");
 
             bool has_shadows = light.casts_shadows && apply_shadows;
 
@@ -1263,6 +1272,65 @@ auto deferred::run_lighting_pass(scene& scn,
 
             lprogram.program->end();
         });
+
+    gfx::discard();
+
+    return lbuffer;
+}
+
+auto deferred::run_indirect_lighting_pass(scene& scn,
+                                          const camera& camera,
+                                          gfx::render_view& rview) -> gfx::frame_buffer::ptr
+{
+    APP_SCOPE_PERF("Rendering/Indirect Lighting Pass");
+
+    const auto& view = camera.get_view();
+    const auto& proj = camera.get_projection();
+    const auto& camera_pos = camera.get_position();
+
+    const auto& gbuffer = rview.fbo_get("GBUFFER");
+    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
+    const auto& lbuffer = rview.fbo_get("LBUFFER");
+    const auto& lbuffer_combined = rview.fbo_get("LBUFFER_COMBINED");
+
+    const auto irradiance_result = run_irradiance_pass(scn, rview);
+
+    gfx::render_pass pass("indirect_light_buffer_pass");
+    pass.bind(lbuffer_combined.get());
+    pass.set_view_proj(view, proj);
+
+    const auto& iprogram = indirect_lighting_program_;
+    iprogram.program->begin();
+
+    float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
+    gfx::set_uniform(iprogram.u_light_data, light_data);
+    gfx::set_uniform(iprogram.u_camera_position, camera_pos);
+
+    size_t i = 0;
+    for(; i < gbuffer->get_attachment_count(); ++i)
+    {
+        gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
+    }
+    gfx::set_texture(iprogram.s_tex[i], i, rbuffer);
+    i++;
+    gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
+    i++;
+    if(irradiance_result.irradiance_tex && iprogram.s_irradiance)
+    {
+        gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
+    }
+    const auto& ssil_tex = rview.tex_safe_get("SSIL");
+    if(ssil_tex && iprogram.s_ssil)
+    {
+        gfx::set_texture(iprogram.s_ssil, 8, ssil_tex);
+    }
+
+    auto topology = gfx::clip_quad(1.0f);
+    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+    gfx::submit(pass.id, iprogram.program->native_handle());
+    gfx::set_state(BGFX_STATE_DEFAULT);
+
+    iprogram.program->end();
 
     gfx::discard();
 
@@ -1508,18 +1576,37 @@ auto deferred::run_ssr_pass(const camera& camera,
         rparams.fill_ssr_params(ssr_params);
     }
 
-    {
-        create_or_resize_hiz_buffer(rview, camera.get_viewport_size());
-        run_hiz_pass(camera, rview, delta_t(0.0f));
-
-        ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
-    }
+    ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
 
     // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
-    ssr_params.settings.fidelityfx.enable_half_res = false;
 
     return ssr_pass_.run(rview, ssr_params);
+}
+
+auto deferred::run_ssil_pass(const camera& camera,
+                             gfx::render_view& rview,
+                             const run_params& rparams) -> gfx::texture::ptr
+{
+    if(!rparams.fill_ssil_params)
+    {
+        rview.tex_get_or_emplace("SSIL") = nullptr;
+        return nullptr;
+    }
+
+    ssil_pass::run_params ssil_params;
+    ssil_params.g_buffer = rview.fbo_get("GBUFFER");
+    ssil_params.direct_lighting = rview.fbo_get("LBUFFER_COMBINED")->get_texture(1);
+    ssil_params.prev_depth = rview.tex_safe_get("PREV_GBUFFER_DEPTH");
+    ssil_params.cam = &camera;
+
+    rparams.fill_ssil_params(ssil_params);
+
+    ssil_params.hiz_buffer = rview.tex_get("HIZBUFFER");
+
+    auto result = ssil_pass_.run(rview, ssil_params);
+    rview.tex_get_or_emplace("SSIL") = result;
+    return result;
 }
 
 auto deferred::run_fxaa_pass(gfx::render_view& rview,
@@ -1612,6 +1699,12 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, rbuffer);
     ++i;
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, irradiance_tex);
+    ++i;
+    const auto& ssil_tex = rview.tex_safe_get("SSIL");
+    if(ssil_tex)
+    {
+        gfx::set_texture(debug_visualization_program_.s_tex[i], i, ssil_tex);
+    }
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
@@ -1635,7 +1728,7 @@ auto deferred::run_hiz_pass(const camera& camera, gfx::render_view& rview, delta
     // Run Hi-Z pass using the base class's pass
     hiz_pass::run_params params;
     params.depth_buffer = gbuffer->get_texture(4);
-    ;
+    
     params.output_hiz = rview.tex_get("HIZBUFFER");
     params.cam = &camera;
 
@@ -1758,6 +1851,8 @@ auto deferred::init(rtti::context& ctx) -> bool
     }
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");
+
+    ssil_pass_.init(ctx);
 
     return pipeline::init(ctx);
 }

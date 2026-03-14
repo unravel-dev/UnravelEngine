@@ -22,6 +22,7 @@
 #include "fxaa_component.hpp"
 #include "assao_component.hpp"
 #include "ssr_component.hpp"
+#include "ssil_component.hpp"
 #include "text_component.hpp"
 #include "particle_emitter_component.hpp"
 #include "../../ui/ecs/components/ui_document_component.hpp"
@@ -49,6 +50,7 @@ using all_serializeable_components = std::tuple<
     bloom_component,
     fxaa_component,
     ssr_component,
+    ssil_component,
     light_component,
     skylight_component,
     reflection_probe_component,
@@ -80,6 +82,7 @@ using all_inspectable_components = std::tuple<
     bloom_component,
     fxaa_component,
     ssr_component,
+    ssil_component,
     light_component,
     skylight_component,
     reflection_probe_component,
@@ -102,6 +105,7 @@ using all_addable_components = std::tuple<
     bloom_component,
     fxaa_component,
     ssr_component,
+    ssil_component,
     light_component,
     skylight_component,
     reflection_probe_component,

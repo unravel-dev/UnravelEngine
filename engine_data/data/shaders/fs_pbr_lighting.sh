@@ -21,6 +21,7 @@ uniform vec4 u_camera_position;
 
 #if PBR_INDIRECT
 SAMPLER2D(s_irradiance, 7);
+SAMPLER2D(s_ssil, 8);
 #else
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
@@ -377,7 +378,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     return visibility;
 }
 
-vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
+void pbr_light(vec2 texcoord0, vec2 fragCoord, out vec4 out_shadowed, out vec4 out_unshadowed)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
@@ -386,7 +387,6 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 lobe_roughness = vec3(0.0f, data.roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
-    // AO is applied to both direct and indirect lighting for depth in crevices
     vec3 specular_color = data.specular_color;
     vec3 diffuse_color = data.diffuse_color;
 
@@ -419,26 +419,27 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
     float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
     float subsurface_shadow = 1.0f;
-    float surface_attenuation = (intensity * light_radius_mask * light_falloff) * surface_shadow;
-    float subsurface_attenuation = (intensity * light_radius_mask * light_falloff) * subsurface_shadow;
+    float base_attenuation = intensity * light_radius_mask * light_falloff;
+    float surface_attenuation = base_attenuation * surface_shadow;
+    float subsurface_attenuation = base_attenuation * subsurface_shadow;
 
     vec3 energy = AreaLightSpecular(0.0f, 0.0f, normalize(vector_to_light), lobe_roughness, vector_to_light, L, V, N);
     vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N, data.ambient_occlusion);
-    //vec3 subsurface_lighting = SubsurfaceShadingTwoSided(data.subsurface_color, L, V, N);
     vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, L, V, N);
-    vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
-    // Direct lighting — AO and SO are applied inside StandardShadingDirect; indirect and emissive in separate pass
-    vec3 direct_lighting = surface_multiplier * direct_surface_lighting;
-    vec3 lighting = direct_lighting
+    vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
+    vec3 lighting = surface_multiplier * direct_surface_lighting
                   + subsurface_lighting * subsurface_multiplier
                   + colorCoverage * u_shadowMapShowCoverage;
 
-    vec4 result;
-    result.xyz = lighting;
-    result.w = 1.0f;
-    return result;
+    vec3 surface_multiplier_unshadowed = light_color * (NoL * base_attenuation);
+    vec3 lighting_unshadowed = surface_multiplier_unshadowed * direct_surface_lighting
+                             + subsurface_lighting * subsurface_multiplier
+                             + colorCoverage * u_shadowMapShowCoverage;
+
+    out_shadowed = vec4(lighting, 1.0f);
+    out_unshadowed = vec4(lighting_unshadowed, 1.0f);
 }
 
 #if PBR_INDIRECT
@@ -456,14 +457,11 @@ vec4 pbr_indirect(vec2 texcoord0)
     vec3 N = data.world_normal;
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    vec3 indirect_diffuse = eval_irradiance_sh(s_irradiance, N);
-
+    vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
+    vec4 ssil_sample = texture2D(s_ssil, texcoord0);
+    vec3 indirect_diffuse = irradiance + ssil_sample.rgb * ssil_sample.a;
     vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, data.roughness, data.ambient_occlusion, V, N);
-
-    vec4 result;
-    result.xyz = indirect_lighting + data.emissive_color;
-    result.w = 1.0f;
-    return result;
+    return vec4(indirect_lighting + data.emissive_color, 1.0f);
 }
 #endif
 

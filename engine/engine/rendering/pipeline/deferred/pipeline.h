@@ -1,6 +1,7 @@
 #pragma once
 #include "../pipeline.h"
 #include "../passes/hiz_pass.h"
+#include "../passes/ssil_pass.h"
 
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -76,7 +77,10 @@ public:
                         delta_t dt,
                         const run_params& rparams);
 
-    auto run_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
+    auto run_direct_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
+        -> gfx::frame_buffer::ptr;
+
+    auto run_indirect_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview)
         -> gfx::frame_buffer::ptr;
 
     void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt);
@@ -90,6 +94,9 @@ public:
     auto run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output,
                        const run_params& rparams)
         -> gfx::frame_buffer::ptr;
+
+    auto run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
+        -> gfx::texture::ptr;
 
     auto run_fxaa_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
                        const run_params& rparams)
@@ -274,11 +281,13 @@ private:
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssil, "s_ssil", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_irradiance;
+        gfx::program::uniform_ptr s_ssil;
 
         std::unique_ptr<gpu_program> program;
 
@@ -296,10 +305,11 @@ private:
             cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[7], "s_tex7", gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_params;
-        std::array<gfx::program::uniform_ptr, 7> s_tex;
+        std::array<gfx::program::uniform_ptr, 8> s_tex;
 
         std::unique_ptr<gpu_program> program;
 
@@ -329,6 +339,8 @@ private:
 public:
 
 private:
+
+    ssil_pass ssil_pass_;
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

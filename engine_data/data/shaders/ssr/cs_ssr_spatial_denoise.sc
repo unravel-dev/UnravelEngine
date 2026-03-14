@@ -20,7 +20,7 @@
 #include "../lighting.sh"
 
 SAMPLER2D(s_ssr_input, 0);
-IMAGE2D_WO(i_ssr_output, rgba16f, 1);
+IMAGE2D_WO(i_ssr_output, rgba8, 1);
 SAMPLER2D(s_normal, 2);
 SAMPLER2D(s_depth,  3);
 

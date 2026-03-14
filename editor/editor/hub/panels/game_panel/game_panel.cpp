@@ -231,6 +231,7 @@ void game_panel::draw_menubar(rtti::context& ctx)
             ImGui::RadioButton("Emissive Color", &visualize_passes_, 9);
             ImGui::RadioButton("Subsurface Color", &visualize_passes_, 10);
             ImGui::RadioButton("Depth", &visualize_passes_, 11);
+            ImGui::RadioButton("SSIL", &visualize_passes_, 12);
             ImGui::EndMenu();
         }
         ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");

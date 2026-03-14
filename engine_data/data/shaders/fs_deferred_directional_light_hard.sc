@@ -8,5 +8,8 @@ $input v_texcoord0
 
 void main()
 {
-    gl_FragColor = pbr_light(v_texcoord0, gl_FragCoord.xy);
+    vec4 shadowed, unshadowed;
+    pbr_light(v_texcoord0, gl_FragCoord.xy, shadowed, unshadowed);
+    gl_FragData[0] = shadowed;
+    gl_FragData[1] = unshadowed;
 }

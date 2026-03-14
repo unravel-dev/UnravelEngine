@@ -1,0 +1,205 @@
+/*
+ * Shared Hi-Z hierarchical ray marching functions.
+ * Used by both SSR and SSIL passes.
+ *
+ * Requirements: the including shader must define:
+ *   - SAMPLER2D(s_hiz, N)      -- Hi-Z depth mip chain
+ *   - computeViewSpacePosition -- from common.sh / lighting.sh
+ */
+
+#ifndef __HIZ_TRACE_SH__
+#define __HIZ_TRACE_SH__
+
+#define FFX_SSSR_FLOAT_MAX 3.402823466e+38
+
+vec3 HizComputeViewspacePosition(vec2 uv, float z)
+{
+    return computeViewSpacePosition(uv, z);
+}
+
+vec2 HizGetDepthMipResolution(sampler2D hiz_sampler, int mipLevel)
+{
+    return vec2(textureSize(hiz_sampler, mipLevel));
+}
+
+float HizFetchDepth(sampler2D hiz_sampler, vec2 coords, int mipLevel)
+{
+    return texelFetch(hiz_sampler, ivec2(coords), mipLevel).r;
+}
+
+void HizInitialAdvanceRay(vec3 ss_ray_origin,
+                          vec3 ss_ray_dir,
+                          vec3 ss_ray_dir_inv,
+                          vec2 curr_mip_resolution,
+                          vec2 curr_mip_resolution_inv,
+                          vec2 floor_offset,
+                          vec2 uv_offset,
+                          out vec3 ss_pos,
+                          out float curr_t)
+{
+    vec2 curr_mip_pos = curr_mip_resolution * ss_ray_origin.xy;
+    vec2 xy_plane = floor(curr_mip_pos) + floor_offset;
+    xy_plane = xy_plane * curr_mip_resolution_inv + uv_offset;
+    vec2 t = xy_plane * ss_ray_dir_inv.xy - ss_ray_origin.xy * ss_ray_dir_inv.xy;
+    curr_t = min(t.x, t.y);
+    ss_pos = ss_ray_origin + curr_t * ss_ray_dir;
+}
+
+bool HizAdvanceRay(vec3 ss_ray_origin,
+                   vec3 ss_ray_dir,
+                   vec3 ss_ray_dir_inv,
+                   vec2 curr_mip_pos,
+                   vec2 curr_mip_resolution_inv,
+                   vec2 floor_offset,
+                   vec2 uv_offset,
+                   float surface_z,
+                   inout vec3 ss_pos,
+                   inout float curr_t)
+{
+    vec2 xy_plane = floor(curr_mip_pos) + floor_offset;
+    xy_plane = xy_plane * curr_mip_resolution_inv + uv_offset;
+    vec3 boundary_planes = vec3(xy_plane, surface_z);
+    vec3 t = boundary_planes * ss_ray_dir_inv - ss_ray_origin * ss_ray_dir_inv;
+
+#ifdef INVERTED_DEPTH_RANGE
+    t.z = ss_ray_dir.z < 0.0 ? t.z : FFX_SSSR_FLOAT_MAX;
+#else
+    t.z = ss_ray_dir.z > 0.0 ? t.z : FFX_SSSR_FLOAT_MAX;
+#endif
+
+    float t_min = min(min(t.x, t.y), t.z);
+
+#ifdef INVERTED_DEPTH_RANGE
+    bool above_surface = surface_z < ss_pos.z;
+#else
+    bool above_surface = surface_z > ss_pos.z;
+#endif
+
+    bool skipped_tile = floatBitsToUint(t_min) != floatBitsToUint(t.z) && above_surface;
+    curr_t = above_surface ? t_min : curr_t;
+    ss_pos = ss_ray_origin + curr_t * ss_ray_dir;
+
+    return skipped_tile;
+}
+
+bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
+                             vec3 ss_ray_origin,
+                             vec3 ss_ray_dir,
+                             vec2 screen_size,
+                             int most_detailed_mip,
+                             int max_iterations,
+                             inout vec3 ss_hit_pos)
+{
+    vec3 ss_ray_dir_inv;
+    ss_ray_dir_inv.x = (ss_ray_dir.x != 0.0) ? rcp(ss_ray_dir.x) : FFX_SSSR_FLOAT_MAX;
+    ss_ray_dir_inv.y = (ss_ray_dir.y != 0.0) ? rcp(ss_ray_dir.y) : FFX_SSSR_FLOAT_MAX;
+    ss_ray_dir_inv.z = (ss_ray_dir.z != 0.0) ? rcp(ss_ray_dir.z) : FFX_SSSR_FLOAT_MAX;
+
+    int curr_mip = most_detailed_mip;
+    vec2 curr_mip_resolution = HizGetDepthMipResolution(hiz_sampler, curr_mip);
+    vec2 curr_mip_resolution_inv = rcp(curr_mip_resolution);
+
+    vec2 uv_offset = 0.005 * exp2(most_detailed_mip) / screen_size;
+    uv_offset.x = ss_ray_dir.x < 0.0 ? -uv_offset.x : uv_offset.x;
+    uv_offset.y = ss_ray_dir.y < 0.0 ? -uv_offset.y : uv_offset.y;
+
+    vec2 floor_offset;
+    floor_offset.x = (ss_ray_dir.x < 0.0) ? 0.0 : 1.0;
+    floor_offset.y = (ss_ray_dir.y < 0.0) ? 0.0 : 1.0;
+
+    float curr_t;
+    HizInitialAdvanceRay(ss_ray_origin, ss_ray_dir, ss_ray_dir_inv,
+                         curr_mip_resolution, curr_mip_resolution_inv,
+                         floor_offset, uv_offset,
+                         ss_hit_pos, curr_t);
+
+    int i = 0;
+    LOOP while(i < max_iterations && curr_mip >= most_detailed_mip)
+    {
+        vec2 curr_mip_pos = curr_mip_resolution * ss_hit_pos.xy;
+        float surface_z = HizFetchDepth(hiz_sampler, curr_mip_pos, curr_mip);
+        bool skipped_tile = HizAdvanceRay(ss_ray_origin, ss_ray_dir, ss_ray_dir_inv,
+                                          curr_mip_pos, curr_mip_resolution_inv,
+                                          floor_offset, uv_offset,
+                                          surface_z, ss_hit_pos, curr_t);
+
+        curr_mip += skipped_tile ? 1 : -1;
+        curr_mip_resolution *= skipped_tile ? 0.5 : 2.0;
+        curr_mip_resolution_inv *= skipped_tile ? 2.0 : 0.5;
+
+        i++;
+    }
+
+    return i < max_iterations;
+}
+
+/// Validate a screen-space hit for indirect lighting.
+/// Returns confidence in [0,1].  Rejects background, self-intersection, and backfaces.
+float HizValidateHit(sampler2D hiz_sampler,
+                     sampler2D normal_sampler,
+                     vec3 ss_hit_pos,
+                     vec2 uv,
+                     vec3 vs_ray_origin,
+                     vec2 screen_size,
+                     float depth_tolerance)
+{
+    BRANCH
+    if(any(lessThan(ss_hit_pos.xy, vec2_splat(0.0))) || any(greaterThan(ss_hit_pos.xy, vec2_splat(1.0))))
+        return 0.0;
+
+    vec2 manhattan_dist = abs(ss_hit_pos.xy - uv);
+    vec2 inv_screen_size = rcp(screen_size);
+
+    BRANCH
+    if(all(lessThan(manhattan_dist, inv_screen_size * 0.5)))
+        return 0.0;
+
+    float surface_z = HizFetchDepth(hiz_sampler, screen_size * ss_hit_pos.xy, 0);
+
+    BRANCH
+#ifdef INVERTED_DEPTH_RANGE
+    if(surface_z == 0.0)
+        return 0.0;
+#else
+    if(surface_z == 1.0)
+        return 0.0;
+#endif
+
+    vec3 vs_hit_pos = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
+    vec3 vs_ray_dir = vs_hit_pos - vs_ray_origin;
+
+    GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(ss_hit_pos.xy, normal_sampler);
+    vec3 vs_normal = mul(u_view, vec4(normal_data.world_normal, 0.0)).xyz;
+
+    if(dot(vs_ray_dir, vs_normal) > 0.0)
+        return 0.0;
+
+    vec3 vs_hit_surface = HizComputeViewspacePosition(ss_hit_pos.xy, surface_z);
+    float dist = length(vs_hit_pos - vs_hit_surface);
+
+    float confidence = 1.0 - smoothstep(0.0, depth_tolerance, dist);
+
+    vec2 fade_in = vec2(0.1, 0.2);
+    vec2 border = smoothstep(vec2_splat(0.0), fade_in, ss_hit_pos.xy)
+                * (1.0 - smoothstep(1.0 - fade_in, vec2_splat(1.0), ss_hit_pos.xy));
+
+    return clamp(confidence * border.x * border.y, 0.0, 1.0);
+}
+
+/// Project a view-space direction to a screen-space direction vector.
+vec3 HizProjectVsDirToSsDir(vec3 vs_pos, vec3 vs_dir, vec3 ss_origin)
+{
+    vec3 end_point = vs_pos + vs_dir;
+    vec4 ss_pj4 = mul(u_proj, vec4(end_point, 1.0));
+    vec3 ss_pj = ss_pj4.xyz / ss_pj4.w;
+    ss_pj = clipTransform(ss_pj);
+    ss_pj.xy = ss_pj.xy * 0.5 + 0.5;
+
+#if BGFX_SHADER_LANGUAGE_GLSL
+    ss_pj.z = ss_pj.z * 0.5 + 0.5;
+#endif
+
+    return ss_pj - ss_origin;
+}
+
+#endif // __HIZ_TRACE_SH__

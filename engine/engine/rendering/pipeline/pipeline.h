@@ -17,6 +17,7 @@
 #include "passes/hiz_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
+#include "passes/ssil_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
 #include "volume_resolver.h"
@@ -108,6 +109,7 @@ public:
         std::function<void(tonemapping_pass::run_params& params)> fill_hdr_params;
         std::function<void(fxaa_pass::run_params& params)> fill_fxaa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
+        std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
 
         std::optional<resolved_post_process_settings> volume_settings;
     };

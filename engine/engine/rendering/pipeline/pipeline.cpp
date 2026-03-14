@@ -16,6 +16,7 @@
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
+#include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/pipeline/volume_resolver.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
@@ -236,6 +237,17 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
 
+    if(auto ssil_comp = camera_ent.try_get<ssil_component>(); ssil_comp && ssil_comp->enabled)
+    {
+        params.fill_ssil_params = [camera_ent](ssil_pass::run_params& params)
+        {
+            if(auto ssil_comp = camera_ent.try_get<ssil_component>())
+            {
+                params.settings = ssil_comp->settings;
+            }
+        };
+    }
+
     return params;
 }
 
@@ -248,7 +260,7 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     }
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
     const bool has_any_volume = resolved.has_bloom || resolved.has_tonemapping || resolved.has_fxaa ||
-                                resolved.has_ssr || resolved.has_assao;
+                                resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
     if(!has_any_volume)
     {
         return params;
@@ -277,6 +289,11 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         assao_pass::settings s = resolved.assao;
         params.fill_assao_params = [s](assao_pass::run_params& p) { p.params = s; };
+    }
+    if(resolved.has_ssil)
+    {
+        ssil_pass::ssil_settings s = resolved.ssil;
+        params.fill_ssil_params = [s](ssil_pass::run_params& p) { p.settings = s; };
     }
     return params;
 }
