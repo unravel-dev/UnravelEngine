@@ -86,7 +86,7 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
         if(ImGui::BeginMenu("View " ICON_MDI_ARROW_DOWN_BOLD))
         {
             ImGui::Checkbox("Show Editor Stats", &show_editor_stats_);
-            ImGui::SetItemTooltip("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
+            ImGui::SetItemTooltipEx("Show editor/UI related draw calls and triangles\n(Focus on scene stats when disabled)");
             ImGui::EndMenu();
         }
         
@@ -97,7 +97,7 @@ auto statistics_panel::draw_menubar(rtti::context& ctx) -> void
             {
                 batch_collector::set_static_mesh_batching_enabled(batching_enabled);
             }
-            ImGui::SetItemTooltip("Enable/disable static mesh batching for performance comparison");
+            ImGui::SetItemTooltipEx("Enable/disable static mesh batching for performance comparison");
             ImGui::EndMenu();
         }
         ImGui::PopStyleColor(3);

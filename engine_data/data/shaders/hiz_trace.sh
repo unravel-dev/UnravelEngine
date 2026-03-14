@@ -135,11 +135,13 @@ bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
 
 /// Validate a screen-space hit for indirect lighting.
 /// Returns confidence in [0,1].  Rejects background, self-intersection, and backfaces.
+/// vs_hit_pos must be pre-computed by the caller via HizComputeViewspacePosition.
 float HizValidateHit(sampler2D hiz_sampler,
                      sampler2D normal_sampler,
                      vec3 ss_hit_pos,
                      vec2 uv,
                      vec3 vs_ray_origin,
+                     vec3 vs_hit_pos,
                      vec2 screen_size,
                      float depth_tolerance)
 {
@@ -165,7 +167,6 @@ float HizValidateHit(sampler2D hiz_sampler,
         return 0.0;
 #endif
 
-    vec3 vs_hit_pos = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
     vec3 vs_ray_dir = vs_hit_pos - vs_ray_origin;
 
     GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(ss_hit_pos.xy, normal_sampler);

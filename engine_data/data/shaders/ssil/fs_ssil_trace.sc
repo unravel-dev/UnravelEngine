@@ -44,7 +44,7 @@ vec3 ImportanceSampleCosine(vec2 E, vec3 N)
     vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, N));
     vec3 bitangent = cross(N, tangent);
-    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+    return tangent * H.x + bitangent * H.y + N * H.z;
 }
 
 vec3 SampleDirectLighting(vec2 hit_uv)
@@ -95,16 +95,9 @@ void main()
         vec2 E = Hammersley16(uint(i), uint(num_rays), rnd);
         vec3 vs_sample_dir = ImportanceSampleCosine(E, vs_normal);
 
-        float cos_theta = max(dot(vs_normal, vs_sample_dir), 0.0);
-        BRANCH
-        if(cos_theta <= 0.0)
-            continue;
-
         vec3 ss_ray_dir = HizProjectVsDirToSsDir(vs_ray_origin, vs_sample_dir, ss_ray_origin);
 
-        // Limit ray length to max_distance in view space
-        float ray_len = length(ss_ray_dir.xy);
-        if(ray_len < 1e-6)
+        if(dot(ss_ray_dir.xy, ss_ray_dir.xy) < 1e-12)
             continue;
 
         vec3 ss_hit_pos;
@@ -114,23 +107,24 @@ void main()
         BRANCH
         if(valid_hit)
         {
+            vec3 vs_hit = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
+            float hit_dist = length(vs_hit - vs_ray_origin);
+
+            if(hit_dist >= u_max_distance)
+                continue;
+
             float confidence = HizValidateHit(s_hiz, s_normal, ss_hit_pos, uv,
-                                               vs_ray_origin, screen_size, u_depth_tolerance);
+                                               vs_ray_origin, vs_hit, screen_size, u_depth_tolerance);
 
             BRANCH
             if(confidence > 0.0)
             {
                 vec3 hit_color = SampleDirectLighting(ss_hit_pos.xy);
 
-                // Clamp to prevent energy explosion from emissives / bright HDR values
                 hit_color = min(hit_color, vec3_splat(10.0));
 
-                // Firefly suppression via Reinhard tonemap
                 hit_color /= 1.0 + Luminance(hit_color);
 
-                // Distance attenuation in view space
-                vec3 vs_hit = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
-                float hit_dist = length(vs_hit - vs_ray_origin);
                 float dist_atten = 1.0 - smoothstep(0.0, u_max_distance, hit_dist);
 
                 float w = confidence * dist_atten;
