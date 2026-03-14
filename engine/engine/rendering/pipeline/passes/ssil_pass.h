@@ -37,7 +37,7 @@ public:
         float depth_tolerance = 0.15f;
         float brightness = 0.15f;
         float max_distance = 20.0f;
-        bool enable_half_res = true;
+        bool enable_half_res = false;
 
         bool enable_spatial_denoise = true;
         spatial_denoise_settings spatial_denoise;

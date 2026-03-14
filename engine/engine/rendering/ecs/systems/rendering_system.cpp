@@ -172,7 +172,7 @@ void rendering_system::render_debug(entt::handle camera_entity)
     const auto& proj = camera.get_projection();
     const auto& obuffer = rview.fbo_get("OBUFFER");
 
-    gfx::render_pass pass("debug_draw_pass");
+    gfx::render_pass pass("Debug Draw Pass");
     pass.bind(obuffer.get());
     pass.set_view_proj(view, proj);
 

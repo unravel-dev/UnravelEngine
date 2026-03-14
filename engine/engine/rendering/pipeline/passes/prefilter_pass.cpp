@@ -49,7 +49,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
         {
             output_cube = params.output_cube_prefiltered;
         }
-        gfx::render_pass pass("blit_faces_to_cubemap_pass");
+        gfx::render_pass pass("Blit Faces to Cubemap Pass");
         for(uint8_t face = 0; face < 6; ++face)
         {
             auto src = params.input_faces[face]->native_handle();
@@ -77,11 +77,11 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
         // Process all mip levels using compute shader
         for(uint8_t mip = 0; mip < max_mips; ++mip)
         {
-            gfx::render_pass::push_scope(fmt::format("mip {}", mip).c_str());
+            gfx::render_pass::push_scope(fmt::format("MIP {}", mip).c_str());
 
             uint16_t dim = cube_size >> mip;
             
-            gfx::render_pass pass("prefilter_compute_pass");
+            gfx::render_pass pass("Prefilter Compute Pass");
 
             // Begin compute program
             cs_.program->begin();
@@ -112,7 +112,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
         
         // Add memory barrier to ensure all compute operations are complete
         // This ensures proper synchronization between mip levels and before texture usage
-        gfx::render_pass barrier_pass("prefilter_barrier_pass");
+        gfx::render_pass barrier_pass("Prefilter Barrier Pass");
         // bgfx handles memory barriers automatically between frame boundaries,
         // but we add explicit synchronization for safety
     }
@@ -135,7 +135,7 @@ void prefilter_pass::generate_mips(const gfx::texture::ptr& texture)
         {
             break;
         }
-        gfx::render_pass pass("mip_downsample_pass");
+        gfx::render_pass pass("MIP Downsample Pass");
         mip_downsample_.program->begin();
         gfx::set_image(0, texture->native_handle(), mip - 1, bgfx::Access::Read);
         gfx::set_image(1, texture->native_handle(), mip, bgfx::Access::Write);

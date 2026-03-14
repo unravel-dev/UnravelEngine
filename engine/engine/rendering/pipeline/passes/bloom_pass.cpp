@@ -104,7 +104,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         auto prefilter_fbo = std::make_shared<gfx::frame_buffer>();
         prefilter_fbo->populate({rview.tex_get("BLOOM_MIP_0")});
 
-        gfx::render_pass prefilter_pass("bloom_prefilter");
+        gfx::render_pass prefilter_pass("Bloom Prefilter Pass");
         prefilter_pass.bind(prefilter_fbo.get());
         prefilter_pass.set_view_proj({}, {});
         prefilter_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -142,7 +142,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         auto fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({out_tex});
 
-        gfx::render_pass pass("bloom_downsample");
+        gfx::render_pass pass("Bloom Downsample Pass");
         pass.bind(fbo.get());
         pass.set_view_proj({}, {});
         pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -170,7 +170,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     {
         auto clear_fbo = std::make_shared<gfx::frame_buffer>();
         clear_fbo->populate({rview.tex_get("BLOOM_MIP_0")});
-        gfx::render_pass clear_pass("bloom_clear_mip0");
+        gfx::render_pass clear_pass("Bloom Clear MIP0 Pass");
         clear_pass.bind(clear_fbo.get());
         clear_pass.set_view_proj(nullptr, nullptr);
         clear_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -190,7 +190,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         auto fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({out_tex});
 
-        gfx::render_pass pass("bloom_upsample");
+        gfx::render_pass pass("Bloom Upsample Pass");
         pass.bind(fbo.get());
         pass.set_view_proj({}, {});
 
@@ -216,7 +216,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
     auto output = create_or_update_output_fb(rview, input, params.output);
 
-    gfx::render_pass pass("bloom_combine");
+    gfx::render_pass pass("Bloom Combine Pass");
     pass.bind(output.get());
     pass.set_view_proj({}, {});
 

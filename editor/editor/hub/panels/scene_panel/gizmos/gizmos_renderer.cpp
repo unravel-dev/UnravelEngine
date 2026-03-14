@@ -75,7 +75,7 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
 
     {
         // Pass 2: Gizmos
-        gfx::render_pass pass("gizmos_pass");
+        gfx::render_pass pass("Gizmos Pass");
         pass.bind(obuffer.get());
         pass.set_view_proj(view, proj);
     
@@ -158,7 +158,7 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
 
-    gfx::render_pass pass("selection_mask_pass");
+    gfx::render_pass pass("Selection Mask Pass");
     pass.bind(selection_mask.get());
     pass.set_view_proj(view, proj);
 

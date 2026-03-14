@@ -354,7 +354,7 @@ private:
     /**
      * @brief Strength of indirect diffuse lighting.
      */
-    float irradiance_intensity_{0.15f};
+    float irradiance_intensity_{0.05f};
 
     /**
      * @brief Optional tint override for irradiance (white = use sky-derived color).

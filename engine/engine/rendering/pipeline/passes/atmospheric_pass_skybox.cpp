@@ -89,7 +89,7 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
     auto cubemap = params.cubemap.get();
 
     // 1) Create a pass
-    gfx::render_pass pass("atmospheric_cubemap_pass");
+    gfx::render_pass pass("Atmospheric Cubemap Pass");
     pass.bind(target.get());
 
     // 2) We want to keep the camera's orientation but remove its translation,

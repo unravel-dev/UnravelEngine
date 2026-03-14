@@ -64,7 +64,7 @@ auto fxaa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
 
     const auto output_size = output->get_size();
 
-    gfx::render_pass pass("fxaa_pass");
+    gfx::render_pass pass("FXAA Pass");
     pass.bind(output.get());
 
     // For a typical post-processing pass, we do a full-screen quad in clip space.

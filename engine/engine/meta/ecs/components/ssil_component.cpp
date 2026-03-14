@@ -82,7 +82,7 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"name", "max_accum_frames"},
             entt::attribute{"pretty_name", "Max Accum Frames"},
             entt::attribute{"min", 1},
-            entt::attribute{"max", 32},
+            entt::attribute{"max", 16},
             entt::attribute{"tooltip", "Maximum temporal accumulation frames"},
         });
 }

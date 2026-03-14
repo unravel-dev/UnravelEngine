@@ -125,7 +125,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"pretty_name", "Max Accum Frames"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 16},
-            entt::attribute{"tooltip", "Maximum accumulation frames"},
+            entt::attribute{"tooltip", "Maximum temporal accumulation frames"},
         });
 
     // -------------------------------------------------------------------------
@@ -235,7 +235,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         .data<&fidelityfx_settings::enable_half_res>("enable_half_res"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_half_res"},
-            entt::attribute{"pretty_name", "Enable Half Res"},
+            entt::attribute{"pretty_name", "Half Resolution"},
             entt::attribute{"tooltip", "Enable half resolution for SSR buffers"},
         })
         // .data<&fidelityfx_settings::enable_cone_tracing>("enable_cone_tracing"_hs)
@@ -255,7 +255,7 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         .data<&fidelityfx_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal_accumulation"},
-            entt::attribute{"pretty_name", "Enable Temporal Accumulation"},
+            entt::attribute{"pretty_name", "Enable Temporal"},
             entt::attribute{"tooltip", "Enable temporal accumulation to reduce noise over multiple frames"},
         })
         .data<&fidelityfx_settings::temporal>("temporal"_hs)

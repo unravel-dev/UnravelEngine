@@ -306,7 +306,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     const auto& proj = camera.get_projection();
     auto& fbo = rview.fbo_get("OBUFFER_DEPTH");
 
-    gfx::render_pass pass("ui_elements_pass");
+    gfx::render_pass pass("UI Elements Pass");
     pass.bind(fbo.get());
     pass.set_view_proj(view, proj);
 
@@ -436,7 +436,7 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
     auto lbuffer_depth = rview.fbo_get("LBUFFER_DEPTH");
 
     // Set up render pass to render particles to the output framebuffer
-    gfx::render_pass pass("particle_pass");
+    gfx::render_pass pass("Particles Pass");
     pass.bind(lbuffer_depth.get());
     
     const auto& view = camera.get_view();

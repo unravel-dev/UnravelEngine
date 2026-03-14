@@ -14,6 +14,7 @@
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
+#include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -533,26 +534,16 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     volume_comp.mode = mode;
 
     object.emplace<assao_component>();
-    // object.emplace<bloom_component>();
+    object.emplace<bloom_component>().enabled = false;
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();
     object.emplace<ssr_component>();
+    object.emplace<ssil_component>();
     return object;
 }
 
-namespace
-{
-auto create_volume_entity_minimal(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode)
-    -> entt::handle
-{
-    auto object = scn.create_entity(name);
-    auto& volume_comp = object.emplace<volume_component>();
-    volume_comp.mode = mode;
-    object.emplace<tonemapping_component>();
-    object.emplace<fxaa_component>();
-    return object;
-}
-} // namespace
+
+
 
 auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
@@ -651,20 +642,26 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         }
     }
 
-    if(preset == scene_preset::low)
-    {
-        create_volume_entity_minimal(ctx, scn, "Volume Global", volume_mode::global);
-    }
-    else
     {
         auto volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
-        if(preset == scene_preset::medium)
+
+        if(preset == scene_preset::low)
         {
-            auto* ssr_comp = volume.try_get<ssr_component>();
-            if(ssr_comp)
-            {
-                ssr_comp->settings.fidelityfx.max_rays = 2;
-            }
+            if(auto* comp = volume.try_get<assao_component>())
+                comp->enabled = false;
+            if(auto* comp = volume.try_get<bloom_component>())
+                comp->enabled = false;
+            if(auto* comp = volume.try_get<ssr_component>())
+                comp->enabled = false;
+            if(auto* comp = volume.try_get<ssil_component>())
+                comp->enabled = false;
+        }
+        else if(preset == scene_preset::medium)
+        {
+            if(auto* comp = volume.try_get<ssr_component>())
+                comp->settings.fidelityfx.max_rays = 2;
+            if(auto* comp = volume.try_get<ssil_component>())
+                comp->enabled = false;
         }
     }
 }
@@ -677,7 +674,6 @@ void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& sc
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
         auto& skylight = object.get_or_emplace<skylight_component>();
-        skylight.set_irradiance_intensity(0.15f);
     }
 
     {
@@ -718,7 +714,6 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
         light_comp.set_light(light);
 
         auto& skylight = object.get_or_emplace<skylight_component>();
-        skylight.set_irradiance_intensity(0.15f);
     }
 
     {

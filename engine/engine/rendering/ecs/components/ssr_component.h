@@ -53,6 +53,8 @@ public:
         r.temporal.roughness_sensitivity = std::lerp(r.temporal.roughness_sensitivity, f.temporal.roughness_sensitivity, contribution);
         r.temporal.motion_scale_pixels = std::lerp(r.temporal.motion_scale_pixels, f.temporal.motion_scale_pixels, contribution);
         r.temporal.normal_dot_threshold = std::lerp(r.temporal.normal_dot_threshold, f.temporal.normal_dot_threshold, contribution);
+        r.temporal.motion_scale_pixels = std::lerp(r.temporal.motion_scale_pixels, f.temporal.motion_scale_pixels, contribution);
+        r.temporal.normal_dot_threshold = std::lerp(r.temporal.normal_dot_threshold, f.temporal.normal_dot_threshold, contribution);
         r.temporal.max_accum_frames = contribution >= 0.5f ? f.temporal.max_accum_frames : r.temporal.max_accum_frames;
 
         r.enable_spatial_denoise = contribution >= 0.5f ? f.enable_spatial_denoise : r.enable_spatial_denoise;

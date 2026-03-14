@@ -66,7 +66,7 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     auto actual_output = create_or_update_output_fb(rview, input_fb, params.output);
 
     // 3) Begin a named render pass for clarity/debug (optional)
-    gfx::render_pass pass("blit_pass");
+    gfx::render_pass pass("Blit Pass");
     pass.bind(actual_output.get());
 
     // 4) Bind our GPU program and set the source texture

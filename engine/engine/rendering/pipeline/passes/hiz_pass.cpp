@@ -48,7 +48,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
 
     // 1) Generate Hi-Z mip 0 from depth buffer
     {
-        gfx::render_pass pass("hiz_generate_compute_pass");
+        gfx::render_pass pass("Hi-Z Generate Compute Pass");
 
         // Begin the compute program
         hiz_generate_.program->begin();
@@ -74,7 +74,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
     // 2) Generate remaining mip levels using compute shaders - optimized batching
     if (num_mips > 1)
     {
-        gfx::render_pass pass("hiz_downsample_compute_pass");
+        gfx::render_pass pass("Hi-Z Downsample Compute Pass");
         
         // Begin the downsampling compute program once for all mips
         hiz_downsample_.program->begin();

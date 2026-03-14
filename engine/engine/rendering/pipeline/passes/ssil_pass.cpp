@@ -90,9 +90,11 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
         return nullptr;
     }
 
+    gfx::render_pass::push_scope("SSIL");
     auto ssil_curr_fb = run_trace(rview, params);
     if(!ssil_curr_fb)
     {
+        gfx::render_pass::pop_scope();
         return nullptr;
     }
 
@@ -108,6 +110,7 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
     {
         result_fb = run_spatial_denoise(rview, result_fb, params.g_buffer, params.settings);
     }
+    gfx::render_pass::pop_scope();
 
     return result_fb->get_texture();
 }
@@ -118,7 +121,7 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
 
     auto ssil_curr_fb = create_or_update_ssil_fb(rview, "SSIL_CURR", params.g_buffer, params.settings.enable_half_res);
 
-    gfx::render_pass pass("ssil_trace_pass");
+    gfx::render_pass pass("Trace Pass");
     pass.bind(ssil_curr_fb.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
 
@@ -174,7 +177,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 
     for(int i = 0; i < num_passes; ++i)
     {
-        gfx::render_pass pass("ssil_spatial_denoise_pass");
+        gfx::render_pass pass(fmt::format("Spatial Denoise Pass {}", i).c_str());
 
         denoise_program_.program->begin();
 
@@ -219,12 +222,12 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     // Also skip if previous-frame depth is not yet available (first frame).
     if(history_tex != old_history || !prev_depth)
     {
-        gfx::render_pass blit_pass("ssil_history_init_blit_pass");
+        gfx::render_pass blit_pass("History Init Blit Pass");
         gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssil_input->get_texture()->native_handle(), 0, 0);
         return temp_fb->get_texture();
     }
 
-    gfx::render_pass pass("ssil_temporal_resolve_pass");
+    gfx::render_pass pass("Temporal Resolve Pass");
     pass.bind(temp_fb.get());
     pass.set_view_proj(cam->get_view(), cam->get_projection());
 
@@ -254,7 +257,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::discard();
 
     // Blit temporal result into persistent history texture
-    gfx::render_pass blit_pass("ssil_history_blit_pass");
+    gfx::render_pass blit_pass("History Blit Pass");
     gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fb->get_texture()->native_handle(), 0, 0);
 
     return temp_fb->get_texture();

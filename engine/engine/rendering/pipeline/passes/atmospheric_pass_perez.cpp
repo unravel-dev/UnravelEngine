@@ -343,7 +343,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
 
         auto& current_fbo = (cur == 0) ? cloud_fbo_a : cloud_fbo_b;
 
-        gfx::render_pass cloud_pass("cloud_prepass");
+        gfx::render_pass cloud_pass("Cloud Pre-Pass");
         cloud_pass.bind(current_fbo.get());
         cloud_pass.set_view_proj(view, proj);
         cloud_pass.clear(BGFX_CLEAR_COLOR, 0x000000FF, 0.0f, 0);
@@ -386,7 +386,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     }
 
     // === Pass 2: Sky pass (full resolution, composites half-res clouds) ===
-    gfx::render_pass pass("atmospherics_pass");
+    gfx::render_pass pass("Atmospherics Pass");
     pass.bind(surface);
     pass.set_view_proj(view, proj);
 

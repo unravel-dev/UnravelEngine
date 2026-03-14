@@ -1794,19 +1794,19 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, gfx::get_caps()->homogeneousDepth);
 
     /// begin generating
-    gfx::render_pass shadowmap_pass_0("shadowmap_pass_0");
-    gfx::render_pass shadowmap_pass_1("shadowmap_pass_1");
-    gfx::render_pass shadowmap_pass_2("shadowmap_pass_2");
-    gfx::render_pass shadowmap_pass_3("shadowmap_pass_3");
-    gfx::render_pass shadowmap_pass_4("shadowmap_pass_4");
-    gfx::render_pass shadowmap_vblur_pass_0("shadowmap_vblur_pass_0");
-    gfx::render_pass shadowmap_hblur_pass_0("shadowmap_hblur_pass_0");
-    gfx::render_pass shadowmap_vblur_pass_1("shadowmap_hblur_pass_1");
-    gfx::render_pass shadowmap_hblur_pass_1("shadowmap_hblur_pass_1");
-    gfx::render_pass shadowmap_vblur_pass_2("shadowmap_vblur_pass_2");
-    gfx::render_pass shadowmap_hblur_pass_2("shadowmap_hblur_pass_2");
-    gfx::render_pass shadowmap_vblur_pass_3("shadowmap_vblur_pass_3");
-    gfx::render_pass shadowmap_hblur_pass_3("shadowmap_hblur_pass_3");
+    gfx::render_pass shadowmap_pass_0("Shadowmap Pass 0");
+    gfx::render_pass shadowmap_pass_1("Shadowmap Pass 1");
+    gfx::render_pass shadowmap_pass_2("Shadowmap Pass 2");
+    gfx::render_pass shadowmap_pass_3("Shadowmap Pass 3");
+    gfx::render_pass shadowmap_pass_4("Shadowmap Pass 4");
+    gfx::render_pass shadowmap_vblur_pass_0("Shadowmap VBlur Pass 0");
+    gfx::render_pass shadowmap_hblur_pass_0("Shadowmap HBlur Pass 0");
+    gfx::render_pass shadowmap_vblur_pass_1("Shadowmap VBlur Pass 1");
+    gfx::render_pass shadowmap_hblur_pass_1("Shadowmap HBlur Pass 1");
+    gfx::render_pass shadowmap_vblur_pass_2("Shadowmap VBlur Pass 2");
+    gfx::render_pass shadowmap_hblur_pass_2("Shadowmap HBlur Pass 2");
+    gfx::render_pass shadowmap_vblur_pass_3("Shadowmap VBlur Pass 3");
+    gfx::render_pass shadowmap_hblur_pass_3("Shadowmap HBlur Pass 3");
 
     auto RENDERVIEW_SHADOWMAP_0_ID = shadowmap_pass_0.id;
     auto RENDERVIEW_SHADOWMAP_1_ID = shadowmap_pass_1.id;

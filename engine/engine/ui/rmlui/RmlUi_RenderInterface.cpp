@@ -321,7 +321,7 @@ void RmlUi_RenderInterface::end_frame()
     const auto& top_layer = layers->get_top_layer();
     auto source_texture = top_layer.get_color_texture();
 
-    gfx::render_pass main_pass("main_surface_pass");
+    gfx::render_pass main_pass("Main Surface Pass");
 
     main_pass.bind(framebuffer.get());
 
@@ -984,7 +984,7 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 
     if(render_program.begin())
     {
-        gfx::render_pass copy_pass("save_layer_as_texture_pass");
+        gfx::render_pass copy_pass("Save Layer as Texture Pass");
         copy_pass.bind(temp_framebuffer.get());
 
         // Set identity view and projection
@@ -1064,7 +1064,7 @@ auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 
     if(render_program.begin())
     {
-        gfx::render_pass mask_pass("save_layer_as_mask_pass");
+        gfx::render_pass mask_pass("Save Layer as Mask Pass");
         mask_pass.bind(destination_fb.framebuffer.get());
 
         // Set identity view and projection for mask rendering
@@ -1865,7 +1865,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto source_texture = render_layers_->get_postprocess_primary().get_color_texture();
                     auto destination = render_layers_->get_postprocess_secondary();
 
-                    gfx::render_pass pass("passthrough_pass");
+                    gfx::render_pass pass("Passthrough Pass");
                     pass.bind(destination.framebuffer.get());
 
                     // Set identity view and projection for filter rendering
@@ -1921,7 +1921,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto source = render_layers_->get_postprocess_primary();
                     auto destination = render_layers_->get_postprocess_secondary();
 
-                    gfx::render_pass pass("drop_shadow_pass");
+                    gfx::render_pass pass("Drop Shadow Pass");
                     pass.bind(destination.framebuffer.get());
 
                     // Set identity view and projection for filter rendering
@@ -1977,7 +1977,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto source = render_layers_->get_postprocess_secondary();
                     auto destination = render_layers_->get_postprocess_primary();
 
-                    gfx::render_pass pass("drop_shadow_composite_pass");
+                    gfx::render_pass pass("Drop Shadow Composite Pass");
                     pass.bind(destination.framebuffer.get());
                     
                     auto view = Rml::Matrix4f::Identity();
@@ -2011,7 +2011,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     const auto& source = render_layers_->get_postprocess_primary();
                     const auto& destination = render_layers_->get_postprocess_secondary();
 
-                    gfx::render_pass pass("color_matrix_pass");
+                    gfx::render_pass pass("Color Matrix Pass");
                     pass.bind(destination.framebuffer.get());
 
                     // Set identity view and projection for filter rendering
@@ -2053,7 +2053,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto source = render_layers_->get_postprocess_primary();
                     auto destination = render_layers_->get_postprocess_secondary();
 
-                    gfx::render_pass pass("blend_mask_pass");
+                    gfx::render_pass pass("Blend Mask Pass");
                     pass.bind(destination.framebuffer.get());
 
                     // Set identity view and projection for filter rendering
@@ -2148,11 +2148,11 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             const RmlUi_LayerFramebuffer& destination_fb = from_source ? temp : source_destination;
 
             // Create render pass for downscaling
-            gfx::render_pass clear_pass("downscale_clear_pass");
+            gfx::render_pass clear_pass("Downscale Clear Pass");
             clear_pass.bind(destination_fb.framebuffer.get());
             clear_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
             
-            gfx::render_pass downscale_pass("downscale_pass");
+            gfx::render_pass downscale_pass("Downscale Pass");
             downscale_pass.bind(destination_fb.framebuffer.get());
 
             // Set view and projection for downscaling
@@ -2189,7 +2189,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
     const bool transfer_to_temp_buffer = (pass_level % 2 == 0);
     if(transfer_to_temp_buffer && passthrough_program.begin())
     {
-        gfx::render_pass transfer_pass("transfer_to_temp_pass");
+        gfx::render_pass transfer_pass("Transfer to Temp Pass");
         transfer_pass.bind(temp.framebuffer.get());
 
         auto view = Rml::Matrix4f::Identity();
@@ -2223,7 +2223,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
         // Blur render pass - vertical
         {
-            gfx::render_pass vertical_blur_pass("vertical_blur_pass");
+            gfx::render_pass vertical_blur_pass("Vertical Blur Pass");
             vertical_blur_pass.bind(source_destination.framebuffer.get());
 
             auto view = Rml::Matrix4f::Identity();
@@ -2250,7 +2250,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
         // Blur render pass - horizontal
         {
-            gfx::render_pass horizontal_blur_pass("horizontal_blur_pass");
+            gfx::render_pass horizontal_blur_pass("Horizontal Blur Pass");
             horizontal_blur_pass.bind(temp.framebuffer.get());
 
             auto view = Rml::Matrix4f::Identity();
@@ -2292,7 +2292,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
         //                                  dst_min.x, dst_min.y, dst_max.x, dst_max.y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
         {
-            gfx::render_pass upscale_pass("upscale_blur_pass");
+            gfx::render_pass upscale_pass("Upscale Blur Pass");
             upscale_pass.bind(source_destination.framebuffer.get());
             upscale_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
             auto view = Rml::Matrix4f::Identity();
@@ -2471,7 +2471,7 @@ void RmlUi_RenderInterface::blit_layer_to_postprocess_primary(Rml::LayerHandle l
     }
 
     // Create a render pass for the blit operation
-    gfx::render_pass blit_pass("blit_layer_pass");
+    gfx::render_pass blit_pass("Blit Layer Pass");
     // Set identity view and projection for filter rendering
     auto view = Rml::Matrix4f::Identity();
     auto proj = Rml::Matrix4f::Identity();
@@ -2524,7 +2524,7 @@ void RmlUi_RenderInterface::composite_to_destination_layer(Rml::LayerHandle dest
     if(render_program.begin())
     {
         // Draw fullscreen quad to composite the result
-        gfx::render_pass pass("composite_pass");
+        gfx::render_pass pass("Composite Pass");
         pass.bind(dest_layer.framebuffer.get());
 
         // Set identity view and projection for compositing
@@ -2555,7 +2555,7 @@ auto RmlUi_RenderInterface::get_layer_pass_id() -> gfx::view_id
     if(target_layer.needs_rebind)
     {
         // Create a new render pass for this layer
-        gfx::render_pass layer_pass("layer_pass");
+        gfx::render_pass layer_pass("Layer Pass");
         layer_pass.bind(target_layer.framebuffer.get());
         auto view = Rml::Matrix4f::Identity();
         auto proj = Rml::Matrix4f::Identity();

@@ -62,7 +62,7 @@ auto render_window::get_surface() -> graphics_surface_t&
 auto render_window::begin_present_pass() -> gfx::render_pass&
 {
     pass_.reset();
-    pass_ = std::make_unique<gfx::render_pass>("present_to_window_pass");
+    pass_ = std::make_unique<gfx::render_pass>("Present to Window Pass");
     pass_->bind(surface_.get());
 
     return *pass_;

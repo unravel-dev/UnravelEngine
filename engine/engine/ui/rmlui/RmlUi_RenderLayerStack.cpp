@@ -48,8 +48,8 @@ auto RmlUi_RenderLayerStack::push_layer() -> Rml::LayerHandle
     layer.layer_id = next_layer_id_++;
     layer.needs_rebind = true;
 
-    gfx::render_pass::push_scope(fmt::format("layer {}", layer.layer_id).c_str());
-    gfx::render_pass layer_pass("layer_clear_pass");
+    gfx::render_pass::push_scope(fmt::format("Layer {}", layer.layer_id).c_str());
+    gfx::render_pass layer_pass("Layer Clear Pass");
     layer_pass.bind(layer.framebuffer.get());
     auto view = Rml::Matrix4f::Identity();
     auto proj = Rml::Matrix4f::Identity();
@@ -123,7 +123,7 @@ void RmlUi_RenderLayerStack::begin_frame(int new_width, int new_height)
         destroy_framebuffers();
     }
 
-    gfx::render_pass::push_scope(fmt::format("rmlui").c_str());
+    gfx::render_pass::push_scope(fmt::format("RmlUi").c_str());
     push_layer();
 }
 

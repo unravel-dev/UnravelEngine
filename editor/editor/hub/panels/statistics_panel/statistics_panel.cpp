@@ -757,45 +757,42 @@ auto statistics_panel::draw_encoder_stats(const gfx::stats* stats, float item_he
 
 auto statistics_panel::draw_view_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void
 {
-    if(ImGui::BeginListBox("Views", ImVec2(ImGui::GetWindowWidth(), stats->numViews * item_height_with_spacing)))
+    constexpr int lines_per_view = 3;
+    if(ImGui::BeginListBox("Views", ImVec2(ImGui::GetWindowWidth(), stats->numViews * lines_per_view * item_height_with_spacing)))
     {
-        ImGuiListClipper clipper;
-        clipper.Begin(stats->numViews, item_height);
-        
-        while(clipper.Step())
+        const float max_width = profiler_max_width * profiler_scale;
+
+        for(uint16_t pos = 0; pos < stats->numViews; ++pos)
         {
-            for(int32_t pos = clipper.DisplayStart; pos < clipper.DisplayEnd; ++pos)
-            {
-                const bgfx::ViewStats& view_stats = stats->viewStats[pos];
-                ImGui::PushID(view_stats.view);
-                ImGui::Text("%3d %3d %s", pos, view_stats.view, view_stats.name);
-                
-                const float max_width = profiler_max_width * profiler_scale;
-                const float cpu_time_elapsed = static_cast<float>((view_stats.cpuTimeEnd - view_stats.cpuTimeBegin) * to_cpu_ms);
-                const float gpu_time_elapsed = static_cast<float>((view_stats.gpuTimeEnd - view_stats.gpuTimeBegin) * to_gpu_ms);
-                const float cpu_width = bx::clamp(cpu_time_elapsed * profiler_scale, 1.0f, max_width);
-                const float gpu_width = bx::clamp(gpu_time_elapsed * profiler_scale, 1.0f, max_width);
-                
-                ImGui::SameLine(64.0f);
-                
-                ImGui::PushID("cpu");
-                if(statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, cpu_color))
-                {
-                    ImGui::SetItemTooltipEx("View %d \"%s\", CPU: %f [ms]", pos, view_stats.name, cpu_time_elapsed);
-                }
-                ImGui::PopID();
-                
-                ImGui::SameLine();
-                
-                ImGui::PushID("gpu");
-                if(statistics_utils::draw_progress_bar(gpu_width, max_width, item_height, gpu_color))
-                {
-                    ImGui::SetItemTooltipEx("View: %d \"%s\", GPU: %f [ms]", pos, view_stats.name, gpu_time_elapsed);
-                }
-                ImGui::PopID();
-                
-                ImGui::PopID();
-            }
+            const bgfx::ViewStats& view_stats = stats->viewStats[pos];
+            const float cpu_time_elapsed = static_cast<float>((view_stats.cpuTimeEnd - view_stats.cpuTimeBegin) * to_cpu_ms);
+            const float gpu_time_elapsed = static_cast<float>((view_stats.gpuTimeEnd - view_stats.gpuTimeBegin) * to_gpu_ms);
+            const float cpu_width = bx::clamp(cpu_time_elapsed * profiler_scale, 1.0f, max_width);
+            const float gpu_width = bx::clamp(gpu_time_elapsed * profiler_scale, 1.0f, max_width);
+
+            ImGui::PushID(pos);
+
+            ImGui::Text("%3d.", view_stats.view);
+
+            ImGui::SameLine();
+
+            ImGui::BeginGroup();
+            ImGui::Text("%s", view_stats.name);
+
+            ImGui::Text("CPU: %.3f [ms]", cpu_time_elapsed);
+            ImGui::SameLine();
+            ImGui::PushID("cpu");
+            statistics_utils::draw_progress_bar(cpu_width, max_width, item_height, cpu_color);
+            ImGui::PopID();
+            ImGui::Text("GPU: %.3f [ms]", gpu_time_elapsed);
+            ImGui::SameLine();
+            ImGui::PushID("gpu");
+            statistics_utils::draw_progress_bar(gpu_width, max_width, item_height, gpu_color);
+            ImGui::PopID();
+
+            ImGui::EndGroup();
+
+            ImGui::PopID();
         }
         ImGui::EndListBox();
     }

@@ -370,7 +370,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
 
             auto handle = scn.create_handle(e);
             {
-                gfx::render_pass::push_scope("build.reflecitons");
+                gfx::render_pass::push_scope("Build Reflections");
 
                 // iterate trough each cube face
                 for(std::uint32_t face = 0; face < 6; ++face)
@@ -651,7 +651,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                                         gfx::texture_format::D32F,
                                                         BGFX_TEXTURE_BLIT_DST);
         }
-        gfx::render_pass blit_pass("prev_depth_blit_pass");
+        gfx::render_pass blit_pass("Prev Depth Blit Pass");
         gfx::blit(blit_pass.id,
                   prev_depth->native_handle(), 0, 0,
                   depth_src->native_handle(), 0, 0);
@@ -671,7 +671,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
 
-    gfx::render_pass pass("g_buffer_pass");
+    gfx::render_pass pass("G-Buffer Pass");
     pass.clear();
     pass.set_view_proj(view, proj);
     pass.bind(gbuffer.get());
@@ -1049,7 +1049,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                 }
             });
 
-        gfx::render_pass irr_pass("irradiance_compute_pass");
+        gfx::render_pass irr_pass("Irradiance Compute Pass");
         irradiance_compute_program_.program->begin();
         gfx::set_image(0, irradiance_tex->native_handle(), 0, bgfx::Access::Write);
 
@@ -1175,7 +1175,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
     const auto buffer_size = lbuffer_combined->get_size();
 
-    gfx::render_pass pass("direct_light_buffer_pass");
+    gfx::render_pass pass("Direct Light Buffer Pass");
     pass.bind(lbuffer_combined.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -1295,7 +1295,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
 
     const auto irradiance_result = run_irradiance_pass(scn, rview);
 
-    gfx::render_pass pass("indirect_light_buffer_pass");
+    gfx::render_pass pass("Indirect Light Buffer Pass");
     pass.bind(lbuffer_combined.get());
     pass.set_view_proj(view, proj);
 
@@ -1351,7 +1351,7 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
     const auto buffer_size = rbuffer->get_size();
 
-    gfx::render_pass pass("refl_buffer_pass");
+    gfx::render_pass pass("Reflection Buffer Pass");
     pass.bind(rbuffer.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -1580,6 +1580,7 @@ auto deferred::run_ssr_pass(const camera& camera,
 
     // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
+    ssr_params.settings.fidelityfx.enable_half_res = false;
 
     return ssr_pass_.run(rview, ssr_params);
 }
@@ -1600,9 +1601,11 @@ auto deferred::run_ssil_pass(const camera& camera,
     ssil_params.prev_depth = rview.tex_safe_get("PREV_GBUFFER_DEPTH");
     ssil_params.cam = &camera;
 
+
     rparams.fill_ssil_params(ssil_params);
 
     ssil_params.hiz_buffer = rview.tex_get("HIZBUFFER");
+    ssil_params.settings.enable_half_res = false;
 
     auto result = ssil_pass_.run(rview, ssil_params);
     rview.tex_get_or_emplace("SSIL") = result;
@@ -1678,7 +1681,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
-    gfx::render_pass pass("debug_visualization_pass");
+    gfx::render_pass pass("Debug Visualization Pass");
     pass.bind(output.get());
     pass.set_view_proj(view, proj);
     // pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);

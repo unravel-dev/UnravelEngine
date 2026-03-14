@@ -259,7 +259,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
     }
 
     const uint32_t num_mips = settings.cone_tracing.max_mip_level + 1;
-    gfx::render_pass pass("blur_compute_ssr_pass");
+    gfx::render_pass pass("Blur Compute SSR Pass");
 
     // Process each mip level using unified blur shader
     for(int mip = 0; mip < num_mips; ++mip)
@@ -356,7 +356,7 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
     auto denoised_tex = denoised_fbo->get_texture();
     auto ssr_size = denoised_fbo->get_size();
 
-    gfx::render_pass pass("ssr_spatial_denoise_pass");
+    gfx::render_pass pass("Spatial Denoise Pass");
 
     spatial_denoise_compute_program_.program->begin();
 
@@ -382,10 +382,12 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
 
 auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
+    gfx::render_pass::push_scope("SSR");
     // Pass 1: SSR Trace - generates SSR_CURR
     auto ssr_curr_fb = run_ssr_trace(rview, params);
     if(!ssr_curr_fb)
     {
+        gfx::render_pass::pop_scope();
         return nullptr;
     }
 
@@ -401,13 +403,14 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
         run_temporal_resolve(rview, temporal_input_fb, params.g_buffer, params.cam, params.settings.fidelityfx);
     if(!ssr_history_fb)
     {
+        gfx::render_pass::pop_scope();
         return ssr_curr_fb; // Fallback to current frame
     }
 
     // Pass 3: Composite - blends SSR_HIST + SSR_CURR + probe, writes to output
     auto composite_fb =
         run_composite(rview, ssr_history_fb, ssr_curr_fb, params.output, params.g_buffer, params.output);
-
+    gfx::render_pass::pop_scope();
     return composite_fb;
 }
 
@@ -429,7 +432,7 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     // ============================================================================
     APP_SCOPE_PERF("Rendering/SSR/Trace Pass");
 
-    gfx::render_pass pass("ssr_trace_pass");
+    gfx::render_pass pass("Trace Pass");
     pass.bind(ssr_curr_fbo.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
 
@@ -527,7 +530,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // Seed it with the current frame and skip temporal this frame.
     if(history_tex != old_history)
     {
-        gfx::render_pass blit_pass("ssr_history_init_blit_pass");
+        gfx::render_pass blit_pass("History Init Blit Pass");
         gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
         return nullptr;
     }
@@ -537,7 +540,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // ============================================================================
     APP_SCOPE_PERF("Rendering/SSR/Temporal Resolve Pass");
 
-    gfx::render_pass pass("ssr_temporal_resolve_pass");
+    gfx::render_pass pass("Temporal Resolve Pass");
     pass.bind(temp_fbo.get());
     pass.set_view_proj(cam->get_view(), cam->get_projection());
 
@@ -591,7 +594,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // ============================================================================
     // Blit temp_fbo texture into persistent history_tex for next frame
     // ============================================================================
-    gfx::render_pass blit_pass("ssr_history_blit_pass");
+    gfx::render_pass blit_pass("History Blit Pass");
     gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fbo->get_texture()->native_handle(), 0, 0);
 
     return temp_fbo;
@@ -617,7 +620,7 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
     // ============================================================================
     APP_SCOPE_PERF("Rendering/SSR/Composite Pass");
 
-    gfx::render_pass pass("ssr_composite_pass");
+    gfx::render_pass pass("Composite Pass");
     pass.bind(actual_output.get());
 
     // Bind composite program
