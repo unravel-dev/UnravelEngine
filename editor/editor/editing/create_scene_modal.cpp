@@ -35,7 +35,7 @@ const preset_card_info presets[] = {
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Full lighting, volumetric clouds, soft shadows and post-processing.\n"
+     "Full lighting, SSIL, SSR, volumetric clouds, soft shadows and post-processing.\n"
      "Best for high-end desktop or showcase builds.",
      defaults::scene_preset::high},
 };
