@@ -217,6 +217,17 @@ auto is_property_flattable(const entt::meta_any& object, const entt::meta_custom
     return false;
 }
 
+auto get_property_hint(const entt::meta_any& object, const entt::meta_data& prop) -> std::string
+{
+    auto predicate_meta = entt::get_attribute(prop, "hint");
+    if(predicate_meta.try_cast<entt::property_predicate_t<std::string>>())
+    {
+        auto pred = predicate_meta.cast<entt::property_predicate_t<std::string>>();
+        return pred(object);
+    }
+    return {};
+}
+
 }
 
 auto register_type_helper(const char* name) -> int

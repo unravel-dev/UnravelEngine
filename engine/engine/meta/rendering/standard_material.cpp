@@ -39,6 +39,13 @@ REFLECT(pbr_material)
             entt::attribute{"name", "emissive_color"},
             entt::attribute{"pretty_name", "Emissive Color"} 
         })
+        .data<&pbr_material::set_emissive_intensity, &pbr_material::get_emissive_intensity>("emissive_intensity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "emissive_intensity"},
+            entt::attribute{"pretty_name", "Emissive Intensity"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 100.0f},
+        })
         .data<&pbr_material::set_roughness, &pbr_material::get_roughness>("roughness"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "roughness"},
@@ -119,6 +126,7 @@ SAVE(pbr_material)
     try_save(ar, ser20::make_nvp("base_color", obj.base_color_));
     try_save(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
     try_save(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
+    try_save(ar, ser20::make_nvp("emissive_intensity", obj.emissive_intensity_));
 
     float roughness = obj.get_roughness();
     float metalness = obj.get_metalness();
@@ -138,6 +146,9 @@ SAVE(pbr_material)
     try_save(ar, ser20::make_nvp("metalness_map", obj.metalness_map_));
     try_save(ar, ser20::make_nvp("emissive_map", obj.emissive_map_));
     try_save(ar, ser20::make_nvp("ao_map", obj.ao_map_));
+
+    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
+
 }
 SAVE_INSTANTIATE(pbr_material, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(pbr_material, ser20::oarchive_binary_t);
@@ -148,6 +159,7 @@ LOAD(pbr_material)
     try_load(ar, ser20::make_nvp("base_color", obj.base_color_));
     try_load(ar, ser20::make_nvp("subsurface_color", obj.subsurface_color_));
     try_load(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
+    try_load(ar, ser20::make_nvp("emissive_intensity", obj.emissive_intensity_));
 
     math::vec4 surface_data{};
     if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
@@ -190,6 +202,8 @@ LOAD(pbr_material)
     try_load(ar, ser20::make_nvp("metalness_map", obj.metalness_map_));
     try_load(ar, ser20::make_nvp("emissive_map", obj.emissive_map_));
     try_load(ar, ser20::make_nvp("ao_map", obj.ao_map_));
+
+    // Changes here should be reflected in ex::get_format_version<material>() in asset_extensions.h
 }
 LOAD_INSTANTIATE(pbr_material, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(pbr_material, ser20::iarchive_binary_t);

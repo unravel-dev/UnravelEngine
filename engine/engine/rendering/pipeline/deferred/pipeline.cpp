@@ -132,7 +132,7 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
                                                    viewport_size.height,
                                                    false,
                                                    1,
-                                                   get_default_format(),
+                                                   format,
                                                    BGFX_TEXTURE_RT);
 
         auto tex3 = std::make_shared<gfx::texture>(viewport_size.width,
@@ -319,6 +319,7 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto& base_color = mat.get_base_color();
     const auto& subsurface_color = mat.get_subsurface_color();
     const auto& emissive_color = mat.get_emissive_color();
+    const float emissive_intensity = mat.get_emissive_intensity();
     const auto& surface_data = mat.get_surface_data();
     const auto& tiling = mat.get_tiling();
     const auto& dither_threshold = mat.get_dither_threshold();
@@ -331,9 +332,15 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     gfx::set_texture(program.s_tex_ao, 4, ao.get());
     gfx::set_texture(program.s_tex_emissive, 5, emissive.get());
 
+    math::color premultiplied_emissive{
+        emissive_color.value.r * emissive_intensity,
+        emissive_color.value.g * emissive_intensity,
+        emissive_color.value.b * emissive_intensity,
+        emissive_color.value.a};
+
     gfx::set_uniform(program.u_base_color, base_color);
     gfx::set_uniform(program.u_subsurface_color, subsurface_color);
-    gfx::set_uniform(program.u_emissive_color, emissive_color);
+    gfx::set_uniform(program.u_emissive_color, premultiplied_emissive);
     gfx::set_uniform(program.u_surface_data, surface_data);
     gfx::set_uniform(program.u_tiling, tiling);
     gfx::set_uniform(program.u_dither_threshold, dither_threshold);

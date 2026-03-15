@@ -459,7 +459,7 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
         override_ctx.set_component_type(type_name, pretty_name);
         override_ctx.push_segment(prop_name, prop_pretty_name);
 
-        property_layout layout(prop, true);
+        property_layout layout(prop, tag_comp, true);
 
         var_info info;
         info.is_property = true;

@@ -41,7 +41,7 @@ public:
      * @param prop Meta property containing name and tooltip information
      * @param columns Whether to use column-based layout (default: true)
      */
-    property_layout(const entt::meta_data& prop, bool columns = true);
+    property_layout(const entt::meta_data& prop, const entt::meta_any& object, bool columns = true);
     
     /**
      * @brief Constructs layout with property name only
@@ -57,6 +57,15 @@ public:
      * @param columns Whether to use column-based layout (default: true)
      */
     property_layout(const std::string& name, const std::string& tooltip, bool columns = true);
+    
+
+        /**
+     * @brief Constructs layout with name, tooltip and hint
+     * @param name Display name for the property
+     * @param tooltip Help text shown on hover
+     * @param columns Whether to use column-based layout (default: true)
+     */
+     property_layout(const std::string& name, const std::string& tooltip, const std::string& hint, bool columns = true);
     
     /**
      * @brief Constructs layout with custom rendering callback
@@ -76,7 +85,7 @@ public:
      * @param prop Meta property containing name and tooltip
      * @param columns Whether to use column-based layout
      */
-    void set_data(const entt::meta_data& prop, bool columns = true);
+    void set_data(const entt::meta_data& prop, const entt::meta_any& object, bool columns = true);
     
     /**
      * @brief Updates layout data with name and tooltip
@@ -84,7 +93,7 @@ public:
      * @param tooltip Help text shown on hover
      * @param columns Whether to use column-based layout
      */
-    void set_data(const std::string& name, const std::string& tooltip, bool columns = true);
+    void set_data(const std::string& name, const std::string& tooltip = "", const std::string& hint = "", bool columns = true);
 
     /**
      * @brief Initializes ImGui layout with tables and property label
@@ -121,6 +130,8 @@ private:
     bool pushed_{};
     /// Display name for the property
     std::string name_;
+    /// Hint text shown on hover
+    std::string hint_;
     /// Help text shown on hover
     std::string tooltip_;
     /// Custom callback for rendering property label
@@ -313,14 +324,16 @@ struct inspector : crtp_meta_type<inspector>
     /**
      * @brief Called before inspecting a property to set up layout
      * @param prop Meta property being inspected
+     * @param object Object being inspected
      */
-    virtual void before_inspect(const entt::meta_data& prop);
+    virtual void before_inspect(const entt::meta_data& prop, const entt::meta_any& object);
     
     /**
      * @brief Called after inspecting a property to clean up layout
      * @param prop Meta property that was inspected
+     * @param object Object being inspected
      */
-    virtual void after_inspect(const entt::meta_data& prop);
+    virtual void after_inspect(const entt::meta_data& prop, const entt::meta_any& object);
     
     /**
      * @brief Pure virtual method to render and handle interaction for a variable

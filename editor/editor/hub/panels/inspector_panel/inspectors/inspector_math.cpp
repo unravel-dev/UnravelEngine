@@ -1175,10 +1175,10 @@ auto inspector_bbox::inspect(rtti::context& ctx,
 }
 
 
-void inspector_transform::before_inspect(const entt::meta_data& prop)
+void inspector_transform::before_inspect(const entt::meta_data& prop, const entt::meta_any& object)
 {
     layout_ = std::make_unique<property_layout>();
-    layout_->set_data(prop, false);
+    layout_->set_data(prop, object, false);
     open_ = layout_->push_tree_layout(ImGuiTreeNodeFlags_SpanFullWidth);
 }
 
@@ -1226,7 +1226,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
         override_ctx.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout;
-        layout.set_data(prop_pretty_name, "");
+        layout.set_data(prop_pretty_name);
         layout.push_layout(false);
 
         ImGui::SameLine();
@@ -1280,7 +1280,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
         override_ctx.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout;
-        layout.set_data(prop_pretty_name, "");
+        layout.set_data(prop_pretty_name);
         layout.push_layout(false);
 
         ImGui::SameLine();
@@ -1337,7 +1337,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
         override_ctx.push_segment(prop_name, prop_pretty_name);
 
         property_layout layout;
-        layout.set_data(prop_pretty_name, "");
+        layout.set_data(prop_pretty_name);
         layout.push_layout(false);
 
         ImGui::SameLine();
@@ -1415,7 +1415,7 @@ auto inspector_transform::inspect(rtti::context& ctx,
         override_ctx.push_segment(prop_name, prop_pretty_name);
         
         property_layout layout;
-        layout.set_data(prop_pretty_name, "");
+        layout.set_data(prop_pretty_name);
         layout.push_layout(false);
 
         ImGui::SameLine();

@@ -141,10 +141,10 @@ auto inspector_text_style_flags::inspect(rtti::context& ctx,
     return result;
 }
 
-void inspector_text_style::before_inspect(const entt::meta_data& prop)
+void inspector_text_style::before_inspect(const entt::meta_data& prop, const entt::meta_any& object)
 {
     layout_ = std::make_unique<property_layout>();
-    layout_->set_data(prop, false);
+    layout_->set_data(prop, object, false);
     open_ = layout_->push_tree_layout(ImGuiTreeNodeFlags_SpanFullWidth);
 }
 

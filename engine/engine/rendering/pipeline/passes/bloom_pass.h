@@ -35,6 +35,7 @@ private:
     auto create_or_resize_mip_chain(gfx::render_view& rview,
                                     const usize32_t& viewport_size,
                                     int mip_count) -> void;
+    auto get_mip_fbo(gfx::render_view& rview, int mip_index) -> const gfx::frame_buffer::ptr&;
     auto create_or_update_output_fb(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;

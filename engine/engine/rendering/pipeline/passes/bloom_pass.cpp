@@ -45,14 +45,32 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
         if(h < 1)
             h = 1;
 
-        auto name = "BLOOM_MIP_" + std::to_string(i);
-        auto& tex = rview.tex_get_or_emplace(name);
+        auto tex_name = "BLOOM_MIP_" + std::to_string(i);
+        auto& tex = rview.tex_get_or_emplace(tex_name);
 
+        bool tex_changed = false;
         if(!tex || tex->get_size().width != w || tex->get_size().height != h)
         {
             tex = std::make_shared<gfx::texture>(w, h, false, 1, gfx::texture_format::RGBA16F, flags);
+            tex_changed = true;
+        }
+
+        auto fbo_name = "BLOOM_MIP_FBO_" + std::to_string(i);
+        auto& fbo = rview.fbo_get_or_emplace(fbo_name);
+        if(!fbo || tex_changed)
+        {
+            fbo = std::make_shared<gfx::frame_buffer>();
+            gfx::fbo_attachment att;
+            att.texture = tex;
+            att.generate_mips = false;
+            fbo->populate({att});
         }
     }
+}
+
+auto bloom_pass::get_mip_fbo(gfx::render_view& rview, int mip_index) -> const gfx::frame_buffer::ptr&
+{
+    return rview.fbo_get("BLOOM_MIP_FBO_" + std::to_string(mip_index));
 }
 
 auto bloom_pass::create_or_update_output_fb(gfx::render_view& rview,
@@ -78,7 +96,10 @@ auto bloom_pass::create_or_update_output_fb(gfx::render_view& rview,
     if(!output_fbo || output_fbo->get_size() != input_sz)
     {
         output_fbo = std::make_shared<gfx::frame_buffer>();
-        output_fbo->populate({output_tex});
+        gfx::fbo_attachment att;
+        att.texture = output_tex;
+        att.generate_mips = false;
+        output_fbo->populate({att});
     }
     return output_fbo;
 }
@@ -96,22 +117,17 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     create_or_resize_mip_chain(rview, viewport_size, mip_count);
 
     // Unity HDRP-style: full-resolution prefilter pass (13-tap + threshold) before pyramid.
-    // Smoothes small specular highlights at full-res density, reducing flicker when downsampling.
     {
-        uint32_t prefilter_w = viewport_size.width;
-        uint32_t prefilter_h = viewport_size.height;
-
-        auto prefilter_fbo = std::make_shared<gfx::frame_buffer>();
-        prefilter_fbo->populate({rview.tex_get("BLOOM_MIP_0")});
+        const auto& mip0_fbo = get_mip_fbo(rview, 0);
 
         gfx::render_pass prefilter_pass("Bloom Prefilter Pass");
-        prefilter_pass.bind(prefilter_fbo.get());
+        prefilter_pass.bind(mip0_fbo.get());
         prefilter_pass.set_view_proj({}, {});
         prefilter_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
         downsample_program_.program->begin();
 
-        float pixel_size[4] = {1.0f / float(prefilter_w), 1.0f / float(prefilter_h), 0.0f, 0.0f};
+        float pixel_size[4] = {1.0f / float(viewport_size.width), 1.0f / float(viewport_size.height), 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
         float params_data[4] = {config.threshold, 0.0f, config.soft_knee, config.clamp};
@@ -119,7 +135,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
 
-        irect32_t rect(0, 0, prefilter_w, prefilter_h);
+        irect32_t rect(0, 0, viewport_size.width, viewport_size.height);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
         gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
@@ -138,9 +154,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         if(out_h < 1)
             out_h = 1;
 
-        const auto& out_tex = rview.tex_get("BLOOM_MIP_" + std::to_string(i + 1));
-        auto fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({out_tex});
+        const auto& fbo = get_mip_fbo(rview, i + 1);
 
         gfx::render_pass pass("Bloom Downsample Pass");
         pass.bind(fbo.get());
@@ -152,11 +166,10 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         float pixel_size[4] = {1.0f / float(out_w), 1.0f / float(out_h), 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
-        float params_data[4] = {0.0f, 1.0f, 0.0f, 0.0f}; // mip_level=1: no threshold
+        float params_data[4] = {0.0f, 1.0f, 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
-        const auto& src_tex = rview.tex_get("BLOOM_MIP_" + std::to_string(i));
-        gfx::set_texture(downsample_program_.s_tex, 0, src_tex);
+        gfx::set_texture(downsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(i)));
 
         irect32_t rect(0, 0, out_w, out_h);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
@@ -167,15 +180,16 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         downsample_program_.program->end();
     }
 
+    // Clear MIP_0 before upsample accumulation
     {
-        auto clear_fbo = std::make_shared<gfx::frame_buffer>();
-        clear_fbo->populate({rview.tex_get("BLOOM_MIP_0")});
+        const auto& mip0_fbo = get_mip_fbo(rview, 0);
         gfx::render_pass clear_pass("Bloom Clear MIP0 Pass");
-        clear_pass.bind(clear_fbo.get());
+        clear_pass.bind(mip0_fbo.get());
         clear_pass.set_view_proj(nullptr, nullptr);
         clear_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
     }
 
+    // Upsample and accumulate
     for(int i = 0; i < mip_count - 1; ++i)
     {
         int out_idx = mip_count - 2 - i;
@@ -186,9 +200,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         if(out_h < 1)
             out_h = 1;
 
-        const auto& out_tex = rview.tex_get("BLOOM_MIP_" + std::to_string(out_idx));
-        auto fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({out_tex});
+        const auto& fbo = get_mip_fbo(rview, out_idx);
 
         gfx::render_pass pass("Bloom Upsample Pass");
         pass.bind(fbo.get());
@@ -202,8 +214,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         float intensity[4] = {config.intensity, 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(upsample_program_.u_intensity, intensity);
 
-        const auto& src_tex = rview.tex_get("BLOOM_MIP_" + std::to_string(mip_count - 1 - i));
-        gfx::set_texture(upsample_program_.s_tex, 0, src_tex);
+        gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(mip_count - 1 - i)));
 
         irect32_t rect(0, 0, out_w, out_h);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

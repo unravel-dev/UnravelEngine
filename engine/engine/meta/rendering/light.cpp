@@ -638,7 +638,9 @@ REFLECT(light)
         .data<&light::intensity>("intensity"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "intensity"},
-            entt::attribute{"pretty_name", "Intensity"} 
+            entt::attribute{"pretty_name", "Intensity"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.05f},
         })
         .data<&light::type>("type"_hs)
         .custom<entt::attributes>(entt::attributes{ 

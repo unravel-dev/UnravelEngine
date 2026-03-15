@@ -80,7 +80,7 @@ REFLECT_INSPECTOR_INLINE(inspector_bbox, math::bbox)
 
 struct inspector_transform : public crtp_meta_type<inspector_transform, inspector>
 {
-    void before_inspect(const entt::meta_data& prop) override;
+    void before_inspect(const entt::meta_data& prop, const entt::meta_any& object) override;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 REFLECT_INSPECTOR_INLINE(inspector_transform, math::transform)

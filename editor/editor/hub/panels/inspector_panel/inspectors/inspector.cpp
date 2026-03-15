@@ -66,11 +66,11 @@ property_layout::property_layout()
     push_layout_to_stack(this);
 }
 
-property_layout::property_layout(const entt::meta_data& prop, bool columns /*= true*/)
+property_layout::property_layout(const entt::meta_data& prop, const entt::meta_any& object, bool columns /*= true*/)
 {
     push_layout_to_stack(this);
 
-    set_data(prop, columns);
+    set_data(prop, object, columns);
 
     push_layout();
 }
@@ -79,7 +79,7 @@ property_layout::property_layout(const std::string& name, bool columns /*= true*
 {
     push_layout_to_stack(this);
 
-    set_data(name, {}, columns);
+    set_data(name, "", "", columns);
 
     push_layout();
 }
@@ -88,7 +88,16 @@ property_layout::property_layout(const std::string& name, const std::string& too
 {
     push_layout_to_stack(this);
 
-    set_data(name, tooltip, columns);
+    set_data(name, tooltip,  "", columns);
+
+    push_layout();
+}
+
+property_layout::property_layout(const std::string& name, const std::string& tooltip, const std::string& hint, bool columns /*= true*/)
+{
+    push_layout_to_stack(this);
+
+    set_data(name, tooltip, hint, columns);
 
     push_layout();
 }
@@ -98,7 +107,7 @@ property_layout::property_layout(const std::string& name, const std::function<vo
     push_layout_to_stack(this);
 
     callback_ = callback;
-    set_data(name, {}, columns);
+    set_data(name, "", "", columns);
 
     push_layout();
 }
@@ -111,20 +120,23 @@ property_layout::~property_layout()
     pop_layout_from_stack(this);
 }
 
-void property_layout::set_data(const entt::meta_data& prop, bool columns)
+void property_layout::set_data(const entt::meta_data& prop, const entt::meta_any& object, bool columns)
 {
     auto name = entt::get_pretty_name(prop);
 
+    auto hint = entt::get_property_hint(object, prop);
+
     auto tooltip = entt::get_attribute_as<std::string>(prop, "tooltip");
 
-    set_data(name, tooltip, columns);
+    set_data(name, tooltip, hint, columns);
 
 }
 
-void property_layout::set_data(const std::string& name, const std::string& tooltip, bool columns)
+void property_layout::set_data(const std::string& name, const std::string& tooltip, const std::string& hint, bool columns)
 {
     name_ = string_utils::capitalize(name);
     tooltip_ = tooltip;
+    hint_ = hint;
     columns_ = columns;
 }
 
@@ -200,8 +212,6 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
         ImGui::SameLine();
         ImGui::HelpMarker("(?)", true, tooltip_callback);
     }
-
-  
 
     if(auto_proceed_to_next_column)
     {
@@ -319,17 +329,26 @@ void property_layout::pop_layout()
         }
     }
 
+    
+
+    
+    if(!hint_.empty())
+    {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + ImGui::GetContentRegionAvail().x);
+        ImGui::TextColored(ImVec4(1.0f, 0.62f, 0.0f, 1.0f), "%s",hint_.c_str());
+        ImGui::PopTextWrapPos();
+    }
     // group_.reset();
 
     pushed_ = false;
 }
 
-void inspector::before_inspect(const entt::meta_data& prop)
+void inspector::before_inspect(const entt::meta_data& prop, const entt::meta_any& object)
 {
-    layout_ = std::make_unique<property_layout>(prop);
+    layout_ = std::make_unique<property_layout>(prop, object);
 }
 
-void inspector::after_inspect(const entt::meta_data& prop)
+void inspector::after_inspect(const entt::meta_data& prop, const entt::meta_any& object)
 {
     layout_.reset();
 }

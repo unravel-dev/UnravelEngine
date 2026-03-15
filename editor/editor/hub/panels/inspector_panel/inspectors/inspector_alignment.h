@@ -16,7 +16,7 @@ REFLECT_INSPECTOR_INLINE(inspector_alignment, alignment)
 
 struct inspector_text_style : public crtp_meta_type<inspector_text_style, inspector>
 {
-    void before_inspect(const entt::meta_data& prop) override;
+    void before_inspect(const entt::meta_data& prop, const entt::meta_any& object) override;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 

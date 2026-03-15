@@ -656,7 +656,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
     if(prop_inspector)
     {
-        prop_inspector->before_inspect(prop);
+        prop_inspector->before_inspect(prop, object);
     }
 
     auto prop_proxy = make_property_proxy(var_proxy, prop);
@@ -673,7 +673,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
         }
         else if(is_enum)
         {
-            property_layout layout(prop);
+            property_layout layout(prop, object);
             result |= inspect_enum(ctx, prop_var, prop_proxy, info);
         }
         else
@@ -741,7 +741,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
 
     if(prop_inspector)
     {
-        prop_inspector->after_inspect(prop);
+        prop_inspector->after_inspect(prop, object);
     }
 
     override_ctx.pop_segment();
@@ -860,7 +860,7 @@ auto inspect_array(rtti::context& ctx,
                     override_ctx.push_segment(array_index_segment, array_index_segment);
 
                     property_layout layout;
-                    layout.set_data(element, {}, true);
+                    layout.set_data(element);
                     layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
                     ImGui::PushReadonly(item_info.read_only);
 

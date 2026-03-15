@@ -173,7 +173,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"predicate", spatial_denoise_predicate_entt},
             entt::attribute{"pretty_name", "Spatial Denoise"},
             entt::attribute{"tooltip", "Spatial denoise settings"},
-            entt::attribute{"flattable", true},
+            // entt::attribute{"flattable", true},
         })
         .data<&ssil_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -187,7 +187,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"predicate", temporal_predicate_entt},
             entt::attribute{"pretty_name", "Temporal Accumulation"},
             entt::attribute{"tooltip", "Temporal accumulation settings"},
-            entt::attribute{"flattable", true},
+            // entt::attribute{"flattable", true},
         });
 }
 

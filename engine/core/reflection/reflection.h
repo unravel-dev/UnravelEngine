@@ -106,6 +106,7 @@ auto is_property_flattable(const entt::meta_any& object, const entt::meta_data& 
 auto is_property_visible(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
 auto is_property_readonly(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
 auto is_property_flattable(const entt::meta_any& object, const entt::meta_custom& custom) -> bool;
+auto get_property_hint(const entt::meta_any& object, const entt::meta_data& prop) -> std::string;
 
 
 } // namespace entt

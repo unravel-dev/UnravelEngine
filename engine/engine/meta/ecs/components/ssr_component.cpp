@@ -252,20 +252,6 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
         //     entt::attribute{"tooltip", "Cone tracing specific settings"},
         //     entt::attribute{"flattable", true},
         // })
-        .data<&fidelityfx_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "enable_temporal_accumulation"},
-            entt::attribute{"pretty_name", "Enable Temporal"},
-            entt::attribute{"tooltip", "Enable temporal accumulation to reduce noise over multiple frames"},
-        })
-        .data<&fidelityfx_settings::temporal>("temporal"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "temporal"},
-            entt::attribute{"predicate", temporal_predicate_entt},
-            entt::attribute{"pretty_name", "Temporal Accumulation"},
-            entt::attribute{"tooltip", "Temporal accumulation settings"},
-            entt::attribute{"flattable", true},
-        })
         .data<&fidelityfx_settings::enable_spatial_denoise>("enable_spatial_denoise"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_spatial_denoise"},
@@ -278,8 +264,23 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"predicate", spatial_denoise_predicate_entt},
             entt::attribute{"pretty_name", "Spatial Denoise"},
             entt::attribute{"tooltip", "Spatial denoise settings (edge-preserving a-trous filter)"},
-            entt::attribute{"flattable", true},
+            // entt::attribute{"flattable", true},
+        })
+        .data<&fidelityfx_settings::enable_temporal_accumulation>("enable_temporal_accumulation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_temporal_accumulation"},
+            entt::attribute{"pretty_name", "Enable Temporal"},
+            entt::attribute{"tooltip", "Enable temporal accumulation to reduce noise over multiple frames"},
+        })
+        .data<&fidelityfx_settings::temporal>("temporal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temporal"},
+            entt::attribute{"predicate", temporal_predicate_entt},
+            entt::attribute{"pretty_name", "Temporal Accumulation"},
+            entt::attribute{"tooltip", "Temporal accumulation settings"},
+            // entt::attribute{"flattable", true},
         });
+
 
 }
 
