@@ -33,11 +33,16 @@ namespace
 
 // Forward declarations
 void apply_texture_conversion(bimg::ImageContainer* image, const std::string& semantic, bool inverse);
-void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& output_file, 
+void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& output_file,
                              const std::string& semantic, bool inverse);
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image);
+void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
+                                            const bimg::ImageContainer* specular_image);
+auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool;
+auto perceived_brightness(float r, float g, float b) -> float;
+auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float;
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
-                                                 const aiColor3D& specular_color, 
+                                                 const aiColor3D& specular_color,
                                                  float glossiness_factor) -> std::tuple<aiColor3D, float, float>;
 
 auto has_rotation_channel(const aiAnimation* animation, const std::string& nodeName) -> bool
@@ -1229,21 +1234,22 @@ void process_embedded_texture(const aiTexture* assimp_tex,
                               std::vector<imported_texture>& textures)
 {
     imported_texture texture{};
-    auto it = std::find_if(std::begin(textures),
-                           std::end(textures),
-                           [&](const imported_texture& texture)
-                           {
-                               return texture.embedded_index == assimp_tex_idx;
-                           });
-    if(it != std::end(textures))
+    // Search backwards: the caller just pushed the target entry at the back.
+    auto rit = std::find_if(textures.rbegin(),
+                            textures.rend(),
+                            [&](const imported_texture& texture)
+                            {
+                                return texture.embedded_index == static_cast<int>(assimp_tex_idx);
+                            });
+    if(rit != textures.rend())
     {
-        if(it->process_count > 0)
+        if(rit->process_count > 0)
         {
             return;
         }
 
-        it->process_count++;
-        texture = *it;
+        rit->process_count++;
+        texture = *rit;
     }
     else if(assimp_tex->mFilename.length > 0)
     {
@@ -1350,40 +1356,18 @@ namespace pixel_transforms
     }
 
     /**
-     * @brief Convert specular color to metallic value using Khronos approach
+     * @brief Approximate metallic from specular-only pixel using perceived brightness.
+     * Without the corresponding diffuse pixel we assume a mid-grey diffuse (0.5) for
+     * the quadratic solve. This gives a much better approximation than a linear remap.
      */
     auto specular_to_metallic_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
     {
-        // Calculate metallic from specular using Khronos official approach
+        constexpr float assumed_diffuse = 0.5f;
         float max_specular = std::max({r, g, b});
-        float avg_specular = (r + g + b) / 3.0f;
-        float color_variance = std::abs(r - avg_specular) + std::abs(g - avg_specular) + std::abs(b - avg_specular);
-        
-        float metallic = 0.0f;
-        const float dielectric_f0 = 0.04f; // Official dielectric F0 threshold
-        
-        if (max_specular <= dielectric_f0)
-        {
-            metallic = 0.0f; // Definitely dielectric
-        }
-        else if (max_specular >= 0.9f)
-        {
-            metallic = 1.0f; // Definitely metallic
-        }
-        else
-        {
-            // Use smooth transition based on official approach
-            float normalized_specular = (max_specular - dielectric_f0) / (1.0f - dielectric_f0);
-            metallic = math::clamp(normalized_specular, 0.0f, 1.0f);
-            
-            // If specular has significant color (not grayscale), boost metallic
-            if (color_variance > 0.1f && avg_specular > 0.3f)
-            {
-                metallic = std::max(metallic, 0.8f); // Strong indication of metal
-            }
-        }
-        
-        // Store metallic value in RGB channels
+        float one_minus_specular_strength = 1.0f - max_specular;
+        float perc_diffuse = perceived_brightness(assumed_diffuse, assumed_diffuse, assumed_diffuse);
+        float perc_specular = perceived_brightness(r, g, b);
+        float metallic = solve_metallic(perc_diffuse, perc_specular, one_minus_specular_strength);
         return std::make_tuple(metallic, metallic, metallic, 1.0f);
     }
 
@@ -1392,101 +1376,66 @@ namespace pixel_transforms
      */
     auto gloss_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
     {
-        // Convert glossiness to roughness: Roughness = 1 - Glossiness
-        
-        // Check if it's a greyscale glossiness map
-        if (std::abs(r - g) < 0.01f && std::abs(g - b) < 0.01f)
-        {
-            // Convert all RGB channels
-            float roughness = 1.0f - r;
-            return std::make_tuple(roughness, roughness, roughness, a);
-        }
-        else
-        {
-            // Check alpha channel for glossiness (common in specular/gloss workflows)
-            if (a < 1.0f)
-            {
-                float roughness = 1.0f - a;
-                return std::make_tuple(r, g, b, roughness);
-            }
-            else
-            {
-                // Assume green channel contains glossiness (common convention)
-                float roughness = 1.0f - g;
-                return std::make_tuple(r, roughness, b, a);
-            }
-        }
+        // This semantic is only used for dedicated glossiness maps (aiTextureType_SHININESS).
+        // Simply invert RGB: Roughness = 1 - Glossiness. Preserve alpha.
+        return std::make_tuple(1.0f - r, 1.0f - g, 1.0f - b, a);
     }
 
     /**
-     * @brief Convert specular texture to roughness estimation
+     * @brief Convert specular texture alpha (gloss) to roughness.
+     * Used when the texture is known to carry glossiness in the alpha channel.
      */
-    auto specular_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
+    auto specular_alpha_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
     {
-        float roughness = 0.0f;
-        
-        // Method 1: If alpha channel has meaningful data, use it as gloss and invert
-        if (a < 1.0f)
-        {
-            roughness = 1.0f - a; // Roughness = 1 - Gloss
-        }
-        else
-        {
-            // Method 2: Convert specular intensity to roughness estimate
-            float specular_intensity = (r + g + b) / 3.0f;
-            roughness = 1.0f - specular_intensity;
-        }
-        
+        float roughness = 1.0f - a;
         return std::make_tuple(roughness, roughness, roughness, 1.0f);
     }
 
     /**
-     * @brief Convert specular to combined metallic/roughness (glTF style)
+     * @brief Convert specular intensity to roughness estimate.
+     * Used when the texture has no meaningful alpha channel.
      */
-    auto specular_to_metallic_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
+    auto specular_intensity_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
     {
-        // Calculate metallic from specular using Khronos official approach
+        float specular_intensity = (r + g + b) / 3.0f;
+        float roughness = 1.0f - specular_intensity;
+        return std::make_tuple(roughness, roughness, roughness, 1.0f);
+    }
+
+    /**
+     * @brief Shared helper: approximate metallic from specular-only pixel.
+     * Uses the quadratic solver with an assumed mid-grey diffuse.
+     */
+    auto compute_metallic_from_specular(float r, float g, float b) -> float
+    {
+        constexpr float assumed_diffuse = 0.5f;
         float max_specular = std::max({r, g, b});
+        float one_minus_specular_strength = 1.0f - max_specular;
+        float perc_diffuse = perceived_brightness(assumed_diffuse, assumed_diffuse, assumed_diffuse);
+        float perc_specular = perceived_brightness(r, g, b);
+        return solve_metallic(perc_diffuse, perc_specular, one_minus_specular_strength);
+    }
+
+    /**
+     * @brief Convert specular to combined metallic/roughness using alpha as gloss.
+     * glTF convention: R=Occlusion(unused), G=Roughness, B=Metallic, A=1.0
+     */
+    auto specular_to_metallic_roughness_alpha_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
+    {
+        float metallic = compute_metallic_from_specular(r, g, b);
+        float roughness = 1.0f - a;
+        return std::make_tuple(1.0f, roughness, metallic, 1.0f);
+    }
+
+    /**
+     * @brief Convert specular to combined metallic/roughness using intensity for roughness.
+     * glTF convention: R=Occlusion(unused), G=Roughness, B=Metallic, A=1.0
+     */
+    auto specular_to_metallic_roughness_intensity_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
+    {
+        float metallic = compute_metallic_from_specular(r, g, b);
         float avg_specular = (r + g + b) / 3.0f;
-        float color_variance = std::abs(r - avg_specular) + std::abs(g - avg_specular) + std::abs(b - avg_specular);
-        
-        float metallic = 0.0f;
-        const float dielectric_f0 = 0.04f; // Official dielectric F0 threshold
-        
-        if (max_specular <= dielectric_f0)
-        {
-            metallic = 0.0f; // Definitely dielectric
-        }
-        else if (max_specular >= 0.9f)
-        {
-            metallic = 1.0f; // Definitely metallic
-        }
-        else
-        {
-            // Use smooth transition based on official approach
-            float normalized_specular = (max_specular - dielectric_f0) / (1.0f - dielectric_f0);
-            metallic = math::clamp(normalized_specular, 0.0f, 1.0f);
-            
-            // If specular has significant color (not grayscale), boost metallic
-            if (color_variance > 0.1f && avg_specular > 0.3f)
-            {
-                metallic = std::max(metallic, 0.8f); // Strong indication of metal
-            }
-        }
-        
-        // Calculate roughness from alpha (gloss) or intensity
-        float roughness = 0.0f;
-        if (a < 1.0f) // Alpha channel has gloss data
-        {
-            roughness = 1.0f - a; // Roughness = 1 - Gloss
-        }
-        else
-        {
-            // Fallback: use inverse of specular intensity
-            roughness = 1.0f - avg_specular;
-        }
-        
-        // Store in glTF convention: R=Occlusion(unused), G=Roughness, B=Metallic, A=1.0
+        float roughness = 1.0f - avg_specular;
         return std::make_tuple(1.0f, roughness, metallic, 1.0f);
     }
 
@@ -1532,13 +1481,28 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
     }
     else if(semantic == "SpecularToRoughness")
     {
-        for(uint32_t i = 0; i < pixel_count; ++i)
+        bool alpha_has_gloss = image_has_meaningful_alpha(image_data, pixel_count, bytes_per_pixel);
+
+        if(alpha_has_gloss)
         {
-            uint32_t pixel_index = i * bytes_per_pixel;
-            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel, 
-                                            pixel_transforms::specular_to_roughness_pixel);
+            for(uint32_t i = 0; i < pixel_count; ++i)
+            {
+                uint32_t pixel_index = i * bytes_per_pixel;
+                pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
+                                                pixel_transforms::specular_alpha_to_roughness_pixel);
+            }
+            APPLOG_TRACE("Mesh Importer: Applied SpecularToRoughness conversion (alpha=gloss) to texture");
         }
-        APPLOG_TRACE("Mesh Importer: Applied SpecularToRoughness conversion to texture");
+        else
+        {
+            for(uint32_t i = 0; i < pixel_count; ++i)
+            {
+                uint32_t pixel_index = i * bytes_per_pixel;
+                pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
+                                                pixel_transforms::specular_intensity_to_roughness_pixel);
+            }
+            APPLOG_TRACE("Mesh Importer: Applied SpecularToRoughness conversion (intensity) to texture");
+        }
     }
     else if(semantic == "SpecularToMetallic")
     {
@@ -1592,6 +1556,29 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
 }
 
 /**
+ * @brief Detect whether an image has meaningful alpha data (not all-opaque).
+ * Samples a subset of pixels for performance.
+ */
+auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool
+{
+    if(bytes_per_pixel < 4)
+    {
+        return false;
+    }
+    uint32_t sample_count = std::min(pixel_count, 256u);
+    uint32_t step = std::max(1u, pixel_count / sample_count);
+    uint32_t non_opaque = 0;
+    for(uint32_t i = 0; i < pixel_count; i += step)
+    {
+        if(image_data[i * bytes_per_pixel + 3] < 255)
+        {
+            non_opaque++;
+        }
+    }
+    return (non_opaque > sample_count / 10);
+}
+
+/**
  * @brief Apply combined specular to metallic+roughness conversion (glTF style)
  */
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image)
@@ -1600,20 +1587,101 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
     {
         return;
     }
-    
+
     uint8_t* image_data = static_cast<uint8_t*>(image->m_data);
     uint32_t pixel_count = image->m_width * image->m_height;
     uint32_t bpp = bimg::getBitsPerPixel(image->m_format);
     uint32_t bytes_per_pixel = bpp / 8;
-    
+
+    bool alpha_has_gloss = image_has_meaningful_alpha(image_data, pixel_count, bytes_per_pixel);
+
+    if(alpha_has_gloss)
+    {
+        for(uint32_t i = 0; i < pixel_count; ++i)
+        {
+            uint32_t pixel_index = i * bytes_per_pixel;
+            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
+                                            pixel_transforms::specular_to_metallic_roughness_alpha_pixel);
+        }
+        APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallicRoughness conversion (alpha=gloss) to texture");
+    }
+    else
+    {
+        for(uint32_t i = 0; i < pixel_count; ++i)
+        {
+            uint32_t pixel_index = i * bytes_per_pixel;
+            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
+                                            pixel_transforms::specular_to_metallic_roughness_intensity_pixel);
+        }
+        APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallicRoughness conversion (intensity) to texture");
+    }
+}
+
+/**
+ * @brief Convert a diffuse texture to a proper metallic/roughness base color texture.
+ * Uses the corresponding specular texture to compute per-pixel metallic and derive
+ * the correct base color from the Khronos identity:
+ *   baseColor = mix(diffuse * omsStr / (1-F0) / (1-m),
+ *                   (specular - F0*(1-m)) / m,
+ *                   metallic^2)
+ * The diffuse_image is modified in-place. specular_image is read-only.
+ * Both images must have the same dimensions.
+ */
+void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
+                                            const bimg::ImageContainer* specular_image)
+{
+    if(!diffuse_image || !diffuse_image->m_data || !specular_image || !specular_image->m_data)
+    {
+        return;
+    }
+    if(diffuse_image->m_width != specular_image->m_width || diffuse_image->m_height != specular_image->m_height)
+    {
+        APPLOG_WARNING("Mesh Importer: Diffuse/specular texture size mismatch for base color conversion");
+        return;
+    }
+
+    constexpr float dielectric_f0 = 0.04f;
+    constexpr float epsilon = 1e-6f;
+
+    uint32_t pixel_count = diffuse_image->m_width * diffuse_image->m_height;
+    uint32_t d_bpp = bimg::getBitsPerPixel(diffuse_image->m_format) / 8;
+    uint32_t s_bpp = bimg::getBitsPerPixel(specular_image->m_format) / 8;
+    auto* d_data = static_cast<uint8_t*>(diffuse_image->m_data);
+    const auto* s_data = static_cast<const uint8_t*>(specular_image->m_data);
+
     for(uint32_t i = 0; i < pixel_count; ++i)
     {
-        uint32_t pixel_index = i * bytes_per_pixel;
-        pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel, 
-                                        pixel_transforms::specular_to_metallic_roughness_pixel);
+        float dr = static_cast<float>(d_data[i * d_bpp + 0]) / 255.0f;
+        float dg = static_cast<float>(d_data[i * d_bpp + 1]) / 255.0f;
+        float db = static_cast<float>(d_data[i * d_bpp + 2]) / 255.0f;
+
+        float sr = static_cast<float>(s_data[i * s_bpp + 0]) / 255.0f;
+        float sg = static_cast<float>(s_data[i * s_bpp + 1]) / 255.0f;
+        float sb = (s_bpp >= 3) ? static_cast<float>(s_data[i * s_bpp + 2]) / 255.0f : sr;
+
+        float max_specular = std::max({sr, sg, sb});
+        float one_minus_spec_str = 1.0f - max_specular;
+        float perc_d = perceived_brightness(dr, dg, db);
+        float perc_s = perceived_brightness(sr, sg, sb);
+        float metallic = solve_metallic(perc_d, perc_s, one_minus_spec_str);
+
+        float one_minus_m = std::max(1.0f - metallic, epsilon);
+        float m_safe = std::max(metallic, epsilon);
+        float t = metallic * metallic;
+
+        auto base_d = [&](float d) { return d * one_minus_spec_str / (1.0f - dielectric_f0) / one_minus_m; };
+        auto base_s = [&](float s) { return (s - dielectric_f0 * (1.0f - metallic)) / m_safe; };
+
+        float br = math::clamp(math::mix(base_d(dr), base_s(sr), t), 0.0f, 1.0f);
+        float bg = math::clamp(math::mix(base_d(dg), base_s(sg), t), 0.0f, 1.0f);
+        float bb = math::clamp(math::mix(base_d(db), base_s(sb), t), 0.0f, 1.0f);
+
+        d_data[i * d_bpp + 0] = static_cast<uint8_t>(br * 255.0f);
+        d_data[i * d_bpp + 1] = static_cast<uint8_t>(bg * 255.0f);
+        d_data[i * d_bpp + 2] = static_cast<uint8_t>(bb * 255.0f);
     }
-    
-    APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallicRoughness conversion to texture");
+
+    APPLOG_TRACE("Mesh Importer: Applied diffuse-to-base-color conversion using specular texture");
 }
 
 /**
@@ -1918,63 +1986,6 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 }
 
 /**
- * @brief Convert specular value to metallic value using improved conversion formula
- */
-auto convert_specular_to_metallic(float specular) -> float
-{
-    // Enhanced conversion based on PBR principles and official Khronos guidelines:
-    const float dielectric_f0 = 0.04f; // Standard F0 for dielectrics
-    
-    if (specular <= dielectric_f0)
-    {
-        return 0.0f; // Definitely dielectric
-    }
-    else if (specular >= 0.9f)
-    {
-        return 1.0f; // Definitely metallic
-    }
-    else
-    {
-        // Smooth transition using the official approach
-        float normalized_specular = (specular - dielectric_f0) / (1.0f - dielectric_f0);
-        return math::clamp(normalized_specular, 0.0f, 1.0f);
-    }
-}
-
-/**
- * @brief Convert specular color to determine if material is metallic
- */
-auto is_specular_color_metallic(const aiColor3D& specular_color) -> bool
-{
-    // Metals typically have colored specular reflections
-    // Dielectrics usually have white/grey specular
-    float avg_specular = (specular_color.r + specular_color.g + specular_color.b) / 3.0f;
-    float color_variance = std::abs(specular_color.r - avg_specular) + 
-                          std::abs(specular_color.g - avg_specular) + 
-                          std::abs(specular_color.b - avg_specular);
-    
-    // If specular color has significant color variation, it's likely metallic
-    return color_variance > 0.1f && avg_specular > 0.3f;
-}
-
-/**
- * @brief Convert specular color to base color for metallic materials
- */
-auto convert_specular_color_to_base_color(const aiColor3D& specular_color, float metallic) -> aiColor3D
-{
-    if(metallic > 0.5f)
-    {
-        // For metals, specular color becomes the base color
-        return specular_color;
-    }
-    else
-    {
-        // For dielectrics, base color should be white or from diffuse
-        return aiColor3D(1.0f, 1.0f, 1.0f);
-    }
-}
-
-/**
  * @brief Get workflow-aware texture with proper semantic mapping
  */
 template<typename GetTextureFunc>
@@ -2062,8 +2073,9 @@ auto get_workflow_aware_texture(const aiMaterial* material,
 }
 
 /**
- * @brief Process material with intelligent property extraction and conversion
- * First tries to get actual PBR properties, then converts missing ones from available data
+ * @brief Process material with intelligent property extraction and conversion.
+ * First tries to get actual PBR properties, then converts missing ones from available data.
+ * For specular/gloss workflows, gathers inputs once and performs a single conversion call.
  */
 void process_material_with_workflow_conversion(const aiMaterial* material, 
                                              material_workflow workflow,
@@ -2071,151 +2083,72 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
                                              float& metallic,
                                              float& roughness)
 {
-    // Step 1: Try to get the actual PBR properties first
     bool has_base_color = (material->Get(AI_MATKEY_BASE_COLOR, base_color) == AI_SUCCESS);
     bool has_metallic = (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS);
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
-    // Step 2: Fill in missing properties based on available data and workflow
-    
-    // Handle Base Color
-    if (!has_base_color)
+    if (workflow == material_workflow::specular_gloss && (!has_base_color || !has_metallic || !has_roughness))
     {
-        // Try diffuse color as fallback
-        if (material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color) != AI_SUCCESS)
+        aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
+        material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
+        
+        aiColor3D specular_color{0.04f, 0.04f, 0.04f};
+        float specular_factor = 1.0f;
+        material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
+        material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
+        specular_color.r *= specular_factor;
+        specular_color.g *= specular_factor;
+        specular_color.b *= specular_factor;
+        
+        float glossiness = 0.5f;
+        if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
         {
-            base_color = aiColor3D{1.0f, 1.0f, 1.0f}; // Default white
+            float shininess = 32.0f;
+            if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+            {
+                glossiness = math::clamp(std::sqrt((shininess + 2.0f) / 1024.0f), 0.0f, 1.0f);
+            }
         }
         
-        // If we're converting from specular workflow, we might need to adjust base color
-        if (workflow == material_workflow::specular_gloss)
+        auto [converted_base_color, converted_metallic, converted_roughness] = 
+            convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
+        
+        if (!has_base_color)
         {
-            aiColor3D diffuse_color = base_color;
-            aiColor3D specular_color{0.04f, 0.04f, 0.04f};
-            float specular_factor = 1.0f;
-            
-            material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
-            material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
-            
-            specular_color.r *= specular_factor;
-            specular_color.g *= specular_factor;
-            specular_color.b *= specular_factor;
-            
-            // Use Khronos conversion for base color calculation
-            float glossiness = 0.5f;
-            if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
-            {
-                float shininess = 32.0f;
-                if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
-                {
-                    glossiness = math::clamp(std::sqrt((shininess + 2.0f) / 1024.0f), 0.0f, 1.0f);
-                }
-            }
-            
-            auto [converted_base_color, _, __] = 
-                convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
             base_color = converted_base_color;
-            
             APPLOG_TRACE("Mesh Importer: Converted base color from specular/diffuse workflow");
         }
-    }
-    
-    // Handle Metallic Factor
-    if (!has_metallic)
-    {
-        if (workflow == material_workflow::specular_gloss)
+        if (!has_metallic)
         {
-            // Convert from specular workflow
-            aiColor3D diffuse_color = base_color;
-            aiColor3D specular_color{0.04f, 0.04f, 0.04f};
-            float specular_factor = 1.0f;
-            float glossiness = 0.5f;
-            
-            material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
-            material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
-            material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
-            
-            specular_color.r *= specular_factor;
-            specular_color.g *= specular_factor;
-            specular_color.b *= specular_factor;
-            
-            if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
-            {
-                float shininess = 32.0f;
-                if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
-                {
-                    glossiness = math::clamp(std::sqrt((shininess + 2.0f) / 1024.0f), 0.0f, 1.0f);
-                }
-            }
-            
-            auto [_, converted_metallic, __] = 
-                convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
             metallic = converted_metallic;
-            
             APPLOG_TRACE("Mesh Importer: Converted metallic factor from specular workflow: {:.3f}", metallic);
         }
-        else
+        if (!has_roughness)
         {
-            // Try legacy reflectivity as fallback
-            if (material->Get(AI_MATKEY_REFLECTIVITY, metallic) != AI_SUCCESS)
-            {
-                metallic = 0.0f; // Default dielectric
-            }
+            roughness = converted_roughness;
+            APPLOG_TRACE("Mesh Importer: Converted roughness from specular workflow: {:.3f}", roughness);
         }
     }
-    
-    // Handle Roughness Factor
-    if (!has_roughness)
+    else
     {
-        if (workflow == material_workflow::specular_gloss)
+        if (!has_base_color)
         {
-            // Convert from glossiness
-            float glossiness = 0.5f;
-            
-            if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) == AI_SUCCESS)
+            if (material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color) != AI_SUCCESS)
             {
-                roughness = 1.0f - glossiness;
-                APPLOG_TRACE("Mesh Importer: Converted roughness from glossiness: {:.3f} -> {:.3f}", 
-                           glossiness, roughness);
-            }
-            else
-            {
-                // Try shininess conversion
-                float shininess = 32.0f;
-                if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
-                {
-                    // Convert to glossiness first, then to roughness
-                    glossiness = math::clamp(std::sqrt((shininess + 2.0f) / 1024.0f), 0.0f, 1.0f);
-                    roughness = 1.0f - glossiness;
-                    APPLOG_TRACE("Mesh Importer: Converted roughness from shininess: {:.1f} -> {:.3f}", 
-                               shininess, roughness);
-                }
-                else
-                {
-                    // Use specular workflow conversion as final fallback
-                    aiColor3D diffuse_color = base_color;
-                    aiColor3D specular_color{0.04f, 0.04f, 0.04f};
-                    float specular_factor = 1.0f;
-                    
-                    material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
-                    material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
-                    material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
-                    
-                    specular_color.r *= specular_factor;
-                    specular_color.g *= specular_factor;
-                    specular_color.b *= specular_factor;
-                    
-                    auto [_, __, converted_roughness] = 
-                        convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
-                    roughness = converted_roughness;
-                    
-                    APPLOG_TRACE("Mesh Importer: Converted roughness from full specular workflow: {:.3f}", roughness);
-                }
+                base_color = aiColor3D{1.0f, 1.0f, 1.0f};
             }
         }
-        else
+        
+        if (!has_metallic)
         {
-            // Try shininess conversion for legacy materials
+            if (material->Get(AI_MATKEY_REFLECTIVITY, metallic) != AI_SUCCESS)
+            {
+                metallic = 0.0f;
+            }
+        }
+        
+        if (!has_roughness)
+        {
             float shininess = 32.0f;
             if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
             {
@@ -2225,12 +2158,11 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
             }
             else
             {
-                roughness = 0.5f; // Default mid-range roughness
+                roughness = 0.5f;
             }
         }
     }
     
-    // Log final values
     APPLOG_TRACE("Mesh Importer: Final PBR values - BaseColor: ({:.3f}, {:.3f}, {:.3f}), "
                 "Metallic: {:.3f}, Roughness: {:.3f} [{}{}{}]",
                 base_color.r, base_color.g, base_color.b, metallic, roughness,
@@ -2339,10 +2271,13 @@ void process_material(asset_manager& am,
             {
                 case aiTextureMapMode_Mirror:
                     tex.flags = BGFX_SAMPLER_UVW_MIRROR;
+                    break;
                 case aiTextureMapMode_Clamp:
                     tex.flags = BGFX_SAMPLER_UVW_CLAMP;
+                    break;
                 case aiTextureMapMode_Decal:
                     tex.flags = BGFX_SAMPLER_UVW_BORDER;
+                    break;
                 default:
                     break;
             }
@@ -2361,7 +2296,8 @@ void process_material(asset_manager& am,
                                    std::end(textures),
                                    [&](const imported_texture& rhs)
                                    {
-                                       return rhs.embedded_index == texture.embedded_index;
+                                       return rhs.embedded_index == texture.embedded_index
+                                           && rhs.semantic == texture.semantic;
                                    });
             if(it != std::end(textures))
             {
@@ -2404,6 +2340,38 @@ void process_material(asset_manager& am,
         {
             process_texture(texture, textures);
 
+            // For specular workflow, convert the diffuse texture to proper base color
+            // using the specular texture for per-pixel metallic derivation.
+            if(workflow == material_workflow::specular_gloss)
+            {
+                aiString specular_path{};
+                if(material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0)
+                {
+                    auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
+                    if(spec_pair.first && spec_pair.first->pcData && spec_pair.first->mHeight == 0)
+                    {
+                        fs::path diffuse_file = output_dir / texture.name;
+                        bimg::ImageContainer* diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
+                        bimg::ImageContainer* specular_img = imageLoad(spec_pair.first->pcData,
+                                                                      static_cast<uint32_t>(spec_pair.first->mWidth));
+                        if(diffuse_img && specular_img)
+                        {
+                            apply_diffuse_to_base_color_conversion(diffuse_img, specular_img);
+                            imageSave(diffuse_file.string().c_str(), diffuse_img);
+                            APPLOG_TRACE("Mesh Importer: Converted diffuse texture to base color: {}", texture.name);
+                        }
+                        if(specular_img)
+                        {
+                            bimg::imageFree(specular_img);
+                        }
+                        if(diffuse_img)
+                        {
+                            bimg::imageFree(diffuse_img);
+                        }
+                    }
+                }
+            }
+
             auto key = fs::convert_to_protocol(output_dir / texture.name);
             mat.set_color_map(am.get_asset<gfx::texture>(key.generic_string()));
         }
@@ -2433,10 +2401,11 @@ void process_material(asset_manager& am,
 
     // METALLIC & ROUGHNESS TEXTURES - Check for duplicate specular usage first
     bool uses_duplicate_specular = detect_duplicate_specular_usage(material, workflow);
+    bool has_metallic_tex = false;
+    bool has_roughness_tex = false;
     
     if(uses_duplicate_specular)
     {
-        // Use combined processing for the same specular texture
         imported_texture combined_texture;
         if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToMetallicRoughness", combined_texture))
         {
@@ -2445,18 +2414,16 @@ void process_material(asset_manager& am,
             auto key = fs::convert_to_protocol(output_dir / combined_texture.name);
             auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
             
-            // Use the same texture for both metallic and roughness (glTF style channels)
             mat.set_metalness_map(texture_asset);
             mat.set_roughness_map(texture_asset);
+            has_metallic_tex = true;
+            has_roughness_tex = true;
             
             APPLOG_TRACE("Mesh Importer: Converting single specular texture to combined metallic/roughness: {}", combined_texture.name);
         }
     }
     else
     {
-        // Process metallic and roughness textures separately
-        
-        // METALLIC TEXTURE - Use workflow-aware detection with conversion support
         {
             imported_texture texture;
             if(get_workflow_aware_texture(material, workflow, "Metallic", texture, get_imported_texture, uses_duplicate_specular))
@@ -2465,8 +2432,8 @@ void process_material(asset_manager& am,
 
                 auto key = fs::convert_to_protocol(output_dir / texture.name);
                 mat.set_metalness_map(am.get_asset<gfx::texture>(key.generic_string()));
+                has_metallic_tex = true;
                 
-                // Log conversion info for debugging
                 if(texture.semantic == "SpecularToMetallic")
                 {
                     APPLOG_TRACE("Mesh Importer: Converting specular texture to metallic: {}", texture.name);
@@ -2474,7 +2441,6 @@ void process_material(asset_manager& am,
             }
         }
         
-        // ROUGHNESS TEXTURE - Use workflow-aware detection with conversion support
         {
             imported_texture texture;
             if(get_workflow_aware_texture(material, workflow, "Roughness", texture, get_imported_texture, uses_duplicate_specular))
@@ -2483,8 +2449,8 @@ void process_material(asset_manager& am,
 
                 auto key = fs::convert_to_protocol(output_dir / texture.name);
                 mat.set_roughness_map(am.get_asset<gfx::texture>(key.generic_string()));
+                has_roughness_tex = true;
                 
-                // Log conversion info for debugging
                 if(texture.semantic == "GlossToRoughness")
                 {
                     APPLOG_TRACE("Mesh Importer: Converting gloss texture to roughness: {}", texture.name);
@@ -2497,13 +2463,19 @@ void process_material(asset_manager& am,
         }
     }
 
-    // METALLIC & ROUGHNESS PROPERTIES - Now handled by workflow conversion above
-    // The metallic and roughness values are already set by process_material_with_workflow_conversion()
-    // which properly converts between specular/gloss and metallic/roughness workflows
-
-    // ROUGHNESS PROPERTY - Now handled by workflow conversion above  
-    // The roughness value is already set by process_material_with_workflow_conversion()
-    // which properly converts between specular/gloss and metallic/roughness workflows
+    // Converted textures already contain the full PBR values. The shader multiplies
+    // factor × texture, so set factors to 1.0 to avoid double-application.
+    if(workflow == material_workflow::specular_gloss)
+    {
+        if(has_metallic_tex)
+        {
+            mat.set_metalness(1.0f);
+        }
+        if(has_roughness_tex)
+        {
+            mat.set_roughness(1.0f);
+        }
+    }
 
     // NORMAL TEXTURE
     aiTextureType normals_type = aiTextureType_NORMALS;
@@ -2765,79 +2737,89 @@ auto read_file(Assimp::Importer& importer, const fs::path& file, uint32_t flags)
 }
 
 /**
- * @brief Convert specular/gloss to metallic/roughness using official Khronos formulas
- * Reference: glTF KHR_materials_pbrSpecularGlossiness specification appendix
+ * @brief Perceived brightness using ITU BT.601 luminance coefficients.
+ * Matches the reference Khronos/Babylon.js conversion utilities.
+ */
+auto perceived_brightness(float r, float g, float b) -> float
+{
+    return std::sqrt(0.299f * r * r + 0.587f * g * g + 0.114f * b * b);
+}
+
+/**
+ * @brief Solve for metallic using the official Khronos quadratic formula.
+ * Reference: babylon.pbrUtilities.js solveMetallic(), lygia/lighting/toMetallic.glsl
+ *
+ * The PBR identity for specular is: specular = lerp(dielectricF0, baseColor, metallic)
+ * Combined with the diffuse identity, this yields a quadratic in metallic that we solve here.
+ */
+auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float
+{
+    constexpr float dielectric_f0 = 0.04f;
+    constexpr float epsilon = 1e-6f;
+
+    if(perceived_specular < dielectric_f0)
+    {
+        return 0.0f;
+    }
+
+    float a = dielectric_f0;
+    float b = perceived_diffuse * one_minus_specular_strength / (1.0f - dielectric_f0) + perceived_specular - 2.0f * dielectric_f0;
+    float c = dielectric_f0 - perceived_specular;
+    float discriminant = std::max(b * b - 4.0f * a * c, 0.0f);
+
+    return math::clamp((-b + std::sqrt(discriminant)) / (2.0f * a + epsilon), 0.0f, 1.0f);
+}
+
+/**
+ * @brief Convert specular/gloss to metallic/roughness using official Khronos formulas.
+ * Reference: glTF KHR_materials_pbrSpecularGlossiness specification appendix,
+ *            babylon.pbrUtilities.js ConvertToMetallicRoughness()
  */
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
-                                                 const aiColor3D& specular_color, 
+                                                 const aiColor3D& specular_color,
                                                  float glossiness_factor) -> std::tuple<aiColor3D, float, float>
 {
-    // Official Khronos conversion formulas from glTF specification appendix
-    
-    // Step 1: Calculate the maximum specular component for metallic detection
+    constexpr float dielectric_f0 = 0.04f;
+    constexpr float epsilon = 1e-6f;
+
     float max_specular = std::max({specular_color.r, specular_color.g, specular_color.b});
-    
-    // Step 2: Calculate metallic factor based on specular intensity
-    // The official formula uses a threshold approach:
-    // - If max(specular) > 0.04 (typical dielectric F0), likely metallic
-    // - Use a sigmoid-like transition for smooth conversion
-    float metallic = 0.0f;
-    const float dielectric_f0 = 0.04f; // Typical F0 for dielectrics
-    
-    if (max_specular > dielectric_f0) 
+    float one_minus_specular_strength = 1.0f - max_specular;
+
+    float perceived_diffuse = perceived_brightness(diffuse_color.r, diffuse_color.g, diffuse_color.b);
+    float perceived_specular = perceived_brightness(specular_color.r, specular_color.g, specular_color.b);
+
+    float metallic = solve_metallic(perceived_diffuse, perceived_specular, one_minus_specular_strength);
+
+    // Reconstruct base color from the two workflow identities:
+    //   dielectric contribution: baseColor ≈ diffuse * oneMinusSpecStrength / (1 - F0) / (1 - metallic)
+    //   metallic contribution:   baseColor ≈ (specular - F0 * (1 - metallic)) / metallic
+    // Blend with metallic² for a smooth perceptual transition.
+    float one_minus_metallic = std::max(1.0f - metallic, epsilon);
+    float metallic_safe = std::max(metallic, epsilon);
+
+    auto base_from_diffuse = [&](float d) -> float
     {
-        // Enhanced metallic detection using official approach
-        float specular_above_dielectric = max_specular - dielectric_f0;
-        float specular_range = 1.0f - dielectric_f0;
-        
-        // Use a smooth transition function instead of sharp cutoff
-        metallic = math::clamp(specular_above_dielectric / specular_range, 0.0f, 1.0f);
-        
-        // Additional check: colored specular strongly indicates metal
-        float avg_specular = (specular_color.r + specular_color.g + specular_color.b) / 3.0f;
-        float color_variance = std::abs(specular_color.r - avg_specular) + 
-                              std::abs(specular_color.g - avg_specular) + 
-                              std::abs(specular_color.b - avg_specular);
-        
-        // If specular has significant color (not grayscale), boost metallic
-        if (color_variance > 0.1f && avg_specular > 0.3f)
-        {
-            metallic = std::max(metallic, 0.8f); // Strong indication of metal
-        }
-    }
-    
-    // Step 3: Calculate base color using official formula
-    // For metals: base color comes from specular color
-    // For dielectrics: base color comes from diffuse color
+        return d * one_minus_specular_strength / (1.0f - dielectric_f0) / one_minus_metallic;
+    };
+    auto base_from_specular = [&](float s) -> float
+    {
+        return (s - dielectric_f0 * (1.0f - metallic)) / metallic_safe;
+    };
+
+    float t = metallic * metallic;
     aiColor3D base_color;
-    
-    if (metallic > 0.5f)
-    {
-        // For metallic materials, specular color becomes base color
-        // Apply the diffuse contribution formula: c_diff = diffuse * (1 - max(specular))
-        float specular_influence = 1.0f - max_specular;
-        base_color.r = specular_color.r + (diffuse_color.r * specular_influence * (1.0f - metallic));
-        base_color.g = specular_color.g + (diffuse_color.g * specular_influence * (1.0f - metallic));
-        base_color.b = specular_color.b + (diffuse_color.b * specular_influence * (1.0f - metallic));
-    }
-    else
-    {
-        // For dielectric materials, use diffuse as base color
-        base_color = diffuse_color;
-    }
-    
-    // Step 4: Convert glossiness to roughness using official formula
-    // α = (1 - glossiness)² where α is the roughness parameter used in BRDF
-    // However, for texture storage, we typically use linear roughness
+    base_color.r = math::mix(base_from_diffuse(diffuse_color.r), base_from_specular(specular_color.r), t);
+    base_color.g = math::mix(base_from_diffuse(diffuse_color.g), base_from_specular(specular_color.g), t);
+    base_color.b = math::mix(base_from_diffuse(diffuse_color.b), base_from_specular(specular_color.b), t);
+
     float roughness = 1.0f - glossiness_factor;
-    
-    // Clamp all values to valid ranges
+
     base_color.r = math::clamp(base_color.r, 0.0f, 1.0f);
     base_color.g = math::clamp(base_color.g, 0.0f, 1.0f);
     base_color.b = math::clamp(base_color.b, 0.0f, 1.0f);
     metallic = math::clamp(metallic, 0.0f, 1.0f);
     roughness = math::clamp(roughness, 0.0f, 1.0f);
-    
+
     return std::make_tuple(base_color, metallic, roughness);
 }
 

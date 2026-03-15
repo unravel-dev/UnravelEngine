@@ -619,11 +619,16 @@ void model::submit(const math::mat4& world_transform,
             {
                 const auto& submesh = submeshes[index];
                 const auto& submesh_skinning_transforms = skinning_transforms[index];
-                gfx::set_world_transform(submesh_skinning_transforms.transforms);
 
-                mesh->bind_render_buffers_for_submesh(submesh, lod);
-                params.preserve_state = &index != &indices.back();
-                callbacks.setup_params_per_submesh(params, *mat);
+                if(!submesh_skinning_transforms.transforms.empty())
+                {
+                    gfx::set_world_transform(submesh_skinning_transforms.transforms);
+
+                    mesh->bind_render_buffers_for_submesh(submesh, lod);
+                    params.preserve_state = &index != &indices.back();
+                    callbacks.setup_params_per_submesh(params, *mat);
+                }
+                
             }
         };
 

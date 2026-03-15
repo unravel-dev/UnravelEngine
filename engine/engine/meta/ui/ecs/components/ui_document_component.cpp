@@ -61,6 +61,14 @@ REFLECT(ui_document_component)
             entt::attribute{"name", "render_mode"},
             entt::attribute{"pretty_name", "Render Mode"},
             entt::attribute{"tooltip", "Screen-space overlay or world-space 3D quad"},
+            entt::attribute{"hint", entt::property_predicate<std::string>([](const entt::meta_any& obj) -> std::string {
+                auto* data = obj.try_cast<ui_document_component>();
+                if(data && data->render_mode == ui_render_mode::screen_space_overlay)
+                {
+                    return "Screen Space Overlay can be viewed in the Game View.";
+                }
+                return {};
+            })},
         })
         .data<&ui_document_component::size>("size"_hs)
         .custom<entt::attributes>(entt::attributes{

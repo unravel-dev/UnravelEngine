@@ -438,17 +438,27 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::
     auto& am = ctx.get_cached<asset_manager>();
     auto asset = am.get_asset<mesh>(key);
 
-    auto mesh_asset = asset.get();
-
     model mdl;
 
     mdl.set_lod(asset, 0);
-  
+
+    auto mesh_ptr = asset.get();
+    if(mesh_ptr)
+    {
+        const auto& material_uids = mesh_ptr->get_default_material_uids();
+        for(size_t i = 0; i < material_uids.size(); ++i)
+        {
+            auto mat_asset = am.get_asset<material>(material_uids[i]);
+            if(mat_asset)
+            {
+                mdl.set_material(mat_asset, static_cast<uint32_t>(i));
+            }
+        }
+    }
 
     std::string name = fs::path(key).stem().string();
     auto object = scn.create_entity(name);
 
-    // Add component and configure it.
     auto& model_comp = object.emplace<model_component>();
     model_comp.set_casts_shadow(true);
     model_comp.set_casts_reflection(false);

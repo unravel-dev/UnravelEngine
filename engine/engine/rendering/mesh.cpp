@@ -775,6 +775,8 @@ auto mesh::load_mesh(load_data&& data) -> bool
 {
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
+    default_material_uids_ = std::move(data.default_material_uids);
+
     const bool has_skin_data = data.skin_data.has_bones();
     const bool skin_is_prepared = data.skin_is_prepared;
     auto bone_palette_bones = std::move(data.bone_palette_bones);
@@ -2032,11 +2034,6 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
     {
         data.bone_palette_bones.push_back(palette.get_bones());
     }
-    for(auto& submesh : data.submeshes)
-    {
-        submesh.skinned = true;
-    }
-
     return true;
 }
 
@@ -2536,6 +2533,11 @@ auto mesh::get_data_groups_count() const -> size_t
     }
 
     return 0;
+}
+
+auto mesh::get_default_material_uids() const -> const std::vector<hpp::uuid>&
+{
+    return default_material_uids_;
 }
 
 auto operator<(const mesh::adjacent_edge_key& key1, const mesh::adjacent_edge_key& key2) -> bool

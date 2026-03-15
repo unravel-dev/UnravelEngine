@@ -1,5 +1,6 @@
 #include "mesh.hpp"
 
+#include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
 #include <engine/meta/core/math/bbox.hpp>
@@ -9,6 +10,7 @@
 #include <serialization/binary_archive.h>
 
 #include <serialization/types/array.hpp>
+#include <serialization/types/vector.hpp>
 
 namespace bgfx
 {
@@ -262,6 +264,7 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("skin_is_prepared", obj.skin_is_prepared));
     try_save(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
     try_save(ar, ser20::make_nvp("lods", obj.lods));
+    try_save(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -283,9 +286,9 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("skin_is_prepared", obj.skin_is_prepared));
     try_load(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
     try_load(ar, ser20::make_nvp("lods", obj.lods));
+    try_load(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
-
 }
 LOAD_INSTANTIATE(mesh::load_data, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(mesh::load_data, ser20::iarchive_associative_t);

@@ -4,6 +4,7 @@
 #include <base/basetypes.hpp>
 #include <graphics/graphics.h>
 #include <hpp/span.hpp>
+#include <hpp/uuid.hpp>
 #include <math/math.h>
 
 #include <map>
@@ -458,6 +459,9 @@ public:
 
         ///< Additional LOD levels (LOD 1, 2, 3, ...) with simplified index buffers
         std::vector<lod_load_data> lods;
+
+        ///< UIDs of default materials generated during import, indexed by data_group_id.
+        std::vector<hpp::uuid> default_material_uids;
     };
 
     /**
@@ -887,6 +891,12 @@ public:
     auto get_data_groups_count() const -> size_t;
 
     /**
+     * @brief Gets the default material UIDs generated during import.
+     * @return A constant reference to the vector of material UIDs, indexed by data_group_id.
+     */
+    auto get_default_material_uids() const -> const std::vector<hpp::uuid>&;
+
+    /**
      * @brief Gets the number of submeshes for this mesh.
      * @param lod_index LOD index (0 = base, 1+ = simplified)
      * @return size_t The number of submeshes.
@@ -1232,6 +1242,9 @@ protected:
     bone_palette_array_t bone_palettes_;
     ///< List of armature nodes.
     std::unique_ptr<armature_node> root_ = nullptr;
+
+    ///< UIDs of default materials generated during import, indexed by data_group_id.
+    std::vector<hpp::uuid> default_material_uids_;
 };
 
 } // namespace unravel

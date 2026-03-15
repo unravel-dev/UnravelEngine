@@ -157,6 +157,16 @@ public:
         emissive_color_ = val;
     }
 
+    auto get_emissive_intensity() const -> float
+    {
+        return emissive_intensity_;
+    }
+
+    void set_emissive_intensity(float val)
+    {
+        emissive_intensity_ = val;
+    }
+
     /**
      * @brief Gets the roughness of the material.
      * @return The roughness value.
@@ -422,6 +432,8 @@ private:
         0.0f, /// Color
         0.0f  /// HDR Scale
     };
+    /// Emissive intensity multiplier (premultiplied into color before G-buffer write)
+    float emissive_intensity_{1.0f};
     /// Surface data
     math::vec4 surface_data_{
         0.3f, /// Roughness
