@@ -111,4 +111,10 @@ auto fxaa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     return output;
 }
 
+void fxaa_pass::release_resources(gfx::render_view& rview)
+{
+    rview.fbo_remove("FXAA_OUTPUT");
+    rview.tex_remove("FXAA_OUTPUT");
+}
+
 } // namespace unravel

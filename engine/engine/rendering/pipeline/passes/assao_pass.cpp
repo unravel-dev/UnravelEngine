@@ -755,4 +755,20 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
         bx::mtxTranspose(m_uniforms.m_normalsWorldToViewspaceMatrix, view);
     }
 }
+
+void assao_pass::release_resources(gfx::render_view& rview)
+{
+    for(int i = 0; i < 4; ++i)
+    {
+        rview.tex_remove("ASSAO_HALF_DEPTH_" + std::to_string(i));
+    }
+    rview.tex_remove("ASSAO_PING_PONG_A");
+    rview.tex_remove("ASSAO_PING_PONG_B");
+    rview.tex_remove("ASSAO_FINAL_RESULTS");
+    rview.tex_remove("ASSAO_NORMALS");
+    rview.tex_remove("ASSAO_IMPORTANCE_MAP");
+    rview.tex_remove("ASSAO_IMPORTANCE_MAP_PONG");
+    rview.tex_remove("ASSAO_AO_MAP");
+}
+
 } // namespace unravel

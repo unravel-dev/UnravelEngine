@@ -132,4 +132,11 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     return output;
 }
+
+void tonemapping_pass::release_resources(gfx::render_view& rview)
+{
+    rview.fbo_remove("TONEMAPPING_OUTPUT");
+    rview.tex_remove("TONEMAPPING_OUTPUT");
+}
+
 } // namespace unravel

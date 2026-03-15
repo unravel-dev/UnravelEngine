@@ -142,6 +142,7 @@ public:
     auto init(rtti::context& ctx) -> bool;
     void run(const camera& camera, gfx::render_view& rview, const run_params& params);
     auto shutdown() -> int32_t;
+    void release_resources(gfx::render_view& rview);
 
 private:
     struct dimensions

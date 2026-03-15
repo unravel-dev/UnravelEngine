@@ -90,6 +90,9 @@ public:
     /// Executes the SSR pass. Returns the actual output framebuffer.
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
+    /// Releases all GPU resources owned by this pass from the render_view.
+    void release_resources(gfx::render_view& rview);
+
     /// Executes the FidelityFX SSR pass. Returns the actual output framebuffer.
     auto run_fidelityfx(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 

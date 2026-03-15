@@ -124,6 +124,31 @@ float MakeRoughnessSafe(float Roughness)
     return max(Roughness, 0.002f);
 }
 
+// Geometric Specular Anti-Aliasing.
+// Reference: Tokuyoshi & Kaplanyan, "Improved Geometric Specular Antialiasing" (2019),
+//            Unity HDRP, Frostbite Engine.
+//
+// Uses screen-space derivatives of the world normal to estimate the geometric
+// normal variance within a pixel. Increases roughness proportionally so the NDF
+// lobe covers the range of normals, eliminating sub-pixel specular flicker
+// (e.g. Fresnel highlights at grazing angles, tiny specular hot-spots).
+//
+// Works in alpha-space (perceptualRoughness^2) to match the GGX parameterisation.
+float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
+{
+    vec3 dNdx = dFdx(worldNormal);
+    vec3 dNdy = dFdy(worldNormal);
+    float variance = dot(dNdx, dNdx) + dot(dNdy, dNdy);
+
+    const float SCREEN_SPACE_VARIANCE = 0.5f;
+    const float THRESHOLD = 0.18f;
+
+    float kernelRoughnessSq = min(variance * SCREEN_SPACE_VARIANCE, THRESHOLD * THRESHOLD);
+    float alpha = perceptualRoughness * perceptualRoughness;
+    float filteredAlpha = saturate(alpha + kernelRoughnessSq);
+    return sqrt(filteredAlpha);
+}
+
 float F0ToMetallic(float F0)
 {
     // Approximate the metallic input from F0 with a small lerp region

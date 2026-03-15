@@ -397,6 +397,11 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
     {
         temporal_input_fb = run_spatial_denoise(rview, ssr_curr_fb, params.g_buffer, params.settings.fidelityfx);
     }
+    else
+    {
+        rview.fbo_remove("SSR_DENOISED");
+        rview.tex_remove("SSR_DENOISED");
+    }
 
     // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST
     auto ssr_history_fb =
@@ -425,6 +430,10 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     {
         blurred_color_buffer =
             generate_blurred_color_buffer(rview, params.previous_frame, params.g_buffer, params.settings.fidelityfx);
+    }
+    else
+    {
+        rview.tex_remove("SSR_BLURRED_COLOR");
     }
 
     // ============================================================================
@@ -644,6 +653,20 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
     gfx::discard();
 
     return actual_output;
+}
+
+void ssr_pass::release_resources(gfx::render_view& rview)
+{
+    rview.fbo_remove("SSR_OUTPUT");
+    rview.tex_remove("SSR_OUTPUT");
+    rview.fbo_remove("SSR_CURR");
+    rview.tex_remove("SSR_CURR");
+    rview.tex_remove("SSR_HISTORY");
+    rview.fbo_remove("SSR_HISTORY_TEMP");
+    rview.tex_remove("SSR_HISTORY_TEMP");
+    rview.tex_remove("SSR_BLURRED_COLOR");
+    rview.fbo_remove("SSR_DENOISED");
+    rview.tex_remove("SSR_DENOISED");
 }
 
 } // namespace unravel

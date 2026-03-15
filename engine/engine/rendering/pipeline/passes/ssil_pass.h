@@ -62,6 +62,9 @@ public:
     /// Returns the SSIL output texture (RGB = indirect diffuse, A = confidence).
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
+    /// Releases all GPU resources owned by this pass from the render_view.
+    void release_resources(gfx::render_view& rview);
+
 private:
     auto run_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 

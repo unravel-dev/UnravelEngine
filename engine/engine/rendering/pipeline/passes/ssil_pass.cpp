@@ -105,10 +105,23 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
         run_temporal_resolve(rview, result_fb, params.g_buffer, params.prev_depth, params.cam, params.settings);
         result_fb = rview.fbo_get_or_emplace("SSIL_HISTORY_TEMP");
     }
+    else
+    {
+        rview.tex_remove("SSIL_HISTORY");
+        rview.fbo_remove("SSIL_HISTORY_TEMP");
+        rview.tex_remove("SSIL_HISTORY_TEMP");
+    }
 
     if(params.settings.enable_spatial_denoise && denoise_program_.is_valid())
     {
         result_fb = run_spatial_denoise(rview, result_fb, params.g_buffer, params.settings);
+    }
+    else
+    {
+        rview.fbo_remove("SSIL_DENOISED_A");
+        rview.tex_remove("SSIL_DENOISED_A");
+        rview.fbo_remove("SSIL_DENOISED_B");
+        rview.tex_remove("SSIL_DENOISED_B");
     }
     gfx::render_pass::pop_scope();
 
@@ -261,6 +274,19 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fb->get_texture()->native_handle(), 0, 0);
 
     return temp_fb->get_texture();
+}
+
+void ssil_pass::release_resources(gfx::render_view& rview)
+{
+    rview.fbo_remove("SSIL_CURR");
+    rview.tex_remove("SSIL_CURR");
+    rview.fbo_remove("SSIL_DENOISED_A");
+    rview.tex_remove("SSIL_DENOISED_A");
+    rview.fbo_remove("SSIL_DENOISED_B");
+    rview.tex_remove("SSIL_DENOISED_B");
+    rview.tex_remove("SSIL_HISTORY");
+    rview.fbo_remove("SSIL_HISTORY_TEMP");
+    rview.tex_remove("SSIL_HISTORY_TEMP");
 }
 
 } // namespace unravel

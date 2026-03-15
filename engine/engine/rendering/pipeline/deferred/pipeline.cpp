@@ -607,6 +607,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         create_or_resize_hiz_buffer(rview, viewport_size);
         run_hiz_pass(camera, rview, delta_t(0.0f));
     }
+    else
+    {
+        rview.tex_remove("HIZBUFFER");
+        rview.tex_remove("PREV_GBUFFER_DEPTH");
+    }
 
     // Direct lighting first so SSIL/SSR can trace against the current frame.
     target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
@@ -937,6 +942,7 @@ void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
 {
     if(!rparams.fill_assao_params)
     {
+        assao_pass_.release_resources(rview);
         return;
     }
     APP_SCOPE_PERF("Rendering/ASSAO Pass");
@@ -1566,6 +1572,7 @@ auto deferred::run_ssr_pass(const camera& camera,
 {
     if(!rparams.fill_ssr_params)
     {
+        ssr_pass_.release_resources(rview);
         return output;
     }
 
@@ -1598,7 +1605,8 @@ auto deferred::run_ssil_pass(const camera& camera,
 {
     if(!rparams.fill_ssil_params)
     {
-        rview.tex_get_or_emplace("SSIL") = nullptr;
+        ssil_pass_.release_resources(rview);
+        rview.tex_remove("SSIL");
         return nullptr;
     }
 
@@ -1626,6 +1634,7 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
 {
     if(!rparams.fill_fxaa_params)
     {
+        fxaa_pass_.release_resources(rview);
         return input;
     }
 
@@ -1646,6 +1655,7 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
 {
     if(!rparams.fill_bloom_params || !rparams.fill_hdr_params)
     {
+        bloom_pass_.release_resources(rview);
         return input;
     }
     bloom_pass::run_params params;
@@ -1661,6 +1671,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
 {
     if(!rparams.fill_hdr_params)
     {
+        tonemapping_pass_.release_resources(rview);
         return input;
     }
     APP_SCOPE_PERF("Rendering/Tonemapping Pass");

@@ -17,10 +17,12 @@ public:
     auto fbo_get_or_emplace(const hpp::string_view& id) -> frame_buffer::ptr&;
     auto fbo_get(const hpp::string_view& id) const -> const frame_buffer::ptr&;
     auto fbo_safe_get(const hpp::string_view& id) const -> const frame_buffer::ptr&;
+    void fbo_remove(const hpp::string_view& id);
 
     auto tex_get_or_emplace(const hpp::string_view& id) -> texture::ptr&;
     auto tex_get(const hpp::string_view& id) const -> const texture::ptr&;
     auto tex_safe_get(const hpp::string_view& id) const -> const texture::ptr&;
+    void tex_remove(const hpp::string_view& id);
 
     auto data_get_or_emplace(const hpp::string_view& id, uint32_t default_val = 0) -> uint32_t&;
     auto data_get(const hpp::string_view& id, uint32_t default_val = 0) const -> uint32_t;

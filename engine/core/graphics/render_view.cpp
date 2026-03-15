@@ -36,6 +36,15 @@ auto render_view::tex_safe_get(const hpp::string_view& id) const -> const textur
 }
 
 
+void render_view::tex_remove(const hpp::string_view& id)
+{
+    auto it = textures_.find(id);
+    if(it != textures_.end())
+    {
+        textures_.erase(it);
+    }
+}
+
 auto render_view::fbo_get_or_emplace(const hpp::string_view& id) -> frame_buffer::ptr&
 {
     auto it = fbos_.find(id);
@@ -64,6 +73,15 @@ auto render_view::fbo_safe_get(const hpp::string_view& id) const -> const frame_
 
     static const frame_buffer::ptr empty;
     return empty;
+}
+
+void render_view::fbo_remove(const hpp::string_view& id)
+{
+    auto it = fbos_.find(id);
+    if(it != fbos_.end())
+    {
+        fbos_.erase(it);
+    }
 }
 
 auto render_view::data_get_or_emplace(const hpp::string_view& id, uint32_t default_val) -> uint32_t&

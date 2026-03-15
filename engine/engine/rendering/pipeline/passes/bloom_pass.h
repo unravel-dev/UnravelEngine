@@ -28,6 +28,7 @@ public:
 
     auto init(rtti::context& ctx) -> bool;
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
+    void release_resources(gfx::render_view& rview);
 
 private:
     static constexpr int max_mip_count = 6;

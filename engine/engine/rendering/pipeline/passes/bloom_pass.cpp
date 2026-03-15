@@ -38,8 +38,8 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
 
     for(int i = 0; i < mip_count; ++i)
     {
-        uint32_t w = viewport_size.width >> i;
-        uint32_t h = viewport_size.height >> i;
+        uint32_t w = viewport_size.width >> (i + 1);
+        uint32_t h = viewport_size.height >> (i + 1);
         if(w < 1)
             w = 1;
         if(h < 1)
@@ -116,18 +116,24 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
     create_or_resize_mip_chain(rview, viewport_size, mip_count);
 
-    // Unity HDRP-style: full-resolution prefilter pass (13-tap + threshold) before pyramid.
+    // First downsample: full-res input -> half-res MIP_0.
+    // Uses Karis-weighted 13-tap to suppress sub-pixel specular flicker,
+    // combined with threshold/soft-knee prefilter.
     {
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
+        auto mip0_size = mip0_fbo->get_size();
 
-        gfx::render_pass prefilter_pass("Bloom Prefilter Pass");
-        prefilter_pass.bind(mip0_fbo.get());
-        prefilter_pass.set_view_proj({}, {});
-        prefilter_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
+        gfx::render_pass pass("Bloom Karis Downsample");
+        pass.bind(mip0_fbo.get());
+        pass.set_view_proj({}, {});
+        pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
         downsample_program_.program->begin();
 
-        float pixel_size[4] = {1.0f / float(viewport_size.width), 1.0f / float(viewport_size.height), 0.0f, 0.0f};
+        float pixel_size[4] = {1.0f / float(viewport_size.width),
+                               1.0f / float(viewport_size.height),
+                               0.0f,
+                               0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
         float params_data[4] = {config.threshold, 0.0f, config.soft_knee, config.clamp};
@@ -135,20 +141,26 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
 
-        irect32_t rect(0, 0, viewport_size.width, viewport_size.height);
+        irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
         gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(prefilter_pass.id, downsample_program_.program->native_handle());
+        gfx::submit(pass.id, downsample_program_.program->native_handle());
         gfx::set_state(BGFX_STATE_DEFAULT);
         downsample_program_.program->end();
     }
 
-    // Downsample pyramid (no threshold; prefilter already applied)
+    // Downsample pyramid: standard 13-tap tent filter, no threshold.
     for(int i = 0; i < mip_count - 1; ++i)
     {
-        uint32_t out_w = viewport_size.width >> (i + 1);
-        uint32_t out_h = viewport_size.height >> (i + 1);
+        uint32_t src_w = viewport_size.width >> (i + 1);
+        uint32_t src_h = viewport_size.height >> (i + 1);
+        uint32_t out_w = viewport_size.width >> (i + 2);
+        uint32_t out_h = viewport_size.height >> (i + 2);
+        if(src_w < 1)
+            src_w = 1;
+        if(src_h < 1)
+            src_h = 1;
         if(out_w < 1)
             out_w = 1;
         if(out_h < 1)
@@ -163,7 +175,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         downsample_program_.program->begin();
 
-        float pixel_size[4] = {1.0f / float(out_w), 1.0f / float(out_h), 0.0f, 0.0f};
+        float pixel_size[4] = {1.0f / float(src_w), 1.0f / float(src_h), 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
         float params_data[4] = {0.0f, 1.0f, 0.0f, 0.0f};
@@ -180,7 +192,8 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         downsample_program_.program->end();
     }
 
-    // Clear MIP_0 before upsample accumulation
+    // Clear MIP_0 before upsample accumulation so the result is purely
+    // the multi-scale bloom contribution from smaller mips.
     {
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
         gfx::render_pass clear_pass("Bloom Clear MIP0 Pass");
@@ -189,12 +202,13 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         clear_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
     }
 
-    // Upsample and accumulate
+    // Upsample and accumulate from smallest mip back to MIP_0.
     for(int i = 0; i < mip_count - 1; ++i)
     {
+        int src_idx = mip_count - 1 - i;
         int out_idx = mip_count - 2 - i;
-        uint32_t out_w = viewport_size.width >> out_idx;
-        uint32_t out_h = viewport_size.height >> out_idx;
+        uint32_t out_w = viewport_size.width >> (out_idx + 1);
+        uint32_t out_h = viewport_size.height >> (out_idx + 1);
         if(out_w < 1)
             out_w = 1;
         if(out_h < 1)
@@ -214,7 +228,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         float intensity[4] = {config.intensity, 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(upsample_program_.u_intensity, intensity);
 
-        gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(mip_count - 1 - i)));
+        gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(src_idx)));
 
         irect32_t rect(0, 0, out_w, out_h);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
@@ -225,6 +239,8 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         upsample_program_.program->end();
     }
 
+    // Combine: add half-res bloom (MIP_0) to full-res scene.
+    // The texture sampler bilinearly upscales the half-res bloom.
     auto output = create_or_update_output_fb(rview, input, params.output);
 
     gfx::render_pass pass("Bloom Combine Pass");
@@ -248,6 +264,17 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     gfx::discard();
 
     return output;
+}
+
+void bloom_pass::release_resources(gfx::render_view& rview)
+{
+    for(int i = 0; i < max_mip_count; ++i)
+    {
+        rview.fbo_remove("BLOOM_MIP_FBO_" + std::to_string(i));
+        rview.tex_remove("BLOOM_MIP_" + std::to_string(i));
+    }
+    rview.fbo_remove("BLOOM_OUTPUT");
+    rview.tex_remove("BLOOM_OUTPUT");
 }
 
 } // namespace unravel
