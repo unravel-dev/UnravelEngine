@@ -564,8 +564,12 @@ void hub::render_projects_list_view(rtti::context& ctx)
 
     auto on_open_project = [&](const std::string& p)
     {
-        auto path = fs::path(p).make_preferred();
-        pm.open_project(ctx, path);
+        auto& em = ctx.get_cached<editing_manager>();
+        em.queue_action("Open Project", [&ctx, &pm, p]() 
+        {
+            auto path = fs::path(p).make_preferred();
+            pm.open_project(ctx, path);
+        });
     };
 
     ImGui::PushFont(ImGui::Font::Bold);

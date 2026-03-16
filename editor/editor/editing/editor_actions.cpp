@@ -1100,7 +1100,13 @@ auto editor_actions::reload_project(rtti::context& ctx) -> bool
     auto project_path = fs::resolve_protocol("app:/");
 
     pm.close_project(ctx);
-    return pm.open_project(ctx, project_path);
+
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Reload Project", [&ctx, &pm, project_path]() 
+    {
+        pm.open_project(ctx, project_path);
+    });
+    return true;
 }
 
 void editor_actions::run_project(const fs::path& executable_path)

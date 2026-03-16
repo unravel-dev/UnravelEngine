@@ -738,7 +738,7 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         watchers.emplace_back(id);
     }
 
-    syncer.sync(data_dir, meta_dir);
+    syncer.sync(data_dir, meta_dir, on_progress);
 
     if(wait)
     {
@@ -808,7 +808,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<ui_tree>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
 
-    syncer.sync(meta_dir, cache_dir);
+    syncer.sync(meta_dir, cache_dir, on_progress);
 
     if(wait)
     {

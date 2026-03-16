@@ -12,9 +12,9 @@ class bloom_pass
 public:
     struct settings
     {
-        float threshold = 1.0f;
-        float soft_knee = 0.5f; // 0 = hard cutoff, 1 = soft transition (prevents specular flicker)
-        float clamp = 20.0f;    // max value before threshold; limits firefly exaggeration
+        float threshold = 0.8f;
+        float soft_knee = 1.0f;  // 0 = hard cutoff, 1 = soft transition (prevents specular flicker)
+        float clamp = 10.0f;    // soft compression limit; Reinhard-style, no hard discontinuity
         float intensity = 1.0f;
         int mip_count = 5;
     };
@@ -31,7 +31,7 @@ public:
     void release_resources(gfx::render_view& rview);
 
 private:
-    static constexpr int max_mip_count = 6;
+    static constexpr int max_mip_count = 10;
 
     auto create_or_resize_mip_chain(gfx::render_view& rview,
                                     const usize32_t& viewport_size,

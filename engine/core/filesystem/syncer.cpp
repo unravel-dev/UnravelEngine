@@ -87,7 +87,7 @@ auto syncer::get_on_renamed_callback(const std::string& ext) -> on_entry_renamed
     return get_mapping(ext).on_entry_renamed;
 }
 
-void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir)
+void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, const on_sync_progress_t& on_progress)
 {
     unsync();
 
@@ -101,8 +101,9 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir)
         ensure_directory_exists(synced_dir_);
     }
 
-    const auto on_change = [this](const auto& entries, bool is_initial_listing)
+    const auto on_change = [this, on_progress](const auto& entries, bool is_initial_listing)
     {
+        size_t completed = 0;
         for(const auto& entry : entries)
         {
             bool is_directory = (entry.type == fs::file_type::directory);
@@ -113,6 +114,15 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir)
                 entry_extension = entry_path.extension().string() + entry_extension;
                 entry_path.replace_extension();
             }
+
+            if(is_initial_listing)
+            {
+                if(on_progress)
+                {
+                    on_progress(completed, entries.size(), "Listing Assets " + entry_extension);
+                }
+            }
+
             switch(entry.status)
             {
                 case fs::watcher::entry_status::created:
@@ -179,6 +189,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir)
                 default:
                     break;
             }
+            completed++;
         }
     };
     using namespace std::literals;

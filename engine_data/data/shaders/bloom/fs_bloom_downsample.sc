@@ -34,6 +34,18 @@ float luminance(vec3 c)
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// Reinhard-style soft compression: smoothly attenuates values approaching the
+// limit instead of a hard min(). Linear near zero, asymptotes to limit.
+// Eliminates the discontinuity of hard clamp that itself causes flicker at the
+// boundary. Preserves color ratios.
+vec3 soft_clamp(vec3 color, float limit)
+{
+    float br = max(max(color.r, color.g), color.b);
+    if (br <= 1e-5) return color;
+    float compressed = limit * br / (limit + br);
+    return color * (compressed / br);
+}
+
 vec3 apply_threshold(vec3 color)
 {
     float br = max(max(color.r, color.g), color.b);
@@ -88,11 +100,10 @@ void main()
 
         if (u_clamp > 0.0)
         {
-            vec3 cv = vec3_splat(u_clamp);
-            a = min(a, cv); b = min(b, cv); c = min(c, cv);
-            d = min(d, cv); e = min(e, cv); f = min(f, cv);
-            g = min(g, cv); h = min(h, cv); i = min(i, cv);
-            j = min(j, cv); k = min(k, cv); l = min(l, cv); m = min(m, cv);
+            a = soft_clamp(a, u_clamp); b = soft_clamp(b, u_clamp); c = soft_clamp(c, u_clamp);
+            d = soft_clamp(d, u_clamp); e = soft_clamp(e, u_clamp); f = soft_clamp(f, u_clamp);
+            g = soft_clamp(g, u_clamp); h = soft_clamp(h, u_clamp); i = soft_clamp(i, u_clamp);
+            j = soft_clamp(j, u_clamp); k = soft_clamp(k, u_clamp); l = soft_clamp(l, u_clamp); m = soft_clamp(m, u_clamp);
         }
 
         vec3 g0 = (a + b + d + e) * 0.25;

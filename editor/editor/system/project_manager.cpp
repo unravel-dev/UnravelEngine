@@ -19,6 +19,7 @@
 #include <engine/rendering/mesh.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
+#include <engine/loading_screen.h>
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
@@ -104,19 +105,28 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     editor_actions::generate_script_workspace();
 
-
+    auto& ls = ctx.get_cached<loading_screen>();
+    ls.begin_module("Opening project");
     auto& aw = ctx.get_cached<asset_watcher>();
-    aw.watch_assets(ctx, "app:/");
+    aw.watch_assets(ctx, "app:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
+    {
+        ls.progress(completed, total, job);
+    });
 
     auto& scr = ctx.get_cached<script_system>();
+
+    ls.begin_module("Scripting");
     scr.load_app_domain(ctx, true);
 
+    ls.begin_module("Project Settings");
     load_project_settings();
     save_project_settings(ctx);
 
+    ls.begin_module("Deploy Settings");
     load_deploy_settings();
     save_deploy_settings();
 
+    ls.begin_module("Scene");
 
     auto scn = project_settings_.standalone.startup_scene;
 

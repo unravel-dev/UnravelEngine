@@ -62,6 +62,18 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
                                            size_t total,
                                            const std::string& current_job)
 {
+
+
+    auto now = std::chrono::steady_clock::now();
+    auto dt = now - last_frame_time_;
+
+    if(dt < std::chrono::milliseconds(100) && completed != total)
+    {
+        return;
+    }
+
+    last_frame_time_ = now;
+
     const auto& rend = ctx.get_cached<renderer>();
     auto window = rend.get_main_window();
     if(!window)

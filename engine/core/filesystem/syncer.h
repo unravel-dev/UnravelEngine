@@ -15,6 +15,7 @@ class syncer
 public:
     using rename_pair_t = std::pair<fs::path, fs::path>;
 
+    using on_sync_progress_t = std::function<void(size_t completed, size_t total, const std::string& current_job)>;
     using on_entry_created_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
     using on_entry_modified_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
     using on_entry_removed_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&)>;
@@ -62,7 +63,7 @@ public:
     /// synced_dir.
     /// </summary>
     //-----------------------------------------------------------------------------
-    void sync(const fs::path& reference_dir, const fs::path& synced_dir);
+    void sync(const fs::path& reference_dir, const fs::path& synced_dir, const on_sync_progress_t& on_progress = nullptr);
 
     //-----------------------------------------------------------------------------
     //  Name : unsync ()

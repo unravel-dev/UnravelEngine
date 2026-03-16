@@ -41,5 +41,7 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     bool inited_{};
+
+    std::chrono::steady_clock::time_point last_frame_time_;
 };
 } // namespace unravel
