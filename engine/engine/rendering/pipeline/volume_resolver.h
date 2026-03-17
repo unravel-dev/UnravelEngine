@@ -2,6 +2,7 @@
 
 #include <engine/ecs/scene.h>
 #include <engine/rendering/pipeline/passes/assao_pass.h>
+#include <engine/rendering/pipeline/passes/auto_exposure_pass.h>
 #include <engine/rendering/pipeline/passes/bloom_pass.h>
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
@@ -20,6 +21,8 @@ namespace unravel
  */
 struct resolved_post_process_settings
 {
+    bool has_auto_exposure = false;
+    auto_exposure_pass::settings auto_exposure{};
     bool has_bloom = false;
     bloom_pass::settings bloom{};
     bool has_tonemapping = false;

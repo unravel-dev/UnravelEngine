@@ -34,12 +34,21 @@ float luminance(vec3 c)
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// Clamp to valid half-float range. On GPUs, max(NaN, 0) returns 0 and
+// min(Inf, 65504) returns 65504, preventing NaN/Inf propagation through
+// the mip chain (which renders as black rectangles).
+vec3 safeHDR(vec3 c)
+{
+    return min(max(c, vec3_splat(0.0)), vec3_splat(65504.0));
+}
+
 // Reinhard-style soft compression: smoothly attenuates values approaching the
 // limit instead of a hard min(). Linear near zero, asymptotes to limit.
 // Eliminates the discontinuity of hard clamp that itself causes flicker at the
 // boundary. Preserves color ratios.
 vec3 soft_clamp(vec3 color, float limit)
 {
+    color = safeHDR(color);
     float br = max(max(color.r, color.g), color.b);
     if (br <= 1e-5) return color;
     float compressed = limit * br / (limit + br);
@@ -84,19 +93,19 @@ void main()
          * Each group is weighted by 1/(1+luma) to suppress bright outliers.
          */
 
-        vec3 a  = texture2D(s_tex, uv + vec2(-1.0, -1.0) * ps).rgb;
-        vec3 b  = texture2D(s_tex, uv + vec2( 0.0, -1.0) * ps).rgb;
-        vec3 c  = texture2D(s_tex, uv + vec2( 1.0, -1.0) * ps).rgb;
-        vec3 d  = texture2D(s_tex, uv + vec2(-1.0,  0.0) * ps).rgb;
-        vec3 e  = texture2D(s_tex, uv).rgb;
-        vec3 f  = texture2D(s_tex, uv + vec2( 1.0,  0.0) * ps).rgb;
-        vec3 g  = texture2D(s_tex, uv + vec2(-1.0,  1.0) * ps).rgb;
-        vec3 h  = texture2D(s_tex, uv + vec2( 0.0,  1.0) * ps).rgb;
-        vec3 i  = texture2D(s_tex, uv + vec2( 1.0,  1.0) * ps).rgb;
-        vec3 j  = texture2D(s_tex, uv + vec2(-0.5, -0.5) * ps).rgb;
-        vec3 k  = texture2D(s_tex, uv + vec2( 0.5, -0.5) * ps).rgb;
-        vec3 l  = texture2D(s_tex, uv + vec2(-0.5,  0.5) * ps).rgb;
-        vec3 m  = texture2D(s_tex, uv + vec2( 0.5,  0.5) * ps).rgb;
+        vec3 a  = safeHDR(texture2D(s_tex, uv + vec2(-1.0, -1.0) * ps).rgb);
+        vec3 b  = safeHDR(texture2D(s_tex, uv + vec2( 0.0, -1.0) * ps).rgb);
+        vec3 c  = safeHDR(texture2D(s_tex, uv + vec2( 1.0, -1.0) * ps).rgb);
+        vec3 d  = safeHDR(texture2D(s_tex, uv + vec2(-1.0,  0.0) * ps).rgb);
+        vec3 e  = safeHDR(texture2D(s_tex, uv).rgb);
+        vec3 f  = safeHDR(texture2D(s_tex, uv + vec2( 1.0,  0.0) * ps).rgb);
+        vec3 g  = safeHDR(texture2D(s_tex, uv + vec2(-1.0,  1.0) * ps).rgb);
+        vec3 h  = safeHDR(texture2D(s_tex, uv + vec2( 0.0,  1.0) * ps).rgb);
+        vec3 i  = safeHDR(texture2D(s_tex, uv + vec2( 1.0,  1.0) * ps).rgb);
+        vec3 j  = safeHDR(texture2D(s_tex, uv + vec2(-0.5, -0.5) * ps).rgb);
+        vec3 k  = safeHDR(texture2D(s_tex, uv + vec2( 0.5, -0.5) * ps).rgb);
+        vec3 l  = safeHDR(texture2D(s_tex, uv + vec2(-0.5,  0.5) * ps).rgb);
+        vec3 m  = safeHDR(texture2D(s_tex, uv + vec2( 0.5,  0.5) * ps).rgb);
 
         if (u_clamp > 0.0)
         {
@@ -153,6 +162,6 @@ void main()
         sum += (1.0 / 32.0) * texture2D(s_tex, uv + vec2( ps.x, -ps.y));
         sum += (1.0 / 32.0) * texture2D(s_tex, uv + vec2(-ps.x, -ps.y));
 
-        gl_FragColor = vec4(sum.rgb, sum.a);
+        gl_FragColor = vec4(safeHDR(sum.rgb), sum.a);
     }
 }

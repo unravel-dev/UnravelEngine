@@ -4,8 +4,9 @@ $input v_texcoord0
  * Screen-Space Indirect Lighting (SSIL) trace pass.
  *
  * Traces cosine-weighted hemisphere rays per pixel using Hi-Z hierarchical
- * ray marching, then samples the current frame's direct lighting at hit
- * points to approximate one-bounce indirect diffuse illumination.
+ * ray marching, then samples radiance at hit points. Supports multi-bounce
+ * by feeding back the previous frame's denoised SSIL output, attenuated by
+ * the hit surface's diffuse albedo for energy conservation.
  */
 
 #include "../common.sh"
@@ -17,6 +18,9 @@ SAMPLER2D(s_color, 0);
 SAMPLER2D(s_normal, 1);
 SAMPLER2D(s_hiz, 2);
 SAMPLER2D(s_emissive, 3);
+SAMPLER2D(s_albedo, 4);
+SAMPLER2D(s_prev_ssil, 5);
+
 uniform vec4 u_ssil_params;
 #define u_max_steps       u_ssil_params.x
 #define u_max_rays        u_ssil_params.y
@@ -26,6 +30,7 @@ uniform vec4 u_ssil_params;
 uniform vec4 u_ssil_params2;
 #define u_max_distance    u_ssil_params2.x
 #define u_frame_index     u_ssil_params2.y
+#define u_multi_bounce    u_ssil_params2.z
 
 #define BASE_LOD 0
 
@@ -47,11 +52,28 @@ vec3 ImportanceSampleCosine(vec2 E, vec3 N)
     return tangent * H.x + bitangent * H.y + N * H.z;
 }
 
-vec3 SampleDirectLighting(vec2 hit_uv)
+/// Sample total outgoing radiance at a hit point, including multi-bounce
+/// feedback from the previous frame attenuated by the hit surface's diffuse albedo.
+vec3 SampleRadiance(vec2 hit_uv)
 {
     vec3 direct = texture2DLod(s_color, hit_uv, 0.0).rgb;
     vec3 emissive = texture2DLod(s_emissive, hit_uv, 0.0).rgb;
-    return direct + emissive;
+    vec3 radiance = direct + emissive;
+
+    BRANCH
+    if(u_multi_bounce > 0.0)
+    {
+        vec3 hit_base_color = texture2DLod(s_albedo, hit_uv, 0.0).rgb;
+        float hit_metalness = texture2DLod(s_normal, hit_uv, 0.0).z;
+        vec3 hit_diffuse = hit_base_color * (1.0 - hit_metalness);
+
+        vec3 prev_indirect = texture2DLod(s_prev_ssil, hit_uv, 0.0).rgb;
+        prev_indirect = min(prev_indirect, vec3_splat(10.0));
+
+        radiance += hit_diffuse * prev_indirect * u_multi_bounce;
+    }
+
+    return radiance;
 }
 
 void main()
@@ -119,7 +141,7 @@ void main()
             BRANCH
             if(confidence > 0.0)
             {
-                vec3 hit_color = SampleDirectLighting(ss_hit_pos.xy);
+                vec3 hit_color = SampleRadiance(ss_hit_pos.xy);
 
                 hit_color = min(hit_color, vec3_splat(10.0));
 

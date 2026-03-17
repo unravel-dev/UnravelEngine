@@ -24,7 +24,7 @@ public:
     /// Temporal accumulation parameters
     struct temporal_settings
     {
-        float history_strength = 0.9f;
+        float history_strength = 0.5f;
         float depth_threshold = 0.01f;
         int max_accum_frames = 8;
     };
@@ -39,6 +39,9 @@ public:
         float max_distance = 20.0f;
         bool enable_half_res = false;
 
+        bool enable_multi_bounce = true;
+        float multi_bounce_intensity = 0.5f;
+
         bool enable_spatial_denoise = true;
         spatial_denoise_settings spatial_denoise;
 
@@ -52,6 +55,7 @@ public:
         gfx::texture::ptr hiz_buffer;
         gfx::texture::ptr direct_lighting;
         gfx::texture::ptr prev_depth;
+        gfx::texture::ptr prev_ssil;
         const camera* cam{};
         ssil_settings settings;
     };
@@ -102,6 +106,8 @@ private:
         gfx::program::uniform_ptr s_normal;
         gfx::program::uniform_ptr s_hiz;
         gfx::program::uniform_ptr s_emissive;
+        gfx::program::uniform_ptr s_albedo;
+        gfx::program::uniform_ptr s_prev_ssil;
 
         void cache_uniforms()
         {
@@ -111,6 +117,8 @@ private:
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_emissive, "s_emissive", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_albedo, "s_albedo", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_prev_ssil, "s_prev_ssil", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }

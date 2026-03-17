@@ -156,7 +156,6 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
     auto& fbo = rview.fbo_get_or_emplace("LBUFFER");
-    auto& fbo_combined = rview.fbo_get_or_emplace("LBUFFER_COMBINED");
     if(needs_recreate(fbo, viewport_size))
     {
         auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
@@ -176,10 +175,7 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
                                                               1,
                                                               format,
                                                               BGFX_TEXTURE_RT);
-                                                              
-        fbo_combined = std::make_shared<gfx::frame_buffer>();
-        fbo_combined->populate({tex, tex_unshadowed});
-
+      
 
         auto& fbo_depth = rview.fbo_get_or_emplace("LBUFFER_DEPTH");
         fbo_depth = std::make_shared<gfx::frame_buffer>();
@@ -631,6 +627,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         run_particle_pass(scn, camera, rview, target);
     }
+
+    target = run_auto_exposure_pass(rview, target, params, dt.count());
 
     target = run_bloom_pass(rview, target, params);
 
@@ -1184,12 +1182,11 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
-    const auto& lbuffer_combined = rview.fbo_get("LBUFFER_COMBINED");
 
-    const auto buffer_size = lbuffer_combined->get_size();
+    const auto buffer_size = lbuffer->get_size();
 
     gfx::render_pass pass("Direct Light Buffer Pass");
-    pass.bind(lbuffer_combined.get());
+    pass.bind(lbuffer.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
@@ -1304,12 +1301,11 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
-    const auto& lbuffer_combined = rview.fbo_get("LBUFFER_COMBINED");
 
     const auto irradiance_result = run_irradiance_pass(scn, rview);
 
     gfx::render_pass pass("Indirect Light Buffer Pass");
-    pass.bind(lbuffer_combined.get());
+    pass.bind(lbuffer.get());
     pass.set_view_proj(view, proj);
 
     const auto& iprogram = indirect_lighting_program_;
@@ -1607,15 +1603,16 @@ auto deferred::run_ssil_pass(const camera& camera,
     {
         ssil_pass_.release_resources(rview);
         rview.tex_remove("SSIL");
+        rview.tex_remove("PREV_SSIL");
         return nullptr;
     }
 
     ssil_pass::run_params ssil_params;
     ssil_params.g_buffer = rview.fbo_get("GBUFFER");
-    ssil_params.direct_lighting = rview.fbo_get("LBUFFER_COMBINED")->get_texture(1);
+    ssil_params.direct_lighting = rview.fbo_get("LBUFFER")->get_texture(0);
     ssil_params.prev_depth = rview.tex_safe_get("PREV_GBUFFER_DEPTH");
+    ssil_params.prev_ssil = rview.tex_safe_get("PREV_SSIL");
     ssil_params.cam = &camera;
-
 
     rparams.fill_ssil_params(ssil_params);
 
@@ -1624,6 +1621,33 @@ auto deferred::run_ssil_pass(const camera& camera,
 
     auto result = ssil_pass_.run(rview, ssil_params);
     rview.tex_get_or_emplace("SSIL") = result;
+
+    if(ssil_params.settings.enable_multi_bounce && result)
+    {
+        const auto viewport_size = camera.get_viewport_size();
+        auto& prev_ssil = rview.tex_get_or_emplace("PREV_SSIL");
+        if(!prev_ssil || prev_ssil->info.width != viewport_size.width ||
+           prev_ssil->info.height != viewport_size.height)
+        {
+            prev_ssil = std::make_shared<gfx::texture>(viewport_size.width,
+                                                       viewport_size.height,
+                                                       false,
+                                                       1,
+                                                       gfx::texture_format::RGBA16F,
+                                                       BGFX_TEXTURE_BLIT_DST |
+                                                           BGFX_SAMPLER_U_CLAMP |
+                                                           BGFX_SAMPLER_V_CLAMP);
+        }
+        gfx::render_pass blit_pass("Prev SSIL Blit Pass");
+        gfx::blit(blit_pass.id,
+                  prev_ssil->native_handle(), 0, 0,
+                  result->native_handle(), 0, 0);
+    }
+    else
+    {
+        rview.tex_remove("PREV_SSIL");
+    }
+
     return result;
 }
 
@@ -1647,6 +1671,23 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
     rparams.fill_fxaa_params(params);
 
     return fxaa_pass_.run(rview, params);
+}
+
+auto deferred::run_auto_exposure_pass(gfx::render_view& rview,
+                                      const gfx::frame_buffer::ptr& input,
+                                      const run_params& rparams,
+                                      float dt) -> gfx::frame_buffer::ptr
+{
+    if(!rparams.fill_auto_exposure_params)
+    {
+        auto_exposure_pass_.release_resources(rview);
+        return input;
+    }
+    auto_exposure_pass::run_params params;
+    params.input = input;
+    params.delta_time = dt;
+    rparams.fill_auto_exposure_params(params);
+    return auto_exposure_pass_.run(rview, params);
 }
 
 auto deferred::run_bloom_pass(gfx::render_view& rview,
@@ -1685,6 +1726,12 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     }
 
     rparams.fill_hdr_params(params);
+
+    if(rparams.fill_auto_exposure_params)
+    {
+        params.config.exposure = 1.0f;
+        params.exposure_texture = auto_exposure_pass_.get_exposure_texture(rview);
+    }
 
     return tonemapping_pass_.run(rview, params);
 }

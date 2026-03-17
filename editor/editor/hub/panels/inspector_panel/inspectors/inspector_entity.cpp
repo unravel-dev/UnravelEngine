@@ -119,6 +119,10 @@ auto get_component_icon() -> std::string
         return ICON_MDI_SCRIPT;
     }
     // Post-processing effects (using similar icons for consistency)
+    else if constexpr(std::is_same<T, auto_exposure_component>::value)
+    {
+        return ICON_MDI_BRIGHTNESS_AUTO;
+    }
     else if constexpr(std::is_same<T, bloom_component>::value)
     {
         return ICON_MDI_WHITE_BALANCE_SUNNY;

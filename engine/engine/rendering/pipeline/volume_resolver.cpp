@@ -1,6 +1,7 @@
 #include "volume_resolver.h"
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
@@ -89,11 +90,14 @@ auto resolve_post_process_volumes(scene& scn,
                   return a.is_global && !b.is_global;
               });
 
+    bool first_auto_exposure = true;
     bool first_bloom = true;
     bool first_tonemapping = true;
     bool first_assao = true;
     bool first_ssr = true;
     bool first_ssil = true;
+    float auto_exposure_enabled_sum = 0.0f;
+    float auto_exposure_contrib_sum = 0.0f;
     float bloom_enabled_sum = 0.0f;
     float bloom_contrib_sum = 0.0f;
     float tonemapping_enabled_sum = 0.0f;
@@ -111,6 +115,17 @@ auto resolve_post_process_volumes(scene& scn,
     {
         auto handle = scn.create_handle(c.entity);
         const float contrib = c.contribution;
+
+        if(auto* ae = handle.try_get<auto_exposure_component>(); ae && contrib > 0.0f)
+        {
+            auto_exposure_enabled_sum += (ae->enabled ? 1.0f : 0.0f) * contrib;
+            auto_exposure_contrib_sum += contrib;
+            if(ae->enabled)
+            {
+                auto_exposure_component::merge_into(result.auto_exposure, ae->settings, contrib, first_auto_exposure);
+                first_auto_exposure = false;
+            }
+        }
 
         if(auto* bloom = handle.try_get<bloom_component>(); bloom && contrib > 0.0f)
         {
@@ -174,6 +189,7 @@ auto resolve_post_process_volumes(scene& scn,
         }
     }
 
+    result.has_auto_exposure = auto_exposure_contrib_sum > 0.0f && (auto_exposure_enabled_sum / auto_exposure_contrib_sum) > 0.5f;
     result.has_bloom = bloom_contrib_sum > 0.0f && (bloom_enabled_sum / bloom_contrib_sum) > 0.5f;
     result.has_tonemapping = tonemapping_contrib_sum > 0.0f && (tonemapping_enabled_sum / tonemapping_contrib_sum) > 0.5f;
     result.has_fxaa = fxaa_contrib_sum > 0.0f && (fxaa_enabled_sum / fxaa_contrib_sum) > 0.5f;

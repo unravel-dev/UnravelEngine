@@ -144,6 +144,13 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     gfx::set_texture(trace_program_.s_normal, 1, params.g_buffer->get_texture(1));
     gfx::set_texture(trace_program_.s_hiz, 2, params.hiz_buffer);
     gfx::set_texture(trace_program_.s_emissive, 3, params.g_buffer->get_texture(2));
+    gfx::set_texture(trace_program_.s_albedo, 4, params.g_buffer->get_texture(0));
+
+    bool multi_bounce_active = params.settings.enable_multi_bounce && params.prev_ssil && trace_program_.s_prev_ssil;
+    if(multi_bounce_active)
+    {
+        gfx::set_texture(trace_program_.s_prev_ssil, 5, params.prev_ssil);
+    }
 
     float ssil_params[4] = {
         float(params.settings.max_steps),
@@ -152,10 +159,11 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         params.settings.brightness};
     gfx::set_uniform(trace_program_.u_ssil_params, ssil_params);
 
+    float multi_bounce_val = multi_bounce_active ? params.settings.multi_bounce_intensity : 0.0f;
     float ssil_params2[4] = {
         params.settings.max_distance,
         float(gfx::get_render_frame() % params.settings.temporal.max_accum_frames),
-        0.0f,
+        multi_bounce_val,
         0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 

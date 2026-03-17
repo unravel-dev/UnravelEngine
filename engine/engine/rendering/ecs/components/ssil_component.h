@@ -31,6 +31,9 @@ public:
         result.max_distance = std::lerp(result.max_distance, from.max_distance, contribution);
         result.enable_half_res = contribution >= 0.5f ? from.enable_half_res : result.enable_half_res;
 
+        result.enable_multi_bounce = contribution >= 0.5f ? from.enable_multi_bounce : result.enable_multi_bounce;
+        result.multi_bounce_intensity = std::lerp(result.multi_bounce_intensity, from.multi_bounce_intensity, contribution);
+
         result.enable_spatial_denoise = contribution >= 0.5f ? from.enable_spatial_denoise : result.enable_spatial_denoise;
         result.spatial_denoise.depth_sigma = std::lerp(result.spatial_denoise.depth_sigma, from.spatial_denoise.depth_sigma, contribution);
         result.spatial_denoise.normal_power = std::lerp(result.spatial_denoise.normal_power, from.spatial_denoise.normal_power, contribution);

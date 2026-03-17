@@ -116,10 +116,15 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     tonemapping_program_.program->begin();
 
-    float tonemap[4] = {params.config.exposure, static_cast<float>(params.config.method), 0.0f, 0.0f};
+    float use_adapted = (params.exposure_texture && tonemapping_program_.s_exposure) ? 1.0f : 0.0f;
+    float tonemap[4] = {params.config.exposure, static_cast<float>(params.config.method), use_adapted, 0.0f};
     gfx::set_uniform(tonemapping_program_.u_tonemapping, tonemap);
 
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
+    if(params.exposure_texture && tonemapping_program_.s_exposure)
+    {
+        gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture);
+    }
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);

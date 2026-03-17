@@ -12,6 +12,7 @@
 #include <engine/ui/ecs/components/ui_document_component.h>
 
 #include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
@@ -43,6 +44,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     blit_pass_.init(ctx);
     atmospheric_pass_perez_.init(ctx);
     atmospheric_pass_skybox_.init(ctx);
+    auto_exposure_pass_.init(ctx);
     bloom_pass_.init(ctx);
     fxaa_pass_.init(ctx);
     tonemapping_pass_.init(ctx);
@@ -186,6 +188,16 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
     
+    if(auto ae_comp = camera_ent.try_get<auto_exposure_component>(); ae_comp && ae_comp->enabled)
+    {
+        params.fill_auto_exposure_params = [camera_ent](auto_exposure_pass::run_params& params)
+        {
+            if(auto ae_comp = camera_ent.try_get<auto_exposure_component>())
+            {
+                params.config = ae_comp->settings;
+            }
+        };
+    }
     if(auto bloom_comp = camera_ent.try_get<bloom_component>(); bloom_comp && bloom_comp->enabled)
     {
         params.fill_bloom_params = [camera_ent](bloom_pass::run_params& params)
@@ -259,13 +271,18 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
         return params;
     }
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
-    const bool has_any_volume = resolved.has_bloom || resolved.has_tonemapping || resolved.has_fxaa ||
-                                resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
+    const bool has_any_volume = resolved.has_auto_exposure || resolved.has_bloom || resolved.has_tonemapping ||
+                                resolved.has_fxaa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
     if(!has_any_volume)
     {
         return params;
     }
     params.volume_settings = resolved;
+    if(resolved.has_auto_exposure)
+    {
+        auto_exposure_pass::settings s = resolved.auto_exposure;
+        params.fill_auto_exposure_params = [s](auto_exposure_pass::run_params& p) { p.config = s; };
+    }
     if(resolved.has_bloom)
     {
         bloom_pass::settings s = resolved.bloom;

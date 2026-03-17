@@ -378,7 +378,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     return visibility;
 }
 
-void pbr_light(vec2 texcoord0, vec2 fragCoord, out vec4 out_shadowed, out vec4 out_unshadowed)
+vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
@@ -434,13 +434,12 @@ void pbr_light(vec2 texcoord0, vec2 fragCoord, out vec4 out_shadowed, out vec4 o
                   + subsurface_lighting * subsurface_multiplier
                   + colorCoverage * u_shadowMapShowCoverage;
 
-    vec3 surface_multiplier_unshadowed = light_color * (NoL * base_attenuation);
-    vec3 lighting_unshadowed = surface_multiplier_unshadowed * direct_surface_lighting
-                             + subsurface_lighting * subsurface_multiplier
-                             + colorCoverage * u_shadowMapShowCoverage;
+    // vec3 surface_multiplier_unshadowed = light_color * (NoL * base_attenuation);
+    // vec3 lighting_unshadowed = surface_multiplier_unshadowed * direct_surface_lighting
+    //                          + subsurface_lighting * subsurface_multiplier
+    //                          + colorCoverage * u_shadowMapShowCoverage;
 
-    out_shadowed = vec4(lighting, 1.0f);
-    out_unshadowed = vec4(lighting_unshadowed, 1.0f);
+    return vec4(lighting, 1.0f);
 }
 
 #if PBR_INDIRECT
@@ -461,8 +460,11 @@ vec4 pbr_indirect(vec2 texcoord0)
     vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
     vec3 indirect_diffuse = irradiance + ssil_sample.rgb * ssil_sample.a;
+
     float indirect_filtered_roughness = data.roughness;//GeometricSpecularAA(N, data.roughness);
-    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, V, N);
+    float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
+
+    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, lighting_visibility, V, N);
     return vec4(indirect_lighting + data.emissive_color, 1.0f);
 }
 #endif

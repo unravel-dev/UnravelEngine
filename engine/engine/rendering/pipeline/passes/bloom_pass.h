@@ -3,6 +3,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <graphics/render_view.h>
+#include <math/color.h>
 
 namespace unravel
 {
@@ -13,10 +14,39 @@ public:
     struct settings
     {
         float threshold = 0.8f;
-        float soft_knee = 1.0f;  // 0 = hard cutoff, 1 = soft transition (prevents specular flicker)
-        float clamp = 10.0f;    // soft compression limit; Reinhard-style, no hard discontinuity
-        float intensity = 1.0f;
-        int mip_count = 5;
+        float soft_knee = 0.5f;
+        float clamp = 10.0f;
+        float intensity = 0.7f;
+        int mip_count = 6;
+
+        // Per-mip tint (RGB) and weight (alpha). Applied during upsample cascade.
+        // Tint controls color, alpha controls contribution weight (0 = disabled, 1 = full).
+        math::color mip0_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/2 res  - tightest halo
+        math::color mip1_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/4 res
+        math::color mip2_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/8 res
+        math::color mip3_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/16 res
+        math::color mip4_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/32 res
+        math::color mip5_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/64 res - widest bloom
+
+        float dirt_intensity = 0.0f;
+
+        auto get_mip_tint(int idx) const -> const math::color&
+        {
+            switch(idx)
+            {
+                case 0: return mip0_tint;
+                case 1: return mip1_tint;
+                case 2: return mip2_tint;
+                case 3: return mip3_tint;
+                case 4: return mip4_tint;
+                case 5: return mip5_tint;
+                default:
+                {
+                    static const math::color default_tint(1.0f, 1.0f, 1.0f, 1.0f);
+                    return default_tint;
+                }
+            }
+        }
     };
 
     struct run_params
@@ -60,11 +90,11 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_pixel_size, "u_pixelSize", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_intensity, "u_intensity", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_tint, "u_tint", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_pixel_size;
-        gfx::program::uniform_ptr u_intensity;
+        gfx::program::uniform_ptr u_tint;
         gfx::program::uniform_ptr s_tex;
         std::unique_ptr<gpu_program> program;
     } upsample_program_;

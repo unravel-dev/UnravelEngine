@@ -40,6 +40,7 @@ public:
     {
         gfx::frame_buffer::ptr input;
         gfx::frame_buffer::ptr output;
+        gfx::texture::ptr exposure_texture;
 
         settings config{};
     };
@@ -59,10 +60,12 @@ private:
         {
             cache_uniform(program.get(), u_tonemapping, "u_tonemapping", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_tonemapping;
         gfx::program::uniform_ptr s_input;
+        gfx::program::uniform_ptr s_exposure;
 
         std::unique_ptr<gpu_program> program;
 

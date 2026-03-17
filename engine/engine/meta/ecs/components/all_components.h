@@ -17,6 +17,7 @@
 #include "test_component.hpp"
 #include "transform_component.hpp"
 #include "script_component.hpp"
+#include "auto_exposure_component.hpp"
 #include "bloom_component.hpp"
 #include "tonemapping_component.hpp"
 #include "fxaa_component.hpp"
@@ -45,6 +46,7 @@ using all_serializeable_components = std::tuple<
     submesh_component,
     camera_component,
     volume_component,
+    auto_exposure_component,
     tonemapping_component,
     assao_component,
     bloom_component,
@@ -77,6 +79,7 @@ using all_inspectable_components = std::tuple<
     submesh_component,
     camera_component,
     volume_component,
+    auto_exposure_component,
     tonemapping_component,
     assao_component,
     bloom_component,
@@ -100,6 +103,7 @@ using all_addable_components = std::tuple<
     animation_component,
     camera_component,
     volume_component,
+    auto_exposure_component,
     tonemapping_component,
     assao_component,
     bloom_component,

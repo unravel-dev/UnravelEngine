@@ -91,6 +91,15 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
 {
     using ssil_settings = ssil_pass::ssil_settings;
 
+    auto multi_bounce_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
+    {
+        if(auto data = obj.try_cast<ssil_settings>())
+        {
+            return data->enable_multi_bounce;
+        }
+        return false;
+    });
+
     auto temporal_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
     {
         if(auto data = obj.try_cast<ssil_settings>())
@@ -160,6 +169,21 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"name", "enable_half_res"},
             entt::attribute{"pretty_name", "Half Resolution"},
             entt::attribute{"tooltip", "Run SSIL at half resolution for better performance. Recommended since diffuse is low-frequency"},
+        })
+        .data<&ssil_settings::enable_multi_bounce>("enable_multi_bounce"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_multi_bounce"},
+            entt::attribute{"pretty_name", "Enable Multi-Bounce"},
+            entt::attribute{"tooltip", "Feed previous frame's SSIL back into the trace for multi-bounce indirect lighting. Light propagates deeper into corridors and shadowed areas over several frames. Each bounce is attenuated by the hit surface's diffuse albedo for energy conservation."},
+        })
+        .data<&ssil_settings::multi_bounce_intensity>("multi_bounce_intensity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "multi_bounce_intensity"},
+            entt::attribute{"pretty_name", "Multi-Bounce Intensity"},
+            entt::attribute{"predicate", multi_bounce_predicate_entt},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "Controls how much indirect light is carried between bounces. Acts as an extra decay factor on top of surface albedo attenuation. 0 = single bounce only, 0.5 = balanced (default), 1.0 = full physical albedo-only attenuation."},
         })
         .data<&ssil_settings::enable_spatial_denoise>("enable_spatial_denoise"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -243,6 +267,8 @@ SAVE_INLINE(ssil_pass::ssil_settings)
     try_save(ar, ser20::make_nvp("brightness", obj.brightness));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_save(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    try_save(ar, ser20::make_nvp("enable_multi_bounce", obj.enable_multi_bounce));
+    try_save(ar, ser20::make_nvp("multi_bounce_intensity", obj.multi_bounce_intensity));
     try_save(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
     try_save(ar, ser20::make_nvp("spatial_denoise", obj.spatial_denoise));
     try_save(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));
@@ -259,6 +285,8 @@ LOAD_INLINE(ssil_pass::ssil_settings)
     try_load(ar, ser20::make_nvp("brightness", obj.brightness));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_load(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    try_load(ar, ser20::make_nvp("enable_multi_bounce", obj.enable_multi_bounce));
+    try_load(ar, ser20::make_nvp("multi_bounce_intensity", obj.multi_bounce_intensity));
     try_load(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
     try_load(ar, ser20::make_nvp("spatial_denoise", obj.spatial_denoise));
     try_load(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));

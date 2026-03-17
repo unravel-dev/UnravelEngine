@@ -17,6 +17,7 @@ void main()
     vec3 bloom_color = texture2D(s_bloom, v_texcoord0).rgb;
 
     vec3 hdr_color = scene_color + bloom_color;
+    hdr_color = min(max(hdr_color, vec3_splat(0.0)), vec3_splat(65504.0));
 
     gl_FragColor = vec4(hdr_color, 1.0);
 }
