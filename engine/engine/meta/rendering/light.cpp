@@ -624,6 +624,40 @@ REFLECT(light)
         });
 
 
+    auto contact_shadow_enabled_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light::contact_shadow_params>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->enabled;
+        });
+
+    entt::meta_factory<light::contact_shadow_params>{}
+        .type("light::contact_shadow_params"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contact_shadow_params"},
+            entt::attribute{"pretty_name", "Contact Shadow Params"},
+        })
+        .data<&light::contact_shadow_params::enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Enabled"},
+            entt::attribute{"tooltip", "Enable screen-space contact shadows for fine detail at object contact points."},
+        })
+        .data<&light::contact_shadow_params::ray_length>("ray_length"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ray_length"},
+            entt::attribute{"pretty_name", "Ray Length"},
+            entt::attribute{"min", 0.01f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Maximum ray distance in view-space units. Shorter = tighter contact detail, longer = catches more occluders."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        });
+
     entt::meta_factory<light>{}
         .type("light"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -703,6 +737,12 @@ REFLECT(light)
             entt::attribute{"tooltip", "Spot light shadow map parameters."},
             entt::attribute{"predicate", casts_shadows_and_is_spot_predicate_entt}
 
+        })
+        .data<&light::contact_shadow>("contact_shadow"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contact_shadow"},
+            entt::attribute{"pretty_name", "Contact Shadow"},
+            entt::attribute{"tooltip", "Screen-space contact shadows for fine shadow detail at object contact points."},
         });
 }
 
@@ -805,6 +845,14 @@ SAVE(light::shadowmap_params)
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_binary_t);
 
+SAVE(light::contact_shadow_params)
+{
+    try_save(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_save(ar, ser20::make_nvp("ray_length", obj.ray_length));
+}
+SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);
+
 SAVE(light)
 {
     try_save(ar, ser20::make_nvp("type", obj.type));
@@ -813,6 +861,7 @@ SAVE(light)
     try_save(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
 
     try_save(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
+    try_save(ar, ser20::make_nvp("contact_shadow", obj.contact_shadow));
 
     if(obj.type == light_type::spot)
     {
@@ -933,6 +982,14 @@ LOAD(light::shadowmap_params)
 LOAD_INSTANTIATE(light::shadowmap_params, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::shadowmap_params, ser20::oarchive_binary_t);
 
+LOAD(light::contact_shadow_params)
+{
+    try_load(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_load(ar, ser20::make_nvp("ray_length", obj.ray_length));
+}
+LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
+LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);
+
 LOAD(light)
 {
     try_load(ar, ser20::make_nvp("type", obj.type));
@@ -940,6 +997,7 @@ LOAD(light)
     try_load(ar, ser20::make_nvp("color", obj.color));
     try_load(ar, ser20::make_nvp("casts_shadows", obj.casts_shadows));
     try_load(ar, ser20::make_nvp("shadow_params", obj.shadow_params));
+    try_load(ar, ser20::make_nvp("contact_shadow", obj.contact_shadow));
 
     if(obj.type == light_type::spot)
     {

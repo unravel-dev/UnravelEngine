@@ -35,12 +35,12 @@ public:
         int max_rays = 4;
         int max_steps = 64;
         float depth_tolerance = 0.15f;
-        float brightness = 0.15f;
+        float brightness = 1.0f;
         float max_distance = 20.0f;
         bool enable_half_res = false;
 
         bool enable_multi_bounce = true;
-        float multi_bounce_intensity = 0.5f;
+        float multi_bounce_intensity = 0.8f;
 
         bool enable_spatial_denoise = true;
         spatial_denoise_settings spatial_denoise;

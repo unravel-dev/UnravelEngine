@@ -1223,9 +1223,13 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             lprogram.program->begin();
 
+            float contact_shadow_distance = light.contact_shadow.enabled
+                                             ? light.contact_shadow.ray_length
+                                             : 0.0f;
+
             if(light.type == light_type::directional)
             {
-                float light_data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                float light_data[4] = {0.0f, 0.0f, 0.0f, contact_shadow_distance};
 
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -1235,7 +1239,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                 float light_data[4] = {light.point_data.range,
                                        light.point_data.exponent_falloff,
                                        0.0f,
-                                       0.0f};
+                                       contact_shadow_distance};
 
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -1246,7 +1250,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                 float light_data[4] = {light.spot_data.get_range(),
                                        math::cos(math::radians(light.spot_data.get_inner_angle() * 0.5f)),
                                        math::cos(math::radians(light.spot_data.get_outer_angle() * 0.5f)),
-                                       0.0f};
+                                       contact_shadow_distance};
 
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_position, light_position);

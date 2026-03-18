@@ -206,7 +206,7 @@ struct light
     /// The color of the light.
     math::color color = {1.0f, 1.0f, 1.0f, 1.0f};
     /// The intensity of the light.
-    float intensity = 2.5f;
+    float intensity = 10.0f;
 
     /// Whether the light casts shadows.
     bool casts_shadows{true};
@@ -335,6 +335,20 @@ struct light
     struct spot_shadowmap_params
     {
     } spot_shadow_params{};
+
+    /**
+     * @brief Struct representing contact shadow parameters.
+     * Screen-space ray-marched shadows that add fine detail at object contact
+     * points where shadow maps lack resolution.
+     */
+    struct contact_shadow_params
+    {
+        /// Whether contact shadows are enabled for this light.
+        bool enabled{false};
+        /// Maximum ray length in view-space units. Shorter = tighter contact detail,
+        /// longer = catches more occluders but may produce artifacts on thin geometry.
+        float ray_length{0.25f};
+    } contact_shadow;
 };
 
 } // namespace unravel

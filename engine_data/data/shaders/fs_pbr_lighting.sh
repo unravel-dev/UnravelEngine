@@ -378,6 +378,48 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     return visibility;
 }
 
+/// Screen-space contact shadow. Marches a short ray toward the light in
+/// screen space and tests the depth buffer for occluders that shadow maps
+/// cannot resolve (object contact points, small crevices, fine detail).
+/// Returns 1.0 when fully lit, 0.0 when fully shadowed.
+float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_depth,
+                    vec3 world_light_dir, float ray_length, vec2 screen_pos)
+{
+    vec3 vs_origin = computeViewSpacePosition(origin_uv, origin_device_depth);
+    vec3 vs_light_dir = normalize(mul(u_view, vec4(world_light_dir, 0.0)).xyz);
+    vec3 vs_end = vs_origin + vs_light_dir * ray_length;
+    vec4 end_proj = mul(u_proj, vec4(vs_end, 1.0));
+    vec3 ss_end = end_proj.xyz / end_proj.w;
+    ss_end = clipTransform(ss_end);
+    ss_end.xy = ss_end.xy * 0.5 + 0.5;
+#if BGFX_SHADER_LANGUAGE_GLSL
+    ss_end.z = ss_end.z * 0.5 + 0.5;
+#endif
+    vec3 ss_origin = vec3(origin_uv, origin_device_depth);
+    vec3 ss_ray = ss_end - ss_origin;
+    const int CONTACT_SHADOW_STEPS = 16;
+    float inv_steps = 1.0 / float(CONTACT_SHADOW_STEPS);
+    float thickness = ray_length * 0.15;
+    float dither = interleavedGradientNoise(screen_pos) * inv_steps;
+    LOOP for(int i = 0; i < CONTACT_SHADOW_STEPS; i++)
+    {
+        float t = (float(i) + 1.0) * inv_steps + dither;
+        if(t > 1.0) break;
+        vec3 ss_pos = ss_origin + ss_ray * t;
+        if(any(lessThan(ss_pos.xy, vec2_splat(0.0))) || any(greaterThan(ss_pos.xy, vec2_splat(1.0))))
+            break;
+        float scene_depth = texture2DLod(depthTex, ss_pos.xy, 0.0).x;
+        float vs_ray_depth = screenSpaceToViewSpaceDepth(ss_pos.z);
+        float vs_scene_depth = screenSpaceToViewSpaceDepth(scene_depth);
+        float depth_diff = vs_ray_depth - vs_scene_depth;
+        if(depth_diff > 0.0 && depth_diff < thickness)
+        {
+            return smoothstep(0.0, 1.0, t);
+        }
+    }
+    return 1.0;
+}
+
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
@@ -419,6 +461,13 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
     float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
+    float contact_shadow_length = u_light_data.w;
+    BRANCH
+    if(contact_shadow_length > 0.0)
+    {
+        float contact = ContactShadow(s_tex4, texcoord0, data.depth01, L, contact_shadow_length, fragCoord);
+        surface_shadow = min(surface_shadow, contact);
+    }
     float subsurface_shadow = 1.0f;
     float base_attenuation = intensity * light_radius_mask * light_falloff;
     float surface_attenuation = base_attenuation * surface_shadow;
