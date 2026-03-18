@@ -12,8 +12,8 @@ class auto_exposure_pass
 public:
     struct settings
     {
-        float min_ev = 1.0f;
-        float max_ev = 20.0f;
+        float min_ev = -1.0f;
+        float max_ev = 0.0f;
         float compensation = 0.0f;
         float adaptation_speed_up = 3.0f;
         float adaptation_speed_down = 1.0f;

@@ -57,15 +57,16 @@ vec3 ImportanceSampleCosine(vec2 E, vec3 N)
 vec3 SampleRadiance(vec2 hit_uv)
 {
     vec3 direct = texture2DLod(s_color, hit_uv, 0.0).rgb;
-    vec3 emissive = texture2DLod(s_emissive, hit_uv, 0.0).rgb;
-    vec3 radiance = direct + emissive;
+
+    GBufferDataEmissive ed = DecodeGBufferEmissiveLod(hit_uv, s_emissive, 0.0);
+    vec3 radiance = direct + ed.emissive_color;
 
     BRANCH
     if(u_multi_bounce > 0.0)
     {
-        vec3 hit_base_color = texture2DLod(s_albedo, hit_uv, 0.0).rgb;
-        float hit_metalness = texture2DLod(s_normal, hit_uv, 0.0).z;
-        vec3 hit_diffuse = hit_base_color * (1.0 - hit_metalness);
+        GBufferDataColorAndAO cd = DecodeGBufferColorAndAOLod(hit_uv, s_albedo, 0.0);
+        GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(hit_uv, s_normal, 0.0);
+        vec3 hit_diffuse = cd.base_color * (1.0 - nd.metalness);
 
         vec3 prev_indirect = texture2DLod(s_prev_ssil, hit_uv, 0.0).rgb;
         prev_indirect = min(prev_indirect, vec3_splat(10.0));

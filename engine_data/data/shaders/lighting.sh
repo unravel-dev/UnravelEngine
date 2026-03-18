@@ -239,6 +239,19 @@ GBufferDataEmissive DecodeGBufferEmissive(
     return data;
 }
 
+GBufferDataEmissive DecodeGBufferEmissiveLod(
+    vec2 texcoord,
+    sampler2D emissiveTex,
+    float lod)
+{
+    GBufferDataEmissive data;
+    vec4 data2 = texture2DLod(emissiveTex, texcoord, lod);   // emissive_color
+
+    data.emissive_color = data2.xyz;
+
+    return data;
+}
+
 GBufferDataSubsurface DecodeGBufferSubsurface(
     vec2 texcoord,
     sampler2D subsurfaceTex)
@@ -1362,7 +1375,8 @@ vec3 StandardShadingIndirect(
     float NoV = saturate( abs( dot(N, V) ) + 1e-5 );
 
     float RoughnessSq = Roughness * Roughness;
-    float SpecularAO = min(AO, LightingVisibility);
+    float EffectiveVisibility = mix(1.0, LightingVisibility, Roughness);
+    float SpecularAO = min(AO, EffectiveVisibility);
     float SpecularOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, SpecularAO);
 
 #if USE_ENERGY_CONSERVATION > 0

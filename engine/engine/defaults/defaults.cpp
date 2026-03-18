@@ -546,7 +546,7 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
 
     object.emplace<assao_component>();
     object.emplace<auto_exposure_component>().enabled = false;
-    object.emplace<bloom_component>().enabled = false;
+    object.emplace<bloom_component>();
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();
     object.emplace<ssr_component>();
@@ -667,6 +667,10 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = false;
             if(auto* comp = volume.try_get<ssil_component>())
                 comp->enabled = false;
+            if(auto* comp = volume.try_get<auto_exposure_component>())
+                comp->enabled = false;
+            if(auto* comp = volume.try_get<bloom_component>())
+                comp->enabled = false;
         }
         else if(preset == scene_preset::medium)
         {
@@ -674,6 +678,14 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->settings.fidelityfx.max_rays = 2;
             if(auto* comp = volume.try_get<ssil_component>())
                 comp->enabled = false;
+
+        }
+        else if(preset == scene_preset::high)
+        {
+            if(auto* comp = volume.try_get<auto_exposure_component>())
+                comp->enabled = true;
+            if(auto* comp = volume.try_get<bloom_component>())
+                comp->enabled = true;
         }
     }
 }

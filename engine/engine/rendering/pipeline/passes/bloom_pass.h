@@ -13,11 +13,11 @@ class bloom_pass
 public:
     struct settings
     {
-        float threshold = 0.8f;
+        float threshold = 5.0f;
         float soft_knee = 0.5f;
-        float clamp = 10.0f;
-        float intensity = 0.7f;
-        int mip_count = 6;
+        float clamp = 100.0f;
+        float intensity = 1.0f;
+        int mip_count = 8;
 
         // Per-mip tint (RGB) and weight (alpha). Applied during upsample cascade.
         // Tint controls color, alpha controls contribution weight (0 = disabled, 1 = full).
