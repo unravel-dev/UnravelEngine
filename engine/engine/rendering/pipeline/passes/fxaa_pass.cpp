@@ -43,14 +43,16 @@ auto fxaa_pass::create_or_update_output_fb(gfx::render_view& rview,
     // If your engine uses something else, adapt accordingly.
 
     auto& output_tex = rview.tex_get_or_emplace("FXAA_OUTPUT");
-    if(!output_tex || output_tex->get_size() != input_sz || output_tex->info.format != input_format)
+    if(gfx::needs_recreate(output_tex, input_sz, input_format))
     {
+        output_tex.reset();
         output_tex =
             std::make_shared<gfx::texture>(input_sz.width, input_sz.height, false, 1, input_format, BGFX_TEXTURE_RT);
     }
     auto& output_fbo = rview.fbo_get_or_emplace("FXAA_OUTPUT");
-    if(!output_fbo || output_fbo->get_size() != input_sz)
+    if(gfx::needs_recreate(output_fbo, input_sz))
     {
+        output_fbo.reset();
         output_fbo = std::make_shared<gfx::frame_buffer>();
         output_fbo->populate({output_tex});
     }

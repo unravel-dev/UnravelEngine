@@ -196,12 +196,6 @@ auto float_to_half(float value) -> uint16_t
 
 } // namespace
 
-cloud_noise_textures& cloud_noise_textures::get()
-{
-    static cloud_noise_textures instance;
-    return instance;
-}
-
 void cloud_noise_textures::generate()
 {
     generate_3d();

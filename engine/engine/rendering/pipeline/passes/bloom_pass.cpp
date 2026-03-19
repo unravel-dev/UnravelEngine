@@ -49,8 +49,9 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
         auto& tex = rview.tex_get_or_emplace(tex_name);
 
         bool tex_changed = false;
-        if(!tex || tex->get_size().width != w || tex->get_size().height != h)
+        if(gfx::needs_recreate(tex, {w, h}))
         {
+            tex.reset();
             tex = std::make_shared<gfx::texture>(w, h, false, 1, gfx::texture_format::RGBA16F, flags);
             tex_changed = true;
         }
@@ -59,6 +60,7 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
         auto& fbo = rview.fbo_get_or_emplace(fbo_name);
         if(!fbo || tex_changed)
         {
+            fbo.reset();
             fbo = std::make_shared<gfx::frame_buffer>();
             gfx::fbo_attachment att;
             att.texture = tex;

@@ -134,4 +134,10 @@ private:
     /// Texture attachments to the frame buffer
     std::vector<fbo_attachment> textures_;
 };
+
+
+inline auto needs_recreate(const gfx::frame_buffer::ptr& fbo, const usize32_t& size) -> bool
+{
+    return !fbo || (fbo && fbo->get_size() != size);
+}
 } // namespace gfx

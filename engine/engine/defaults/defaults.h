@@ -200,7 +200,8 @@ struct defaults
     {
         low,
         medium,
-        high
+        high,
+        showcase
     };
 
     /**

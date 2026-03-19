@@ -96,4 +96,15 @@ struct texture : public handle_impl<texture, texture_handle>
     /// Creation flags.
     std::uint64_t flags = BGFX_TEXTURE_NONE;
 };
+
+
+inline auto needs_recreate(const gfx::texture::ptr& tex, const usize32_t& size) -> bool
+{
+    return !tex || (tex && tex->get_size() != size);
+}
+
+inline auto needs_recreate(const gfx::texture::ptr& tex, const usize32_t& size, const texture_format& format) -> bool
+{
+    return !tex || (tex && tex->get_size() != size) || (tex && tex->info.format != format);
+}
 } // namespace gfx

@@ -528,8 +528,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     {
         auto key = "ASSAO_HALF_DEPTH_" + std::to_string(i);
         auto& tex = rview.tex_get_or_emplace(key);
-        if(!tex || tex->get_size() != halfSz)
+        if(gfx::needs_recreate(tex, halfSz))
         {
+            tex.reset();
             tex = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
                                                  uint16_t(dims.halfSize[1]),
                                                  true,
@@ -540,8 +541,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     }
 
     auto& pingA = rview.tex_get_or_emplace("ASSAO_PING_PONG_A");
-    if(!pingA || pingA->get_size() != halfSz)
+    if(gfx::needs_recreate(pingA, halfSz))
     {
+        pingA.reset();
         pingA = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
                                                uint16_t(dims.halfSize[1]),
                                                false,
@@ -550,8 +552,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                BGFX_TEXTURE_COMPUTE_WRITE);
     }
     auto& pingB = rview.tex_get_or_emplace("ASSAO_PING_PONG_B");
-    if(!pingB || pingB->get_size() != halfSz)
+    if(gfx::needs_recreate(pingB, halfSz))
     {
+        pingB.reset();
         pingB = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
                                                uint16_t(dims.halfSize[1]),
                                                false,
@@ -561,8 +564,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     }
 
     auto& finalRes = rview.tex_get_or_emplace("ASSAO_FINAL_RESULTS");
-    if(!finalRes || finalRes->get_size() != halfSz)
+    if(gfx::needs_recreate(finalRes, halfSz))
     {
+        finalRes.reset();
         finalRes = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
                                                   uint16_t(dims.halfSize[1]),
                                                   false,
@@ -572,8 +576,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     }
 
     auto& normals = rview.tex_get_or_emplace("ASSAO_NORMALS");
-    if(!normals || normals->get_size() != fullSz)
+    if(gfx::needs_recreate(normals, fullSz))
     {
+        normals.reset();
         normals = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
                                                  uint16_t(dims.size[1]),
                                                  false,
@@ -583,8 +588,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     }
 
     auto& importanceMap = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP");
-    if(!importanceMap || importanceMap->get_size() != quarterSz)
+    if(gfx::needs_recreate(importanceMap, quarterSz))
     {
+        importanceMap.reset();
         importanceMap = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
                                                        uint16_t(dims.quarterSize[1]),
                                                        false,
@@ -593,8 +599,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                        BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
     }
     auto& importanceMapPong = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP_PONG");
-    if(!importanceMapPong || importanceMapPong->get_size() != quarterSz)
+    if(gfx::needs_recreate(importanceMapPong, quarterSz))
     {
+        importanceMapPong.reset();
         importanceMapPong = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
                                                           uint16_t(dims.quarterSize[1]),
                                                            false,
@@ -604,8 +611,9 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
     }
 
     auto& aoMap = rview.tex_get_or_emplace("ASSAO_AO_MAP");
-    if(!aoMap || aoMap->get_size() != fullSz)
+    if(gfx::needs_recreate(aoMap, fullSz))
     {
+        aoMap.reset();
         aoMap = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
                                                uint16_t(dims.size[1]),
                                                false,

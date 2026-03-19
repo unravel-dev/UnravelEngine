@@ -13,9 +13,6 @@ struct cloud_noise_textures
     static constexpr uint16_t flat_resolution = 256;
     static constexpr int tile_period = 6;
 
-    /// Returns the singleton cloud noise textures. Created once in defaults::init_assets.
-    static cloud_noise_textures& get();
-
     void generate();
     void clear();
 
@@ -26,7 +23,6 @@ struct cloud_noise_textures
     std::unique_ptr<gfx::texture> flat_noise;
 
 private:
-    cloud_noise_textures() = default;
     void generate_3d();
     void generate_flat();
 };

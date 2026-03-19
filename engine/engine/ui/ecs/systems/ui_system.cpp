@@ -795,37 +795,35 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
 
 void ui_system::ensure_document_framebuffer(ui_document_component& comp)
 {
-    if(comp.framebuffer && comp.framebuffer->is_valid())
+    if(gfx::needs_recreate(comp.framebuffer, comp.size))
     {
-        auto sz = comp.framebuffer->get_size();
-        if(sz.width == comp.size.width && sz.height == comp.size.height)
+        comp.framebuffer.reset();
+
+        uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+        auto color_texture = std::make_shared<gfx::texture>(static_cast<uint16_t>(comp.size.width),
+                                                            static_cast<uint16_t>(comp.size.height),
+                                                            false,
+                                                            1,
+                                                            gfx::texture_format::RGBA8,
+                                                            texture_flags);
+
+        if(!color_texture->is_valid())
         {
+            APPLOG_ERROR("Failed to create UI document color texture");
             return;
+        }
+
+        std::vector<gfx::texture::ptr> textures;
+        textures.push_back(color_texture);
+        comp.framebuffer.reset();
+        comp.framebuffer = std::make_shared<gfx::frame_buffer>(textures);
+        if(!comp.framebuffer->is_valid())
+        {
+            APPLOG_ERROR("Failed to create UI document framebuffer");
+            comp.framebuffer.reset();
         }
     }
 
-    uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    auto color_texture = std::make_shared<gfx::texture>(static_cast<uint16_t>(comp.size.width),
-                                                        static_cast<uint16_t>(comp.size.height),
-                                                        false,
-                                                        1,
-                                                        gfx::texture_format::RGBA8,
-                                                        texture_flags);
-
-    if(!color_texture->is_valid())
-    {
-        APPLOG_ERROR("Failed to create UI document color texture");
-        return;
-    }
-
-    std::vector<gfx::texture::ptr> textures;
-    textures.push_back(color_texture);
-    comp.framebuffer = std::make_shared<gfx::frame_buffer>(textures);
-    if(!comp.framebuffer->is_valid())
-    {
-        APPLOG_ERROR("Failed to create UI document framebuffer");
-        comp.framebuffer.reset();
-    }
 }
 
 } // namespace unravel

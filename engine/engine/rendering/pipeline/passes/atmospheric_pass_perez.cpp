@@ -1,6 +1,6 @@
 #include "atmospheric_pass_perez.h"
 #include <engine/assets/asset_manager.h>
-#include <engine/rendering/cloud_noise.h>
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/perez_luminance.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
@@ -284,7 +284,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     float cloud_params[4] = {params.cloud_coverage, params.cloud_base_altitude, params.cloud_time, params.cloud_density};
     float cloud_params2[4] = {params.cloud_absorption, params.cloud_light_absorption, params.cloud_top_altitude, float(params.cloud_mode)};
 
-    auto& cloud_noise = cloud_noise_textures::get();
+    auto& cloud_noise = default_textures::get().cloud_noise();
 
     // === Pass 1: Cloud pre-pass at half resolution with temporal blending (ping-pong) ===
     // Only run when cloud_mode == volumetric (2)
@@ -308,16 +308,18 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         prev_cloud_time_bits = cur_time_bits;
 
         auto& cloud_tex_a = rview.tex_get_or_emplace("CLOUD_PING");
-        if(!cloud_tex_a || cloud_tex_a->get_size().width != half_w || cloud_tex_a->get_size().height != half_h)
+        if(gfx::needs_recreate(cloud_tex_a, {half_w, half_h}))
         {
+            cloud_tex_a.reset();
             cloud_tex_a = std::make_shared<gfx::texture>(half_w, half_h, false, 1,
                 gfx::texture_format::RGBA16F, cloud_tex_flags);
             cloud_frame_count = 0;
         }
 
         auto& cloud_tex_b = rview.tex_get_or_emplace("CLOUD_PONG");
-        if(!cloud_tex_b || cloud_tex_b->get_size().width != half_w || cloud_tex_b->get_size().height != half_h)
+        if(gfx::needs_recreate(cloud_tex_b, {half_w, half_h}))
         {
+            cloud_tex_b.reset();
             cloud_tex_b = std::make_shared<gfx::texture>(half_w, half_h, false, 1,
                 gfx::texture_format::RGBA16F, cloud_tex_flags);
             cloud_frame_count = 0;
@@ -328,15 +330,17 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         auto& history_tex  = (cur == 0) ? cloud_tex_b : cloud_tex_a;
 
         auto& cloud_fbo_a = rview.fbo_get_or_emplace("CLOUD_FBO_PING");
-        if(!cloud_fbo_a || cloud_fbo_a->get_size().width != half_w || cloud_fbo_a->get_size().height != half_h)
+        if(gfx::needs_recreate(cloud_fbo_a, {half_w, half_h}))
         {
+            cloud_fbo_a.reset();
             cloud_fbo_a = std::make_shared<gfx::frame_buffer>();
             cloud_fbo_a->populate({cloud_tex_a});
         }
 
         auto& cloud_fbo_b = rview.fbo_get_or_emplace("CLOUD_FBO_PONG");
-        if(!cloud_fbo_b || cloud_fbo_b->get_size().width != half_w || cloud_fbo_b->get_size().height != half_h)
+        if(gfx::needs_recreate(cloud_fbo_b, {half_w, half_h}))
         {
+            cloud_fbo_b.reset();
             cloud_fbo_b = std::make_shared<gfx::frame_buffer>();
             cloud_fbo_b->populate({cloud_tex_b});
         }

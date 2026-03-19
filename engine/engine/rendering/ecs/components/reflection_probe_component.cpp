@@ -77,6 +77,7 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
     if(!tex)
     {
         constexpr uint16_t size = 256;
+        tex.reset();
         tex = std::make_shared<gfx::texture>(size,
                                              true,
                                              1,
@@ -93,6 +94,7 @@ auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::textur
     if(!tex)
     {
         constexpr uint16_t size = 256;
+        tex.reset();
         tex = std::make_shared<gfx::texture>(size,
                                              true,
                                              1,
@@ -112,6 +114,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
         if(!tex)
         {
             constexpr uint16_t size = 256;
+            tex.reset();
             tex = std::make_shared<gfx::texture>(size,
                                                  size,
                                                  true,
@@ -125,6 +128,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
         att.texture = tex;
         att.generate_mips = true;
 
+        fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({att});
     }

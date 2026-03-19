@@ -1,5 +1,6 @@
 #include "tonemapping_pass.h"
 #include <engine/assets/asset_manager.h>
+#include <engine/rendering/default_textures.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 
@@ -32,8 +33,9 @@ auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
     // If your engine uses something else, adapt accordingly.
 
     auto& output_tex = rview.tex_get_or_emplace("TONEMAPPING_OUTPUT");
-    if(!output_tex || output_tex->get_size() != input_sz)
+    if(gfx::needs_recreate(output_tex, input_sz))
     {
+        output_tex.reset();
         output_tex = std::make_shared<gfx::texture>(input_sz.width,
                                                     input_sz.height,
                                                     false,
@@ -42,8 +44,9 @@ auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
                                                     BGFX_TEXTURE_RT);
     }
     auto& output_fbo = rview.fbo_get_or_emplace("TONEMAPPING_OUTPUT");
-    if(!output_fbo || output_fbo->get_size() != input_sz)
+    if(gfx::needs_recreate(output_fbo, input_sz))
     {
+        output_fbo.reset();
         output_fbo = std::make_shared<gfx::frame_buffer>();
         output_fbo->populate({output_tex});
     }
@@ -116,15 +119,12 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     tonemapping_program_.program->begin();
 
-    float use_adapted = (params.exposure_texture && tonemapping_program_.s_exposure) ? 1.0f : 0.0f;
-    float tonemap[4] = {params.config.exposure, static_cast<float>(params.config.method), use_adapted, 0.0f};
+    float tonemap[4] = {params.config.exposure, static_cast<float>(params.config.method), 0.0, 0.0f};
     gfx::set_uniform(tonemapping_program_.u_tonemapping, tonemap);
 
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
-    if(params.exposure_texture && tonemapping_program_.s_exposure)
-    {
-        gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture);
-    }
+    gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
+    
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);

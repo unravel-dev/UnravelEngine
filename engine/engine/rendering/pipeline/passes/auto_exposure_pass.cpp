@@ -43,8 +43,9 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
 void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
 {
     auto& exposure_tex = rview.tex_get_or_emplace("AUTO_EXPOSURE");
-    if(!exposure_tex)
+    if(gfx::needs_recreate(exposure_tex, {1, 1}))
     {
+        exposure_tex.reset();
         exposure_tex = std::make_shared<gfx::texture>(1,
                                                       1,
                                                       false,
@@ -133,8 +134,9 @@ auto auto_exposure_pass::create_or_update_output_fb(gfx::render_view& rview,
     }
     auto input_sz = input->get_size();
     auto& output_tex = rview.tex_get_or_emplace("AUTO_EXPOSURE_OUTPUT");
-    if(!output_tex || output_tex->get_size() != input_sz)
+    if(gfx::needs_recreate(output_tex, input_sz))
     {
+        output_tex.reset();
         output_tex = std::make_shared<gfx::texture>(input_sz.width,
                                                     input_sz.height,
                                                     false,
@@ -143,8 +145,9 @@ auto auto_exposure_pass::create_or_update_output_fb(gfx::render_view& rview,
                                                     BGFX_TEXTURE_RT);
     }
     auto& output_fbo = rview.fbo_get_or_emplace("AUTO_EXPOSURE_OUTPUT");
-    if(!output_fbo || output_fbo->get_size() != input_sz)
+    if(gfx::needs_recreate(output_fbo, input_sz))
     {
+        output_fbo.reset();
         output_fbo = std::make_shared<gfx::frame_buffer>();
         gfx::fbo_attachment att;
         att.texture = output_tex;

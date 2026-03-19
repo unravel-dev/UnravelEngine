@@ -73,9 +73,9 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     auto ref_format = gfx::texture_format::RGBA8;
 
     auto& ssr_output_tex = rview.tex_get_or_emplace("SSR_OUTPUT");
-    if(!ssr_output_tex || (ssr_output_tex && ssr_output_tex->get_size() != ref_sz) ||
-       (ssr_output_tex && ssr_output_tex->info.format != ref_format))
+    if(gfx::needs_recreate(ssr_output_tex, ref_sz, ref_format))
     {
+        ssr_output_tex.reset();
         ssr_output_tex = std::make_shared<gfx::texture>(ref_sz.width,
                                                         ref_sz.height,
                                                         false,
@@ -86,7 +86,9 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     }
 
     auto& ssr_output_fbo = rview.fbo_get_or_emplace("SSR_OUTPUT");
-    if(!ssr_output_fbo || (ssr_output_fbo && ssr_output_fbo->get_size() != ref_sz))
+    if(gfx::needs_recreate(ssr_output_fbo, ref_sz))
+    {
+        ssr_output_fbo.reset();
     {
         ssr_output_fbo = std::make_shared<gfx::frame_buffer>();
         ssr_output_fbo->populate({ssr_output_tex});
@@ -111,10 +113,9 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     target_height = target_height > 0 ? target_height : 1;
 
     auto& ssr_curr_tex = rview.tex_get_or_emplace("SSR_CURR");
-    if(!ssr_curr_tex || 
-       (ssr_curr_tex && (ssr_curr_tex->info.width != target_width || ssr_curr_tex->info.height != target_height)) ||
-       (ssr_curr_tex && ssr_curr_tex->info.format != ref_format))
+    if(gfx::needs_recreate(ssr_curr_tex, {target_width, target_height}, ref_format))
     {
+        ssr_curr_tex.reset();
         ssr_curr_tex = std::make_shared<gfx::texture>(target_width,
                                                       target_height,
                                                       false,
@@ -126,8 +127,9 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
 
     auto& ssr_curr_fbo = rview.fbo_get_or_emplace("SSR_CURR");
     usize32_t target_size{target_width, target_height};
-    if(!ssr_curr_fbo || (ssr_curr_fbo && ssr_curr_fbo->get_size() != target_size))
+    if(gfx::needs_recreate(ssr_curr_fbo, target_size))
     {
+        ssr_curr_fbo.reset();
         ssr_curr_fbo = std::make_shared<gfx::frame_buffer>();
         ssr_curr_fbo->populate({ssr_curr_tex});
     }
@@ -151,10 +153,9 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
     target_height = target_height > 0 ? target_height : 1;
 
     auto& history_tex = rview.tex_get_or_emplace("SSR_HISTORY");
-    if(!history_tex || 
-       (history_tex && (history_tex->info.width != target_width || history_tex->info.height != target_height)) ||
-       (history_tex && history_tex->info.format != ref_format))
+    if(gfx::needs_recreate(history_tex, {target_width, target_height}, ref_format))
     {
+        history_tex.reset();
         history_tex = std::make_shared<gfx::texture>(target_width,
                                                      target_height,
                                                      false,
@@ -198,8 +199,9 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
 
     auto& temp_fbo = rview.fbo_get_or_emplace("SSR_HISTORY_TEMP");
     usize32_t target_size{target_width, target_height};
-    if(!temp_fbo || (temp_fbo && temp_fbo->get_size() != target_size))
+    if(gfx::needs_recreate(temp_fbo, target_size))
     {
+        temp_fbo.reset();
         temp_fbo = std::make_shared<gfx::frame_buffer>();
         temp_fbo->populate({temp_tex});
     }
@@ -247,8 +249,9 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
 
     // Get or create blurred color texture with mip chain
     auto& blurred_tex = rview.tex_get_or_emplace("SSR_BLURRED_COLOR");
-    if(!blurred_tex || blurred_tex->get_size() != input_size)
+    if(gfx::needs_recreate(blurred_tex, input_size))
     {
+        blurred_tex.reset();
         blurred_tex = std::make_shared<gfx::texture>(input_size.width,
                                                      input_size.height,
                                                      true,                       // has mips
@@ -318,9 +321,9 @@ auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
     usize32_t target_size{target_width, target_height};
 
     auto& denoised_tex = rview.tex_get_or_emplace("SSR_DENOISED");
-    if(!denoised_tex ||
-       (denoised_tex && (denoised_tex->info.width != target_width || denoised_tex->info.height != target_height)))
+    if(gfx::needs_recreate(denoised_tex, target_size))
     {
+        denoised_tex.reset();
         denoised_tex = std::make_shared<gfx::texture>(target_width,
                                                       target_height,
                                                       false,
@@ -331,8 +334,9 @@ auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
     }
 
     auto& denoised_fbo = rview.fbo_get_or_emplace("SSR_DENOISED");
-    if(!denoised_fbo || (denoised_fbo && denoised_fbo->get_size() != target_size))
+    if(gfx::needs_recreate(denoised_fbo, target_size))
     {
+        denoised_fbo.reset();
         denoised_fbo = std::make_shared<gfx::frame_buffer>();
         denoised_fbo->populate({denoised_tex});
     }

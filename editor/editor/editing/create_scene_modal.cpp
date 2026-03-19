@@ -35,9 +35,15 @@ const preset_card_info presets[] = {
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Full lighting, SSIL, SSR, volumetric clouds, soft shadows and post-processing.\n"
-     "Best for high-end desktop or showcase builds.",
+     "Full lighting, SSR, Bloom, volumetric clouds, soft shadows and post-processing.\n"
+     "Best for high-end desktop builds.",
      defaults::scene_preset::high},
+    {"preset_showcase",
+     ICON_MDI_GIFT,
+     "Showcase",
+     "Full lighting, SSIL, SSR, Bloom, volumetric clouds, soft shadows and post-processing.\n"
+     "Best for showcase builds. Requires a powerful GPU.",
+     defaults::scene_preset::showcase},
 };
 
 enum class card_action

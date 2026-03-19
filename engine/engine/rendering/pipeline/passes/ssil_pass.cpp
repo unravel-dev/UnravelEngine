@@ -43,8 +43,9 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
     usize32_t target_size{w, h};
 
     auto& tex = rview.tex_get_or_emplace(name);
-    if(!tex || tex->info.width != w || tex->info.height != h)
+    if(gfx::needs_recreate(tex, {w, h}))
     {
+        tex.reset();
         tex = std::make_shared<gfx::texture>(w, h, false, 1,
                                              gfx::texture_format::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
@@ -52,8 +53,9 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
     }
 
     auto& fbo = rview.fbo_get_or_emplace(name);
-    if(!fbo || fbo->get_size() != target_size)
+    if(gfx::needs_recreate(fbo, target_size))
     {
+        fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
     }
@@ -72,8 +74,9 @@ auto ssil_pass::create_or_update_ssil_tex(gfx::render_view& rview,
     uint32_t h = half_res ? std::max(1u, ref_sz.height / 2) : ref_sz.height;
 
     auto& tex = rview.tex_get_or_emplace(name);
-    if(!tex || tex->info.width != w || tex->info.height != h)
+    if(gfx::needs_recreate(tex, {w, h}))
     {
+        tex.reset();
         tex = std::make_shared<gfx::texture>(w, h, false, 1,
                                              gfx::texture_format::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST |

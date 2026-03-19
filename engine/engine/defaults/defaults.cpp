@@ -21,7 +21,7 @@
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
-#include <engine/rendering/cloud_noise.h>
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
@@ -235,7 +235,7 @@ auto defaults::deinit(rtti::context& ctx) -> bool
     }
     material::default_color_map() = {};
     material::default_normal_map() = {};
-    cloud_noise_textures::get().clear();
+    default_textures::get().clear();
     return true;
 }
 
@@ -368,7 +368,7 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
         model::fallback_material() = asset;
     }
 
-    cloud_noise_textures::get().generate();
+    default_textures::get().generate();
 
     return true;
 }
@@ -550,7 +550,7 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();
     object.emplace<ssr_component>();
-    object.emplace<ssil_component>();
+    object.emplace<ssil_component>().enabled = false;
     return object;
 }
 
@@ -685,6 +685,17 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
             if(auto* comp = volume.try_get<auto_exposure_component>())
                 comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
+                comp->enabled = true;
+            if(auto* comp = volume.try_get<ssil_component>())
+                comp->enabled = false;
+        }
+        else if(preset == scene_preset::showcase)
+        {
+            if(auto* comp = volume.try_get<auto_exposure_component>())
+                comp->enabled = true;
+            if(auto* comp = volume.try_get<bloom_component>())
+                comp->enabled = true;
+            if(auto* comp = volume.try_get<ssil_component>())
                 comp->enabled = true;
         }
     }
