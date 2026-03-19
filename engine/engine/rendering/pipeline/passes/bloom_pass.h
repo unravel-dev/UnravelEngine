@@ -54,6 +54,7 @@ public:
         gfx::frame_buffer::ptr input;
         gfx::frame_buffer::ptr output;
         settings config{};
+        gfx::texture::ptr exposure_texture;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -78,10 +79,12 @@ private:
             cache_uniform(program.get(), u_pixel_size, "u_pixelSize", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_pixel_size;
         gfx::program::uniform_ptr u_params;
         gfx::program::uniform_ptr s_tex;
+        gfx::program::uniform_ptr s_exposure;
         std::unique_ptr<gpu_program> program;
     } downsample_program_;
 

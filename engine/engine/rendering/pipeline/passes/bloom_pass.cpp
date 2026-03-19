@@ -1,6 +1,7 @@
 #include "bloom_pass.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/default_textures.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <math/math.h>
@@ -142,6 +143,8 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
+        gfx::set_texture(downsample_program_.s_exposure, 1,
+                         params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
 
         irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

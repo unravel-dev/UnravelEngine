@@ -89,7 +89,6 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     if(gfx::needs_recreate(ssr_output_fbo, ref_sz))
     {
         ssr_output_fbo.reset();
-    {
         ssr_output_fbo = std::make_shared<gfx::frame_buffer>();
         ssr_output_fbo->populate({ssr_output_tex});
     }
@@ -184,10 +183,9 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
     target_height = target_height > 0 ? target_height : 1;
 
     auto& temp_tex = rview.tex_get_or_emplace("SSR_HISTORY_TEMP");
-    if(!temp_tex || 
-       (temp_tex && (temp_tex->info.width != target_width || temp_tex->info.height != target_height)) ||
-       (temp_tex && temp_tex->info.format != ref_format))
+    if(gfx::needs_recreate(temp_tex, {target_width, target_height}, ref_format))
     {
+        temp_tex.reset();
         temp_tex = std::make_shared<gfx::texture>(target_width,
                                                   target_height,
                                                   false,

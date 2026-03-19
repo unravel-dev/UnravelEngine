@@ -632,7 +632,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(apply_reflecitons)
     {
-        target = run_auto_exposure_pass(rview, target, params, dt);
+        run_auto_exposure_pass(rview, target, params, dt);
 
         target = run_bloom_pass(rview, target, params);
     }
@@ -1637,7 +1637,7 @@ auto deferred::run_ssil_pass(const camera& camera,
         const auto viewport_size = camera.get_viewport_size();
         auto& prev_ssil = rview.tex_get_or_emplace("PREV_SSIL");
         
-        if(gfx::needs_recreate(prev_ssil, viewport_size);)
+        if(gfx::needs_recreate(prev_ssil, viewport_size))
         {
             prev_ssil.reset();
             prev_ssil = std::make_shared<gfx::texture>(viewport_size.width,
@@ -1684,21 +1684,21 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
     return fxaa_pass_.run(rview, params);
 }
 
-auto deferred::run_auto_exposure_pass(gfx::render_view& rview,
+void deferred::run_auto_exposure_pass(gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& input,
                                       const run_params& rparams,
-                                      delta_t dt) -> gfx::frame_buffer::ptr
+                                      delta_t dt)
 {
     if(!rparams.fill_auto_exposure_params)
     {
         auto_exposure_pass_.release_resources(rview);
-        return input;
+        return;
     }
     auto_exposure_pass::run_params params;
     params.input = input;
     params.delta_time = dt.count();
     rparams.fill_auto_exposure_params(params);
-    return auto_exposure_pass_.run(rview, params);
+    auto_exposure_pass_.run(rview, params);
 }
 
 auto deferred::run_bloom_pass(gfx::render_view& rview,
@@ -1713,6 +1713,12 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
     bloom_pass::run_params params;
     params.input = input;
     rparams.fill_bloom_params(params);
+
+    if(rparams.fill_auto_exposure_params)
+    {
+        params.exposure_texture = auto_exposure_pass_.get_exposure_texture(rview);
+    }
+
     return bloom_pass_.run(rview, params);
 }
 

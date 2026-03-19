@@ -20,6 +20,7 @@ $input v_texcoord0
 #include "../common.sh"
 
 SAMPLER2D(s_tex, 0);
+SAMPLER2D(s_exposure, 1);
 
 uniform vec4 u_pixelSize;
 uniform vec4 u_params;
@@ -55,18 +56,18 @@ vec3 soft_clamp(vec3 color, float limit)
     return color * (compressed / br);
 }
 
-vec3 apply_threshold(vec3 color)
+vec3 apply_threshold(vec3 color, float threshold)
 {
     float br = max(max(color.r, color.g), color.b);
-    float knee = u_threshold * u_soft_knee + 1e-5;
-    float curve_x = u_threshold - knee;
+    float knee = threshold * u_soft_knee + 1e-5;
+    float curve_x = threshold - knee;
     float curve_y = knee * 2.0;
     float curve_z = 0.25 / knee;
 
     float rq = clamp(br - curve_x, 0.0, curve_y);
     rq = curve_z * rq * rq;
 
-    float factor = max(rq, br - u_threshold) / max(br, 1e-5);
+    float factor = max(rq, br - threshold) / max(br, 1e-5);
     return color * factor;
 }
 
@@ -137,7 +138,9 @@ void main()
 
         if (u_threshold > 0.0)
         {
-            color = apply_threshold(color);
+            float adapted = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0).r;
+            float effective_threshold = u_threshold / max(adapted, 1e-5);
+            color = apply_threshold(color, effective_threshold);
         }
 
         gl_FragColor = vec4(color, 1.0);
