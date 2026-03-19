@@ -683,9 +683,9 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         else if(preset == scene_preset::high)
         {
             if(auto* comp = volume.try_get<auto_exposure_component>())
-                comp->enabled = false;
+                comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
-                comp->enabled = false;
+                comp->enabled = true;
         }
     }
 }
