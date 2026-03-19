@@ -164,6 +164,9 @@ public:
     void set_opacity(float opacity);
     auto get_opacity() const -> float;
 
+    void set_color_intensity(float intensity);
+    auto get_color_intensity() const -> float;
+
     // Playback control
     void play();
     void play_sub_emitters();

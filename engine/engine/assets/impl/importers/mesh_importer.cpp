@@ -2106,7 +2106,7 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
             float shininess = 32.0f;
             if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
             {
-                glossiness = math::clamp(std::sqrt((shininess + 2.0f) / 1024.0f), 0.0f, 1.0f);
+                glossiness = math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
             }
         }
         
@@ -2288,6 +2288,23 @@ void process_material(asset_manager& am,
         return false;
     };
 
+    auto needs_external_conversion = [](const imported_texture& tex) -> bool
+    {
+        return tex.embedded_index < 0 &&
+               (tex.semantic == "GlossToRoughness" ||
+                tex.semantic == "SpecularToRoughness" ||
+                tex.semantic == "SpecularToMetallic" ||
+                tex.semantic == "SpecularToMetallicRoughness" ||
+                tex.inverse);
+    };
+
+    auto make_converted_name = [](const std::string& original_name, const std::string& semantic) -> std::string
+    {
+        fs::path p(original_name);
+        std::string suffix = semantic.empty() ? "converted" : semantic;
+        return (p.parent_path() / (p.stem().string() + "_" + suffix + ".tga")).generic_string();
+    };
+
     auto process_texture = [&](imported_texture& texture, std::vector<imported_texture>& textures, bool force_process = false)
     {
         if(texture.embedded_index >= 0)
@@ -2308,6 +2325,25 @@ void process_material(asset_manager& am,
                 return;
             }
         }
+        else
+        {
+            auto it = std::find_if(std::begin(textures),
+                                   std::end(textures),
+                                   [&](const imported_texture& rhs)
+                                   {
+                                       return rhs.embedded_index < 0
+                                           && rhs.name == texture.name
+                                           && rhs.semantic == texture.semantic;
+                                   });
+            if(it != std::end(textures))
+            {
+                if(needs_external_conversion(texture))
+                {
+                    texture.name = make_converted_name(texture.name, texture.semantic);
+                }
+                return;
+            }
+        }
 
         textures.emplace_back(texture);
 
@@ -2315,6 +2351,21 @@ void process_material(asset_manager& am,
         {
             const auto& embedded_texture = scene->mTextures[texture.embedded_index];
             process_embedded_texture(embedded_texture, texture.embedded_index, filename, output_dir, textures);
+        }
+        else if(needs_external_conversion(texture))
+        {
+            fs::path original_file = output_dir / texture.name;
+            auto converted_name = make_converted_name(texture.name, texture.semantic);
+            fs::path converted_file = output_dir / converted_name;
+            bimg::ImageContainer* image = imageLoad(bx::FilePath(original_file.string().c_str()));
+            if(image)
+            {
+                apply_texture_conversion(image, texture.semantic, texture.inverse);
+                imageSave(converted_file.string().c_str(), image);
+                bimg::imageFree(image);
+                texture.name = converted_name;
+                APPLOG_TRACE("Mesh Importer: Applied {} conversion to external texture: {}", texture.semantic, texture.name);
+            }
         }
     };
 
@@ -2359,6 +2410,29 @@ void process_material(asset_manager& am,
                             apply_diffuse_to_base_color_conversion(diffuse_img, specular_img);
                             imageSave(diffuse_file.string().c_str(), diffuse_img);
                             APPLOG_TRACE("Mesh Importer: Converted diffuse texture to base color: {}", texture.name);
+                        }
+                        if(specular_img)
+                        {
+                            bimg::imageFree(specular_img);
+                        }
+                        if(diffuse_img)
+                        {
+                            bimg::imageFree(diffuse_img);
+                        }
+                    }
+                    else if(!spec_pair.first)
+                    {
+                        fs::path diffuse_file = output_dir / texture.name;
+                        fs::path specular_file = output_dir / specular_path.C_Str();
+                        bimg::ImageContainer* diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
+                        bimg::ImageContainer* specular_img = imageLoad(bx::FilePath(specular_file.string().c_str()));
+                        if(diffuse_img && specular_img)
+                        {
+                            apply_diffuse_to_base_color_conversion(diffuse_img, specular_img);
+                            auto converted_name = make_converted_name(texture.name, "BaseColor");
+                            imageSave((output_dir / converted_name).string().c_str(), diffuse_img);
+                            texture.name = converted_name;
+                            APPLOG_TRACE("Mesh Importer: Converted diffuse texture to base color using external specular: {}", texture.name);
                         }
                         if(specular_img)
                         {
@@ -2755,7 +2829,6 @@ auto perceived_brightness(float r, float g, float b) -> float
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float
 {
     constexpr float dielectric_f0 = 0.04f;
-    constexpr float epsilon = 1e-6f;
 
     if(perceived_specular < dielectric_f0)
     {
@@ -2767,7 +2840,7 @@ auto solve_metallic(float perceived_diffuse, float perceived_specular, float one
     float c = dielectric_f0 - perceived_specular;
     float discriminant = std::max(b * b - 4.0f * a * c, 0.0f);
 
-    return math::clamp((-b + std::sqrt(discriminant)) / (2.0f * a + epsilon), 0.0f, 1.0f);
+    return math::clamp((-b + std::sqrt(discriminant)) / (2.0f * a), 0.0f, 1.0f);
 }
 
 /**

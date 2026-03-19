@@ -144,6 +144,7 @@ struct EmitterUniforms
 	math::gradient<math::color> m_colorGradient; // Color gradient over particle lifetime
 	float m_emissionLifetime; // Duration of one emission cycle
 	float m_opacity; // Global opacity for all particles (0.0 = fully transparent, 1.0 = no change)
+	float m_colorIntensity; // HDR multiplier for particle color RGB (1.0 = no change, >1.0 = glow)
 
 	// Playback control states
 	bool m_playing; // Whether the emitter is currently playing/active

@@ -108,6 +108,7 @@ void EmitterUniforms::reset()
 
     m_emissionLifetime = 2.0f; // Default: 2 second emission cycle
     m_opacity = 1.0f;  // Default: no opacity modification
+    m_colorIntensity = 1.0f; // Default: no HDR intensity scaling
 
     // Initialize playback states
     m_playing = true;  // Default: playing
@@ -347,6 +348,9 @@ struct Emitter
         // Cache final color
         particle.color = sampledColor;
         particle.color.value.a *= uniforms_.m_opacity;
+        particle.color.value.r *= uniforms_.m_colorIntensity;
+        particle.color.value.g *= uniforms_.m_colorIntensity;
+        particle.color.value.b *= uniforms_.m_colorIntensity;
 
         // Calculate uniform scale with system scaling
         float scale = math::mix(particle.scale_start, particle.scale_end, particle.life) * avgSystemScale;

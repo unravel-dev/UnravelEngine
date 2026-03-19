@@ -525,6 +525,15 @@ REFLECT(particle_emitter_component)
             entt::attribute{"step", 0.01f},
             entt::attribute{"group", "Color over lifetime"},
         })
+        .data<&particle_emitter_component::set_color_intensity, &particle_emitter_component::get_color_intensity>("color_intensity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "color_intensity"},
+            entt::attribute{"pretty_name", "Color Intensity"},
+            entt::attribute{"tooltip", "HDR multiplier for particle color. Values above 1.0 make particles glow when bloom is enabled."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.1f},
+            entt::attribute{"group", "Color over lifetime"},
+        })
         .data<&particle_emitter_component::set_color_by_speed_gradient, &particle_emitter_component::get_color_by_speed_gradient>("color_by_speed_gradient"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "color_by_speed_gradient"},
@@ -649,6 +658,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("scale_gradient", obj.get_scale_gradient()));
     try_save(ar, ser20::make_nvp("initial_scale_3d", obj.get_initial_scale_3d()));
     try_save(ar, ser20::make_nvp("opacity", obj.get_opacity()));
+    try_save(ar, ser20::make_nvp("color_intensity", obj.get_color_intensity()));
     
     // Colors
     try_save(ar, ser20::make_nvp("color_gradient", obj.get_color_gradient()));
@@ -851,6 +861,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("opacity", opacity)))
     {
         obj.set_opacity(opacity);
+    }
+
+    float color_intensity{1.0f};
+    if(try_load(ar, ser20::make_nvp("color_intensity", color_intensity)))
+    {
+        obj.set_color_intensity(color_intensity);
     }
     
     // Colors

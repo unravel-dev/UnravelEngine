@@ -312,6 +312,16 @@ auto particle_emitter_component::get_opacity() const -> float
     return uniforms_.m_opacity;
 }
 
+void particle_emitter_component::set_color_intensity(float intensity)
+{
+    uniforms_.m_colorIntensity = math::max(intensity, 0.0f);
+}
+
+auto particle_emitter_component::get_color_intensity() const -> float
+{
+    return uniforms_.m_colorIntensity;
+}
+
 void particle_emitter_component::play()
 {
     uniforms_.m_playing = true;
