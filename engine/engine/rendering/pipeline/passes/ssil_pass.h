@@ -35,7 +35,7 @@ public:
         int max_rays = 4;
         int max_steps = 64;
         float depth_tolerance = 0.15f;
-        float brightness = 1.0f;
+        float brightness = 0.5f;
         float max_distance = 20.0f;
         bool enable_half_res = false;
 

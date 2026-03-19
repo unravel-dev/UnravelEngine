@@ -51,6 +51,7 @@ void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
                                                       1,
                                                       gfx::texture_format::R32F,
                                                       BGFX_TEXTURE_COMPUTE_WRITE);
+        rview.data_get_or_emplace("AUTO_EXPOSURE_SNAP", 1u) = 1u;
     }
 }
 
@@ -106,7 +107,15 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const settings& co
     float params1[4] = {config.min_ev, config.max_ev, config.compensation, 0.0f};
     gfx::set_uniform(average_program_.u_average_params1, params1);
 
-    float params2[4] = {dt, config.adaptation_speed_up, config.adaptation_speed_down, 0.0f};
+    float effective_dt = dt;
+    auto& snap = rview.data_get_or_emplace("AUTO_EXPOSURE_SNAP", 0u);
+    if(snap != 0u)
+    {
+        effective_dt = 100.0f;
+        snap = 0u;
+    }
+
+    float params2[4] = {effective_dt, config.adaptation_speed_up, config.adaptation_speed_down, 0.0f};
     gfx::set_uniform(average_program_.u_average_params2, params2);
 
     bgfx::dispatch(pass.id, average_program_.program->native_handle(), 1, 1, 1);
@@ -197,6 +206,7 @@ void auto_exposure_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove("AUTO_EXPOSURE");
     rview.tex_remove("AUTO_EXPOSURE_OUTPUT");
     rview.fbo_remove("AUTO_EXPOSURE_OUTPUT");
+    rview.data_get_or_emplace("AUTO_EXPOSURE_SNAP", 1u) = 1u;
 }
 
 } // namespace unravel

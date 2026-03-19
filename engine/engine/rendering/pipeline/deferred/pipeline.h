@@ -105,7 +105,7 @@ public:
     auto run_auto_exposure_pass(gfx::render_view& rview,
                                 const gfx::frame_buffer::ptr& input,
                                 const run_params& rparams,
-                                float dt) -> gfx::frame_buffer::ptr;
+                                delta_t dt) -> gfx::frame_buffer::ptr;
 
     auto run_bloom_pass(gfx::render_view& rview,
                         const gfx::frame_buffer::ptr& input,

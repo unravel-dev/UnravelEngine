@@ -593,7 +593,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
-    run_assao_pass(visibility_set, camera, rview, dt, params);
+    if(apply_reflecitons)
+    {
+        run_assao_pass(visibility_set, camera, rview, dt, params);
+    }
 
     run_reflection_probe_pass(scn, camera, rview, dt);
 
@@ -628,9 +631,12 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         run_particle_pass(scn, camera, rview, target);
     }
 
-    target = run_auto_exposure_pass(rview, target, params, dt.count());
+    if(apply_reflecitons)
+    {
+        target = run_auto_exposure_pass(rview, target, params, dt);
 
-    target = run_bloom_pass(rview, target, params);
+        target = run_bloom_pass(rview, target, params);
+    }
 
     target = run_tonemapping_pass(rview, target, output, params);
 
@@ -1680,7 +1686,7 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
 auto deferred::run_auto_exposure_pass(gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& input,
                                       const run_params& rparams,
-                                      float dt) -> gfx::frame_buffer::ptr
+                                      delta_t dt) -> gfx::frame_buffer::ptr
 {
     if(!rparams.fill_auto_exposure_params)
     {
@@ -1689,7 +1695,7 @@ auto deferred::run_auto_exposure_pass(gfx::render_view& rview,
     }
     auto_exposure_pass::run_params params;
     params.input = input;
-    params.delta_time = dt;
+    params.delta_time = dt.count();
     rparams.fill_auto_exposure_params(params);
     return auto_exposure_pass_.run(rview, params);
 }
