@@ -223,6 +223,7 @@ private:
             cache_uniform(program.get(), u_light_position, "u_light_position", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_light_direction, "u_light_direction", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_light_data, "u_light_data", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", gfx::uniform_type::Vec4);
 
@@ -237,6 +238,7 @@ private:
         gfx::program::uniform_ptr u_light_position;
         gfx::program::uniform_ptr u_light_direction;
         gfx::program::uniform_ptr u_light_data;
+        gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
         gfx::program::uniform_ptr u_camera_position;
         std::array<gfx::program::uniform_ptr, 7> s_tex;

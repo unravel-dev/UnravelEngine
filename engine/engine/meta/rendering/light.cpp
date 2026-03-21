@@ -656,6 +656,46 @@ REFLECT(light)
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Maximum ray distance in view-space units. Shorter = tighter contact detail, longer = catches more occluders."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        })
+        .data<&light::contact_shadow_params::thickness>("thickness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "thickness"},
+            entt::attribute{"pretty_name", "Hit Thickness"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"step", 0.005f},
+            entt::attribute{"tooltip", "View-space depth tolerance for a ray hit. Zero = automatic (15% of ray length)."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        })
+        .data<&light::contact_shadow_params::n_dot_l_fade_start>("n_dot_l_fade_start"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "n_dot_l_fade_start"},
+            entt::attribute{"pretty_name", "N·L Fade Start"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Contact shadow ramps in from this N·L (smoothstep low edge)."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        })
+        .data<&light::contact_shadow_params::n_dot_l_fade_end>("n_dot_l_fade_end"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "n_dot_l_fade_end"},
+            entt::attribute{"pretty_name", "N·L Fade End"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Full contact shadow strength at or above this N·L (smoothstep high edge)."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        })
+        .data<&light::contact_shadow_params::normal_facing_reject>("normal_facing_reject"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_facing_reject"},
+            entt::attribute{"pretty_name", "Normal Facing Reject"},
+            entt::attribute{"min", -1.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip", "Reject hits when reconstructed occluder normal faces the light above this cosine. -1 disables."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         });
 
     entt::meta_factory<light>{}
@@ -849,6 +889,10 @@ SAVE(light::contact_shadow_params)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.enabled));
     try_save(ar, ser20::make_nvp("ray_length", obj.ray_length));
+    try_save(ar, ser20::make_nvp("thickness", obj.thickness));
+    try_save(ar, ser20::make_nvp("n_dot_l_fade_start", obj.n_dot_l_fade_start));
+    try_save(ar, ser20::make_nvp("n_dot_l_fade_end", obj.n_dot_l_fade_end));
+    try_save(ar, ser20::make_nvp("normal_facing_reject", obj.normal_facing_reject));
 }
 SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);
@@ -986,6 +1030,10 @@ LOAD(light::contact_shadow_params)
 {
     try_load(ar, ser20::make_nvp("enabled", obj.enabled));
     try_load(ar, ser20::make_nvp("ray_length", obj.ray_length));
+    try_load(ar, ser20::make_nvp("thickness", obj.thickness));
+    try_load(ar, ser20::make_nvp("n_dot_l_fade_start", obj.n_dot_l_fade_start));
+    try_load(ar, ser20::make_nvp("n_dot_l_fade_end", obj.n_dot_l_fade_end));
+    try_load(ar, ser20::make_nvp("normal_facing_reject", obj.normal_facing_reject));
 }
 LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);

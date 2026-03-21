@@ -1233,6 +1233,19 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                              ? light.contact_shadow.ray_length
                                              : 0.0f;
 
+            float n_dot_l_low = light.contact_shadow.n_dot_l_fade_start;
+            float n_dot_l_high = light.contact_shadow.n_dot_l_fade_end;
+            if(n_dot_l_high < n_dot_l_low)
+            {
+                const float t = n_dot_l_low;
+                n_dot_l_low = n_dot_l_high;
+                n_dot_l_high = t;
+            }
+            const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
+                                                     n_dot_l_low,
+                                                     n_dot_l_high,
+                                                     light.contact_shadow.normal_facing_reject};
+
             if(light.type == light_type::directional)
             {
                 float light_data[4] = {0.0f, 0.0f, 0.0f, contact_shadow_distance};
@@ -1262,6 +1275,8 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
             }
+
+            gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);
 
             float light_color_intensity[4] = {light.color.value.r,
                                               light.color.value.g,

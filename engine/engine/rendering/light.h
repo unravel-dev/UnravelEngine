@@ -348,6 +348,16 @@ struct light
         /// Maximum ray length in view-space units. Shorter = tighter contact detail,
         /// longer = catches more occluders but may produce artifacts on thin geometry.
         float ray_length{0.25f};
+        /// View-space depth comparison thickness for ray hits. Zero uses automatic
+        /// thickness from ray length (legacy 15 percent of ray length).
+        float thickness{0.0f};
+        /// N·L smoothstep low edge: below this, contact shadow fades out (surface faces away from light).
+        float n_dot_l_fade_start{0.0f};
+        /// N·L smoothstep high edge: at or above this, contact shadow has full strength.
+        float n_dot_l_fade_end{0.2f};
+        /// If in [0, 1], reject ray hits whose reconstructed occluder normal faces the light
+        /// more strongly than this cosine (reduces false self-contact). Below zero disables.
+        float normal_facing_reject{-1.0f};
     } contact_shadow;
 };
 

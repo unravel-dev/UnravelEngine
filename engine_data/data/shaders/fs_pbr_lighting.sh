@@ -17,6 +17,8 @@ uniform vec4 u_light_position;
 uniform vec4 u_light_direction;
 uniform vec4 u_light_color_intensity;
 uniform vec4 u_light_data;
+/// x: hit thickness (view-space, 0 = auto from ray length). y,z: N·L smoothstep edges. w: normal-facing reject (-1 = off).
+uniform vec4 u_contact_shadow;
 uniform vec4 u_camera_position;
 
 #if PBR_INDIRECT
@@ -353,7 +355,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 /// cannot resolve (object contact points, small crevices, fine detail).
 /// Returns 1.0 when fully lit, 0.0 when fully shadowed.
 float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_depth,
-                    vec3 world_light_dir, float ray_length, vec2 screen_pos)
+                    vec3 world_light_dir, float ray_length, vec2 screen_pos, vec3 world_shading_normal)
 {
     vec3 vs_origin = computeViewSpacePosition(origin_uv, origin_device_depth);
     vec3 vs_light_dir = normalize(mul(u_view, vec4(world_light_dir, 0.0)).xyz);
@@ -369,7 +371,11 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
     vec3 ss_ray = ss_end - ss_origin;
     const int CONTACT_SHADOW_STEPS = 16;
     float inv_steps = 1.0 / float(CONTACT_SHADOW_STEPS);
-    float thickness = ray_length * 0.15;
+    float thickness = u_contact_shadow.x > 0.0 ? u_contact_shadow.x : (ray_length * 0.15);
+    float n_dot_l = saturate(dot(world_shading_normal, world_light_dir));
+    float n_dot_l_hi = max(u_contact_shadow.z, u_contact_shadow.y + 1e-4);
+    float n_dot_l_mask = smoothstep(u_contact_shadow.y, n_dot_l_hi, n_dot_l);
+    vec2 depth_texel_uv = 1.0 / vec2(textureSize(depthTex, 0));
     float dither = interleavedGradientNoise(screen_pos) * inv_steps;
     LOOP for(int i = 0; i < CONTACT_SHADOW_STEPS; i++)
     {
@@ -384,7 +390,30 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
         float depth_diff = vs_ray_depth - vs_scene_depth;
         if(depth_diff > 0.0 && depth_diff < thickness)
         {
-            return smoothstep(0.0, 1.0, t);
+            if(u_contact_shadow.w >= 0.0)
+            {
+                vec2 duvx = vec2(depth_texel_uv.x, 0.0);
+                vec2 duvy = vec2(0.0, depth_texel_uv.y);
+                float zx = texture2DLod(depthTex, ss_pos.xy + duvx, 0.0).x;
+                float zy = texture2DLod(depthTex, ss_pos.xy + duvy, 0.0).x;
+                vec3 p0 = computeViewSpacePosition(ss_pos.xy, scene_depth);
+                vec3 px = computeViewSpacePosition(ss_pos.xy + duvx, zx);
+                vec3 py = computeViewSpacePosition(ss_pos.xy + duvy, zy);
+                vec3 n_vs = cross(px - p0, py - p0);
+                float n_len = length(n_vs);
+                if(n_len > 1e-5)
+                {
+                    n_vs *= 1.0 / n_len;
+                    vec3 v_to_cam = normalize(-p0);
+                    if(dot(n_vs, v_to_cam) < 0.0)
+                        n_vs = -n_vs;
+                    vec3 n_ws = normalize(mul(u_invView, vec4(n_vs, 0.0)).xyz);
+                    if(dot(n_ws, world_light_dir) > u_contact_shadow.w)
+                        continue;
+                }
+            }
+            float occ = smoothstep(0.0, 1.0, t);
+            return mix(1.0, occ, n_dot_l_mask);
         }
     }
     return 1.0;
@@ -435,7 +464,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     BRANCH
     if(contact_shadow_length > 0.0)
     {
-        float contact = ContactShadow(s_tex4, texcoord0, data.depth01, L, contact_shadow_length, fragCoord);
+        float contact = ContactShadow(s_tex4, texcoord0, data.depth01, L, contact_shadow_length, fragCoord, N);
         surface_shadow = min(surface_shadow, contact);
     }
     float subsurface_shadow = 1.0f;
