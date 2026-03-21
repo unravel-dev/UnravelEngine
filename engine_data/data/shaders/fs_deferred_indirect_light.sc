@@ -8,5 +8,5 @@ $input v_texcoord0
 
 void main()
 {
-    gl_FragColor = pbr_indirect(v_texcoord0);
+    gl_FragColor = pbr_indirect(v_texcoord0, gl_FragCoord.xy);
 }

@@ -93,32 +93,9 @@ float calculateNormalOffsetScale(float _NdotL)
     return sqrt(1.0 - _NdotL * _NdotL);
 }
 
-// Receiver plane depth bias (Render Diagrams: https://renderdiagrams.org/2024/12/18/shadowmap-bias/)
-// Assumes the receiving surface is planar within the shadow texel. Computes dz/dUV via screen-space
-// derivatives and the chain rule, then adds bias based on distance from pixel to texel center.
-// Returns a value to ADD to shadowCoord.z; clamped to <= 0 so we only move out of shadow.
-// Caveat: ddx/ddy assume flat surface across 2x2 block; discontinuities can cause artifacts.
-float computeReceiverPlaneDepthBias(vec4 _shadowCoord, float _texelSize)
-{
-    vec2 uv = _shadowCoord.xy / _shadowCoord.w;
-    float w = _shadowCoord.w;
-    vec2 dU_dXY = (w * dFdx(_shadowCoord.xy) - _shadowCoord.xy * dFdx(w)) / (w * w);
-    vec2 dV_dXY = (w * dFdy(_shadowCoord.xy) - _shadowCoord.xy * dFdy(w)) / (w * w);
-    float dZ_dX = (w * dFdx(_shadowCoord.z) - _shadowCoord.z * dFdx(w)) / (w * w);
-    float dZ_dY = (w * dFdy(_shadowCoord.z) - _shadowCoord.z * dFdy(w)) / (w * w);
-    vec2 dZ_dXY = vec2(dZ_dX, dZ_dY);
-    float detJ = dU_dXY.x * dV_dXY.y - dV_dXY.x * dU_dXY.y;
-    vec2 dz_dUV = vec2_splat(0.0);
-    if (abs(detJ) > 1e-7)
-    {
-        dz_dUV.x = (dZ_dXY.x * dV_dXY.y - dZ_dXY.y * dV_dXY.x) / detJ;
-        dz_dUV.y = (-dZ_dXY.x * dU_dXY.y + dZ_dXY.y * dU_dXY.x) / detJ;
-    }
-    float shadowMapSize = 1.0 / _texelSize;
-    vec2 distanceToTexelCenterUV = (vec2_splat(0.5) - fract(uv * shadowMapSize)) * _texelSize;
-    float slopeBias = dot(distanceToTexelCenterUV, dz_dUV);
-    return min(slopeBias, 0.0);
-}
+// Receiver-plane depth bias (ddx/ddy of shadow coords) is not used in this file: deferred lighting
+// runs as a fullscreen pass, so derivatives are across unrelated screen neighbors, not along the
+// receiver surface — the plane assumption is wrong and produces sparse wrong visibility (dots).
 
 float computeVisibility(sampler2D _sampler
                       , vec4 _shadowCoord
@@ -220,7 +197,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     if (selection0)
     {
         vec4 shadowcoord = v_texcoord1;
-        shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.x, 0.001);
 
         float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
@@ -241,7 +217,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     else if (selection1 && u_numSplits > 1)
     {
         vec4 shadowcoord = v_texcoord2;
-        shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.y, 0.001);
 
         float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
@@ -261,7 +236,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     else if (selection2 && u_numSplits > 2)
     {
         vec4 shadowcoord = v_texcoord3;
-        shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.z, 0.001);
 
         float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
@@ -281,7 +255,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     else if (selection3 && u_numSplits > 3) // selection3
     {
         vec4 shadowcoord = v_texcoord4;
-        shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.w, 0.001);
 
         float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
@@ -339,8 +312,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
         colorCoverage = vec3(coverage, -coverage, -coverage);
     }
 
-    shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
-
     visibility = computeVisibility(s_shadowMap0
                     , shadowcoord
                     , adjustedBias
@@ -356,7 +327,6 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize);
 
     vec4 shadowcoord = v_shadowcoord;
-    shadowcoord.z += computeReceiverPlaneDepthBias(shadowcoord, texelSize.x);
 
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = vec3(coverage, -coverage, -coverage);
@@ -422,11 +392,11 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
 
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
-    GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
-    vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
-    clip = clipTransform(clip);
+    ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
+    GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
+    vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
-    float filtered_roughness = data.roughness;//GeometricSpecularAA(data.world_normal, data.roughness);
+    float filtered_roughness = GeometricSpecularAA(data.world_normal, data.roughness);
     vec3 lobe_roughness = vec3(0.0f, filtered_roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
@@ -443,7 +413,6 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 N = data.world_normal;
     vec3 V = normalize(u_camera_position.xyz - world_position);
     vec3 L = vector_to_light / sqrt( distance_sqr );
-    float NoL = saturate( dot(N, L) );
 
 #if POINT_LIGHT
     vec3 vector_to_light_over_radius = vector_to_light / u_light_data.x;
@@ -458,6 +427,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float light_falloff = 1.0f;
 #endif
 
+    float NoL = saturate(dot(N, L));
 
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
     float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
@@ -474,6 +444,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float subsurface_attenuation = base_attenuation * subsurface_shadow;
 
     vec3 energy = AreaLightSpecular(0.0f, 0.0f, normalize(vector_to_light), lobe_roughness, vector_to_light, L, V, N);
+
     vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N, data.ambient_occlusion);
     vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, L, V, N);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
@@ -493,24 +464,24 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 
 #if PBR_INDIRECT
 // Separate indirect lighting + emissive pass (rendered once as a fullscreen quad, not per-light)
-vec4 pbr_indirect(vec2 texcoord0)
+vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 {
-    GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
+    ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
+    GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
-    vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
-    clip = clipTransform(clip);
+    vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     vec3 indirect_color = u_light_data.xyz;
     float indirect_intensity = u_light_data.w;
 
-    vec3 N = data.world_normal;
+    vec3 N = normalize(data.world_normal);
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
     vec3 indirect_diffuse = irradiance + ssil_sample.rgb * ssil_sample.a;
 
-    float indirect_filtered_roughness = data.roughness;//GeometricSpecularAA(N, data.roughness);
+    float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
 
     vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, lighting_visibility, V, N);

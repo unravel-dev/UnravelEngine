@@ -134,14 +134,15 @@ float MakeRoughnessSafe(float Roughness)
 // (e.g. Fresnel highlights at grazing angles, tiny specular hot-spots).
 //
 // Works in alpha-space (perceptualRoughness^2) to match the GGX parameterisation.
+// Kernel variance / clamp follow the paper's recommended screen-space filter (see Section 5.2).
 float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
 {
     vec3 dNdx = dFdx(worldNormal);
     vec3 dNdy = dFdy(worldNormal);
     float variance = dot(dNdx, dNdx) + dot(dNdy, dNdy);
 
-    const float SCREEN_SPACE_VARIANCE = 0.5f;
-    const float THRESHOLD = 0.18f;
+    const float SCREEN_SPACE_VARIANCE = 0.85f;
+    const float THRESHOLD = 0.22f;
 
     float kernelRoughnessSq = min(variance * SCREEN_SPACE_VARIANCE, THRESHOLD * THRESHOLD);
     float alpha = perceptualRoughness * perceptualRoughness;
@@ -315,6 +316,71 @@ GBufferData DecodeGBuffer(vec2 texcoord, sampler2D tex0, sampler2D tex1, sampler
     data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
     data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
     return data;
+}
+
+// Integer texel for UV; clamps so texcoord==1 stays on the last texel (avoids out-of-range with floor).
+ivec2 GBufferTexelCoord(vec2 texcoord, sampler2D sizeRefSampler)
+{
+    ivec2 dim = textureSize(sizeRefSampler, 0);
+    vec2 f = texcoord * vec2(dim) - vec2_splat(1e-4);
+    return clamp(ivec2(floor(f)), ivec2(0, 0), dim - ivec2(1, 1));
+}
+
+// Deferred lighting: sample each G-buffer attachment at a single texel (no bilinear blend).
+// At depth discontinuities, bilinear mixing of two surfaces yields a bogus "average" normal and material
+// parameters, which makes GGX specular spike on one-pixel-wide silhouettes. texelFetch is the standard
+// production fix (often described as "nearest" G-buffer sampling for lighting).
+GBufferData DecodeGBufferTexel(
+    ivec2 texel,
+    sampler2D tex0,
+    sampler2D tex1,
+    sampler2D tex2,
+    sampler2D tex3,
+    sampler2D tex4)
+{
+    GBufferData data;
+    vec4 d0 = texelFetch(tex0, texel, 0);
+    vec4 d1 = texelFetch(tex1, texel, 0);
+    vec4 d2 = texelFetch(tex2, texel, 0);
+    vec4 d3 = texelFetch(tex3, texel, 0);
+    float deviceDepth = texelFetch(tex4, texel, 0).x;
+
+    data.base_color = d0.xyz;
+    data.ambient_occlusion = d0.w;
+    data.world_normal = decodeNormalOctahedron(d1.xy);
+    data.metalness = d1.z;
+    data.roughness = d1.w;
+    data.emissive_color = d2.xyz;
+    data.subsurface_color = d3.xyz;
+    data.subsurface_opacity = d3.w;
+    data.depth01 = deviceDepth;
+    data.depth = toClipSpaceDepth(deviceDepth);
+    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
+    data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
+    return data;
+}
+
+// G-buffer texel for the current framebuffer pixel (assumes lighting pass viewport matches G-buffer size).
+ivec2 GBufferTexelFromFragCoord(vec2 fragCoord, sampler2D dimSampler)
+{
+    ivec2 dim = textureSize(dimSampler, 0);
+    ivec2 t = ivec2(floor(fragCoord));
+    return clamp(t, ivec2(0, 0), dim - ivec2(1, 1));
+}
+
+// UV at texel center — use for depth rays / SSIL so they match the same pixel as texelFetch.
+vec2 GBufferUvCenterFromTexel(ivec2 texel, sampler2D dimSampler)
+{
+    vec2 dim = vec2(textureSize(dimSampler, 0));
+    return (vec2(texel) + vec2(0.5, 0.5)) / dim;
+}
+
+// clip.xy must come from the same texel as normal/depth: otherwise V = normalize(camera - P) disagrees with N
+// from the G-buffer and GGX produces bright one-pixel rims on silhouettes.
+vec3 ReconstructClipFromGBufferTexel(ivec2 texel, float clipSpaceDepth, sampler2D dimSampler)
+{
+    vec2 uv = GBufferUvCenterFromTexel(texel, dimSampler);
+    return clipTransform(vec3(uv * 2.0 - 1.0, clipSpaceDepth));
 }
 
 /**
@@ -542,16 +608,17 @@ struct BxDFContext
     float YoH;
 };
 
+// Matches Unreal BRDF.ush InitBxDFContext: unsaturated NoL/NoV so NoH/VoL stay consistent with
+// N·H = (N·V + N·L) / |V+L|. Clamp cosines only where the microfacet model assumes the upper hemisphere.
 void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 {
-	//Context.NoL = dot(N, L);
-    //Context.NoV = dot(N, V);
-    Context.NoL = saturate( dot(N, L) );
-    Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
+    Context.NoL = dot(N, L);
+    Context.NoV = dot(N, V);
     Context.VoL = dot(V, L);
-    float InvLenH = inversesqrt( 2 + 2 * Context.VoL );
-    Context.NoH = saturate( ( Context.NoL + Context.NoV ) * InvLenH );
-    Context.VoH = saturate( InvLenH + InvLenH * Context.VoL );
+    float LenHSq = max(2.0f + 2.0f * Context.VoL, 1e-8f);
+    float InvLenH = inversesqrt(LenHSq);
+    Context.NoH = saturate((Context.NoL + Context.NoV) * InvLenH);
+    Context.VoH = saturate(InvLenH + InvLenH * Context.VoL);
 
     Context.XoV = 0.0f;
     Context.XoL = 0.0f;
@@ -563,14 +630,13 @@ void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 
 void Init( inout BxDFContext Context, vec3 N, vec3 X, vec3 Y, vec3 V, vec3 L )
 {
-	//Context.NoL = dot(N, L);
-    //Context.NoV = dot(N, V);
-    Context.NoL = saturate( dot(N, L) );
-    Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
+    Context.NoL = dot(N, L);
+    Context.NoV = dot(N, V);
     Context.VoL = dot(V, L);
-    float InvLenH = inversesqrt( 2 + 2 * Context.VoL );
-    Context.NoH = saturate( ( Context.NoL + Context.NoV ) * InvLenH );
-    Context.VoH = saturate( InvLenH + InvLenH * Context.VoL );
+    float LenHSq = max(2.0f + 2.0f * Context.VoL, 1e-8f);
+    float InvLenH = inversesqrt(LenHSq);
+    Context.NoH = saturate((Context.NoL + Context.NoV) * InvLenH);
+    Context.VoH = saturate(InvLenH + InvLenH * Context.VoL);
 
     Context.XoV = dot(X, V);
     Context.XoL = dot(X, L);
@@ -582,14 +648,14 @@ void Init( inout BxDFContext Context, vec3 N, vec3 X, vec3 Y, vec3 V, vec3 L )
 
 void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 {
-	//Context.NoL = NoL;
-    //Context.NoV = dot(N, V);	
-    Context.NoL = saturate(NoL);
-    Context.NoV = saturate( abs( dot(N, V) ) + 1e-5 );
+    Context.NoL = NoL;
+    Context.NoV = dot(N, V);
     Context.VoL = dot(V, L);
-    vec3 H = normalize(vec3(V + L));
-    Context.NoH = max(0, dot(N, H));
-    Context.VoH = max(0, dot(V, H));
+    vec3 Hsum = V + L;
+    float hLen2 = max(dot(Hsum, Hsum), 1e-8f);
+    vec3 H = Hsum * inversesqrt(hLen2);
+    Context.NoH = max(0.0f, dot(N, H));
+    Context.VoH = max(0.0f, dot(V, H));
 
     Context.XoV = 0.0f;
     Context.XoL = 0.0f;
@@ -1243,7 +1309,8 @@ FBxDFEnergyTerms ComputeFresnelEnergyTerms(vec2 E, vec3 InF0, vec3 InF90)
     FBxDFEnergyTerms Result;
     // [2] Eq 16: this restores the missing energy of the bsdf, while also accounting for the fact that the fresnel term causes some energy to be absorbed
     // NOTE: using F0 here is an approximation, but for schlick fresnel Favg is almost exactly equal to F0
-    Result.W = 1.0 + F0 * ((1 - E.x) / E.x);
+    float Eavg = max(E.x, 1e-3f);
+    Result.W = 1.0 + F0 * ((1.0f - E.x) / Eavg);
 
     // Now estimate the amount of energy reflected off this specular lobe so that we can remove it from underlying BxDF layers (like diffuse)
     // This relies on the split-sum approximation as in [3] Sec 4.
@@ -1300,8 +1367,12 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
     return EnergyTerms.W;
 }
 
-// Direct lighting only — microfacet specular + diffuse BRDF, per-light evaluation.
-// AO is applied to diffuse; SpecularOcclusion (derived from NoV, Roughness, AO) is applied to specular for crevice consistency.
+// Direct lighting — analytic (delta) lights.
+// Specular AA: use GeometricSpecularAA on roughness before this path (Tokuyoshi & Kaplanyan 2019; also Unity HDRP / Frostbite).
+// Multiple-scattering energy weight W from directional-albedo fits is intended for integrated lighting (IBL / prefiltered
+// probes); for delta lights the standard evaluation is the single-scatter microfacet BRDF (W = 1). See e.g. Kulla-Conty
+// discussion in production PBR notes (W matches environment, not point lights).
+// AO is applied to diffuse; SpecularOcclusion (NoV, Roughness, AO) scales specular (Lagarde).
 vec3 StandardShadingDirect(
  vec3 DiffuseColor,
  vec3 SpecularColor,
@@ -1312,33 +1383,39 @@ vec3 StandardShadingDirect(
  vec3 N,
  float AO )
 {
+    // Deferred / filtered G-buffer normals are often not unit length; BRDF half-vector identities require |N|==1.
+    N = normalize(N);
     BxDFContext context;
     Init(context, N, V, L);
 
     float Roughness = MakeRoughnessSafe(LobeRoughness[1]);
     float RoughnessSq = Roughness * Roughness;
-#if APPLY_AO_TO_DIRECT
-    float SpecularOcclusion = GetSpecularOcclusion(context.NoV, RoughnessSq, AO);
-#else
+    // Upper-hemisphere cosines for GGX visibility, diffuse, and occlusion (NoH/VoH stay tied to raw Init).
+    const float kNoVEpsilon = 1e-5f;
+    float NoL = max(context.NoL, 0.0f);
+    float NoV = max(context.NoV, kNoVEpsilon);
+
     float SpecularOcclusion = 1.0f;
+#if APPLY_AO_TO_DIRECT
+    SpecularOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, AO);
 #endif
 
-    // Generalized microfacet specular
-    float D = Distribution( Roughness, context.NoH ) * LobeEnergy[1];
-    float Vis = Visibility( Roughness, context.NoV, context.NoL, context.VoH, context.NoH );
+    // Keep NoH strictly inside (0,1): at exactly 1 the GGX denominator can lose precision for low roughness.
+    float NoH_D = min(context.NoH, 1.0f - 1e-5f);
+    float D = Distribution( Roughness, NoH_D ) * LobeEnergy[1];
+    float Vis = Visibility( Roughness, NoV, NoL, context.VoH, context.NoH );
     vec3 F = Fresnel( SpecularColor, context.VoH );
 
 	float RetroReflectivityWeight = 1.0;
-    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, context.NoV, context.NoL, context.VoH, context.NoH, RetroReflectivityWeight ) * LobeEnergy[2];
+    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, NoV, NoL, context.VoH, context.NoH, RetroReflectivityWeight ) * LobeEnergy[2];
 
-#if USE_ENERGY_CONSERVATION > 0
-    FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, context.NoV, SpecularColor);
-    float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
-    vec3 EnergyConservationFactor = ComputeEnergyConservation(SpecularEnergyTerms);
-#else
+    // Do not apply IBL/multiscatter directional-albedo energy preservation to diffuse under delta lights.
+    // ComputeGGXSpecEnergyTerms + ComputeFresnelEnergyTerms can drive W and E to extreme values at grazing
+    // NoV / low roughness (and for metals), so (1 - Luminance(E)) becomes negative, NaN, or otherwise unstable;
+    // that scales the whole diffuse column and looks like white fireflies even when Diffuse() is Lambert.
+    // Specular already uses EnergyConservationFactor = 1 for direct lights; keep diffuse consistent.
     float EnergyPreservationFactor = 1.0f;
     vec3 EnergyConservationFactor = vec3_splat(1.0f);
-#endif
 
     // Specular terminator fade: smoothly attenuate specular near the shadow terminator
     // to prevent the bright fringe artifact caused by D spiking at grazing light angles.
@@ -1351,7 +1428,8 @@ vec3 StandardShadingDirect(
     float DirectAO = 1.0f;
 #endif
 
-    return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + (D * Vis) * F * EnergyConservationFactor * specularTerminatorFade * SpecularOcclusion;
+    vec3 specular = (D * Vis) * F * EnergyConservationFactor * specularTerminatorFade * SpecularOcclusion;
+    return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + specular;
 }
 
 // Indirect lighting only — environment BRDF + indirect diffuse, evaluated once per pixel.
@@ -1371,8 +1449,10 @@ vec3 StandardShadingIndirect(
  vec3 V,
  vec3 N )
 {
+    N = normalize(N);
     Roughness = MakeRoughnessSafe(Roughness);
-    float NoV = saturate( abs( dot(N, V) ) + 1e-5 );
+    const float kNoVEpsilon = 1e-5f;
+    float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
 
     float RoughnessSq = Roughness * Roughness;
     float EffectiveVisibility = mix(1.0, LightingVisibility, Roughness);
@@ -1388,13 +1468,15 @@ vec3 StandardShadingIndirect(
     float EnergyPreservationFactor = 1.0f;
 #endif
 
-    return (DiffuseColor * AO * IndirectDiffuse * EnergyPreservationFactor) + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
+    return (DiffuseColor * AO * IndirectDiffuse * EnergyPreservationFactor)
+         + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
 }
 
 
 vec3 SubsurfaceShading( vec3 SubsurfaceColor, float Opacity, float AO, vec3 L, vec3 V, vec3 N )
 {
-    vec3 H = normalize(V + L);
+    vec3 Hsum = V + L;
+    vec3 H = Hsum * inversesqrt(max(dot(Hsum, Hsum), 1e-8f));
     // to get an effect when you see through the material
     // hard coded pow constant
     float InScatter = saturate(pow(saturate(dot(L, -V)), 12.0f) * mix(3.0f, 0.1f, Opacity));
