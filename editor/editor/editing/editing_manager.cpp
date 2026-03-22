@@ -17,6 +17,7 @@
 #include <engine/defaults/defaults.h>
 #include <engine/meta/ecs/entity.hpp>
 
+#include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <editor/events.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
@@ -504,12 +505,26 @@ void editing_manager::on_frame_update(rtti::context& ctx, delta_t dt)
 
     undo_stack.last_action_elapsed_time += dt;
 
-
     if(focused_data.remaining_time <= delta_t::zero())
     {
         unfocus();
     }
 
+    auto& ev = ctx.get_cached<events>();
+
+    // Only evict assets if not playing
+    if(!ev.is_playing)
+    {
+        using namespace std::chrono;
+        static auto last_eviction = steady_clock::now();
+        auto now = steady_clock::now();
+        if(now - last_eviction > seconds(30))
+        {
+            auto& am = ctx.get_cached<asset_manager>();
+            am.evict_unused_assets("app:/", seconds(60));
+            last_eviction = now;
+        }
+    }
 }
 void editing_manager::focus(entt::meta_any object)
 {

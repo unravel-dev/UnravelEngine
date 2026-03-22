@@ -31,7 +31,7 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, asset_handle<T>& obj)
     {
         auto& ctx = unravel::engine::context();
         auto& am = ctx.get_cached<unravel::asset_manager>();
-        obj = am.get_asset<T>(uid);
+        obj = am.get_asset<T>(uid, unravel::load_flags::standard, unravel::load_mode::deferred);
     }
 }
 } // namespace ser20

@@ -12,6 +12,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 
+#include <engine/ui/style_sheet.h>
 #include <engine/meta/ecs/components/all_components.h>
 
 #include <engine/rendering/material.h>
@@ -88,6 +89,8 @@ auto get_thumbnail_impl(thumbnail_manager::generator& gen,
         return transparent.get();
     }
 
+    asset.get(false);
+
     if(!asset.is_ready())
     {
         return loading.get();
@@ -133,6 +136,9 @@ auto thumbnail_manager::get_thumbnail<ui_tree>(const asset_handle<ui_tree>& asse
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.ui_tree.get();
 }
 
@@ -143,6 +149,9 @@ auto thumbnail_manager::get_thumbnail<style_sheet>(const asset_handle<style_shee
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.style_sheet.get();
 }
 
@@ -153,6 +162,9 @@ auto thumbnail_manager::get_thumbnail<script>(const asset_handle<script>& asset)
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.script.get();
 }
 
@@ -164,6 +176,9 @@ auto thumbnail_manager::get_thumbnail<physics_material>(const asset_handle<physi
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.physics_material.get();
 }
 
@@ -174,6 +189,9 @@ auto thumbnail_manager::get_thumbnail<audio_clip>(const asset_handle<audio_clip>
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.audio_clip.get();
 }
 
@@ -184,6 +202,9 @@ auto thumbnail_manager::get_thumbnail<font>(const asset_handle<font>& asset) -> 
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.font.get();
 }
 
@@ -194,6 +215,9 @@ auto thumbnail_manager::get_thumbnail<animation_clip>(const asset_handle<animati
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.animation.get();
 }
 
@@ -205,6 +229,8 @@ auto thumbnail_manager::get_thumbnail<gfx::texture>(const asset_handle<gfx::text
         return thumbnails_.transparent.get();
     }
 
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : asset.get();
 }
 
@@ -215,6 +241,9 @@ auto thumbnail_manager::get_thumbnail<gfx::shader>(const asset_handle<gfx::shade
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.shader.get();
 }
 
@@ -240,6 +269,9 @@ auto thumbnail_manager::get_thumbnail<scene_prefab>(const asset_handle<scene_pre
     {
         return thumbnails_.transparent.get();
     }
+
+    asset.get(false);
+
     return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.scene_prefab.get();
 }
 
@@ -266,6 +298,46 @@ void thumbnail_manager::remove_thumbnail(const hpp::uuid& uid)
 void thumbnail_manager::clear_thumbnails()
 {
     gen_.thumbnails.clear();
+}
+
+void thumbnail_manager::set_cache_directory(const fs::path& cache_dir)
+{
+    cache_directory_ = cache_dir;
+    fs::error_code ec;
+    fs::create_directories(cache_directory_, ec);
+}
+
+auto thumbnail_manager::get_cache_path(const hpp::uuid& uid) const -> fs::path
+{
+    if(cache_directory_.empty())
+    {
+        return {};
+    }
+    return cache_directory_ / (hpp::to_string(uid) + ".thumb");
+}
+
+auto thumbnail_manager::load_cached_thumbnail(const hpp::uuid& uid) -> gfx::texture::ptr
+{
+    (void)uid;
+    // Stub: disk persistence not yet implemented.
+    return nullptr;
+}
+
+void thumbnail_manager::save_thumbnail_to_cache(const hpp::uuid& uid, gfx::texture::ptr tex)
+{
+    (void)uid;
+    (void)tex;
+    // Stub: disk persistence not yet implemented.
+}
+
+void thumbnail_manager::invalidate_cache_entry(const hpp::uuid& uid)
+{
+    auto path = get_cache_path(uid);
+    if(!path.empty())
+    {
+        fs::error_code ec;
+        fs::remove(path, ec);
+    }
 }
 
 auto thumbnail_manager::get_gizmo_icon(entt::handle e) -> gfx::texture::ptr

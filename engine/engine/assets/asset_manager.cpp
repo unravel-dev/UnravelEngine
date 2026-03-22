@@ -273,4 +273,20 @@ void asset_manager::remove_asset_info_for_key(const std::string& key)
     db.remove_asset(key);
 }
 
+void asset_manager::evict_unused_assets(const std::string& group, std::chrono::steady_clock::duration max_idle)
+{
+    for(auto& [type_hash, storage] : storages_)
+    {
+        storage->evict_unused(pool_, group, max_idle);
+    }
+}
+
+void asset_manager::preload_all_assets()
+{
+    for(auto& [type_hash, storage] : storages_)
+    {
+        storage->preload_all();
+    }
+}
+
 } // namespace unravel

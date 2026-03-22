@@ -8,21 +8,23 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/physics/physics_material.h>
-#include <engine/ui/ui_tree.h>
 #include <engine/ui/style_sheet.h>
+#include <engine/ui/ui_tree.h>
 
+
+#include <engine/ecs/components/prefab_component.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/ecs/entity.hpp>
-#include <engine/ecs/components/prefab_component.h>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/texture.hpp>
-#include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
+#include <engine/meta/ui/ui_tree.hpp>
+#include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
-#include <engine/rendering/font.h>
+
 
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/thumbnail_manager.h>
@@ -120,26 +122,37 @@ auto pick_asset(ImGuiTextFilter& filter,
     {
         const auto& thumbnail = tm.get_thumbnail(data);
 
-        ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
-
-        ImGui::ContentItem citem{};
-        citem.texId = ImGui::ToId(thumbnail);
-        citem.texture_size = texture_size;
-        citem.image_size = item_size;
-
-        if(ImGui::ContentButtonItem(citem))
+        if(!data.is_ready())
         {
-            em.foucs_asset(data);
+            auto spinner_size = item_size.x;
+            ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner",
+                                                                      ImSpinner::Radius{spinner_size * 0.5f},
+                                                                      ImSpinner::Thickness{6.0f},
+                                                                      ImSpinner::Color{ImSpinner::white},
+                                                                      ImSpinner::Speed{6.0f});
         }
-        ImGui::SetItemTooltipEx("Locate the asset in the content browser.\n%s", data.id().c_str());
+        else
+        {
+            ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
 
+            ImGui::ContentItem citem{};
+            citem.texId = ImGui::ToId(thumbnail);
+            citem.texture_size = texture_size;
+            citem.image_size = item_size;
 
-        ImGui::DrawItemActivityOutline();
+            if(ImGui::ContentButtonItem(citem))
+            {
+                em.foucs_asset(data);
+            }
+            ImGui::SetItemTooltipEx("Locate the asset in the content browser.\n%s", data.id().c_str());
+
+            ImGui::DrawItemActivityOutline();
+        }
     }
     else
     {
         ImGui::Button("##None", item_size);
-        
+
         ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_TextDisabled), 1.0f);
     }
 
@@ -225,27 +238,40 @@ auto pick_asset(ImGuiTextFilter& filter,
                                auto& asset = assets[index];
                                const auto& thumbnail = tm.get_thumbnail(asset);
 
-                               ImVec2 item_size = {size, size};
-                               ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
-
-                               // copy so that we can pass c_str
-                               auto name = asset.name();
-
-                               ImGui::ContentItem citem{};
-                               citem.texId = ImGui::ToId(thumbnail);
-                               citem.name = name.c_str();
-                               citem.texture_size = texture_size;
-                               citem.image_size = item_size;
-
-                               if(ImGui::ContentButtonItem(citem))
+                               if(!asset.is_ready())
                                {
-                                   data = asset;
-                                   result.changed = true;
-                                   result.edit_finished = true;
-                                   ImGui::CloseCurrentPopup();
+                                   auto spinner_size = size;
+                                   ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>(
+                                       "spinner",
+                                       ImSpinner::Radius{spinner_size * 0.5f},
+                                       ImSpinner::Thickness{6.0f},
+                                       ImSpinner::Color{ImSpinner::white},
+                                       ImSpinner::Speed{6.0f});
                                }
+                               else
+                               {
+                                   ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
+                                   ImVec2 item_size = {size, size};
 
-                               ImGui::SetItemTooltipEx("%s", asset.name().c_str());
+                                   // copy so that we can pass c_str
+                                   auto name = asset.name();
+
+                                   ImGui::ContentItem citem{};
+                                   citem.texId = ImGui::ToId(thumbnail);
+                                   citem.name = name.c_str();
+                                   citem.texture_size = texture_size;
+                                   citem.image_size = item_size;
+
+                                   if(ImGui::ContentButtonItem(citem))
+                                   {
+                                       data = asset;
+                                       result.changed = true;
+                                       result.edit_finished = true;
+                                       ImGui::CloseCurrentPopup();
+                                   }
+
+                                   ImGui::SetItemTooltipEx("%s", asset.name().c_str());
+                               }
                            });
 
         ImGui::EndChild();
@@ -277,7 +303,8 @@ auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_pr
         }
         return false;
     };
-    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    data_var_proxy.impl->setter =
+        [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
@@ -306,7 +333,6 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
             auto& data = var.cast<asset_handle<T>&>();
             if(data)
             {
-                
                 auto mat = data.get(false);
                 if(mat)
                 {
@@ -317,7 +343,8 @@ auto make_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> m
         }
         return false;
     };
-    data_var_proxy.impl->setter = [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    data_var_proxy.impl->setter =
+        [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
     {
         // entt::meta_any var;
         // proxy.impl->getter(var);
@@ -354,12 +381,13 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
                     return true;
                 }
             }
-           
         }
         return false;
     };
-    
-    data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+
+    data_var_proxy.impl->setter = [data, parent_proxy = var_proxy](meta_any_proxy& proxy,
+                                                                   const entt::meta_any& value,
+                                                                   uint64_t execution_count) mutable
     {
         entt::meta_any var;
         if(proxy.impl->getter(var) && var)
@@ -382,7 +410,6 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
                 tm.regenerate_thumbnail(data.uid());
                 asset_writer::atomic_save_to_file(data.id(), data);
             }
-            
 
             return true;
         }
@@ -391,7 +418,6 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
 
     return data_var_proxy;
 }
-
 
 } // namespace
 
@@ -468,7 +494,6 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
             if(data.is_ready())
             {
-
                 var_info tex_var_info;
                 tex_var_info.read_only = true;
                 tex_var_info.is_copyable = false;
@@ -480,7 +505,6 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                 {
                     result |= ::unravel::inspect_var(ctx, tex_var, tex_var_proxy, tex_var_info);
                 }
-                
             }
             ImGui::EndChild();
             ImGui::EndTabItem();
@@ -492,7 +516,6 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
             auto base_importer = meta.meta.importer;
 
             auto importer = std::static_pointer_cast<texture_importer_meta>(base_importer);
-            
 
             if(importer)
             {
@@ -559,13 +582,12 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
     if(data.is_ready())
     {
         auto data_var_proxy = make_mutable_asset_proxy<material>(var, var_proxy);
-      
+
         entt::meta_any data_var;
         if(data_var_proxy.impl->getter(data_var))
         {
             result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
         }
-    
 
         if(result.changed)
         {
@@ -588,7 +610,6 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
                                         const entt::meta_custom& custom) -> inspect_result
 {
     auto& data = var.cast<std::shared_ptr<material>&>();
-
 
     inspect_result result{};
     {
@@ -620,7 +641,6 @@ auto inspector_shared_material::inspect(rtti::context& ctx,
             }
         }
     }
-
 
     return result;
 }
@@ -680,9 +700,8 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                 {
                     result |= ::unravel::inspect_var(ctx, mesh_var, mesh_var_proxy, mesh_var_info);
                 }
-
             }
-        
+
             ImGui::EndChild();
             ImGui::EndTabItem();
         }
@@ -809,13 +828,11 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
 
                 auto clip_var_proxy = make_asset_proxy<animation_clip>(var, var_proxy);
 
-
                 entt::meta_any clip_var;
                 if(clip_var_proxy.impl->getter(clip_var))
                 {
                     result |= ::unravel::inspect_var(ctx, clip_var, clip_var_proxy, clip_var_info);
                 }
-
             }
             ImGui::EndTabItem();
         }
@@ -871,7 +888,8 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
     return result;
 }
 
-auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab) -> entt::handle
+auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab)
+    -> entt::handle
 {
     entt::handle instance{};
     auto view = inspected_scene_.registry->view<prefab_component>();
@@ -995,7 +1013,6 @@ auto inspector_asset_handle_scene_prefab::inspect(rtti::context& ctx,
     {
         if(ImGui::BeginTabItem(ex::get_type(data.extension()).c_str()))
         {
-
             ImGui::EndTabItem();
         }
         if(ImGui::BeginTabItem("Import"))
@@ -1223,10 +1240,7 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
     return result;
 }
 
-
-auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx,
-                                                      asset_handle<font>& data)
-    -> inspect_result
+auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx, asset_handle<font>& data) -> inspect_result
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto& tm = ctx.get_cached<thumbnail_manager>();
@@ -1239,10 +1253,10 @@ auto inspector_asset_handle_font::inspect_as_property(rtti::context& ctx,
 }
 
 auto inspector_asset_handle_font::inspect(rtti::context& ctx,
-                                                      entt::meta_any& var,
-                                                      const meta_any_proxy& var_proxy,
-                                                      const var_info& info,
-                                                      const entt::meta_custom& custom) -> inspect_result
+                                          entt::meta_any& var,
+                                          const meta_any_proxy& var_proxy,
+                                          const var_info& info,
+                                          const entt::meta_custom& custom) -> inspect_result
 {
     auto& data = var.cast<asset_handle<font>&>();
 
@@ -1270,7 +1284,6 @@ auto inspector_asset_handle_font::inspect(rtti::context& ctx,
         }
     }
 
-
     return result;
 }
 
@@ -1288,10 +1301,10 @@ auto inspector_asset_handle_ui_tree::inspect_as_property(rtti::context& ctx, ass
 }
 
 auto inspector_asset_handle_ui_tree::inspect(rtti::context& ctx,
-                                                  entt::meta_any& var,
-                                                  const meta_any_proxy& var_proxy,
-                                                  const var_info& info,
-                                                  const entt::meta_custom& custom) -> inspect_result
+                                             entt::meta_any& var,
+                                             const meta_any_proxy& var_proxy,
+                                             const var_info& info,
+                                             const entt::meta_custom& custom) -> inspect_result
 {
     auto& data = var.cast<asset_handle<ui_tree>&>();
 
@@ -1333,10 +1346,10 @@ auto inspector_asset_handle_style_sheet::inspect_as_property(rtti::context& ctx,
 }
 
 auto inspector_asset_handle_style_sheet::inspect(rtti::context& ctx,
-                                                  entt::meta_any& var,
-                                                  const meta_any_proxy& var_proxy,
-                                                  const var_info& info,
-                                                  const entt::meta_custom& custom) -> inspect_result
+                                                 entt::meta_any& var,
+                                                 const meta_any_proxy& var_proxy,
+                                                 const var_info& info,
+                                                 const entt::meta_custom& custom) -> inspect_result
 {
     auto& data = var.cast<asset_handle<style_sheet>&>();
 

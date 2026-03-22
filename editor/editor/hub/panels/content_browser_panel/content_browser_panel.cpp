@@ -292,9 +292,7 @@ auto draw_item(const content_browser_item& item)
     }
     else
     {
-        
         auto spinner_size = item_size.x;
-
         ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner", 
             ImSpinner::Radius{spinner_size * 0.5f},
             ImSpinner::Thickness{6.0f},

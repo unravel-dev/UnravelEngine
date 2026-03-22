@@ -79,6 +79,11 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    {
+        auto& am = ctx.get_cached<asset_manager>();
+        am.preload_all_assets();
+    }
+
     auto& scr = ctx.get_cached<script_system>();
     if(!scr.load_app_domain(ctx, true))
     {

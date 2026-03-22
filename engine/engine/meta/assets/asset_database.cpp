@@ -1,5 +1,6 @@
 #include "asset_database.hpp"
 #include "asset_importer_meta.hpp"
+#include "asset_header_info.hpp"
 #include <engine/meta/core/common/basetypes.hpp>
 
 #include <fstream>
@@ -88,6 +89,7 @@ SAVE(asset_meta)
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("uid", obj.uid));
     try_save(ar, ser20::make_nvp("importer", obj.importer));
+    try_save(ar, ser20::make_nvp("header", obj.header));
 }
 SAVE_INSTANTIATE(asset_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(asset_meta, ser20::oarchive_binary_t);
@@ -97,7 +99,7 @@ LOAD(asset_meta)
     try_load(ar, ser20::make_nvp("type", obj.type));
     try_load(ar, ser20::make_nvp("uid", obj.uid));
     try_load(ar, ser20::make_nvp("importer", obj.importer));
-
+    try_load(ar, ser20::make_nvp("header", obj.header));
 }
 LOAD_INSTANTIATE(asset_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(asset_meta, ser20::iarchive_binary_t);

@@ -112,6 +112,23 @@ public:
     auto generate_metadata(const fs::path& p) const -> asset_meta;
 
     /**
+     * @brief Gets typed header info for an asset without loading it.
+     * @tparam HeaderT The header info type (e.g. texture_header_info).
+     * @param uid The UUID of the asset.
+     * @return Shared pointer to the header, or nullptr if not available.
+     */
+    template<typename HeaderT>
+    auto get_header(const hpp::uuid& uid) const -> std::shared_ptr<HeaderT>
+    {
+        auto meta = get_metadata(uid);
+        if(meta.meta.header && meta.meta.header->is<HeaderT>())
+        {
+            return std::static_pointer_cast<HeaderT>(meta.meta.header);
+        }
+        return nullptr;
+    }
+
+    /**
      * @brief Adds a storage for a specific type.
      * @tparam S The type of storage.
      * @tparam Args The arguments for constructing the storage.
@@ -132,11 +149,18 @@ public:
      * @tparam T The type of the asset.
      * @param key The key of the asset.
      * @param flags The load flags for the asset.
+     * @param mode Whether to load immediately or defer until first get().
      * @return The handle to the asset.
      */
     template<typename T>
-    auto get_asset(const std::string& key, load_flags flags = load_flags::standard) -> asset_handle<T>
+    auto get_asset(const std::string& key,
+                   load_flags flags = load_flags::standard,
+                   load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
+        if(mode == load_mode::deferred)
+        {
+            return register_asset<T>(key);
+        }
         auto& storage = get_storage<T>();
         return load_asset_from_file_impl<T>(key,
                                             flags,
@@ -150,24 +174,85 @@ public:
      * @tparam T The type of the asset.
      * @param uid The UUID of the asset.
      * @param flags The load flags for the asset.
+     * @param mode Whether to load immediately or defer until first get().
      * @return The handle to the asset.
      */
     template<typename T>
-    auto get_asset(const hpp::uuid& uid, load_flags flags = load_flags::standard) -> asset_handle<T>
+    auto get_asset(const hpp::uuid& uid,
+                   load_flags flags = load_flags::standard,
+                   load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
         auto meta = get_metadata(uid);
         if(!meta.location.empty())
         {
             const auto& key = meta.location;
-            return get_asset<T>(key, flags);
+            return get_asset<T>(key, flags, mode);
         }
 
         if(parent_)
         {
-            return parent_->get_asset<T>(uid, flags);
+            return parent_->get_asset<T>(uid, flags, mode);
         }
         return {};
     }
+
+    /**
+     * @brief Registers an asset by key without loading it.
+     * The actual load is triggered on the first handle.get() call.
+     * @tparam T The type of the asset.
+     * @param key The key of the asset.
+     * @return A deferred handle to the asset.
+     */
+    template<typename T>
+    auto register_asset(const std::string& key) -> asset_handle<T>
+    {
+        auto& storage = get_storage<T>();
+        return register_asset_impl<T>(key,
+                                      storage.container_mutex,
+                                      storage.container,
+                                      storage.load_from_file);
+    }
+
+    /**
+     * @brief Registers an asset by UUID without loading it.
+     * The actual load is triggered on the first handle.get() call.
+     * @tparam T The type of the asset.
+     * @param uid The UUID of the asset.
+     * @return A deferred handle to the asset.
+     */
+    template<typename T>
+    auto register_asset(const hpp::uuid& uid) -> asset_handle<T>
+    {
+        auto meta = get_metadata(uid);
+        if(!meta.location.empty())
+        {
+            return register_asset<T>(meta.location);
+        }
+        if(parent_)
+        {
+            return parent_->register_asset<T>(uid);
+        }
+        return {};
+    }
+
+    /**
+     * @brief Triggers loading on all deferred handles of a given type.
+     * Non-blocking: starts background loads but does not wait.
+     * @tparam T The type of the assets to preload.
+     */
+    template<typename T>
+    void preload_assets()
+    {
+        auto& storage = get_storage<T>();
+        storage.preload_all();
+    }
+
+    /**
+     * @brief Triggers loading on all deferred handles across every registered storage.
+     * Non-blocking: starts background loads but does not wait.
+     * Useful for game runtime preloading after scene deserialization.
+     */
+    void preload_all_assets();
 
     /**
      * @brief Finds an asset by its key.
@@ -313,6 +398,15 @@ public:
      * @return A vector of handles to the assets.
      */
     auto get_all_assets(const std::string& group) const -> std::vector<std::string>;
+
+    /**
+     * @brief Evicts full-loaded assets not accessed within the given duration.
+     * Demotes them back to deferred state so they can be re-loaded on next access.
+     * @param group The group to evict assets from.
+     * @param max_idle Maximum idle duration before eviction.
+     */
+    void evict_unused_assets(const std::string& group, std::chrono::steady_clock::duration max_idle);
+
 private:
     /**
      * @brief Gets the asset database for a specified group.
@@ -379,8 +473,40 @@ private:
             }
 
             handle.set_internal_ids(uid, key);
-            load_func(pool_, handle, key);
+            load_func(pool_, handle, key, load_mode::immediate);
         }
+
+        return handle;
+    }
+
+    /**
+     * @brief Registers an asset handle with a deferred pool job.
+     * The job is stored but not queued -- it runs when handle.get() is first called.
+     * @tparam T The type of the asset.
+     * @param key The key of the asset.
+     * @param container_mutex The mutex for the asset container.
+     * @param container The container for the assets.
+     * @param load_func The function to load the asset (called with deferred mode).
+     * @return A deferred handle to the asset.
+     */
+    template<typename T>
+    auto register_asset_impl(const std::string& key,
+                             std::recursive_mutex& container_mutex,
+                             typename asset_storage<T>::request_container_t& container,
+                             typename asset_storage<T>::load_from_file_t& load_func) -> asset_handle<T>
+    {
+        auto inst = find_asset_impl<T>(key, container_mutex, container);
+        if(inst)
+        {
+            return inst;
+        }
+
+        std::lock_guard<std::recursive_mutex> lock(container_mutex);
+
+        auto& handle = container[key];
+        auto uid = add_asset(key);
+        handle.set_internal_ids(uid, key);
+        load_func(pool_, handle, key, load_mode::deferred);
 
         return handle;
     }

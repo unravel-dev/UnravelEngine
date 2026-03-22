@@ -1,6 +1,7 @@
 #pragma once
 
 #include "asset_handle.h"
+#include "asset_flags.h"
 
 #include <context/context.hpp>
 #include <hpp/event.hpp>
@@ -123,6 +124,50 @@ struct audio_importer_meta : crtp_meta_type<audio_importer_meta, asset_importer_
     bool force_to_mono{false};
 };
 
+//-----------------------------------------------------------------------------
+// Asset header info -- lightweight per-type metadata readable without full load.
+// Populated during compilation, stored in .meta files (editor only).
+//-----------------------------------------------------------------------------
+
+/// Base class for per-type asset header information.
+struct asset_header_info : crtp_meta_type<asset_header_info>
+{
+    virtual ~asset_header_info() = default;
+    size_t file_size{};
+};
+
+struct texture_header_info : crtp_meta_type<texture_header_info, asset_header_info>
+{
+    uint32_t width{};
+    uint32_t height{};
+    uint16_t depth{1};
+    uint16_t num_layers{1};
+    uint16_t num_mips{1};
+    std::string format{};
+};
+
+struct mesh_header_info : crtp_meta_type<mesh_header_info, asset_header_info>
+{
+    uint32_t vertex_count{};
+    uint32_t index_count{};
+    uint32_t submesh_count{};
+    uint32_t lod_count{};
+};
+
+struct animation_header_info : crtp_meta_type<animation_header_info, asset_header_info>
+{
+    float duration{};
+    uint32_t channel_count{};
+    float sample_rate{};
+};
+
+struct audio_header_info : crtp_meta_type<audio_header_info, asset_header_info>
+{
+    float duration{};
+    uint32_t sample_rate{};
+    uint16_t channels{};
+};
+
 /**
  * @struct asset_meta
  * @brief Metadata for an asset, including its UUID and type.
@@ -135,6 +180,8 @@ struct asset_meta
     std::string type{};
     /// Importer meta
     std::shared_ptr<asset_importer_meta> importer;
+    /// Per-type header info (editor only, populated during compilation).
+    std::shared_ptr<asset_header_info> header;
 };
 
 /**
@@ -337,6 +384,20 @@ struct basic_storage
      * @param group The group to unload.
      */
     virtual void unload_group(tpp::thread_pool& pool, const std::string& group) = 0;
+
+    /**
+     * @brief Evicts loaded assets not accessed within the given duration.
+     * Demotes them back to deferred state so memory is freed.
+     * @param pool The thread pool.
+     * @param max_idle Maximum idle duration before eviction.
+     */
+    virtual void evict_unused(tpp::thread_pool& pool, const std::string& group, std::chrono::steady_clock::duration max_idle) = 0;
+
+    /**
+     * @brief Triggers loading on all deferred handles in this storage.
+     * Non-blocking: starts background loads but does not wait.
+     */
+    virtual void preload_all() = 0;
 };
 
 /**
@@ -354,7 +415,7 @@ struct asset_storage : public basic_storage
     using callable = std::function<F>;
 
     /// Function type for loading from file.
-    using load_from_file_t = callable<bool(tpp::thread_pool& pool, asset_handle<T>&, const std::string&)>;
+    using load_from_file_t = callable<bool(tpp::thread_pool& pool, asset_handle<T>&, const std::string&, load_mode)>;
 
     /// Function type for loading from instance. Predicate function type.
     using predicate_t = callable<bool(const asset_handle<T>&)>;
@@ -477,6 +538,52 @@ struct asset_storage : public basic_storage
                 hpp::string_view id_view(id);
                 return id_view.starts_with(group);
             });
+    }
+
+    /**
+     * @brief Evicts loaded assets not accessed within the given duration.
+     * Assets whose weak_ptr has expired (no external references) and that
+     * have been idle longer than max_idle are demoted back to deferred state.
+     * @param pool The thread pool.
+     * @param max_idle Maximum idle duration before eviction.
+     */
+    void evict_unused(tpp::thread_pool& pool, const std::string& group, std::chrono::steady_clock::duration max_idle) final
+    {
+        auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::recursive_mutex> lock(container_mutex);
+        for(auto& [key, handle] : container)
+        {
+            const auto& id = handle.id();
+            hpp::string_view id_view(id);
+            if(!id_view.starts_with(group))
+            {
+                continue;
+            }
+            if(!handle.is_ready())
+            {
+                continue;
+            }
+            bool is_idle = (now - handle.last_access()) > max_idle;
+            if(!is_idle)
+            {
+                continue;
+            }
+            pool.stop(handle.task_id());
+            handle.demote_to_deferred();
+            load_from_file(pool, handle, key, load_mode::deferred);
+        }
+    }
+
+    void preload_all() final
+    {
+        std::lock_guard<std::recursive_mutex> lock(container_mutex);
+        for(auto& [key, handle] : container)
+        {
+            if(handle.is_deferred())
+            {
+                handle.submit();
+            }
+        }
     }
 
     /// Function for loading assets from file.

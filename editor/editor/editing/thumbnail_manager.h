@@ -45,6 +45,9 @@ struct thumbnail_manager
 
         bool needs_regeneration{true};
         gfx::frame_buffer::ptr thumbnail;
+
+        bool is_cached_on_disk{false};
+        fs::path cache_path{};
     };
 
     struct generator
@@ -84,6 +87,21 @@ struct thumbnail_manager
     void regenerate_thumbnail(const hpp::uuid& uid);
     void remove_thumbnail(const hpp::uuid& uid);
     void clear_thumbnails();
+
+    /// Sets the directory for persistent thumbnail caching.
+    void set_cache_directory(const fs::path& cache_dir);
+
+    /// Gets the disk cache path for a given asset uid.
+    auto get_cache_path(const hpp::uuid& uid) const -> fs::path;
+
+    /// Loads a cached thumbnail from disk (stub -- returns nullptr for now).
+    auto load_cached_thumbnail(const hpp::uuid& uid) -> gfx::texture::ptr;
+
+    /// Saves a generated thumbnail to disk (stub -- no-op for now).
+    void save_thumbnail_to_cache(const hpp::uuid& uid, gfx::texture::ptr tex);
+
+    /// Invalidates a cached thumbnail on disk.
+    void invalidate_cache_entry(const hpp::uuid& uid);
 
 private:
     struct thumbnail_cache
@@ -127,6 +145,9 @@ private:
 
     std::map<std::string, asset_handle<gfx::texture>> icons_;
     std::map<std::string, asset_handle<gfx::texture>> gizmo_icons_;
+
+    /// Directory for persistent thumbnail cache (e.g., "app:/.cache/").
+    fs::path cache_directory_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

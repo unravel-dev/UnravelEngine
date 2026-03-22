@@ -119,7 +119,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
             {
                 if(on_progress)
                 {
-                    on_progress(completed, entries.size(), "Listing Assets " + entry_extension);
+                    on_progress(completed, entries.size(), entry_extension);
                 }
             }
 

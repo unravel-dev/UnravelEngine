@@ -2,6 +2,7 @@
 #include "asset_extensions.h"
 #include "../../threading/threader.h"
 #include "../asset_handle.h"
+#include "../asset_flags.h"
 #include <graphics/shader.h>
 
 namespace gfx
@@ -32,11 +33,12 @@ auto resolve_compiled_key(const std::string& key) -> std::string;
 auto resolve_compiled_path(const std::string& key) -> fs::path;
 
 template<typename T>
-auto load_from_file(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key) -> bool;
+auto load_from_file(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key,
+                    load_mode mode = load_mode::immediate) -> bool;
 
 #define DECLARE_LOADER_SPEC(T)\
 template<>\
-auto load_from_file<T>(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key) -> bool
+auto load_from_file<T>(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key, load_mode mode) -> bool
 
 DECLARE_LOADER_SPEC(gfx::shader);
 DECLARE_LOADER_SPEC(gfx::texture);

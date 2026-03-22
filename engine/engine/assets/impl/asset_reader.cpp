@@ -86,350 +86,233 @@ auto validate(const std::string& key, const std::string& compiled_ext, std::stri
     return true;
 }
 
-template<>
-auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::texture>& output, const std::string& key)
-    -> bool
+namespace detail
 {
-    std::string compiled_absolute_path{};
 
-    if(!validate(key, {}, compiled_absolute_path))
+template<typename T, typename CreateFromPathFn>
+auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key,
+                   const std::string& compiled_ext, CreateFromPathFn create_fn, load_mode mode) -> bool
+{
+    if(mode == load_mode::deferred)
+    {
+        auto deferred_fn = [key, compiled_ext, create_fn]() -> std::shared_ptr<T>
+        {
+            std::string path{};
+            if(!validate(key, compiled_ext, path))
+            {
+                return nullptr;
+            }
+            return create_fn(path);
+        };
+        output.set_internal_job(pool.create_job(get_job_name<T>(), deferred_fn).share());
+        return true;
+    }
+
+    std::string path{};
+    if(!validate(key, compiled_ext, path))
     {
         return false;
     }
-
-    auto create_resource_func = [compiled_absolute_path]()
+    auto immediate_fn = [path, create_fn]() -> std::shared_ptr<T>
     {
-        return std::make_shared<gfx::texture>(compiled_absolute_path.c_str());
+        return create_fn(path);
     };
-
-    auto job = pool.schedule(get_job_name<gfx::texture>(), create_resource_func).share();
-
-    output.set_internal_job(job);
-
+    output.set_internal_job(pool.schedule(get_job_name<T>(), immediate_fn).share());
     return true;
 }
 
+} // namespace detail
+
 template<>
-auto load_from_file<gfx::shader>(tpp::thread_pool& pool, asset_handle<gfx::shader>& output, const std::string& key)
-    -> bool
+auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::texture>& output,
+                                   const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, gfx::get_current_renderer_filename_extension(), compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path, key]()
-    {
-        auto stream = std::ifstream{compiled_absolute_path, std::ios::binary};
-        auto read_memory = fs::read_stream(stream);
-
-        const gfx::memory_view* mem = gfx::copy(read_memory.data(), static_cast<std::uint32_t>(read_memory.size()));
-
-        auto shader = std::make_shared<gfx::shader>(mem); 
-
-        gfx::set_name(shader->native_handle(), key.c_str(), static_cast<int32_t>(key.size()));
-
-        return shader;
-    };
-
-    auto job = pool.schedule(get_job_name<gfx::shader>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<gfx::texture>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            return std::make_shared<gfx::texture>(path.c_str());
+        }, mode);
 }
 
 template<>
-auto load_from_file<material>(tpp::thread_pool& pool, asset_handle<material>& output, const std::string& key) -> bool
+auto load_from_file<gfx::shader>(tpp::thread_pool& pool, asset_handle<gfx::shader>& output,
+                                  const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
+    return detail::schedule_load<gfx::shader>(pool, output, key,
+        gfx::get_current_renderer_filename_extension(),
+        [key](const std::string& path)
+        {
+            auto stream = std::ifstream{path, std::ios::binary};
+            auto read_memory = fs::read_stream(stream);
 
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
+            const gfx::memory_view* mem = gfx::copy(read_memory.data(), static_cast<std::uint32_t>(read_memory.size()));
 
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        std::shared_ptr<unravel::material> material;
-        load_from_file_bin(compiled_absolute_path, material);
-        return material;
-    };
+            auto shader = std::make_shared<gfx::shader>(mem);
 
-    auto job = pool.schedule(get_job_name<material>(), create_resource_func).share();
-    output.set_internal_job(job);
+            gfx::set_name(shader->native_handle(), key.c_str(), static_cast<int32_t>(key.size()));
 
-    return true;
+            return shader;
+        }, mode);
 }
 
 template<>
-auto load_from_file<mesh>(tpp::thread_pool& pool, asset_handle<mesh>& output, const std::string& key) -> bool
+auto load_from_file<material>(tpp::thread_pool& pool, asset_handle<material>& output,
+                               const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        mesh::load_data data;
-        load_from_file_bin(compiled_absolute_path, data);
-
-        auto mesh = std::make_shared<unravel::mesh>();
-        mesh->load_mesh(std::move(data));
-        return mesh;
-    };
-
-    auto job = pool.schedule(get_job_name<mesh>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
-}
-
-
-template<>
-auto load_from_file<animation_clip>(tpp::thread_pool& pool, asset_handle<animation_clip>& output, const std::string& key) -> bool
-{
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto anim = std::make_shared<animation_clip>();
-        load_from_file_bin(compiled_absolute_path, *anim);
-
-        return anim;
-    };
-
-    auto job = pool.schedule(get_job_name<animation_clip>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<material>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            std::shared_ptr<unravel::material> mat;
+            load_from_file_bin(path, mat);
+            return mat;
+        }, mode);
 }
 
 template<>
-auto load_from_file<prefab>(tpp::thread_pool& pool, asset_handle<prefab>& output, const std::string& key) -> bool
+auto load_from_file<mesh>(tpp::thread_pool& pool, asset_handle<mesh>& output,
+                           const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
+    return detail::schedule_load<mesh>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            mesh::load_data data;
+            load_from_file_bin(path, data);
 
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto pfb = std::make_shared<prefab>();
-
-        auto stream = std::ifstream{compiled_absolute_path};
-        pfb->buffer = fs::read_stream_buffer(stream);
-        return pfb;
-    };
-
-    auto job = pool.schedule(get_job_name<prefab>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+            auto m = std::make_shared<unravel::mesh>();
+            m->load_mesh(std::move(data));
+            return m;
+        }, mode);
 }
 
 template<>
-auto load_from_file<scene_prefab>(tpp::thread_pool& pool, asset_handle<scene_prefab>& output, const std::string& key)
-    -> bool
+auto load_from_file<animation_clip>(tpp::thread_pool& pool, asset_handle<animation_clip>& output,
+                                     const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto pfb = std::make_shared<scene_prefab>();
-
-        auto stream = std::ifstream{compiled_absolute_path};
-        pfb->buffer = fs::read_stream_buffer(stream);
-        return pfb;
-    };
-
-    auto job = pool.schedule(get_job_name<scene_prefab>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<animation_clip>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto anim = std::make_shared<animation_clip>();
+            load_from_file_bin(path, *anim);
+            return anim;
+        }, mode);
 }
 
 template<>
-auto load_from_file<physics_material>(tpp::thread_pool& pool,
-                                      asset_handle<physics_material>& output,
-                                      const std::string& key) -> bool
+auto load_from_file<prefab>(tpp::thread_pool& pool, asset_handle<prefab>& output,
+                             const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto material = std::make_shared<physics_material>();
-        load_from_file_bin(compiled_absolute_path, material);
-        return material;
-    };
-
-    auto job = pool.schedule(get_job_name<physics_material>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<prefab>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto pfb = std::make_shared<prefab>();
+            auto stream = std::ifstream{path};
+            pfb->buffer = fs::read_stream_buffer(stream);
+            return pfb;
+        }, mode);
 }
 
 template<>
-auto load_from_file<audio_clip>(tpp::thread_pool& pool, asset_handle<audio_clip>& output, const std::string& key)
-    -> bool
+auto load_from_file<scene_prefab>(tpp::thread_pool& pool, asset_handle<scene_prefab>& output,
+                                   const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_load_func = [compiled_absolute_path]()
-    {
-        auto data = std::make_shared<audio::sound_data>();
-        load_from_file_bin(compiled_absolute_path, *data);
-        return data;
-    };
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        audio::sound_data data;
-        load_from_file_bin(compiled_absolute_path, data);
-
-        auto create_job = tpp::async(tpp::main_thread::get_id(),
-                                     [data = std::move(data)]() mutable
-                                     {
-                                         auto clip = std::make_shared<audio_clip>(std::move(data), false);
-                                         return clip;
-                                     });
-
-        return create_job.get();
-    };
-
-    auto job = pool.schedule(get_job_name<audio_clip>(), create_resource_func).share();
-
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<scene_prefab>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto pfb = std::make_shared<scene_prefab>();
+            auto stream = std::ifstream{path};
+            pfb->buffer = fs::read_stream_buffer(stream);
+            return pfb;
+        }, mode);
 }
 
 template<>
-auto load_from_file<font>(tpp::thread_pool& pool, asset_handle<font>& output, const std::string& key)
-    -> bool
+auto load_from_file<physics_material>(tpp::thread_pool& pool, asset_handle<physics_material>& output,
+                                       const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
-
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto create_job = tpp::async(tpp::main_thread::get_id(),
-                                     [compiled_absolute_path]() mutable
-                                     {
-                                         auto fnt = std::make_shared<font>(compiled_absolute_path.c_str(), 0, 86, FONT_TYPE_DISTANCE_OUTLINE_DROP_SHADOW_IMAGE, 8, 8);
-                                         return fnt;
-                                     });
-
-        return create_job.get();
-    };
-
-    auto job = pool.schedule(get_job_name<font>(), create_resource_func).share();
-
-    output.set_internal_job(job);
-
-    return true;
+    return detail::schedule_load<physics_material>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto mat = std::make_shared<physics_material>();
+            load_from_file_bin(path, mat);
+            return mat;
+        }, mode);
 }
 
 template<>
-auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output, const std::string& key)
-    -> bool
+auto load_from_file<audio_clip>(tpp::thread_pool& pool, asset_handle<audio_clip>& output,
+                                 const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
+    return detail::schedule_load<audio_clip>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            audio::sound_data data;
+            load_from_file_bin(path, data);
 
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
+            auto create_job = tpp::async(tpp::main_thread::get_id(),
+                                         [data = std::move(data)]() mutable
+                                         {
+                                             return std::make_shared<audio_clip>(std::move(data), false);
+                                         });
 
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto scr = std::make_shared<script>();
-        load_from_file_bin(compiled_absolute_path, scr);
-        return scr;
-    };
-
-    auto job = pool.schedule(get_job_name<script>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+            return create_job.get();
+        }, mode);
 }
 
 template<>
-auto load_from_file<ui_tree>(tpp::thread_pool& pool, asset_handle<ui_tree>& output, const std::string& key)
-    -> bool
+auto load_from_file<font>(tpp::thread_pool& pool, asset_handle<font>& output,
+                           const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
+    return detail::schedule_load<font>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto create_job = tpp::async(tpp::main_thread::get_id(),
+                                         [path]()
+                                         {
+                                             return std::make_shared<font>(path.c_str(), 0, 86,
+                                                 FONT_TYPE_DISTANCE_OUTLINE_DROP_SHADOW_IMAGE, 8, 8);
+                                         });
 
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
-
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto tree = std::make_shared<ui_tree>();
-        load_from_file(compiled_absolute_path, tree);
-        return tree;
-    };
-
-    auto job = pool.schedule(get_job_name<ui_tree>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+            return create_job.get();
+        }, mode);
 }
 
 template<>
-auto load_from_file<style_sheet>(tpp::thread_pool& pool, asset_handle<style_sheet>& output, const std::string& key)
-    -> bool
+auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output,
+                             const std::string& key, load_mode mode) -> bool
 {
-    std::string compiled_absolute_path{};
+    return detail::schedule_load<script>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto scr = std::make_shared<script>();
+            load_from_file_bin(path, scr);
+            return scr;
+        }, mode);
+}
 
-    if(!validate(key, {}, compiled_absolute_path))
-    {
-        return false;
-    }
+template<>
+auto load_from_file<ui_tree>(tpp::thread_pool& pool, asset_handle<ui_tree>& output,
+                              const std::string& key, load_mode mode) -> bool
+{
+    return detail::schedule_load<ui_tree>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto tree = std::make_shared<ui_tree>();
+            load_from_file(path, tree);
+            return tree;
+        }, mode);
+}
 
-    auto create_resource_func = [compiled_absolute_path]()
-    {
-        auto sheet = std::make_shared<style_sheet>();
-        load_from_file(compiled_absolute_path, sheet);
-        return sheet;
-    };
-
-    auto job = pool.schedule(get_job_name<style_sheet>(), create_resource_func).share();
-    output.set_internal_job(job);
-
-    return true;
+template<>
+auto load_from_file<style_sheet>(tpp::thread_pool& pool, asset_handle<style_sheet>& output,
+                                  const std::string& key, load_mode mode) -> bool
+{
+    return detail::schedule_load<style_sheet>(pool, output, key, {},
+        [](const std::string& path)
+        {
+            auto sheet = std::make_shared<style_sheet>();
+            load_from_file(path, sheet);
+            return sheet;
+        }, mode);
 }
 
 } // namespace unravel::asset_reader

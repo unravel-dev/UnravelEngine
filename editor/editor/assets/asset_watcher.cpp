@@ -354,9 +354,13 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
             {
                 if(entry.status == fs::watcher::entry_status::removed)
                 {
-                    removed.emplace(am.get_asset<T>(key).uid());
-                    am.unload_asset<T>(key);
-
+                    auto asset = am.find_asset<T>(key);
+                    if(asset)
+                    {
+                        removed.emplace(asset.uid());
+                        am.unload_asset<T>(key);
+                    }
+                   
                     if constexpr(std::is_same<T, script>::value)
                     {
                         script_system::set_needs_recompile(fs::extract_protocol(fs::convert_to_protocol(key)).string());
@@ -377,9 +381,11 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                     if(check_files_integrity(key, entry.path))
                     {
                         load_flags flags = is_initial_list ? load_flags::standard : load_flags::reload;
-                        auto asset = am.get_asset<T>(key, flags);
-
-                        changed.emplace(asset.uid());
+                        auto asset = am.get_asset<T>(key, flags, load_mode::deferred);
+                        if(asset)
+                        {
+                            changed.emplace(asset.uid());
+                        }
                     }
 
                     if constexpr(std::is_same<T, script>::value)
@@ -738,7 +744,15 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         watchers.emplace_back(id);
     }
 
-    syncer.sync(data_dir, meta_dir, on_progress);
+    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_job)
+    {
+        if(on_progress)
+        {
+            on_progress(completed, total, "Indexing Assets Metadata " + current_job);
+        }
+    };
+
+    syncer.sync(data_dir, meta_dir, on_sync_progress);
 
     if(wait)
     {
@@ -808,7 +822,14 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<ui_tree>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
 
-    syncer.sync(meta_dir, cache_dir, on_progress);
+    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_job)
+    {
+        if(on_progress)
+        {
+            on_progress(completed, total, "Indexing Compiled Assets " + current_job);
+        }
+    };
+    syncer.sync(meta_dir, cache_dir, on_sync_progress);
 
     if(wait)
     {

@@ -3,6 +3,7 @@
 #include <engine/engine_export.h>
 #include <hpp/filesystem.hpp>
 #include <logging/logging.h>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <uuid/uuid.h>
@@ -11,6 +12,9 @@
 
 template<typename T>
 using task_future = tpp::job_shared_future<T>;
+
+template<typename T>
+struct asset_handle;
 
 /**
  * @struct asset_link
@@ -27,10 +31,12 @@ struct asset_link
     hpp::uuid uid{};
     /// String identifier for the asset.
     std::string id{};
-    /// Task future for the asset.
+    /// Task future for the asset (valid for both scheduled and deferred jobs).
     task_future_t task{};
     /// Weak pointer to the asset.
     weak_asset_t weak_asset{};
+    /// Last time this asset was accessed via get(), used for eviction.
+    mutable std::chrono::steady_clock::time_point last_access{};
 };
 
 /**
@@ -60,7 +66,7 @@ struct asset_handle
 
     /**
      * @brief Conversion operator to bool.
-     * @return True if the handle is valid, false otherwise.
+     * @return True if the handle references an asset (loaded or deferred).
      */
     operator bool() const
     {
@@ -115,12 +121,26 @@ struct asset_handle
      * @brief Gets the shared pointer to the asset.
      * @param wait If true, waits for the task to complete if not ready.
      * @return The shared pointer to the asset.
+     *
+     * If the handle was registered with deferred loading, the first call
+     * to get() triggers the actual load on the thread pool. Subsequent
+     * calls behave as before (wait or poll).
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
+        if(link_)
+        {
+            link_->last_access = std::chrono::steady_clock::now();
+        }
+
         if(auto cached_asset = get_cached_asset())
         {
             return cached_asset;
+        }
+
+        if(is_deferred())
+        {
+            link_->task.submit();
         }
 
         bool valid = is_valid();
@@ -166,6 +186,62 @@ struct asset_handle
         return is_valid() && link_->task.is_ready();
     }
 
+    /**
+     * @brief Checks if the handle has a deferred job not yet submitted to workers.
+     * @return True if the task exists but hasn't been submitted.
+     */
+    auto is_deferred() const -> bool
+    {
+        return is_valid() && !link_->task.is_submitted();
+    }
+
+    /**
+     * @brief Checks if the asset is currently loading (task exists but not ready).
+     * @return True if the asset load is in progress.
+     */
+    auto is_loading() const -> bool
+    {
+        return is_valid() && link_->task.is_submitted() && !link_->task.is_ready();
+    }
+
+    /**
+     * @brief Submits a deferred task to the thread pool for execution.
+     * Does nothing if the task is already submitted or invalid.
+     */
+    void submit()
+    {
+        if(link_ && link_->task.valid() && !link_->task.is_submitted())
+        {
+            link_->task.submit();
+        }
+    }
+
+    /**
+     * @brief Demotes a fully loaded asset back to deferred state.
+     * Clears the task and cached asset but preserves ids.
+     * Caller should follow with load_from_file(deferred) to set up a new deferred task.
+     */
+    void demote_to_deferred()
+    {
+        if(link_)
+        {
+            link_->task = {};
+            link_->weak_asset = {};
+        }
+    }
+
+    /**
+     * @brief Gets the last access timestamp.
+     * @return The time point of the last get() call.
+     */
+    auto last_access() const -> std::chrono::steady_clock::time_point
+    {
+        if(link_)
+        {
+            return link_->last_access;
+        }
+        return {};
+    }
 
     /**
      * @brief Gets the task ID.

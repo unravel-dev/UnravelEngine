@@ -113,6 +113,9 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
         ls.progress(completed, total, job);
     });
 
+    auto& tm = ctx.get_cached<thumbnail_manager>();
+    tm.set_cache_directory(fs::resolve_protocol("app:/.cache/"));
+
     auto& scr = ctx.get_cached<script_system>();
 
     ls.begin_module("Scripting");
