@@ -206,34 +206,59 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
                 if(ImGui::BeginMenu("Recompile"))
                 {
-                    if(ImGui::MenuItem("Shaders (Engine)"))
+                    if(ImGui::BeginMenu("Shaders"))
                     {
-                        editor_actions::recompile_shaders("engine:/");
+                        if(ImGui::MenuItem("Shaders (Engine)"))
+                        {
+                            editor_actions::recompile_shaders("engine:/");
+                        }
+
+                        if(ImGui::MenuItem("Shaders (Editor)"))
+                        {
+                            editor_actions::recompile_shaders("editor:/");
+                        }
+
+                        if(ImGui::MenuItem("Shaders (Project)"))
+                        {
+                            editor_actions::recompile_shaders("app");
+                        }
+                        ImGui::EndMenu();
+                    }
+                    if(ImGui::BeginMenu("Textures"))
+                    {
+                        if(ImGui::MenuItem("Textures (Engine)"))
+                        {
+                            editor_actions::recompile_textures("engine:/");
+                        }
+
+                        if(ImGui::MenuItem("Textures (Editor)"))
+                        {
+                            editor_actions::recompile_textures("editor:/");
+                        }
+
+                        if(ImGui::MenuItem("Textures (Project)"))
+                        {
+                            editor_actions::recompile_textures("app:/");
+                        }
+
+                        ImGui::EndMenu();
                     }
 
-                    if(ImGui::MenuItem("Shaders (Editor)"))
+                    if(ImGui::BeginMenu("Meshes"))
                     {
-                        editor_actions::recompile_shaders("editor:/");
-                    }
-
-                    if(ImGui::MenuItem("Shaders (Project)"))
-                    {
-                        editor_actions::recompile_shaders("app");
-                    }
-
-                    if(ImGui::MenuItem("Textures (Engine)"))
-                    {
-                        editor_actions::recompile_textures();
-                    }
-
-                    if(ImGui::MenuItem("Textures (Editor)"))
-                    {
-                        editor_actions::recompile_textures();
-                    }
-
-                    if(ImGui::MenuItem("Textures (Project)"))
-                    {
-                        editor_actions::recompile_textures("app");
+                        if(ImGui::MenuItem("Meshes (Engine)"))
+                        {
+                            editor_actions::recompile_meshes("engine:/");
+                        }
+                        if(ImGui::MenuItem("Meshes (Editor)"))
+                        {
+                            editor_actions::recompile_meshes("editor:/");
+                        }
+                        if(ImGui::MenuItem("Meshes (Project)"))
+                        {
+                            editor_actions::recompile_meshes("app:/");
+                        }
+                        ImGui::EndMenu();
                     }
 
                     if(ImGui::MenuItem("UI", ImGui::GetKeyCombinationName(shortcuts::recompile_ui).c_str()))
@@ -241,35 +266,44 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                         editor_actions::recompile_ui();
                     }
 
-                    if(ImGui::MenuItem("Scripts (Engine)"))
+
+                    if(ImGui::BeginMenu("Scripts"))
                     {
-                        editor_actions::recompile_scripts("engine:/");
+                        if(ImGui::MenuItem("Scripts (Engine)"))
+                        {
+                            editor_actions::recompile_scripts("engine:/");
+                        }
+
+                        if(ImGui::MenuItem("Scripts (Editor)"))
+                        {
+                            editor_actions::recompile_scripts("editor:/");
+                        }
+
+                        if(ImGui::MenuItem("Scripts (Project)"))
+                        {
+                            editor_actions::recompile_scripts("app:/");
+                        }
+                        ImGui::EndMenu();
                     }
 
-                    if(ImGui::MenuItem("Scripts (Editor)"))
+                    if(ImGui::BeginMenu("All"))
                     {
-                        editor_actions::recompile_scripts("editor:/");
+                        if(ImGui::MenuItem("All (Engine)"))
+                        {
+                            editor_actions::recompile_all("engine:/");
+                        }
+                        if(ImGui::MenuItem("All (Editor)"))
+                        {
+                            editor_actions::recompile_all("editor:/");
+                        }
+    
+                        if(ImGui::MenuItem("All (Project)"))
+                        {
+                            editor_actions::recompile_all("app:/");
+                        }
+                        ImGui::EndMenu();
                     }
 
-                    if(ImGui::MenuItem("Scripts (Project)"))
-                    {
-                        editor_actions::recompile_scripts("app");
-                    }
-
-                    if(ImGui::MenuItem("All (Engine)"))
-                    {
-                        editor_actions::recompile_all("engine:/");
-                    }
-
-                    if(ImGui::MenuItem("All (Editor)"))
-                    {
-                        editor_actions::recompile_all("editor:/");
-                    }
-
-                    if(ImGui::MenuItem("All (Project)"))
-                    {
-                        editor_actions::recompile_all("app");
-                    }
                     ImGui::EndMenu();
                 }
                 ImGui::EndMenu();

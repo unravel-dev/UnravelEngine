@@ -157,13 +157,15 @@ struct gfx_callback final : public bgfx::CallbackI
     {
     }
 
-    virtual void screenShot(const char* _filePath,
-                            uint32_t    _width,
-                            uint32_t    _height,
-                            uint32_t    _pitch,
-                            const void* _data,
-                            uint32_t    _size,
-                            bool        _yflip) override
+    virtual void screenShot(			  
+        const char* _filePath
+        , uint32_t _width
+        , uint32_t _height
+        , uint32_t _pitch
+        , bgfx::TextureFormat::Enum _format
+        , const void* _data
+        , uint32_t _size
+        , bool _yflip) override
     {
         const std::string full_path = std::string(_filePath) + ".png";
 
@@ -177,7 +179,7 @@ struct gfx_callback final : public bgfx::CallbackI
                                     _height,
                                     _pitch,
                                     _data,
-                                    bimg::TextureFormat::BGRA8,
+                                    static_cast<bimg::TextureFormat::Enum>(_format),
                                     _yflip,
                                     nullptr);
             }
@@ -1315,7 +1317,7 @@ void get_size_from_ratio(backbuffer_ratio _ratio, uint16_t& _width, uint16_t& _h
 auto get_renderer_filename_extension(renderer_type _type) -> const std::string&
 {
     static const std::map<renderer_type, std::string> types = {{renderer_type::Direct3D11, ".dxbc"},
-                                                               {renderer_type::Direct3D12, ".dxbc"},
+                                                               {renderer_type::Direct3D12, ".dxil"},
                                                                {renderer_type::Gnm, ".pssl"},
                                                                {renderer_type::Metal, ".metal"},
                                                                {renderer_type::Nvn, ".nvn"},

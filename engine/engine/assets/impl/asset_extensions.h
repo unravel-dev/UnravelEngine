@@ -193,7 +193,7 @@ inline auto get_format_version() -> uint64_t
 template<>
 inline auto get_format_version<unravel::mesh>() -> uint64_t
 {
-    return 4;
+    return 5;
 }
 
 template<>

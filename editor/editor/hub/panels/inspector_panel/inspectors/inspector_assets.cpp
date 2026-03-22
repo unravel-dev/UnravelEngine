@@ -238,7 +238,8 @@ auto pick_asset(ImGuiTextFilter& filter,
                                auto& asset = assets[index];
                                const auto& thumbnail = tm.get_thumbnail(asset);
 
-                               if(!asset.is_ready())
+                               
+                               if(asset && !asset.is_ready())
                                {
                                    auto spinner_size = size;
                                    ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>(

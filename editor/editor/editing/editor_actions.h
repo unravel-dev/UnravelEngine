@@ -35,6 +35,7 @@ struct editor_actions
     static void recompile_textures(const std::string& group = "");
     static void recompile_ui(const std::string& group = "");
     static void recompile_scripts(const std::string& group = "");
+    static void recompile_meshes(const std::string& group = "");
     static void recompile_all(const std::string& group = "");
     static void generate_script_workspace();
     static void open_workspace_on_file(const fs::path& file, int line = 0);

@@ -498,10 +498,18 @@ auto compile_shader_to_file(const fs::path& input_path,
         if(vs || fs)
         {
             str_profile = "s_5_0";
+            if(renderer == gfx::renderer_type::Direct3D12)
+            {
+                str_profile = "s_6_0";
+            }
         }
         else if(cs)
         {
             str_profile = "s_5_0";
+            if(renderer == gfx::renderer_type::Direct3D12)
+            {
+                str_profile = "s_6_0";
+            }
             str_opt = optimize ? "1" : "0";
         }
     }

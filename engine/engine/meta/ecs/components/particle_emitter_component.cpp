@@ -532,6 +532,7 @@ REFLECT(particle_emitter_component)
             entt::attribute{"tooltip", "HDR multiplier for particle color. Values above 1.0 make particles glow when bloom is enabled."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
+            entt::attribute{"max", 100.0f},
             entt::attribute{"group", "Color over lifetime"},
         })
         .data<&particle_emitter_component::set_color_by_speed_gradient, &particle_emitter_component::get_color_by_speed_gradient>("color_by_speed_gradient"_hs)

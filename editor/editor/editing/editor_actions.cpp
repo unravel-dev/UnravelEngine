@@ -1487,6 +1487,21 @@ void editor_actions::recompile_textures(const std::string& group)
     fs::watcher::resume();
 }
 
+void editor_actions::recompile_meshes(const std::string& group)
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+    auto meshes = am.get_assets<mesh>(group);
+    fs::watcher::pause();
+    for(auto& asset : meshes)
+    {
+        fs::error_code ec;
+        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+        fs::watcher::touch(path, false);
+    }
+    fs::watcher::resume();
+}
+
 void editor_actions::recompile_ui(const std::string& group)
 {
     auto& ctx = engine::context();
