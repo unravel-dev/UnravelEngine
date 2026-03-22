@@ -157,13 +157,10 @@ public:
                    load_flags flags = load_flags::standard,
                    load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
-        if(mode == load_mode::deferred)
-        {
-            return register_asset<T>(key);
-        }
         auto& storage = get_storage<T>();
         return load_asset_from_file_impl<T>(key,
                                             flags,
+                                            mode,
                                             storage.container_mutex,
                                             storage.container,
                                             storage.load_from_file);
@@ -434,6 +431,7 @@ private:
      * @tparam F The function to load the asset.
      * @param key The key of the asset.
      * @param flags The load flags for the asset.
+     * @param mode Whether to load immediately or defer until first get().
      * @param container_mutex The mutex for the asset container.
      * @param container The container for the assets.
      * @param load_func The function to load the asset.
@@ -442,6 +440,7 @@ private:
     template<typename T, typename F>
     auto load_asset_from_file_impl(const std::string& key,
                                    load_flags flags,
+                                   load_mode mode,
                                    std::recursive_mutex& container_mutex,
                                    typename asset_storage<T>::request_container_t& container,
                                    F&& load_func) -> asset_handle<T>
@@ -458,13 +457,9 @@ private:
         std::unique_lock<std::recursive_mutex> lock(container_mutex);
 
         auto& handle = container[key];
-        // Dispatch the loading
         if(load_func)
         {
             auto uid = add_asset(key);
-            // calling the function on a locked mutex is ok
-            // since we dont expect this to actually
-            // do much except add tasks to the executor
 
             if(handle.task_id())
             {
@@ -473,7 +468,7 @@ private:
             }
 
             handle.set_internal_ids(uid, key);
-            load_func(pool_, handle, key, load_mode::immediate);
+            load_func(pool_, handle, key, mode);
         }
 
         return handle;

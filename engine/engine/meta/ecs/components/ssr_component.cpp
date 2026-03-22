@@ -168,14 +168,6 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"name", "ssr_pass::fidelityfx_ssr_settings"},
             entt::attribute{"pretty_name", "FidelityFX SSR Settings"},
         })
-        .data<&fidelityfx_settings::max_steps>("max_steps"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "max_steps"},
-            entt::attribute{"pretty_name", "Max Steps"},
-            entt::attribute{"min", 8},
-            entt::attribute{"max", 200},
-            entt::attribute{"tooltip", "Maximum ray marching steps for hierarchical traversal"},
-        })
         .data<&fidelityfx_settings::max_rays>("max_rays"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_rays"},
@@ -183,6 +175,14 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"min", 1},
             entt::attribute{"max", 64},
             entt::attribute{"tooltip", "Maximum rays for rough surfaces (future: cone tracing)"},
+        })
+        .data<&fidelityfx_settings::max_steps>("max_steps"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_steps"},
+            entt::attribute{"pretty_name", "Max Steps"},
+            entt::attribute{"min", 8},
+            entt::attribute{"max", 200},
+            entt::attribute{"tooltip", "Maximum ray marching steps for hierarchical traversal"},
         })
         .data<&fidelityfx_settings::depth_tolerance>("depth_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{

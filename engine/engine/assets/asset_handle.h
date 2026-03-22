@@ -133,10 +133,10 @@ struct asset_handle
             link_->last_access = std::chrono::steady_clock::now();
         }
 
-        // if(auto cached_asset = get_cached_asset())
-        // {
-        //     return cached_asset;
-        // }
+        if(auto cached_asset = get_cached_asset())
+        {
+            return cached_asset;
+        }
 
         if(is_deferred())
         {
