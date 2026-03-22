@@ -573,5 +573,19 @@ void pipeline_stats::add_batch_stats(const batch_stats& stats)
     batching_stats.calculate_derived_stats();
 }
 
+void pipeline_stats::add_stats(const pipeline_stats& stats)
+{
+    drawn_models += stats.drawn_models;
+    drawn_skinned_models += stats.drawn_skinned_models;
+    drawn_models_for_shadows += stats.drawn_models_for_shadows;
+    drawn_skinned_models_for_shadows += stats.drawn_skinned_models_for_shadows;
+    drawn_lights += stats.drawn_lights;
+    drawn_lights_casting_shadows += stats.drawn_lights_casting_shadows;
+    drawn_particles += stats.drawn_particles;
+    drawn_particles_batches += stats.drawn_particles_batches;
+
+    add_batch_stats(stats.batching_stats);
+}
+
 } // namespace rendering
 } // namespace unravel

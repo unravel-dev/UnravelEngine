@@ -26,9 +26,14 @@ auto reflection_probe_system::deinit(rtti::context& ctx) -> bool
 
 void reflection_probe_system::on_frame_update(scene& scn, delta_t dt)
 {
-    scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
-        [&](auto e, auto&& transform, auto&& probe, auto&& active)
+    scn.registry->view<transform_component, reflection_probe_component>().each(
+        [&](auto e, auto&& transform, auto&& probe)
         {
+            if(!scn.registry->all_of<active_component>(e))
+            {
+                probe.release_resources();
+            }
+            
             probe.update();
         });
 }

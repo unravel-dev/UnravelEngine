@@ -75,6 +75,7 @@ public:
      * @brief Updates the reflection probe component.
      */
     void update();
+    void release_resources();
 
     /**
      * @brief Check if the cubemap was generated this frame.
@@ -127,7 +128,8 @@ private:
     /**
      * @brief The render views for this component.
      */
-    std::array<gfx::render_view, 6> rview_;
+    std::array<gfx::render_view, 6> face_rviews_;
+    gfx::render_view rview_;
 
     std::array<uint64_t, 6> generated_frame_{uint64_t(-1),
                                              uint64_t(-1),

@@ -444,6 +444,33 @@ auto thumbnail_manager::deinit(rtti::context& ctx) -> bool
 void thumbnail_manager::on_frame_update(rtti::context& ctx, delta_t)
 {
     gen_.reset();
+    evict_unused_thumbnails(std::chrono::seconds(30), std::chrono::seconds(60));
+}
+
+void thumbnail_manager::evict_unused_thumbnails(std::chrono::seconds scan_interval, std::chrono::seconds idle_timeout)
+{
+    
+    auto now = clock::now();
+    if((now - last_eviction_scan_) < scan_interval)
+    {
+        return;
+    }
+    last_eviction_scan_ = now;
+
+    auto& thumbnails = gen_.thumbnails;
+    for(auto it = thumbnails.begin(); it != thumbnails.end();)
+    {
+        auto& entry = it->second;
+        bool is_idle = (now - entry.last_access_time) > idle_timeout;
+        if(is_idle && !entry.needs_regeneration)
+        {
+            it = thumbnails.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 auto thumbnail_manager::generated_thumbnail::get() -> gfx::texture::ptr
@@ -453,6 +480,7 @@ auto thumbnail_manager::generated_thumbnail::get() -> gfx::texture::ptr
         return nullptr;
     }
 
+    last_access_time = clock::now();
     return thumbnail->get_texture();
 }
 
@@ -460,6 +488,7 @@ void thumbnail_manager::generated_thumbnail::set(gfx::frame_buffer::ptr fbo)
 {
     thumbnail = fbo;
     needs_regeneration = false;
+    last_access_time = clock::now();
 }
 
 auto thumbnail_manager::generator::get_scene() -> scene&

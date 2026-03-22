@@ -68,12 +68,12 @@ auto reflection_probe_component::compute_projected_sphere_rect(irect32_t& rect,
 
 auto reflection_probe_component::get_render_view(size_t idx) -> gfx::render_view&
 {
-    return rview_[idx];
+    return face_rviews_[idx];
 }
 
 auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 {
-    auto& tex = rview_[0].tex_get_or_emplace("CUBEMAP");
+    auto& tex = rview_.tex_get_or_emplace("CUBEMAP");
     if(!tex)
     {
         constexpr uint16_t size = 256;
@@ -90,7 +90,7 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 
 auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::texture::ptr&
 {
-    auto& tex = rview_[0].tex_get_or_emplace("CUBEMAP_PREFILTERED");
+    auto& tex = rview_.tex_get_or_emplace("CUBEMAP_PREFILTERED");
     if(!tex)
     {
         constexpr uint16_t size = 256;
@@ -107,10 +107,10 @@ auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::textur
 
 auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::frame_buffer::ptr&
 {
-    auto& fbo = rview_[face].fbo_get_or_emplace("CUBEMAP");
+    auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP");
     if(!fbo)
     {
-        auto& tex = rview_[face].tex_get_or_emplace("CUBEMAP_FACE");
+        auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
         if(!tex)
         {
             constexpr uint16_t size = 256;
@@ -161,6 +161,19 @@ void reflection_probe_component::update()
         first_generation_ = false;
     }
     generated_faces_count_ = 0; // Reset the count of generated faces
+
+    
+    if(faces_per_frame_ == 0)
+    {
+        face_rviews_ = {};
+    }
+
+}
+
+void reflection_probe_component::release_resources()
+{
+    face_rviews_ = {};
+    rview_ = {};
 }
 
 auto reflection_probe_component::get_probe() const -> const reflection_probe&

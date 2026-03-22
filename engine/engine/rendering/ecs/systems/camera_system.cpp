@@ -34,6 +34,10 @@ void camera_system::on_frame_before_render(scene& scn, delta_t dt)
     scn.registry->view<transform_component, camera_component>().each(
         [&](auto e, auto&& transform, auto&& camera)
         {
+            if(!scn.registry->all_of<active_component>(e))
+            {
+                camera.release_resources();
+            }
             camera.update(transform.get_transform_global());
         });
 }

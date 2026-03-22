@@ -9,6 +9,8 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/scene.h>
 
+#include <chrono>
+
 
 namespace gfx
 {
@@ -38,6 +40,8 @@ namespace unravel
     
 struct thumbnail_manager
 {
+    using clock = std::chrono::steady_clock;
+
     struct generated_thumbnail
     {
         auto get() -> gfx::texture::ptr;
@@ -48,6 +52,8 @@ struct thumbnail_manager
 
         bool is_cached_on_disk{false};
         fs::path cache_path{};
+
+        clock::time_point last_access_time{clock::now()};
     };
 
     struct generator
@@ -146,8 +152,14 @@ private:
     std::map<std::string, asset_handle<gfx::texture>> icons_;
     std::map<std::string, asset_handle<gfx::texture>> gizmo_icons_;
 
+    /// Releases thumbnails not accessed within the idle timeout.
+    void evict_unused_thumbnails(std::chrono::seconds scan_interval, std::chrono::seconds idle_timeout);
+
     /// Directory for persistent thumbnail cache (e.g., "app:/.cache/").
     fs::path cache_directory_{};
+
+    /// Timestamp of the last eviction scan.
+    clock::time_point last_eviction_scan_{clock::now()};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

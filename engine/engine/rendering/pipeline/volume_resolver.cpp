@@ -57,8 +57,8 @@ auto resolve_post_process_volumes(scene& scn,
 
     std::vector<volume_contribution> contributions;
 
-    scn.registry->view<transform_component, volume_component>().each(
-        [&](entt::entity e, const transform_component& transform_comp, const volume_component& volume_comp)
+    scn.registry->view<transform_component, volume_component, active_component>().each(
+        [&](entt::entity e, const transform_component& transform_comp, const volume_component& volume_comp, const active_component& active_comp)
         {
             float contribution = 0.0f;
             if(volume_comp.mode == volume_mode::global)

@@ -1350,15 +1350,11 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     i++;
     gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
     i++;
-    if(irradiance_result.irradiance_tex && iprogram.s_irradiance)
-    {
-        gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
-    }
+    gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
+    
     const auto& ssil_tex = rview.tex_safe_get("SSIL");
-    if(iprogram.s_ssil)
-    {
-        gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().black_texture());
-    }
+    gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().black_texture());
+    
 
     auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);

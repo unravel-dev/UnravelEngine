@@ -49,13 +49,15 @@ void game_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
 
 void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 {
-    if(!is_visible() && !is_visible_force_)
-    {
-        return;
-    }
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
     auto& path = ctx.get_cached<rendering_system>();
+
+    if(!is_visible() && !is_visible_force_)
+    {
+        path.release_pipeline_resources(scene);
+        return;
+    }
 
     path.render_scene(scene, dt);
 
@@ -125,6 +127,7 @@ void game_panel::draw_ui(rtti::context& ctx)
     if(size.x > 0 && size.y > 0)
     {
         bool rendered = false;
+        rendering::pipeline_stats pstats;
         ec.get_scene().registry->view<camera_component>().each(
             [&](auto e, auto&& camera_comp)
             {
@@ -161,7 +164,9 @@ void game_panel::draw_ui(rtti::context& ctx)
                     }
                     rendered = true;
 
-                    camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
+                    const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
+                    pipeline->set_debug_pass(visualize_passes_);
+                    pstats.add_stats(pipeline->get_stats());
                 }
             });
 
@@ -177,6 +182,9 @@ void game_panel::draw_ui(rtti::context& ctx)
                                    ImGui::TextUnformatted(text);
                                });
         }
+      
+                            
+        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game");
     }
 }
 
@@ -255,24 +263,7 @@ void game_panel::draw_menubar(rtti::context& ctx)
         }
         ImGui::SetItemTooltipEx("%s", debugger_enabled ? "Hide UI Debugger" : "Show UI Debugger");
 
-        ImGui::PushFont(ImGui::Font::Mono);
-        auto& io = ImGui::GetIO();
-
-        auto fps_size = ImGui::CalcTextSize(fmt::format("{:.1f}", io.Framerate).c_str()).x;
-        ImGui::PopFont();
-
-        ImGui::SameLine();
-
-        ImGui::AlignedItem(1.0f,
-                           ImGui::GetContentRegionAvail().x,
-                           fps_size,
-                           [&]()
-                           {
-                               ImGui::PushFont(ImGui::Font::Mono);
-                               ImGui::Text("%.1f", io.Framerate);
-                               ImGui::PopFont();
-                           });
-
+        viewport_stats_overlay::draw_stats_toggle(stats_overlay_state_);
 
         ImGui::PopStyleColor(3);
 

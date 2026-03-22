@@ -55,6 +55,9 @@ public:
 
 
     void on_play_begin(hpp::span<const entt::handle> entities, delta_t dt);
+
+    auto release_pipeline_resources(scene& scn) -> bool;
+
     /**
      * @brief Renders the scene and returns the frame buffer.
      * @param scn The scene to render.

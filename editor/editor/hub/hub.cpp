@@ -529,6 +529,8 @@ void hub::on_start_page_render(rtti::context& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f, 28.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 10.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+
     ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     
     if(ImGui::BeginPopupModal("PROJECTS", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar))
@@ -553,7 +555,7 @@ void hub::on_start_page_render(rtti::context& ctx)
     }
     
     ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(4);
 
     ImGui::End();
 }

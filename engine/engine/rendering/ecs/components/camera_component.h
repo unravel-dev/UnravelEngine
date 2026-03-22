@@ -93,6 +93,11 @@ public:
     void update(const math::transform& t);
 
     /**
+     * @brief Releases the pipeline resources.
+     */
+    void release_resources();
+
+    /**
      * @brief Sets the viewport size.
      * @param[in] size The size of the viewport.
      */

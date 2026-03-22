@@ -4,6 +4,7 @@
 #include <math/math.h>
 
 #include "gizmos/gizmos_renderer.h"
+#include "../viewport_stats_overlay.h"
 
 namespace unravel
 {
@@ -57,7 +58,6 @@ private:
     void draw_snapping_menu(editing_manager& em);
     void draw_inverse_kinematics_menu(editing_manager& em);
     void draw_camera_settings_menu(rtti::context& ctx);
-    void draw_framerate_display();
 
       
     // Drag selection helper functions
@@ -98,5 +98,7 @@ private:
     bool was_using_gizmo_{false};
 
     std::string fullscreen_name_{};
+
+    viewport_stats_overlay::state stats_overlay_state_{};
 };
 } // namespace unravel

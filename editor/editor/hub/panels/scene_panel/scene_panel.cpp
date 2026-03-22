@@ -2,12 +2,13 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "imgui_widgets/utils.h"
+#include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/picking_manager.h>
 #include <editor/editing/thumbnail_manager.h>
-#include <editor/editing/actions/entity_actions.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/shortcuts.h>
+
 
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -23,17 +24,16 @@
 
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
-#include <engine/ui/ecs/components/ui_document_component.h>
+#include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
-#include <engine/rendering/material.h>
 #include <engine/rendering/renderer.h>
-#include <seq/seq.h>
+#include <engine/ui/ecs/components/ui_document_component.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <imgui_widgets/gizmo.h>
 #include <imgui_widgets/imcoolbar.h>
-
+#include <seq/seq.h>
 
 #include <algorithm>
 #include <filesystem/filesystem.h>
@@ -47,10 +47,17 @@ namespace
 
 // Forward declarations
 void restore_original_materials(entt::handle entity, const std::vector<asset_handle<material>>& original_materials);
-void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::string& material_path, 
-                          entt::handle& last_preview_entity, std::vector<asset_handle<material>>& original_materials,
-                          bool& is_previewing);
-void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::handle center, entt::handle editor_camera, editing_manager& em);
+void apply_material_preview(rtti::context& ctx,
+                            entt::handle entity,
+                            const std::string& material_path,
+                            entt::handle& last_preview_entity,
+                            std::vector<asset_handle<material>>& original_materials,
+                            bool& is_previewing);
+void manipulation_gizmos(bool& gizmo_at_center,
+                         bool& was_using_gizmo,
+                         entt::handle center,
+                         entt::handle editor_camera,
+                         editing_manager& em);
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging);
 
 // Material preview state
@@ -75,7 +82,8 @@ auto check_material_drag(std::string& out_material_path) -> bool
         {
             if(payload->Data)
             {
-                out_material_path = std::string(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
+                out_material_path =
+                    std::string(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
                 out_material_path = fs::convert_to_protocol(fs::path(out_material_path)).generic_string();
                 return true;
             }
@@ -88,7 +96,7 @@ auto check_material_drag(std::string& out_material_path) -> bool
 void handle_material_preview(rtti::context& ctx, const camera_component& camera_comp, const std::string& material_path)
 {
     auto& pick_manager = ctx.get_cached<picking_manager>();
-    
+
     // Check if the material path changed
     if(g_preview_state.current_drag_material != material_path)
     {
@@ -97,23 +105,26 @@ void handle_material_preview(rtti::context& ctx, const camera_component& camera_
         {
             restore_original_materials(g_preview_state.last_preview_entity, g_preview_state.original_materials);
         }
-        
+
         // Update current material
         g_preview_state.current_drag_material = material_path;
         g_preview_state.is_previewing = false;
     }
-    
+
     // Query for entity under cursor to show preview
     // picking_manager handles throttling internally
     auto cursor_pos = ImGui::GetMousePos();
-    pick_manager.query_pick(
-        math::vec2{cursor_pos.x, cursor_pos.y}, 
-        camera_comp.get_camera(),
-        [&ctx, material_path](entt::handle entity, const math::vec2& screen_pos) {
-            apply_material_preview(ctx, entity, material_path, g_preview_state.last_preview_entity, 
-                                  g_preview_state.original_materials, g_preview_state.is_previewing);
-        }
-    );
+    pick_manager.query_pick(math::vec2{cursor_pos.x, cursor_pos.y},
+                            camera_comp.get_camera(),
+                            [&ctx, material_path](entt::handle entity, const math::vec2& screen_pos)
+                            {
+                                apply_material_preview(ctx,
+                                                       entity,
+                                                       material_path,
+                                                       g_preview_state.last_preview_entity,
+                                                       g_preview_state.original_materials,
+                                                       g_preview_state.is_previewing);
+                            });
 }
 
 // Handle material drop on entity
@@ -123,16 +134,17 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
     auto& pick_manager = ctx.get_cached<picking_manager>();
     auto& am = ctx.get_cached<asset_manager>();
     auto& em = ctx.get_cached<editing_manager>();
-    
+
     // Load the material asset
     auto material_asset = am.get_asset<material>(material_path);
     bool force = true;
 
     // Use the picking system to query what's under the cursor
     pick_manager.query_pick(
-        math::vec2{cursor_pos.x, cursor_pos.y}, 
+        math::vec2{cursor_pos.x, cursor_pos.y},
         camera_comp.get_camera(),
-        [material_asset, &em](entt::handle entity, const math::vec2& screen_pos) {
+        [material_asset, &em](entt::handle entity, const math::vec2& screen_pos)
+        {
             // Check if entity has a model component
             if(entity && entity.all_of<model_component>())
             {
@@ -140,20 +152,20 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
                 auto& model_comp = entity.get<model_component>();
                 const auto& current_model = model_comp.get_model();
                 auto old_materials = current_model.get_materials();
-                
+
                 em.push_undo_stack_enabled(true);
 
                 // Create and execute the action
                 em.queue_action<entity_set_materials_action_t>({}, entity, old_materials, material_asset);
-                
+
                 em.pop_undo_stack_enabled();
             }
             else if(entity)
             {
                 APPLOG_WARNING("Cannot apply material to entity without model_component");
             }
-        }, force
-    );
+        },
+        force);
 }
 
 // Handle mesh drop at cursor position
@@ -163,18 +175,18 @@ void handle_mesh_drop(rtti::context& ctx, const camera_component& camera_comp, c
     auto& em = ctx.get_cached<editing_manager>();
 
     em.queue_action("Drop Mesh",
-        [&ctx, camera = camera_comp.get_camera(), mesh_path, cursor_pos]()
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto target_scene = em.get_active_scene(ctx);
-        
-        auto object = defaults::create_mesh_entity_at(ctx,
-                                                *target_scene,
-                                                mesh_path,
-                                                camera,
-                                                math::vec2{cursor_pos.x, cursor_pos.y});
-        em.select(object);
-    });
+                    [&ctx, camera = camera_comp.get_camera(), mesh_path, cursor_pos]()
+                    {
+                        auto& em = ctx.get_cached<editing_manager>();
+                        auto target_scene = em.get_active_scene(ctx);
+
+                        auto object = defaults::create_mesh_entity_at(ctx,
+                                                                      *target_scene,
+                                                                      mesh_path,
+                                                                      camera,
+                                                                      math::vec2{cursor_pos.x, cursor_pos.y});
+                        em.select(object);
+                    });
 }
 
 // Handle prefab drop at cursor position
@@ -184,18 +196,18 @@ void handle_prefab_drop(rtti::context& ctx, const camera_component& camera_comp,
     auto& em = ctx.get_cached<editing_manager>();
 
     em.queue_action("Drop Prefab",
-        [&ctx, camera = camera_comp.get_camera(), prefab_path, cursor_pos]()
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto target_scene = em.get_active_scene(ctx);
-        
-        auto object = defaults::create_prefab_at(ctx,
-                                          *target_scene,
-                                          prefab_path,
-                                          camera,
-                                          math::vec2{cursor_pos.x, cursor_pos.y});
-        em.select(object);
-    });
+                    [&ctx, camera = camera_comp.get_camera(), prefab_path, cursor_pos]()
+                    {
+                        auto& em = ctx.get_cached<editing_manager>();
+                        auto target_scene = em.get_active_scene(ctx);
+
+                        auto object = defaults::create_prefab_at(ctx,
+                                                                 *target_scene,
+                                                                 prefab_path,
+                                                                 camera,
+                                                                 math::vec2{cursor_pos.x, cursor_pos.y});
+                        em.select(object);
+                    });
 }
 
 // Reset material preview state
@@ -279,10 +291,8 @@ auto collect_movement_input(float& max_hold, bool& is_dragging) -> math::vec3
         {
             movement_input.x -= move_speed;
         }
-    
     }
 
-   
     auto delta_wheel = ImGui::GetIO().MouseWheel;
     if(delta_wheel != 0)
     {
@@ -292,7 +302,7 @@ auto collect_movement_input(float& max_hold, bool& is_dragging) -> math::vec3
     return movement_input;
 }
 
-auto handle_mouse_rotation(entt::handle camera, float rotation_speed, bool is_dragging)-> bool
+auto handle_mouse_rotation(entt::handle camera, float rotation_speed, bool is_dragging) -> bool
 {
     if(!is_dragging)
     {
@@ -362,10 +372,7 @@ void apply_movement(entt::handle camera,
 
     auto length = math::length(move_dir);
     transform.move_by_local(math::normalize(move_dir) * length * movement_speed * adjusted_dt * acceleration);
-
-
 }
-
 
 void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging)
 {
@@ -391,7 +398,6 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
 
     // Handle middle mouse panning
     handle_middle_mouse_panning(camera, movement_speed, fixed_dt);
-
 
     // Handle right mouse dragging
     is_dragging = ImGui::IsMouseDown(ImGuiMouseButton_Right);
@@ -582,11 +588,11 @@ auto handle_component_bounds_manipulation(entt::handle active_selection,
 {
     auto& transform_comp = active_selection.get<transform_component>();
     const auto& camera = camera_comp.get_camera();
-    
+
     // Store initial state for undo/redo
     fsize_t initial_area = area;
     math::vec3 initial_position = transform_comp.get_position_global();
-    
+
     // Local-space half-extents = 0.5 in X & Y, zero thickness in Z
     float bounds[6] = {
         -0.5f,
@@ -605,21 +611,21 @@ auto handle_component_bounds_manipulation(entt::handle active_selection,
     math::mat4 output = model_tr;
 
     int movetype = ImGuizmo::Manipulate(camera.get_view(),
-                         camera.get_projection(),
-                         ImGuizmo::BOUNDS,
-                         em.mode,
-                         math::value_ptr(output),
-                         nullptr,
-                         snap,
-                         bounds,
-                         bounds_snap);
+                                        camera.get_projection(),
+                                        ImGuizmo::BOUNDS,
+                                        em.mode,
+                                        math::value_ptr(output),
+                                        nullptr,
+                                        snap,
+                                        bounds,
+                                        bounds_snap);
 
     if(movetype != ImGuizmo::MT_NONE)
     {
         math::transform output_tr = output;
         const auto& scale = output_tr.get_scale();
         const auto& trans = output_tr.get_translation();
-    
+
         // Create new area and position
         fsize_t new_area{scale.x, scale.y};
         math::vec3 new_position = trans;
@@ -633,7 +639,6 @@ auto handle_component_bounds_manipulation(entt::handle active_selection,
 
     return hpp::nullopt;
 }
-
 
 auto handle_text_component_bounds_manipulation(entt::handle active_selection,
                                                const camera_component& camera_comp,
@@ -654,7 +659,13 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
         return false;
     }
 
-    auto result = handle_component_bounds_manipulation(active_selection, area, camera_comp, em, snap, bounds_snap_data, bounds_snap);
+    auto result = handle_component_bounds_manipulation(active_selection,
+                                                       area,
+                                                       camera_comp,
+                                                       em,
+                                                       snap,
+                                                       bounds_snap_data,
+                                                       bounds_snap);
     if(!result)
     {
         return false;
@@ -667,30 +678,29 @@ auto handle_text_component_bounds_manipulation(entt::handle active_selection,
 
     // Create composite action with both text bounds and transform changes
     auto composite_action = std::make_shared<composite_action_t>();
-    
+
     // Add text bounds action
-    composite_action->add_sub_action(std::make_shared<entity_set_text_bounds_action_t>(
-        active_selection, initial_area, new_area));
-    
+    composite_action->add_sub_action(
+        std::make_shared<entity_set_text_bounds_action_t>(active_selection, initial_area, new_area));
+
     // Add global transform action for the center entity
-    composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
-        active_selection, initial_position, new_position));
-    
+    composite_action->add_sub_action(
+        std::make_shared<transform_move_global_action_t>(active_selection, initial_position, new_position));
+
     // Execute the composite action
     em.push_undo_stack_enabled(true);
     em.do_action("Text Bounds Manipulation", composite_action);
     em.pop_undo_stack_enabled();
 
     return true;
-  
 }
 
 auto handle_ui_document_component_bounds_manipulation(entt::handle active_selection,
-                                               const camera_component& camera_comp,
-                                               editing_manager& em,
-                                               float* snap,
-                                               float bounds_snap_data[3],
-                                               float* bounds_snap) -> bool
+                                                      const camera_component& camera_comp,
+                                                      editing_manager& em,
+                                                      float* snap,
+                                                      float bounds_snap_data[3],
+                                                      float* bounds_snap) -> bool
 {
     auto ui_document_comp = active_selection.try_get<ui_document_component>();
     if(!ui_document_comp)
@@ -704,46 +714,54 @@ auto handle_ui_document_component_bounds_manipulation(entt::handle active_select
     }
     auto area = ui_document_comp->get_world_space_scale();
 
-    auto result = handle_component_bounds_manipulation(active_selection, fsize_t(area.x, area.y), camera_comp, em, snap, bounds_snap_data, bounds_snap);
+    auto result = handle_component_bounds_manipulation(active_selection,
+                                                       fsize_t(area.x, area.y),
+                                                       camera_comp,
+                                                       em,
+                                                       snap,
+                                                       bounds_snap_data,
+                                                       bounds_snap);
     if(!result)
     {
         return false;
     }
 
-    const auto& initial_area = fsize_t(result->initial_area.width * ui_document_comp->pixels_per_world_unit, result->initial_area.height * ui_document_comp->pixels_per_world_unit);
+    const auto& initial_area = fsize_t(result->initial_area.width * ui_document_comp->pixels_per_world_unit,
+                                       result->initial_area.height * ui_document_comp->pixels_per_world_unit);
     const auto& initial_position = result->initial_position;
-    const auto& new_area = fsize_t(result->new_area.width * ui_document_comp->pixels_per_world_unit, result->new_area.height * ui_document_comp->pixels_per_world_unit);
+    const auto& new_area = fsize_t(result->new_area.width * ui_document_comp->pixels_per_world_unit,
+                                   result->new_area.height * ui_document_comp->pixels_per_world_unit);
     const auto& new_position = result->new_position;
 
     // Create composite action with both text bounds and transform changes
     auto composite_action = std::make_shared<composite_action_t>();
-    
+
     usize32_t initial_area_size = usize32_t(initial_area.width, initial_area.height);
     usize32_t new_area_size = usize32_t(new_area.width, new_area.height);
     // Add text bounds action
-    composite_action->add_sub_action(std::make_shared<entity_set_ui_document_component_bounds_action_t>(
-        active_selection, initial_area_size, new_area_size));
-    
+    composite_action->add_sub_action(
+        std::make_shared<entity_set_ui_document_component_bounds_action_t>(active_selection,
+                                                                           initial_area_size,
+                                                                           new_area_size));
+
     // Add global transform action for the center entity
-    composite_action->add_sub_action(std::make_shared<transform_move_global_action_t>(
-        active_selection, initial_position, new_position));
-    
+    composite_action->add_sub_action(
+        std::make_shared<transform_move_global_action_t>(active_selection, initial_position, new_position));
+
     // Execute the composite action
     em.push_undo_stack_enabled(true);
     em.do_action("UI Document Size Manipulation", composite_action);
     em.pop_undo_stack_enabled();
 
     return true;
-  
 }
-
 
 auto handle_inverse_kinematics(entt::handle selection, entt::handle center, editing_manager& em) -> bool
 {
     // Allow IK when gizmo is being used, but block for other ImGui items (like text inputs, sliders, etc.)
     bool is_gizmo_active = ImGuizmo::IsUsing();
     bool is_other_item_active = ImGui::IsAnyItemActive() && !is_gizmo_active;
-    
+
     if(is_other_item_active)
     {
         return false;
@@ -753,15 +771,28 @@ auto handle_inverse_kinematics(entt::handle selection, entt::handle center, edit
 
     if(ImGui::IsKeyDown(shortcuts::ik_ccd))
     {
-        return ik_set_position_ccd(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes, 0.001f, 100);
+        return ik_set_position_ccd(selection,
+                                   center_transform_comp.get_position_global(),
+                                   em.ik_data.num_nodes,
+                                   0.001f,
+                                   100);
     }
     if(ImGui::IsKeyDown(shortcuts::ik_fabrik))
     {
-        return ik_set_position_fabrik(selection, center_transform_comp.get_position_global(), em.ik_data.num_nodes, 0.001f, 100);
+        return ik_set_position_fabrik(selection,
+                                      center_transform_comp.get_position_global(),
+                                      em.ik_data.num_nodes,
+                                      0.001f,
+                                      100);
     }
     if(ImGui::IsKeyDown(shortcuts::ik_two_bone))
     {
-        return ik_set_position_two_bone(selection, center_transform_comp.get_position_global(), center_transform_comp.get_z_axis_global(), 1.0f, 1.0f, 100);
+        return ik_set_position_two_bone(selection,
+                                        center_transform_comp.get_position_global(),
+                                        center_transform_comp.get_z_axis_global(),
+                                        1.0f,
+                                        1.0f,
+                                        100);
     }
     return false;
 }
@@ -857,7 +888,11 @@ auto handle_standard_gizmo_manipulation(entt::handle active_selection,
     return movetype;
 }
 
-void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::handle center, entt::handle editor_camera, editing_manager& em)
+void manipulation_gizmos(bool& gizmo_at_center,
+                         bool& was_using_gizmo,
+                         entt::handle center,
+                         entt::handle editor_camera,
+                         editing_manager& em)
 {
     auto& camera_trans = editor_camera.get<transform_component>();
     auto& camera_comp = editor_camera.get<camera_component>();
@@ -880,7 +915,7 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
 
     auto selections = em.try_get_selections_as<entt::handle>();
     setup_gizmo_pivot(gizmo_at_center, center, selections, *active_sel);
-    
+
     // Store initial center transform before any manipulation
     auto& center_transform_comp = center.get<transform_component>();
     math::mat4 center_initial_global = center_transform_comp.get_transform_global();
@@ -902,7 +937,7 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
     std::vector<math::transform> original_transforms;
     original_parents.reserve(top_level_selections.size());
     original_transforms.reserve(top_level_selections.size());
-    
+
     // Store initial state before any manipulation
     for(const auto& sel : top_level_selections)
     {
@@ -919,31 +954,30 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
     if(em.operation != ImGuizmo::ROTATE && em.operation != ImGuizmo::SCALE && top_level_selections.size() == 1)
     {
         bounds_changed = handle_text_component_bounds_manipulation(*active_sel,
-                                                 camera_comp,
-                                                 em,
-                                                 snap,
-                                                 bounds_snap_data,
-                                                 bounds_snap);
+                                                                   camera_comp,
+                                                                   em,
+                                                                   snap,
+                                                                   bounds_snap_data,
+                                                                   bounds_snap);
 
         bounds_changed = handle_ui_document_component_bounds_manipulation(*active_sel,
-                                                    camera_comp,
-                                                    em,
-                                                    snap,
-                                                    bounds_snap_data,
-                                                    bounds_snap);
+                                                                          camera_comp,
+                                                                          em,
+                                                                          snap,
+                                                                          bounds_snap_data,
+                                                                          bounds_snap);
     }
-    
+
     int movetype = ImGuizmo::MT_NONE;
     // Handle standard gizmo manipulation for non-bounds operations
     if(em.operation != ImGuizmo::BOUNDS)
     {
         movetype = handle_standard_gizmo_manipulation(*active_sel, center, camera_comp, em, snap);
     }
-    
+
     // After all manipulations, compute the delta and apply it to all selections
     math::mat4 center_final_global = center_transform_comp.get_transform_global();
     math::mat4 center_delta = center_final_global * glm::inverse(center_initial_global);
-
 
     auto batch_action = std::make_shared<composite_action_t>();
     // Apply transforms and create undoable actions
@@ -952,8 +986,9 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
         auto& sel = top_level_selections[i];
         if(sel)
         {
-            bool ik_keys_down = ImGui::IsKeyDown(shortcuts::ik_ccd) || ImGui::IsKeyDown(shortcuts::ik_fabrik) || ImGui::IsKeyDown(shortcuts::ik_two_bone);
-            
+            bool ik_keys_down = ImGui::IsKeyDown(shortcuts::ik_ccd) || ImGui::IsKeyDown(shortcuts::ik_fabrik) ||
+                                ImGui::IsKeyDown(shortcuts::ik_two_bone);
+
             if(ik_keys_down)
             {
                 // When IK is active, only the center entity (gizmo target) is moved by the gizmo.
@@ -962,16 +997,16 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
                 handle_inverse_kinematics(sel, center, em);
                 continue;
             }
-            
+
             // Apply transform delta to each selection (normal case when IK is not active)
             auto& sel_transform_comp = sel.get<transform_component>();
             math::mat4 old_global = sel_transform_comp.get_transform_global();
             math::mat4 new_global = center_delta * old_global;
-            
+
             // Convert to local space based on parent
             entt::handle original_parent = original_parents[i];
             math::transform new_local_transform;
-            
+
             if(original_parent)
             {
                 const auto& parent_transform = original_parent.get<transform_component>();
@@ -985,7 +1020,7 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
                 // If no valid parent, the new local == new global
                 new_local_transform = math::transform(new_global);
             }
-            
+
             // Apply the new transform
             sel_transform_comp.set_transform_local(new_local_transform);
             // Create undoable action if there was a manipulation
@@ -1004,47 +1039,44 @@ void manipulation_gizmos(bool& gizmo_at_center, bool& was_using_gizmo, entt::han
                     }
 
                     // batch_action->add_sub_action(std::make_shared<transform_manipulation_action_t>(
-                    //     sel, 
-                    //     original_transforms[i], 
+                    //     sel,
+                    //     original_transforms[i],
                     //     new_local_transform,
                     //     position, rotation, scale, skew));
 
                     auto composite_action = std::make_shared<composite_action_t>();
 
-
                     if(position)
                     {
-                        composite_action->add_sub_action(std::make_shared<transform_move_action_t>(
-                            sel, 
-                            original_transforms[i].get_position(), 
-                            new_local_transform.get_position()));
+                        composite_action->add_sub_action(
+                            std::make_shared<transform_move_action_t>(sel,
+                                                                      original_transforms[i].get_position(),
+                                                                      new_local_transform.get_position()));
                     }
                     if(rotation)
                     {
-                        composite_action->add_sub_action(std::make_shared<transform_rotate_action_t>(
-                            sel, 
-                            original_transforms[i].get_rotation(), 
-                            new_local_transform.get_rotation()));
+                        composite_action->add_sub_action(
+                            std::make_shared<transform_rotate_action_t>(sel,
+                                                                        original_transforms[i].get_rotation(),
+                                                                        new_local_transform.get_rotation()));
                     }
                     if(scale)
                     {
-                        composite_action->add_sub_action(std::make_shared<transform_scale_action_t>(
-                            sel, 
-                            original_transforms[i].get_scale(), 
-                            new_local_transform.get_scale()));
+                        composite_action->add_sub_action(
+                            std::make_shared<transform_scale_action_t>(sel,
+                                                                       original_transforms[i].get_scale(),
+                                                                       new_local_transform.get_scale()));
                     }
                     if(skew)
                     {
-                        composite_action->add_sub_action(std::make_shared<transform_skew_action_t>(
-                            sel, 
-                            original_transforms[i].get_skew(), 
-                            new_local_transform.get_skew()));
+                        composite_action->add_sub_action(
+                            std::make_shared<transform_skew_action_t>(sel,
+                                                                      original_transforms[i].get_skew(),
+                                                                      new_local_transform.get_skew()));
                     }
-
 
                     batch_action->add_sub_action(composite_action);
                 }
-
             }
         }
     }
@@ -1071,7 +1103,7 @@ void process_drag_drop_target(rtti::context& ctx, const camera_component& camera
     if(ImGui::IsDragDropPayloadBeingAccepted())
     {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        
+
         // Check for material drag and show preview
         std::string material_path;
         if(check_material_drag(material_path))
@@ -1093,10 +1125,10 @@ void process_drag_drop_target(rtti::context& ctx, const camera_component& camera
         {
             std::string absolute_path(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
             std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
-            
+
             // Clear preview state since we're actually dropping now
             reset_preview_state();
-            
+
             handle_material_drop(ctx, camera_comp, key);
         }
     }
@@ -1109,7 +1141,7 @@ void process_drag_drop_target(rtti::context& ctx, const camera_component& camera
         {
             // Clear preview state
             reset_preview_state();
-            
+
             std::string absolute_path(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
             std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
 
@@ -1125,7 +1157,7 @@ void process_drag_drop_target(rtti::context& ctx, const camera_component& camera
         {
             // Clear preview state
             reset_preview_state();
-            
+
             std::string absolute_path(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
             std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
 
@@ -1141,29 +1173,32 @@ void restore_original_materials(entt::handle entity, const std::vector<asset_han
 {
     if(!entity || !entity.all_of<model_component>() || original_materials.empty())
         return;
-        
+
     auto& model_comp = entity.get<model_component>();
     class model model_copy = model_comp.get_model();
-    
+
     // Restore original materials
     for(size_t i = 0; i < original_materials.size() && i < model_copy.get_materials().size(); ++i)
     {
         model_copy.set_material(original_materials[i], i);
     }
-    
+
     // Update the model
     model_comp.set_model(model_copy);
 }
 
 // Apply material preview to an entity and save original materials for restoration
-void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::string& material_path, 
-                          entt::handle& last_preview_entity, std::vector<asset_handle<material>>& original_materials,
-                          bool& is_previewing)
+void apply_material_preview(rtti::context& ctx,
+                            entt::handle entity,
+                            const std::string& material_path,
+                            entt::handle& last_preview_entity,
+                            std::vector<asset_handle<material>>& original_materials,
+                            bool& is_previewing)
 {
     // If entity is invalid, restore previous preview if there was one
-    if (!entity)
+    if(!entity)
     {
-        if (is_previewing && last_preview_entity)
+        if(is_previewing && last_preview_entity)
         {
             restore_original_materials(last_preview_entity, original_materials);
             is_previewing = false;
@@ -1172,7 +1207,7 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
         }
         return;
     }
-    
+
     // If entity changed, restore previous preview
     if(is_previewing && last_preview_entity && entity != last_preview_entity)
     {
@@ -1180,18 +1215,18 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
         is_previewing = false;
         original_materials.clear();
     }
-    
+
     // If entity has model component and is different from last preview
     if(entity && entity.all_of<model_component>() && (!is_previewing || entity != last_preview_entity))
     {
         // Load material for preview
         auto& am = ctx.get_cached<asset_manager>();
         auto material_asset = am.get_asset<material>(material_path);
-        
+
         // Store original materials for restoration
         auto& model_comp = entity.get<model_component>();
         auto& model = model_comp.get_model();
-        
+
         // Save original materials if not already previewing this entity
         if(!is_previewing || entity != last_preview_entity)
         {
@@ -1201,7 +1236,7 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
                 original_materials.push_back(mat);
             }
         }
-        
+
         // Apply preview material
         class model model_copy = model;
         for(size_t i = 0; i < model_copy.get_materials().size(); ++i)
@@ -1209,7 +1244,7 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
             model_copy.set_material(material_asset, i);
         }
         model_comp.set_model(model_copy);
-        
+
         // Update preview state
         is_previewing = true;
         last_preview_entity = entity;
@@ -1222,7 +1257,9 @@ void apply_material_preview(rtti::context& ctx, entt::handle entity, const std::
 // Scene Panel Implementation
 // ============================================================================
 
-scene_panel::scene_panel(imgui_panels* parent, const char* name) : entity_panel(parent, name), fullscreen_name_(get_name() + " (Fullscreen)")
+scene_panel::scene_panel(imgui_panels* parent, const char* name)
+    : entity_panel(parent, name)
+    , fullscreen_name_(get_name() + " (Fullscreen)")
 {
 }
 
@@ -1236,10 +1273,10 @@ void scene_panel::init(rtti::context& ctx)
     ctx.add<gizmo_registry>();
     gizmos_.init(ctx);
 
-    //create editor camera
+    // create editor camera
     defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
 
-    //create center entity
+    // create center entity
     panel_scene_.create_entity();
 }
 
@@ -1248,7 +1285,6 @@ void scene_panel::deinit(rtti::context& ctx)
     gizmos_.deinit(ctx);
     ctx.remove<gizmo_registry>();
 }
-
 
 // ============================================================================
 // Drag Selection Helper Functions
@@ -1261,7 +1297,7 @@ void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             drag_start_pos_ = ImGui::GetMousePos();
-        }  
+        }
         // Check if we should start drag selection
         if(ImGui::IsMouseDragging(ImGuiMouseButton_Left))
         {
@@ -1272,7 +1308,6 @@ void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera
             }
         }
     }
-    
 
     // Update drag selection
     if(is_drag_selecting_)
@@ -1297,22 +1332,21 @@ void scene_panel::draw_drag_selection_rect(const ImVec2& start_pos, const ImVec2
     }
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    
+
     // Calculate the rectangle bounds
     ImVec2 min_pos(std::min(start_pos.x, current_pos.x), std::min(start_pos.y, current_pos.y));
     ImVec2 max_pos(std::max(start_pos.x, current_pos.x), std::max(start_pos.y, current_pos.y));
-    
+
     // Draw the selection rectangle
-    ImU32 rect_color = ImGui::GetColorU32(ImVec4(0.2f, 0.6f, 1.0f, 0.3f)); // Semi-transparent blue
+    ImU32 rect_color = ImGui::GetColorU32(ImVec4(0.2f, 0.6f, 1.0f, 0.3f));   // Semi-transparent blue
     ImU32 border_color = ImGui::GetColorU32(ImVec4(0.2f, 0.6f, 1.0f, 0.8f)); // Solid blue border
-    
+
     // Fill rectangle
     draw_list->AddRectFilled(min_pos, max_pos, rect_color);
-    
+
     // Border
     draw_list->AddRect(min_pos, max_pos, border_color, 0.0f, 0, 2.0f);
 }
-
 
 void scene_panel::handle_prefab_mode_changes(rtti::context& ctx)
 {
@@ -1396,6 +1430,12 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 {
     if(!is_visible())
     {
+        auto handle = get_camera();
+        if(handle)
+        {    
+            auto& camera_comp = handle.get<camera_component>();
+            camera_comp.get_render_view() = {};
+        }
         return;
     }
     draw_scene(ctx, dt);
@@ -1415,10 +1455,11 @@ auto scene_panel::get_window_flags() const -> ImGuiWindowFlags
 auto scene_panel::get_camera() -> entt::handle
 {
     entt::handle camera_entity;
-    panel_scene_.registry->view<camera_component>().each([&](auto e, auto&& camera_comp) 
-    {
-        camera_entity = panel_scene_.create_handle(e);
-    });
+    panel_scene_.registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            camera_entity = panel_scene_.create_handle(e);
+        });
     return camera_entity;
 }
 
@@ -1427,10 +1468,11 @@ auto scene_panel::get_center() -> entt::handle
     entt::handle center_entity;
 
     auto view = panel_scene_.registry->view<root_component>(entt::exclude<camera_component>);
-    view.each([&](auto e, auto&& comp) 
-    {
-        center_entity = panel_scene_.create_handle(e);
-    });
+    view.each(
+        [&](auto e, auto&& comp)
+        {
+            center_entity = panel_scene_.create_handle(e);
+        });
     return center_entity;
 }
 
@@ -1438,7 +1480,6 @@ auto scene_panel::get_auto_save_prefab() const -> bool
 {
     return auto_save_prefab_;
 }
-
 
 // ============================================================================
 // UI Drawing Functions
@@ -1611,7 +1652,6 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
     ImGui::PushID("Billboard Gizmos");
     ImGui::SetNextWindowViewportToCurrent();
 
-    
     if(ImGui::BeginMenu(ICON_MDI_ARROW_DOWN_BOLD, em.show_icon_gizmos))
     {
         ImGui::PushItemWidth(100.0f);
@@ -1735,9 +1775,7 @@ void scene_panel::draw_inverse_kinematics_menu(editing_manager& em)
 }
 
 void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
-{    
-
-
+{
     ImGui::SetNextWindowSizeConstraints({}, {400.0f, ImGui::GetContentRegionAvail().y});
     ImGui::SetNextWindowViewportToCurrent();
 
@@ -1754,8 +1792,6 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
         }
 
         ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");
-
-
 
         entt::meta_any cam = get_camera();
         inspect_var(ctx, cam, make_proxy(cam));
@@ -1781,10 +1817,7 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
 
         math::vec2 area = {bounds.second.x - bounds.first.x, bounds.second.y - bounds.first.y};
         // Calculate the center of the drag selection area
-        math::vec2 center = {
-            bounds.first.x + area.x * 0.5f,
-            bounds.first.y + area.y * 0.5f
-        };
+        math::vec2 center = {bounds.first.x + area.x * 0.5f, bounds.first.y + area.y * 0.5f};
 
         pick_manager.request_pick(camera, em.get_select_mode(), center, area);
     }
@@ -1843,8 +1876,7 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
 {
     if(size.x > 0 && size.y > 0)
     {
-        camera_comp.get_camera().set_viewport_pos(
-            {static_cast<int32_t>(pos.x), static_cast<int32_t>(pos.y)});
+        camera_comp.get_camera().set_viewport_pos({static_cast<int32_t>(pos.x), static_cast<int32_t>(pos.y)});
         camera_comp.set_viewport_size({static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y)});
     }
 }
@@ -1852,7 +1884,6 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
 void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
 {
     auto& em = ctx.get_cached<editing_manager>();
-
 
     auto pos = ImGui::GetCursorScreenPos();
     auto camera_entity = get_camera();
@@ -1864,7 +1895,6 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     const auto& camera = camera_comp.get_camera();
     const auto& rview = camera_comp.get_render_view();
     const auto& obuffer = rview.fbo_safe_get("OBUFFER");
-
 
     if(obuffer && obuffer->get_attachment_count() > 0)
     {
@@ -1893,7 +1923,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     draw_selected_camera(ctx, camera_entity, size);
 
     // {
-        
+
     //     const float& ref_font_scale = ImGui::GetCurrentContext()->FontSizeBase;
 
     //     ImGui::ImCoolBarConfig config;
@@ -1901,7 +1931,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     //     config.hovered_size = 80.0f;
     //     config.anchor = ImVec2(0.5f, 1.0f);
     //     config.anchor_area = ImRect(pos,  pos + size);
-        
+
     //     if (ImGui::BeginCoolBar("CoolBarMainWin", ImCoolBarFlags_Horizontal, config))
     //     {
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo"})
@@ -1909,7 +1939,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     //             ImVec2 size(item.ctx.width, 0);
     //             ImGui::Button("Play", size);
     //         }
-        
+
     //         if (ImGui::CoolBarItemGuard item{"imgui_demo1"})
     //         {
     //             ImVec2 size(item.ctx.width, 0);
@@ -1938,7 +1968,6 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
 
-                        
     auto window = ImGui::GetCurrentWindow();
     auto draw_list = window->DrawList;
     auto clip_rect = window->ClipRect;
@@ -1971,35 +2000,16 @@ void scene_panel::draw_ui(rtti::context& ctx)
     auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
-
         auto pos = ImGui::GetCursorScreenPos();
         auto& camera_comp = camera_entity.get<camera_component>();
 
         setup_camera_viewport(camera_comp, size, pos);
         draw_scene_viewport(ctx, size);
         process_drag_drop_target(ctx, camera_comp);
+
+        const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
+        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
     }
-}
-
-void scene_panel::draw_framerate_display()
-{
-    ImGui::PushFont(ImGui::Font::Mono);
-    auto& io = ImGui::GetIO();
-
-    auto fps_size = ImGui::CalcTextSize(fmt::format("{:.1f}", io.Framerate).c_str()).x;
-    ImGui::PopFont();
-
-    ImGui::SameLine();
-
-    ImGui::AlignedItem(1.0f,
-                       ImGui::GetContentRegionAvail().x,
-                       fps_size,
-                       [&]()
-                       {
-                           ImGui::PushFont(ImGui::Font::Mono);
-                           ImGui::Text("%.1f", io.Framerate);
-                           ImGui::PopFont();
-                       });
 }
 
 void scene_panel::draw_menubar(rtti::context& ctx)
@@ -2023,8 +2033,8 @@ void scene_panel::draw_menubar(rtti::context& ctx)
         draw_snapping_menu(em);
         draw_inverse_kinematics_menu(em);
         draw_camera_settings_menu(ctx);
-        draw_framerate_display();
-        
+        viewport_stats_overlay::draw_stats_toggle(stats_overlay_state_);
+
         ImGui::PopStyleColor(3);
 
         ImGui::EndMenuBar();

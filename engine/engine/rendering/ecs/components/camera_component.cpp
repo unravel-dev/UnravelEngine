@@ -15,6 +15,11 @@ void camera_component::update(const math::transform& t)
 
 }
 
+void camera_component::release_resources()
+{
+    rview_ = {};
+}
+
 
 void camera_component::set_viewport_size(const usize32_t& size)
 {

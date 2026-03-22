@@ -74,6 +74,7 @@ struct pipeline_stats
      * @param stats Batch statistics to accumulate
      */
     void add_batch_stats(const batch_stats& stats);
+    void add_stats(const pipeline_stats& stats);
 };
 /**
  * @class rendering_pipeline

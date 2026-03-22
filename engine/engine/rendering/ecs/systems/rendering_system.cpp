@@ -78,6 +78,23 @@ void rendering_system::on_play_begin(hpp::span<const entt::handle> entities, del
     ctx.get_cached<reflection_probe_system>().on_play_begin(entities, dt);
 }
 
+auto rendering_system::release_pipeline_resources(scene& scn) -> bool
+{
+    auto& ctx = engine::context();
+    gfx::frame_buffer::ptr output{};
+    scn.registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            auto& pipeline_data = camera_comp.get_pipeline_data();
+            auto& camera = pipeline_data.get_camera();
+            auto& pipeline = pipeline_data.get_pipeline();
+            auto& rview = camera_comp.get_render_view();
+            rview = {};
+            return;
+        });
+    return true;
+}
+
 auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt,
                                     bool render_screen_space) -> gfx::frame_buffer::ptr
 {
