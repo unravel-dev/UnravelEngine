@@ -21,7 +21,7 @@ namespace
 constexpr float overlay_width = 400.0f;
 constexpr float overlay_padding = 8.0f;
 constexpr float overlay_rounding = 4.0f;
-constexpr float overlay_bg_alpha = 0.80f;
+constexpr float overlay_bg_alpha = 0.75f;
 constexpr ImVec4 overlay_bg_color{0.08f, 0.08f, 0.08f, overlay_bg_alpha};
 
 constexpr ImVec4 color_good{0.2f, 0.8f, 0.2f, 1.0f};
@@ -413,7 +413,6 @@ void draw(const rendering::pipeline_stats& pstats, const state& overlay_state, c
         });
         ImGui::PopWindowFontScale();
 
-        ImGui::Separator();
         ImGui::PushFont(ImGui::Font::Mono);
         draw_performance_section();
         draw_scene_section();
