@@ -3,6 +3,7 @@
 #include <engine/settings/settings.h>
 #include <editor/settings/settings.h>
 #include <editor/deploy/deploy.h>
+#include <editor/project/project_editor_settings.h>
 #include <filesystem/syncer.h>
 #include <cmd_line/parser.h>
 
@@ -36,6 +37,7 @@ public:
     auto get_settings() -> settings&;
     auto get_deploy_settings() -> deploy_settings&;
     auto get_editor_settings() -> editor_settings&;
+    auto get_project_editor_settings() -> project_editor_settings&;
 
 
     auto has_open_project() const -> bool;
@@ -44,6 +46,8 @@ public:
     void save_project_settings(rtti::context& ctx);
     void load_deploy_settings();
     void save_deploy_settings();
+    void load_project_editor_settings();
+    void save_project_editor_settings();
 
 private:
     void fixup_editor_settings_on_save();
@@ -64,6 +68,7 @@ private:
     settings project_settings_;
     deploy_settings deploy_settings_;
     editor_settings editor_settings_;
+    project_editor_settings project_editor_settings_;
 
     fs::syncer app_meta_syncer_;
     fs::syncer app_cache_syncer_;

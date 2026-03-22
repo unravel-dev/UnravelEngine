@@ -5,6 +5,7 @@
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/meta/deploy/deploy.hpp>
+#include <editor/meta/project/project_editor_settings.hpp>
 #include <editor/meta/settings/settings.hpp>
 #include <editor/meta/system/project_manager.hpp>
 
@@ -38,6 +39,7 @@ namespace
 fs::path app_deploy_cfg = "app:/deploy/deploy.cfg";
 fs::path app_deploy_file = "deploy/deploy.cfg";
 fs::path app_settings_cfg = "app:/settings/settings.cfg";
+fs::path app_editor_cfg = "app:/editor/editor.cfg";
 fs::path editor_cfg = fs::persistent_path() / "unravel" / "editor.cfg";
 
 } // namespace
@@ -49,8 +51,10 @@ void project_manager::close_project(rtti::context& ctx)
         save_editor_settings();
         save_project_settings(ctx);
         save_deploy_settings();
+        save_project_editor_settings();
         project_settings_ = {};
         deploy_settings_ = {};
+        project_editor_settings_ = {};
     }
 
     ctx.remove<settings>();
@@ -95,6 +99,7 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
         fs::create_directories(fs::resolve_protocol(ex::get_meta_directory("app")), err);
         fs::create_directories(fs::resolve_protocol("app:/settings"), err);
         fs::create_directories(fs::resolve_protocol("app:/deploy"), err);
+        fs::create_directories(fs::resolve_protocol("app:/editor"), err);
 
     }
 
@@ -114,7 +119,7 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     });
 
     auto& tm = ctx.get_cached<thumbnail_manager>();
-    tm.set_cache_directory(fs::resolve_protocol("app:/.cache/"));
+    tm.set_cache_directory(fs::resolve_protocol("app:/editor/.cache/"));
 
     auto& scr = ctx.get_cached<script_system>();
 
@@ -129,18 +134,24 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     load_deploy_settings();
     save_deploy_settings();
 
+    ls.begin_module("Project Editor Settings");
+    load_project_editor_settings();
+
     ls.begin_module("Scene");
 
-    auto scn = project_settings_.standalone.startup_scene;
+    auto opened_scene = project_editor_settings_.scene.opened_scene;
+    auto startup_scene = project_settings_.standalone.startup_scene;
 
-    if(scn)
+    bool scene_loaded = false;
+    if(opened_scene)
     {
-        if(!editor_actions::open_scene_from_asset(ctx, scn))
-        {
-            editor_actions::new_scene(ctx);
-        }
+        scene_loaded = editor_actions::open_scene_from_asset(ctx, opened_scene);
     }
-    else
+    if(!scene_loaded && startup_scene)
+    {
+        scene_loaded = editor_actions::open_scene_from_asset(ctx, startup_scene);
+    }
+    if(!scene_loaded)
     {
         editor_actions::new_scene(ctx);
     }
@@ -177,6 +188,21 @@ void project_manager::load_deploy_settings()
 void project_manager::save_deploy_settings()
 {
     asset_writer::atomic_save_to_file(fs::resolve_protocol(app_deploy_cfg).string(), deploy_settings_);
+}
+
+void project_manager::load_project_editor_settings()
+{
+    load_from_file(fs::resolve_protocol(app_editor_cfg).string(), project_editor_settings_);
+}
+
+void project_manager::save_project_editor_settings()
+{
+    asset_writer::atomic_save_to_file(fs::resolve_protocol(app_editor_cfg).string(), project_editor_settings_);
+}
+
+auto project_manager::get_project_editor_settings() -> project_editor_settings&
+{
+    return project_editor_settings_;
 }
 
 void project_manager::create_project(rtti::context& ctx, const fs::path& project_path)

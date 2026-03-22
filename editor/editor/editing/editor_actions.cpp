@@ -986,6 +986,9 @@ auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handl
         if(loaded)
         {
             em.sync_prefab_instances(ctx, &scene);
+            auto& pm = ctx.get_cached<project_manager>();
+            pm.get_project_editor_settings().scene.opened_scene = asset;
+            pm.save_project_editor_settings();
         }
 
         if(!loaded)
