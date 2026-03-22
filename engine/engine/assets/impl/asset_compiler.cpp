@@ -438,6 +438,7 @@ auto compile_texture_to_file(const fs::path& input_path,
     if(!run_process(texturec.string(), args_array, false, error))
     {
         APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
+        fs::remove(str_output);
         return false;
     }
     
@@ -590,6 +591,7 @@ auto compile_shader_to_file(const fs::path& input_path,
     if(!run_process(shaderc.string(), args_array, true, error))
     {
         APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, output_path.filename().string(), error);
+        fs::remove(str_output);
         return false;
     }
     return true;
