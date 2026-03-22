@@ -4,6 +4,7 @@
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
+#include <engine/assets/impl/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_manifest.h>
 #include <engine/audio/audio_clip.h>
@@ -29,7 +30,6 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
-#include <fstream>
 #include <set>
 
 namespace unravel
@@ -51,210 +51,54 @@ auto checking_dependencies_job_name() -> std::string
 }
 
 
-/// Check if recompilation is needed based on manifest
+/// Check if recompilation is needed based on manifest.
+/// Resolves include dependencies via asset_compiler::resolve_dependencies<T> so that
+/// changes in included files are detected through the combined SHA.
+template<typename T>
 auto needs_recompilation(const fs::path& source_file_path, const fs::path& compiled_output_path) -> bool
 {
     fs::error_code err;
-
-    // If output doesn't exist, we need to compile
     if(!fs::exists(compiled_output_path, err) || err)
     {
         return true;
     }
-
-    // Check if manifest exists
     auto manifest_path = asset_compiler::get_manifest_path(compiled_output_path);
     if(!fs::exists(manifest_path, err) || err)
     {
-        // APPLOG_TRACE("Manifest missing for {}, cannot check if recompilation is needed",
-        // compiled_output_path.string());
         return true;
     }
-
-    // Load manifest and check if source has changed
     asset_compiler::asset_manifest manifest;
     if(!asset_compiler::load_manifest(manifest_path, manifest))
     {
         APPLOG_WARNING("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-
-    // Check if source file has changed
-    if(asset_compiler::is_source_file_changed(source_file_path, manifest))
+    auto absolute_source = fs::resolve_protocol(
+        fs::replace(fs::convert_to_protocol(source_file_path), ex::get_meta_directory(), ex::get_data_directory()));
+    if(absolute_source.extension() == ".meta")
+    {
+        absolute_source.replace_extension();
+    }
+    std::set<fs::path> deps;
+    asset_compiler::resolve_dependencies<T>(absolute_source, deps);
+    if(asset_compiler::is_source_file_changed(source_file_path, manifest, deps))
     {
         APPLOG_WARNING("Source file changed for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-
-    // Check if compiled format has changed
     if(asset_compiler::is_compiled_format_changed(source_file_path, manifest))
     {
         APPLOG_WARNING("Compiled format changed for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-
-    // APPLOG_TRACE("Asset {} is up to date, skipping compilation", compiled_output_path.string());
     return false;
-}
-
-template<typename T>
-void resolve_includes(const fs::path& file_path, std::set<fs::path>& processed_files)
-{
-}
-
-template<>
-void resolve_includes<gfx::shader>(const fs::path& file_path, std::set<fs::path>& processed_files)
-{
-    if(!processed_files.insert(file_path).second)
-    {
-        return; // Avoid processing the same file multiple times
-    }
-
-    std::ifstream file(file_path);
-    if(!file.is_open())
-    {
-        // std::cerr << "Failed to open file: " << filePath << '\n';
-        return;
-    }
-
-    const std::string include_keyword = "#include";
-    const std::string bgfx_include_path = "/path/to/bgfx/include"; // Assuming bgfx include path is known
-
-    std::string line;
-    while(std::getline(file, line))
-    {
-        // Trim leading whitespace
-        line.erase(0, line.find_first_not_of(" \t"));
-
-        // Check for #include directive
-        if(line.compare(0, include_keyword.length(), include_keyword) == 0)
-        {
-            // Find the start and end of the include path
-            size_t start = line.find_first_of("\"<") + 1;
-            size_t end = line.find_last_of("\">");
-
-            if(start == std::string::npos || end == std::string::npos || start >= end)
-            {
-                // std::cerr << "Invalid include directive: " << line << '\n';
-                continue;
-            }
-
-            std::string include_path = line.substr(start, end - start);
-            fs::path resolved_path;
-
-            if(line[start - 1] == '<' && line[end] == '>')
-            {
-                // Resolve system include path (e.g., bgfx_shader.sh)
-                // resolvedPath = fs::path(bgfxIncludePath) / includePath;
-                continue;
-            }
-            else
-            {
-                // Resolve local include path relative to the current file
-                resolved_path = file_path.parent_path() / include_path;
-            }
-
-            resolved_path = fs::absolute(resolved_path);
-            // std::cout << "Resolved include: " << resolvedPath << '\n';
-
-            // Recurse into the included file
-            resolve_includes<gfx::shader>(resolved_path, processed_files);
-        }
-    }
-}
-
-auto extract_href_from_link_tag(hpp::string_view link_tag) -> hpp::string_view
-{
-    size_t href_pos = link_tag.find("href=");
-    if(href_pos == std::string::npos)
-    {
-        return {};
-    }
-
-    href_pos += 5; // Move past "href="
-
-    // Find the quote character (either " or ')
-    char quote_char = link_tag[href_pos];
-    if(quote_char != '"' && quote_char != '\'')
-    {
-        return {};
-    }
-
-    href_pos++; // Move past the opening quote
-    size_t href_end = link_tag.find(quote_char, href_pos);
-    if(href_end == std::string::npos)
-    {
-        return {};
-    }
-
-    return link_tag.substr(href_pos, href_end - href_pos);
-}
-
-auto resolve_ui_tree_dependency_path(const fs::path& href_value, const fs::path& base_file_path) -> fs::path
-{
-    if(fs::has_known_protocol(href_value))
-    {
-        // Handle protocol paths like "engine:/data/ui/rml.rcss"
-        return fs::resolve_protocol(href_value);
-    }
-
-    // Resolve relative path
-    return fs::absolute(base_file_path.parent_path() / href_value);
-}
-
-template<>
-void resolve_includes<ui_tree>(const fs::path& file_path, std::set<fs::path>& processed_files)
-{
-    if(!processed_files.insert(file_path).second)
-    {
-        return; // Avoid processing the same file multiple times
-    }
-
-    std::ifstream file(file_path);
-    if(!file.is_open())
-    {
-        return;
-    }
-
-    std::string content_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    hpp::string_view content(content_str);
-    // Parse HTML/RML content to find <link> tags with href attributes
-    size_t pos = 0;
-    while((pos = content.find("<link", pos)) != std::string::npos)
-    {
-        // Find the end of the link tag
-        size_t tag_end = content.find('>', pos);
-        if(tag_end == std::string::npos)
-        {
-            break;
-        }
-
-        hpp::string_view link_tag = content.substr(pos, tag_end - pos + 1);
-        hpp::string_view href_value = extract_href_from_link_tag(link_tag);
-
-        if(!href_value.empty())
-        {
-            fs::path resolved_path = resolve_ui_tree_dependency_path(fs::path(href_value), file_path);
-
-            // Recurse into the included file if it's a supported dependency format
-            const auto& supported_deps = ex::get_suported_dependencies_formats<ui_tree>();
-            auto extension = resolved_path.extension().string();
-            if(std::find(supported_deps.begin(), supported_deps.end(), extension) != supported_deps.end())
-            {
-                resolve_includes<ui_tree>(resolved_path, processed_files);
-            }
-        }
-
-        pos = tag_end + 1;
-    }
 }
 
 template<typename T>
 auto has_depencency(const fs::path& file, const fs::path& dep_to_check) -> bool
 {
     std::set<fs::path> dependecies;
-    resolve_includes<T>(file, dependecies);
-
+    asset_compiler::resolve_dependencies<T>(file, dependecies);
     return dependecies.contains(dep_to_check);
 }
 
@@ -491,8 +335,7 @@ static void add_to_syncer(rtti::context& ctx,
 
         for(const auto& output : paths)
         {
-            // Check if recompilation is needed based on manifest
-            if(is_initial_listing && !needs_recompilation(ref_path, output))
+            if(is_initial_listing && !needs_recompilation<T>(ref_path, output))
             {
                 continue;
             }
@@ -500,7 +343,6 @@ static void add_to_syncer(rtti::context& ctx,
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))
             {
-
                 auto job_name = fmt::format("Compiling {}", ex::get_type<T>());
                 auto task = ts.pool->schedule(job_name,
                                               [&am, ref_path, output, job_name]()
@@ -563,12 +405,10 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 continue;
             }
 
-            // Check if recompilation is needed based on manifest
-            if(is_initial_listing && !needs_recompilation(ref_path, output))
+            if(is_initial_listing && !needs_recompilation<gfx::shader>(ref_path, output))
             {
                 continue;
             }
-            
 
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output))

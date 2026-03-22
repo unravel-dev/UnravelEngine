@@ -1191,7 +1191,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
     const auto buffer_size = lbuffer->get_size();
 
-    gfx::render_pass pass("Direct Light Buffer Pass");
+    gfx::render_pass pass("Direct Lighting Pass");
     pass.bind(lbuffer.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -1284,6 +1284,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                               light.intensity};
 
             gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
+
             gfx::set_uniform(lprogram.u_camera_position, camera_pos);
 
             size_t i = 0;
@@ -1329,7 +1330,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
 
     const auto irradiance_result = run_irradiance_pass(scn, rview);
 
-    gfx::render_pass pass("Indirect Light Buffer Pass");
+    gfx::render_pass pass("Indirect Lighting Pass");
     pass.bind(lbuffer.get());
     pass.set_view_proj(view, proj);
 

@@ -90,7 +90,7 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
     auto& present_pass = window->begin_present_pass();
     present_pass.clear();
 
-    for(int i = 0; i < 2; ++i)
+    for(int i = 0; i < 1; ++i)
     {
         imguiBeginFrame(1.0f / 60.0f);
         draw_loading_overlay(stage, completed, total, current_job);

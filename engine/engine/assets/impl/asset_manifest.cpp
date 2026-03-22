@@ -16,6 +16,12 @@ namespace asset_compiler
 
 void asset_manifest::compute_source_sha(const fs::path& source_key)
 {
+    std::set<fs::path> empty;
+    compute_source_sha(source_key, empty);
+}
+
+void asset_manifest::compute_source_sha(const fs::path& source_key, const std::set<fs::path>& dependency_paths)
+{
     auto source_file_path = fs::resolve_protocol(source_key);
     fs::error_code ec;
     if(!fs::exists(source_file_path, ec) || ec)
@@ -24,23 +30,49 @@ void asset_manifest::compute_source_sha(const fs::path& source_key)
         source_sha = "";
         return;
     }
-    
     try
     {
-        std::ifstream file(source_file_path, std::ios::binary);
-        if(!file.is_open())
+        if(dependency_paths.empty())
         {
-            APPLOG_ERROR("Failed to open source file for SHA computation: {}", source_file_path.string());
-            source_sha = "";
-            return;
+            std::ifstream file(source_file_path, std::ios::binary);
+            if(!file.is_open())
+            {
+                APPLOG_ERROR("Failed to open source file for SHA computation: {}", source_file_path.string());
+                source_sha = "";
+                return;
+            }
+            bool is_text = !ex::is_binary(source_file_path.extension().string());
+            auto hasher = hpp::sha1::compute_file_sha1_stable(file, is_text);
+            std::array<char, SHA1_HEX_SIZE> hex_buffer{};
+            hasher.print_hex(hex_buffer.data(), true, false);
+            source_sha = std::string(hex_buffer.data());
         }
-        
-        bool is_text = !ex::is_binary(source_file_path.extension().string());
-        auto hasher = hpp::sha1::compute_file_sha1_stable(file, is_text);
-        
-        std::array<char, SHA1_HEX_SIZE> hex_buffer{};
-        hasher.print_hex(hex_buffer.data(), true, false);
-        source_sha = std::string(hex_buffer.data());
+        else
+        {
+            hpp::sha1 combined_hasher;
+            for(const auto& dep_path : dependency_paths)
+            {
+                fs::error_code dep_ec;
+                if(!fs::exists(dep_path, dep_ec) || dep_ec)
+                {
+                    continue;
+                }
+                std::ifstream file(dep_path, std::ios::binary);
+                if(!file.is_open())
+                {
+                    continue;
+                }
+                bool is_text = !ex::is_binary(dep_path.extension().string());
+                auto file_hasher = hpp::sha1::compute_file_sha1_stable(file, is_text);
+                std::array<char, SHA1_HEX_SIZE> hex_buffer{};
+                file_hasher.print_hex(hex_buffer.data(), true, false);
+                combined_hasher.add(hex_buffer.data(), SHA1_HEX_SIZE - 1);
+            }
+            combined_hasher.finalize();
+            std::array<char, SHA1_HEX_SIZE> hex_buffer{};
+            combined_hasher.print_hex(hex_buffer.data(), true, false);
+            source_sha = std::string(hex_buffer.data());
+        }
     }
     catch(const std::exception& e)
     {
@@ -111,44 +143,41 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
     }
 }
 
+namespace
+{
+auto resolve_manifest_input_file(const fs::path& key) -> fs::path
+{
+    fs::path source_key = fs::convert_to_protocol(key);
+    source_key = fs::replace(source_key, ex::get_meta_directory(), ex::get_data_directory());
+    if(source_key.extension() == ".meta")
+    {
+        source_key.replace_extension();
+    }
+    return source_key;
+}
+} // namespace
+
 auto is_source_file_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool
 {
-    auto resolve_input_file = [](const fs::path& key) -> fs::path
-    {
-        fs::path source_key = fs::convert_to_protocol(key);
-        source_key = fs::replace(source_key, ex::get_meta_directory(), ex::get_data_directory());
-        // absolute_path = fs::resolve_protocol(fs::replace(absolute_path, ex::get_meta_directory(), ex::get_data_directory()));
-        if(source_key.extension() == ".meta")
-        {
-            source_key.replace_extension();
-        }
-        return source_key;
-    };
-
-    auto source_key = resolve_input_file(source_path);
-    // Create a temporary manifest to compute current SHA
+    auto source_key = resolve_manifest_input_file(source_path);
     asset_manifest current_manifest(source_key);
-
     current_manifest.compute_source_sha(source_key);
-    // Compare SHA values
+    return current_manifest.source_sha != manifest.source_sha;
+}
+
+auto is_source_file_changed(const fs::path& source_path,
+                            const asset_manifest& manifest,
+                            const std::set<fs::path>& dependency_paths) -> bool
+{
+    auto source_key = resolve_manifest_input_file(source_path);
+    asset_manifest current_manifest(source_key);
+    current_manifest.compute_source_sha(source_key, dependency_paths);
     return current_manifest.source_sha != manifest.source_sha;
 }
 
 auto is_compiled_format_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool
 {
-    auto resolve_input_file = [](const fs::path& key) -> fs::path
-    {
-        fs::path source_key = fs::convert_to_protocol(key);
-        source_key = fs::replace(source_key, ex::get_meta_directory(), ex::get_data_directory());
-        // absolute_path = fs::resolve_protocol(fs::replace(absolute_path, ex::get_meta_directory(), ex::get_data_directory()));
-        if(source_key.extension() == ".meta")
-        {
-            source_key.replace_extension();
-        }
-        return source_key;
-    };
-
-    auto source_key = resolve_input_file(source_path);
+    auto source_key = resolve_manifest_input_file(source_path);
     auto extension = source_key.extension().string();
     auto current_version = ex::get_format_version(extension);
     return manifest.format_version != current_version;

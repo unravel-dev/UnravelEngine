@@ -254,7 +254,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                         , cascadeScale
                         );
     }
-    else if (selection3 && u_numSplits > 3) // selection3
+    else if (selection3 && u_numSplits > 3)
     {
         vec4 shadowcoord = v_texcoord4;
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.w, 0.001);
@@ -357,6 +357,11 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_depth,
                     vec3 world_light_dir, float ray_length, vec2 screen_pos, vec3 world_shading_normal)
 {
+    float vs_depth = abs(screenSpaceToViewSpaceDepth(origin_device_depth));
+    float fade_end = max(ray_length * 80.0, 20.0);
+    float distance_fade = 1.0 - smoothstep(fade_end * 0.6, fade_end, vs_depth);
+    if(distance_fade <= 0.0) return 1.0;
+
     vec3 vs_origin = computeViewSpacePosition(origin_uv, origin_device_depth);
     vec3 vs_light_dir = normalize(mul(u_view, vec4(world_light_dir, 0.0)).xyz);
     vec3 vs_end = vs_origin + vs_light_dir * ray_length;
@@ -375,25 +380,34 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
     float n_dot_l = saturate(dot(world_shading_normal, world_light_dir));
     float n_dot_l_hi = max(u_contact_shadow.z, u_contact_shadow.y + 1e-4);
     float n_dot_l_mask = smoothstep(u_contact_shadow.y, n_dot_l_hi, n_dot_l);
-    vec2 depth_texel_uv = 1.0 / vec2(textureSize(depthTex, 0));
-    float dither = interleavedGradientNoise(screen_pos) * inv_steps;
+    if(n_dot_l_mask <= 0.0) return 1.0;
+
+    float vs_origin_z = vs_origin.z;
+    float vs_end_z = vs_end.z;
+    vec3 vs_normal = normalize(mul(u_view, vec4(world_shading_normal, 0.0)).xyz);
+    float n_dot_v = max(abs(dot(vs_normal, normalize(-vs_origin))), 0.05);
+    float self_shadow_bias = ray_length * 0.07 / n_dot_v;
+    float frame_index = u_camera_position.w;
+    float dither = interleavedGradientNoise(screen_pos + frame_index * vec2(47.17, 17.31)) * inv_steps;
     LOOP for(int i = 0; i < CONTACT_SHADOW_STEPS; i++)
     {
         float t = (float(i) + 1.0) * inv_steps + dither;
         if(t > 1.0) break;
         vec3 ss_pos = ss_origin + ss_ray * t;
-        if(any(lessThan(ss_pos.xy, vec2_splat(0.0))) || any(greaterThan(ss_pos.xy, vec2_splat(1.0))))
+        if(any(greaterThan(abs(ss_pos.xy - 0.5), vec2_splat(0.5))))
             break;
         float scene_depth = texture2DLod(depthTex, ss_pos.xy, 0.0).x;
-        float vs_ray_depth = screenSpaceToViewSpaceDepth(ss_pos.z);
+        float vs_ray_depth = mix(vs_origin_z, vs_end_z, t);
         float vs_scene_depth = screenSpaceToViewSpaceDepth(scene_depth);
         float depth_diff = vs_ray_depth - vs_scene_depth;
-        if(depth_diff > 0.0 && depth_diff < thickness)
+        float step_thickness = thickness * (1.0 - t * 0.7);
+        if(depth_diff > self_shadow_bias && depth_diff < step_thickness)
         {
             if(u_contact_shadow.w >= 0.0)
             {
-                vec2 duvx = vec2(depth_texel_uv.x, 0.0);
-                vec2 duvy = vec2(0.0, depth_texel_uv.y);
+                vec2 texel_uv = 1.0 / vec2(textureSize(depthTex, 0));
+                vec2 duvx = vec2(texel_uv.x, 0.0);
+                vec2 duvy = vec2(0.0, texel_uv.y);
                 float zx = texture2DLod(depthTex, ss_pos.xy + duvx, 0.0).x;
                 float zy = texture2DLod(depthTex, ss_pos.xy + duvy, 0.0).x;
                 vec3 p0 = computeViewSpacePosition(ss_pos.xy, scene_depth);
@@ -404,8 +418,7 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
                 if(n_len > 1e-5)
                 {
                     n_vs *= 1.0 / n_len;
-                    vec3 v_to_cam = normalize(-p0);
-                    if(dot(n_vs, v_to_cam) < 0.0)
+                    if(dot(n_vs, normalize(-p0)) < 0.0)
                         n_vs = -n_vs;
                     vec3 n_ws = normalize(mul(u_invView, vec4(n_vs, 0.0)).xyz);
                     if(dot(n_ws, world_light_dir) > u_contact_shadow.w)
@@ -413,7 +426,7 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
                 }
             }
             float occ = smoothstep(0.0, 1.0, t);
-            return mix(1.0, occ, n_dot_l_mask);
+            return mix(1.0, occ, n_dot_l_mask * distance_fade);
         }
     }
     return 1.0;

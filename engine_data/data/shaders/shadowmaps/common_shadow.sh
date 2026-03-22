@@ -131,6 +131,12 @@ float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bia
 {
     vec2 texCoord = _shadowCoord.xy/_shadowCoord.w;
 
+#if SM_CSM
+    // For CSM, clamp to the cascade bounds so that filter samples extending
+    // past the edge read the nearest valid texel instead of returning 1.0.
+    // This prevents bright fringes where PCSS/PCF kernels straddle the boundary.
+    texCoord = saturate(texCoord);
+#else
     bool outside = any(greaterThan(texCoord, vec2_splat(1.0)))
                 || any(lessThan   (texCoord, vec2_splat(0.0)))
                  ;
@@ -139,6 +145,7 @@ float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bia
     {
         return 1.0;
     }
+#endif
 
     float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w;
     float occluder = unpackRgbaToFloat(texture2DLod(_sampler, texCoord, lod) );
@@ -159,12 +166,34 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
 {
     float result = 0.0;
 
+#if SM_CSM
+    // For CSM, de-weight samples that land near the cascade shadow map edge.
+    // The cascade frustum boundary may lack blocker geometry, so those texels
+    // read as "fully lit" and pull the average up (bright fringe). Instead of
+    // shrinking the filter (which hardens the shadow), we keep the full kernel
+    // but smoothly fade out unreliable edge samples.
+    float totalWeight = 0.0;
+    for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
+    {
+        vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
+        vec4 sampleCoord = _shadowCoord + vec4(jitteredOffset, 0.0, 0.0);
+        vec2 sampleUV = sampleCoord.xy / sampleCoord.w;
+        float edgeDist = min(min(sampleUV.x, 1.0 - sampleUV.x),
+                             min(sampleUV.y, 1.0 - sampleUV.y));
+        float weight = smoothstep(0.0, 0.02, edgeDist);
+        result += hardShadowLod(_sampler, lod, sampleCoord, _bias) * weight;
+        totalWeight += weight;
+    }
+    return (totalWeight > 0.5) ? result / totalWeight
+                               : hardShadowLod(_sampler, lod, _shadowCoord, _bias);
+#else
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
         vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
         result += hardShadowLod(_sampler, lod, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias);
     }
     return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
+#endif
 }
 
 float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation, float _cascadeScale)
@@ -310,7 +339,11 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
     for( int i = 0; i < BLOCKER_SEARCH_NUM_SAMPLES; ++i )
     {
         vec2 offset = rotateSample(samplePoisson(i), _diskRotation) * _searchSize;
-        float shadowMapDepth = unpackRgbaToFloat(texture2D(_sampler, texCoord + offset));
+        vec2 sampleUV = texCoord + offset;
+#if SM_CSM
+        sampleUV = saturate(sampleUV);
+#endif
+        float shadowMapDepth = unpackRgbaToFloat(texture2D(_sampler, sampleUV));
         if (shadowMapDepth < receiverDepth)
         {
             avgBlockerDepth += shadowMapDepth;
