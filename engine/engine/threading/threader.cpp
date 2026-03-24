@@ -2,6 +2,7 @@
 
 #include <base/platform/thread.hpp>
 #include <logging/logging.h>
+#include <engine/profiler/profiler.h>
 namespace unravel
 {
 threader::threader()
@@ -10,6 +11,7 @@ threader::threader()
     data.set_thread_name = [](const std::string& name)
     {
         platform::set_thread_name(name.c_str());
+        get_thread_profile_data(name.c_str());
     };
 
     data.log_info = [](const std::string& msg)

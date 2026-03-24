@@ -1,4 +1,5 @@
 #include "game_panel.h"
+#include "../panel.h"
 #include "../panels_defs.h"
 #include "../../hub.h"
 #include "imgui/imgui.h"
@@ -17,7 +18,9 @@
 namespace unravel
 {
 
-game_panel::game_panel(const char* name) : panel_base(name)
+game_panel::game_panel(imgui_panels* parent, const char* name)
+    : panel_base(name)
+    , parent_(parent)
 {
 }
 
@@ -185,6 +188,12 @@ void game_panel::draw_ui(rtti::context& ctx)
       
                             
         viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game");
+
+        if(stats_overlay_state_.open_profiler_requested)
+        {
+            stats_overlay_state_.open_profiler_requested = false;
+            parent_->get_profiler_timeline_panel().show(true);
+        }
     }
 }
 

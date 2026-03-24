@@ -5,7 +5,6 @@
 #include <bx/file.h>
 #include <algorithm>
 #include <map>
-#include <vector>
 namespace gfx
 {
 namespace
@@ -50,6 +49,7 @@ void set_error_logger(const std::function<void(const std::string&, const char*, 
 {
     get_loggers()["error"] = logger;
 }
+
 void log(const std::string& category, const std::string& log_msg, const char* _filePath, uint16_t _line)
 {
     if(get_loggers()[category])
@@ -57,6 +57,23 @@ void log(const std::string& category, const std::string& log_msg, const char* _f
         get_loggers()[category](log_msg, _filePath, _line);
     }
 }
+
+namespace
+{
+struct profiler_hook_state
+{
+    gfx_profiler_begin_hook on_begin{};
+    gfx_profiler_begin_literal_hook on_begin_literal{};
+    gfx_profiler_end_hook on_end{};
+};
+
+auto profiler_hooks() -> profiler_hook_state&
+{
+    static profiler_hook_state s{};
+    return s;
+}
+
+} // namespace
 
 struct gfx_callback final : public bgfx::CallbackI
 {
@@ -86,19 +103,28 @@ struct gfx_callback final : public bgfx::CallbackI
         }
     }
 
-    void profilerBegin(const char* /*_name*/, uint32_t /*_abgr*/, const char* /*_filePath*/, uint16_t /*_line*/) final
+    void profilerBegin(const char* _name, uint32_t _abgr, const char* _filePath, uint16_t _line) final
     {
+        if(const auto& fn = profiler_hooks().on_begin)
+        {
+            fn(_name, _abgr, _filePath, _line);
+        }
     }
 
-    void profilerBeginLiteral(const char* /*_name*/,
-                              uint32_t /*_abgr*/,
-                              const char* /*_filePath*/,
-                              uint16_t /*_line*/) final
+    void profilerBeginLiteral(const char* _name, uint32_t _abgr, const char* _filePath, uint16_t _line) final
     {
+        if(const auto& fn = profiler_hooks().on_begin_literal)
+        {
+            fn(_name, _abgr, _filePath, _line);
+        }
     }
 
     void profilerEnd() final
     {
+        if(const auto& fn = profiler_hooks().on_end)
+        {
+            fn();
+        }
     }
     void fatal(const char* _filePath, uint16_t _line, bgfx::Fatal::Enum _code, const char* _str) final
     {
@@ -209,6 +235,24 @@ struct gfx_callback final : public bgfx::CallbackI
     }
 };
 
+void set_profiler_hooks(gfx_profiler_begin_hook on_begin,
+                        gfx_profiler_begin_literal_hook on_begin_literal,
+                        gfx_profiler_end_hook on_end)
+{
+    auto& h = profiler_hooks();
+    h.on_begin = std::move(on_begin);
+    h.on_begin_literal = std::move(on_begin_literal);
+    h.on_end = std::move(on_end);
+}
+
+void clear_profiler_hooks()
+{
+    auto& h = profiler_hooks();
+    h.on_begin = {};
+    h.on_begin_literal = {};
+    h.on_end = {};
+}
+
 void set_platform_data(const platform_data& _data)
 {
     bgfx::setPlatformData(_data);
@@ -216,6 +260,7 @@ void set_platform_data(const platform_data& _data)
 
 void shutdown()
 {
+    clear_profiler_hooks();
     if(s_context.initted)
     {
         deinit_uniform_cache();

@@ -2009,6 +2009,12 @@ void scene_panel::draw_ui(rtti::context& ctx)
 
         const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
         viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
+
+        if(stats_overlay_state_.open_profiler_requested)
+        {
+            stats_overlay_state_.open_profiler_requested = false;
+            parent_->get_profiler_timeline_panel().show(true);
+        }
     }
 }
 

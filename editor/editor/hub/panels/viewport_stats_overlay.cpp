@@ -368,7 +368,7 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
 
 } // namespace
 
-void draw(const rendering::pipeline_stats& pstats, const state& overlay_state, const char* id)
+void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const char* id)
 {
     if(!overlay_state.is_visible)
     {
@@ -418,8 +418,20 @@ void draw(const rendering::pipeline_stats& pstats, const state& overlay_state, c
         draw_scene_section();
         draw_memory_section();
         draw_pipeline_section(pstats);
-
         ImGui::PopFont();
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        float btn_width = ImGui::CalcTextSize(ICON_MDI_CHART_BAR " Open Profiler").x
+            + ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetCursorPosX((overlay_width - btn_width) * 0.5f);
+        if(ImGui::Button(ICON_MDI_CHART_BAR " Open Profiler"))
+        {
+            overlay_state.open_profiler_requested = true;
+        }
+        ImGui::Spacing();
     }
     ImGui::EndChild();
 

@@ -34,7 +34,7 @@
 #include <engine/meta/scripting/script.hpp>
 
 #include <engine/scripting/ecs/systems/script_system.h>
-
+#include <engine/profiler/profiler.h>
 #include <fstream>
 #include <monopp/mono_jit.h>
 #include <regex>
@@ -449,6 +449,7 @@ auto compile_shader_to_file(const fs::path& input_path,
                            const fs::path& output_path,
                            gfx::renderer_type renderer) -> bool
 {
+
     std::string str_input = input_path.string();
     std::string str_output = output_path.string();
     
@@ -600,6 +601,7 @@ auto compile_shader_to_file(const fs::path& input_path,
 template<typename T>
 auto write_manifest_file(const fs::path& input_path, const fs::path& output_path) -> bool
 {
+    APP_SCOPE_PERF("Write Manifest File");
     std::set<fs::path> deps;
     resolve_dependencies<T>(input_path, deps);
 
@@ -730,6 +732,7 @@ auto read_importer<gfx::texture>(asset_manager& am, const fs::path& key) -> std:
 template<>
 auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Texture");
     auto base_importer = read_importer<gfx::texture>(am, key);
 
     if(!base_importer)
@@ -773,6 +776,7 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
 template<>
 auto compile<material>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Material");
     auto absolute_path = resolve_input_file(key);
 
     std::string str_input = absolute_path.string();
@@ -808,6 +812,7 @@ auto compile<material>(asset_manager& am, const fs::path& key, const fs::path& o
 template<>
 auto read_importer<mesh>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
+    APP_SCOPE_PERF("Read Mesh Importer");
     auto absolute = fs::resolve_protocol(key).string();
     asset_meta meta;
     if(load_from_file(absolute, meta))
@@ -834,6 +839,7 @@ auto read_importer<mesh>(asset_manager& am, const fs::path& key) -> std::shared_
 template<>
 auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Mesh");
     // Try to import first.
     auto base_importer = read_importer<mesh>(am, key);
 
@@ -871,6 +877,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         // otherwise the stored LOD index buffers will reference the wrong vertices at runtime.
         if(data.skin_data.has_bones())
         {
+            APP_SCOPE_PERF("Apply Skin to Load Data");
             if(!mesh::apply_skin_to_load_data(data))
             {
                 APPLOG_ERROR("Failed to apply skinning data before generating LODs for {0}", str_input);
@@ -887,6 +894,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             
             if(!lod_configs.empty())
             {
+                APP_SCOPE_PERF("Generate LODs for Load Data");
                 mesh::generate_lods_for_load_data(data, lod_configs);
             }
         }
@@ -925,6 +933,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     }
 
     {
+        APP_SCOPE_PERF("Write Animations");
         for(const auto& animation : animations)
         {
            fs::path anim_output;
@@ -963,6 +972,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
 template<>
 auto read_importer<animation_clip>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
+    APP_SCOPE_PERF("Read Animation Clip Importer");
     auto absolute = fs::resolve_protocol(key).string();
     asset_meta meta;
     if(load_from_file(absolute, meta))
@@ -989,6 +999,7 @@ auto read_importer<animation_clip>(asset_manager& am, const fs::path& key) -> st
 template<>
 auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Animation Clip");
     // Try to import first.
     auto base_importer = read_importer<animation_clip>(am, key);
 
@@ -1040,6 +1051,7 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
 template<>
 auto compile<font>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Font");
     auto absolute_path = resolve_input_file(key);
 
     copy_compiled_file(absolute_path, output);
@@ -1056,6 +1068,7 @@ auto compile<font>(asset_manager& am, const fs::path& key, const fs::path& outpu
 template<>
 auto compile<prefab>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Prefab");
     auto absolute_path = resolve_input_file(key);
 
     if(!write_minified_file(absolute_path, output))
@@ -1076,6 +1089,7 @@ auto compile<prefab>(asset_manager& am, const fs::path& key, const fs::path& out
 template<>
 auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Scene Prefab");
     auto absolute_path = resolve_input_file(key);
    
     if(!write_minified_file(absolute_path, output))
@@ -1096,6 +1110,7 @@ auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::pat
 template<>
 auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Physics Material");
     auto absolute_path = resolve_input_file(key);
 
     std::string str_input = absolute_path.string();
@@ -1131,6 +1146,7 @@ auto compile<physics_material>(asset_manager& am, const fs::path& key, const fs:
 template<>
 auto compile<ui_tree>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile UI Tree");
     auto absolute_path = resolve_input_file(key);
     std::string str_input = absolute_path.string();
     fs::error_code err;
@@ -1172,6 +1188,7 @@ auto compile<ui_tree>(asset_manager& am, const fs::path& key, const fs::path& ou
 template<>
 auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Style Sheet");
     auto absolute_path = resolve_input_file(key);
     std::string str_input = absolute_path.string();
     fs::error_code err;
@@ -1213,6 +1230,7 @@ auto compile<style_sheet>(asset_manager& am, const fs::path& key, const fs::path
 template<>
 auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
+    APP_SCOPE_PERF("Read Audio Clip Importer");
     auto absolute = fs::resolve_protocol(key).string();
     asset_meta meta;
     if(load_from_file(absolute, meta))
@@ -1239,6 +1257,7 @@ auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::s
 template<>
 auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Audio Clip");
     // Try to import first.
     auto base_importer = read_importer<audio_clip>(am, key);
 
@@ -1481,6 +1500,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 template<>
 auto compile<script>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    APP_SCOPE_PERF("Compile Script");
     auto absolute_path = resolve_input_file(key);
 
     fs::error_code er;

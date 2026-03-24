@@ -28,8 +28,9 @@ imgui_panels::imgui_panels()
     hierarchy_panel_ = std::make_unique<hierarchy_panel>(this, HIERARCHY_VIEW);
     inspector_panel_ = std::make_unique<inspector_panel>(this, INSPECTOR_VIEW);
     scene_panel_ = std::make_unique<scene_panel>(this, SCENE_VIEW);
-    game_panel_ = std::make_unique<game_panel>(GAME_VIEW);
+    game_panel_ = std::make_unique<game_panel>(this, GAME_VIEW);
     statistics_panel_ = std::make_unique<statistics_panel>(STATISTICS_VIEW);
+    profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(PROFILER_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
@@ -144,6 +145,8 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 
         statistics_panel_->on_frame_ui_render(ctx);
 
+        profiler_timeline_panel_->on_frame_ui_render(ctx, PROFILER_VIEW);
+
         console_log_panel_->on_frame_ui_render(ctx);
 
         content_browser_panel_->on_frame_ui_render(ctx);
@@ -239,6 +242,11 @@ auto imgui_panels::get_dockspace() -> dockspace&
 auto imgui_panels::get_animation_panel() -> animation_panel&
 {
     return *animation_panel_;
+}
+
+auto imgui_panels::get_profiler_timeline_panel() -> profiler_timeline_panel&
+{
+    return *profiler_timeline_panel_;
 }
 
 auto imgui_panels::get_undo_redo_panel() -> undo_redo_panel&

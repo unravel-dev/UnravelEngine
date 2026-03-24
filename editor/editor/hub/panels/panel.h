@@ -21,6 +21,7 @@
 #include "project_settings_panel/project_settings_panel.h"
 #include "scene_panel/scene_panel.h"
 #include "statistics_panel/statistics_panel.h"
+#include "profiler_panel/profiler_timeline_panel.h"
 #include "style_panel/style_panel.h"
 #include "undo_redo_panel/undo_redo_panel.h"
 
@@ -50,6 +51,7 @@ public:
     auto get_style_panel() -> style_panel&;
     auto get_undo_redo_panel() -> undo_redo_panel&;
     auto get_animation_panel() -> animation_panel&;
+    auto get_profiler_timeline_panel() -> profiler_timeline_panel&;
     auto get_dockspace() -> dockspace&;
     void set_external_drop_in_progress(bool in_progress);
 
@@ -79,6 +81,7 @@ private:
     std::unique_ptr<scene_panel> scene_panel_;
     std::unique_ptr<game_panel> game_panel_;
     std::unique_ptr<statistics_panel> statistics_panel_;
+    std::unique_ptr<profiler_timeline_panel> profiler_timeline_panel_;
     std::unique_ptr<header_panel> header_panel_;
     std::unique_ptr<footer_panel> footer_panel_;
     std::unique_ptr<deploy_panel> deploy_panel_;

@@ -643,6 +643,19 @@ void set_info_logger(const std::function<void(const std::string&, const char* _f
 void set_warning_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void set_error_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void set_debug_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
+
+/// Hooks for bgfx::CallbackI::profilerBegin / profilerBeginLiteral / profilerEnd. The graphics layer
+/// only forwards events; pair nested begin/end and any token stack in the code that installs hooks.
+using gfx_profiler_begin_hook =
+    std::function<void(const char* name, uint32_t abgr, const char* file_path, uint16_t line)>;
+using gfx_profiler_begin_literal_hook = gfx_profiler_begin_hook;
+using gfx_profiler_end_hook = std::function<void()>;
+
+void set_profiler_hooks(gfx_profiler_begin_hook on_begin,
+                        gfx_profiler_begin_literal_hook on_begin_literal,
+                        gfx_profiler_end_hook on_end);
+void clear_profiler_hooks();
+
 void flush();
 
 bool is_origin_bottom_left();

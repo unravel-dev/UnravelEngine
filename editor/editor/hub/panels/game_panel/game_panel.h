@@ -9,11 +9,12 @@
 
 namespace unravel
 {
-class camera_component; // Forward declaration
+class imgui_panels;
+class camera_component;
 class game_panel : public panel_base
 {
 public:
-    explicit game_panel(const char* name);
+    game_panel(imgui_panels* parent, const char* name);
 
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
@@ -35,6 +36,7 @@ private:
     bool is_visible_force_{};
     int visualize_passes_{-1};
 
+    imgui_panels* parent_{};
     viewport_stats_overlay::state stats_overlay_state_{};
 };
 } // namespace unravel

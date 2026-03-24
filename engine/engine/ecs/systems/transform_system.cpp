@@ -39,6 +39,8 @@ void transform_system::on_frame_update(scene& scn, delta_t dt)
                   view_root.end(),
                   [&view_root](entt::entity entity)
                   {
+                      APP_SCOPE_PERF_THREAD("Transform/Resolve Transform Global","Pool Thread");
+
                       auto& transform_comp = view_root.get<transform_component>(entity);
 
                       transform_comp.resolve_transform_global();

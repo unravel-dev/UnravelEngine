@@ -14,6 +14,7 @@ namespace unravel::viewport_stats_overlay
 struct state
 {
     bool is_visible = false;
+    bool open_profiler_requested = false;
 };
 
 //-----------------------------------------------------------------------------
@@ -25,7 +26,7 @@ struct state
 /// <param name="overlay_state">Persistent state for visibility toggle</param>
 /// <param name="id">Unique identifier to disambiguate multiple overlays</param>
 //-----------------------------------------------------------------------------
-void draw(const rendering::pipeline_stats& pstats, const state& overlay_state, const char* id);
+void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const char* id);
 
 //-----------------------------------------------------------------------------
 /// <summary>

@@ -437,67 +437,103 @@ auto engine::process() -> int
     auto& thr = ctx.get_cached<threader>();
     auto& input = ctx.get_cached<input_system>();
 
-    thr.process();
-
-    sim.run_one_frame(true);
-
-    auto dt = sim.get_delta_time();
-
-    if(ev.is_playing)
     {
-        if(ev.frames_playing == 0)
+        APP_SCOPE_PERF("Frame Loop");
+
         {
-            dt = delta_t(0.0166);
+            APP_SCOPE_PERF("Threader Process");
+            thr.process();
         }
-        ev.frames_playing++;
-    }
 
-    if(ev.is_paused)
-    {
-        dt = {};
-    }
+        sim.run_one_frame(true);
 
-    update_input_zone(rend, input);
+        auto dt = sim.get_delta_time();
 
-    input.manager.before_events_update();
+        if(ev.is_playing)
+        {
+            if(ev.frames_playing == 0)
+            {
+                dt = delta_t(0.0166);
+            }
+            ev.frames_playing++;
+        }
 
-    bool should_quit = false;
+        if(ev.is_paused)
+        {
+            dt = {};
+        }
 
-    os::event e{};
-    while(os::poll_event(e))
-    {
-        ev.on_os_event(ctx, e);
+        update_input_zone(rend, input);
 
-        input.manager.on_os_event(e);
+        input.manager.before_events_update();
 
-        should_quit = rend.get_main_window() == nullptr || is_shutting_down;
+        bool should_quit = false;
+
+        {
+            APP_SCOPE_PERF("Poll OS Events");
+            os::event e{};
+            while(os::poll_event(e))
+            {
+                ev.on_os_event(ctx, e);
+
+                input.manager.on_os_event(e);
+
+                should_quit = rend.get_main_window() == nullptr || is_shutting_down;
+                if(should_quit)
+                {
+                    break;
+                }
+            }
+        }
+
+        {
+            APP_SCOPE_PERF("After Events Update");
+            input.manager.after_events_update();
+        }
+
         if(should_quit)
         {
-            break;
+            ev.set_play_mode(ctx, false);
+            is_shutting_down = false;
+            return 0;
+        }
+
+        {   
+            APP_SCOPE_PERF("Frame Begin");
+            ev.on_frame_begin(ctx, dt);
+        }
+
+        {
+            APP_SCOPE_PERF("Seq Update");
+            seq::update(dt);
+        }
+
+
+        {
+            APP_SCOPE_PERF("Frame Update");
+            ev.on_frame_update(ctx, dt);
+        }
+
+        {
+            APP_SCOPE_PERF("Seq Update Zero");
+            seq::update(delta_t::zero());
+        }
+
+        {
+            APP_SCOPE_PERF("Frame Before Render");
+            ev.on_frame_before_render(ctx, dt);
+        }
+
+        {
+            APP_SCOPE_PERF("Frame Render");
+            ev.on_frame_render(ctx, dt);
+        }
+
+        {
+            APP_SCOPE_PERF("Frame End");
+            ev.on_frame_end(ctx, dt);
         }
     }
-    input.manager.after_events_update();
-
-    if(should_quit)
-    {
-        ev.set_play_mode(ctx, false);
-        is_shutting_down = false;
-        return 0;
-    }
-
-    ev.on_frame_begin(ctx, dt);
-
-    seq::update(dt);
-
-    ev.on_frame_update(ctx, dt);
-
-    seq::update(delta_t::zero());
-    
-    ev.on_frame_before_render(ctx, dt);
-
-    ev.on_frame_render(ctx, dt);
-
-    ev.on_frame_end(ctx, dt);
 
     get_app_profiler()->swap();
 

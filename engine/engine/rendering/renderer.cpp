@@ -2,6 +2,7 @@
 #include "../events.h"
 #include "spdlog/common.h"
 #include "gpu_program.h"
+#include <engine/profiler/profiler.h>
 
 #include <base/assert.hpp>
 #include <graphics/debugdraw.h>
@@ -10,8 +11,16 @@
 
 #include <logging/logging.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace unravel
 {
+namespace
+{
+thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
+}
+
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
 {
     gfx::set_debug_logger(
@@ -39,6 +48,64 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
         {
             APPLOG_ERROR_LOC(file_path, line, "renderer", msg);
         });
+
+    auto main_thread_id = std::this_thread::get_id();
+    gfx::set_profiler_hooks(
+        [main_thread_id](const char* name, uint32_t abgr, const char* file_path, uint16_t line)
+        {
+            (void)abgr;
+            (void)file_path;
+            (void)line;
+            if(name == nullptr)
+            {
+                return;
+            }
+            auto current_id = std::this_thread::get_id();
+            if(current_id != main_thread_id)
+            {
+                s_bgfx_profiler_scope_stack.push_back(
+                    profile_begin_owned(hpp::string_view(name), "Render Thread"));
+            }
+            else
+            {
+                s_bgfx_profiler_scope_stack.push_back(
+                    profile_begin_owned(hpp::string_view(name)));
+            }
+        },
+        [main_thread_id](const char* name, uint32_t abgr, const char* file_path, uint16_t line)
+        {
+            (void)abgr;
+            (void)file_path;
+            (void)line;
+            if(name == nullptr)
+            {
+                return;
+            }
+            auto current_id = std::this_thread::get_id();
+            if(current_id != main_thread_id)
+            {
+                s_bgfx_profiler_scope_stack.push_back(
+                    profile_begin_owned(hpp::string_view(name), "Render Thread"));
+            }
+            else
+            {
+                s_bgfx_profiler_scope_stack.push_back(profile_begin(name));
+            }
+        },
+        []()
+        {
+            if(s_bgfx_profiler_scope_stack.empty())
+            {
+                return;
+            }
+            const uint32_t token = s_bgfx_profiler_scope_stack.back();
+            s_bgfx_profiler_scope_stack.pop_back();
+            if(token != UINT32_MAX)
+            {
+                profile_end(token);
+            }
+        });
+    get_thread_profile_data("Main Thread");
 
     auto& ev = ctx.get_cached<events>();
     ev.on_os_event.connect(sentinel_, this, &renderer::on_os_event);
@@ -284,6 +351,7 @@ void renderer::frame_begin(rtti::context& /*ctx*/, delta_t /*dt*/)
 
 void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
 {
+    APP_SCOPE_PERF("Graphics Frame");
     gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer Update Pass");
     pass.bind();
 
