@@ -662,7 +662,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
 void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 {
-    // APP_SCOPE_PERF("Script/System Fixed Update");
+    APP_SCOPE_PERF("Script/System Fixed Update");
 
     auto& ev = ctx.get_cached<events>();
 
@@ -740,7 +740,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
     }
     
     {
-        APP_SCOPE_PERF("Script/System Clenup");
+        APP_SCOPE_PERF("Script/System Cleanup");
         dt = std::max(delta_t::zero(), dt);
 
         delta_t secs(dt);

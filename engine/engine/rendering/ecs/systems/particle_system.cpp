@@ -64,7 +64,7 @@ void particle_system::on_frame_before_render(scene& scn, delta_t dt)
     {
         // This is not needed as we dont cal .get on any assets here
         // tpp::this_thread::register_this_thread();
-
+        APP_SCOPE_PERF_THREAD("Particle/Update Emitter","Pool Thread");
         auto& transform_comp = view.get<transform_component>(entity);
         auto& emitter_comp = view.get<particle_emitter_component>(entity);
         

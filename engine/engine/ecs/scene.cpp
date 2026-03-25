@@ -22,6 +22,7 @@
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/events.h>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/profiler/profiler.h>
 
 #include <logging/logging.h>
 
@@ -236,6 +237,7 @@ auto scene::instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e, bo
 
 auto scene::instantiate_out(entt::registry& reg, const asset_handle<prefab>& pfb, entt::handle& e, bool call_callbacks) -> bool
 {
+    APP_SCOPE_PERF("Instantiate Out Prefab");
     if(call_callbacks)
     {
         push_on_load_callbacks({on_load_callback});
@@ -250,6 +252,7 @@ auto scene::instantiate_out(entt::registry& reg, const asset_handle<prefab>& pfb
 
 auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) -> entt::handle
 {
+    APP_SCOPE_PERF("Instantiate Prefab");
     if(call_callbacks)
     {
         push_on_load_callbacks({on_load_callback});
@@ -264,6 +267,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) ->
 
 auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks) -> entt::handle
 {
+    APP_SCOPE_PERF("Instantiate Prefab With Parent");
     auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
         if(parent && !entities.empty())
@@ -316,7 +320,7 @@ auto scene::create_entity(const std::string& tag, entt::handle parent) -> entt::
 
 void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool keep_parent, bool call_callbacks)
 {
-    // APPLOG_TRACE_PERF(std::chrono::microseconds);
+    APP_SCOPE_PERF("Clone Entity");
 
     auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
@@ -349,7 +353,7 @@ void scene::clone_entity(entt::handle& clone_to, entt::handle clone_from, bool k
 
 auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_callbacks) -> entt::handle
 {
-    // APPLOG_TRACE_PERF(std::chrono::microseconds);
+    APP_SCOPE_PERF("Clone Entity To");
 
     auto* reg = clone_from.registry();
     entt::handle clone_to(*reg, reg->create());
@@ -359,6 +363,7 @@ auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_ca
 
 void scene::clone_scene(const scene& src_scene, scene& dst_scene, bool call_callbacks)
 {
+    APP_SCOPE_PERF("Clone Scene");
     if(call_callbacks)
     {
         push_on_load_callbacks({on_load_callback});

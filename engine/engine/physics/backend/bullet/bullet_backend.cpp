@@ -15,6 +15,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/settings/settings.h>
 
+#include <engine/profiler/profiler.h>
 #define BT_USE_SSE_IN_API
 #include <BulletCollision/CollisionDispatch/btCollisionDispatcherMt.h>
 #include <BulletCollision/NarrowPhaseCollision/btRaycastCallback.h>
@@ -753,6 +754,7 @@ struct world
 
     void process_manifolds()
     {
+        APP_SCOPE_PERF("Physics/Bullet/Process Manifolds");
         auto& ctx = unravel::engine::context();
         auto& scripting = ctx.get_cached<unravel::script_system>();
         auto& ec = ctx.get_cached<unravel::ecs>();
@@ -925,6 +927,7 @@ struct world
 
     void simulate(btScalar dt, btScalar fixed_time_step = 1.0 / 60.0, int max_subs_steps = 10)
     {
+        APP_SCOPE_PERF("Physics/Bullet/Simulate Step");
         in_simulate = true;
 
         dynamics_world->stepSimulation(dt, max_subs_steps, fixed_time_step);
@@ -2212,6 +2215,7 @@ void bullet_backend::on_skip_next_frame(rtti::context& ctx)
 
 void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
 {
+    APP_SCOPE_PERF("Physics/Bullet/Update");
     auto& ev = ctx.get_cached<events>();
 
     auto& ec = ctx.get_cached<ecs>();
@@ -2236,6 +2240,7 @@ void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
         int steps = 0;
         while(world.elapsed >= fixed_time_step && steps < max_subs_steps)
         {
+            APP_SCOPE_PERF("Physics/Bullet/Fixed Update");
             delta_t step_dt(fixed_time_step);
             ev.on_frame_fixed_update(ctx, step_dt);
 
@@ -2243,15 +2248,19 @@ void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
             uint64_t physics_entities{};
             uint64_t physics_entities_synced{};
 
-            registry.view<transform_component, physics_component, active_component>().each(
-                [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
-                {
-                    physics_entities++;
-                    if(to_physics(world, transform, rigidbody))
+            {
+                APP_SCOPE_PERF("Physics/Bullet/Sync Transforms To Physics");
+                registry.view<transform_component, physics_component, active_component>().each(
+                    [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
                     {
-                        physics_entities_synced++;
-                    }
-                });
+                        physics_entities++;
+                        if(to_physics(world, transform, rigidbody))
+                        {
+                            physics_entities_synced++;
+                        }
+                    });
+            }
+            
 
             // APPLOG_TRACE("Physics Update: entities {} -> synced to physics {}",
             //              physics_entities,
@@ -2262,15 +2271,18 @@ void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
             physics_entities = {};
             physics_entities_synced = {};
             // update transform from phyiscs interpolated spatial properties
-            registry.view<transform_component, physics_component, active_component>().each(
-                [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
-                {
-                    physics_entities++;
-                    if(from_physics(world, transform, rigidbody))
+            {
+                APP_SCOPE_PERF("Physics/Bullet/Sync Transforms From Physics");
+                registry.view<transform_component, physics_component, active_component>().each(
+                    [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
                     {
-                        physics_entities_synced++;
-                    }
-                });
+                        physics_entities++;
+                        if(from_physics(world, transform, rigidbody))
+                        {
+                            physics_entities_synced++;
+                        }
+                    });
+            }
 
             // APPLOG_TRACE("Physics Update: entities {} -> synced from physics {}",
             //              physics_entities,

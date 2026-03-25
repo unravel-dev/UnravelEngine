@@ -15,7 +15,12 @@ namespace
 
 constexpr float row_height = 20.0f;
 constexpr float lane_header_width = 120.0f;
-constexpr float frame_bar_height = 60.0f;
+/// Total vertical space reserved for the frame histogram row (background + bars).
+constexpr float frame_bar_height = 92.0f;
+/// Empty band at the top of the histogram so the tallest bar does not touch the container edge.
+constexpr float histogram_plot_top_pad = 14.0f;
+/// Vertical span used to map @c scale_max ms to bar height (below the top pad).
+constexpr float histogram_inner_height = frame_bar_height - histogram_plot_top_pad;
 constexpr float ruler_height = 22.0f;
 constexpr float min_visible_width_px = 1.0f;
 
@@ -283,7 +288,7 @@ void render_histogram_bars(ImDrawList* draw_list,
 
         float ms = static_cast<float>(snap->frame_end_ns - snap->frame_start_ns) / 1'000'000.0f;
         float h_frac = std::clamp(ms / scale_max, 0.01f, 1.0f);
-        float bar_h = frame_bar_height * h_frac;
+        float bar_h = histogram_inner_height * h_frac;
 
         float x0 = canvas_pos.x + (static_cast<float>(i) - hist_start) * entry_w;
         float x1 = canvas_pos.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
@@ -318,7 +323,7 @@ void render_histogram_guides(ImDrawList* draw_list,
 {
     constexpr float target_30fps_ms = 33.333f;
 
-    float line_60_y = bottom_y - frame_bar_height * (target_60fps_ms / scale_max);
+    float line_60_y = bottom_y - histogram_inner_height * (target_60fps_ms / scale_max);
     draw_list->AddLine(ImVec2(canvas_pos.x, line_60_y),
                        ImVec2(canvas_pos.x + bar_width, line_60_y),
                        IM_COL32(0, 200, 0, 100));
@@ -327,7 +332,7 @@ void render_histogram_guides(ImDrawList* draw_list,
 
     if(target_30fps_ms < scale_max)
     {
-        float line_30_y = bottom_y - frame_bar_height * (target_30fps_ms / scale_max);
+        float line_30_y = bottom_y - histogram_inner_height * (target_30fps_ms / scale_max);
         draw_list->AddLine(ImVec2(canvas_pos.x, line_30_y),
                            ImVec2(canvas_pos.x + bar_width, line_30_y),
                            IM_COL32(200, 100, 0, 100));
@@ -337,29 +342,30 @@ void render_histogram_guides(ImDrawList* draw_list,
 }
 
 void render_histogram_cursor(ImDrawList* draw_list,
-                              ImVec2 canvas_pos,
+                              float plot_top_y,
                               float bottom_y,
                               float bar_width,
                               int32_t selected_idx,
                               float hist_start,
-                              float entry_w)
+                              float entry_w,
+                              float canvas_x)
 {
-    float cursor_x = canvas_pos.x + (static_cast<float>(selected_idx) + 0.5f - hist_start) * entry_w;
-    if(cursor_x < canvas_pos.x - 10.0f || cursor_x > canvas_pos.x + bar_width + 10.0f)
+    float cursor_x = canvas_x + (static_cast<float>(selected_idx) + 0.5f - hist_start) * entry_w;
+    if(cursor_x < canvas_x - 10.0f || cursor_x > canvas_x + bar_width + 10.0f)
     {
         return;
     }
 
-    draw_list->AddLine(ImVec2(cursor_x, canvas_pos.y),
+    draw_list->AddLine(ImVec2(cursor_x, plot_top_y),
                        ImVec2(cursor_x, bottom_y),
                        IM_COL32(255, 255, 255, 220), 1.5f);
 
     constexpr float tri_half = 5.0f;
     constexpr float tri_h = 7.0f;
     draw_list->AddTriangleFilled(
-        ImVec2(cursor_x - tri_half, canvas_pos.y),
-        ImVec2(cursor_x + tri_half, canvas_pos.y),
-        ImVec2(cursor_x, canvas_pos.y + tri_h),
+        ImVec2(cursor_x - tri_half, plot_top_y),
+        ImVec2(cursor_x + tri_half, plot_top_y),
+        ImVec2(cursor_x, plot_top_y + tri_h),
         IM_COL32(255, 255, 255, 230));
 }
 
@@ -768,8 +774,9 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
     render_histogram_bars(draw_list, profiler, first_vis, last_vis,
                           canvas_pos, bottom_y, bar_width, eff_start, entry_w, scale_max);
     render_histogram_guides(draw_list, canvas_pos, bar_width, bottom_y, scale_max);
-    render_histogram_cursor(draw_list, canvas_pos, bottom_y, bar_width,
-                            effective_selected, eff_start, entry_w);
+    const float plot_top_y = canvas_pos.y + histogram_plot_top_pad;
+    render_histogram_cursor(draw_list, plot_top_y, bottom_y, bar_width,
+                            effective_selected, eff_start, entry_w, canvas_pos.x);
 
     ImGui::InvisibleButton("##frame_histogram", ImVec2(bar_width, frame_bar_height));
 
@@ -1107,7 +1114,7 @@ void profiler_timeline_panel::draw_timeline()
     {
         if(ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
         {
-            ImGui::SetScrollY(ImGui::GetScrollY() + io.MouseDelta.y);
+            ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
             if(lane_content_width > 0)
             {
                 const double ns_per_px = view_duration_ns_ / static_cast<double>(lane_content_width);

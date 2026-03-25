@@ -5,7 +5,7 @@
 #include <engine/audio/ecs/components/audio_source_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
-
+#include <engine/profiler/profiler.h>
 #include <audiopp/logger.h>
 #include <logging/logging.h>
 
@@ -169,6 +169,7 @@ void audio_system::on_skip_next_frame(rtti::context& ctx)
 
 void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)
 {
+    APP_SCOPE_PERF("Audio/System Update");
     auto& ev = ctx.get_cached<events>();
 
     auto& ec = ctx.get_cached<ecs>();

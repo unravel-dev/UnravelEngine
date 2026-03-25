@@ -98,6 +98,7 @@ auto rendering_system::release_pipeline_resources(scene& scn) -> bool
 auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt,
                                     bool render_screen_space) -> gfx::frame_buffer::ptr
 {
+    APP_SCOPE_PERF("Rendering/Render Scene Camera");
     auto& ctx = engine::context();
     auto& pipeline_data = camera_comp.get_pipeline_data();
     auto& camera = pipeline_data.get_camera();
@@ -123,6 +124,7 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
 
 auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer::ptr
 {
+    APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
     gfx::frame_buffer::ptr output{};
     scn.registry->view<camera_component>().each(
@@ -142,6 +144,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
                                     delta_t dt,
                                     bool render_screen_space)
 {
+    APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
     auto& pipeline_data = camera_comp.get_pipeline_data();
     auto& camera = pipeline_data.get_camera();
@@ -166,6 +169,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
 
 void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
 {
+    APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
@@ -181,6 +185,8 @@ void rendering_system::render_debug(entt::handle camera_entity)
     {
         return;
     }
+
+    APP_SCOPE_PERF("Rendering/Render Debug");
 
     auto& camera_comp = camera_entity.get<camera_component>();
     const auto& rview = camera_comp.get_render_view();

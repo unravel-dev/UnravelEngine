@@ -3,7 +3,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
-
+#include <engine/profiler/profiler.h>
 #include <logging/logging.h>
 
 namespace unravel
@@ -31,6 +31,7 @@ void camera_system::on_frame_update(scene& scn, delta_t dt)
 
 void camera_system::on_frame_before_render(scene& scn, delta_t dt)
 {
+    APP_SCOPE_PERF("Camera/System Before Render");
     scn.registry->view<transform_component, camera_component>().each(
         [&](auto e, auto&& transform, auto&& camera)
         {

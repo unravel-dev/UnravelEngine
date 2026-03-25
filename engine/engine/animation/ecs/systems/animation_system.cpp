@@ -136,7 +136,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                   view.end(),
                   [&](entt::entity entity)
                   {
-                      APP_SCOPE_PERF_THREAD("Animation/Update Poses","Pool Thread");
+                      APP_SCOPE_PERF_THREAD("Animation/Update Poses", "Pool Thread");
 
                       // This is needed as we call .get on the animations inside the player
                       tpp::this_thread::register_this_thread(thread_name, true);

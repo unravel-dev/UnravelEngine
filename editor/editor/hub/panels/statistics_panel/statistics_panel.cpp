@@ -222,7 +222,7 @@ auto statistics_panel::draw_frame_statistics(float overlay_width) -> void
                      frame_time_samples.get_min(),
                      frame_time_samples.get_max());
                      
-        ImGui::SetNextWindowViewportToCurrent();
+        // ImGui::SetNextWindowViewportToCurrent();
         ImGui::PlotLines("##FrameTime",
                          frame_time_samples.get_values(),
                          statistics_utils::sample_data::num_samples,
@@ -377,12 +377,6 @@ auto statistics_panel::draw_profiler_section() -> void
     }
     
     ImGui::PushFont(ImGui::Font::Mono);
-    
-    // CPU Profiler - always shown
-    ImGui::Text("CPU Profiler:");
-    draw_app_profiler_data();
-    
-    ImGui::Separator();
     
     // GPU Profiler controls
     ImGui::AlignTextToFramePadding();
@@ -798,37 +792,6 @@ auto statistics_panel::draw_view_stats(const gfx::stats* stats, float item_heigh
     }
 }
 
-auto statistics_panel::draw_app_profiler_data() -> void
-{
-    auto profiler = get_app_profiler();
-    const auto& data = profiler->get_per_frame_data_read();
-    
-    for(const auto& [name, per_frame_data] : data)
-    {
-        if(ImGui::TreeNode(
-            fmt::format("{:>7.3f}ms [{:^5}] - {}###{}", 
-                       per_frame_data.get_time_since_swap(), 
-                       per_frame_data.get_samples_since_swap(), 
-                       name,
-                       name).c_str()))
-        {
-                       ImGui::TextUnformatted(
-            fmt::format("- {:>7.3f}ms [{:^5}] - Avg", 
-                       per_frame_data.get_avg(),
-                       sample_data::num_samples).c_str());
-                       ImGui::TextUnformatted(
-            fmt::format("- {:>7.3f}ms [{:^5}] - Max", 
-                       per_frame_data.get_max(),
-                       sample_data::num_samples).c_str());
-                       ImGui::TextUnformatted(
-            fmt::format("- {:>7.3f}ms [{:^5}] - Min", 
-                       per_frame_data.get_min(),
-                       sample_data::num_samples).c_str());
-            ImGui::TreePop();
-        }
-    }
-}
-
 auto statistics_panel::draw_gpu_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void
 {
     gpu_memory_max = std::max(stats->gpuMemoryUsed, stats->gpuMemoryMax);
@@ -860,7 +823,7 @@ auto statistics_panel::draw_gpu_memory_section(const gfx::stats* stats, int64_t&
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
-    ImGui::SetNextWindowViewportToCurrent();
+    // ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##GPUMemory",
                      gpu_memory_samples.get_values(),
                      statistics_utils::sample_data::num_samples,
@@ -903,7 +866,7 @@ auto statistics_panel::draw_render_target_memory_section(const gfx::stats* stats
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
-    ImGui::SetNextWindowViewportToCurrent();
+    // ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##RenderTargetMemory",
                      render_target_memory_samples.get_values(),
                      statistics_utils::sample_data::num_samples,
@@ -946,7 +909,7 @@ auto statistics_panel::draw_texture_memory_section(const gfx::stats* stats, int6
     ImGui::SameLine();
     ImGui::TextColored(usage_color, "(%.1f%%)", usage_percentage);
     
-    ImGui::SetNextWindowViewportToCurrent();
+    // ImGui::SetNextWindowViewportToCurrent();
     ImGui::PlotLines("##TextureMemory",
                      texture_memory_samples.get_values(),
                      statistics_utils::sample_data::num_samples,

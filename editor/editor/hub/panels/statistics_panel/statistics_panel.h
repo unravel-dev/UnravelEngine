@@ -127,7 +127,6 @@ private:
     auto draw_primitive_counts(const gfx::stats* stats, const ImGuiIO& io) -> void;
     auto draw_call_counts(const gfx::stats* stats, const ImGuiIO& io) -> void;
     auto draw_profiler_bars(const gfx::stats* stats) -> void;
-    auto draw_app_profiler_data() -> void;
     auto draw_encoder_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms) -> void;
     auto draw_view_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms, double to_gpu_ms) -> void;
     auto draw_gpu_memory_section(const gfx::stats* stats, int64_t& gpu_memory_max, float overlay_width) -> void;

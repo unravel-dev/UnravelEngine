@@ -178,6 +178,10 @@ struct thread_profile_buffer
 /// is read by the main thread for display and aggregation.
 struct thread_profile_data
 {
+    /// @brief Mirrored from @ref performance_profiler recording state: 1 while @c recording, else 0.
+    /// Updated when recording toggles and when the thread registers. Hot path: relaxed load in profile_begin.
+    std::atomic<uint8_t> capture_active{0};
+
     std::array<thread_profile_buffer, 2> buffers{};
     std::atomic<uint32_t> write_idx{0};
 
@@ -342,6 +346,8 @@ private:
 
     auto register_thread_unlocked(const std::string& name) -> thread_profile_data*;
 
+    void sync_capture_active_to_threads();
+
     void capture_frame_snapshot();
 };
 
@@ -383,11 +389,20 @@ inline auto get_thread_profile_data(const char* thread_name) -> thread_profile_d
     return t_profile_data;
 }
 
+[[nodiscard]] inline auto thread_profile_should_capture(const thread_profile_data* data) -> bool
+{
+    return data->capture_active.load(std::memory_order_relaxed) != 0;
+}
+
 /// @brief Begin a profiling scope. Returns an event index for profile_end().
 inline auto profile_begin(const char* name) -> uint32_t
 {
     auto* data = get_thread_profile_data();
     if(!data) [[unlikely]]
+    {
+        return UINT32_MAX;
+    }
+    if(!thread_profile_should_capture(data)) [[unlikely]]
     {
         return UINT32_MAX;
     }
@@ -421,6 +436,10 @@ inline auto profile_begin(const char* name, const char* thread_name) -> uint32_t
     {
         return UINT32_MAX;
     }
+    if(!thread_profile_should_capture(data)) [[unlikely]]
+    {
+        return UINT32_MAX;
+    }
 
     auto& buf = data->write_buffer();
     if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
@@ -450,6 +469,10 @@ inline auto profile_begin_owned(hpp::string_view name) -> uint32_t
     {
         return UINT32_MAX;
     }
+    if(!thread_profile_should_capture(data)) [[unlikely]]
+    {
+        return UINT32_MAX;
+    }
 
     auto& buf = data->write_buffer();
     if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
@@ -476,6 +499,10 @@ inline auto profile_begin_owned(hpp::string_view name, const char* thread_name) 
 {
     auto* data = get_thread_profile_data(thread_name);
     if(!data) [[unlikely]]
+    {
+        return UINT32_MAX;
+    }
+    if(!thread_profile_should_capture(data)) [[unlikely]]
     {
         return UINT32_MAX;
     }

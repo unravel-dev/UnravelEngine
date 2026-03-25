@@ -195,6 +195,7 @@ void ui_system::update_ui_document_common(entt::handle handle, ui_document_compo
 void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt::handle handle, ui_document_component& comp,
                                             const camera& cam, float dp_ratio, bool process_input, bool& hit_found)
 {
+    APP_SCOPE_PERF("UI/Update World Space Document");
     auto doc_size = Rml::Vector2i(static_cast<int>(comp.size.width), static_cast<int>(comp.size.height));
     comp.context->SetDimensions(doc_size);
     comp.context->SetDensityIndependentPixelRatio(dp_ratio);
@@ -232,6 +233,7 @@ void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt
 void ui_system::update_screen_space_document(rtti::context& ctx, Rml::Context* context, int viewport_width,
                                             int viewport_height, float dp_ratio, scene& scn, bool process_input, bool& hit_found)
 {
+    APP_SCOPE_PERF("UI/Update Screen Space Document");
     auto doc_size = Rml::Vector2i(viewport_width, viewport_height);
     context->SetDimensions(doc_size);
     context->SetDensityIndependentPixelRatio(dp_ratio);
@@ -686,6 +688,7 @@ auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& even
 void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
 {
     auto& ev = ctx.get_cached<events>();
+    APP_SCOPE_PERF("UI/Update UI Documents");
 
     scn.registry->view<ui_document_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp)
@@ -734,6 +737,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
 
 auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool log_error) -> bool
 {
+    APP_SCOPE_PERF("UI/Load UI Document");
     if(!component.asset)
     {
         if(log_error)

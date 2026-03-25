@@ -38,6 +38,9 @@ auto performance_profiler::register_thread_unlocked(const std::string& name) -> 
     data->buffers[1].thread_index = thread_index;
 
     auto* raw_ptr = data.get();
+    raw_ptr->capture_active.store(
+        (recording_state_ == recording_state::recording) ? 1u : 0u, std::memory_order_relaxed);
+
     threads_.push_back({name, std::move(data)});
     return raw_ptr;
 }
@@ -219,6 +222,15 @@ auto performance_profiler::get_frame_end_ns() const -> int64_t
     return prev_frame_end_ns_;
 }
 
+void performance_profiler::sync_capture_active_to_threads()
+{
+    const uint8_t v = (recording_state_ == recording_state::recording) ? 1u : 0u;
+    for(auto& thread : threads_)
+    {
+        thread.data->capture_active.store(v, std::memory_order_relaxed);
+    }
+}
+
 void performance_profiler::set_recording_state(recording_state state)
 {
     if(state == recording_state::stopped)
@@ -226,6 +238,8 @@ void performance_profiler::set_recording_state(recording_state state)
         clear_history();
     }
     recording_state_ = state;
+    std::lock_guard lock(registration_mutex_);
+    sync_capture_active_to_threads();
 }
 
 auto performance_profiler::get_recording_state() const -> recording_state
