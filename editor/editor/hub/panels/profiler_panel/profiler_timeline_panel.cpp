@@ -1,9 +1,20 @@
 #include "profiler_timeline_panel.h"
 
+#include "gpu_frame_stats_widgets.h"
+#include "profiler_gpu_resources_section.h"
+#include "../panel.h"
+
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <base/platform/process_memory.hpp>
 #include <graphics/graphics.h>
+#include <monopp/mono_gc_handle.h>
+
+#include <bx/string.h>
+
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -17,6 +28,44 @@ constexpr float row_height = 20.0f;
 constexpr float lane_header_width = 120.0f;
 /// Total vertical space reserved for the frame histogram row (background + bars).
 constexpr float frame_bar_height = 92.0f;
+/// Stacked rows for managed heap and GPU memory (aligned to frame index axis).
+constexpr float memory_hist_row_height = 72.0f;
+constexpr float memory_hist_top_pad = 10.0f;
+constexpr float megabyte_divisor = 1024.0f * 1024.0f;
+constexpr ImU32 cpu_heap_hist_color = IM_COL32(200, 140, 70, 220);
+constexpr ImU32 gpu_mem_hist_color = IM_COL32(70, 130, 210, 220);
+constexpr ImU32 process_rss_hist_color = IM_COL32(140, 200, 120, 220);
+
+enum class memory_histogram_metric : uint8_t
+{
+    managed_heap_mb,
+    gpu_memory_mb,
+    process_rss_mb
+};
+
+auto memory_mb_from_snapshot(const frame_snapshot* snap, memory_histogram_metric metric) -> float
+{
+    if(snap == nullptr)
+    {
+        return 0.0f;
+    }
+    switch(metric)
+    {
+    case memory_histogram_metric::managed_heap_mb:
+        return static_cast<float>(snap->cpu_heap_used_bytes) / megabyte_divisor;
+    case memory_histogram_metric::gpu_memory_mb:
+        return static_cast<float>(snap->gpu_memory_used_bytes) / megabyte_divisor;
+    case memory_histogram_metric::process_rss_mb:
+        return static_cast<float>(snap->process_resident_bytes) / megabyte_divisor;
+    }
+    return 0.0f;
+}
+
+auto memory_hist_inner_height() -> float
+{
+    return memory_hist_row_height - memory_hist_top_pad;
+}
+
 /// Empty band at the top of the histogram so the tallest bar does not touch the container edge.
 constexpr float histogram_plot_top_pad = 14.0f;
 /// Vertical span used to map @c scale_max ms to bar height (below the top pad).
@@ -341,6 +390,150 @@ void render_histogram_guides(ImDrawList* draw_list,
     }
 }
 
+/// Horizontal scale guides for a memory row (same idea as @ref render_histogram_guides for frame ms).
+void render_memory_histogram_guides(ImDrawList* draw_list,
+                                    ImVec2 row_top_left,
+                                    float bar_width,
+                                    float scale_max_mb)
+{
+    if(scale_max_mb <= 0.001f)
+    {
+        return;
+    }
+    const float inner_h = memory_hist_inner_height();
+    const float bottom_y = row_top_left.y + memory_hist_row_height;
+    constexpr ImU32 line_col = IM_COL32(130, 130, 155, 95);
+    constexpr ImU32 text_col = IM_COL32(200, 200, 220, 175);
+
+    auto bytes_for_mb_frac = [](float mb, float frac) -> uint64_t
+    {
+        const double b = static_cast<double>(mb) * static_cast<double>(megabyte_divisor) * static_cast<double>(frac);
+        if(b <= 0.0)
+        {
+            return 0u;
+        }
+        return static_cast<uint64_t>(b);
+    };
+
+    // Mid-scale reference (50% of current vertical max).
+    {
+        constexpr float frac = 0.5f;
+        const float y = bottom_y - inner_h * frac;
+        draw_list->AddLine(ImVec2(row_top_left.x, y), ImVec2(row_top_left.x + bar_width, y), line_col);
+        std::array<char, 64> pretty{};
+        bx::prettify(pretty.data(), pretty.size(), bytes_for_mb_frac(scale_max_mb, frac));
+        draw_list->AddText(ImVec2(row_top_left.x + 2.0f, y - 13.0f), text_col, pretty.data());
+    }
+
+    // Top of plot = max of scale (bars map to this row height).
+    {
+        const float y = bottom_y - inner_h;
+        draw_list->AddLine(ImVec2(row_top_left.x, y), ImVec2(row_top_left.x + bar_width, y), line_col);
+        std::array<char, 64> pretty{};
+        bx::prettify(pretty.data(), pretty.size(), bytes_for_mb_frac(scale_max_mb, 1.0f));
+        const std::string label = fmt::format("max {}", pretty.data());
+        const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
+        draw_list->AddText(ImVec2(row_top_left.x + bar_width - ts.x - 4.0f, y - 13.0f), text_col,
+                           label.c_str());
+    }
+}
+
+void render_memory_mb_row(ImDrawList* draw_list,
+                          performance_profiler* profiler,
+                          int32_t first_frame,
+                          int32_t last_frame,
+                          ImVec2 row_top_left,
+                          float bar_width,
+                          float hist_start,
+                          float entry_w,
+                          float scale_max_mb,
+                          memory_histogram_metric metric,
+                          ImU32 fill_col)
+{
+    const float inner_h = memory_hist_inner_height();
+    const float bottom_y = row_top_left.y + memory_hist_row_height;
+    draw_list->PushClipRect(row_top_left,
+                            ImVec2(row_top_left.x + bar_width, row_top_left.y + memory_hist_row_height),
+                            true);
+
+    for(int32_t i = first_frame; i <= last_frame; ++i)
+    {
+        const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
+        if(!snap)
+        {
+            continue;
+        }
+        const float mb = memory_mb_from_snapshot(snap, metric);
+        const float h_frac =
+            (scale_max_mb > 0.001f) ? std::clamp(mb / scale_max_mb, 0.02f, 1.0f) : 0.02f;
+        const float bar_h = inner_h * h_frac;
+
+        const float x0 = row_top_left.x + (static_cast<float>(i) - hist_start) * entry_w;
+        const float x1 = row_top_left.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
+        const float y_top = bottom_y - bar_h;
+
+        draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
+        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
+                           IM_COL32(100, 100, 120, 100), 0.0f, 0, 1.0f);
+    }
+
+    draw_list->PopClipRect();
+}
+
+void render_live_sample_row(ImDrawList* draw_list,
+                            ImVec2 row_top_left,
+                            float bar_width,
+                            const sample_data& samples,
+                            float scale_max,
+                            ImU32 fill_col,
+                            bool is_frame_ms_row)
+{
+    const int n = static_cast<int>(sample_data::num_samples);
+    if(n <= 0 || scale_max <= 0.0f)
+    {
+        return;
+    }
+    const float entry_w = bar_width / static_cast<float>(n);
+    const float inner_h = is_frame_ms_row ? histogram_inner_height : memory_hist_inner_height();
+    const float bottom_y = row_top_left.y + (is_frame_ms_row ? frame_bar_height : memory_hist_row_height);
+
+    draw_list->PushClipRect(row_top_left,
+                            ImVec2(row_top_left.x + bar_width,
+                                   row_top_left.y + (is_frame_ms_row ? frame_bar_height : memory_hist_row_height)),
+                            true);
+
+    const ImU32 row_bg = is_frame_ms_row ? IM_COL32(30, 30, 30, 255) : IM_COL32(26, 26, 28, 255);
+    draw_list->AddRectFilled(row_top_left, ImVec2(row_top_left.x + bar_width, bottom_y), row_bg);
+
+    const int offset = samples.get_offset();
+    const float* vals = samples.get_values();
+
+    for(int col = 0; col < n; ++col)
+    {
+        const int idx = (offset + col) % n;
+        const float v = vals[idx];
+        const float h_frac = std::clamp(v / scale_max, 0.02f, 1.0f);
+        const float bar_h = inner_h * h_frac;
+        const float x0 = row_top_left.x + static_cast<float>(col) * entry_w;
+        const float x1 = row_top_left.x + static_cast<float>(col + 1) * entry_w;
+        const float y_top = bottom_y - bar_h;
+
+        if(is_frame_ms_row)
+        {
+            const ImU32 col = histogram_bar_color(v);
+            draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), col);
+        }
+        else
+        {
+            draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
+        }
+        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
+                           IM_COL32(100, 100, 120, 80), 0.0f, 0, 1.0f);
+    }
+
+    draw_list->PopClipRect();
+}
+
 void render_histogram_cursor(ImDrawList* draw_list,
                               float plot_top_y,
                               float bottom_y,
@@ -459,6 +652,7 @@ void profiler_timeline_panel::timeline_render_event_block(const lane_context& lc
         const float cpu_ms = static_cast<float>(ev.cpu_end_ns - ev.cpu_start_ns) / 1'000'000.0f;
         const float wait_ms = std::max(0.0f, wall_ms - cpu_ms);
 
+        ImGui::SetNextWindowViewportToCurrent();
         ImGui::BeginTooltip();
         ImGui::Text("%s", ev.name());
         ImGui::Text("Wall:  %s", format_time(wall_ms).c_str());
@@ -514,7 +708,9 @@ void profiler_timeline_panel::validate_timeline_scope_selection(uint32_t frame_c
     selected_scope_label_.clear();
 }
 
-profiler_timeline_panel::profiler_timeline_panel(const char* name) : name_(name)
+profiler_timeline_panel::profiler_timeline_panel(imgui_panels* parent, const char* name)
+    : name_(name)
+    , parent_(parent)
 {
 }
 
@@ -566,6 +762,10 @@ void profiler_timeline_panel::draw_ui(rtti::context& ctx)
     ImGui::Separator();
 
     draw_aggregate_section();
+
+    ImGui::Separator();
+
+    draw_profiler_bottom_sections(ctx);
 }
 
 // ============================================================================
@@ -673,6 +873,84 @@ void profiler_timeline_panel::draw_recording_toolbar()
 // Frame selector histogram
 // ============================================================================
 
+auto profiler_timeline_panel::histogram_stack_height() const -> float
+{
+    float h = frame_bar_height;
+    if(show_histogram_managed_heap_)
+    {
+        h += memory_hist_row_height;
+    }
+    if(show_histogram_gpu_memory_)
+    {
+        h += memory_hist_row_height;
+    }
+    if(show_histogram_process_rss_)
+    {
+        h += memory_hist_row_height;
+    }
+    return h;
+}
+
+void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
+{
+    (void)ctx;
+    if(parent_ == nullptr)
+    {
+        return;
+    }
+    ImGui::PushID("profiler_bottom");
+    if(ImGui::CollapsingHeader(ICON_MDI_CHIP "\tRender Passes"))
+    {
+        ImGui::PushFont(ImGui::Font::Mono);
+        draw_gpu_bgfx_submit_profiler_ui(gfx::get_stats(), &parent_->gpu_bgfx_profiler_enabled());
+        ImGui::PopFont();
+    }
+    profiler_draw_gpu_resources_section();
+    ImGui::PopID();
+}
+
+void profiler_timeline_panel::draw_live_histogram_stack(float bar_width)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float max_ms = std::max(frame_time_history_.get_max(), target_60fps_ms) * 1.1f;
+    const float max_cpu_mb = std::max(cpu_heap_mb_history_.get_max(), 1.0f) * 1.1f;
+    const float max_gpu_mb = std::max(gpu_memory_mb_history_.get_max(), 1.0f) * 1.1f;
+    const float max_rss_mb = std::max(process_rss_mb_history_.get_max(), 1.0f) * 1.1f;
+
+    render_live_sample_row(dl, pos, bar_width, frame_time_history_, max_ms, 0, true);
+    const float frame_bottom = pos.y + frame_bar_height;
+    render_histogram_guides(dl, pos, bar_width, frame_bottom, max_ms);
+    dl->AddText(ImVec2(pos.x + 4, pos.y + 2), IM_COL32(180, 180, 200, 200), "Frame (ms)");
+
+    float row_y = frame_bottom;
+    if(show_histogram_managed_heap_)
+    {
+        const ImVec2 row(pos.x, row_y);
+        render_live_sample_row(dl, row, bar_width, cpu_heap_mb_history_, max_cpu_mb, cpu_heap_hist_color, false);
+        dl->AddText(ImVec2(row.x + 4, row.y + 2), IM_COL32(180, 180, 200, 200), "Managed heap (MB)");
+        render_memory_histogram_guides(dl, row, bar_width, max_cpu_mb);
+        row_y += memory_hist_row_height;
+    }
+    if(show_histogram_gpu_memory_)
+    {
+        const ImVec2 row(pos.x, row_y);
+        render_live_sample_row(dl, row, bar_width, gpu_memory_mb_history_, max_gpu_mb, gpu_mem_hist_color, false);
+        dl->AddText(ImVec2(row.x + 4, row.y + 2), IM_COL32(180, 180, 200, 200), "GPU memory (MB)");
+        render_memory_histogram_guides(dl, row, bar_width, max_gpu_mb);
+        row_y += memory_hist_row_height;
+    }
+    if(show_histogram_process_rss_)
+    {
+        const ImVec2 row(pos.x, row_y);
+        render_live_sample_row(dl, row, bar_width, process_rss_mb_history_, max_rss_mb, process_rss_hist_color, false);
+        dl->AddText(ImVec2(row.x + 4, row.y + 2), IM_COL32(180, 180, 200, 200), "Process RSS (MB)");
+        render_memory_histogram_guides(dl, row, bar_width, max_rss_mb);
+    }
+
+    ImGui::Dummy(ImVec2(bar_width, histogram_stack_height()));
+}
+
 void profiler_timeline_panel::draw_frame_selector_bar()
 {
     auto* profiler = get_app_profiler();
@@ -686,33 +964,29 @@ void profiler_timeline_panel::draw_frame_selector_bar()
     }
     frame_time_history_.push_sample(frame_ms);
 
-    float fps = (frame_ms > 0.001f) ? 1000.0f / frame_ms : 0.0f;
-    ImGui::Text("CPU: %.2f ms (%.0f FPS)", frame_ms, fps);
-
-    auto stats = gfx::get_stats();
-    if(stats)
-    {
-        double to_gpu_ms = 1000.0 / static_cast<double>(stats->gpuTimerFreq);
-        double gpu_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * to_gpu_ms;
-        ImGui::SameLine();
-        ImGui::Text("  GPU: %.2f ms", gpu_ms);
-    }
+    ImGui::Checkbox("Managed heap", &show_histogram_managed_heap_);
+    ImGui::SameLine();
+    ImGui::Checkbox("GPU memory", &show_histogram_gpu_memory_);
+    ImGui::SameLine();
+    ImGui::Checkbox("Process RSS", &show_histogram_process_rss_);
 
     uint32_t frame_count = profiler->get_frame_count();
     if(frame_count == 0)
     {
-        const float* values = frame_time_history_.get_values();
-        int offset = frame_time_history_.get_offset();
-        float max_val = std::max(frame_time_history_.get_max(), target_60fps_ms);
+        const float cpu_mb = static_cast<float>(mono::gc_get_used_size()) / megabyte_divisor;
+        cpu_heap_mb_history_.push_sample(cpu_mb);
+        float gpu_mb = 0.0f;
+        auto* stats = gfx::get_stats();
+        if(stats)
+        {
+            gpu_mb = static_cast<float>(stats->gpuMemoryUsed) / megabyte_divisor;
+        }
+        gpu_memory_mb_history_.push_sample(gpu_mb);
+        const float rss_mb =
+            static_cast<float>(platform::get_process_resident_set_bytes()) / megabyte_divisor;
+        process_rss_mb_history_.push_sample(rss_mb);
         auto region = ImGui::GetContentRegionAvail();
-        ImGui::PlotHistogram("##frame_time",
-                             values,
-                             static_cast<int>(sample_data::num_samples),
-                             offset,
-                             nullptr,
-                             0.0f,
-                             max_val * 1.1f,
-                             ImVec2(region.x, frame_bar_height));
+        draw_live_histogram_stack(region.x);
         return;
     }
 
@@ -732,7 +1006,7 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
 {
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-    float bottom_y = canvas_pos.y + frame_bar_height;
+    const float frame_bottom_y = canvas_pos.y + frame_bar_height;
 
     float fc_f = static_cast<float>(frame_count);
     float eff_range = (hist_range_ <= 0.0f) ? fc_f : std::min(hist_range_, fc_f);
@@ -751,34 +1025,104 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
                                 static_cast<int32_t>(std::ceil(eff_start + eff_range)));
 
     draw_list->AddRectFilled(canvas_pos,
-                             ImVec2(canvas_pos.x + bar_width, bottom_y),
+                             ImVec2(canvas_pos.x + bar_width, frame_bottom_y),
                              IM_COL32(30, 30, 30, 255));
 
     float max_frame_ms = target_60fps_ms;
+    float max_cpu_mb = 1.0f;
+    float max_gpu_mb = 1.0f;
+    float max_rss_mb = 1.0f;
     for(int32_t i = first_vis; i <= last_vis; ++i)
     {
         const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
-        if(snap && snap->frame_end_ns > snap->frame_start_ns)
+        if(!snap)
+        {
+            continue;
+        }
+        if(snap->frame_end_ns > snap->frame_start_ns)
         {
             float ms = static_cast<float>(snap->frame_end_ns - snap->frame_start_ns) / 1'000'000.0f;
             max_frame_ms = std::max(max_frame_ms, ms);
         }
+        if(show_histogram_managed_heap_)
+        {
+            max_cpu_mb =
+                std::max(max_cpu_mb, static_cast<float>(snap->cpu_heap_used_bytes) / megabyte_divisor);
+        }
+        if(show_histogram_gpu_memory_)
+        {
+            max_gpu_mb =
+                std::max(max_gpu_mb, static_cast<float>(snap->gpu_memory_used_bytes) / megabyte_divisor);
+        }
+        if(show_histogram_process_rss_)
+        {
+            max_rss_mb =
+                std::max(max_rss_mb, static_cast<float>(snap->process_resident_bytes) / megabyte_divisor);
+        }
     }
     float scale_max = max_frame_ms * 1.1f;
+    const float scale_cpu_mb = max_cpu_mb * 1.1f;
+    const float scale_gpu_mb = max_gpu_mb * 1.1f;
+    const float scale_rss_mb = max_rss_mb * 1.1f;
 
     int32_t effective_selected = auto_follow_
         ? static_cast<int32_t>(frame_count) - 1
         : selected_frame_;
     effective_selected = std::clamp(effective_selected, 0, static_cast<int32_t>(frame_count) - 1);
 
+    draw_list->AddText(ImVec2(canvas_pos.x + 4, canvas_pos.y + 2),
+                       IM_COL32(180, 180, 200, 200), "Frame (ms)");
+
     render_histogram_bars(draw_list, profiler, first_vis, last_vis,
-                          canvas_pos, bottom_y, bar_width, eff_start, entry_w, scale_max);
-    render_histogram_guides(draw_list, canvas_pos, bar_width, bottom_y, scale_max);
+                          canvas_pos, frame_bottom_y, bar_width, eff_start, entry_w, scale_max);
+    render_histogram_guides(draw_list, canvas_pos, bar_width, frame_bottom_y, scale_max);
+
+    float mem_row_y = frame_bottom_y;
+    if(show_histogram_managed_heap_)
+    {
+        const ImVec2 cpu_row_top(canvas_pos.x, mem_row_y);
+        draw_list->AddRectFilled(cpu_row_top,
+                                 ImVec2(canvas_pos.x + bar_width, mem_row_y + memory_hist_row_height),
+                                 IM_COL32(26, 26, 28, 255));
+        draw_list->AddText(ImVec2(cpu_row_top.x + 4, cpu_row_top.y + 2),
+                           IM_COL32(180, 180, 200, 200), "Managed heap (MB)");
+        render_memory_mb_row(draw_list, profiler, first_vis, last_vis, cpu_row_top, bar_width, eff_start,
+                             entry_w, scale_cpu_mb, memory_histogram_metric::managed_heap_mb, cpu_heap_hist_color);
+        render_memory_histogram_guides(draw_list, cpu_row_top, bar_width, scale_cpu_mb);
+        mem_row_y += memory_hist_row_height;
+    }
+    if(show_histogram_gpu_memory_)
+    {
+        const ImVec2 gpu_row_top(canvas_pos.x, mem_row_y);
+        draw_list->AddRectFilled(gpu_row_top,
+                                 ImVec2(canvas_pos.x + bar_width, mem_row_y + memory_hist_row_height),
+                                 IM_COL32(26, 26, 28, 255));
+        draw_list->AddText(ImVec2(gpu_row_top.x + 4, gpu_row_top.y + 2),
+                           IM_COL32(180, 180, 200, 200), "GPU memory (MB)");
+        render_memory_mb_row(draw_list, profiler, first_vis, last_vis, gpu_row_top, bar_width, eff_start,
+                             entry_w, scale_gpu_mb, memory_histogram_metric::gpu_memory_mb, gpu_mem_hist_color);
+        render_memory_histogram_guides(draw_list, gpu_row_top, bar_width, scale_gpu_mb);
+        mem_row_y += memory_hist_row_height;
+    }
+    if(show_histogram_process_rss_)
+    {
+        const ImVec2 rss_row_top(canvas_pos.x, mem_row_y);
+        draw_list->AddRectFilled(rss_row_top,
+                                 ImVec2(canvas_pos.x + bar_width, mem_row_y + memory_hist_row_height),
+                                 IM_COL32(26, 26, 28, 255));
+        draw_list->AddText(ImVec2(rss_row_top.x + 4, rss_row_top.y + 2),
+                           IM_COL32(180, 180, 200, 200), "Process RSS (MB)");
+        render_memory_mb_row(draw_list, profiler, first_vis, last_vis, rss_row_top, bar_width, eff_start,
+                             entry_w, scale_rss_mb, memory_histogram_metric::process_rss_mb, process_rss_hist_color);
+        render_memory_histogram_guides(draw_list, rss_row_top, bar_width, scale_rss_mb);
+    }
+
+    const float stack_bottom_y = canvas_pos.y + histogram_stack_height();
     const float plot_top_y = canvas_pos.y + histogram_plot_top_pad;
-    render_histogram_cursor(draw_list, plot_top_y, bottom_y, bar_width,
+    render_histogram_cursor(draw_list, plot_top_y, stack_bottom_y, bar_width,
                             effective_selected, eff_start, entry_w, canvas_pos.x);
 
-    ImGui::InvisibleButton("##frame_histogram", ImVec2(bar_width, frame_bar_height));
+    ImGui::InvisibleButton("##frame_histogram", ImVec2(bar_width, this->histogram_stack_height()));
 
     handle_histogram_input(profiler, frame_count, canvas_pos, bar_width, eff_start, eff_range);
 }
@@ -813,6 +1157,7 @@ void profiler_timeline_panel::handle_histogram_input(performance_profiler* profi
                 float cpu_ms = hms * cpu_ratio;
                 float wait_ms = hms - cpu_ms;
 
+                ImGui::SetNextWindowViewportToCurrent();
                 ImGui::BeginTooltip();
                 ImGui::Text("Frame %d / %u", hover_idx + 1, frame_count);
                 ImGui::Text("Wall: %.2f ms (%.0f FPS)", hms, hms > 0.001f ? 1000.0f / hms : 0.0f);
@@ -820,6 +1165,30 @@ void profiler_timeline_panel::handle_histogram_input(performance_profiler* profi
                 if(wait_ms > 0.001f)
                 {
                     ImGui::Text("Wait: %.2f ms (%.0f%%)", wait_ms, (1.0f - cpu_ratio) * 100.0f);
+                }
+                std::array<char, 64> heap_pretty{};
+                std::array<char, 64> gpu_pretty{};
+                std::array<char, 64> rss_pretty{};
+                bx::prettify(heap_pretty.data(),
+                             heap_pretty.size(),
+                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->cpu_heap_used_bytes)));
+                bx::prettify(gpu_pretty.data(),
+                             gpu_pretty.size(),
+                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->gpu_memory_used_bytes)));
+                bx::prettify(rss_pretty.data(),
+                             rss_pretty.size(),
+                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->process_resident_bytes)));
+                if(show_histogram_managed_heap_)
+                {
+                    ImGui::Text("Managed heap: %s", heap_pretty.data());
+                }
+                if(show_histogram_gpu_memory_)
+                {
+                    ImGui::Text("GPU memory: %s", gpu_pretty.data());
+                }
+                if(show_histogram_process_rss_)
+                {
+                    ImGui::Text("Process RSS: %s", rss_pretty.data());
                 }
                 ImGui::EndTooltip();
             }

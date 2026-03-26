@@ -207,6 +207,12 @@ struct frame_snapshot
     int64_t frame_end_ns{0};
     int64_t event_min_ns{0};
     int64_t event_max_ns{0};
+    /// Managed heap used (e.g. Mono GC) sampled at capture; bytes.
+    int64_t cpu_heap_used_bytes{0};
+    /// Total GPU memory reported by bgfx at capture; bytes.
+    int64_t gpu_memory_used_bytes{0};
+    /// Process resident set (RSS / working set) at capture; bytes.
+    int64_t process_resident_bytes{0};
 
     struct thread_snapshot
     {
@@ -576,6 +582,28 @@ private:
     uint32_t index_;
 };
 
+class scope_profile_timer_owned
+{
+public:
+    explicit scope_profile_timer_owned(hpp::string_view name)
+        : index_(profile_begin_owned(name))
+    {
+    }
+
+    ~scope_profile_timer_owned()
+    {
+        profile_end(index_);
+    }
+
+    scope_profile_timer_owned(const scope_profile_timer_owned&) = delete;
+    scope_profile_timer_owned(scope_profile_timer_owned&&) = delete;
+    auto operator=(const scope_profile_timer_owned&) -> scope_profile_timer_owned& = delete;
+    auto operator=(scope_profile_timer_owned&&) -> scope_profile_timer_owned& = delete;
+
+private:
+    uint32_t index_;
+};
+
 /// @brief Like scope_profile_timer but registers the current OS thread with @a ThreadName on first use.
 template<typename ScopeName, typename ThreadName>
     requires string_literal<ScopeName> && string_literal<ThreadName>
@@ -613,8 +641,13 @@ auto get_app_profiler() -> performance_profiler*;
 
 /// @brief Create a scoped performance timer that records to the timeline profiler.
 /// Only accepts string literals to ensure pointer lifetime safety.
-#define APP_SCOPE_PERF(name) \
-    const ::unravel::scope_profile_timer APP_SCOPE_PERF_UNIQUE_VAR(timer)(name)
+#define APP_SCOPE_PERF(name_literal) \
+    const ::unravel::scope_profile_timer APP_SCOPE_PERF_UNIQUE_VAR(timer)(name_literal)
+
+/// @brief Create a scoped performance timer that records to the timeline profiler.
+/// Only accepts string literals to ensure pointer lifetime safety.
+#define APP_SCOPE_PERF_OWNED(name) \
+    const ::unravel::scope_profile_timer_owned APP_SCOPE_PERF_UNIQUE_VAR(timer)(name)
 
 /// @brief Scoped scope on a named thread lane (thread_name used only on first profiler use this thread).
 #define APP_SCOPE_PERF_THREAD(scope_name_literal, thread_name_literal)                                           \

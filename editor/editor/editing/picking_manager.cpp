@@ -5,6 +5,7 @@
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <logging/logging.h>
+#include <engine/profiler/profiler.h>
 
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
@@ -370,6 +371,7 @@ void picking_manager::on_frame_render(rtti::context& ctx, delta_t dt)
 
 void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 {
+    APP_SCOPE_PERF("On Frame Pick");
     auto& em = ctx.get_cached<editing_manager>();
 
     // Get the appropriate scene based on edit mode

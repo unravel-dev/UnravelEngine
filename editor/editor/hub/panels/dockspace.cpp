@@ -30,7 +30,7 @@ void build_dockspace(ImGuiID dockspace_id /*, ImVec2 size*/)
     ImGuiID dock_left_id = ImGui::DockBuilderSplitNode(dock_main_id, ImGuiDir_Left, 0.2f, nullptr, &dock_main_id);
     ImGui::DockBuilderDockWindow(HIERARCHY_VIEW, dock_left_id);
     ImGui::DockBuilderDockWindow(INSPECTOR_VIEW, dock_right_id);
-    ImGui::DockBuilderDockWindow(STATISTICS_VIEW, dock_right_down_id);
+    ImGui::DockBuilderDockWindow(PROFILER_VIEW, dock_right_down_id);
     ImGui::DockBuilderDockWindow(LAYOUTS_VIEW, dock_right_down_id);
 
     ImGui::DockBuilderDockWindow(CONSOLE_VIEW, dock_down_id);
@@ -82,7 +82,7 @@ void dockspace::execute_dock_builder_order_and_focus_workaround()
     // only execute if we are in the second frame of our program
     int& i = reset_focus_counter_;
 
-    static const std::vector<const char*> focused_dock_tabs{SCENE_VIEW, CONTENT_VIEW, STATISTICS_VIEW};
+    static const std::vector<const char*> focused_dock_tabs{SCENE_VIEW, CONTENT_VIEW, PROFILER_VIEW};
 
     int tabs_count = int(focused_dock_tabs.size());
     if(i < tabs_count)

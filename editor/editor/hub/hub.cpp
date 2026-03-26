@@ -409,6 +409,7 @@ void hub::on_frame_before_render(rtti::context& ctx, delta_t dt)
 
 void hub::on_frame_render(rtti::context& ctx, delta_t dt)
 {
+    APP_SCOPE_PERF("Hub Frame Render");
     auto& pm = ctx.get_cached<project_manager>();
 
     if(!pm.has_open_project())

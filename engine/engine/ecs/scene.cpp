@@ -252,7 +252,7 @@ auto scene::instantiate_out(entt::registry& reg, const asset_handle<prefab>& pfb
 
 auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) -> entt::handle
 {
-    APP_SCOPE_PERF("Instantiate Prefab");
+    APP_SCOPE_PERF_OWNED(fmt::format("Instantiate Prefab {}", pfb.id()));
     if(call_callbacks)
     {
         push_on_load_callbacks({on_load_callback});
@@ -267,7 +267,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) ->
 
 auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks) -> entt::handle
 {
-    APP_SCOPE_PERF("Instantiate Prefab With Parent");
+    APP_SCOPE_PERF_OWNED(fmt::format("Instantiate Prefab With Parent {}", pfb.id()));
     auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
         if(parent && !entities.empty())

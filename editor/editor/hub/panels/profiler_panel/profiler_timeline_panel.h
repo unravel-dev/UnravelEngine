@@ -8,10 +8,12 @@
 namespace unravel
 {
 
+class imgui_panels;
+
 class profiler_timeline_panel
 {
 public:
-    explicit profiler_timeline_panel(const char* name);
+    explicit profiler_timeline_panel(imgui_panels* parent, const char* name);
 
     void on_frame_ui_render(rtti::context& ctx, const char* name);
 
@@ -31,6 +33,7 @@ private:
     void draw_ui(rtti::context& ctx);
     void draw_recording_toolbar();
     void draw_frame_selector_bar();
+    void draw_profiler_bottom_sections(rtti::context& ctx);
     void draw_timeline();
     void draw_time_ruler(double view_start_ns, double reference_ns, double ns_per_pixel,
                          float ruler_width, ImVec2 canvas_pos);
@@ -92,6 +95,9 @@ private:
 
     void draw_aggregate_section();
     void draw_frame_histogram(performance_profiler* profiler, uint32_t frame_count, float bar_width);
+    void draw_live_histogram_stack(float bar_width);
+
+    [[nodiscard]] auto histogram_stack_height() const -> float;
     void handle_histogram_input(performance_profiler* profiler, uint32_t frame_count,
                                 ImVec2 canvas_pos, float bar_width,
                                 float eff_start, float eff_range);
@@ -99,7 +105,16 @@ private:
                                    float bar_width, float eff_start, float eff_range);
 
     std::string name_;
+    imgui_panels* parent_{nullptr};
+
     sample_data frame_time_history_;
+    sample_data cpu_heap_mb_history_;
+    sample_data gpu_memory_mb_history_;
+    sample_data process_rss_mb_history_;
+
+    bool show_histogram_managed_heap_{false};
+    bool show_histogram_gpu_memory_{false};
+    bool show_histogram_process_rss_{false};
 
     double view_start_ns_{0.0};
     double view_duration_ns_{20'000'000.0};

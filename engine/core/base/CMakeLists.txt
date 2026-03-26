@@ -9,7 +9,9 @@ target_include_directories(${target_name}
     INTERFACE
 		${CMAKE_CURRENT_SOURCE_DIR}/..
 )
-
+if(WIN32)
+    target_link_libraries(${target_name} INTERFACE Psapi)
+endif()
 #target_precompile_headers(${target_name}
 #    INTERFACE
 #    <string>
@@ -27,3 +29,6 @@ endif()
 #    POSITION_INDEPENDENT_CODE ON
 #    WINDOWS_EXPORT_ALL_SYMBOLS ON
 #)
+
+
+

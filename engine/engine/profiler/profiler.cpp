@@ -1,5 +1,9 @@
 #include "profiler.h"
 
+#include <base/platform/process_memory.hpp>
+#include <graphics/graphics.h>
+#include <monopp/mono_gc_handle.h>
+
 #include <sstream>
 #include <thread>
 
@@ -182,6 +186,13 @@ void performance_profiler::capture_frame_snapshot()
 
     snapshot.event_min_ns = (emin <= emax) ? emin : snapshot.frame_start_ns;
     snapshot.event_max_ns = (emin <= emax) ? emax : snapshot.frame_end_ns;
+
+    snapshot.cpu_heap_used_bytes = mono::gc_get_used_size();
+    snapshot.process_resident_bytes = platform::get_process_resident_set_bytes();
+    if(const auto* st = gfx::get_stats())
+    {
+        snapshot.gpu_memory_used_bytes = st->gpuMemoryUsed;
+    }
 
     if(snapshot.frame_start_ns <= 0 && emin <= emax)
     {

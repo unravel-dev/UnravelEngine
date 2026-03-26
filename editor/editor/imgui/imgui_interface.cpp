@@ -2,6 +2,7 @@
 #include "imgui_widgets/utils.h"
 #include "integration/imgui_style.h"
 #include <editor/events.h>
+#include <engine/profiler/profiler.h>
 
 #include <engine/events.h>
 #include <engine/rendering/renderer.h>
@@ -259,6 +260,7 @@ void imgui_interface::on_frame_ui_render(rtti::context& ctx, delta_t dt)
     const auto& main_window = rend.get_main_window();
     const auto& main_surface = main_window->get_surface();
 
+    APP_SCOPE_PERF("ImGui Frame");
     imguiBeginFrame(dt.count());
 
     ev.on_frame_ui_render(ctx, dt);

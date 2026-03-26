@@ -29,8 +29,7 @@ imgui_panels::imgui_panels()
     inspector_panel_ = std::make_unique<inspector_panel>(this, INSPECTOR_VIEW);
     scene_panel_ = std::make_unique<scene_panel>(this, SCENE_VIEW);
     game_panel_ = std::make_unique<game_panel>(this, GAME_VIEW);
-    statistics_panel_ = std::make_unique<statistics_panel>(STATISTICS_VIEW);
-    profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(PROFILER_VIEW);
+    profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(this, PROFILER_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
@@ -55,7 +54,6 @@ void imgui_panels::init(rtti::context& ctx)
     inspector_panel_->init(ctx);
     scene_panel_->init(ctx);
     game_panel_->init(ctx);
-    statistics_panel_->init(ctx);
     animation_panel_->init(ctx);
 
     auto layouts_dir = fs::resolve_protocol("editor:/settings/layouts");
@@ -68,7 +66,6 @@ void imgui_panels::deinit(rtti::context& ctx)
     scene_panel_->deinit(ctx);
     game_panel_->deinit(ctx);
     inspector_panel_->deinit(ctx);
-    statistics_panel_->deinit(ctx);
     animation_panel_->deinit(ctx);
 }
 
@@ -142,8 +139,6 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
         hierarchy_panel_->on_frame_ui_render(ctx);
 
         inspector_panel_->on_frame_ui_render(ctx);
-
-        statistics_panel_->on_frame_ui_render(ctx);
 
         profiler_timeline_panel_->on_frame_ui_render(ctx, PROFILER_VIEW);
 

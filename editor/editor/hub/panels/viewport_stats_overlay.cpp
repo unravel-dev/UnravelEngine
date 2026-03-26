@@ -9,6 +9,8 @@
 #include <engine/rendering/pipeline/pipeline.h>
 #include <graphics/graphics.h>
 
+#include <bx/string.h>
+
 #include <algorithm>
 #include <array>
 #include <numeric>

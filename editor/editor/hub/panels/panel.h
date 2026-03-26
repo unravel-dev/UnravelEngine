@@ -20,7 +20,6 @@
 #include "layout_panel/layout_panel.h"
 #include "project_settings_panel/project_settings_panel.h"
 #include "scene_panel/scene_panel.h"
-#include "statistics_panel/statistics_panel.h"
 #include "profiler_panel/profiler_timeline_panel.h"
 #include "style_panel/style_panel.h"
 #include "undo_redo_panel/undo_redo_panel.h"
@@ -70,6 +69,9 @@ public:
     auto get_layout_manager() -> layout_manager&;
     auto get_layout_panel() -> layout_panel&;
 
+    /// Shared with @ref profiler_timeline_panel for bgfx view/encoder timing (Render Passes section).
+    auto gpu_bgfx_profiler_enabled() -> bool& { return gpu_bgfx_profiler_enabled_; }
+
 private:
 
     panel_base* full_screen_panel_{};
@@ -80,7 +82,6 @@ private:
     std::unique_ptr<inspector_panel> inspector_panel_;
     std::unique_ptr<scene_panel> scene_panel_;
     std::unique_ptr<game_panel> game_panel_;
-    std::unique_ptr<statistics_panel> statistics_panel_;
     std::unique_ptr<profiler_timeline_panel> profiler_timeline_panel_;
     std::unique_ptr<header_panel> header_panel_;
     std::unique_ptr<footer_panel> footer_panel_;
@@ -102,5 +103,7 @@ private:
         ImVec2 drop_position{};
         std::vector<std::string> drop_files{};
     } external_drop_data_;
+
+    bool gpu_bgfx_profiler_enabled_{false};
 };
 } // namespace unravel
