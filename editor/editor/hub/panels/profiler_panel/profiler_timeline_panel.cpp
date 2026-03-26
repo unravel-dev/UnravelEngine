@@ -1770,10 +1770,8 @@ void profiler_timeline_panel::draw_aggregate_section()
             ImGui::TableNextColumn();
             const float bar_frac = scale_avg > 0.0f ? std::clamp(pfd.get_avg() / scale_avg, 0.0f, 1.0f) : 0.0f;
             ImGui::ProgressBar(bar_frac, ImVec2(-1.0f, bar_h), "");
-            if(ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("Average ms vs largest average in this table (%.3f ms).", scale_avg);
-            }
+            ImGui::SetItemTooltipEx("Average ms vs largest average in this table (%.3f ms).", scale_avg);
+            
 
             ImGui::TableNextColumn();
             const sample_data& hist = pfd.get_history();
@@ -1785,27 +1783,20 @@ void profiler_timeline_panel::draw_aggregate_section()
                              0.0f,
                              spark_ymax,
                              ImVec2(-1.0f, 36.0f));
-            if(ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip(
+            ImGui::SetItemTooltipEx(
                     "Last %u frames: total ms per frame for this name (oldest left, newest right). Y max = %.3f ms.",
                     sample_data::num_samples,
                     spark_ymax);
-            }
+            
 
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(name.c_str());
-            if(ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("%s", name.c_str());
-            }
+            ImGui::SetItemTooltipEx("%s", name.c_str());
+            
 
             ImGui::TableNextColumn();
             ImGui::Text("%.3f\n%u", pfd.get_time_since_swap(), static_cast<unsigned>(pfd.get_samples_since_swap()));
-            if(ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("In-progress frame: summed ms so far and number of ended spans.");
-            }
+            ImGui::SetItemTooltipEx("In-progress frame: summed ms so far and number of ended spans.");
 
             ImGui::TableNextColumn();
             ImGui::Text("%.3f", pfd.get_avg());
