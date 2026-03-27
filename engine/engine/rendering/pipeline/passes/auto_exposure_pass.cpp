@@ -39,12 +39,15 @@ void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
     if(gfx::needs_recreate(exposure_tex, {1, 1}))
     {
         exposure_tex.reset();
+        const float initial_exposure = 1.0f;
+        const gfx::memory_view* initial_pixel = gfx::copy(&initial_exposure, sizeof(initial_exposure));
         exposure_tex = std::make_shared<gfx::texture>(1,
                                                       1,
                                                       false,
                                                       1,
                                                       gfx::texture_format::R32F,
-                                                      BGFX_TEXTURE_COMPUTE_WRITE);
+                                                      BGFX_TEXTURE_COMPUTE_WRITE,
+                                                      initial_pixel);
         rview.data_get_or_emplace("AUTO_EXPOSURE_SNAP", 1u) = 1u;
     }
 }

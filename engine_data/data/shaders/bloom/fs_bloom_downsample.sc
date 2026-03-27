@@ -139,6 +139,10 @@ void main()
         if (u_threshold > 0.0)
         {
             float adapted = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0).r;
+            if ((adapted != adapted) || adapted <= 0.0 || adapted >= 1.0e10)
+            {
+                adapted = 1.0;
+            }
             float effective_threshold = u_threshold / max(adapted, 1e-5);
             color = apply_threshold(color, effective_threshold);
         }

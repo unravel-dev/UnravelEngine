@@ -17,6 +17,10 @@ void main()
 
     float exposure = u_tonemappingExposure;
     float adapted = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0).r;
+    if ((adapted != adapted) || adapted <= 0.0 || adapted >= 1.0e10)
+    {
+        adapted = 1.0;
+    }
     exposure *= max(adapted, 1e-5);
 
     color = apply_tonemapping(color, u_tonemappingMode, exposure);

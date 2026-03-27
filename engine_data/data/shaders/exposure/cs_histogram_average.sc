@@ -66,49 +66,54 @@ void main()
     }
 
     uint total_pixels = shared_histogram[255];
-    if (total_pixels == 0u)
-    {
-        return;
-    }
-
-    uint low_count  = uint(float(total_pixels) * u_low_percentile);
-    uint high_count = uint(float(total_pixels) * u_high_percentile);
-
-    float weighted_sum = 0.0;
-    float weight_total = 0.0;
-    uint prev_cumulative = 0u;
-
-    for (uint i = 0u; i < 256u; ++i)
-    {
-        uint cumulative = shared_histogram[i];
-        uint bin_val = cumulative - prev_cumulative;
-
-        if (bin_val > 0u)
-        {
-            uint active_start = max(prev_cumulative, low_count);
-            uint active_end   = min(cumulative, high_count);
-
-            if (active_start < active_end)
-            {
-                uint active_count = active_end - active_start;
-                float bin_center_log_lum = u_min_log_lum + (float(i) / 255.0) * u_log_lum_range;
-
-                weighted_sum += bin_center_log_lum * float(active_count);
-                weight_total += float(active_count);
-            }
-        }
-
-        prev_cumulative = cumulative;
-    }
 
     float avg_log_lum;
-    if (weight_total > 0.0)
+    if (total_pixels == 0u)
     {
-        avg_log_lum = weighted_sum / weight_total;
+        // Empty histogram (e.g. failed dispatch): use mid-range luminance so we still
+        // write a finite exposure and avoid leaving NaN/garbage in the R32F target.
+        avg_log_lum = u_min_log_lum + u_log_lum_range * 0.5;
     }
     else
     {
-        avg_log_lum = u_min_log_lum + u_log_lum_range * 0.5;
+        uint low_count  = uint(float(total_pixels) * u_low_percentile);
+        uint high_count = uint(float(total_pixels) * u_high_percentile);
+
+        float weighted_sum = 0.0;
+        float weight_total = 0.0;
+        uint prev_cumulative = 0u;
+
+        for (uint i = 0u; i < 256u; ++i)
+        {
+            uint cumulative = shared_histogram[i];
+            uint bin_val = cumulative - prev_cumulative;
+
+            if (bin_val > 0u)
+            {
+                uint active_start = max(prev_cumulative, low_count);
+                uint active_end   = min(cumulative, high_count);
+
+                if (active_start < active_end)
+                {
+                    uint active_count = active_end - active_start;
+                    float bin_center_log_lum = u_min_log_lum + (float(i) / 255.0) * u_log_lum_range;
+
+                    weighted_sum += bin_center_log_lum * float(active_count);
+                    weight_total += float(active_count);
+                }
+            }
+
+            prev_cumulative = cumulative;
+        }
+
+        if (weight_total > 0.0)
+        {
+            avg_log_lum = weighted_sum / weight_total;
+        }
+        else
+        {
+            avg_log_lum = u_min_log_lum + u_log_lum_range * 0.5;
+        }
     }
 
     // Convert raw log2(luminance) to EV100 using the photographic calibration
@@ -122,8 +127,9 @@ void main()
     float target_exposure = exp2(-clamped_ev + u_compensation) / 1.2;
 
     float prev_exposure = imageLoad(s_exposure, ivec2(0, 0)).x;
-
-    if (prev_exposure <= 0.0)
+    // NaN fails (x == x); filter Inf and non-positive garbage from uninitialized storage.
+    bool prev_ok = (prev_exposure == prev_exposure) && (prev_exposure > 0.0) && (prev_exposure < 1.0e10);
+    if (!prev_ok)
     {
         prev_exposure = target_exposure;
     }
@@ -131,6 +137,11 @@ void main()
     float speed = (target_exposure > prev_exposure) ? u_speed_up : u_speed_down;
     float adaptation_factor = 1.0 - exp(-u_delta_time / max(speed, 0.001));
     float adapted_exposure = prev_exposure + (target_exposure - prev_exposure) * adaptation_factor;
+
+    if ((adapted_exposure != adapted_exposure) || adapted_exposure <= 0.0 || adapted_exposure >= 1.0e10)
+    {
+        adapted_exposure = target_exposure;
+    }
 
     imageStore(s_exposure, ivec2(0, 0), vec4(adapted_exposure, 0.0, 0.0, 0.0));
 }

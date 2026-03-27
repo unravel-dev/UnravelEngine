@@ -486,15 +486,11 @@ mat3 invert_3x3( mat4 M4 )
 
 mat3 constructTangentToWorldSpaceMatrix( vec3 T, vec3 B, vec3 N )
 {
-	mat3 TBN = mat3(
+	return mtxFromCols(
 			normalize(T),
 			normalize(B),
 			normalize(N)
 			);
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-	TBN = transpose( TBN );
-#endif
-	return TBN;
 }
 
 mat3 calculateInverseTranspose( mat4 m )
@@ -519,11 +515,7 @@ mat3 computeTangentToWorldSpaceMatrix( vec3 N, vec3 p, vec2 uv )
 
 	/* construct a scale-invariant frame */
 	float invmax = inversesqrt( max( dot(T,T), dot(B,B) ) );
-	mat3 TBN =  mat3( T * invmax, B * invmax, N );
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_SPIRV
-	TBN = transpose( TBN );
-#endif
-	return TBN;
+	return mtxFromCols( T * invmax, B * invmax, N );
 }
 #endif
 
