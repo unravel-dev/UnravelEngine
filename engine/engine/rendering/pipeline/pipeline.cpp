@@ -36,6 +36,21 @@ namespace unravel
 {
 namespace rendering
 {
+namespace
+{
+auto particle_blend_bgfx_state(BlendMode::Enum mode) -> uint64_t
+{
+    switch(mode)
+    {
+    case BlendMode::Additive:
+        return BGFX_STATE_BLEND_ADD;
+    case BlendMode::Multiply:
+        return BGFX_STATE_BLEND_MULTIPLY;
+    default:
+        return BGFX_STATE_BLEND_NORMAL;
+    }
+}
+} // namespace
 auto pipeline::init(rtti::context& ctx) -> bool
 {
     cache_entity_ = cache_registry_.create();
@@ -504,53 +519,60 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
         }
 
         {
-            APP_SCOPE_PERF("Rendering/Particle Pass/Group Emitters by Texture");
-            // Group by texture while maintaining distance order
-            // This batches emitters with the same texture together for efficient rendering
-            // while preserving the distance-sorted order for proper alpha blending
+            APP_SCOPE_PERF("Rendering/Particle Pass/Group Emitters for batch");
             hpp::small_vector<EmitterHandle, 16> current_batch;
-            asset_handle<gfx::texture> current_texture;
-            
+            asset_handle<gfx::texture> batch_texture;
+            TextureMode::Enum batch_texture_mode = TextureMode::MultiChannel;
+            BlendMode::Enum batch_blend_mode = BlendMode::Normal;
+            bool batch_open = false;
+
+            auto flush_particle_batch = [&]()
+            {
+                if(current_batch.empty() || !batch_texture.is_valid())
+                {
+                    current_batch.clear();
+                    batch_open = false;
+                    return;
+                }
+                const bgfx::ProgramHandle program = (batch_texture_mode == TextureMode::Mask)
+                    ? particle_program_instanced_mask_->native_handle()
+                    : particle_program_instanced_->native_handle();
+                auto texture = batch_texture.get()->native_handle();
+                const uint64_t blend_state = particle_blend_bgfx_state(batch_blend_mode);
+                stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()),
+                    pass.id, program, cam_view, cam_pos, texture, blend_state);
+                stats_.drawn_particles_batches++;
+                current_batch.clear();
+                batch_open = false;
+            };
+
             for(const auto& particle_emitter : particle_emitters)
             {
-                // Check if we need to start a new batch (different texture)
-                if(current_texture != particle_emitter.component->get_texture())
+                auto* comp = particle_emitter.component;
+                const auto& tex = comp->get_texture();
+                const TextureMode::Enum tm = comp->get_texture_mode();
+                const BlendMode::Enum bm = comp->get_blend_mode();
+                if(batch_open && (tex != batch_texture || tm != batch_texture_mode || bm != batch_blend_mode))
                 {
-                    // Render the current batch if it has emitters
-                    if(!current_batch.empty())
-                    {
-                        auto texture = current_texture.get()->native_handle();
-                        stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
-                                        pass.id, particle_program_instanced_->native_handle(), particle_program_instanced_mask_->native_handle(), 
-                                        cam_view, cam_pos, texture);
-                        stats_.drawn_particles_batches++;
-                    }
-                    
-                    // Start new batch
-                    current_batch.clear();
-                    current_texture = particle_emitter.component->get_texture();
+                    flush_particle_batch();
                 }
-                
-                // Add emitter to current batch (only if it's enabled and has valid handle)
-                if(particle_emitter.component->is_enabled())
+                if(!batch_open)
                 {
-                    auto emitter_handle = particle_emitter.component->get_emitter_handle();
+                    batch_texture = tex;
+                    batch_texture_mode = tm;
+                    batch_blend_mode = bm;
+                    batch_open = true;
+                }
+                if(comp->is_enabled())
+                {
+                    auto emitter_handle = comp->get_emitter_handle();
                     if(isValid(emitter_handle))
                     {
                         current_batch.push_back(emitter_handle);
                     }
                 }
             }
-            
-            // Render the final batch
-            if(!current_batch.empty() && current_texture.is_valid())
-            {
-                auto texture = current_texture.get()->native_handle();
-                stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(), static_cast<uint32_t>(current_batch.size()), 
-                                pass.id, particle_program_instanced_->native_handle(), particle_program_instanced_mask_->native_handle(), 
-                                cam_view, cam_pos, texture);
-                stats_.drawn_particles_batches++;
-            }
+            flush_particle_batch();
         }
 
         particle_program_instanced_->end();

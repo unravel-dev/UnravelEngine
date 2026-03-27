@@ -203,15 +203,17 @@ void psDestroyEmitter(EmitterHandle _handle);
 
 
 ///
-/// Render multiple emitters in batched draw calls grouped by texture mode
-/// This is much more efficient than calling psRenderEmitter multiple times as it:
-/// - Combines particles with the same texture mode into batches
-/// - Sorts all particles globally for proper alpha blending
-/// - Uses minimal draw calls (one per texture mode)
-/// 
-/// Example usage:
-///   EmitterHandle handles[] = {fire_emitter, smoke_emitter, spark_emitter};
-///   psRenderEmitterBatch(handles, 3, view, programMulti, programMask, viewMatrix, cameraPos, fireTexture);
-uint32_t psRenderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, uint8_t _view, bgfx::ProgramHandle _programMultiChannel, bgfx::ProgramHandle _programMask, const float* _mtxView, const math::vec3& _eye, bgfx::TextureHandle _texture);
+/// Submit one homogeneous particle batch: same texture, @ref TextureMode (mask vs multi-channel), and
+/// @ref BlendMode. @ref RenderMode is per-instance. The pipeline groups emitters; this function sorts
+/// all instances back-to-front and may issue multiple submits if the transient instance buffer is smaller
+/// than the particle count.
+uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
+                              uint32_t _count,
+                              uint8_t _view,
+                              bgfx::ProgramHandle _program,
+                              const float* _mtxView,
+                              const math::vec3& _eye,
+                              bgfx::TextureHandle _texture,
+                              uint64_t _blend_state);
 
 #endif // PARTICLE_SYSTEM_H_HEADER_GUARD

@@ -169,11 +169,11 @@ struct Particle
     math::quat rotation; // Quaternion representing particle rotation
 };
 
-struct ParticleSort
+namespace
 {
-    float dist;
-    uint32_t idx;
-};
+constexpr float k_min_particle_lifespan = 1.0e-4f;
+constexpr float k_emit_dir_zero_len_sq = 1.0e-12f;
+} // namespace
 
 struct Emitter
 {
@@ -504,10 +504,11 @@ struct Emitter
 			// If paused, set delta time to 0 (particles don't advance but remain visible)
 			_dt = 0.0f;
 		}
-		
-		// Update temporal position buffer for smooth emitter speed calculation
 		const math::vec3 currentPos = uniforms_.m_transform.get_position();
-		update_temporal_buffer(currentPos, _dt);
+		if(!uniforms_.m_paused)
+		{
+			update_temporal_buffer(currentPos, _dt);
+		}
 
         if(!uniforms_.m_loop && total_particles_spawned_ >= max_particles_)
         {
@@ -544,7 +545,17 @@ struct Emitter
 		for(uint32_t ii = 0; ii < num; ++ii)
 		{
 			Particle& particle = particles_[ii];
-			particle.life += _dt * 1.0f / particle.lifeSpan;
+			if(particle.lifeSpan <= 0.0f)
+			{
+				if(ii != num - 1)
+				{
+					bx::memCopy(&particle, &particles_[num - 1], sizeof(Particle));
+					--ii;
+				}
+				--num;
+				continue;
+			}
+			particle.life += _dt / particle.lifeSpan;
 
 			if(particle.life > 1.0f)
 			{
@@ -869,12 +880,18 @@ struct Emitter
                     break;
 
                 case EmitterDirection::Outward:
-                    dir = math::normalize(pos);
-                    break;
+                {
+                    const float len_sq = math::dot(pos, pos);
+                    dir = (len_sq > k_emit_dir_zero_len_sq) ? math::normalize(pos) : up;
+                }
+                break;
 
                 case EmitterDirection::Inward:
-                    dir = math::normalize(pos);
-                    break;
+                {
+                    const float len_sq = math::dot(pos, pos);
+                    dir = (len_sq > k_emit_dir_zero_len_sq) ? math::normalize(pos) : up;
+                }
+                break;
             }
 
             // Use pre-calculated system scale for better performance
@@ -893,7 +910,7 @@ struct Emitter
                 dir *= -1.0f;
             }
 
-            particle->lifeSpan = lifeSpan;
+            particle->lifeSpan = math::max(lifeSpan, k_min_particle_lifespan);
             particle->life = 0.0f;
 
             // Fast-forward life so the particle starts at the time it would have been
@@ -965,7 +982,6 @@ struct Emitter
     math::bbox aabb_;
 
     Particle* particles_;
-    ParticleSort* particle_sort_;
     uint32_t num_particles_;
     uint32_t max_particles_;
     uint32_t total_particles_spawned_;
@@ -1000,13 +1016,6 @@ struct Emitter
     math::vec2 pivot_;
 };
 
-static int32_t particleSortFn(const void* _lhs, const void* _rhs)
-{
-    const ParticleSort& lhs = *(const ParticleSort*)_lhs;
-    const ParticleSort& rhs = *(const ParticleSort*)_rhs;
-    return lhs.dist > rhs.dist ? -1 : 1;
-}
-
 struct ParticleSystem
 {
     void init(uint16_t _maxEmitters, bx::AllocatorI* _allocator)
@@ -1036,16 +1045,14 @@ struct ParticleSystem
         );
 
         s_texColor = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
-        u_billboardRight = bgfx::createUniform("u_billboardRight", bgfx::UniformType::Vec4);
-        u_billboardUp = bgfx::createUniform("u_billboardUp", bgfx::UniformType::Vec4);
+        u_viewCamera = bgfx::createUniform("u_viewCamera", bgfx::UniformType::Mat4);
         u_eyePos = bgfx::createUniform("u_eyePos", bgfx::UniformType::Vec4);
     }
 
     void shutdown()
     {
         bgfx::destroy(s_texColor);
-        bgfx::destroy(u_billboardRight);
-        bgfx::destroy(u_billboardUp);
+        bgfx::destroy(u_viewCamera);
         bgfx::destroy(u_eyePos);
         bgfx::destroy(m_quadVBH);
         bgfx::destroy(m_quadIBH);
@@ -1056,45 +1063,6 @@ struct ParticleSystem
         m_allocator = nullptr;
     }
     
-    // Calculate billboard vectors based on render mode and view matrix
-    void calculateBillboardVectors(RenderMode::Enum renderMode, const float* mtxView, math::vec3& outRight, math::vec3& outUp)
-    {
-
-        // Extract camera vectors from view matrix (column-major order)
-        // View matrix columns represent right, up, forward, position
-        math::vec3 cameraRight(mtxView[0], mtxView[4], mtxView[8]);
-        math::vec3 cameraUp(mtxView[1], mtxView[5], mtxView[9]);
-        math::vec3 cameraForward(mtxView[2], mtxView[6], mtxView[10]);
-        
-        if(renderMode == RenderMode::HorizontalBillboard)
-        {
-            // Horizontal billboard: rotate around Y axis only, stay horizontal (parallel to ground)
-            // Remove Y component from camera right and normalize, use world up for vertical
-            math::vec3 worldUp(0.0f, 0.0f, 1.0f);
-            math::vec3 rightNoY(1.0f, 0.0f, 0.0f);
-
-            outRight = rightNoY;
-            outUp = worldUp;
-        }
-        else if(renderMode == RenderMode::VerticalBillboard)
-        {
-            // Vertical billboard: particles stay vertical (upright), rotate around Y axis to face camera
-            // This is what the current "horizontal" implementation does - it's correct for vertical
-            // Right vector: camera right projected to XZ plane (removes Y component)
-            // Up vector: always world up (0, 1, 0) to keep particles vertical/upright
-            math::vec3 worldUp(0.0f, 1.0f, 0.0f);
-            math::vec3 rightNoY = math::normalize(math::vec3(cameraRight.x, 0.0f, cameraRight.z));
-            outRight = rightNoY;
-            outUp = worldUp;
-        }
-        else // RenderMode::Billboard (default)
-        {
-            // Standard billboard: always face camera (full 3D rotation)
-            outRight = math::normalize(cameraRight);
-            outUp = math::normalize(cameraUp);
-        }
-    }
-
     // Batch rendering support structures and functions
     struct BatchedParticle
     {
@@ -1103,93 +1071,21 @@ struct ParticleSystem
         uint32_t particle_idx; // Index within that emitter's particle array
     };
 
-    static int32_t batchedParticleSortFn(const void* _lhs, const void* _rhs)
-    {
-        const BatchedParticle& lhs = *(const BatchedParticle*)_lhs;
-        const BatchedParticle& rhs = *(const BatchedParticle*)_rhs;
-        // Sort by squared distance (back to front for proper alpha blending)
-        return lhs.dist > rhs.dist ? -1 : 1;
-    }
-
-    uint32_t renderEmitterBatch(const EmitterHandle* _handles, uint32_t _count, 
-                           uint8_t _view, bgfx::ProgramHandle _programMultiChannel,
-                           bgfx::ProgramHandle _programMask,
-                           const float* _mtxView, const math::vec3& _eye, 
-                           bgfx::TextureHandle _texture)
+    uint32_t renderEmitterBatch(const EmitterHandle* _handles,
+                              uint32_t _count,
+                              uint8_t _view,
+                              bgfx::ProgramHandle _program,
+                              const float* _mtxView,
+                              const math::vec3& _eye,
+                              bgfx::TextureHandle _texture,
+                              uint64_t _blend_state)
     {
         if(_count == 0 || !bgfx::isValid(_texture))
         {
-            return 0; // Nothing to render
+            return 0;
         }
-
-		APP_SCOPE_PERF("Rendering/Particle Pass/Render Batched Emitters");
-
-        // Separate emitters by texture mode and blend mode for batching
-        std::vector<EmitterHandle> multiChannelNormal;
-        std::vector<EmitterHandle> multiChannelAdditive;
-        std::vector<EmitterHandle> multiChannelMultiply;
-        std::vector<EmitterHandle> maskNormal;
-        std::vector<EmitterHandle> maskAdditive;
-        std::vector<EmitterHandle> maskMultiply;
-        
-        uint32_t totalParticles = 0;
-        
-        for(uint32_t i = 0; i < _count; ++i)
-        {
-            if(!isValid(_handles[i]))
-            {
-                continue;
-            }
-            
-            const Emitter& emitter = m_emitter[_handles[i].idx];
-            const bool isMask = (emitter.texture_mode_ == TextureMode::Mask);
-            
-            if(isMask)
-            {
-                switch(emitter.blend_mode_)
-                {
-                    case BlendMode::Additive: maskAdditive.push_back(_handles[i]); break;
-                    case BlendMode::Multiply: maskMultiply.push_back(_handles[i]); break;
-                    default: maskNormal.push_back(_handles[i]); break;
-                }
-            }
-            else
-            {
-                switch(emitter.blend_mode_)
-                {
-                    case BlendMode::Additive: multiChannelAdditive.push_back(_handles[i]); break;
-                    case BlendMode::Multiply: multiChannelMultiply.push_back(_handles[i]); break;
-                    default: multiChannelNormal.push_back(_handles[i]); break;
-                }
-            }
-            
-            totalParticles += emitter.num_particles_;
-        }
-
-        if(totalParticles == 0)
-        {
-            return 0; // No particles to render
-        }
-
-        auto renderBatch = [&](const std::vector<EmitterHandle>& handles, bgfx::ProgramHandle program, BlendMode::Enum blendMode)
-        {
-            if(handles.empty()) return 0u;
-            uint64_t blendState = (blendMode == BlendMode::Additive) ? BGFX_STATE_BLEND_ADD :
-                                  (blendMode == BlendMode::Multiply) ? BGFX_STATE_BLEND_MULTIPLY :
-                                  BGFX_STATE_BLEND_NORMAL;
-            return renderEmitterBatchByMode(handles.data(), static_cast<uint32_t>(handles.size()),
-                _view, program, _mtxView, _eye, _texture, blendState);
-        };
-
-        uint32_t renderedParticles = 0;
-        renderedParticles += renderBatch(multiChannelNormal, _programMultiChannel, BlendMode::Normal);
-        renderedParticles += renderBatch(multiChannelAdditive, _programMultiChannel, BlendMode::Additive);
-        renderedParticles += renderBatch(multiChannelMultiply, _programMultiChannel, BlendMode::Multiply);
-        renderedParticles += renderBatch(maskNormal, _programMask, BlendMode::Normal);
-        renderedParticles += renderBatch(maskAdditive, _programMask, BlendMode::Additive);
-        renderedParticles += renderBatch(maskMultiply, _programMask, BlendMode::Multiply);
-
-		return renderedParticles;
+        APP_SCOPE_PERF("Rendering/Particle Pass/Render Batched Emitters");
+        return renderEmitterBatchByMode(_handles, _count, _view, _program, _mtxView, _eye, _texture, _blend_state);
     }
     
     uint32_t renderEmitterBatchByMode(const EmitterHandle* _handles, uint32_t _count, 
@@ -1197,174 +1093,135 @@ struct ParticleSystem
                            const float* _mtxView, const math::vec3& _eye, 
                            bgfx::TextureHandle _texture, uint64_t _blendState)
     {
-        // Count total particles for this batch
         uint32_t totalParticles = 0;
         for(uint32_t i = 0; i < _count; ++i)
         {
             const Emitter& emitter = m_emitter[_handles[i].idx];
             totalParticles += emitter.num_particles_;
         }
-
         if(totalParticles == 0)
         {
             return 0;
         }
-
-        // Use instanced rendering for the batch
-        // Instance data layout (80 bytes total):
-        // i_data0: vec4 (position.xyz, unused)           - 16 bytes
-        // i_data1: vec4 (rotation quaternion xyzw)        - 16 bytes
-        // i_data2: vec4 (scale3d.xyz, unused)              - 16 bytes
-        // i_data3: vec4 (uvOffset.xy, uvScale.xy)         - 16 bytes
-        // i_data4: vec4 (color.rgba)                       - 16 bytes
-        const uint16_t instanceStride = 80; // 80 bytes per instance (5 * 16 bytes)
-        
-        // Get available instance buffer space
-        uint32_t maxInstances = bgfx::getAvailInstanceDataBuffer(totalParticles, instanceStride);
-        
-        if(maxInstances == 0)
+        const uint16_t instanceStride = 96;
+        buildSortedBatchedParticles(_handles, _count, _eye);
+        const uint32_t sortedCount = static_cast<uint32_t>(batched_particles_scratch_.size());
+        if(sortedCount == 0)
         {
-            BX_WARN(false, "No instance buffer space available for batch rendering.");
             return 0;
         }
-        
-        // Allocate instance data buffer
-        bgfx::InstanceDataBuffer idb;
-        bgfx::allocInstanceDataBuffer(&idb, maxInstances, instanceStride);
-        
-        // Generate batched instance data
-        generateBatchedInstanceData(_handles, _count, idb, maxInstances, instanceStride, _eye);
-        
-        // Set static quad geometry
+        float viewCamera[16];
+        viewCamera[0] = _mtxView[0];
+        viewCamera[1] = _mtxView[4];
+        viewCamera[2] = _mtxView[8];
+        viewCamera[3] = 0.0f;
+        viewCamera[4] = _mtxView[1];
+        viewCamera[5] = _mtxView[5];
+        viewCamera[6] = _mtxView[9];
+        viewCamera[7] = 0.0f;
+        viewCamera[8] = _mtxView[2];
+        viewCamera[9] = _mtxView[6];
+        viewCamera[10] = _mtxView[10];
+        viewCamera[11] = 0.0f;
+        viewCamera[12] = 0.0f;
+        viewCamera[13] = 0.0f;
+        viewCamera[14] = 0.0f;
+        viewCamera[15] = 1.0f;
+        float eyePosVec4[4] = { _eye.x, _eye.y, _eye.z, 0.0f };
         bgfx::setVertexBuffer(0, m_quadVBH);
         bgfx::setIndexBuffer(m_quadIBH);
-        
-        // Set instance data
-        bgfx::setInstanceDataBuffer(&idb);
-        
-        // Calculate billboard vectors based on first emitter's render mode (for batch)
-        math::vec3 billboardRight, billboardUp;
-        if(_count > 0)
-        {
-            const Emitter& firstEmitter = m_emitter[_handles[0].idx];
-            calculateBillboardVectors(firstEmitter.render_mode_, _mtxView, billboardRight, billboardUp);
-        }
-        else
-        {
-            // Fallback to standard billboard
-            billboardRight = math::vec3(1.0f, 0.0f, 0.0f);
-            billboardUp = math::vec3(0.0f, 1.0f, 0.0f);
-        }
-        
-        // Set render state and texture
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
                        BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        _blendState);
         bgfx::setTexture(0, s_texColor, _texture);
-        
-        // Set billboard vectors as uniforms (vec4 for alignment)
-        float billboardRightVec4[4] = { billboardRight.x, billboardRight.y, billboardRight.z, 0.0f };
-        float billboardUpVec4[4] = { billboardUp.x, billboardUp.y, billboardUp.z, 0.0f };
-        bgfx::setUniform(u_billboardRight, billboardRightVec4);
-        bgfx::setUniform(u_billboardUp, billboardUpVec4);
-        
-        // Set eye position with render mode in w component
-        // w = 0: Billboard, w = 1: HorizontalBillboard, w = 2: VerticalBillboard
-        RenderMode::Enum renderMode = RenderMode::Billboard;
-        if(_count > 0)
-        {
-            renderMode = m_emitter[_handles[0].idx].render_mode_;
-        }
-        float eyePosVec4[4] = { _eye.x, _eye.y, _eye.z, float(renderMode) };
+        bgfx::setUniform(u_viewCamera, viewCamera);
         bgfx::setUniform(u_eyePos, eyePosVec4);
-        
-        // Single draw call for all particles from all emitters!
-        bgfx::submit(_view, _program);
-
-		return totalParticles;
+        uint32_t renderedTotal = 0;
+        uint32_t offset = 0;
+        while(offset < sortedCount)
+        {
+            const uint32_t remaining = sortedCount - offset;
+            uint32_t chunk = bgfx::getAvailInstanceDataBuffer(remaining, instanceStride);
+            if(chunk == 0)
+            {
+                BX_WARN(false, "No instance buffer space available for batch rendering.");
+                break;
+            }
+            chunk = math::min(chunk, remaining);
+            bgfx::InstanceDataBuffer idb;
+            bgfx::allocInstanceDataBuffer(&idb, chunk, instanceStride);
+            writeBatchedInstanceChunk(idb.data, offset, chunk, _handles, instanceStride);
+            bgfx::setInstanceDataBuffer(&idb);
+            bgfx::submit(_view, _program);
+            renderedTotal += chunk;
+            offset += chunk;
+        }
+        return renderedTotal;
     }
 
-    void generateBatchedInstanceData(const EmitterHandle* _handles, uint32_t _count,
-                                   bgfx::InstanceDataBuffer& idb, uint32_t maxInstances, 
-                                   uint16_t instanceStride, const math::vec3& _eye)
+    void buildSortedBatchedParticles(const EmitterHandle* _handles, uint32_t _count, const math::vec3& _eye)
     {
-        // First, collect all particles from all emitters and calculate distances
-        static std::vector<BatchedParticle> batchedParticles; // Static to avoid allocations
-        batchedParticles.clear();
-        
+        batched_particles_scratch_.clear();
         for(uint32_t emitterIdx = 0; emitterIdx < _count; ++emitterIdx)
         {
             if(!isValid(_handles[emitterIdx]))
             {
                 continue;
             }
-            
             const Emitter& emitter = m_emitter[_handles[emitterIdx].idx];
-            
-			batchedParticles.reserve(batchedParticles.size() + emitter.num_particles_);
+            batched_particles_scratch_.reserve(batched_particles_scratch_.size() + emitter.num_particles_);
             for(uint32_t particleIdx = 0; particleIdx < emitter.num_particles_; ++particleIdx)
             {
                 const Particle& particle = emitter.particles_[particleIdx];
                 const math::vec3 tmp0 = _eye - particle.position;
                 const float distSquared = math::dot(tmp0, tmp0);
-                
-                batchedParticles.emplace_back(BatchedParticle{distSquared, emitterIdx, particleIdx});
+                batched_particles_scratch_.emplace_back(BatchedParticle{distSquared, emitterIdx, particleIdx});
             }
         }
-        
-        // Sort all particles by distance (back to front for alpha blending)
-        std::sort(batchedParticles.begin(), batchedParticles.end(), 
-                 [](const BatchedParticle& a, const BatchedParticle& b) {
-                     return a.dist > b.dist; // Back to front
-                 });
-        
-        // Generate instance data for sorted particles
-        uint8_t* data = idb.data;
-        uint32_t numToRender = math::min(static_cast<uint32_t>(batchedParticles.size()), maxInstances);
-        
-        for(uint32_t i = 0; i < numToRender; ++i)
+        std::sort(batched_particles_scratch_.begin(), batched_particles_scratch_.end(),
+                 [](const BatchedParticle& a, const BatchedParticle& b) { return a.dist > b.dist; });
+    }
+
+    void writeBatchedInstanceChunk(uint8_t* data, uint32_t sortedStart, uint32_t sortedCount,
+        const EmitterHandle* _handles, uint16_t instanceStride)
+    {
+        uint8_t* row = data;
+        for(uint32_t i = 0; i < sortedCount; ++i)
         {
-            const BatchedParticle& batchedParticle = batchedParticles[i];
+            const BatchedParticle& batchedParticle = batched_particles_scratch_[sortedStart + i];
             const Emitter& emitter = m_emitter[_handles[batchedParticle.emitter_idx].idx];
             const Particle& particle = emitter.particles_[batchedParticle.particle_idx];
-            
-            // Position (16 bytes) - i_data0
-            float* pos = (float*)data;
+            float* pos = (float*)row;
             pos[0] = particle.position.x;
             pos[1] = particle.position.y;
             pos[2] = particle.position.z;
-            pos[3] = emitter.pivot_.x; // Pivot X
-            
-            // Rotation quaternion (16 bytes) - i_data1
-            float* rot = (float*)&data[16];
+            pos[3] = emitter.pivot_.x;
+            float* rot = (float*)&row[16];
             rot[0] = particle.rotation.x;
             rot[1] = particle.rotation.y;
             rot[2] = particle.rotation.z;
             rot[3] = particle.rotation.w;
-            
-            // 3D Scale (16 bytes) - i_data2
-            // Multiply uniform scale by cached 3D scale from emitter
-            float* scale3d = (float*)&data[32];
+            float* scale3d = (float*)&row[32];
             scale3d[0] = particle.scale * emitter.particle_scale_3d_.x;
             scale3d[1] = particle.scale * emitter.particle_scale_3d_.y;
             scale3d[2] = particle.scale * emitter.particle_scale_3d_.z;
-            scale3d[3] = emitter.pivot_.y; // Pivot Y
-            
-            // UV Offset + UV Scale (16 bytes) - i_data3
-            float* uvData = (float*)&data[48];
-            uvData[0] = particle.uv_offset.x; // UV offset X
-            uvData[1] = particle.uv_offset.y; // UV offset Y
-            uvData[2] = particle.uv_scale.x;  // UV scale X
-            uvData[3] = particle.uv_scale.y;  // UV scale Y
-            
-            // Color (16 bytes) - i_data4
-            float* color = (float*)&data[64];
+            scale3d[3] = emitter.pivot_.y;
+            float* uvData = (float*)&row[48];
+            uvData[0] = particle.uv_offset.x;
+            uvData[1] = particle.uv_offset.y;
+            uvData[2] = particle.uv_scale.x;
+            uvData[3] = particle.uv_scale.y;
+            float* color = (float*)&row[64];
             color[0] = particle.color.value.r;
             color[1] = particle.color.value.g;
             color[2] = particle.color.value.b;
             color[3] = particle.color.value.a;
-            
-            data += instanceStride;
+            float* facing = (float*)&row[80];
+            facing[0] = float(emitter.render_mode_);
+            facing[1] = 0.0f;
+            facing[2] = 0.0f;
+            facing[3] = 0.0f;
+            row += instanceStride;
         }
     }
 
@@ -1426,14 +1283,14 @@ struct ParticleSystem
 
     bx::HandleAlloc* m_emitterAlloc;
     std::vector<Emitter> m_emitter;
+    std::vector<BatchedParticle> batched_particles_scratch_;
 
     // Static geometry for instanced rendering
     bgfx::VertexBufferHandle m_quadVBH;
     bgfx::IndexBufferHandle m_quadIBH;
 
     bgfx::UniformHandle s_texColor;
-    bgfx::UniformHandle u_billboardRight;
-    bgfx::UniformHandle u_billboardUp;
+    bgfx::UniformHandle u_viewCamera;
     bgfx::UniformHandle u_eyePos;
 };
 
@@ -1447,15 +1304,12 @@ void Emitter::create(EmitterShape::Enum _shape, EmitterDirection::Enum _directio
     direction_ = _direction;
     max_particles_ = _maxParticles;
     particles_ = (Particle*)bx::alloc(s_ctx.m_allocator, max_particles_ * sizeof(Particle));
-    particle_sort_ = (ParticleSort*)bx::alloc(s_ctx.m_allocator, max_particles_ * sizeof(ParticleSort));
 }
 
 void Emitter::destroy()
 {
     bx::free(s_ctx.m_allocator, particles_);
     particles_ = nullptr;
-    bx::free(s_ctx.m_allocator, particle_sort_);
-    particle_sort_ = nullptr;
 }
 
 } // namespace ps
@@ -1512,13 +1366,13 @@ void psDestroyEmitter(EmitterHandle _handle)
 }
 
 uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
-                         uint32_t _count,
-                         uint8_t _view,
-                         bgfx::ProgramHandle _programMultiChannel,
-                         bgfx::ProgramHandle _programMask,
-                         const float* _mtxView,
-                         const math::vec3& _eye,
-                         bgfx::TextureHandle _texture)
+                              uint32_t _count,
+                              uint8_t _view,
+                              bgfx::ProgramHandle _program,
+                              const float* _mtxView,
+                              const math::vec3& _eye,
+                              bgfx::TextureHandle _texture,
+                              uint64_t _blend_state)
 {
-    return s_ctx.renderEmitterBatch(_handles, _count, _view, _programMultiChannel, _programMask, _mtxView, _eye, _texture);
+    return s_ctx.renderEmitterBatch(_handles, _count, _view, _program, _mtxView, _eye, _texture, _blend_state);
 }

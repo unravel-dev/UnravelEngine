@@ -135,6 +135,7 @@ float MakeRoughnessSafe(float Roughness)
 //
 // Works in alpha-space (perceptualRoughness^2) to match the GGX parameterisation.
 // Kernel variance / clamp follow the paper's recommended screen-space filter (see Section 5.2).
+#if BGFX_SHADER_TYPE_FRAGMENT
 float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
 {
     vec3 dNdx = dFdx(worldNormal);
@@ -149,7 +150,7 @@ float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
     float filteredAlpha = saturate(alpha + kernelRoughnessSq);
     return sqrt(filteredAlpha);
 }
-
+#endif
 float F0ToMetallic(float F0)
 {
     // Approximate the metallic input from F0 with a small lerp region
