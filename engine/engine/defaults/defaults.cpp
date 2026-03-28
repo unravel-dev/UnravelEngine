@@ -614,31 +614,29 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");
         auto& skylight = object.emplace<skylight_component>();
+        auto& light_comp = object.get<light_component>();
+        auto light = light_comp.get_light();
 
         if(preset == scene_preset::low)
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::none);
+            light.shadow_params.type = sm_impl::pcf;
         }
         else if(preset == scene_preset::medium)
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
             skylight.set_cloud_speed(10.0f);
+            light.shadow_params.type = sm_impl::pcf;
         }
         else
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::volumetric);
             skylight.set_cloud_speed(10.0f);
-        }
-
-        if(preset != scene_preset::low)
-        {
-            auto& light_comp = object.get<light_component>();
-            auto light = light_comp.get_light();
             light.shadow_params.type = sm_impl::pcss;
-
-
-            light_comp.set_light(light);
+            light.contact_shadow.enabled = true;
         }
+
+        light_comp.set_light(light);
     }
 
     {

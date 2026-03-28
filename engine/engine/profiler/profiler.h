@@ -178,10 +178,6 @@ struct thread_profile_buffer
 /// is read by the main thread for display and aggregation.
 struct thread_profile_data
 {
-    /// @brief Mirrored from @ref performance_profiler recording state: 1 while @c recording, else 0.
-    /// Updated when recording toggles and when the thread registers. Hot path: relaxed load in profile_begin.
-    std::atomic<uint8_t> capture_active{0};
-
     std::array<thread_profile_buffer, 2> buffers{};
     std::atomic<uint32_t> write_idx{0};
 
@@ -352,6 +348,7 @@ private:
 
     auto register_thread_unlocked(const std::string& name) -> thread_profile_data*;
 
+    /// Sets the process-wide capture gate (@ref profiler_process_capture_gate_store).
     void sync_capture_active_to_threads();
 
     void capture_frame_snapshot();
@@ -362,6 +359,24 @@ private:
 // ============================================================================
 
 inline thread_local thread_profile_data* t_profile_data = nullptr;
+
+/// Process-wide capture flag set from @c performance_profiler::sync_capture_active_to_threads.
+/// Checked before TLS in @c profile_begin so idle frames avoid @c get_thread_profile_data() per scope.
+[[nodiscard]] inline auto profiler_process_capture_gate_ref() -> std::atomic<uint8_t>&
+{
+    static std::atomic<uint8_t> process_capture_gate{0};
+    return process_capture_gate;
+}
+
+[[nodiscard]] inline auto profiler_process_capture_gate_load() -> bool
+{
+    return profiler_process_capture_gate_ref().load(std::memory_order_relaxed) != 0;
+}
+
+inline void profiler_process_capture_gate_store(uint8_t v)
+{
+    profiler_process_capture_gate_ref().store(v, std::memory_order_relaxed);
+}
 
 inline auto get_time_ns() -> int64_t
 {
@@ -395,20 +410,15 @@ inline auto get_thread_profile_data(const char* thread_name) -> thread_profile_d
     return t_profile_data;
 }
 
-[[nodiscard]] inline auto thread_profile_should_capture(const thread_profile_data* data) -> bool
-{
-    return data->capture_active.load(std::memory_order_relaxed) != 0;
-}
-
 /// @brief Begin a profiling scope. Returns an event index for profile_end().
 inline auto profile_begin(const char* name) -> uint32_t
 {
-    auto* data = get_thread_profile_data();
-    if(!data) [[unlikely]]
+    if(!profiler_process_capture_gate_load()) [[likely]]
     {
         return UINT32_MAX;
     }
-    if(!thread_profile_should_capture(data)) [[unlikely]]
+    auto* data = get_thread_profile_data();
+    if(!data) [[unlikely]]
     {
         return UINT32_MAX;
     }
@@ -437,12 +447,12 @@ inline auto profile_begin(const char* name) -> uint32_t
 /// @a thread_name for the timeline lane label (e.g. @c "Render" / @c "JobPool-3").
 inline auto profile_begin(const char* name, const char* thread_name) -> uint32_t
 {
-    auto* data = get_thread_profile_data(thread_name);
-    if(!data) [[unlikely]]
+    if(!profiler_process_capture_gate_load()) [[likely]]
     {
         return UINT32_MAX;
     }
-    if(!thread_profile_should_capture(data)) [[unlikely]]
+    auto* data = get_thread_profile_data(thread_name);
+    if(!data) [[unlikely]]
     {
         return UINT32_MAX;
     }
@@ -470,12 +480,12 @@ inline auto profile_begin(const char* name, const char* thread_name) -> uint32_t
 /// @brief Like profile_begin() but copies the label into name_owned (script / dynamic names).
 inline auto profile_begin_owned(hpp::string_view name) -> uint32_t
 {
-    auto* data = get_thread_profile_data();
-    if(!data) [[unlikely]]
+    if(!profiler_process_capture_gate_load()) [[likely]]
     {
         return UINT32_MAX;
     }
-    if(!thread_profile_should_capture(data)) [[unlikely]]
+    auto* data = get_thread_profile_data();
+    if(!data) [[unlikely]]
     {
         return UINT32_MAX;
     }
@@ -503,12 +513,12 @@ inline auto profile_begin_owned(hpp::string_view name) -> uint32_t
 /// @brief profile_begin_owned(@a name) with optional lane label on first registration (see profile_begin two-arg).
 inline auto profile_begin_owned(hpp::string_view name, const char* thread_name) -> uint32_t
 {
-    auto* data = get_thread_profile_data(thread_name);
-    if(!data) [[unlikely]]
+    if(!profiler_process_capture_gate_load()) [[likely]]
     {
         return UINT32_MAX;
     }
-    if(!thread_profile_should_capture(data)) [[unlikely]]
+    auto* data = get_thread_profile_data(thread_name);
+    if(!data) [[unlikely]]
     {
         return UINT32_MAX;
     }
@@ -536,8 +546,12 @@ inline auto profile_begin_owned(hpp::string_view name, const char* thread_name) 
 /// @brief End a profiling scope started by profile_begin().
 inline void profile_end(uint32_t idx)
 {
+    if(idx == UINT32_MAX) [[likely]]
+    {
+        return;
+    }
     auto* data = get_thread_profile_data();
-    if(!data || idx == UINT32_MAX) [[unlikely]]
+    if(!data) [[unlikely]]
     {
         return;
     }

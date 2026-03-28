@@ -120,6 +120,7 @@ auto on_load_callback(hpp::span<const entt::handle> entities) -> void
 {
     if(!entities.empty())
     {   
+        APP_SCOPE_PERF("On Load Callback");
         auto& ctx = engine::context();
         auto& ev = ctx.get_cached<events>();
 
@@ -267,7 +268,7 @@ auto scene::instantiate(const asset_handle<prefab>& pfb, bool call_callbacks) ->
 
 auto scene::instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks) -> entt::handle
 {
-    APP_SCOPE_PERF_OWNED(fmt::format("Instantiate Prefab With Parent {}", pfb.id()));
+    APP_SCOPE_PERF_OWNED(fmt::format("Instantiate Prefab {}", pfb.id()));
     auto load_callback_override = [&](hpp::span<const entt::handle> entities) -> void
     {
         if(parent && !entities.empty())

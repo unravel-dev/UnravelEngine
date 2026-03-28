@@ -44,11 +44,13 @@ auto rendering_system::deinit(rtti::context& ctx) -> bool
 
 void rendering_system::on_frame_end(rtti::context& ctx, delta_t dt)
 {
+    APP_SCOPE_PERF("Rendering/On Frame End");
     debug_draw_callbacks_.clear();
 }
 
 void rendering_system::on_frame_update(scene& scn, delta_t dt)
 {
+    APP_SCOPE_PERF("Rendering/On Frame Update");
     auto& ctx = engine::context();
     ctx.get_cached<transform_system>().on_frame_update(scn, dt);
     ctx.get_cached<camera_system>().on_frame_update(scn, dt);
@@ -60,6 +62,7 @@ void rendering_system::on_frame_update(scene& scn, delta_t dt)
 
 void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
 {
+    APP_SCOPE_PERF("Rendering/On Frame Before Render");
     auto& ctx = engine::context();
     ctx.get_cached<model_system>().on_frame_before_render(scn, dt);
     ctx.get_cached<camera_system>().on_frame_before_render(scn, dt);
@@ -70,6 +73,7 @@ void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
 
 void rendering_system::on_play_begin(hpp::span<const entt::handle> entities, delta_t dt)
 {
+    APP_SCOPE_PERF("Rendering/On Play Begin");
     auto& ctx = engine::context();
     ctx.get_cached<transform_system>().on_play_begin(entities, dt);
     ctx.get_cached<camera_system>().on_play_begin(entities, dt);
@@ -80,8 +84,8 @@ void rendering_system::on_play_begin(hpp::span<const entt::handle> entities, del
 
 auto rendering_system::release_pipeline_resources(scene& scn) -> bool
 {
+    APP_SCOPE_PERF("Rendering/Release Pipeline Resources");
     auto& ctx = engine::context();
-    gfx::frame_buffer::ptr output{};
     scn.registry->view<camera_component>().each(
         [&](auto e, auto&& camera_comp)
         {

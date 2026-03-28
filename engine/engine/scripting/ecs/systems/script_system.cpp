@@ -447,6 +447,7 @@ void script_system::on_destroy_active_component(entt::registry& r, entt::entity 
 
 void script_system::on_play_begin(hpp::span<const entt::handle> entities)
 {
+    APP_SCOPE_PERF("Script/On Play Begin");
     if(!app_domain_ || !domain_)
     {
         return;
@@ -455,26 +456,33 @@ void script_system::on_play_begin(hpp::span<const entt::handle> entities)
     {
         create_call_ = call_progress::started;
 
-        for(auto entity : entities)
         {
-            if(auto comp = entity.try_get<script_component>())
+            APP_SCOPE_PERF("Script/On Play Begin Create");
+            for(auto entity : entities)
             {
-                comp->create();
+                if(auto comp = entity.try_get<script_component>())
+                {
+                    comp->create();
+                }
             }
         }
+        
         create_call_ = call_progress::finished;
 
-        for(auto entity : entities)
         {
-            if(auto comp = entity.try_get<script_component>())
+            APP_SCOPE_PERF("Script/On Play Begin Enable");
+            for(auto entity : entities)
             {
-                if(entity.all_of<active_component>())
+                if(auto comp = entity.try_get<script_component>())
                 {
-                    comp->enable();
-                }
-                else
-                {
-                    comp->disable();
+                    if(entity.all_of<active_component>())
+                    {
+                        comp->enable();
+                    }
+                    else
+                    {
+                        comp->disable();
+                    }
                 }
             }
         }
@@ -487,6 +495,7 @@ void script_system::on_play_begin(hpp::span<const entt::handle> entities)
 
 void script_system::on_play_begin(entt::registry& entities)
 {
+    APP_SCOPE_PERF("Script/On Play Begin Scene");
     if(!app_domain_ || !domain_)
     {
         return;
@@ -495,26 +504,32 @@ void script_system::on_play_begin(entt::registry& entities)
     {
         create_call_ = call_progress::started;
 
-        entities.view<script_component>().each(
-            [&](auto e, auto&& comp)
-            {
-                comp.create();
-            });
+        {
+            APP_SCOPE_PERF("Script/On Play Begin Scene Create");
+            entities.view<script_component>().each(
+                [&](auto e, auto&& comp)
+                {
+                    comp.create();
+                });
+        }
 
         create_call_ = call_progress::finished;
 
-        entities.view<script_component>().each(
-            [&](auto e, auto&& comp)
-            {
-                if(entities.all_of<active_component>(e))
+        {
+            APP_SCOPE_PERF("Script/On Play Begin Scene Enable");
+            entities.view<script_component>().each(
+                [&](auto e, auto&& comp)
                 {
-                    comp.enable();
-                }
-                else
-                {
-                    comp.disable();
-                }
-            });
+                    if(entities.all_of<active_component>(e))
+                    {
+                        comp.enable();
+                    }
+                    else
+                    {
+                        comp.disable();
+                    }
+                });
+        }
     }
     catch(const mono::mono_exception& e)
     {
@@ -646,9 +661,12 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             data.time_scale = time_scale;
             data.frame_count = sim.get_frame();
 
-            // Use cached method to avoid repeated allocations
-            auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.update_method);
-            method_thunk(data);
+            {
+                APP_SCOPE_PERF("Script/System Update Managed");
+                // Use cached method to avoid repeated allocations
+                auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.update_method);
+                method_thunk(data);
+            }
 
             elapsed_time_ += dt;
         }
@@ -696,9 +714,12 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
             update_data data;
             data.fixed_delta_time = dt.count();
 
-            // Use cached method to avoid repeated allocations
-            auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
-            method_thunk(data);
+            {
+                APP_SCOPE_PERF("Script/System Fixed Update Managed");
+                // Use cached method to avoid repeated allocations
+                auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
+                method_thunk(data);
+            }
         }
     }
     catch(const mono::mono_exception& e)
@@ -727,6 +748,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
     
             if(ev.is_playing && dt > delta_t::zero())
             {
+                APP_SCOPE_PERF("Script/System Late Update Managed");
                 // Use cached method to avoid repeated allocations
                 auto method_thunk = mono::make_method_invoker<void()>(cache_.late_update_method);
                 method_thunk();
