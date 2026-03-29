@@ -119,6 +119,15 @@ struct defaults
                                       math::vec3 pos = {0.0f, 0.0f, 0.0f}) -> entt::handle;
 
     /**
+     * @brief Creates a test heightfield terrain entity (embedded procedural mesh).
+     * @param ctx The context for creation.
+     * @param scn The scene to create the entity in.
+     * @param pos World position of the terrain origin.
+     * @return A handle to the created entity.
+     */
+    static auto create_terrain(rtti::context& ctx, scene& scn, math::vec3 pos = {0.0f, 0.0f, 0.0f}) -> entt::handle;
+
+    /**
      * @brief Creates a light entity.
      * @param ctx The context for creation.
      * @param scn The scene to create the entity in.

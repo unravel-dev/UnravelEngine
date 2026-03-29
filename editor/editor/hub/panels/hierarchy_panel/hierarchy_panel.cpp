@@ -264,6 +264,24 @@ void create_ui_document_entity(rtti::context& ctx, imgui_panels* panels, entt::h
     });
 }
 
+void create_terrain_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.queue_action("Create Terrain Entity",
+        [&ctx, panels, parent_entity]() mutable
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* active_scene = em.get_active_scene(ctx);
+        auto object = defaults::create_terrain(ctx, *active_scene);
+        if(object)
+        {
+            object.get<transform_component>().set_parent(parent_entity, false);
+        }
+        em.select(object);
+        start_editing_label(ctx, panels, object);
+    });
+}
+
 // ============================================================================
 // Drag and Drop Operations
 // ============================================================================
@@ -481,6 +499,14 @@ void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle
     if(ImGui::MenuItem("Text"))
     {
         create_text_entity(ctx, panels, parent_entity);
+    }
+
+    ImGui::NextLine();
+    ImGui::Separator();
+
+    if(ImGui::MenuItem("Terrain"))
+    {
+        create_terrain_entity(ctx, panels, parent_entity);
     }
 
     ImGui::EndMenu();

@@ -567,6 +567,23 @@ public:
                       bool hardware_copy = true) -> bool;
 
     /**
+     * @brief Creates a heightfield on the XZ plane (Y up): vertex grid (segments_x+1)*(segments_z+1).
+     * @param heights Row-major samples indexed by z * (segments_x+1) + x, values in arbitrary units scaled by height_scale.
+     * @param half_extent_x Half world size along X; vertices span [-half_extent_x, half_extent_x].
+     * @param half_extent_z Half world size along Z.
+     * @param height_scale Multiplier applied to each height sample before placing along Y.
+     */
+    auto create_heightfield(const gfx::vertex_layout& format,
+                          hpp::span<const float> heights,
+                          uint32_t segments_x,
+                          uint32_t segments_z,
+                          float half_extent_x,
+                          float half_extent_z,
+                          float height_scale,
+                          mesh_create_origin origin,
+                          bool hardware_copy = true) -> bool;
+
+    /**
      * @brief Creates a cube geometry.
      *
      * @param format The vertex format.

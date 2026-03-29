@@ -22,6 +22,51 @@ namespace
 // Local Module Level Namespaces.
 //-----------------------------------------------------------------------------
 
+auto hf_height_at(hpp::span<const float> heights, uint32_t vx, int32_t sx, int32_t sz, int32_t ix, int32_t iz) -> double
+{
+    ix = std::clamp(ix, 0, sx);
+    iz = std::clamp(iz, 0, sz);
+    const size_t idx = static_cast<size_t>(iz) * vx + static_cast<size_t>(ix);
+    return static_cast<double>(heights[idx]);
+}
+
+auto hf_dh_dt0(hpp::span<const float> heights, uint32_t vx, int32_t sx, int32_t sz, int32_t ix, int32_t iz) -> double
+{
+    if(sx < 1)
+    {
+        return 0.0;
+    }
+    if(ix <= 0)
+    {
+        return static_cast<double>(sx) * (hf_height_at(heights, vx, sx, sz, 1, iz) - hf_height_at(heights, vx, sx, sz, 0, iz));
+    }
+    if(ix >= sx)
+    {
+        return static_cast<double>(sx) *
+               (hf_height_at(heights, vx, sx, sz, sx, iz) - hf_height_at(heights, vx, sx, sz, sx - 1, iz));
+    }
+    return static_cast<double>(sx) * 0.5 *
+           (hf_height_at(heights, vx, sx, sz, ix + 1, iz) - hf_height_at(heights, vx, sx, sz, ix - 1, iz));
+}
+
+auto hf_dh_dt1(hpp::span<const float> heights, uint32_t vx, int32_t sx, int32_t sz, int32_t ix, int32_t iz) -> double
+{
+    if(sz < 1)
+    {
+        return 0.0;
+    }
+    if(iz <= 0)
+    {
+        return static_cast<double>(sz) * (hf_height_at(heights, vx, sx, sz, ix, 1) - hf_height_at(heights, vx, sx, sz, ix, 0));
+    }
+    if(iz >= sz)
+    {
+        return static_cast<double>(sz) *
+               (hf_height_at(heights, vx, sx, sz, ix, sz) - hf_height_at(heights, vx, sx, sz, ix, sz - 1));
+    }
+    return static_cast<double>(sz) * 0.5 *
+           (hf_height_at(heights, vx, sx, sz, ix, iz + 1) - hf_height_at(heights, vx, sx, sz, ix, iz - 1));
+}
 
 void create_mesh(const gfx::vertex_layout& format,
                  const generator::any_mesh& mesh,
@@ -848,6 +893,68 @@ auto mesh::create_plane(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
+    return end_prepare(hardware_copy);
+}
+
+auto mesh::create_heightfield(const gfx::vertex_layout& format,
+                              hpp::span<const float> heights,
+                              uint32_t segments_x,
+                              uint32_t segments_z,
+                              float half_extent_x,
+                              float half_extent_z,
+                              float height_scale,
+                              mesh_create_origin origin,
+                              bool hardware_copy) -> bool
+{
+    (void)origin;
+    const uint32_t sx = segments_x;
+    const uint32_t sz = segments_z;
+    if(sx < 1u || sz < 1u)
+    {
+        return false;
+    }
+    const uint32_t vx = sx + 1u;
+    if(heights.size() < static_cast<size_t>(vx) * static_cast<size_t>(sz + 1u))
+    {
+        return false;
+    }
+
+    prepare_mesh(format);
+
+    const double hx = static_cast<double>(half_extent_x);
+    const double hz = static_cast<double>(half_extent_z);
+    const double hs = static_cast<double>(height_scale);
+    const int32_t isx = static_cast<int32_t>(sx);
+    const int32_t isz = static_cast<int32_t>(sz);
+
+    auto eval = [heights, vx, sx, sz, hx, hz, hs, isx, isz](const gml::dvec2& t) -> generator::mesh_vertex_t
+    {
+        const double fx = t[0] * static_cast<double>(sx);
+        const double fz = t[1] * static_cast<double>(sz);
+        int32_t ix = static_cast<int32_t>(std::lround(fx));
+        int32_t iz = static_cast<int32_t>(std::lround(fz));
+        ix = std::clamp(ix, 0, isx);
+        iz = std::clamp(iz, 0, isz);
+
+        generator::mesh_vertex_t v{};
+        v.position[0] = (t[0] - 0.5) * 2.0 * hx;
+        v.position[1] = hs * hf_height_at(heights, vx, isx, isz, ix, iz);
+        v.position[2] = (t[1] - 0.5) * 2.0 * hz;
+        v.tex_coord[0] = t[0];
+        v.tex_coord[1] = t[1];
+
+        const gml::dvec3 dr_dt0{2.0 * hx, hs * hf_dh_dt0(heights, vx, isx, isz, ix, iz), 0.0};
+        const gml::dvec3 dr_dt1{0.0, hs * hf_dh_dt1(heights, vx, isx, isz, ix, iz), 2.0 * hz};
+        v.normal = -gml::normalize(gml::cross(dr_dt1, dr_dt0));
+
+        return v;
+    };
+
+    generator::parametric_mesh_t hf_mesh(eval, gml::ivec2{static_cast<int>(sx), static_cast<int>(sz)});
+    math::quat rot(math::vec3(math::radians(-180.0f), 0.f, 0.0f));
+    auto mesh = rotate_mesh(hf_mesh, rot);
+    create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
+    
     return end_prepare(hardware_copy);
 }
 

@@ -30,6 +30,9 @@
 #include <string_utils/utils.h>
 #include <seq/seq.h>
 
+#include <cmath>
+#include <vector>
+
 namespace unravel
 {
 
@@ -297,6 +300,36 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
         manager.get_asset_from_instance(id, instance);
     }
     {
+        const auto id = "engine:/embedded/terrain_test";
+        constexpr uint32_t sx = 64;
+        constexpr uint32_t sz = 64;
+        constexpr float k_pi = 3.14159265f;
+        std::vector<float> heights(static_cast<size_t>(sx + 1) * static_cast<size_t>(sz + 1));
+        for(uint32_t z = 0; z <= sz; ++z)
+        {
+            const float tz = static_cast<float>(z) / static_cast<float>(sz);
+            for(uint32_t x = 0; x <= sx; ++x)
+            {
+                const float tx = static_cast<float>(x) / static_cast<float>(sx);
+                const float nx = tx * 2.0f - 1.0f;
+                const float nz = tz * 2.0f - 1.0f;
+                heights[static_cast<size_t>(z) * static_cast<size_t>(sx + 1) + static_cast<size_t>(x)] =
+                    std::sin(nx * k_pi * 2.0f) * std::cos(nz * k_pi * 2.0f) * 0.5f + 0.5f;
+            }
+        }
+        auto instance = std::make_shared<mesh>();
+        instance->create_heightfield(gfx::mesh_vertex::get_layout(),
+                                     heights,
+                                     sx,
+                                     sz,
+                                     25.0f,
+                                     25.0f,
+                                     4.0f,
+                                     mesh_create_origin::center,
+                                     true);
+        manager.get_asset_from_instance(id, instance);
+    }
+    {
         const auto id = "engine:/embedded/teapot";
         auto instance = std::make_shared<mesh>();
         instance->create_teapot(gfx::mesh_vertex::get_layout());
@@ -489,6 +522,17 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx,
                           false);
 
     return create_mesh_entity_at(ctx, scn, key, projected_pos);
+}
+
+auto defaults::create_terrain(rtti::context& ctx, scene& scn, math::vec3 pos) -> entt::handle
+{
+    static constexpr const char* terrain_mesh_id = "engine:/embedded/terrain_test";
+    auto object = create_mesh_entity_at(ctx, scn, terrain_mesh_id, pos);
+    if(object)
+    {
+        object.get<tag_component>().name = "Terrain";
+    }
+    return object;
 }
 
 auto defaults::create_light_entity(rtti::context& ctx, scene& scn, light_type type, const std::string& name)
