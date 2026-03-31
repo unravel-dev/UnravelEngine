@@ -286,6 +286,11 @@ auto should_rebuild_shadows(const shadow::shadow_map_models_t& visibility_set,
 
     return false;
 }
+
+auto reflection_screen_stack_enabled(std::uint32_t stages) -> bool
+{
+    return (stages & deferred::pipeline_steps::reflection_probe) != 0u;
+}
 } // namespace
 
 auto deferred::get_light_program(const light& l) const -> const color_lighting&
@@ -406,8 +411,9 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
 
                     auto params = create_run_params(handle, &scn, &camera);
                     params.vflags = vflags;
+                    params.pflags = pflags;
 
-                    run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params, pflags);
+                    run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params);
                 }
 
                 auto env_cube = reflection_probe_comp.get_cubemap();
@@ -521,7 +527,7 @@ auto deferred::run_pipeline(scene& scn,
     const auto& viewport_size = camera.get_viewport_size();
     const auto& obuffer = create_or_resize_o_buffer(rview, viewport_size, params);
 
-    run_pipeline_impl(obuffer, scn, camera, rview, dt, params, pipeline_steps::full, render_mask);
+    run_pipeline_impl(obuffer, scn, camera, rview, dt, params, render_mask);
 
     return obuffer;
 }
@@ -553,12 +559,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  gfx::render_view& rview,
                                  delta_t dt,
                                  const run_params& params,
-                                 pipeline_flags pflags,
                                  layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Run Pipeline");
 
-    if(pipeline_steps::full == pflags)
+    const pipeline_flags stages = params.pflags;
+
+    if(stages == pipeline_steps::full)
     {
         stats_ = {};
     }
@@ -566,10 +573,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     visibility_set_models_t visibility_set;
     gfx::frame_buffer::ptr target = nullptr;
 
-    bool apply_reflecitons = pflags & pipeline_steps::reflection_probe;
-    bool apply_shadows = pflags & pipeline_steps::shadow_pass;
+    const bool apply_reflection_pipeline = (stages & pipeline_steps::reflection_probe) != 0u;
+    const bool apply_shadows = (stages & pipeline_steps::shadow_pass) != 0u;
 
-    if(apply_reflecitons)
+    if(apply_reflection_pipeline)
     {
         build_reflections(scn, camera, dt);
     }
@@ -600,7 +607,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         const_cast<class camera&>(camera).set_aa_data(viewport_size, 0u, 1u);
     }
 
-    if(pflags & pipeline_steps::geometry_pass)
+    if(stages & pipeline_steps::geometry_pass)
     {
         gather_visible_models(scn, &camera, params.vflags, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
         {
@@ -610,58 +617,42 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
-    if(apply_reflecitons)
-    {
-        run_assao_pass(visibility_set, camera, rview, dt, params);
-    }
+    run_assao_pass(visibility_set, camera, rview, dt, params);
 
     run_reflection_probe_pass(scn, camera, rview, dt);
 
-    bool needs_hiz = apply_reflecitons && (params.fill_ssr_params || params.fill_ssil_params);
-    if(needs_hiz)
-    {
-        create_or_resize_hiz_buffer(rview, viewport_size);
-        run_hiz_pass(camera, rview, delta_t(0.0f));
-    }
-    else
-    {
-        rview.tex_remove("HIZBUFFER");
-        rview.tex_remove("PREV_GBUFFER_DEPTH");
-    }
+    const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
     // Direct lighting first so SSIL/SSR can trace against the current frame.
     target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
 
-    if(apply_reflecitons)
-    {
-        run_ssr_pass(camera, rview, target, params);
-        run_ssil_pass(camera, rview, params);
-    }
+    // SSR pass
+    run_ssr_pass(camera, rview, target, params);
+
+    // SSIL pass
+    run_ssil_pass(camera, rview, params);
 
     // Indirect lighting after SSIL so it can use the result.
     target = run_indirect_lighting_pass(scn, camera, rview);
 
     target = run_atmospherics_pass(target, scn, camera, rview, dt);
 
-    if(pflags & pipeline_steps::particles_pass)
+    if(stages & pipeline_steps::particles_pass)
     {
         run_particle_pass(scn, camera, rview, target);
     }
 
     target = run_taa_pass(camera, rview, target, output, params);
 
-    if(apply_reflecitons)
-    {
-        run_auto_exposure_pass(rview, target, params, dt);
+    run_auto_exposure_pass(rview, target, params, dt);
 
-        target = run_bloom_pass(rview, target, params);
-    }
+    target = run_bloom_pass(rview, target, params);
 
     target = run_tonemapping_pass(rview, target, output, params);
 
     run_fxaa_pass(rview, target, output, params);
 
-    if(pflags == pipeline_steps::full)
+    if(stages == pipeline_steps::full)
     {
         run_ui_pass(scn, camera, rview, output);
 
@@ -671,27 +662,33 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
     }
 
-    // Snapshot current G-buffer depth for next frame's SSIL temporal reprojection validation.
-    // Must happen after all passes that read PREV_GBUFFER_DEPTH.
-    if(needs_hiz)
+    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
+    if(hiz_active)
     {
-        auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
-        auto& prev_depth = rview.tex_get_or_emplace("PREV_GBUFFER_DEPTH");
-        if(gfx::needs_recreate(prev_depth, viewport_size))
-        {
-            prev_depth.reset();
-            prev_depth = std::make_shared<gfx::texture>(viewport_size.width,
-                                                        viewport_size.height,
-                                                        false,
-                                                        1,
-                                                        gfx::texture_format::D32F,
-                                                        BGFX_TEXTURE_BLIT_DST);
-        }
-        gfx::render_pass blit_pass("Prev Depth Blit Pass");
-        gfx::blit(blit_pass.id,
-                  prev_depth->native_handle(), 0, 0,
-                  depth_src->native_handle(), 0, 0);
+        snapshot_prev_depth(rview, viewport_size);
     }
+
+
+}
+
+void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size)
+{
+    auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
+    auto& prev_depth = rview.tex_get_or_emplace("PREV_DEPTH");
+    if(gfx::needs_recreate(prev_depth, viewport_size))
+    {
+        prev_depth.reset();
+        prev_depth = std::make_shared<gfx::texture>(viewport_size.width,
+                                                    viewport_size.height,
+                                                    false,
+                                                    1,
+                                                    gfx::texture_format::D32F,
+                                                    BGFX_TEXTURE_BLIT_DST);
+    }
+    gfx::render_pass blit_pass("Prev Depth Blit Pass");
+    gfx::blit(blit_pass.id,
+              prev_depth->native_handle(), 0, 0,
+              depth_src->native_handle(), 0, 0);
 }
 
 void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
@@ -964,7 +961,8 @@ void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
                               delta_t dt,
                               const run_params& rparams)
 {
-    if(!rparams.fill_assao_params)
+    const std::uint32_t stages = rparams.pflags;
+    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_assao_params)
     {
         assao_pass_.release_resources(rview);
         return;
@@ -1603,15 +1601,16 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
     return input;
 }
 
-auto deferred::run_ssr_pass(const camera& camera,
+void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
                             const gfx::frame_buffer::ptr& output,
-                            const run_params& rparams) -> gfx::frame_buffer::ptr
+                            const run_params& rparams)
 {
-    if(!rparams.fill_ssr_params)
+    const std::uint32_t stages = rparams.pflags;
+    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_ssr_params)
     {
         ssr_pass_.release_resources(rview);
-        return output;
+        return;
     }
 
     ssr_pass::run_params ssr_params;
@@ -1634,25 +1633,26 @@ auto deferred::run_ssr_pass(const camera& camera,
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
     ssr_params.settings.fidelityfx.enable_half_res = false;
 
-    return ssr_pass_.run(rview, ssr_params);
+    ssr_pass_.run(rview, ssr_params);
 }
 
-auto deferred::run_ssil_pass(const camera& camera,
+void deferred::run_ssil_pass(const camera& camera,
                              gfx::render_view& rview,
-                             const run_params& rparams) -> gfx::texture::ptr
+                             const run_params& rparams)
 {
-    if(!rparams.fill_ssil_params)
+    const std::uint32_t stages = rparams.pflags;
+    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_ssil_params)
     {
         ssil_pass_.release_resources(rview);
         rview.tex_remove("SSIL");
         rview.tex_remove("PREV_SSIL");
-        return nullptr;
+        return;
     }
 
     ssil_pass::run_params ssil_params;
     ssil_params.g_buffer = rview.fbo_get("GBUFFER");
     ssil_params.direct_lighting = rview.fbo_get("LBUFFER")->get_texture(0);
-    ssil_params.prev_depth = rview.tex_safe_get("PREV_GBUFFER_DEPTH");
+    ssil_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
     ssil_params.prev_ssil = rview.tex_safe_get("PREV_SSIL");
     ssil_params.cam = &camera;
 
@@ -1691,7 +1691,6 @@ auto deferred::run_ssil_pass(const camera& camera,
         rview.tex_remove("PREV_SSIL");
     }
 
-    return result;
 }
 
 auto deferred::run_taa_pass(const camera& camera,
@@ -1746,7 +1745,8 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
                                       const run_params& rparams,
                                       delta_t dt)
 {
-    if(!rparams.fill_auto_exposure_params)
+    const std::uint32_t stages = rparams.pflags;
+    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_auto_exposure_params)
     {
         auto_exposure_pass_.release_resources(rview);
         return;
@@ -1762,7 +1762,8 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& input,
                               const run_params& rparams) -> gfx::frame_buffer::ptr
 {
-    if(!rparams.fill_bloom_params || !rparams.fill_hdr_params)
+    const std::uint32_t stages = rparams.pflags;
+    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_bloom_params || !rparams.fill_hdr_params)
     {
         bloom_pass_.release_resources(rview);
         return input;
@@ -1858,23 +1859,41 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     gfx::discard();
 }
 
-auto deferred::run_hiz_pass(const camera& camera, gfx::render_view& rview, delta_t dt) -> gfx::texture::ptr
+auto deferred::run_hiz_pass(const camera& camera,
+                              gfx::render_view& rview,
+                              const run_params& params,
+                              const usize32_t& viewport_size,
+                              delta_t dt) -> bool
 {
+    (void)dt;
+    const std::uint32_t stages = params.pflags;
+    const bool want_hiz =
+        reflection_screen_stack_enabled(stages) && (params.fill_ssr_params || params.fill_ssil_params);
+
+    if(!want_hiz)
+    {
+        rview.tex_remove("HIZBUFFER");
+        rview.tex_remove("PREV_DEPTH");
+        return false;
+    }
+
+    create_or_resize_hiz_buffer(rview, viewport_size);
+
     APP_SCOPE_PERF("Rendering/SSR/Hi-Z Pass");
 
-    auto& gbuffer = rview.fbo_get("GBUFFER");
+    const auto& gbuffer = rview.fbo_get("GBUFFER");
     if(!gbuffer)
-        return nullptr;
+    {
+        return false;
+    }
 
-    // Run Hi-Z pass using the base class's pass
-    hiz_pass::run_params params;
-    params.depth_buffer = gbuffer->get_texture(4);
-    
-    params.output_hiz = rview.tex_get("HIZBUFFER");
-    params.cam = &camera;
+    hiz_pass::run_params hp;
+    hp.depth_buffer = gbuffer->get_texture(4);
+    hp.output_hiz = rview.tex_get("HIZBUFFER");
+    hp.cam = &camera;
 
-    hiz_pass_.run(rview, params);
-    return params.output_hiz;
+    hiz_pass_.run(rview, hp);
+    return true;
 }
 
 deferred::deferred()
@@ -1992,8 +2011,6 @@ auto deferred::init(rtti::context& ctx) -> bool
     }
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");
-
-    ssil_pass_.init(ctx);
 
     return pipeline::init(ctx);
 }

@@ -102,10 +102,13 @@ public:
     };
 
     using visibility_flags = uint32_t; ///< Type alias for visibility flags.
-
+    using pipeline_flags = uint32_t;
     struct run_params
     {
         visibility_flags vflags = visibility_query::not_specified;
+
+        /// Deferred pipeline only: bitmask of @c deferred::pipeline_steps. Default equals @c deferred::pipeline_steps::full.
+        pipeline_flags pflags = 0xFFFFFFFFu;
 
         std::function<void(assao_pass::run_params& params)> fill_assao_params;
         std::function<void(auto_exposure_pass::run_params& params)> fill_auto_exposure_params;
@@ -219,6 +222,7 @@ protected:
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
+    ssil_pass ssil_pass_{};
 
     std::unique_ptr<gpu_program> particle_program_{};
     std::unique_ptr<gpu_program> particle_program_instanced_{};

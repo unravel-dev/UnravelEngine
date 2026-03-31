@@ -1,7 +1,5 @@
 #pragma once
 #include "../pipeline.h"
-#include "../passes/hiz_pass.h"
-#include "../passes/ssil_pass.h"
 
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -42,20 +40,22 @@ public:
                       layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) override;
     void set_debug_pass(int pass) override;
 
+    /// Bitmask for @c pipeline::run_params::pflags (deferred path only).
     enum pipeline_steps : uint32_t
     {
-        geometry_pass = 1 << 1,
-        shadow_pass = 1 << 2,
-        reflection_probe = 1 << 3,
-        lighting = 1 << 4,
-        atmospheric = 1 << 5,
-        particles_pass = 1 << 6,
+        geometry_pass = 1u << 1,
+        shadow_pass = 1u << 2,
+        reflection_probe = 1u << 3,
+        lighting = 1u << 4,
+        atmospheric = 1u << 5,
+        particles_pass = 1u << 6,
 
-        full = geometry_pass | shadow_pass | reflection_probe | lighting | atmospheric | particles_pass,
+        /// Cubemap face / minimal deferred: lighting + atmospherics; no screen-reflection stack or probe build.
         probe = lighting | atmospheric,
+        /// Default main-camera path: all bits set (matches @c run_params::pflags default). Individual stages
+        /// above are still tested with @c (pflags & pipeline_steps::geometry_pass), etc.
+        full = 0xFFFFFFFFu,
     };
-
-    using pipeline_flags = uint32_t;
 
     void run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                            scene& scn,
@@ -63,7 +63,6 @@ public:
                            gfx::render_view& rview,
                            delta_t dt,
                            const run_params& params,
-                           pipeline_flags pflags,
                            layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
     void run_g_buffer_pass(const visibility_set_models_t& visibility_set,
@@ -91,12 +90,10 @@ public:
                                gfx::render_view& rview,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
-    auto run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output,
-                       const run_params& rparams)
-        -> gfx::frame_buffer::ptr;
+    void run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output,
+                       const run_params& rparams);
 
-    auto run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
-        -> gfx::texture::ptr;
+    void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
@@ -128,7 +125,12 @@ public:
 
     void build_shadows(scene& scn, const camera& camera, delta_t dt, visibility_flags query = visibility_query::not_specified, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
-    auto run_hiz_pass(const camera& camera, gfx::render_view& rview, delta_t dt) -> gfx::texture::ptr;
+    /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
+    auto run_hiz_pass(const camera& camera,
+                      gfx::render_view& rview,
+                      const run_params& params,
+                      const usize32_t& viewport_size,
+                      delta_t dt) -> bool;
 
 private:
     struct ref_probe_program : uniforms_cache
@@ -352,8 +354,8 @@ private:
 public:
 
 private:
-
-    ssil_pass ssil_pass_;
+    /// After SSIL/SSR; copies G-buffer depth into @c PREV_DEPTH for next-frame reprojection.
+    void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};
