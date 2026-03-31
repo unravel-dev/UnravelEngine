@@ -19,6 +19,25 @@ enum class projection_mode : std::uint32_t
 };
 
 /**
+ * @brief Subpixel jitter sequence for temporal AA (see camera::set_aa_data).
+ */
+enum class taa_jitter_mode : std::uint8_t
+{
+    /// Kronecker / golden-ratio; smooth incommensurable steps (default).
+    progressive_golden = 0,
+    /// Halton(base 2,3) in [-0.5,0.5]; strong low-discrepancy, larger frame-to-frame steps.
+    halton_2_3 = 1,
+    /// R2 / recurrence lattice pair; alternative progressive 2D coverage.
+    r2_low_discrepancy = 2,
+    /// Two-tap MSAA-style pattern, period 2.
+    msaa_2_rotating = 3,
+    /// Three-tap MSAA-style pattern, period 3.
+    msaa_3_rotating = 4,
+    /// Four-tap MSAA-style pattern, period 4.
+    msaa_4_rotating = 5,
+};
+
+/**
  * @brief Structure for storing camera related context.
  */
 struct camera_storage
@@ -224,6 +243,13 @@ public:
      */
     auto get_prev_view_projection() const -> math::transform;
     auto get_prev_view_projection_relative() const -> math::transform;
+
+    /**
+     * @brief View-projection used for the previous rendered frame (before the latest jitter sample).
+     *
+     * Updated inside set_aa_data(); use for temporal reprojection (TAA) so history aligns with jittered projection.
+     */
+    auto get_taa_prev_view_projection() const -> math::transform;
     /**
      * @brief Retrieves the current view-projection matrix.
      *
@@ -240,13 +266,22 @@ public:
     /**
      * @brief Sets the current jitter value for temporal anti-aliasing.
      *
-     * @param viewportSize The size of the viewport.
-     * @param currentSubpixelIndex The current subpixel index.
-     * @param temporalAASamples The number of temporal AA samples.
+     * @param viewport_size Viewport size (pixels) for scaling jitter into clip space.
+     * @param temporal_frame_index Monotonic frame counter (e.g. render frame). Drives progressive
+     *        subpixel jitter (no short-period MSAA-style cycling); avoid large discontinuities.
+     * @param temporal_aa_samples Values > 1 enable jitter; count is stored for UI / future tuning.
+     * @param jitter_mode Which subpixel sequence to use (see @c taa_jitter_mode).
+     * @param jitter_amplitude Scales raw subpixel offsets before clip scaling; 1 = full ~±½ pixel.
+     *        Lower values (e.g. 0.5–0.7) reduce visible whole-frame shake at some AA cost.
+     * @param jitter_temporal_phase_scale Multiplies progression speed for golden / Halton / R2 (1 = legacy).
+     *        MSAA rotating modes ignore this and advance one subsample per frame.
      */
     void set_aa_data(const usize32_t& viewport_size,
-                     std::uint32_t current_subpixel_index,
-                     std::uint32_t temporal_aa_samples);
+                     std::uint32_t temporal_frame_index,
+                     std::uint32_t temporal_aa_samples,
+                     taa_jitter_mode jitter_mode = taa_jitter_mode::progressive_golden,
+                     float jitter_amplitude = 1.0f,
+                     float jitter_temporal_phase_scale = 1.0f);
 
     /**
      * @brief Retrieves the anti-aliasing data.
@@ -511,6 +546,10 @@ protected:
 
     /// Cached "previous" projection matrix.
     math::transform last_projection_;
+
+    /// Snapshot for temporal reprojection: view/projection before advancing jitter (see set_aa_data).
+    math::transform taa_prev_view_;
+    math::transform taa_prev_projection_;
     /// Details regarding the camera frustum.
     mutable math::frustum frustum_;
     /// The near clipping volume (area of space between the camera position and the near plane).

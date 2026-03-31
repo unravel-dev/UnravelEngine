@@ -98,6 +98,12 @@ public:
     auto run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
         -> gfx::texture::ptr;
 
+    auto run_taa_pass(const camera& camera,
+                      gfx::render_view& rview,
+                      const gfx::frame_buffer::ptr& input,
+                      const gfx::frame_buffer::ptr& output,
+                      const run_params& rparams) -> gfx::frame_buffer::ptr;
+
     auto run_fxaa_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
                        const run_params& rparams)
         -> gfx::frame_buffer::ptr;

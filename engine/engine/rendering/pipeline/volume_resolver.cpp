@@ -8,6 +8,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
+#include <engine/rendering/ecs/components/taa_component.h>
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -96,6 +97,7 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_assao = true;
     bool first_ssr = true;
     bool first_ssil = true;
+    bool first_taa = true;
     float auto_exposure_enabled_sum = 0.0f;
     float auto_exposure_contrib_sum = 0.0f;
     float bloom_enabled_sum = 0.0f;
@@ -110,6 +112,8 @@ auto resolve_post_process_volumes(scene& scn,
     float assao_contrib_sum = 0.0f;
     float ssil_enabled_sum = 0.0f;
     float ssil_contrib_sum = 0.0f;
+    float taa_enabled_sum = 0.0f;
+    float taa_contrib_sum = 0.0f;
 
     for(const auto& c : contributions)
     {
@@ -155,6 +159,17 @@ auto resolve_post_process_volumes(scene& scn,
             fxaa_contrib_sum += contrib;
         }
 
+        if(auto* taa = handle.try_get<taa_component>(); taa && contrib > 0.0f)
+        {
+            taa_enabled_sum += (taa->enabled ? 1.0f : 0.0f) * contrib;
+            taa_contrib_sum += contrib;
+            if(taa->enabled)
+            {
+                taa_component::merge_into(result.taa, taa->settings, contrib, first_taa);
+                first_taa = false;
+            }
+        }
+
         if(auto* ssr = handle.try_get<ssr_component>(); ssr && contrib > 0.0f)
         {
             ssr_enabled_sum += (ssr->enabled ? 1.0f : 0.0f) * contrib;
@@ -193,6 +208,7 @@ auto resolve_post_process_volumes(scene& scn,
     result.has_bloom = bloom_contrib_sum > 0.0f && (bloom_enabled_sum / bloom_contrib_sum) > 0.5f;
     result.has_tonemapping = tonemapping_contrib_sum > 0.0f && (tonemapping_enabled_sum / tonemapping_contrib_sum) > 0.5f;
     result.has_fxaa = fxaa_contrib_sum > 0.0f && (fxaa_enabled_sum / fxaa_contrib_sum) > 0.5f;
+    result.has_taa = taa_contrib_sum > 0.0f && (taa_enabled_sum / taa_contrib_sum) > 0.5f;
     result.has_ssr = ssr_contrib_sum > 0.0f && (ssr_enabled_sum / ssr_contrib_sum) > 0.5f;
     result.has_assao = assao_contrib_sum > 0.0f && (assao_enabled_sum / assao_contrib_sum) > 0.5f;
     result.has_ssil = ssil_contrib_sum > 0.0f && (ssil_enabled_sum / ssil_contrib_sum) > 0.5f;

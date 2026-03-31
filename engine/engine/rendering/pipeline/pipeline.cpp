@@ -15,6 +15,7 @@
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
+#include <engine/rendering/ecs/components/taa_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
@@ -31,6 +32,8 @@
 #include <poolstl/poolstl.hpp>
 
 #include <concurrency/concurrentqueue.h>
+
+#include <algorithm>
 
 namespace unravel
 {
@@ -62,6 +65,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     auto_exposure_pass_.init(ctx);
     bloom_pass_.init(ctx);
     fxaa_pass_.init(ctx);
+    taa_pass_.init(ctx);
     tonemapping_pass_.init(ctx);
     assao_pass_.init(ctx);
     ssr_pass_.init(ctx);
@@ -242,7 +246,22 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
     
-    if(auto fxaa_comp = camera_ent.try_get<fxaa_component>(); fxaa_comp && fxaa_comp->enabled)
+    if(auto taa_comp = camera_ent.try_get<taa_component>(); taa_comp && taa_comp->enabled)
+    {
+        params.taa_temporal_sample_count = std::max(std::uint32_t(2), taa_comp->settings.temporal_sample_count);
+        params.taa_temporal_jitter_mode = taa_comp->settings.jitter_mode;
+        params.taa_jitter_amplitude = taa_comp->settings.jitter_amplitude;
+        params.taa_jitter_temporal_phase_scale = taa_comp->settings.jitter_temporal_phase_scale;
+        params.fill_taa_params = [camera_ent](taa_pass::run_params& p)
+        {
+            if(auto c = camera_ent.try_get<taa_component>())
+            {
+                p.config = c->settings;
+            }
+        };
+    }
+
+    if(auto fxaa_comp = camera_ent.try_get<fxaa_component>(); fxaa_comp && fxaa_comp->enabled && !params.fill_taa_params)
     {
         params.fill_fxaa_params = [camera_ent](fxaa_pass::run_params& params)
         {
@@ -287,7 +306,7 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     }
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
     const bool has_any_volume = resolved.has_auto_exposure || resolved.has_bloom || resolved.has_tonemapping ||
-                                resolved.has_fxaa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
+                                resolved.has_fxaa || resolved.has_taa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
     if(!has_any_volume)
     {
         return params;
@@ -312,6 +331,15 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         params.fill_fxaa_params = [](fxaa_pass::run_params&) {};
     }
+    if(resolved.has_taa)
+    {
+        taa_pass::settings s = resolved.taa;
+        params.taa_temporal_sample_count = std::max(std::uint32_t(2), s.temporal_sample_count);
+        params.taa_temporal_jitter_mode = s.jitter_mode;
+        params.taa_jitter_amplitude = s.jitter_amplitude;
+        params.taa_jitter_temporal_phase_scale = s.jitter_temporal_phase_scale;
+        params.fill_taa_params = [s](taa_pass::run_params& p) { p.config = s; };
+    }
     if(resolved.has_ssr)
     {
         ssr_pass::ssr_settings s = resolved.ssr;
@@ -326,6 +354,10 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         ssil_pass::ssil_settings s = resolved.ssil;
         params.fill_ssil_params = [s](ssil_pass::run_params& p) { p.settings = s; };
+    }
+    if(params.fill_taa_params)
+    {
+        params.fill_fxaa_params = {};
     }
     return params;
 }

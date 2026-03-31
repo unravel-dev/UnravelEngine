@@ -1000,6 +1000,7 @@ auto text_component::get_scaled_font() const -> const scaled_font&
     {
         recreate_scaled_font();
     }
+    auto font = font_.get();
 
     if(scaled_font_)
     {

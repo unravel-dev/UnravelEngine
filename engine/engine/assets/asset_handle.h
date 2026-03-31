@@ -61,6 +61,7 @@ struct asset_handle
 
     auto version() const -> uintptr_t
     {
+        update_last_access();
         return uintptr_t(get_cached_asset().get());
     }
 
@@ -128,10 +129,7 @@ struct asset_handle
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
-        if(link_)
-        {
-            link_->last_access = std::chrono::steady_clock::now();
-        }
+        update_last_access();
 
         if(auto cached_asset = get_cached_asset())
         {
@@ -307,6 +305,7 @@ struct asset_handle
         set_internal_job({});
     }
 
+
     /**
      * @brief Gets an empty asset handle.
      * @return The empty asset handle.
@@ -345,6 +344,14 @@ struct asset_handle
     }
 
 private:
+
+    void update_last_access() const
+    {
+        if(link_)
+        {
+            link_->last_access = std::chrono::steady_clock::now();
+        }
+    }
     auto get_cached_asset() const -> std::shared_ptr<T>
     {
         if(link_)

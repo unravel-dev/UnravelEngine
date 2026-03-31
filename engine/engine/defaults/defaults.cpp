@@ -12,6 +12,7 @@
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
+#include <engine/rendering/ecs/components/taa_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
@@ -593,6 +594,7 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     object.emplace<bloom_component>();
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();
+    object.emplace<taa_component>();
     object.emplace<ssr_component>();
     object.emplace<ssil_component>().enabled = false;
     return object;
@@ -730,6 +732,8 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = true;
             if(auto* comp = volume.try_get<ssil_component>())
                 comp->enabled = false;
+            if(auto* comp = volume.try_get<taa_component>())
+                comp->enabled = true;
         }
         else if(preset == scene_preset::showcase)
         {
@@ -738,6 +742,8 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
             if(auto* comp = volume.try_get<ssil_component>())
+                comp->enabled = true;
+            if(auto* comp = volume.try_get<taa_component>())
                 comp->enabled = true;
         }
     }

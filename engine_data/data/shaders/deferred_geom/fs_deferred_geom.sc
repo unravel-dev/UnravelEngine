@@ -75,7 +75,7 @@ void main()
 
 	float distance = length(view_direction) - u_camear_near * 2.0f;
 	float distance_factor = saturate(distance / u_dither_distance_threshold);
-	float dither = dither16x16(gl_FragCoord.xy);
+	float dither = ign16x16(gl_FragCoord.xy);
 
 	// LOD transition using optimized single-component branchless approach
 	// v_lod_params.x: positive = current LOD fading out, negative = target LOD fading in

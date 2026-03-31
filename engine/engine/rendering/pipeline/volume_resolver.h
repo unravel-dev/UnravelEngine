@@ -8,6 +8,7 @@
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
 #include <engine/rendering/pipeline/passes/ssil_pass.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
+#include <engine/rendering/pipeline/passes/taa_pass.h>
 #include <entt/entt.hpp>
 #include <math/math.h>
 #include <optional>
@@ -28,6 +29,8 @@ struct resolved_post_process_settings
     bool has_tonemapping = false;
     tonemapping_pass::settings tonemapping{};
     bool has_fxaa = false;
+    bool has_taa = false;
+    taa_pass::settings taa{};
     bool has_ssr = false;
     ssr_pass::ssr_settings ssr{};
     bool has_assao = false;

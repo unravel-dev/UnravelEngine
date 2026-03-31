@@ -21,6 +21,7 @@
 #include "bloom_component.hpp"
 #include "tonemapping_component.hpp"
 #include "fxaa_component.hpp"
+#include "taa_component.hpp"
 #include "assao_component.hpp"
 #include "ssr_component.hpp"
 #include "ssil_component.hpp"
@@ -51,6 +52,7 @@ using all_serializeable_components = std::tuple<
     assao_component,
     bloom_component,
     fxaa_component,
+    taa_component,
     ssr_component,
     ssil_component,
     light_component,
@@ -84,6 +86,7 @@ using all_inspectable_components = std::tuple<
     assao_component,
     bloom_component,
     fxaa_component,
+    taa_component,
     ssr_component,
     ssil_component,
     light_component,
@@ -108,6 +111,7 @@ using all_addable_components = std::tuple<
     assao_component,
     bloom_component,
     fxaa_component,
+    taa_component,
     ssr_component,
     ssil_component,
     light_component,

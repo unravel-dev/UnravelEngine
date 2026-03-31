@@ -21,6 +21,7 @@
 #include "passes/ssil_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
+#include "passes/taa_pass.h"
 #include "volume_resolver.h"
 
 #include <engine/ui/ecs/components/ui_document_component.h>
@@ -111,10 +112,20 @@ public:
         std::function<void(bloom_pass::run_params& params)> fill_bloom_params;
         std::function<void(tonemapping_pass::run_params& params)> fill_hdr_params;
         std::function<void(fxaa_pass::run_params& params)> fill_fxaa_params;
+        std::function<void(taa_pass::run_params& params)> fill_taa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
 
         std::optional<resolved_post_process_settings> volume_settings;
+
+        /// Subpixel sequence length for TAA jitter (used with fill_taa_params).
+        std::uint32_t taa_temporal_sample_count = 8;
+        /// TAA subpixel sequence; copied from @c taa_pass::settings::jitter_mode when TAA is active.
+        taa_jitter_mode taa_temporal_jitter_mode = taa_jitter_mode::progressive_golden;
+        /// Passed to @c camera::set_aa_data (see @c taa_pass::settings::jitter_amplitude).
+        float taa_jitter_amplitude = 0.65f;
+        /// See @c taa_pass::settings::jitter_temporal_phase_scale.
+        float taa_jitter_temporal_phase_scale = 0.45f;
     };
 
     pipeline() = default;
@@ -204,6 +215,7 @@ protected:
     auto_exposure_pass auto_exposure_pass_{};
     bloom_pass bloom_pass_{};
     fxaa_pass fxaa_pass_{};
+    taa_pass taa_pass_{};
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass

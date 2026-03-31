@@ -8,6 +8,8 @@
 #include "transform.hpp"
 #include "color.h"
 #include "gradient.h"
+#include <algorithm>
+#include <cmath>
 #include <functional>
 
 namespace math
@@ -267,6 +269,80 @@ inline float halton(std::uint32_t Index, std::uint32_t Base)
         Fraction *= InvBase;
     }
     return Result;
+}
+
+/**
+ * @brief 2D subpixel jitter in [-0.5, 0.5] for temporal AA (Kronecker / golden-ratio sequence).
+ *
+ * Successive integer @p frame values advance by incommensurable steps on the unit torus, so
+ * offsets fill the pixel progressively without the large consecutive jumps of Halton(i,2)/(i,3)
+ * and without a hard period-N reset from @c frame % N (which causes a periodic reprojection spike).
+ *
+ * @param temporal_phase_scale Multiplies the frame index inside the sequence (default 1). Values below 1
+ *        (e.g. 0.35–0.5) walk the torus more slowly so consecutive frames sit closer on the pixel,
+ *        which helps TAA history track and reduces visible whole-frame shake; coverage still fills over time.
+ */
+inline void taa_subpixel_offset_progressive(std::uint32_t frame,
+                                            float& offset_x,
+                                            float& offset_y,
+                                            float temporal_phase_scale = 1.0f)
+{
+    const float s =
+        temporal_phase_scale < 0.03f ? 0.03f : (temporal_phase_scale > 4.0f ? 4.0f : temporal_phase_scale);
+    constexpr float inv_phi = 0.61803398874989484820459f;
+    const float f = static_cast<float>(frame) * s;
+    float u = std::fmod(0.5f + f * inv_phi, 1.0f);
+    float v = std::fmod(0.5f + f * (inv_phi * inv_phi), 1.0f);
+    if(u < 0.0f)
+    {
+        u += 1.0f;
+    }
+    if(v < 0.0f)
+    {
+        v += 1.0f;
+    }
+    offset_x = u - 0.5f;
+    offset_y = v - 0.5f;
+}
+
+/** Halton(2), Halton(3) mapped to [-0.5, 0.5]. Uses @p frame + 1 so the first frame is non-degenerate. */
+inline void taa_subpixel_offset_halton(std::uint32_t frame,
+                                       float& offset_x,
+                                       float& offset_y,
+                                       float temporal_phase_scale = 1.0f)
+{
+    const float s =
+        temporal_phase_scale < 0.03f ? 0.03f : (temporal_phase_scale > 4.0f ? 4.0f : temporal_phase_scale);
+    // Larger effective index steps when s<1 so Halton visits similar to "slower phase" golden/R2.
+    const float inv_s = 1.0f / s;
+    const std::uint32_t i = std::max(1u, static_cast<std::uint32_t>(static_cast<float>(frame) * inv_s) + 1u);
+    offset_x = halton(i, 2u) - 0.5f;
+    offset_y = halton(i, 3u) - 0.5f;
+}
+
+/** R2 / recurrence-based low-discrepancy pair in [-0.5, 0.5]. */
+inline void taa_subpixel_offset_r2(std::uint32_t frame,
+                                   float& offset_x,
+                                   float& offset_y,
+                                   float temporal_phase_scale = 1.0f)
+{
+    const float s =
+        temporal_phase_scale < 0.03f ? 0.03f : (temporal_phase_scale > 4.0f ? 4.0f : temporal_phase_scale);
+    constexpr float a1 = 0.75487766624669276f;
+    constexpr float a2 = 0.56984029099805327f;
+    const float f = static_cast<float>(frame) * s;
+    float u = std::fmod(0.5f + f * a1, 1.0f);
+    float v = std::fmod(0.5f + f * a2, 1.0f);
+    if(u < 0.0f)
+    {
+        u += 1.0f;
+    }
+    if(v < 0.0f)
+    {
+        v += 1.0f;
+    }
+    offset_x = u - 0.5f;
+    offset_y = v - 0.5f;
 }
 
 inline std::uint32_t power_of_n_round_down(std::uint32_t val, std::uint32_t n)

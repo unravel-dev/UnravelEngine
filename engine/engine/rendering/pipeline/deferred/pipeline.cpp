@@ -22,7 +22,10 @@
 #include <engine/rendering/renderer.h>
 
 #include <graphics/index_buffer.h>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
+
+#include <algorithm>
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
@@ -582,6 +585,21 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     create_or_resize_l_buffer(rview, viewport_size, params);
     create_or_resize_r_buffer(rview, viewport_size, params);
 
+    if(params.fill_taa_params)
+    {
+        const uint32_t sc = (std::min)(std::uint32_t(16), (std::max)(std::uint32_t(2), params.taa_temporal_sample_count));
+        const_cast<class camera&>(camera).set_aa_data(viewport_size,
+                                                 static_cast<uint32_t>(gfx::get_render_frame()),
+                                                 sc,
+                                                 params.taa_temporal_jitter_mode,
+                                                 params.taa_jitter_amplitude,
+                                                 params.taa_jitter_temporal_phase_scale);
+    }
+    else
+    {
+        const_cast<class camera&>(camera).set_aa_data(viewport_size, 0u, 1u);
+    }
+
     if(pflags & pipeline_steps::geometry_pass)
     {
         gather_visible_models(scn, &camera, params.vflags, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
@@ -629,6 +647,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         run_particle_pass(scn, camera, rview, target);
     }
+
+    target = run_taa_pass(camera, rview, target, output, params);
 
     if(apply_reflecitons)
     {
@@ -1674,12 +1694,37 @@ auto deferred::run_ssil_pass(const camera& camera,
     return result;
 }
 
+auto deferred::run_taa_pass(const camera& camera,
+                            gfx::render_view& rview,
+                            const gfx::frame_buffer::ptr& input,
+                            const gfx::frame_buffer::ptr& output,
+                            const run_params& rparams) -> gfx::frame_buffer::ptr
+{
+    if(!rparams.fill_taa_params)
+    {
+        taa_pass_.release_resources(rview);
+        return input;
+    }
+    const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
+    if(!input || !gbuffer)
+    {
+        return input;
+    }
+    taa_pass::run_params p;
+    p.input = input;
+    p.output = nullptr;
+    p.cam = &camera;
+    p.g_buffer = gbuffer;
+    rparams.fill_taa_params(p);
+    return taa_pass_.run(rview, p);
+}
+
 auto deferred::run_fxaa_pass(gfx::render_view& rview,
                              const gfx::frame_buffer::ptr& input,
                              const gfx::frame_buffer::ptr& output,
                              const run_params& rparams) -> gfx::frame_buffer::ptr
 {
-    if(!rparams.fill_fxaa_params)
+    if(!rparams.fill_fxaa_params || rparams.fill_taa_params)
     {
         fxaa_pass_.release_resources(rview);
         return input;
@@ -1749,7 +1794,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     tonemapping_pass::run_params params;
     params.input = input;
 
-    if(!rparams.fill_fxaa_params)
+    if(!rparams.fill_fxaa_params || rparams.fill_taa_params)
     {
         params.output = output;
     }

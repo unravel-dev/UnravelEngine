@@ -3,6 +3,7 @@
 
 #include <graphics/graphics.h>
 
+#include <algorithm>
 #include <limits>
 
 namespace unravel
@@ -312,6 +313,11 @@ auto camera::get_view_projection() const -> math::transform
 auto camera::get_prev_view_projection() const -> math::transform
 {
     return get_prev_projection() * get_prev_view();
+}
+
+auto camera::get_taa_prev_view_projection() const -> math::transform
+{
+    return taa_prev_projection_ * taa_prev_view_;
 }
 
 auto camera::get_view_projection_relative() const -> math::transform
@@ -759,67 +765,77 @@ void camera::record_current_matrices()
 }
 
 void camera::set_aa_data(const usize32_t& viewport_size,
-                         std::uint32_t current_subpixel_index,
-                         std::uint32_t temporal_aa_samples)
+                         std::uint32_t temporal_frame_index,
+                         std::uint32_t temporal_aa_samples,
+                         taa_jitter_mode jitter_mode,
+                         float jitter_amplitude,
+                         float jitter_temporal_phase_scale)
 {
+    taa_prev_view_ = get_view();
+    taa_prev_projection_ = get_projection();
+
     if(temporal_aa_samples > 1)
     {
-        float SampleX = math::halton(current_subpixel_index, 2) - 0.5f;
-        float SampleY = math::halton(current_subpixel_index, 3) - 0.5f;
-        if(temporal_aa_samples == 2)
+        float SampleX = 0.0f;
+        float SampleY = 0.0f;
+        switch(jitter_mode)
         {
-            float SamplesX[] = {-4.0f / 16.0f, 4.0f / 16.0f};
-            float SamplesY[] = {4.0f / 16.0f, -4.0f / 16.0f};
-
-            std::uint32_t Index = current_subpixel_index;
-            SampleX = SamplesX[Index];
-            SampleY = SamplesY[Index];
+        case taa_jitter_mode::halton_2_3:
+            math::taa_subpixel_offset_halton(temporal_frame_index,
+                                             SampleX,
+                                             SampleY,
+                                             jitter_temporal_phase_scale);
+            break;
+        case taa_jitter_mode::r2_low_discrepancy:
+            math::taa_subpixel_offset_r2(temporal_frame_index,
+                                         SampleX,
+                                         SampleY,
+                                         jitter_temporal_phase_scale);
+            break;
+        case taa_jitter_mode::msaa_2_rotating:
+        {
+            const float SamplesX[] = {-4.0f / 16.0f, 4.0f / 16.0f};
+            const float SamplesY[] = {4.0f / 16.0f, -4.0f / 16.0f};
+            const std::uint32_t idx = temporal_frame_index % 2u;
+            SampleX = SamplesX[idx];
+            SampleY = SamplesY[idx];
+            break;
         }
-        else if(temporal_aa_samples == 3)
+        case taa_jitter_mode::msaa_3_rotating:
         {
-            // 3xMSAA
-            //   A..
-            //   ..B
-            //   .C.
-            // Rolling circle pattern (A,B,C).
-            float SamplesX[] = {-2.0f / 3.0f, 2.0f / 3.0f, 0.0f / 3.0f};
-            float SamplesY[] = {-2.0f / 3.0f, 0.0f / 3.0f, 2.0f / 3.0f};
-            std::uint32_t Index = current_subpixel_index;
-            SampleX = SamplesX[Index];
-            SampleY = SamplesY[Index];
+            const float SamplesX[] = {-2.0f / 3.0f, 2.0f / 3.0f, 0.0f / 3.0f};
+            const float SamplesY[] = {-2.0f / 3.0f, 0.0f / 3.0f, 2.0f / 3.0f};
+            const std::uint32_t idx = temporal_frame_index % 3u;
+            SampleX = SamplesX[idx];
+            SampleY = SamplesY[idx];
+            break;
         }
-        else if(temporal_aa_samples == 4)
+        case taa_jitter_mode::msaa_4_rotating:
         {
-            // 4xMSAA
-            // Pattern docs:
-            // http://msdn.microsoft.com/en-us/library/windows/desktop/ff476218(v=vs.85).aspx
-            //   .N..
-            //   ...E
-            //   W...
-            //   ..S.
-            // Rolling circle pattern (N,E,S,W).
-            float SamplesX[] = {-2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f, -6.0f / 16.0f};
-            float SamplesY[] = {-6.0f / 16.0f, -2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f};
-            std::uint32_t Index = current_subpixel_index;
-            SampleX = SamplesX[Index];
-            SampleY = SamplesY[Index];
+            const float SamplesX[] = {-2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f, -6.0f / 16.0f};
+            const float SamplesY[] = {-6.0f / 16.0f, -2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f};
+            const std::uint32_t idx = temporal_frame_index % 4u;
+            SampleX = SamplesX[idx];
+            SampleY = SamplesY[idx];
+            break;
         }
-        else if(temporal_aa_samples == 8)
-        {
-            // This works better than various orderings of 8xMSAA.
-            std::uint32_t Index = current_subpixel_index;
-            SampleX = math::halton(Index, 2) - 0.5f;
-            SampleY = math::halton(Index, 3) - 0.5f;
-        }
-        else
-        {
-            // More than 8 samples can improve quality.
-            std::uint32_t Index = current_subpixel_index;
-            SampleX = math::halton(Index, 2) - 0.5f;
-            SampleY = math::halton(Index, 3) - 0.5f;
+        case taa_jitter_mode::progressive_golden:
+        default:
+            math::taa_subpixel_offset_progressive(temporal_frame_index,
+                                                  SampleX,
+                                                  SampleY,
+                                                  jitter_temporal_phase_scale);
+            break;
         }
 
-        aa_data_ = math::vec4(float(current_subpixel_index), float(temporal_aa_samples), SampleX, SampleY);
+        const float amp = std::clamp(jitter_amplitude, 0.0f, 1.5f);
+        SampleX *= amp;
+        SampleY *= amp;
+
+        aa_data_ = math::vec4(float(temporal_frame_index & 0xFFFFu),
+                              float(temporal_aa_samples),
+                              SampleX,
+                              SampleY);
 
         float width = static_cast<float>(viewport_size.width);
         float height = static_cast<float>(viewport_size.height);
