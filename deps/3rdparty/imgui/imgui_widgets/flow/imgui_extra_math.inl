@@ -31,11 +31,6 @@ inline bool operator!=(const ImVec2& lhs, const ImVec2& rhs)
 }
 # endif
 
-inline ImVec2 operator*(const float lhs, const ImVec2& rhs)
-{
-    return ImVec2(lhs * rhs.x, lhs * rhs.y);
-}
-
 # if IMGUI_VERSION_NUM < 18955
 inline ImVec2 operator-(const ImVec2& lhs)
 {
