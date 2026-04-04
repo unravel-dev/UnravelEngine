@@ -237,7 +237,7 @@ namespace Unravel.Core
             audioSource.clip = clip;
             audioSource.volume = volume;
             audioSource.Play();
-            Scene.DestroyEntity(entity, clip.length * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
+            Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
             return audioSource;
         }
 

@@ -141,12 +141,15 @@ auto renderer::create_window_for_display(int index, const std::string& title, ui
 
     if(flags & os::window::resizable)
     {
-        uint32_t window_header = 38 / mode.display_scale;
-        bounds.y += window_header;
-        bounds.h -= window_header;
+        auto frame_size = init_window_->get_frame_size();
+        bounds.y += static_cast<int>(static_cast<float>(frame_size.top) / mode.display_scale);
+        bounds.h -= static_cast<int>(static_cast<float>(frame_size.top + frame_size.bottom) / mode.display_scale);
+        bounds.x += static_cast<int>(static_cast<float>(frame_size.left) / mode.display_scale);
+        bounds.w -= static_cast<int>(static_cast<float>(frame_size.left + frame_size.right) / mode.display_scale);
     }
 
     os::window window(title, bounds.x, bounds.y, bounds.w * mode.display_scale, bounds.h * mode.display_scale, flags);
+    
     set_main_window(std::move(window));
     return render_window_;
 }
