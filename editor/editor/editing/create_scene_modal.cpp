@@ -35,13 +35,13 @@ const preset_card_info presets[] = {
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Full lighting, SSR, Bloom, volumetric clouds, soft shadows and post-processing.\n"
+     "Full Lighting, SSR, Bloom, Volumetric Clouds, Soft Shadows and Post-Processing.\n"
      "Best for high-end desktop builds.",
      defaults::scene_preset::high},
     {"preset_showcase",
      ICON_MDI_GIFT,
      "Showcase",
-     "Full lighting, SSIL, SSR, Bloom, volumetric clouds, soft shadows and post-processing.\n"
+     "Full Lighting, SSIL, SSR, Bloom, TAA, Volumetric Clouds, Soft Shadows and Post-Processing.\n"
      "Best for showcase builds. Requires a powerful GPU.",
      defaults::scene_preset::showcase},
 };
