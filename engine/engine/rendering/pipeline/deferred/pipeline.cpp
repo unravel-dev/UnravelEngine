@@ -54,6 +54,30 @@ auto get_default_depth_format() -> gfx::texture_format
     return gfx::texture_format::D32F;
 }
 
+// run_pipeline_impl takes const camera& for reads; jitter only touches projection jitter state.
+void apply_pipeline_taa_jitter_to_camera(const camera& view_camera,
+                                         const usize32_t& viewport_size,
+                                         const pipeline::run_params& params)
+{
+    camera& cam = const_cast<camera&>(view_camera);
+    if(params.fill_taa_params)
+    {
+        const std::uint32_t sample_count =
+            (std::min)(std::uint32_t(16),
+                       (std::max)(std::uint32_t(2), params.taa_temporal_sample_count));
+        cam.set_aa_data(viewport_size,
+                        static_cast<std::uint32_t>(gfx::get_render_frame()),
+                        sample_count,
+                        params.taa_temporal_jitter_mode,
+                        params.taa_jitter_amplitude,
+                        params.taa_jitter_temporal_phase_scale);
+    }
+    else
+    {
+        cam.set_aa_data(viewport_size, 0u, 1u);
+    }
+}
+
 auto create_or_resize_d_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
                                const pipeline::run_params& params) -> const gfx::texture::ptr&
@@ -592,20 +616,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     create_or_resize_l_buffer(rview, viewport_size, params);
     create_or_resize_r_buffer(rview, viewport_size, params);
 
-    if(params.fill_taa_params)
-    {
-        const uint32_t sc = (std::min)(std::uint32_t(16), (std::max)(std::uint32_t(2), params.taa_temporal_sample_count));
-        const_cast<class camera&>(camera).set_aa_data(viewport_size,
-                                                 static_cast<uint32_t>(gfx::get_render_frame()),
-                                                 sc,
-                                                 params.taa_temporal_jitter_mode,
-                                                 params.taa_jitter_amplitude,
-                                                 params.taa_jitter_temporal_phase_scale);
-    }
-    else
-    {
-        const_cast<class camera&>(camera).set_aa_data(viewport_size, 0u, 1u);
-    }
+    apply_pipeline_taa_jitter_to_camera(camera, viewport_size, params);
 
     if(stages & pipeline_steps::geometry_pass)
     {
