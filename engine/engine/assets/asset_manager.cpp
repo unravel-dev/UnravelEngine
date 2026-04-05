@@ -207,10 +207,16 @@ void asset_manager::save_database(const std::string& protocol, const fs::path& p
     save_to_file(path.string(), db);
 }
 
-auto asset_manager::add_asset(const std::string& key) -> hpp::uuid
+auto asset_manager::add_asset(const std::string& key, bool override) -> hpp::uuid
 {
     auto meta = generate_metadata(key);
-    return add_asset_info_for_key(key, meta, false);
+    return add_asset_info_for_key(key, meta, override);
+}
+
+auto asset_manager::add_asset_for_path(const fs::path& path, bool override) -> hpp::uuid
+{
+    auto key = fs::convert_to_protocol(path).generic_string();
+    return add_asset(key, override);
 }
 
 auto asset_manager::add_asset_info_for_path(const fs::path& path, const asset_meta& meta, bool override) -> hpp::uuid
@@ -239,6 +245,24 @@ auto asset_manager::get_metadata(const hpp::uuid& uid) const -> asset_database::
         }
     }
     return {};
+}
+
+auto asset_manager::get_metadata_for_path(const fs::path& path) const -> asset_database::meta
+{
+    const auto key = fs::convert_to_protocol(path).generic_string();
+    return get_metadata_for_key(key);
+}
+
+auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_database::meta
+{
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    const auto it = databases_.find(key);
+    if(it == databases_.cend())
+    {
+        static const asset_database::meta empty;
+        return empty;
+    }
+    return it->second.get_metadata(key);
 }
 
 auto asset_manager::generate_metadata(const fs::path& p) const -> asset_meta

@@ -902,6 +902,8 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         // Save materials and register their UIDs before writing the mesh binary
         data.default_material_uids.reserve(materials.size());
 
+        APPLOG_INFO("Adding default material UIDs for {0}", str_input);
+
         for(const auto& material : materials)
         {
             fs::path mat_output;
@@ -915,15 +917,14 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                 mat_output = dir / (material.name + ".mat");
             }
 
+            auto uid = am.add_asset_for_path(mat_output, false);
+            data.default_material_uids.push_back(uid);
+
             asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) -> void
             {
                 save_to_file(temp.string(), material.mat);
             }, err);
 
-            auto mat_protocol_path = fs::convert_to_protocol(mat_output);
-            auto mat_meta = am.generate_metadata(mat_protocol_path);
-            auto uid = am.add_asset_info_for_path(mat_output, mat_meta, false);
-            data.default_material_uids.push_back(uid);
         }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void

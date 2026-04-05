@@ -289,6 +289,23 @@ public:
         return uid;
     }
 
+    auto get_metadata(const std::string& location) const -> const meta&
+    {
+        std::lock_guard<std::mutex> lock(asset_mutex_);
+
+        for(const auto& kvp : asset_meta_)
+        {
+            const auto& metainfo = kvp.second;
+            if(metainfo.location == location)
+            {
+                return metainfo;
+            }
+        }
+
+        static const meta empty;
+        return empty;
+    }
+
     /**
      * @brief Gets the metadata of an asset based on its UUID.
      * @param id The UUID of the asset.

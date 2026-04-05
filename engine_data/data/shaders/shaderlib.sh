@@ -12,6 +12,8 @@
 #	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = {
 #endif // BGFX_SHADER_LANGUAGE_GLSL
 
+#define NORMAL_MAP_Y_UP 1
+
 vec4 encodeRE8(float _r)
 {
 	float exponent = ceil(log2(_r) );

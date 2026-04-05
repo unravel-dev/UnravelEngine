@@ -1,6 +1,7 @@
 #pragma once
 #include <engine/engine_export.h>
-
+#include <engine/assets/asset_handle.h>
+#include <engine/rendering/material.h>
 #include <base/basetypes.hpp>
 #include <graphics/graphics.h>
 #include <hpp/span.hpp>
@@ -913,6 +914,11 @@ public:
      */
     auto get_default_material_uids() const -> const std::vector<hpp::uuid>&;
 
+        /**
+     * @brief Gets the imported materials generated during import.
+     * @return A constant reference to the vector of imported materials.
+     */
+     auto get_imported_materials() const -> std::vector<asset_handle<material>>;
     /**
      * @brief Gets the number of submeshes for this mesh.
      * @param lod_index LOD index (0 = base, 1+ = simplified)

@@ -87,6 +87,7 @@ public:
     void remove_asset_info_for_key(const std::string& key);
 
 
+    void register_asset_info_for_path(const fs::path& path, bool override);
     /**
      * @brief Adds asset information for a specified path.
      * @param path The path of the asset.
@@ -109,6 +110,8 @@ public:
      * @return Meta object containing information.
      */
     auto get_metadata(const hpp::uuid& uid) const -> asset_database::meta;
+    auto get_metadata_for_path(const fs::path& path) const -> asset_database::meta;
+    auto get_metadata_for_key(const std::string& key) const -> asset_database::meta;
     auto generate_metadata(const fs::path& p) const -> asset_meta;
 
     /**
@@ -404,6 +407,22 @@ public:
      */
     void evict_unused_assets(const std::string& group, std::chrono::steady_clock::duration max_idle);
 
+        /**
+     * @brief Adds an asset with a specified key.
+     * @param key The key of the asset.
+     * @return The UUID of the added asset.
+     */
+     auto add_asset(const std::string& key, bool override = false) -> hpp::uuid;
+
+     /**
+      * @brief Adds an asset with a specified path.
+      * @param path The path of the asset.
+      * @param override Whether to override the asset if it already exists.
+      * @return The UUID of the added asset.
+      */
+     auto add_asset_for_path(const fs::path& path, bool override = false) -> hpp::uuid;
+ 
+
 private:
     /**
      * @brief Gets the asset database for a specified group.
@@ -418,12 +437,6 @@ private:
      */
     void remove_database(const std::string& group);
 
-    /**
-     * @brief Adds an asset with a specified key.
-     * @param key The key of the asset.
-     * @return The UUID of the added asset.
-     */
-    auto add_asset(const std::string& key) -> hpp::uuid;
 
     /**
      * @brief Loads an asset from a file.

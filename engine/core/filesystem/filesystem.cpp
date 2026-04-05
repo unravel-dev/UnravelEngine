@@ -264,7 +264,9 @@ bool has_known_protocol(const path& _path)
 
 path convert_to_protocol(const path& _path)
 {
-    const auto string_path = fs::path(_path).make_preferred().string();
+    fs::error_code ec;
+    auto canonical_path = fs::weakly_canonical(_path, ec);
+    const auto string_path = fs::path(canonical_path).make_preferred().string();
 
     const auto& protocols = get_path_protocols();
 

@@ -548,15 +548,19 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
 
             if(meta.uid.is_nil() || recreate_meta_file)
             {
-                auto key = fs::convert_to_protocol(ref_path).generic_string();
-                auto new_meta = am.generate_metadata(key);
+                auto new_meta = am.get_metadata_for_path(ref_path).meta;
 
+                if(new_meta.uid.is_nil())
+                {
+                    const auto protocol_path = fs::convert_to_protocol(ref_path);
+                    new_meta = am.generate_metadata(protocol_path);
+                    am.remove_asset_info_for_path(ref_path);
+                }
+                
                 if(new_meta.uid != meta.uid)
                 {
-                    am.remove_asset_info_for_path(ref_path);
                     meta = new_meta;
                 }
-
             }
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 

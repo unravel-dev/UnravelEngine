@@ -206,7 +206,7 @@ struct light
     /// The color of the light.
     math::color color = {1.0f, 1.0f, 1.0f, 1.0f};
     /// The intensity of the light.
-    float intensity = 2.5f;
+    float intensity = 5.0f;
 
     /// Whether the light casts shadows.
     bool casts_shadows{true};

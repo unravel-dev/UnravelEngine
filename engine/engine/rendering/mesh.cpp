@@ -9,6 +9,9 @@
 #include <memory/checked_delete.h>
 #include <meshoptimizer/src/meshoptimizer.h>
 
+
+#include <engine/engine.h>
+#include <engine/assets/asset_manager.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -2646,6 +2649,21 @@ auto mesh::get_default_material_uids() const -> const std::vector<hpp::uuid>&
 {
     return default_material_uids_;
 }
+
+
+auto mesh::get_imported_materials() const -> std::vector<asset_handle<material>>
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+    std::vector<asset_handle<material>> imported_materials;
+    for(const auto& uid : default_material_uids_)
+    {
+        auto mat = am.get_asset<material>(uid);
+        imported_materials.push_back(mat);
+    }
+    return imported_materials;
+}
+
 
 auto operator<(const mesh::adjacent_edge_key& key1, const mesh::adjacent_edge_key& key2) -> bool
 {

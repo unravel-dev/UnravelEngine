@@ -110,6 +110,12 @@ REFLECT(mesh)
             entt::attribute{"name", "info"},
             entt::attribute{"pretty_name", "Info"},
             entt::attribute{"tooltip", "Info about the mesh."},
+        })
+        .data<nullptr, &mesh::get_imported_materials>("imported_materials"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "imported_materials"},
+            entt::attribute{"pretty_name", "Imported Materials"},
+            entt::attribute{"tooltip", "Imported materials."},
         });
 }
 SAVE(mesh::submesh)

@@ -377,7 +377,8 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     }
     else if(method == TONEMAP_FILMIC)
     {
-        tonemapped_color = linear_to_srgb(tonemap_filmic(color));
+        // tonemap_filmic bakes gamma (~2.2); output is already display-encoded for UNORM8.
+        tonemapped_color = saturate(tonemap_filmic(color));
     }
     else if(method == TONEMAP_ACES)
     {

@@ -49,6 +49,10 @@ CONST(uint g_numTaps[5]) = { 3, 5, 12, 0, 0 };
 //
 #define SSAO_DEPTH_MIPS_ENABLE_AT_QUALITY_PRESET                        (2)         // !!warning!! the MIP generation on the C++ side will be enabled on quality preset 2 regardless of this value, so if changing here, change the C++ side too
 #define SSAO_DEPTH_MIPS_GLOBAL_OFFSET                                   (-4.3)      // best noise/quality/performance tradeoff, found empirically
+// When the camera is very close to geometry, pixLookupRadiusMod explodes, mipLevel goes high, and
+// coarse mips average unrelated depths (worse with R16F half-res) -> radial banding / false occlusion.
+// Inside this view-space radius (same units as u_effectRadius / scene), force mip 0 like quality<=1.
+#define SSAO_DEPTH_MIPS_DISABLE_INSIDE_VIEW_DIST                        (4.0)
 //
 // !!warning!! the edge handling is hard-coded to 'disabled' on quality level 0, and enabled above, on the C++ side; while toggling it here will work for
 // testing purposes, it will not yield performance gains (or correct results)
@@ -210,6 +214,11 @@ void SSAOTap( const int qualityLevel, inout float obscuranceSum, inout float wei
     // calculate MIP based on the sample distance from the centre, similar to as described
     // in http://graphics.cs.williams.edu/papers/SAOHPG12/.
     float mipLevel = ( qualityLevel < SSAO_DEPTH_MIPS_ENABLE_AT_QUALITY_PRESET )?(0):(samplePow2Len + mipOffset);
+    if(qualityLevel >= SSAO_DEPTH_MIPS_ENABLE_AT_QUALITY_PRESET
+       && length(pixCenterPos) < SSAO_DEPTH_MIPS_DISABLE_INSIDE_VIEW_DIST)
+    {
+        mipLevel = 0.0;
+    }
 
 #if BGFX_SHADER_LANGUAGE_GLSL
     sampleOffset.y = -sampleOffset.y;
