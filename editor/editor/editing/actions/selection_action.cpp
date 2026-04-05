@@ -3,14 +3,60 @@
 
 namespace unravel
 {
+namespace
+{
+    auto convert_to_stable(const std::vector<entt::meta_any>& selection) -> std::vector<entt::meta_any>
+    {
+        std::vector<entt::meta_any> stable_selection;
+        for(const auto& sel : selection)
+        {
+            if(sel.type() == entt::resolve<entt::handle>())
+            {
+                auto handle = sel.cast<entt::handle>();
+                if(handle)
+                {
+                    stable_selection.emplace_back(entt::make_uhandle(handle));
+                }
+            }
+            else
+            {
+                stable_selection.emplace_back(sel);
+            }
+        }
+        return stable_selection;
+    } 
+    
+    auto resolve_stable(const std::vector<entt::meta_any>& selection) -> std::vector<entt::meta_any>
+    {
+        std::vector<entt::meta_any> resolved_selection;
+        for(const auto& sel : selection)
+        {
+            if(sel.type() == entt::resolve<entt::uhandle>())
+            {
+                auto uhandle = sel.cast<entt::uhandle>();
+                auto resolved = uhandle.resolve();
+                if(resolved)
+                {
+                    resolved_selection.emplace_back(resolved);
+                }
+            }
+            else
+            {
+                resolved_selection.emplace_back(sel);
+            }
+        }
+        return resolved_selection;
+    }
+}
 
 selection_action_t::selection_action_t(editing_manager* mgr,
                                        const std::vector<entt::meta_any>& old_sel,
                                        const std::vector<entt::meta_any>& new_sel, bool is_select)
-    : manager(mgr), old_selection(old_sel), new_selection(new_sel), is_select(is_select)
+    : manager(mgr), old_selection(convert_to_stable(old_sel)), new_selection(convert_to_stable(new_sel)), is_select(is_select)
 {
     name = is_select ? "Select" : "Unselect";
     undoable = true;
+
 }
 
 void selection_action_t::do_action()
@@ -21,7 +67,7 @@ void selection_action_t::do_action()
     }
 
     // Restore the new selection state using the internal method
-    manager->restore_selection_impl(new_selection);
+    manager->restore_selection_impl(resolve_stable(new_selection));
 }
 
 void selection_action_t::undo_action()
@@ -32,7 +78,7 @@ void selection_action_t::undo_action()
     }
 
     // Restore the old selection state using the internal method
-    manager->restore_selection_impl(old_selection);
+    manager->restore_selection_impl(resolve_stable(old_selection));
 }
 
 auto selection_action_t::is_mergeable(const editing_action_t& previous) const -> bool

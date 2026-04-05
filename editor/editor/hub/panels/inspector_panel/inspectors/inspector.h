@@ -289,6 +289,14 @@ struct meta_any_proxy
  */
 auto make_proxy(entt::meta_any& var, const std::string& name = {}) -> meta_any_proxy;
 
+/**
+ * @brief Like make_proxy, but for entt::handle roots resolved by id_component UUID each access.
+ *
+ * Survives entity destruction/recreation when the recreated row keeps the same id_component id.
+ * Falls back to make_proxy for non-handles, empty handles, or entities without id_component.
+ */
+auto make_entity_proxy(entt::meta_any& var, const std::string& name = {}) -> meta_any_proxy;
+
 auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy;
 
 /**

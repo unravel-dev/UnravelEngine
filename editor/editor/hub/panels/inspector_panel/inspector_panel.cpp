@@ -8,6 +8,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/id_component.h>
+#include <engine/ecs/scene.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <uuid/uuid.h>
 #include <engine/assets/asset_manager.h>
@@ -53,7 +54,7 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
         if(override_ctx.begin_prefab_inspection(entity))
         {
             auto name = entity_panel::get_entity_name(entity);
-            auto proxy = make_proxy(object, name);
+            auto proxy = make_entity_proxy(object, name);
             auto result = inspect_var(ctx, object, proxy);
             
             override_ctx.end_prefab_inspection();
@@ -68,8 +69,8 @@ auto inspect_object_with_prefab_check(rtti::context& ctx, entt::meta_any& object
         name = entity_panel::get_entity_name(entity);
     }
 
-    // Fall back to normal inspection (empty reference) 
-    auto proxy = make_proxy(object, name);
+    // Fall back to normal inspection (empty reference)
+    auto proxy = make_entity_proxy(object, name);
     auto result = inspect_var(ctx, object, proxy);
 
 }

@@ -1,7 +1,9 @@
 #include "entity_panel.h"
 #include "panel.h"
 #include "reflection/reflection.h"
+#include <memory>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/actions/entity_actions.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/components/id_component.h>
@@ -67,25 +69,14 @@ void entity_panel::delete_entities(const std::vector<entt::handle>& entities)
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Delete Entities",
-        [entities]() mutable
-        {
-            auto& ctx = engine::context();
-            auto& em = ctx.get_cached<editing_manager>();
-            for(auto entity : entities)
-            {
-                if(!entity.valid())
-                {
-                    return;
-                }
-
-                em.unselect(entity);
-
-                prefab_override_context::mark_entity_as_removed(entity);
-
-                entity.destroy();
-            }
-        });
+    
+    em.push_undo_stack_enabled(true);
+    for(auto entity : entities)
+    {
+        em.unselect(entity);
+    }
+    em.queue_action("Delete Entities", std::make_shared<delete_entities_action_t>(entities));
+    em.pop_undo_stack_enabled();
 }
 
 

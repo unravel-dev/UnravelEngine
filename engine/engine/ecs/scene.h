@@ -1,6 +1,8 @@
 #pragma once
 #include <engine/engine_export.h>
 
+#include <uuid/uuid.h>
+
 #include "prefab.h"
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -159,6 +161,13 @@ struct scene
      */
     static auto find_entity_by_prefab_uuid(entt::handle root_entity, const hpp::uuid& target_uuid) -> entt::handle;
 
+        /**
+     * @brief Finds an entity by UUID in the scene.
+     * @param uuid The UUID of the entity to find.
+     * @return The entity handle if found, otherwise an empty handle.
+     */
+     auto find_entity_by_uuid(const hpp::uuid& target_uuid) const -> entt::handle;
+
     /**
      * @brief The source prefab asset handle for the scene.
      */
@@ -173,6 +182,44 @@ struct scene
     std::string tag{};
 };
 
+
 #define TAG_COMPONENT(name) entt::tag<name##_hs>
 
+/**
+ * @brief Finds an entity by id_component UUID in a registry (no scene wrapper required).
+ */
+ENGINE_EXPORT auto find_entity_by_uuid(entt::registry& registry, const hpp::uuid& target_uuid) -> entt::handle;
+
+
 } // namespace unravel
+
+namespace entt
+{
+struct uhandle
+{
+    uhandle() = default;
+    uhandle(entt::handle handle);
+    uhandle(entt::registry& registry, const hpp::uuid& uuid) : registry(&registry), uuid(uuid) {}
+    uhandle(const uhandle& other) = default;
+    uhandle(uhandle&& other) = default;
+    auto operator=(const uhandle& other) -> uhandle& = default;
+    auto operator=(uhandle&& other) -> uhandle& = default;
+    ~uhandle() = default;
+    auto resolve() const -> entt::handle;
+    auto operator==(const uhandle& other) const -> bool
+    {
+        return registry == other.registry && uuid == other.uuid;
+    }
+    auto operator!=(const uhandle& other) const -> bool
+    {
+        return !(*this == other);
+    }
+    entt::registry* registry{};
+    hpp::uuid uuid{};
+};
+
+inline auto make_uhandle(entt::handle handle) -> uhandle
+{
+    return uhandle(handle);
+}
+}

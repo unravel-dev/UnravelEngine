@@ -1,37 +1,38 @@
 #include "transform_actions.h"
 #include "base/basetypes.hpp"
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include <engine/ecs/scene.h>
 
 namespace unravel
 {
 
 // Transform Move Action Implementation
 transform_move_action_t::transform_move_action_t(entt::handle ent, const math::vec3& old_pos, const math::vec3& new_pos)
-    : entity(ent), old_position(old_pos), new_position(new_pos)
+    : entity(entt::make_uhandle(ent)), old_position(old_pos), new_position(new_pos)
 {
     name = "Position";
 }
 
 void transform_move_action_t::do_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_position_local(new_position);
-            prefab_override_context::mark_transform_as_changed(entity, true, false, false, false);
+            prefab_override_context::mark_transform_as_changed(ent, true, false, false, false);
         }
     }
 }
 
 void transform_move_action_t::undo_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_position_local(old_position);
-            prefab_override_context::mark_transform_as_changed(entity, true, false, false, false);
+            prefab_override_context::mark_transform_as_changed(ent, true, false, false, false);
         }
     }
 }
@@ -50,8 +51,9 @@ void transform_move_action_t::merge_with(const editing_action_t& previous)
 
 auto transform_move_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
-}   
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
+}
 
 
 void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
@@ -65,31 +67,31 @@ void transform_move_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Move Global Action Implementation
 transform_move_global_action_t::transform_move_global_action_t(entt::handle ent, const math::vec3& old_pos, const math::vec3& new_pos)
-    : entity(ent), old_position(old_pos), new_position(new_pos)
+    : entity(entt::make_uhandle(ent)), old_position(old_pos), new_position(new_pos)
 {
     name = "Global Position";
 }
 
 void transform_move_global_action_t::do_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_position_global(new_position);
-            prefab_override_context::mark_transform_global_as_changed(entity, true, false, false, false);
+            prefab_override_context::mark_transform_global_as_changed(ent, true, false, false, false);
         }
     }
 }
 
 void transform_move_global_action_t::undo_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_position_global(old_position);
-            prefab_override_context::mark_transform_global_as_changed(entity, true, false, false, false);
+            prefab_override_context::mark_transform_global_as_changed(ent, true, false, false, false);
         }
     }
 }
@@ -108,8 +110,9 @@ void transform_move_global_action_t::merge_with(const editing_action_t& previous
 
 auto transform_move_global_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
-}   
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
+}
 
 void transform_move_global_action_t::draw_in_inspector(rtti::context& ctx)
 {
@@ -122,31 +125,31 @@ void transform_move_global_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Rotate Action Implementation
 transform_rotate_action_t::transform_rotate_action_t(entt::handle ent, const math::quat& old_rot, const math::quat& new_rot)
-    : entity(ent), old_rotation(old_rot), new_rotation(new_rot)
+    : entity(entt::make_uhandle(ent)), old_rotation(old_rot), new_rotation(new_rot)
 {
     name = "Rotation";
 }
 
 void transform_rotate_action_t::do_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_rotation_local(new_rotation);
-            prefab_override_context::mark_transform_as_changed(entity, false, true, false, false);
+            prefab_override_context::mark_transform_as_changed(ent, false, true, false, false);
         }
     }
 }
 
 void transform_rotate_action_t::undo_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_rotation_local(old_rotation);
-            prefab_override_context::mark_transform_as_changed(entity, false, true, false, false);
+            prefab_override_context::mark_transform_as_changed(ent, false, true, false, false);
         }
     }
 }
@@ -165,7 +168,8 @@ void transform_rotate_action_t::merge_with(const editing_action_t& previous)
 
 auto transform_rotate_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
 }
 
 void transform_rotate_action_t::draw_in_inspector(rtti::context& ctx)
@@ -180,31 +184,31 @@ void transform_rotate_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Scale Action Implementation
 transform_scale_action_t::transform_scale_action_t(entt::handle ent, const math::vec3& old_sc, const math::vec3& new_sc)
-    : entity(ent), old_scale(old_sc), new_scale(new_sc)
+    : entity(entt::make_uhandle(ent)), old_scale(old_sc), new_scale(new_sc)
 {
     name = "Scale";
 }
 
 void transform_scale_action_t::do_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_scale_local(new_scale);
-            prefab_override_context::mark_transform_as_changed(entity, false, false, true, false);
+            prefab_override_context::mark_transform_as_changed(ent, false, false, true, false);
         }
     }
 }
 
 void transform_scale_action_t::undo_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_scale_local(old_scale);
-            prefab_override_context::mark_transform_as_changed(entity, false, false, true, false);
+            prefab_override_context::mark_transform_as_changed(ent, false, false, true, false);
         }
     }
 }
@@ -223,7 +227,8 @@ void transform_scale_action_t::merge_with(const editing_action_t& previous)
 
 auto transform_scale_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
 }
 
 void transform_scale_action_t::draw_in_inspector(rtti::context& ctx)
@@ -238,31 +243,31 @@ void transform_scale_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Skew Action Implementation
 transform_skew_action_t::transform_skew_action_t(entt::handle ent, const math::vec3& old_sk, const math::vec3& new_sk)
-    : entity(ent), old_skew(old_sk), new_skew(new_sk)
+    : entity(entt::make_uhandle(ent)), old_skew(old_sk), new_skew(new_sk)
 {
     name = "Skew";
 }
 
 void transform_skew_action_t::do_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_skew_local(new_skew);
-            prefab_override_context::mark_transform_as_changed(entity, false, false, false, true);
+            prefab_override_context::mark_transform_as_changed(ent, false, false, false, true);
         }
     }
 }
 
 void transform_skew_action_t::undo_action()
 {
-    if (entity)
+    if(auto ent = entity.resolve())
     {
-        if (auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_skew_local(old_skew);
-            prefab_override_context::mark_transform_as_changed(entity, false, false, false, true);
+            prefab_override_context::mark_transform_as_changed(ent, false, false, false, true);
         }
     }
 }
@@ -281,7 +286,8 @@ void transform_skew_action_t::merge_with(const editing_action_t& previous)
 
 auto transform_skew_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
 }
 
 void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
@@ -295,9 +301,9 @@ void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Set Parent Action Implementation
 transform_set_parent_action_t::transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p)
-    : entity(ent), old_parent(old_p), new_parent(new_p)
+    : entity(entt::make_uhandle(ent)), old_parent(entt::make_uhandle(old_p)), new_parent(entt::make_uhandle(new_p))
 {
-    if(new_parent)
+    if(new_p)
     {
         name = "Set Parent";
     }
@@ -309,24 +315,24 @@ transform_set_parent_action_t::transform_set_parent_action_t(entt::handle ent, e
 
 void transform_set_parent_action_t::do_action()
 {
-    if(entity)
+    if(auto ent = entity.resolve())
     {
-        if(auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
-            transform->set_parent(new_parent, true);
-            prefab_override_context::mark_transform_as_changed(entity, true, true, true, true);
+            transform->set_parent(new_parent.resolve(), true);
+            prefab_override_context::mark_transform_as_changed(ent, true, true, true, true);
         }
     }
 }
 
 void transform_set_parent_action_t::undo_action()
 {
-    if(entity)
+    if(auto ent = entity.resolve())
     {
-        if(auto transform = entity.try_get<transform_component>())
+        if(auto transform = ent.try_get<transform_component>())
         {
-            transform->set_parent(old_parent, true);
-            prefab_override_context::mark_transform_as_changed(entity, true, true, true, true);
+            transform->set_parent(old_parent.resolve(), true);
+            prefab_override_context::mark_transform_as_changed(ent, true, true, true, true);
         }
     }
 }
@@ -340,7 +346,8 @@ void transform_set_parent_action_t::merge_with(const editing_action_t& previous)
 
 auto transform_set_parent_action_t::is_valid() const -> bool
 {
-    return entity.valid() && entity.try_get<transform_component>();
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<transform_component>();
 }
 
 void transform_set_parent_action_t::draw_in_inspector(rtti::context& ctx)
@@ -348,8 +355,8 @@ void transform_set_parent_action_t::draw_in_inspector(rtti::context& ctx)
     auto custom = entt::make_custom<entt::attributes>(entt::attributes{
         {"name", "parent"},
         {"pretty_name", "Parent"}});
-    draw_in_inspector_impl(ctx, entt::meta_any{std::in_place_type<entt::handle>, old_parent},
-                          entt::meta_any{std::in_place_type<entt::handle>, new_parent}, custom);
+    draw_in_inspector_impl(ctx, entt::meta_any{std::in_place_type<entt::handle>, old_parent.resolve()},
+                          entt::meta_any{std::in_place_type<entt::handle>, new_parent.resolve()}, custom);
 }
 
 } // namespace unravel

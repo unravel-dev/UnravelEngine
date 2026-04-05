@@ -1,7 +1,10 @@
 #include "inspector.h"
 #include <imgui/imgui_internal.h>
 #include <string_utils/utils.h>
+#include <engine/ecs/components/id_component.h>
+#include <engine/ecs/scene.h>
 #include <engine/engine.h>
+#include <engine/meta/ecs/entity.hpp>
 #include "imgui/imgui.h"
 #include "inspectors.h"
 
@@ -376,6 +379,40 @@ auto make_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
         if(proxy.impl->getter(var) && var)
         {
             return var.assign(value);
+        }
+        return false;
+    };
+    return proxy;
+}
+
+auto make_entity_proxy(entt::meta_any& var, const std::string& name) -> meta_any_proxy
+{
+    if(var.type() != entt::resolve<entt::uhandle>())
+    {
+        return make_proxy(var, name);
+    }
+    auto handle = var.cast<entt::uhandle>();
+    
+    meta_any_proxy proxy;
+    proxy.impl->parent = nullptr;
+    proxy.impl->type_name = entt::get_pretty_name(var.type());
+    proxy.impl->name = name;
+    proxy.impl->resolver = [handle](entt::meta_any& result) mutable -> bool
+    {
+        result = handle;
+        return !!result;
+    };
+    proxy.impl->getter = [handle](entt::meta_any& result) mutable -> bool
+    {
+        result = handle;
+        return !!result;
+    };
+    proxy.impl->setter = [](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        entt::meta_any var_slot;
+        if(proxy.impl->getter(var_slot) && var_slot)
+        {
+            return var_slot.assign(value);
         }
         return false;
     };

@@ -314,6 +314,28 @@ auto scene::create_entity(entt::registry& r, const std::string& name, entt::hand
     return ent;
 }
 
+auto find_entity_by_uuid(entt::registry& registry, const hpp::uuid& target_uuid) -> entt::handle
+{
+    if(target_uuid.is_nil())
+    {
+        return {};
+    }
+    auto view = registry.view<id_component>();
+    for(auto e : view)
+    {
+        if(view.get<id_component>(e).id == target_uuid)
+        {
+            return entt::handle(registry, e);
+        }
+    }
+    return {};
+}
+
+auto scene::find_entity_by_uuid(const hpp::uuid& target_uuid) const -> entt::handle
+{
+    return ::unravel::find_entity_by_uuid(*registry, target_uuid);
+}
+
 auto scene::create_entity(const std::string& tag, entt::handle parent) -> entt::handle
 {
     return create_entity(*registry, tag, parent);
@@ -423,4 +445,22 @@ auto scene::find_entity_by_prefab_uuid(entt::handle entity, const hpp::uuid& tar
     
     return {};
 }
+
+
 } // namespace unravel
+
+namespace entt
+{
+uhandle::uhandle(entt::handle handle)
+{
+    if(handle)
+    {
+        registry = handle.registry();
+        uuid = handle.get<unravel::id_component>().id;
+    }
+}
+auto uhandle::resolve() const -> entt::handle
+{
+    return ::unravel::find_entity_by_uuid(*registry, uuid);
+}
+}

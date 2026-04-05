@@ -3,6 +3,7 @@
 #include "editing_action.h"
 #include "composite_action.h"
 #include "entt/meta/meta.hpp"
+#include <engine/ecs/scene.h>
 #include <engine/ecs/components/transform_component.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector.h>
 #include <math/math.h>
@@ -13,7 +14,7 @@ namespace unravel
 // Individual transform component actions
 struct transform_move_action_t : crtp_meta_type<transform_move_action_t, editing_action_t>
 {
-    entt::handle entity;
+    entt::uhandle entity{};
     math::vec3 old_position;
     math::vec3 new_position;
     
@@ -29,7 +30,7 @@ struct transform_move_action_t : crtp_meta_type<transform_move_action_t, editing
 
 struct transform_move_global_action_t : crtp_meta_type<transform_move_global_action_t, editing_action_t>
 {
-    entt::handle entity;
+    entt::uhandle entity{};
     math::vec3 old_position;
     math::vec3 new_position;
     
@@ -45,7 +46,7 @@ struct transform_move_global_action_t : crtp_meta_type<transform_move_global_act
 
 struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, editing_action_t>
 {
-    entt::handle entity;
+    entt::uhandle entity{};
     math::quat old_rotation;
     math::quat new_rotation;
     
@@ -61,7 +62,7 @@ struct transform_rotate_action_t : crtp_meta_type<transform_rotate_action_t, edi
 
 struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editing_action_t>
 {
-    entt::handle entity;
+    entt::uhandle entity{};
     math::vec3 old_scale;
     math::vec3 new_scale;
     
@@ -77,7 +78,7 @@ struct transform_scale_action_t : crtp_meta_type<transform_scale_action_t, editi
 
 struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing_action_t>
 {
-    entt::handle entity;
+    entt::uhandle entity{};
     math::vec3 old_skew;
     math::vec3 new_skew;
     
@@ -93,9 +94,9 @@ struct transform_skew_action_t : crtp_meta_type<transform_skew_action_t, editing
 
 struct transform_set_parent_action_t : crtp_meta_type<transform_set_parent_action_t, editing_action_t>
 {
-    entt::handle entity;
-    entt::handle old_parent;
-    entt::handle new_parent;
+    entt::uhandle entity{};
+    entt::uhandle old_parent{};
+    entt::uhandle new_parent{};
 
     transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p);
 
