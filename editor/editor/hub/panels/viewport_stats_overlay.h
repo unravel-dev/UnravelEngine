@@ -1,13 +1,7 @@
 #pragma once
 #include <editor/imgui/integration/imgui.h>
+#include <engine/rendering/pipeline/pipeline.h>
 
-namespace unravel
-{
-namespace rendering
-{
-class pipeline_stats;
-}
-}
 namespace unravel::viewport_stats_overlay
 {
 

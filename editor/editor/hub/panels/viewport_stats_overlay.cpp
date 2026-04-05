@@ -16,9 +16,8 @@
 #include <cstdio>
 #include <numeric>
 
-namespace unravel::viewport_stats_overlay
+namespace unravel
 {
-
 namespace
 {
 constexpr float overlay_width = 400.0f;
@@ -371,7 +370,7 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
 
 } // namespace
 
-void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const char* id)
+void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats, state& overlay_state, const char* id)
 {
     if(!overlay_state.is_visible)
     {
@@ -442,7 +441,7 @@ void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const c
     ImGui::PopStyleColor(4);
 }
 
-void draw_stats_toggle(state& overlay_state)
+void viewport_stats_overlay::draw_stats_toggle(state& overlay_state)
 {
     const float fps = ImGui::GetIO().Framerate;
     std::array<char, 96> fps_label_buf{};
@@ -482,5 +481,4 @@ void draw_stats_toggle(state& overlay_state)
                        });
     ImGui::SetItemTooltipEx("%s", overlay_state.is_visible ? "Hide Statistics" : "Show Statistics");
 }
-
-} // namespace unravel::viewport_stats_overlay
+} // namespace unravel
