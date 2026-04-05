@@ -17,7 +17,7 @@ public:
         float soft_knee = 0.5f;
         float clamp = 100.0f;
         float intensity = 1.0f;
-        int mip_count = 6;
+        int mip_count = 8;
 
         // Per-mip tint (RGB) and weight (alpha). Applied during upsample cascade.
         // Tint controls color, alpha controls contribution weight (0 = disabled, 1 = full).

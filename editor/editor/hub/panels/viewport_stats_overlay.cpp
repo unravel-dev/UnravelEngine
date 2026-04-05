@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <numeric>
 
 namespace unravel::viewport_stats_overlay
@@ -443,9 +444,18 @@ void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const c
 
 void draw_stats_toggle(state& overlay_state)
 {
-    const char* label = overlay_state.is_visible
-        ? (ICON_MDI_CHART_LINE " Stats")
-        : (ICON_MDI_CHART_LINE_VARIANT " Stats");
+    const float fps = ImGui::GetIO().Framerate;
+    std::array<char, 96> fps_label_buf{};
+    const char* label = ICON_MDI_CHART_LINE " Stats";
+    if(!overlay_state.is_visible)
+    {
+        
+        std::snprintf(fps_label_buf.data(),
+                      fps_label_buf.size(),
+                      ICON_MDI_CHART_LINE_VARIANT " Stats (%.1f FPS)",
+                      static_cast<double>(fps));
+        label = fps_label_buf.data();
+    }
 
     auto label_size = ImGui::CalcTextSize(label).x;
 
