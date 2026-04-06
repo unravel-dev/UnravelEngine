@@ -102,6 +102,8 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_ssil_params;
         gfx::program::uniform_ptr u_ssil_params2;
+        /// xy = G-buffer (full) width/height; z = 1 when tracing at half resolution (UV from gl_FragCoord).
+        gfx::program::uniform_ptr u_ssil_resolution;
         gfx::program::uniform_ptr s_color;
         gfx::program::uniform_ptr s_normal;
         gfx::program::uniform_ptr s_hiz;
@@ -113,6 +115,7 @@ private:
         {
             cache_uniform(program.get(), u_ssil_params, "u_ssil_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_ssil_params2, "u_ssil_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_ssil_resolution, "u_ssil_resolution", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_color, "s_color", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);

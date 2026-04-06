@@ -508,8 +508,11 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     auto prev_view_proj = params.cam->get_prev_view_projection();
     gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
-    // Draw fullscreen quad
-    auto topology = gfx::clip_quad(1.0f);
+    uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
+    if(topology == 0)
+    {
+        topology = gfx::clip_quad(1.0f);
+    }
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     gfx::submit(pass.id, fidelityfx_pixel_program_.program->native_handle());
 

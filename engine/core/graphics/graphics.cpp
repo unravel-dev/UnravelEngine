@@ -1193,6 +1193,63 @@ auto screen_quad(float dest_width, float dest_height, float depth, float width, 
     return 0;
 }
 
+auto clip_fullscreen_triangle(float depth, float width, float height) -> uint64_t
+{
+    bool origin_bottom_left = is_origin_bottom_left();
+
+    if(3 != getAvailTransientVertexBuffer(3, pos_texcoord0_vertex::get_layout()))
+    {
+        return 0;
+    }
+
+    transient_vertex_buffer vb;
+    alloc_transient_vertex_buffer(&vb, 3, pos_texcoord0_vertex::get_layout());
+    auto vertex = reinterpret_cast<pos_texcoord0_vertex*>(vb.data);
+
+    const float minx = -width;
+    const float maxx = width;
+    const float miny = -height;
+    const float maxy = height;
+
+    const float minu = 0.0f;
+    const float maxu = 1.0f;
+
+    const float zz = depth;
+
+    float minv = 1.0f;
+    float maxv = 0.0f;
+
+    if(origin_bottom_left)
+    {
+        minv = 1.0f - minv;
+        maxv = 1.0f - maxv;
+    }
+
+    // One triangle covering [-width,width] x [-height,height] with extrapolated UVs (no quad diagonal).
+    // v0: BL, v1: bottom edge extrapolated past BR, v2: left edge extrapolated past TL.
+    vertex[0].x = minx;
+    vertex[0].y = miny;
+    vertex[0].z = zz;
+    vertex[0].u = minu;
+    vertex[0].v = minv;
+
+    vertex[1].x = maxx + 2.0f * width;
+    vertex[1].y = miny;
+    vertex[1].z = zz;
+    vertex[1].u = minu + 2.0f * (maxu - minu);
+    vertex[1].v = minv;
+
+    vertex[2].x = minx;
+    vertex[2].y = maxy + 2.0f * height;
+    vertex[2].z = zz;
+    vertex[2].u = minu;
+    vertex[2].v = minv + 2.0f * (maxv - minv);
+
+    bgfx::setVertexBuffer(0, &vb);
+
+    return BGFX_STATE_PT_TRISTRIP;
+}
+
 auto clip_quad(float depth, float width, float height) -> uint64_t
 {
     // float texture_half = get_half_texel();

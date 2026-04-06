@@ -18,6 +18,7 @@
 #include "../bgfx_compute.sh"
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../hiz_trace.sh"
 
 SAMPLER2D(s_ssr_input, 0);
 IMAGE2D_WO(i_ssr_output, rgba8, 1);
@@ -57,6 +58,10 @@ void main()
 	vec2 texel_size = 1.0 / vec2(size);
 	vec2 uv = (vec2(coord) + 0.5) * texel_size;
 
+	vec2 depth_dim = vec2(textureSize(s_depth, 0));
+	float resolution_scale = depth_dim.x / max(float(size.x), 1.0);
+	vec2 full_uv_center = HizScreenPassToFullResUV(uv, resolution_scale, depth_dim);
+
 	vec4 center = texelFetch(s_ssr_input, coord, 0);
 
 	BRANCH
@@ -66,8 +71,8 @@ void main()
 		return;
 	}
 
-	float center_depth = DecodeGBufferDepthLod(uv, s_depth, 0.0).depth01;
-	GBufferDataNormalMetalRoughness center_nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_normal, 0.0);
+	float center_depth = DecodeGBufferDepthLod(full_uv_center, s_depth, 0.0).depth01;
+	GBufferDataNormalMetalRoughness center_nd = DecodeGBufferNormalMetalRoughnessLod(full_uv_center, s_normal, 0.0);
 	vec3  center_normal = center_nd.world_normal;
 	float roughness     = center_nd.roughness;
 
@@ -101,11 +106,12 @@ void main()
 			float kw = kernel_weight(dx, dy);
 			vec4  s  = texelFetch(s_ssr_input, sc, 0);
 			vec2  suv = (vec2(sc) + 0.5) * texel_size;
+			vec2  full_uv_s = HizScreenPassToFullResUV(suv, resolution_scale, depth_dim);
 
-			float sd = DecodeGBufferDepthLod(suv, s_depth, 0.0).depth01;
+			float sd = DecodeGBufferDepthLod(full_uv_s, s_depth, 0.0).depth01;
 			float dw = exp(-abs(center_depth - sd) / max(u_depth_sigma, 1e-6));
 
-			vec3 sn = DecodeGBufferNormalMetalRoughnessLod(suv, s_normal, 0.0).world_normal;
+			vec3 sn = DecodeGBufferNormalMetalRoughnessLod(full_uv_s, s_normal, 0.0).world_normal;
 			float nw = pow(max(0.0, dot(center_normal, sn)), u_normal_power);
 
 			float sl = Luminance(s.rgb);

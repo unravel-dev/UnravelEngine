@@ -666,6 +666,11 @@ uint32_t get_max_blend_transforms();
 uint64_t screen_quad(float dest_width, float dest_height, float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 uint64_t clip_quad(float depth = 0.0f, float width = 1.0f, float height = 1.0f);
 
+/// Single large triangle covering the clip rect (same UV convention as @ref clip_quad).
+/// Use for fullscreen passes that must not have a quad diagonal (e.g. SSIL half-res trace).
+/// Returns 0 if transient VB allocation failed — fall back to @ref clip_quad in that case.
+uint64_t clip_fullscreen_triangle(float depth = 0.0f, float width = 1.0f, float height = 1.0f);
+
 struct clip_quad_def
 {
     float depth = 0.0f;

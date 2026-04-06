@@ -168,7 +168,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_half_res"},
             entt::attribute{"pretty_name", "Half Resolution"},
-            entt::attribute{"tooltip", "Run SSIL at half resolution for better performance. Recommended since diffuse is low-frequency"},
+            entt::attribute{"tooltip", "Run SSIL trace at half resolution; each texel maps to the center of a 2×2 full-res G-buffer block (no UV mismatch). Indirect pass still samples the upscaled result at full res."},
         })
         .data<&ssil_settings::enable_multi_bounce>("enable_multi_bounce"_hs)
         .custom<entt::attributes>(entt::attributes{

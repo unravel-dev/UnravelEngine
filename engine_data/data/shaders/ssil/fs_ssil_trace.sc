@@ -32,6 +32,9 @@ uniform vec4 u_ssil_params2;
 #define u_frame_index     u_ssil_params2.y
 #define u_multi_bounce    u_ssil_params2.z
 
+/// xy = full G-buffer size (pixels); z = 1 when SSIL RT is half-res (see HizScreenPassToFullResUV).
+uniform vec4 u_ssil_resolution;
+
 #define BASE_LOD 0
 
 /// Cosine-weighted hemisphere sample around N (tangent space -> world).
@@ -79,7 +82,9 @@ vec3 SampleRadiance(vec2 hit_uv)
 
 void main()
 {
-    vec2 uv = v_texcoord0;
+    vec2 uv = HizScreenPassToFullResUV(v_texcoord0,
+                                       mix(1.0, 2.0, step(0.5, u_ssil_resolution.z)),
+                                       u_ssil_resolution.xy);
 
     GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughness(uv, s_normal);
     vec3 world_normal = nd.world_normal;
@@ -107,7 +112,7 @@ void main()
     int max_steps = int(u_max_steps);
     int frame_idx = int(u_frame_index);
 
-    vec2 scaled_uv = uv * u_viewRect.zw;
+    vec2 scaled_uv = uv * u_ssil_resolution.xy;
     uvec2 rnd = Rand3DPCG16(ivec3(scaled_uv, frame_idx)).xy;
 
     vec3 accumulated = vec3_splat(0.0);

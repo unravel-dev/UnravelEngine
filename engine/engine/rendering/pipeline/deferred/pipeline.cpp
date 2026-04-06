@@ -1642,7 +1642,6 @@ void deferred::run_ssr_pass(const camera& camera,
 
     // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
-    ssr_params.settings.fidelityfx.enable_half_res = false;
 
     ssr_pass_.run(rview, ssr_params);
 }
@@ -1670,21 +1669,23 @@ void deferred::run_ssil_pass(const camera& camera,
     rparams.fill_ssil_params(ssil_params);
 
     ssil_params.hiz_buffer = rview.tex_get("HIZBUFFER");
-    ssil_params.settings.enable_half_res = false;
 
     auto result = ssil_pass_.run(rview, ssil_params);
     rview.tex_get_or_emplace("SSIL") = result;
 
     if(ssil_params.settings.enable_multi_bounce && result)
     {
-        const auto viewport_size = camera.get_viewport_size();
+        // Match SSIL output resolution (half when half-res trace is on). Upscaling the previous
+        // frame into a full-viewport PREV_SSIL blurs bright indirect across depth boundaries and
+        // causes severe multi-bounce light bleed; a 1:1 blit keeps history aligned with the trace.
+        const auto prev_sz = result->get_size();
         auto& prev_ssil = rview.tex_get_or_emplace("PREV_SSIL");
-        
-        if(gfx::needs_recreate(prev_ssil, viewport_size))
+
+        if(gfx::needs_recreate(prev_ssil, prev_sz))
         {
             prev_ssil.reset();
-            prev_ssil = std::make_shared<gfx::texture>(viewport_size.width,
-                                                       viewport_size.height,
+            prev_ssil = std::make_shared<gfx::texture>(static_cast<std::uint16_t>(prev_sz.width),
+                                                       static_cast<std::uint16_t>(prev_sz.height),
                                                        false,
                                                        1,
                                                        gfx::texture_format::RGBA16F,

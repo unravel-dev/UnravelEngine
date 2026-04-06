@@ -1429,6 +1429,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
         if(protocol == "engine")
         {
+            APPLOG_ERROR("No scripts to compile for engine");
             return false;
         }
 

@@ -355,7 +355,7 @@ vec3 GenerateReflectionRay(vec3 V, vec3 N, float roughness, vec2 texCoord, uint 
 	roughness = mix(0.0, MAX_ROUGHNESS, roughness);
 	
 #if HAMMERSLEY_TYPE == 1
-	vec2 scaled_texcoord = texCoord * u_viewRect.zw;
+	vec2 scaled_texcoord = texCoord * vec2(u_hiz_width, u_hiz_height);
 	uvec2 Random = Rand3DPCG16( ivec3( scaled_texcoord, frame_index ) ).xy;
 	vec2 E = Hammersley16( i, num_rays, Random );
 #else
@@ -389,7 +389,8 @@ vec3 GenerateReflectionRay(vec3 V, vec3 N, float roughness, vec2 texCoord, uint 
 
 void main()
 {
-    vec2 uv = v_texcoord0;
+    vec2 half_uv = v_texcoord0;
+    vec2 uv = HizScreenPassToFullResUV(half_uv, u_ssr_resolution_scale, vec2(u_hiz_width, u_hiz_height));
     GBufferDataNormalMetalRoughness normalData = DecodeGBufferNormalMetalRoughness(uv, s_normal);
 
     float metallic = normalData.metalness;

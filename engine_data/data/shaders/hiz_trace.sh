@@ -5,6 +5,8 @@
  * Requirements: the including shader must define:
  *   - SAMPLER2D(s_hiz, N)      -- Hi-Z depth mip chain
  *   - computeViewSpacePosition -- from common.sh / lighting.sh
+ *
+ * HizScreenPassToFullResUV: map reduced-res trace pass UV to full-res G-buffer/Hi-Z UV (SSR, SSIL).
  */
 
 #ifndef __HIZ_TRACE_SH__
@@ -201,6 +203,22 @@ vec3 HizProjectVsDirToSsDir(vec3 vs_pos, vec3 vs_dir, vec3 ss_origin)
 #endif
 
     return ss_pj - ss_origin;
+}
+
+/// Map normalized UV in a reduced-resolution screen pass to full-res G-buffer / Hi-Z UV (texel block center).
+/// resolution_scale = full_width / pass_width (e.g. 2 when the pass is half-res). Use 1.0 for full-res.
+vec2 HizScreenPassToFullResUV(vec2 pass_uv, float resolution_scale, vec2 full_buffer_dim)
+{
+    BRANCH
+    if(resolution_scale < 1.5)
+    {
+        return pass_uv;
+    }
+    vec2 pass_dim = full_buffer_dim / resolution_scale;
+    vec2 pass_px = floor(pass_uv * pass_dim - vec2_splat(0.5) + vec2_splat(1e-4));
+    pass_px = clamp(pass_px, vec2_splat(0.0), pass_dim - vec2_splat(1.0));
+    return clamp((pass_px * resolution_scale + vec2_splat(0.5)) / full_buffer_dim,
+                 vec2_splat(1e-5), vec2_splat(1.0 - 1e-5));
 }
 
 #endif // __HIZ_TRACE_SH__

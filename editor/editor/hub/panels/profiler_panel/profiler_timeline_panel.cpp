@@ -759,8 +759,6 @@ void profiler_timeline_panel::draw_ui(rtti::context& ctx)
 
     draw_timeline();
 
-    ImGui::Separator();
-
     draw_aggregate_section();
 
     ImGui::Separator();
@@ -1430,7 +1428,7 @@ void profiler_timeline_panel::draw_timeline()
                                      std::max(total_height + 10.0f, 100.0f));
 
     // -- Begin scrollable child ------------------------------------------
-    ImGui::BeginChild("##timeline_scroll", ImVec2(0, timeline_height), ImGuiChildFlags_Borders,
+    ImGui::BeginChild("##timeline_scroll", ImVec2(0, timeline_height), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY,
                       ImGuiWindowFlags_NoScrollWithMouse);
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();

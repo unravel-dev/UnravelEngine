@@ -170,7 +170,18 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 
-    auto topology = gfx::clip_quad(1.0f);
+    const auto gbuf_sz = params.g_buffer->get_size();
+    const float ssil_resolution[4] = {static_cast<float>(gbuf_sz.width),
+                                        static_cast<float>(gbuf_sz.height),
+                                        params.settings.enable_half_res ? 1.0f : 0.0f,
+                                        0.0f};
+    gfx::set_uniform(trace_program_.u_ssil_resolution, ssil_resolution);
+
+    uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
+    if(topology == 0)
+    {
+        topology = gfx::clip_quad(1.0f);
+    }
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     gfx::submit(pass.id, trace_program_.program->native_handle());
 

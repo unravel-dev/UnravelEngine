@@ -728,7 +728,10 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         else if(preset == scene_preset::medium)
         {
             if(auto* comp = volume.try_get<ssr_component>())
-                comp->settings.fidelityfx.max_rays = 2;
+            {
+                comp->settings.fidelityfx.max_rays = 4;
+                comp->settings.fidelityfx.enable_half_res = true;
+            }
             if(auto* comp = volume.try_get<ssil_component>())
                 comp->enabled = false;
 
@@ -740,7 +743,15 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
             if(auto* comp = volume.try_get<ssil_component>())
-                comp->enabled = false;
+            {
+                comp->enabled = true;
+                comp->settings.enable_half_res = true;
+            }
+            if(auto* comp = volume.try_get<ssil_component>())
+            {
+                comp->enabled = true;
+                comp->settings.enable_half_res = true;
+            }
             if(auto* comp = volume.try_get<taa_component>())
                 comp->enabled = true;
         }

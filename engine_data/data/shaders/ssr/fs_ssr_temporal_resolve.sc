@@ -2,6 +2,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../hiz_trace.sh"
 
 // Current frame SSR result (rgb = color, a = confidence)
 SAMPLER2D(s_ssr_curr, 0);
@@ -142,10 +143,12 @@ vec4 ApplyTemporalAccumulation(
 
 void main()
 {
-    vec2 uv = v_texcoord0;
-    
-    // Sample current frame SSR result
-    vec4 curr_ssr = texture2D(s_ssr_curr, uv);
+    vec2 half_uv = v_texcoord0;
+    vec2 depth_dim = vec2(textureSize(s_depth, 0));
+    vec2 full_uv = HizScreenPassToFullResUV(half_uv, u_ssr_resolution_scale, depth_dim);
+
+    // Sample current frame SSR result (half-res texture; same normalized UV as G-buffer extent)
+    vec4 curr_ssr = texture2D(s_ssr_curr, half_uv);
     
     // Early out if no SSR contribution
     BRANCH
@@ -155,14 +158,14 @@ void main()
         return;
     }
     
-    // Sample G-buffer data for temporal validation
-    GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(uv, s_normal);
-    float surface_z = DecodeGBufferDepth(uv, s_depth).depth01;
+    // Sample G-buffer at full-res UV aligned with this half-res pixel
+    GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(full_uv, s_normal);
+    float surface_z = DecodeGBufferDepth(full_uv, s_depth).depth01;
     
-    // Apply temporal accumulation
+    // Apply temporal accumulation (uv = full-screen space for reprojection / motion)
     vec4 result = ApplyTemporalAccumulation(
         curr_ssr,
-        uv,
+        full_uv,
         surface_z,
         normal_data.roughness,
         normal_data.world_normal
