@@ -14,10 +14,15 @@
 #include <bx/handlealloc.h>
 #include <math/math.h>
 #include <glm/gtc/random.hpp>
-#include <vector>
 #include <algorithm>
+#include <cstdint>
+#include <vector>
+
 #include <engine/profiler/profiler.h>
 #include <core/logging/logging.h>
+
+#define POOLSTL_STD_SUPPLEMENT 1
+#include <poolstl/poolstl.hpp>
 // New instanced particle vertex structure (just position and UV)
 struct ParticleVertex
 {
@@ -1096,50 +1101,76 @@ struct ParticleSystem
         uint32_t totalParticles = 0;
         for(uint32_t i = 0; i < _count; ++i)
         {
-            const Emitter& emitter = m_emitter[_handles[i].idx];
-            totalParticles += emitter.num_particles_;
+            if(!isValid(_handles[i]))
+            {
+                continue;
+            }
+            totalParticles += m_emitter[_handles[i].idx].num_particles_;
         }
         if(totalParticles == 0)
         {
             return 0;
         }
         const uint16_t instanceStride = 96;
-        buildSortedBatchedParticles(_handles, _count, _eye);
+        buildSortedBatchedParticles(_handles, _count, _eye, totalParticles);
         const uint32_t sortedCount = static_cast<uint32_t>(batched_particles_scratch_.size());
         if(sortedCount == 0)
         {
             return 0;
         }
-        float viewCamera[16];
-        viewCamera[0] = _mtxView[0];
-        viewCamera[1] = _mtxView[4];
-        viewCamera[2] = _mtxView[8];
-        viewCamera[3] = 0.0f;
-        viewCamera[4] = _mtxView[1];
-        viewCamera[5] = _mtxView[5];
-        viewCamera[6] = _mtxView[9];
-        viewCamera[7] = 0.0f;
-        viewCamera[8] = _mtxView[2];
-        viewCamera[9] = _mtxView[6];
-        viewCamera[10] = _mtxView[10];
-        viewCamera[11] = 0.0f;
-        viewCamera[12] = 0.0f;
-        viewCamera[13] = 0.0f;
-        viewCamera[14] = 0.0f;
-        viewCamera[15] = 1.0f;
-        float eyePosVec4[4] = { _eye.x, _eye.y, _eye.z, 0.0f };
-        bgfx::setVertexBuffer(0, m_quadVBH);
-        bgfx::setIndexBuffer(m_quadIBH);
-        bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
-                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
-                       _blendState);
-        bgfx::setTexture(0, s_texColor, _texture);
-        bgfx::setUniform(u_viewCamera, viewCamera);
-        bgfx::setUniform(u_eyePos, eyePosVec4);
+
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Set Common Uniforms");
+            float viewCamera[16];
+            viewCamera[0] = _mtxView[0];
+            viewCamera[1] = _mtxView[4];
+            viewCamera[2] = _mtxView[8];
+            viewCamera[3] = 0.0f;
+            viewCamera[4] = _mtxView[1];
+            viewCamera[5] = _mtxView[5];
+            viewCamera[6] = _mtxView[9];
+            viewCamera[7] = 0.0f;
+            viewCamera[8] = _mtxView[2];
+            viewCamera[9] = _mtxView[6];
+            viewCamera[10] = _mtxView[10];
+            viewCamera[11] = 0.0f;
+            viewCamera[12] = 0.0f;
+            viewCamera[13] = 0.0f;
+            viewCamera[14] = 0.0f;
+            viewCamera[15] = 1.0f;
+            float eyePosVec4[4] = { _eye.x, _eye.y, _eye.z, 0.0f };
+            
+            bgfx::setVertexBuffer(0, m_quadVBH);
+            bgfx::setIndexBuffer(m_quadIBH);
+            bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | 
+                           BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
+                           _blendState);
+            bgfx::setTexture(0, s_texColor, _texture);
+            bgfx::setUniform(u_viewCamera, viewCamera);
+            bgfx::setUniform(u_eyePos, eyePosVec4);
+        }
+
+        const uint32_t availAll = bgfx::getAvailInstanceDataBuffer(sortedCount, instanceStride);
+        if(availAll >= sortedCount)
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Allocate Instance Data Buffer (single batch)");
+            bgfx::InstanceDataBuffer idb{};
+            bgfx::allocInstanceDataBuffer(&idb, sortedCount, instanceStride);
+            writeBatchedInstanceChunk(idb.data, 0, sortedCount, _handles, instanceStride);
+            bgfx::setInstanceDataBuffer(&idb);
+            {
+                APP_SCOPE_PERF("Rendering/Particle Pass/Submit Batch");
+                bgfx::submit(_view, _program);
+            }
+            return sortedCount;
+        }
+
         uint32_t renderedTotal = 0;
         uint32_t offset = 0;
         while(offset < sortedCount)
         {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Allocate Instance Data Buffer");
+
             const uint32_t remaining = sortedCount - offset;
             uint32_t chunk = bgfx::getAvailInstanceDataBuffer(remaining, instanceStride);
             if(chunk == 0)
@@ -1148,46 +1179,130 @@ struct ParticleSystem
                 break;
             }
             chunk = math::min(chunk, remaining);
-            bgfx::InstanceDataBuffer idb;
+            bgfx::InstanceDataBuffer idb{};
             bgfx::allocInstanceDataBuffer(&idb, chunk, instanceStride);
             writeBatchedInstanceChunk(idb.data, offset, chunk, _handles, instanceStride);
             bgfx::setInstanceDataBuffer(&idb);
-            bgfx::submit(_view, _program);
+            {
+                APP_SCOPE_PERF("Rendering/Particle Pass/Submit Batch");
+                bgfx::submit(_view, _program);
+            }
+
             renderedTotal += chunk;
             offset += chunk;
         }
         return renderedTotal;
     }
 
-    void buildSortedBatchedParticles(const EmitterHandle* _handles, uint32_t _count, const math::vec3& _eye)
+    void buildSortedBatchedParticles(const EmitterHandle* _handles,
+        uint32_t _count,
+        const math::vec3& _eye,
+        uint32_t totalParticles)
     {
+        APP_SCOPE_PERF("Rendering/Particle Pass/Build Sorted Batched Particles");
+
         batched_particles_scratch_.clear();
+        if(_count == 0 || totalParticles == 0)
+        {
+            return;
+        }
+
+        batched_particles_scratch_.resize(totalParticles);
+
+        emitter_batch_prefix_scratch_.resize(_count + 1);
+        emitter_batch_prefix_scratch_[0] = 0;
         for(uint32_t emitterIdx = 0; emitterIdx < _count; ++emitterIdx)
         {
-            if(!isValid(_handles[emitterIdx]))
+            uint32_t n = 0;
+            if(isValid(_handles[emitterIdx]))
             {
-                continue;
+                n = m_emitter[_handles[emitterIdx].idx].num_particles_;
             }
-            const Emitter& emitter = m_emitter[_handles[emitterIdx].idx];
-            batched_particles_scratch_.reserve(batched_particles_scratch_.size() + emitter.num_particles_);
-            for(uint32_t particleIdx = 0; particleIdx < emitter.num_particles_; ++particleIdx)
+            emitter_batch_prefix_scratch_[emitterIdx + 1] = emitter_batch_prefix_scratch_[emitterIdx] + n;
+        }
+
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Particle Sort Keys Parallel");
+
+            const auto fillEmitterSortKeys = [&](uint32_t emitterIdx)
             {
-                const Particle& particle = emitter.particles_[particleIdx];
-                const math::vec3 tmp0 = _eye - particle.position;
-                const float distSquared = math::dot(tmp0, tmp0);
-                batched_particles_scratch_.emplace_back(BatchedParticle{distSquared, emitterIdx, particleIdx});
+                const uint32_t start = emitter_batch_prefix_scratch_[emitterIdx];
+                const uint32_t end = emitter_batch_prefix_scratch_[emitterIdx + 1];
+                const uint32_t n = end - start;
+                if(n == 0)
+                {
+                    return;
+                }
+                const Emitter& emitter = m_emitter[_handles[emitterIdx].idx];
+                for(uint32_t p = 0; p < n; ++p)
+                {
+                    const Particle& particle = emitter.particles_[p];
+                    const math::vec3 tmp0 = _eye - particle.position;
+                    const float distSquared = math::dot(tmp0, tmp0);
+                    batched_particles_scratch_[start + p] = BatchedParticle{distSquared, emitterIdx, p};
+                }
+            };
+
+            // One poolstl task per emitter-index range (not per emitter) to match writeBatchedInstanceChunk grain.
+            constexpr uint32_t kParallelSortKeysEmitterThreshold = 16;
+            constexpr uint32_t kMinEmittersPerParallelJob = 16;
+            if(_count < kParallelSortKeysEmitterThreshold)
+            {
+                for(uint32_t emitterIdx = 0; emitterIdx < _count; ++emitterIdx)
+                {
+                    fillEmitterSortKeys(emitterIdx);
+                }
+            }
+            else
+            {
+                const uint32_t numJobs = (_count + kMinEmittersPerParallelJob - 1) / kMinEmittersPerParallelJob;
+                if(numJobs <= 1u)
+                {
+                    for(uint32_t emitterIdx = 0; emitterIdx < _count; ++emitterIdx)
+                    {
+                        fillEmitterSortKeys(emitterIdx);
+                    }
+                }
+                else
+                {
+                    std::for_each(poolstl::par,
+                                  poolstl::iota_iter<uint32_t>(0),
+                                  poolstl::iota_iter<uint32_t>(numJobs),
+                                  [&](uint32_t job)
+                                  {
+                                    //   APP_SCOPE_PERF_THREAD("Rendering/Particle Pass/Particle Sort Keys Job", "Pool Thread");
+                                      const uint32_t emitBegin = job * kMinEmittersPerParallelJob;
+                                      const uint32_t emitEnd = math::min(emitBegin + kMinEmittersPerParallelJob, _count);
+                                      for(uint32_t emitterIdx = emitBegin; emitterIdx < emitEnd; ++emitterIdx)
+                                      {
+                                          fillEmitterSortKeys(emitterIdx);
+                                      }
+                                  });
+                }
             }
         }
-        std::sort(batched_particles_scratch_.begin(), batched_particles_scratch_.end(),
-                 [](const BatchedParticle& a, const BatchedParticle& b) { return a.dist > b.dist; });
+
+        {
+            APP_SCOPE_PERF("Rendering/Particle Pass/Particle Sort Parallel");
+            std::sort(poolstl::par,
+                      batched_particles_scratch_.begin(),
+                      batched_particles_scratch_.end(),
+                      [](const BatchedParticle& a, const BatchedParticle& b)
+                       { 
+                            // APP_SCOPE_PERF_THREAD("Rendering/Particle Pass/Particle Sort Job", "Pool Thread");
+                            return a.dist > b.dist; 
+                       });
+        }
     }
 
     void writeBatchedInstanceChunk(uint8_t* data, uint32_t sortedStart, uint32_t sortedCount,
         const EmitterHandle* _handles, uint16_t instanceStride)
     {
-        uint8_t* row = data;
-        for(uint32_t i = 0; i < sortedCount; ++i)
+        APP_SCOPE_PERF("Rendering/Particle Pass/Write Batched Instance Chunk Parallel");
+
+        const auto writeRow = [&](uint32_t i)
         {
+            uint8_t* row = data + static_cast<size_t>(i) * instanceStride;
             const BatchedParticle& batchedParticle = batched_particles_scratch_[sortedStart + i];
             const Emitter& emitter = m_emitter[_handles[batchedParticle.emitter_idx].idx];
             const Particle& particle = emitter.particles_[batchedParticle.particle_idx];
@@ -1221,8 +1336,44 @@ struct ParticleSystem
             facing[1] = 0.0f;
             facing[2] = 0.0f;
             facing[3] = 0.0f;
-            row += instanceStride;
+        };
+
+        // Disjoint row writes. One poolstl task per contiguous row range (not per particle) to amortize scheduling.
+        constexpr uint32_t kParallelWriteThreshold = 128;
+        constexpr uint32_t kMinRowsPerParallelJob = 128;
+
+        if(sortedCount < kParallelWriteThreshold)
+        {
+            for(uint32_t i = 0; i < sortedCount; ++i)
+            {
+                writeRow(i);
+            }
+            return;
         }
+        const uint32_t numJobs = (sortedCount + kMinRowsPerParallelJob - 1) / kMinRowsPerParallelJob;
+        if(numJobs <= 1u)
+        {
+            for(uint32_t i = 0; i < sortedCount; ++i)
+            {
+                writeRow(i);
+            }
+            return;
+        }
+
+        std::for_each(poolstl::par,
+                      poolstl::iota_iter<uint32_t>(0),
+                      poolstl::iota_iter<uint32_t>(numJobs),
+                      [&](uint32_t job)
+                      {
+                        //   APP_SCOPE_PERF_THREAD("Rendering/Particle Pass/Write Batched Instance Chunk Job", "Pool Thread");
+
+                          const uint32_t rowBegin = job * kMinRowsPerParallelJob;
+                          const uint32_t rowEnd = math::min(rowBegin + kMinRowsPerParallelJob, sortedCount);
+                          for(uint32_t i = rowBegin; i < rowEnd; ++i)
+                          {
+                              writeRow(i);
+                          }
+                      });
     }
 
     EmitterHandle createEmitter(EmitterShape::Enum _shape, EmitterDirection::Enum _direction, uint32_t _maxParticles)
@@ -1284,6 +1435,7 @@ struct ParticleSystem
     bx::HandleAlloc* m_emitterAlloc;
     std::vector<Emitter> m_emitter;
     std::vector<BatchedParticle> batched_particles_scratch_;
+    std::vector<uint32_t> emitter_batch_prefix_scratch_;
 
     // Static geometry for instanced rendering
     bgfx::VertexBufferHandle m_quadVBH;

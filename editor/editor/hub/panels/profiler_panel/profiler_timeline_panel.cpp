@@ -759,9 +759,9 @@ void profiler_timeline_panel::draw_ui(rtti::context& ctx)
 
     draw_timeline();
 
-    draw_aggregate_section();
-
     ImGui::Separator();
+
+    draw_aggregate_section();
 
     draw_profiler_bottom_sections(ctx);
 }
@@ -1242,13 +1242,16 @@ void profiler_timeline_panel::handle_histogram_zoom_pan(uint32_t frame_count,
     float wheel = ImGui::GetIO().MouseWheel;
     if(wheel != 0.0f)
     {
-        float mouse_frame = eff_start + mouse_frac * eff_range;
-        float new_range = eff_range * (1.0f - wheel * 0.15f);
-        new_range = std::clamp(new_range, 10.0f, fc_f);
+        if(ImGui::GetIO().KeyCtrl)
+        {
+            float mouse_frame = eff_start + mouse_frac * eff_range;
+            float new_range = eff_range * (1.0f - wheel * 0.15f);
+            new_range = std::clamp(new_range, 10.0f, fc_f);
 
-        hist_start_ = mouse_frame - mouse_frac * new_range;
-        hist_start_ = std::clamp(hist_start_, 0.0f, std::max(0.0f, fc_f - new_range));
-        hist_range_ = new_range;
+            hist_start_ = mouse_frame - mouse_frac * new_range;
+            hist_start_ = std::clamp(hist_start_, 0.0f, std::max(0.0f, fc_f - new_range));
+            hist_range_ = new_range;
+        }
     }
 
     if(ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
@@ -1346,6 +1349,11 @@ void profiler_timeline_panel::draw_timeline()
     auto* profiler = get_app_profiler();
     uint32_t frame_count = profiler->get_frame_count();
     validate_timeline_scope_selection(frame_count);
+    if(profiler->get_recording_state() == recording_state::recording)
+    {
+        ImGui::TextDisabled("Recording...");
+        return;
+    }
     if(frame_count == 0)
     {
         ImGui::TextDisabled("No frame data to display");
