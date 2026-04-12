@@ -456,7 +456,10 @@ uhandle::uhandle(entt::handle handle)
     if(handle)
     {
         registry = handle.registry();
-        uuid = handle.get<unravel::id_component>().id;
+        if(auto id = handle.try_get<unravel::id_component>())
+        {
+            uuid = id->id;
+        }
     }
 }
 auto uhandle::resolve() const -> entt::handle

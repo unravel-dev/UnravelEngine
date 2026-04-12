@@ -239,6 +239,54 @@ public:
     void set_cloud_light_absorption(float absorption);
 
     /**
+     * @brief Volumetric cloud shape: world-to-noise UV scale (smaller = larger features).
+     */
+    auto get_cloud_vol_uv_scale() const noexcept -> float;
+    void set_cloud_vol_uv_scale(float scale);
+
+    /**
+     * @brief Volumetric cloud shape: smoothstep edge width for the density mask.
+     */
+    auto get_cloud_vol_edge_width() const noexcept -> float;
+    void set_cloud_vol_edge_width(float width);
+
+    /**
+     * @brief Volumetric cloud shape: contrast on the density mask (pow exponent).
+     */
+    auto get_cloud_vol_shape_power() const noexcept -> float;
+    void set_cloud_vol_shape_power(float power);
+
+    /**
+     * @brief Volumetric cloud shape: Worley detail erosion strength.
+     */
+    auto get_cloud_vol_detail_erode() const noexcept -> float;
+    void set_cloud_vol_detail_erode(float erode);
+
+    /**
+     * @brief Volumetric cloud shape: macro Worley threshold jitter (clearings vs sheet).
+     */
+    auto get_cloud_vol_macro_strength() const noexcept -> float;
+    void set_cloud_vol_macro_strength(float strength);
+
+    /**
+     * @brief Volumetric cloud shape: coarse noise sample scale (larger masses).
+     */
+    auto get_cloud_vol_coarse_scale() const noexcept -> float;
+    void set_cloud_vol_coarse_scale(float scale);
+
+    /**
+     * @brief Volumetric cloud shape: blend between coarse and fine base noise.
+     */
+    auto get_cloud_vol_base_mix() const noexcept -> float;
+    void set_cloud_vol_base_mix(float mix);
+
+    /**
+     * @brief Volumetric cloud lighting: sun contribution multiplier in the cloud integrator.
+     */
+    auto get_cloud_vol_sun_intensity() const noexcept -> float;
+    void set_cloud_vol_sun_intensity(float intensity);
+
+    /**
      * @brief Gets the irradiance intensity (strength of indirect diffuse).
      * @return The irradiance intensity value.
      */
@@ -328,7 +376,7 @@ private:
     cloud_mode cloud_mode_{cloud_mode::volumetric};
 
     /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
-    float cloud_coverage_{0.6f};
+    float cloud_coverage_{0.52f};
 
     /// Cloud base altitude in world units. Vol: slab bottom. Flat: projection height.
     float cloud_base_altitude_{27500.0f};
@@ -340,13 +388,23 @@ private:
     float cloud_speed_{0.0f};
 
     /// Cloud density/opacity multiplier.
-    float cloud_density_{1.0f};
+    float cloud_density_{1.5f};
 
     /// Beer-Lambert extinction coefficient [0.01-0.5]. Higher = more opaque.
     float cloud_absorption_{0.08f};
 
     /// Light absorption / self-shadow strength [0.01-0.5]. Higher = darker shadows.
     float cloud_light_absorption_{0.10f};
+
+    /// Volumetric clouds: u_cloudParams3 (shape) and u_cloudParams4 (macro + sun).
+    float cloud_vol_uv_scale_{0.00008f};
+    float cloud_vol_edge_width_{0.20f};
+    float cloud_vol_shape_power_{1.12f};
+    float cloud_vol_detail_erode_{0.48f};
+    float cloud_vol_macro_strength_{0.36f};
+    float cloud_vol_coarse_scale_{0.38f};
+    float cloud_vol_base_mix_{0.45f};
+    float cloud_vol_sun_intensity_{24.0f};
 
     /// Accumulated time for cloud animation.
     float cloud_time_{0.0f};

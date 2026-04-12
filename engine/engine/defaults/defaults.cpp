@@ -600,7 +600,18 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     return object;
 }
 
+auto defaults::create_default_volume_entity_for_preview(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle
+{
+    auto object = scn.create_entity(name);
+    auto& volume_comp = object.emplace<volume_component>();
+    volume_comp.mode = mode;
 
+    object.emplace<tonemapping_component>();
+    object.emplace<fxaa_component>();
+    object.emplace<bloom_component>();
+
+    return object;
+}
 
 
 auto defaults::create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
@@ -794,7 +805,7 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
     -> entt::handle
 {
     auto camera = create_camera_entity(ctx, scn, "Main Camera");
-    auto post_process_volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+    auto post_process_volume = create_default_volume_entity_for_preview(ctx, scn, "Volume Global", volume_mode::global);
     
     {
         auto& transf_comp = camera.get<transform_component>();

@@ -283,6 +283,14 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     float exposition[4] = {0.02f, 3.0f, perez.exposition, hour};
     float cloud_params[4] = {params.cloud_coverage, params.cloud_base_altitude, params.cloud_time, params.cloud_density};
     float cloud_params2[4] = {params.cloud_absorption, params.cloud_light_absorption, params.cloud_top_altitude, float(params.cloud_mode)};
+    float cloud_params3[4] = {params.cloud_vol_uv_scale,
+                              params.cloud_vol_edge_width,
+                              params.cloud_vol_shape_power,
+                              params.cloud_vol_detail_erode};
+    float cloud_params4[4] = {params.cloud_vol_macro_strength,
+                              params.cloud_vol_coarse_scale,
+                              params.cloud_vol_base_mix,
+                              params.cloud_vol_sun_intensity};
 
     auto& cloud_noise = default_textures::get().cloud_noise();
 
@@ -362,6 +370,8 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         gfx::set_uniform(cloud_program_.u_perezCoeff, &perez.perez_coeff[0][0], 5);
         gfx::set_uniform(cloud_program_.u_cloudParams, cloud_params);
         gfx::set_uniform(cloud_program_.u_cloudParams2, cloud_params2);
+        gfx::set_uniform(cloud_program_.u_cloudParams3, cloud_params3);
+        gfx::set_uniform(cloud_program_.u_cloudParams4, cloud_params4);
 
         float cloud_frame[4] = {float(gfx::get_render_frame()), float(cloud_frame_count), cloud_time_delta, 0.0f};
         gfx::set_uniform(cloud_program_.u_cloudFrame, cloud_frame);

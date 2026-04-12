@@ -54,23 +54,27 @@ auto get_default_depth_format() -> gfx::texture_format
     return gfx::texture_format::D32F;
 }
 
+// Cubemap face captures: keep tonemapping + FXAA from create_run_params; drop screen-space / temporal stack.
+void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& params)
+{
+    params.fill_assao_params = {};
+    params.fill_auto_exposure_params = {};
+    params.fill_bloom_params = {};
+    params.fill_taa_params = {};
+    params.apply_taa_params = {};
+    params.fill_ssr_params = {};
+    params.fill_ssil_params = {};
+}
+
 // run_pipeline_impl takes const camera& for reads; jitter only touches projection jitter state.
 void apply_pipeline_taa_jitter_to_camera(const camera& view_camera,
                                          const usize32_t& viewport_size,
                                          const pipeline::run_params& params)
 {
     camera& cam = const_cast<camera&>(view_camera);
-    if(params.fill_taa_params)
+    if(params.apply_taa_params)
     {
-        const std::uint32_t sample_count =
-            (std::min)(std::uint32_t(16),
-                       (std::max)(std::uint32_t(2), params.taa_temporal_sample_count));
-        cam.set_aa_data(viewport_size,
-                        static_cast<std::uint32_t>(gfx::get_render_frame()),
-                        sample_count,
-                        params.taa_temporal_jitter_mode,
-                        params.taa_jitter_amplitude,
-                        params.taa_jitter_temporal_phase_scale);
+        params.apply_taa_params(cam, viewport_size);
     }
     else
     {
@@ -436,6 +440,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
                     auto params = create_run_params(handle, &scn, &camera);
                     params.vflags = vflags;
                     params.pflags = pflags;
+                    strip_post_effects_for_reflection_probe_capture(params);
 
                     run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params);
                 }
@@ -1582,6 +1587,14 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                     params_perez.cloud_light_absorption = light_comp_ref.get_cloud_light_absorption();
                     params_perez.cloud_time = light_comp_ref.get_cloud_time();
                     params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
+                    params_perez.cloud_vol_uv_scale = light_comp_ref.get_cloud_vol_uv_scale();
+                    params_perez.cloud_vol_edge_width = light_comp_ref.get_cloud_vol_edge_width();
+                    params_perez.cloud_vol_shape_power = light_comp_ref.get_cloud_vol_shape_power();
+                    params_perez.cloud_vol_detail_erode = light_comp_ref.get_cloud_vol_detail_erode();
+                    params_perez.cloud_vol_macro_strength = light_comp_ref.get_cloud_vol_macro_strength();
+                    params_perez.cloud_vol_coarse_scale = light_comp_ref.get_cloud_vol_coarse_scale();
+                    params_perez.cloud_vol_base_mix = light_comp_ref.get_cloud_vol_base_mix();
+                    params_perez.cloud_vol_sun_intensity = light_comp_ref.get_cloud_vol_sun_intensity();
                 }
                 params_perez.irradiance_intensity = light_comp_ref.get_irradiance_intensity();
             }

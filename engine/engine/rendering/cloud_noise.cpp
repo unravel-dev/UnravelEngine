@@ -239,9 +239,8 @@ void cloud_noise_textures::generate_3d()
                 // Inverted Worley at 1x — puffy cell centers
                 float inv_worley = 1.0f - worley_at(px, py, pz, 1.0f);
 
-                // R: Linear Perlin-Worley blend (matches original procedural shader)
-                // Full [0,1] range — coverage=0.5 gives ~50% sky coverage
-                float perlin_worley = perlin4 * 0.65f + inv_worley * 0.35f;
+                // R: Perlin-Worley blend — slightly higher Worley weight for chunkier, less uniform masses.
+                float perlin_worley = perlin4 * 0.55f + inv_worley * 0.45f;
                 perlin_worley = std::clamp(perlin_worley, 0.0f, 1.0f);
 
                 // G/B/A: Worley at increasing frequencies for multi-octave erosion

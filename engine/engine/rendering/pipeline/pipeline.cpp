@@ -249,15 +249,25 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
     
     if(auto taa_comp = camera_ent.try_get<taa_component>(); taa_comp && taa_comp->enabled)
     {
-        params.taa_temporal_sample_count = std::max(std::uint32_t(2), taa_comp->settings.temporal_sample_count);
-        params.taa_temporal_jitter_mode = taa_comp->settings.jitter_mode;
-        params.taa_jitter_amplitude = taa_comp->settings.jitter_amplitude;
-        params.taa_jitter_temporal_phase_scale = taa_comp->settings.jitter_temporal_phase_scale;
-        params.fill_taa_params = [camera_ent](taa_pass::run_params& p)
+        params.fill_taa_params = [camera_ent](taa_pass::run_params& p) -> void
         {
             if(auto c = camera_ent.try_get<taa_component>())
             {
                 p.config = c->settings;
+            }
+        };
+        params.apply_taa_params = [camera_ent](camera& cam, const usize32_t& viewport_size) -> void
+        {
+            if(auto c = camera_ent.try_get<taa_component>())
+            {
+                const std::uint32_t sample_count = (std::min)(std::uint32_t(16),
+                                                                (std::max)(std::uint32_t(2), c->settings.temporal_sample_count));
+                cam.set_aa_data(viewport_size,
+                                  static_cast<std::uint32_t>(gfx::get_render_frame()),
+                                  sample_count,
+                                  c->settings.jitter_mode,
+                                  c->settings.jitter_amplitude,
+                                  c->settings.jitter_temporal_phase_scale);
             }
         };
     }
@@ -312,7 +322,6 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         return params;
     }
-    params.volume_settings = resolved;
     if(resolved.has_auto_exposure)
     {
         auto_exposure_pass::settings s = resolved.auto_exposure;
@@ -335,11 +344,18 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     if(resolved.has_taa)
     {
         taa_pass::settings s = resolved.taa;
-        params.taa_temporal_sample_count = std::max(std::uint32_t(2), s.temporal_sample_count);
-        params.taa_temporal_jitter_mode = s.jitter_mode;
-        params.taa_jitter_amplitude = s.jitter_amplitude;
-        params.taa_jitter_temporal_phase_scale = s.jitter_temporal_phase_scale;
-        params.fill_taa_params = [s](taa_pass::run_params& p) { p.config = s; };
+        params.fill_taa_params = [s](taa_pass::run_params& p) -> void { p.config = s; };
+        params.apply_taa_params = [s](camera& cam, const usize32_t& viewport_size) -> void
+        {
+            const std::uint32_t sample_count =
+                (std::min)(std::uint32_t(16), (std::max)(std::uint32_t(2), s.temporal_sample_count));
+            cam.set_aa_data(viewport_size,
+                              static_cast<std::uint32_t>(gfx::get_render_frame()),
+                              sample_count,
+                              s.jitter_mode,
+                              s.jitter_amplitude,
+                              s.jitter_temporal_phase_scale);
+        };
     }
     if(resolved.has_ssr)
     {

@@ -318,6 +318,8 @@ private:
     static auto create_default_3d_scene_for_preview(rtti::context& ctx, scene& scn, const usize32_t& size)
         -> entt::handle;
 
+    static auto create_default_volume_entity_for_preview(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle;
+
 };
 
 } // namespace unravel

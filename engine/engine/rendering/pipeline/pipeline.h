@@ -116,19 +116,11 @@ public:
         std::function<void(tonemapping_pass::run_params& params)> fill_hdr_params;
         std::function<void(fxaa_pass::run_params& params)> fill_fxaa_params;
         std::function<void(taa_pass::run_params& params)> fill_taa_params;
+        /// When set with @c fill_taa_params, applies jitter / temporal AA state to the camera (typically @c camera::set_aa_data).
+        /// When TAA is off, leave empty; the deferred path resets AA on the camera.
+        std::function<void(camera&, const usize32_t& viewport_size)> apply_taa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
-
-        std::optional<resolved_post_process_settings> volume_settings;
-
-        /// Subpixel sequence length for TAA jitter (used with fill_taa_params).
-        std::uint32_t taa_temporal_sample_count = 8;
-        /// TAA subpixel sequence; copied from @c taa_pass::settings::jitter_mode when TAA is active.
-        taa_jitter_mode taa_temporal_jitter_mode = taa_jitter_mode::progressive_golden;
-        /// Passed to @c camera::set_aa_data (see @c taa_pass::settings::jitter_amplitude).
-        float taa_jitter_amplitude = 0.65f;
-        /// See @c taa_pass::settings::jitter_temporal_phase_scale.
-        float taa_jitter_temporal_phase_scale = 0.45f;
     };
 
     pipeline() = default;

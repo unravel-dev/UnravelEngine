@@ -282,7 +282,7 @@ auto draw_item(const content_browser_item& item)
     ImGuiID current_id = ImGui::GetID(name.c_str());
     float current_time = ImGui::GetTime();
     
-    bool button_clicked = false;//ImGui::ContentButtonItem(citem);
+    bool button_clicked = false;
 
     if(!item.is_loading)
     {
@@ -351,13 +351,35 @@ auto draw_item(const content_browser_item& item)
         }
     }
 
-    ImGui::AddItemTooltipEx("%s", filename.c_str());
-
-    if(!file_type.empty())
+    const bool show_shift_preview_tooltip =
+        ImGui::IsItemHovered() && !item.is_loading && ImGui::GetIO().KeyShift;
+    if(show_shift_preview_tooltip)
     {
-        ImGui::PushFont(file_type_font, file_type_font->LegacySize);
-        ImGui::AddItemTooltipEx("%s", file_type.c_str());
-        ImGui::PopFont();
+        ImGui::SetNextWindowViewportToCurrent();
+        ImGui::SetNextWindowPos(ImGui::GetIO().MousePos, ImGuiCond_None, ImVec2(0.5f, 1.0f));
+        if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
+        {
+            constexpr float preview_scale = 2.75f;
+            constexpr float preview_max_side = 384.0f;
+            const float preview_side = ImClamp(item.size * preview_scale, item.size + 16.0f, preview_max_side);
+            ImGui::PushID("shift_thumbnail_preview");
+            ImGui::ContentItem preview_item = citem;
+            preview_item.image_size = ImVec2(preview_side, preview_side);
+            ImGui::ContentButtonItem(preview_item);
+            ImGui::PopID();
+            ImGui::EndTooltip();
+        }
+    }
+    else
+    {
+        ImGui::AddItemTooltipEx("%s", filename.c_str());
+
+        if(!file_type.empty())
+        {
+            ImGui::PushFont(file_type_font, file_type_font->LegacySize);
+            ImGui::AddItemTooltipEx("%s", file_type.c_str());
+            ImGui::PopFont();
+        }
     }
 
     auto input_buff = ImGui::CreateInputTextBuffer(name);

@@ -22,6 +22,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 
+#include <engine/rendering/ecs/systems/ik_solvers.h>
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/material.h>

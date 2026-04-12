@@ -17,7 +17,7 @@
 #include <engine/meta/ecs/components/all_components.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
-#include <engine/rendering/ecs/systems/model_system.h>
+#include <engine/rendering/ecs/systems/ik_solvers.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/settings/settings.h>

@@ -231,6 +231,86 @@ void skylight_component::set_cloud_light_absorption(float absorption)
     cloud_light_absorption_ = math::clamp(absorption, 0.01f, 0.5f);
 }
 
+auto skylight_component::get_cloud_vol_uv_scale() const noexcept -> float
+{
+    return cloud_vol_uv_scale_;
+}
+
+void skylight_component::set_cloud_vol_uv_scale(float scale)
+{
+    cloud_vol_uv_scale_ = math::clamp(scale, 1.0e-6f, 0.01f);
+}
+
+auto skylight_component::get_cloud_vol_edge_width() const noexcept -> float
+{
+    return cloud_vol_edge_width_;
+}
+
+void skylight_component::set_cloud_vol_edge_width(float width)
+{
+    cloud_vol_edge_width_ = math::clamp(width, 0.01f, 0.8f);
+}
+
+auto skylight_component::get_cloud_vol_shape_power() const noexcept -> float
+{
+    return cloud_vol_shape_power_;
+}
+
+void skylight_component::set_cloud_vol_shape_power(float power)
+{
+    cloud_vol_shape_power_ = math::clamp(power, 0.5f, 4.0f);
+}
+
+auto skylight_component::get_cloud_vol_detail_erode() const noexcept -> float
+{
+    return cloud_vol_detail_erode_;
+}
+
+void skylight_component::set_cloud_vol_detail_erode(float erode)
+{
+    cloud_vol_detail_erode_ = math::clamp(erode, 0.0f, 2.0f);
+}
+
+auto skylight_component::get_cloud_vol_macro_strength() const noexcept -> float
+{
+    return cloud_vol_macro_strength_;
+}
+
+void skylight_component::set_cloud_vol_macro_strength(float strength)
+{
+    cloud_vol_macro_strength_ = math::clamp(strength, 0.0f, 1.5f);
+}
+
+auto skylight_component::get_cloud_vol_coarse_scale() const noexcept -> float
+{
+    return cloud_vol_coarse_scale_;
+}
+
+void skylight_component::set_cloud_vol_coarse_scale(float scale)
+{
+    cloud_vol_coarse_scale_ = math::clamp(scale, 0.05f, 1.0f);
+}
+
+auto skylight_component::get_cloud_vol_base_mix() const noexcept -> float
+{
+    return cloud_vol_base_mix_;
+}
+
+void skylight_component::set_cloud_vol_base_mix(float mix)
+{
+    cloud_vol_base_mix_ = math::clamp(mix, 0.0f, 1.0f);
+}
+
+auto skylight_component::get_cloud_vol_sun_intensity() const noexcept -> float
+{
+    return cloud_vol_sun_intensity_;
+}
+
+void skylight_component::set_cloud_vol_sun_intensity(float intensity)
+{
+    cloud_vol_sun_intensity_ = math::clamp(intensity, 0.0f, 200.0f);
+}
+
 auto skylight_component::get_irradiance_intensity() const noexcept -> float
 {
     return irradiance_intensity_;

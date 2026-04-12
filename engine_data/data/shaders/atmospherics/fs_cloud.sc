@@ -8,6 +8,8 @@ uniform vec4 u_sunLuminance;
 uniform vec4 u_skyLuminance;
 uniform vec4 u_cloudParams;
 uniform vec4 u_cloudParams2;
+uniform vec4 u_cloudParams3;
+uniform vec4 u_cloudParams4;
 uniform vec4 u_cloudFrame;
 uniform mat4 u_prevViewProj;
 
@@ -23,6 +25,16 @@ uniform mat4 u_prevViewProj;
 #define u_cloud_light_absorption u_cloudParams2.y
 #define u_cloud_top_altitude     u_cloudParams2.z
 
+#define u_vol_uv_scale        u_cloudParams3.x
+#define u_vol_edge_width      u_cloudParams3.y
+#define u_vol_shape_power     u_cloudParams3.z
+#define u_vol_detail_erode    u_cloudParams3.w
+
+#define u_vol_macro_strength  u_cloudParams4.x
+#define u_vol_coarse_scale    u_cloudParams4.y
+#define u_vol_base_mix        u_cloudParams4.z
+#define u_vol_sun_intensity   u_cloudParams4.w
+
 SAMPLER3D(s_cloudNoise, 0);
 SAMPLER2D(s_cloudHistory, 1);
 
@@ -35,14 +47,16 @@ SAMPLER2D(s_cloudHistory, 1);
 #define CLOUD_VOL_HG_BACK       -0.15
 #define CLOUD_VOL_HG_BLEND       0.65
 #define CLOUD_VOL_AMBIENT        0.22
-#define CLOUD_VOL_SUN_INTENSITY  24.0
 #define CLOUD_VOL_HORIZON_FADE   0.05
 #define CLOUD_VOL_HORIZON_SCALE  0.05
-#define CLOUD_VOL_UV_SCALE       0.00008
 #define CLOUD_VOL_MAX_ACCUM      16.0
 
 #define CLOUD_PI 3.14159265
 #define CLOUD_NOISE_PERIOD 6.0
+
+#define CLOUD_VOL_THR_MIN          0.03
+#define CLOUD_VOL_THR_MAX          0.97
+#define CLOUD_VOL_DENSE_SKIP       0.70
 
 // Interleaved Gradient Noise (Jimenez 2014, "Next Generation Post Processing in Call of Duty").
 // Produces high-frequency spatially-uniform noise ideal for temporal accumulation.
@@ -94,9 +108,9 @@ float henyey_greenstein(float cos_theta, float g)
 
 float dual_lobe_phase(float cos_theta)
 {
-    float hg_forward = henyey_greenstein(cos_theta, CLOUD_VOL_HG_FORWARD);
-    float hg_back = henyey_greenstein(cos_theta, CLOUD_VOL_HG_BACK);
-    return mix(hg_back, hg_forward, CLOUD_VOL_HG_BLEND);
+    float hg_fwd = henyey_greenstein(cos_theta, CLOUD_VOL_HG_FORWARD);
+    float hg_bk = henyey_greenstein(cos_theta, CLOUD_VOL_HG_BACK);
+    return mix(hg_bk, hg_fwd, CLOUD_VOL_HG_BLEND);
 }
 
 float powder_effect(float density, float cos_theta)
@@ -115,7 +129,7 @@ float height_gradient(float height_fraction)
 
 vec3 cloud_sample_pos(vec3 world_pos)
 {
-    vec3 sp = world_pos * CLOUD_VOL_UV_SCALE;
+    vec3 sp = world_pos * u_vol_uv_scale;
     sp.x += u_cloud_time * CLOUD_VOL_WIND_SPEED * 10.0;
     sp.z += u_cloud_time * CLOUD_VOL_WIND_SPEED * 4.0;
     return sp;
@@ -124,6 +138,18 @@ vec3 cloud_sample_pos(vec3 world_pos)
 vec3 cloud_uvw(vec3 sp)
 {
     return sp / CLOUD_NOISE_PERIOD;
+}
+
+void cloud_base_and_threshold(vec3 sp, out float o_base_noise, out float o_threshold)
+{
+    vec3 coarse_sp = sp * u_vol_coarse_scale + vec3(2.1, 9.7, 4.3);
+    vec4 coarse_s = texture3D(s_cloudNoise, cloud_uvw(coarse_sp));
+    float base_coarse = coarse_s.r;
+    float macro_w = coarse_s.g;
+    float base_fine = texture3D(s_cloudNoise, cloud_uvw(sp)).r;
+    o_base_noise = mix(base_coarse, base_fine, u_vol_base_mix);
+    float coverage_jitter = (macro_w - 0.5) * u_vol_macro_strength;
+    o_threshold = clamp(1.0 - u_cloud_coverage + coverage_jitter, CLOUD_VOL_THR_MIN, CLOUD_VOL_THR_MAX);
 }
 
 float sample_cloud_density_full(vec3 world_pos)
@@ -135,20 +161,22 @@ float sample_cloud_density_full(vec3 world_pos)
     if(h_grad < 0.001) return 0.0;
 
     vec3 sp = cloud_sample_pos(world_pos);
-    float base_noise = texture3D(s_cloudNoise, cloud_uvw(sp)).r;
+    float base_noise;
+    float threshold;
+    cloud_base_and_threshold(sp, base_noise, threshold);
 
-    float threshold = 1.0 - u_cloud_coverage;
-    float density = smoothstep(threshold, threshold + 0.4, base_noise);
+    float density = smoothstep(threshold, threshold + u_vol_edge_width, base_noise);
+    density = pow(max(density, 0.0), u_vol_shape_power);
     density *= h_grad;
 
     if(density < 0.001) return 0.0;
-    if(density > 0.7) return density * CLOUD_VOL_BASE_DENSITY * u_cloud_density;
+    if(density > CLOUD_VOL_DENSE_SKIP) return density * CLOUD_VOL_BASE_DENSITY * u_cloud_density;
 
     vec3 detail_uvw = cloud_uvw(sp * 5.0 + vec3(17.3, 41.7, 23.1));
     vec4 dns = texture3D(s_cloudNoise, detail_uvw);
     float detail = dns.g * 0.625 + dns.b * 0.25 + dns.a * 0.125;
     float edge_factor = 1.0 - density * density;
-    density = max(0.0, density - detail * 0.35 * edge_factor);
+    density = max(0.0, density - detail * u_vol_detail_erode * edge_factor);
 
     return density * CLOUD_VOL_BASE_DENSITY * u_cloud_density;
 }
@@ -162,10 +190,12 @@ float sample_cloud_density_cheap(vec3 world_pos)
     if(h_grad < 0.001) return 0.0;
 
     vec3 sp = cloud_sample_pos(world_pos);
-    float pw = texture3D(s_cloudNoise, cloud_uvw(sp)).r;
+    float base_noise;
+    float threshold;
+    cloud_base_and_threshold(sp, base_noise, threshold);
 
-    float threshold = 1.0 - u_cloud_coverage;
-    float density = smoothstep(threshold, threshold + 0.35, pw);
+    float density = smoothstep(threshold, threshold + u_vol_edge_width * 0.92, base_noise);
+    density = pow(max(density, 0.0), u_vol_shape_power);
     density *= h_grad * 0.5;
 
     return density * CLOUD_VOL_BASE_DENSITY * u_cloud_density;
@@ -247,7 +277,7 @@ void main()
         float sun_atten = light_march(sample_pos, lightDir);
         float powder = powder_effect(sample_density, cos_theta);
 
-        vec3 lit_color = sun_color * sun_atten * phase * CLOUD_VOL_SUN_INTENSITY * powder + ambient_color;
+        vec3 lit_color = sun_color * sun_atten * phase * u_vol_sun_intensity * powder + ambient_color;
 
         float sample_transmittance = exp(-sample_density * u_cloud_absorption);
         accum_light += lit_color * (1.0 - sample_transmittance) * transmittance;
@@ -279,7 +309,7 @@ void main()
     float t_hit = cloud_mid_alt / max(viewDir.y, 0.01);
 
     float cloud_time_dt = u_cloudFrame.z;
-    float inv_scale = 1.0 / CLOUD_VOL_UV_SCALE;
+    float inv_scale = 1.0 / u_vol_uv_scale;
     vec3 wind_per_frame = vec3(
         cloud_time_dt * CLOUD_VOL_WIND_SPEED * 10.0 * inv_scale,
         0.0,
