@@ -309,11 +309,6 @@ void vertex_convert(const vertex_layout& _destDecl,
     bgfx::vertexConvert(_destDecl, _destData, _srcDecl, _srcData, _num);
 }
 
-uint16_t weld_vertices(uint16_t* _output, const vertex_layout& _decl, const void* _data, uint16_t _num, float _epsilon)
-{
-    return bgfx::weldVertices(_output, _decl, _data, _num, _epsilon);
-}
-
 uint32_t topology_convert(topology_conversion _conversion,
                           void* _dst,
                           uint32_t _dstSize,

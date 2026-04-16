@@ -92,13 +92,6 @@ void vertex_convert(const vertex_layout& _destDecl,
                     uint32_t _num = 1);
 
 /**/
-uint16_t weld_vertices(uint16_t* _output,
-                       const vertex_layout& _decl,
-                       const void* _data,
-                       uint16_t _num,
-                       float _epsilon = 0.001f);
-
-/**/
 uint32_t topology_convert(topology_conversion _conversion,
                           void* _dst,
                           uint32_t _dstSize,
