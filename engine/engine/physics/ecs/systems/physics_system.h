@@ -67,6 +67,21 @@ public:
      */
     static void clear_kinematic_velocities(physics_component& comp);
 
+    static void on_create_cc_component(entt::registry& r, entt::entity e);
+    static void on_destroy_cc_component(entt::registry& r, entt::entity e);
+
+    /**
+     * @brief Moves a character controller by a displacement.
+     * @param comp The character controller component.
+     * @param displacement The displacement vector.
+     * @return Collision flags from the movement.
+     */
+    static void move_character(character_controller_component& comp, const math::vec3& displacement);
+    static void jump_character(character_controller_component& comp, const math::vec3& direction);
+    static void apply_impulse_character(character_controller_component& comp, const math::vec3& impulse);
+    static void warp_character(character_controller_component& comp, const math::vec3& position);
+    static void set_character_linear_velocity(character_controller_component& comp, const math::vec3& velocity);
+
     auto ray_cast(const math::vec3& origin,
                   const math::vec3& direction,
                   float max_distance,

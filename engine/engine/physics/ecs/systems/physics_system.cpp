@@ -5,6 +5,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/profiler/profiler.h>
 
 #include <logging/logging.h>
@@ -129,6 +130,43 @@ void physics_system::apply_torque(physics_component& comp, const math::vec3& tor
 void physics_system::clear_kinematic_velocities(physics_component& comp)
 {
     backend_type::clear_kinematic_velocities(comp);
+}
+
+void physics_system::on_create_cc_component(entt::registry& r, entt::entity e)
+{
+    character_controller_component::on_create_component(r, e);
+    backend_type::on_create_cc_component(r, e);
+}
+
+void physics_system::on_destroy_cc_component(entt::registry& r, entt::entity e)
+{
+    character_controller_component::on_destroy_component(r, e);
+    backend_type::on_destroy_cc_component(r, e);
+}
+
+void physics_system::move_character(character_controller_component& comp, const math::vec3& displacement)
+{
+    backend_type::move_character(comp, displacement);
+}
+
+void physics_system::jump_character(character_controller_component& comp, const math::vec3& direction)
+{
+    backend_type::jump_character(comp, direction);
+}
+
+void physics_system::apply_impulse_character(character_controller_component& comp, const math::vec3& impulse)
+{
+    backend_type::apply_impulse_character(comp, impulse);
+}
+
+void physics_system::warp_character(character_controller_component& comp, const math::vec3& position)
+{
+    backend_type::warp_character(comp, position);
+}
+
+void physics_system::set_character_linear_velocity(character_controller_component& comp, const math::vec3& velocity)
+{
+    backend_type::set_character_linear_velocity(comp, velocity);
 }
 
 auto physics_system::ray_cast(const math::vec3& origin,

@@ -355,7 +355,6 @@ void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bo
         {
             if(recover_selection)
             {
-                entity.remove<id_component>();
                 select(entity, select_mode::shift);
             }
         }

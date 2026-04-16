@@ -11,6 +11,7 @@
 #include "model_component.hpp"
 #include "animation_component.hpp"
 #include "physics_component.hpp"
+#include "character_controller_component.hpp"
 #include "prefab_component.hpp"
 #include "reflection_probe_component.hpp"
 #include "volume_component.hpp"
@@ -59,6 +60,7 @@ using all_serializeable_components = std::tuple<
     skylight_component,
     reflection_probe_component,
     physics_component,
+    character_controller_component,
     audio_source_component,
     audio_listener_component,
     text_component,
@@ -93,6 +95,7 @@ using all_inspectable_components = std::tuple<
     skylight_component,
     reflection_probe_component,
     physics_component,
+    character_controller_component,
     audio_source_component,
     audio_listener_component,
     text_component,
@@ -118,6 +121,7 @@ using all_addable_components = std::tuple<
     skylight_component,
     reflection_probe_component,
     physics_component,
+    character_controller_component,
     audio_source_component,
     audio_listener_component,
     text_component,

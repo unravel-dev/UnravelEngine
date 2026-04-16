@@ -5,6 +5,7 @@
 #include <context/context.hpp>
 
 #include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/rendering/camera.h>
 #include <graphics/debugdraw.h>
 #include <hpp/small_vector.hpp>
@@ -70,10 +71,22 @@ struct bullet_backend
     static void on_destroy_component(entt::registry& r, entt::entity e);
     static void on_destroy_bullet_rigidbody_component(entt::registry& r, entt::entity e);
 
+    static void on_create_cc_component(entt::registry& r, entt::entity e);
+    static void on_destroy_cc_component(entt::registry& r, entt::entity e);
+    static void on_destroy_bullet_cc_component(entt::registry& r, entt::entity e);
+
+    static void move_character(character_controller_component& comp, const math::vec3& displacement);
+    static void jump_character(character_controller_component& comp, const math::vec3& direction);
+    static void apply_impulse_character(character_controller_component& comp, const math::vec3& impulse);
+    static void warp_character(character_controller_component& comp, const math::vec3& position);
+    static void set_character_linear_velocity(character_controller_component& comp, const math::vec3& velocity);
+    static void sync_character_runtime_state(character_controller_component& comp);
+
     static void on_create_active_component(entt::registry& r, entt::entity e);
     static void on_destroy_active_component(entt::registry& r, entt::entity e);
 
     static void draw_system_gizmos(rtti::context& ctx, const camera& cam, gfx::dd_raii& dd);
     static void draw_gizmo(rtti::context& ctx, physics_component& comp, const camera& cam, gfx::dd_raii& dd);
+    static void draw_gizmo(rtti::context& ctx, character_controller_component& comp, const camera& cam, gfx::dd_raii& dd);
 };
 } // namespace unravel

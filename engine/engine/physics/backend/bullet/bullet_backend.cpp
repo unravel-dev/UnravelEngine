@@ -11,6 +11,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
+#include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/settings/settings.h>
@@ -24,6 +25,8 @@
 
 #include <btBulletCollisionCommon.h>
 #include <btBulletDynamicsCommon.h>
+#include <BulletDynamics/Character/btKinematicCharacterController.h>
+#include <BulletCollision/CollisionDispatch/btGhostObject.h>
 
 #include <hpp/flat_map.hpp>
 #include <logging/logging.h>
@@ -665,6 +668,15 @@ struct rigidbody
     int collision_filter_mask{};
 };
 
+struct character_controller
+{
+    std::shared_ptr<btPairCachingGhostObject> ghost{};
+    std::shared_ptr<btCapsuleShape> shape{};
+    std::shared_ptr<btKinematicCharacterController> controller{};
+    int collision_filter_group{};
+    int collision_filter_mask{};
+};
+
 struct world
 {
     std::shared_ptr<btBroadphaseInterface> broadphase;
@@ -712,6 +724,22 @@ struct world
         }
         btAssert(in_simulate == false);
         dynamics_world->removeRigidBody(body.internal.get());
+    }
+
+    void add_character_controller(const character_controller& cc)
+    {
+        btAssert(in_simulate == false);
+        dynamics_world->addCollisionObject(cc.ghost.get(),
+                                           cc.collision_filter_group,
+                                           cc.collision_filter_mask);
+        dynamics_world->addAction(cc.controller.get());
+    }
+
+    void remove_character_controller(const character_controller& cc)
+    {
+        btAssert(in_simulate == false);
+        dynamics_world->removeAction(cc.controller.get());
+        dynamics_world->removeCollisionObject(cc.ghost.get());
     }
 
     void process_manifold(unravel::script_system& scripting, const contact_manifold& manifold)
@@ -1223,6 +1251,7 @@ auto create_dynamics_world() -> bullet::world
     world.solver = solver;
     world.dynamics_world->setGravity(gravity_earth);
     world.dynamics_world->setForceUpdateAllAabbs(false);
+    world.dynamics_world->getPairCache()->setInternalGhostPairCallback(new btGhostPairCallback());
     return world;
 }
 
@@ -1824,6 +1853,162 @@ auto from_physics(bullet::world& world, transform_component& transform, physics_
     return result;
 }
 
+void make_character_controller_body(bullet::world& world,
+                                    entt::handle entity,
+                                    character_controller_component& comp)
+{
+    auto& cc = entity.emplace<bullet::character_controller>();
+    float capsule_half_height = (comp.get_height() - 2.0f * comp.get_radius()) * 0.5f;
+    if(capsule_half_height < 0.0f)
+    {
+        capsule_half_height = 0.0f;
+    }
+    cc.shape = std::make_shared<btCapsuleShape>(comp.get_radius(), capsule_half_height * 2.0f);
+    cc.ghost = std::make_shared<btPairCachingGhostObject>();
+    cc.ghost->setCollisionShape(cc.shape.get());
+    cc.ghost->setCollisionFlags(btCollisionObject::CF_CHARACTER_OBJECT | btCollisionObject::CF_KINEMATIC_OBJECT);
+    cc.ghost->setUserIndex(int(entity.entity()));
+    cc.ghost->setUserPointer(&world);
+    cc.collision_filter_group = entity.get<layer_component>().layers.mask;
+    cc.collision_filter_mask = comp.get_collision_mask().mask;
+    cc.controller = std::make_shared<btKinematicCharacterController>(
+        cc.ghost.get(), cc.shape.get(), comp.get_step_height());
+    cc.controller->setMaxSlope(math::radians(comp.get_slope_limit()));
+    cc.controller->setGravity(world.dynamics_world->getGravity() * comp.get_gravity_scale());
+    cc.controller->setJumpSpeed(comp.get_jump_speed());
+    cc.controller->setFallSpeed(comp.get_fall_speed());
+    cc.controller->setMaxJumpHeight(comp.get_max_jump_height());
+    cc.controller->setLinearDamping(comp.get_linear_damping());
+    auto& transform = entity.get<transform_component>();
+    const auto& p = transform.get_position_global();
+    const auto& q = transform.get_rotation_global();
+    btTransform bt_trans(bullet::to_bullet(q), bullet::to_bullet(p + comp.get_center()));
+    cc.ghost->setWorldTransform(bt_trans);
+    if(entity.all_of<active_component>())
+    {
+        world.add_character_controller(cc);
+    }
+}
+
+void destroy_character_controller_body(bullet::world& world,
+                                       entt::handle entity,
+                                       bool from_cc_component)
+{
+    auto cc = entity.try_get<bullet::character_controller>();
+    if(cc && cc->controller)
+    {
+        world.remove_character_controller(*cc);
+    }
+    if(from_cc_component)
+    {
+        entity.remove<bullet::character_controller>();
+    }
+}
+
+void sync_character_controller_body(bullet::world& world,
+                                    character_controller_component& comp,
+                                    bool force = false)
+{
+    auto owner = comp.get_owner();
+    if(force)
+    {
+        destroy_character_controller_body(world, owner, true);
+        make_character_controller_body(world, owner, comp);
+    }
+    else
+    {
+        auto* cc = owner.try_get<bullet::character_controller>();
+        if(!cc || !cc->controller)
+        {
+            return;
+        }
+        if(comp.is_property_dirty(character_controller_property::shape) ||
+           comp.is_property_dirty(character_controller_property::skin_width))
+        {
+            destroy_character_controller_body(world, owner, true);
+            make_character_controller_body(world, owner, comp);
+            comp.set_dirty(system_id, false);
+            return;
+        }
+        if(comp.is_property_dirty(character_controller_property::step_height))
+        {
+            cc->controller->setStepHeight(comp.get_step_height());
+        }
+        if(comp.is_property_dirty(character_controller_property::slope_limit))
+        {
+            cc->controller->setMaxSlope(math::radians(comp.get_slope_limit()));
+        }
+        if(comp.is_property_dirty(character_controller_property::gravity_scale))
+        {
+            cc->controller->setGravity(world.dynamics_world->getGravity() * comp.get_gravity_scale());
+        }
+        if(comp.is_property_dirty(character_controller_property::layer))
+        {
+            destroy_character_controller_body(world, owner, true);
+            make_character_controller_body(world, owner, comp);
+            comp.set_dirty(system_id, false);
+            return;
+        }
+        if(comp.is_property_dirty(character_controller_property::movement_params))
+        {
+            cc->controller->setJumpSpeed(comp.get_jump_speed());
+            cc->controller->setFallSpeed(comp.get_fall_speed());
+            cc->controller->setMaxJumpHeight(comp.get_max_jump_height());
+            cc->controller->setLinearDamping(comp.get_linear_damping());
+        }
+    }
+    comp.set_dirty(system_id, false);
+}
+
+auto to_physics_cc(bullet::world& world,
+                   transform_component& transform,
+                   character_controller_component& comp) -> bool
+{
+    bool transform_dirty = transform.is_dirty(system_id);
+    bool cc_dirty = comp.is_dirty(system_id);
+    sync_character_controller_body(world, comp);
+    if(transform_dirty || cc_dirty)
+    {
+        auto owner = comp.get_owner();
+        auto* cc = owner.try_get<bullet::character_controller>();
+        if(!cc || !cc->ghost)
+        {
+            return false;
+        }
+        const auto& p = transform.get_position_global();
+        const auto& q = transform.get_rotation_global();
+        btTransform bt_trans(bullet::to_bullet(q), bullet::to_bullet(p + comp.get_center()));
+        cc->ghost->setWorldTransform(bt_trans);
+        return true;
+    }
+    return false;
+}
+
+auto from_physics_cc(bullet::world& world,
+                     transform_component& transform,
+                     character_controller_component& comp) -> bool
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->ghost)
+    {
+        return false;
+    }
+    const auto& bt_trans = cc->ghost->getWorldTransform();
+    auto p = bullet::from_bullet(bt_trans.getOrigin()) - comp.get_center();
+    auto q = bullet::from_bullet(bt_trans.getRotation());
+    float epsilon = 0.009f;
+    bool changed = transform.set_position_and_rotation_global(p, q, epsilon);
+
+    comp.set_grounded(cc->controller->onGround());
+    auto bt_vel = cc->controller->getLinearVelocity();
+    comp.set_velocity_internal(bullet::from_bullet(bt_vel));
+
+    transform.set_dirty(system_id, false);
+    comp.set_dirty(system_id, false);
+    return changed;
+}
+
 auto add_force(btRigidBody* body, const btVector3& force, force_mode mode) -> bool
 {
     if(force.fuzzyZero())
@@ -1944,9 +2129,106 @@ void bullet_backend::on_destroy_bullet_rigidbody_component(entt::registry& r, en
     }
 }
 
+void bullet_backend::on_create_cc_component(entt::registry& r, entt::entity e)
+{
+    auto world = r.ctx().find<bullet::world>();
+    if(world)
+    {
+        entt::handle entity(r, e);
+        auto& comp = entity.get<character_controller_component>();
+        sync_character_controller_body(*world, comp, true);
+    }
+}
+
+void bullet_backend::on_destroy_cc_component(entt::registry& r, entt::entity e)
+{
+    auto world = r.ctx().find<bullet::world>();
+    if(world)
+    {
+        entt::handle entity(r, e);
+        destroy_character_controller_body(*world, entity, true);
+    }
+}
+
+void bullet_backend::on_destroy_bullet_cc_component(entt::registry& r, entt::entity e)
+{
+    auto world = r.ctx().find<bullet::world>();
+    if(world)
+    {
+        entt::handle entity(r, e);
+        destroy_character_controller_body(*world, entity, false);
+    }
+}
+
+void bullet_backend::move_character(character_controller_component& comp, const math::vec3& displacement)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    cc->controller->setWalkDirection(bullet::to_bullet(displacement));
+}
+
+void bullet_backend::jump_character(character_controller_component& comp, const math::vec3& direction)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    cc->controller->jump(bullet::to_bullet(direction));
+}
+
+void bullet_backend::apply_impulse_character(character_controller_component& comp, const math::vec3& impulse)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    cc->controller->applyImpulse(bullet::to_bullet(impulse));
+}
+
+void bullet_backend::warp_character(character_controller_component& comp, const math::vec3& position)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    cc->controller->warp(bullet::to_bullet(position + comp.get_center()));
+}
+
+void bullet_backend::set_character_linear_velocity(character_controller_component& comp, const math::vec3& velocity)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    cc->controller->setLinearVelocity(bullet::to_bullet(velocity));
+}
+
+void bullet_backend::sync_character_runtime_state(character_controller_component& comp)
+{
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return;
+    }
+    comp.set_grounded(cc->controller->onGround());
+    comp.set_velocity_internal(bullet::from_bullet(cc->controller->getLinearVelocity()));
+}
+
 void bullet_backend::on_create_active_component(entt::registry& r, entt::entity e)
 {
-    // this function will be called for both physics_component and bullet::rigidbody
     auto world = r.ctx().find<bullet::world>();
     if(world)
     {
@@ -1956,12 +2238,16 @@ void bullet_backend::on_create_active_component(entt::registry& r, entt::entity 
         {
             set_rigidbody_active(*world, *body, true);
         }
+        auto cc = entity.try_get<bullet::character_controller>();
+        if(cc)
+        {
+            world->add_character_controller(*cc);
+        }
     }
 }
 
 void bullet_backend::on_destroy_active_component(entt::registry& r, entt::entity e)
 {
-    // this function will be called for both physics_component and bullet::rigidbody
     auto world = r.ctx().find<bullet::world>();
     if(world)
     {
@@ -1970,6 +2256,11 @@ void bullet_backend::on_destroy_active_component(entt::registry& r, entt::entity
         if(body)
         {
             set_rigidbody_active(*world, *body, false);
+        }
+        auto cc = entity.try_get<bullet::character_controller>();
+        if(cc)
+        {
+            world->remove_character_controller(*cc);
         }
     }
 }
@@ -2169,6 +2460,7 @@ void bullet_backend::on_play_begin(rtti::context& ctx)
     auto& world = registry.ctx().emplace<bullet::world>(bullet::create_dynamics_world());
 
     registry.on_destroy<bullet::rigidbody>().connect<&on_destroy_bullet_rigidbody_component>();
+    registry.on_destroy<bullet::character_controller>().connect<&on_destroy_bullet_cc_component>();
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
@@ -2176,6 +2468,11 @@ void bullet_backend::on_play_begin(rtti::context& ctx)
         [&](auto e, auto&& comp)
         {
             sync_physics_body(world, comp, true);
+        });
+    registry.view<character_controller_component>().each(
+        [&](auto e, auto&& comp)
+        {
+            sync_character_controller_body(world, comp, true);
         });
 }
 
@@ -2186,6 +2483,11 @@ void bullet_backend::on_play_end(rtti::context& ctx)
 
     auto& world = registry.ctx().get<bullet::world>();
 
+    registry.view<character_controller_component>().each(
+        [&](auto e, auto&& comp)
+        {
+            destroy_character_controller_body(world, comp.get_owner(), true);
+        });
     registry.view<physics_component>().each(
         [&](auto e, auto&& comp)
         {
@@ -2194,6 +2496,7 @@ void bullet_backend::on_play_end(rtti::context& ctx)
 
     registry.on_construct<active_component>().disconnect<&on_create_active_component>();
     registry.on_destroy<active_component>().disconnect<&on_destroy_active_component>();
+    registry.on_destroy<bullet::character_controller>().disconnect<&on_destroy_bullet_cc_component>();
     registry.on_destroy<bullet::rigidbody>().disconnect<&on_destroy_bullet_rigidbody_component>();
 
     registry.ctx().erase<bullet::world>();
@@ -2259,18 +2562,17 @@ void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
                             physics_entities_synced++;
                         }
                     });
+                registry.view<transform_component, character_controller_component, active_component>().each(
+                    [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
+                    {
+                        to_physics_cc(world, transform, cc_comp);
+                    });
             }
-            
 
-            // APPLOG_TRACE("Physics Update: entities {} -> synced to physics {}",
-            //              physics_entities,
-            //              physics_entities_synced);
-            // update physics
             world.simulate(fixed_time_step, fixed_time_step, 1);
 
             physics_entities = {};
             physics_entities_synced = {};
-            // update transform from phyiscs interpolated spatial properties
             {
                 APP_SCOPE_PERF("Physics/Bullet/Sync Transforms From Physics");
                 registry.view<transform_component, physics_component, active_component>().each(
@@ -2281,6 +2583,11 @@ void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
                         {
                             physics_entities_synced++;
                         }
+                    });
+                registry.view<transform_component, character_controller_component, active_component>().each(
+                    [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
+                    {
+                        from_physics_cc(world, transform, cc_comp);
                     });
             }
 
@@ -2314,6 +2621,33 @@ void bullet_backend::draw_system_gizmos(rtti::context& ctx, const camera& cam, g
 
 void bullet_backend::draw_gizmo(rtti::context& ctx, physics_component& comp, const camera& cam, gfx::dd_raii& dd)
 {
+}
+
+void bullet_backend::draw_gizmo(rtti::context& ctx,
+                                character_controller_component& comp,
+                                const camera& cam,
+                                gfx::dd_raii& dd)
+{
+    auto owner = comp.get_owner();
+    if(!owner || !owner.all_of<transform_component>())
+    {
+        return;
+    }
+    auto& transform = owner.get<transform_component>();
+    const auto& p = transform.get_position_global();
+    const auto& q = transform.get_rotation_global();
+    float cylinder_half_height = (comp.get_height() - 2.0f * comp.get_radius()) * 0.5f;
+    if(cylinder_half_height < 0.0f)
+    {
+        cylinder_half_height = 0.0f;
+    }
+    auto center = p + comp.get_center();
+    math::vec3 up = q * math::vec3(0.0f, 1.0f, 0.0f);
+    auto top = center + up * cylinder_half_height;
+    auto bottom = center - up * cylinder_half_height;
+    dd.encoder.setColor(0xff00ffff);
+    dd.encoder.setWireframe(true);
+    dd.encoder.drawCapsule({bottom.x, bottom.y, bottom.z}, {top.x, top.y, top.z}, comp.get_radius());
 }
 
 } // namespace unravel

@@ -459,10 +459,24 @@ uhandle::uhandle(entt::handle handle)
     if(handle)
     {
         registry = handle.registry();
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+        if(auto id_comp = handle.try_get<unravel::id_component>())
+        {
+            uuid = id_comp->id;
+        }
+
+=======
+>>>>>>> Stashed changes
         if(auto id = handle.try_get<unravel::id_component>())
         {
             uuid = id->id;
         }
+<<<<<<< Updated upstream
+=======
+>>>>>>> 42176cee6556612a09a6114887b5c6db1c6ce737
+>>>>>>> Stashed changes
     }
 }
 auto uhandle::resolve() const -> entt::handle

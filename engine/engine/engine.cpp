@@ -25,6 +25,7 @@
 #include <ospp/event.h>
 
 #include <crash/crash.hpp>
+#include <cstdlib>
 #include <exception>
 #include <logging/logging.h>
 
@@ -38,6 +39,7 @@ namespace unravel
 {
 namespace
 {
+
 auto context_ptr() -> rtti::context*&
 {
     static rtti::context* ctx{};
