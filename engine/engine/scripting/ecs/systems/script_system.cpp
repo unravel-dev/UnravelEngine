@@ -368,6 +368,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 
     copy_compiled_lib(app_script_lib_temp, app_script_lib);
 
+    if(!is_deploy_mode)
     {
         auto& am = ctx.get_cached<asset_manager>();
         auto assets = am.get_assets<script>("app");
@@ -378,27 +379,30 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         }
     }
 
-
-
-    APPLOG_TRACE("------------------------------------------------");
-    APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));
-    APPLOG_TRACE("------------------------------------------------");
-    try
+    fs::error_code ec;
+    if(fs::exists(app_script_lib, ec))
     {
-        auto assembly = app_domain_->get_assembly(app_script_lib.string());
-        // print_assembly_info(assembly);
-
-        app_cache_.scriptable_component_types.clear();
-        if(!has_compilation_errors_)
+        APPLOG_TRACE("------------------------------------------------");
+        APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));
+        APPLOG_TRACE("------------------------------------------------");
+        try
         {
-            app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+            auto assembly = app_domain_->get_assembly(app_script_lib.string());
+            // print_assembly_info(assembly);
+    
+            app_cache_.scriptable_component_types.clear();
+            if(!has_compilation_errors_)
+            {
+                app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+            }
+        }
+        catch(const mono::mono_exception& e)
+        {
+            log_exception(e);
+            result = false;
         }
     }
-    catch(const mono::mono_exception& e)
-    {
-        log_exception(e);
-        result = false;
-    }
+    
 
     return result;
 }

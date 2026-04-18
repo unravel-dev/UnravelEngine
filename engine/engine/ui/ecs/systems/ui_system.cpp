@@ -93,17 +93,22 @@ auto ui_system::init(rtti::context& ctx) -> bool
             height = static_cast<int>(size.h);
         }
     }
+    bool is_deploy_mode = ctx.has<deploy>();
 
-    // Create debug context (empty, used for RmlUi debugger)
-    debug_context_ = Rml::CreateContext("debug", Rml::Vector2i(width, height));
-    if(!debug_context_)
+    if(!is_deploy_mode)
     {
-        APPLOG_ERROR("Failed to create RmlUi debug context");
-        RmlUi_Backend_Engine::shutdown();
-        return false;
+        // Create debug context (empty, used for RmlUi debugger)
+        debug_context_ = Rml::CreateContext("debug", Rml::Vector2i(width, height));
+        if(!debug_context_)
+        {
+            APPLOG_ERROR("Failed to create RmlUi debug context");
+            RmlUi_Backend_Engine::shutdown();
+            return false;
+        }
+        Rml::Debugger::Initialise(debug_context_);
+        debug_render_layer_stack_ = std::make_shared<RmlUi_RenderLayerStack>();
+
     }
-    Rml::Debugger::Initialise(debug_context_);
-    debug_render_layer_stack_ = std::make_shared<RmlUi_RenderLayerStack>();
     // Register component callbacks
     register_component_callbacks(ctx);
 

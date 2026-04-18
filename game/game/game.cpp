@@ -85,7 +85,7 @@ auto game::init(const cmd_line::parser& parser) -> bool
     }
 
     auto& scr = ctx.get_cached<script_system>();
-    if(!scr.load_app_domain(ctx, true))
+    if(!scr.load_app_domain(ctx, false))
     {
         return false;
     }
