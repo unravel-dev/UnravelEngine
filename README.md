@@ -18,11 +18,10 @@
 
 ## 🚀 Quick Start
 
-### Try the Demo
+### Try it
 1. Download the latest release from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
 2. Extract and run `еditor.exe` (Windows) or `еditor` (Linux)
-3. Open the included DemoProject to explore features
-
+   
 ### System Requirements
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
@@ -99,8 +98,6 @@ Unravel Engine is in **active development** and not yet production-ready. We wel
 ## 🎯 Editor
 
 Download pre-built binaries for Windows and Linux from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
-
-The release includes a **DemoProject** to help you get started quickly and explore the engine's capabilities.
 
 ### Code Editing Integration
 The Editor integrates seamlessly with **Visual Studio Code** and its variants (Cursor, VSCodium, etc) for script editing:
