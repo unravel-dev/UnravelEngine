@@ -3631,36 +3631,37 @@ auto internal_m2n_audio_source_get_loop(entt::entity id) -> bool
 
 void internal_m2n_utils_set_ik_posiiton_ccd(entt::entity id,
                                             const math::vec3& target,
+                                            const math::vec3& pole,
                                             int num_bones_in_chain,
-                                            float threshold,
-                                            int max_iterations)
+                                            int max_iterations,
+                                            float threshold)
 {
     auto e = get_entity_from_id(id);
 
-    ik_set_position_ccd(e, target, num_bones_in_chain, threshold, max_iterations);
+    ik_set_position_ccd(e, target, pole, num_bones_in_chain, max_iterations, threshold);
 }
 
 void internal_m2n_utils_set_ik_posiiton_fabrik(entt::entity id,
                                                const math::vec3& target,
+                                               const math::vec3& pole,
                                                int num_bones_in_chain,
-                                               float threshold,
-                                               int max_iterations)
+                                               int max_iterations,
+                                               float threshold)
 {
     auto e = get_entity_from_id(id);
 
-    ik_set_position_fabrik(e, target, num_bones_in_chain, threshold, max_iterations);
+    ik_set_position_fabrik(e, target, pole, num_bones_in_chain, max_iterations, threshold);
 }
 
 void internal_m2n_utils_set_ik_posiiton_two_bone(entt::entity id,
                                                  const math::vec3& target,
-                                                 const math::vec3& forward,
+                                                 const math::vec3& pole,
                                                  float weight,
-                                                 float soften,
-                                                 int max_iterations)
+                                                 float soften)
 {
     auto e = get_entity_from_id(id);
 
-    ik_set_position_two_bone(e, target, forward, weight, soften, max_iterations);
+    ik_set_position_two_bone(e, target, pole, weight, soften);
 }
 
 void internal_m2n_utils_set_ik_look_at_posiiton(entt::entity id, const math::vec3& target, float weight)

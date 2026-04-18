@@ -180,7 +180,7 @@ namespace Unravel.Core
 
         public void Jump()
         {
-            Jump(Vector3.up);
+            Jump(Vector3.zero);
         }
 
         /// <summary>

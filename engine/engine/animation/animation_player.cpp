@@ -95,31 +95,77 @@ void animation_player::blend_to(size_t layer_idx,
         {
             layer.current_state = {};
         }
+        return;
     }
 
-    layer.target_state.state.loop = loop;
-
+    // Already blending TO this clip - nothing to do (but keep loop flag fresh).
     if(layer.target_state.state.clip == clip)
     {
+        layer.target_state.state.loop = loop;
         return;
     }
 
+    // Caller wants to go back to the clip we're currently blending AWAY from.
     if(layer.current_state.state.clip == clip)
     {
+        // No active crossfade? Already fully on this clip, nothing to do.
+        if(!layer.target_state.state.clip)
+        {
+            layer.current_state.state.loop = loop;
+            return;
+        }
+
+        // Active crossfade - reverse direction. Swap current<->target so we
+        // are now blending BACK toward the caller's requested clip, and
+        // flip the blend progress so the visible pose stays continuous.
+        std::swap(layer.current_state, layer.target_state);
+        layer.current_state.state.loop = loop;
+
+        if(auto* bot = std::get_if<blend_over_time>(&layer.blending_state.state))
+        {
+            float progress_before = 0.0f;
+            if(bot->duration.count() > 0.0f)
+            {
+                progress_before = float(bot->elapsed.count() / bot->duration.count());
+                progress_before = std::clamp(progress_before, 0.0f, 1.0f);
+            }
+
+            if(progress_before > 1e-4f)
+            {
+                // Stretch `duration` so remaining wall-clock time == caller's
+                // requested duration, while starting at mirrored progress
+                // (1 - progress_before) for visual continuity.
+                auto stretched = seconds_t(duration.count() / progress_before);
+                bot->duration = stretched;
+                bot->elapsed  = seconds_t(stretched.count() * (1.0f - progress_before));
+            }
+            else
+            {
+                bot->duration = duration;
+                bot->elapsed  = seconds_t(0);
+            }
+        }
+        else
+        {
+            // Shouldn't happen given target was set, but be safe.
+            layer.blending_state.state = blend_over_time{duration};
+        }
+        layer.blending_state.easing = easing;
         return;
     }
 
+    // Fresh blend: start a new crossfade from current to the requested clip.
     layer.target_state.state.clip = clip;
+    layer.target_state.state.loop = loop;
+
     auto phase = phase_sync ? layer.current_state.state.get_progress() : 0.0f;
     layer.target_state.state.set_progress(phase);
-
 
     if(duration > clip.get()->duration)
     {
         duration = clip.get()->duration;
     }
 
-    // Set blending parameters
     layer.blending_state.state = blend_over_time{duration};
     layer.blending_state.easing = easing;
 }

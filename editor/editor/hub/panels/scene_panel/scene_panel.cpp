@@ -774,16 +774,16 @@ auto handle_inverse_kinematics(entt::handle selection, entt::handle center, edit
     {
         return ik_set_position_ccd(selection,
                                    center_transform_comp.get_position_global(),
+                                   math::vec3(0.f),
                                    em.ik_data.num_nodes,
-                                   0.001f,
                                    100);
     }
     if(ImGui::IsKeyDown(shortcuts::ik_fabrik))
     {
         return ik_set_position_fabrik(selection,
                                       center_transform_comp.get_position_global(),
+                                      math::vec3(0.f),
                                       em.ik_data.num_nodes,
-                                      0.001f,
                                       100);
     }
     if(ImGui::IsKeyDown(shortcuts::ik_two_bone))
@@ -792,8 +792,7 @@ auto handle_inverse_kinematics(entt::handle selection, entt::handle center, edit
                                         center_transform_comp.get_position_global(),
                                         center_transform_comp.get_z_axis_global(),
                                         1.0f,
-                                        1.0f,
-                                        100);
+                                        1.0f);
     }
     return false;
 }

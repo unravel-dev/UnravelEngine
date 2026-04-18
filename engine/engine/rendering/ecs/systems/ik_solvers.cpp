@@ -60,9 +60,131 @@ auto get_end_position(transform_component* comp) -> math::vec3
     return comp->get_position_global();
 }
 
+// -----------------------------------------------------------------------------
+// Pole constraint helper.
+//
+// Pivots every intermediate joint in `positions` around the (root -> end) axis
+// so that it lies in the half-plane that contains the `pole` vector. This is
+// the canonical way to disambiguate "which side does the knee bend to" in a
+// position-based IK solver: the chain remains the same length and the end
+// effector stays on target, but the bend direction is forced to match the pole.
+//
+// Pass a zero-length pole to disable the constraint.
+// -----------------------------------------------------------------------------
+void apply_pole_constraint(ik_vector<math::vec3>& positions, const math::vec3& pole)
+{
+    if(glm::dot(pole, pole) < 1e-10f)
+    {
+        return;
+    }
+
+    const size_t n = positions.size();
+    if(n < 3)
+    {
+        return;
+    }
+
+    const math::vec3 root = positions.front();
+    const math::vec3 end = positions.back();
+
+    math::vec3 axis = end - root;
+    const float axis_len = math::length(axis);
+    if(axis_len < 1e-5f)
+    {
+        return;
+    }
+    axis /= axis_len;
+
+    // Component of the pole direction perpendicular to the root->end axis.
+    // That's the target "knee side" half-plane direction.
+    math::vec3 pole_dir = pole - root;
+    math::vec3 pole_perp = pole_dir - glm::dot(pole_dir, axis) * axis;
+    const float pole_perp_len = math::length(pole_perp);
+    if(pole_perp_len < 1e-5f)
+    {
+        // Pole is collinear with the leg: can't disambiguate. Leave chain alone.
+        return;
+    }
+    pole_perp /= pole_perp_len;
+
+    for(size_t i = 1; i + 1 < n; ++i)
+    {
+        const math::vec3 rel = positions[i] - root;
+        const float along = glm::dot(rel, axis);
+        const math::vec3 along_vec = along * axis;
+        const math::vec3 perp = rel - along_vec;
+        const float perp_len = math::length(perp);
+        if(perp_len < 1e-5f)
+        {
+            continue;
+        }
+        // Keep the joint's distance from the root->end line but rotate it onto
+        // the pole side.
+        positions[i] = root + along_vec + pole_perp * perp_len;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Re-derive bone rotations from a set of target joint positions.
+//
+// Shared by FABRIK (after its forward/backward pass) and by CCD's pole
+// post-processing. For each bone we compute the shortest-arc rotation that
+// aligns the current bone direction with the desired direction implied by the
+// new joint positions, then convert that correction into local space and
+// compose it with the bone's existing local rotation.
+// -----------------------------------------------------------------------------
+void update_rotations_from_positions(ik_vector<transform_component*>& chain,
+                                     const ik_vector<math::vec3>& positions)
+{
+    const size_t n = chain.size();
+    for(size_t i = 0; i + 1 < n; ++i)
+    {
+        transform_component* bone = chain[i];
+        transform_component* child = chain[i + 1];
+
+        const math::vec3 current_pos = bone->get_position_global();
+        const math::vec3 child_pos = child->get_position_global();
+        math::vec3 current_dir = child_pos - current_pos;
+        math::vec3 desired_dir = positions[i + 1] - positions[i];
+
+        if(math::length(current_dir) < 1e-5f || math::length(desired_dir) < 1e-5f)
+        {
+            continue;
+        }
+
+        current_dir = math::normalize(current_dir);
+        desired_dir = math::normalize(desired_dir);
+
+        const float dot = glm::clamp(glm::dot(current_dir, desired_dir), -1.f, 1.f);
+        if(dot > 0.9999f)
+        {
+            continue;
+        }
+
+        math::vec3 axis = math::cross(current_dir, desired_dir);
+        if(math::length(axis) < 1e-5f)
+        {
+            continue;
+        }
+        axis = math::normalize(axis);
+
+        const float angle = math::acos(dot);
+        const math::quat rotation_delta = math::angleAxis(angle, axis);
+
+        auto parent = bone->get_parent();
+        transform_component* parent_trans = parent ? parent.try_get<transform_component>() : nullptr;
+        const math::quat parent_global_rot =
+            (parent_trans) ? parent_trans->get_rotation_global() : math::identity<math::quat>();
+
+        const math::quat local_rotation_delta = glm::inverse(parent_global_rot) * rotation_delta * parent_global_rot;
+        bone->set_rotation_local(math::normalize(local_rotation_delta * bone->get_rotation_local()));
+    }
+}
+
 // Advanced CCD IK solver with unreachable target handling and non-linear weighting.
 auto ccdik_advanced(ik_vector<transform_component*>& chain,
                     math::vec3 target,
+                    const math::vec3& pole,
                     float threshold = 0.001f,
                     int maxIterations = 10,
                     float damping_error_threshold = 0.5f,
@@ -171,11 +293,28 @@ auto ccdik_advanced(ik_vector<transform_component*>& chain,
             float current_error = math::length(target - current_end_pos);
             if(current_error < threshold)
             {
-                return true; // Target reached.
+                // Target reached; still enforce the pole constraint below before returning.
+                iter = maxIterations;
+                break;
             }
         }
     }
-    return false; // Target not reached within the iteration limit.
+
+    // Post-process: enforce the pole constraint by pivoting intermediate joints
+    // into the (root, end, pole) half-plane and re-deriving rotations.
+    if(glm::dot(pole, pole) > 1e-10f && chain_size >= 3)
+    {
+        ik_vector<math::vec3> positions(chain_size);
+        for(size_t i = 0; i < chain_size; ++i)
+        {
+            positions[i] = chain[i]->get_position_global();
+        }
+        apply_pole_constraint(positions, pole);
+        update_rotations_from_positions(chain, positions);
+    }
+
+    const float final_error = math::length(target - get_end_position(end_effector));
+    return final_error < threshold;
 }
 
 // FABRIK IK Solver (Advanced)
@@ -191,6 +330,7 @@ auto ccdik_advanced(ik_vector<transform_component*>& chain,
 // If your system stores a separate rest offset (or tip offset), you can substitute that.
 auto fabrik(ik_vector<transform_component*>& chain,
             const math::vec3& target,
+            const math::vec3& pole,
             float threshold = 0.001f,
             int max_iterations = 10) -> bool
 {
@@ -261,320 +401,195 @@ auto fabrik(ik_vector<transform_component*>& chain,
         }
     }
 
-    // STEP 4: Update bone rotations (mirroring CCDIK logic).
-    for(size_t i = 0; i < n - 1; ++i)
-    {
-        transform_component* bone = chain[i];
-        transform_component* child = chain[i + 1];
+    // STEP 3.5: Enforce the pole constraint before deriving rotations.
+    // Done after position convergence so the end effector stays at the target.
+    apply_pole_constraint(positions, pole);
 
-        // Current direction: where the bone is pointing right now
-        math::vec3 current_pos = bone->get_position_global();
-        math::vec3 child_pos = child->get_position_global();
-        math::vec3 current_dir = math::normalize(child_pos - current_pos);
-
-        // Desired direction: where it *should* be pointing now after FABRIK
-        math::vec3 desired_dir = math::normalize(positions[i + 1] - positions[i]);
-
-        // If the vectors are too short or nearly aligned, skip
-        if(math::length(current_dir) < 1e-5f || math::length(desired_dir) < 1e-5f)
-        {
-            continue;
-        }
-
-        float dot = math::clamp(math::dot(current_dir, desired_dir), -1.f, 1.f);
-        if(dot > 0.9999f) // Almost aligned
-        {
-            continue;
-        }
-
-        math::vec3 axis = math::cross(current_dir, desired_dir);
-        if(math::length(axis) < 1e-5f)
-        {
-            continue;
-        }
-
-        axis = math::normalize(axis);
-        float angle = math::acos(dot);
-        math::quat rotation_delta = math::angleAxis(angle, axis);
-
-        // Convert rotation from world to local space
-        auto parent = bone->get_parent();
-        transform_component* parent_trans = parent ? parent.try_get<transform_component>() : nullptr;
-        math::quat parent_global_rot =
-            (parent_trans) ? parent_trans->get_rotation_global() : math::identity<math::quat>();
-
-        math::quat local_rotation_delta = glm::inverse(parent_global_rot) * rotation_delta * parent_global_rot;
-
-        // Apply the rotation delta to the local rotation
-        math::quat new_local = math::normalize(local_rotation_delta * bone->get_rotation_local());
-        bone->set_rotation_local(new_local);
-    }
+    // STEP 4: Derive bone rotations from the final joint positions.
+    update_rotations_from_positions(chain, positions);
 
     // (Optionally update the end effector orientation if desired.)
 
     return true;
 }
 
-// Helper functions to transform points and vectors in homogeneous coordinates.
-inline glm::vec3 transform_point(const glm::mat4& mat, const glm::vec3& point)
+// -----------------------------------------------------------------------------
+// Analytical two-bone IK solver.
+//
+// Given three joints (start / mid / end), a target and a world-space pole, we
+// solve the knee/elbow position directly via the law of cosines. Unlike the
+// previous implementation this:
+//   * Always writes the result when weight > 0 (the old version silently threw
+//     away the solution whenever the target was reachable).
+//   * Uses the pole vector correctly as a bending-plane hint (the old version
+//     passed the pole as both the pole AND the bend axis, which are supposed
+//     to be perpendicular, producing garbage).
+//   * Requires no fallback to FABRIK.
+//
+// A zero-length pole keeps the mid joint in its current bending half-plane.
+// -----------------------------------------------------------------------------
+auto solve_two_bone_ik(transform_component* start_joint,
+                       transform_component* mid_joint,
+                       transform_component* end_joint,
+                       const math::vec3& target,
+                       const math::vec3& pole,
+                       float weight,
+                       float soften) -> bool
 {
-    return glm::vec3(mat * glm::vec4(point, 1.0f));
-}
-
-inline glm::vec3 transform_vector(const glm::mat4& mat, const glm::vec3& vec)
-{
-    return glm::vec3(mat * glm::vec4(vec, 0.0f));
-}
-
-/// @brief Two-bone IK solver.
-/// @param start_joint                    Pointer to the first (start) joint.
-/// @param mid_joint                      Pointer to the second (mid) joint.
-/// @param end_joint                      Pointer to the end effector.
-/// @param target                       Global target position.
-/// @param mid_axis                     Desired bending axis (global, normalized).
-/// @param pole_vector                  Reference pole vector (global).
-/// @param twist_angle                  Optional twist (in radians).
-/// @param weight                       IK weight in [0, 1].
-/// @param soften                       Softening factor (0 = rigid, 1 = full softening).
-/// @return                             true Flag indicating if the target is nearly reached..
-bool solve_two_bone_ik_impl(transform_component* start_joint,
-                            transform_component* mid_joint,
-                            transform_component* end_joint,
-                            const glm::vec3& target,
-                            const glm::vec3& mid_axis,    // desired bending axis (global)
-                            const glm::vec3& pole_vector, // reference pole vector (global)
-                            float twist_angle,
-                            float weight,
-                            float soften)
-{
-    // --- 1. Retrieve Global Transforms and Positions ---
-    glm::mat4 start_transform = start_joint->get_transform_global();
-    glm::mat4 mid_transform = mid_joint->get_transform_global();
-    glm::mat4 end_transform = end_joint->get_transform_global();
-
-    glm::vec3 start_pos = start_joint->get_position_global();
-    glm::vec3 mid_pos = mid_joint->get_position_global();
-    glm::vec3 end_pos = end_joint->get_position_global();
-
-    // --- 2. Compute Inverse Transforms ---
-    glm::mat4 inv_start = glm::inverse(start_transform);
-    glm::mat4 inv_mid = glm::inverse(mid_transform);
-
-    // --- 3. Set Up Constant Data ---
-
-    // Transform positions into mid joint space.
-    glm::vec3 start_ms = transform_point(inv_mid, start_pos);
-    glm::vec3 end_ms = transform_point(inv_mid, end_pos);
-    // In mid joint space, the mid joint is the origin.
-    glm::vec3 start_mid_ms = -start_ms; // vector from mid joint to start joint.
-    glm::vec3 mid_end_ms = end_ms;      // vector from mid joint to end effector.
-
-    // Transform positions into start joint space.
-    glm::vec3 mid_ss = transform_point(inv_start, mid_pos);
-    glm::vec3 end_ss = transform_point(inv_start, end_pos);
-    glm::vec3 start_mid_ss = mid_ss;        // start joint is at the origin.
-    glm::vec3 mid_end_ss = end_ss - mid_ss; // vector from mid joint to end effector.
-    glm::vec3 start_end_ss = end_ss;        // vector from start joint to end effector.
-
-    float start_mid_ss_len2 = glm::dot(start_mid_ss, start_mid_ss);
-    float mid_end_ss_len2 = glm::dot(mid_end_ss, mid_end_ss);
-    float start_end_ss_len2 = glm::dot(start_end_ss, start_end_ss);
-
-    // --- 4. Soften the Target Position ---
-    // Transform target into start joint space.
-    glm::vec3 start_target_ss_orig = transform_point(inv_start, target);
-    float start_target_ss_orig_len = glm::length(start_target_ss_orig);
-    float start_target_ss_orig_len2 = start_target_ss_orig_len * start_target_ss_orig_len;
-
-    // Compute bone lengths in start joint space.
-    float l0 = std::sqrt(start_mid_ss_len2); // upper bone length
-    float l1 = std::sqrt(mid_end_ss_len2);   // lower bone length
-    float chain_length = l0 + l1;
-    float bone_diff = fabs(l0 - l1);
-
-    // Compute softening parameters.
-    float da = chain_length * glm::clamp(soften, 0.0f, 1.0f);
-    float ds = chain_length - da;
-
-    glm::vec3 start_target_ss;
-    float start_target_ss_len2;
-    bool target_softened = false;
-    if(start_target_ss_orig_len > da && start_target_ss_orig_len > bone_diff && ds > 1e-4f)
+    if(weight <= 0.f)
     {
-        float alpha = (start_target_ss_orig_len - da) / ds;
-        // Exponential-like blend: ratio = 1 - (3^4)/((alpha+3)^4)
-        float ratio = 1.0f - (std::pow(3.0f, 4.0f) / std::pow(alpha + 3.0f, 4.0f));
-        float new_target_len = da + ds - ds * ratio;
-        start_target_ss = glm::normalize(start_target_ss_orig) * new_target_len;
-        start_target_ss_len2 = new_target_len * new_target_len;
-        target_softened = true;
-    }
-    else
-    {
-        start_target_ss = start_target_ss_orig;
-        start_target_ss_len2 = start_target_ss_orig_len2;
+        return false;
     }
 
-    // --- 5. Compute the Mid Joint (Knee) Correction ---
-    // Compute the "corrected" knee angle using the law of cosines.
-    float cos_corrected = (start_mid_ss_len2 + mid_end_ss_len2 - start_target_ss_len2) / (2.0f * l0 * l1);
-    cos_corrected = glm::clamp(cos_corrected, -1.0f, 1.0f);
-    float corrected_angle = std::acos(cos_corrected);
+    const math::vec3 a = start_joint->get_position_global();
+    const math::vec3 b = mid_joint->get_position_global();
+    const math::vec3 c = end_joint->get_position_global();
 
-    // Compute the "initial" knee angle from the original effector position.
-    float cos_initial = (start_mid_ss_len2 + mid_end_ss_len2 - start_end_ss_len2) / (2.0f * l0 * l1);
-    cos_initial = glm::clamp(cos_initial, -1.0f, 1.0f);
-    float initial_angle = std::acos(cos_initial);
-
-    // Adjust the sign of the initial angle based on the bending direction.
-    glm::vec3 mid_axis_ms = glm::normalize(glm::mat3(inv_mid) * mid_axis);
-    glm::vec3 bent_side_ref = glm::cross(start_mid_ms, mid_axis_ms);
-    if(glm::dot(bent_side_ref, mid_end_ms) < 0.0f)
+    const float l1 = math::length(b - a);
+    const float l2 = math::length(c - b);
+    if(l1 < 1e-5f || l2 < 1e-5f)
     {
-        initial_angle = -initial_angle;
+        return false;
     }
 
-    float angle_delta = corrected_angle - initial_angle;
-    // Mid joint correction quaternion (rotation about the (global) mid_axis).
-    glm::quat mid_rot = glm::angleAxis(angle_delta, glm::normalize(mid_axis));
-
-    // --- 6. Compute the Start Joint Correction ---
-    // Predict the effector position given the mid correction.
-    glm::vec3 rotated_mid_end_ms = glm::rotate(mid_rot, mid_end_ms);
-    glm::vec3 rotated_mid_end_global = glm::mat3(mid_transform) * rotated_mid_end_ms;
-    glm::vec3 mid_end_ss_final = glm::mat3(inv_start) * rotated_mid_end_global;
-    glm::vec3 start_end_ss_final = start_mid_ss + mid_end_ss_final;
-
-    // Compute the rotation aligning the predicted effector direction to the softened target.
-    glm::quat end_to_target_rot_ss = glm::rotation(start_end_ss_final, start_target_ss);
-    glm::quat start_rot_ss = end_to_target_rot_ss;
-
-    // Compute the "rotate-plane" correction if the target direction is valid.
-    if(glm::length(start_target_ss) > 1e-4f)
+    math::vec3 at = target - a;
+    float d = math::length(at);
+    if(d < 1e-5f)
     {
-        // Transform the pole vector into start joint space.
-        glm::vec3 pole_ss = glm::normalize(glm::mat3(inv_start) * pole_vector);
-        // Compute the reference plane normal (cross of target and pole).
-        glm::vec3 ref_plane_normal_ss = glm::normalize(glm::cross(start_target_ss, pole_ss));
-        // Compute mid_axis in start joint space.
-        glm::vec3 mid_axis_ss = glm::normalize(glm::mat3(inv_start) * (glm::mat3(mid_transform) * mid_axis));
-        // Joint chain plane normal (rotated by end_to_target rotation).
-        glm::vec3 joint_plane_normal_ss = glm::rotate(end_to_target_rot_ss, mid_axis_ss);
+        return false;
+    }
 
-        float rotate_plane_cos_angle =
-            glm::dot(glm::normalize(ref_plane_normal_ss), glm::normalize(joint_plane_normal_ss));
-        rotate_plane_cos_angle = glm::clamp(rotate_plane_cos_angle, -1.0f, 1.0f);
+    // Clamp target distance to the analytically solvable range. `soften` pulls
+    // the maximum reach in slightly so full extension never produces a locked
+    // knee (which tends to look bad and introduces numerical noise).
+    const float soft_t = glm::clamp(soften, 0.f, 1.f);
+    const float max_d = (l1 + l2) * (1.f - 0.001f * soft_t);
+    const float min_d = std::max(std::fabs(l1 - l2) * 1.001f, 1e-4f);
+    d = glm::clamp(d, min_d, max_d);
 
-        // Rotation axis is along the softened target direction (flip if needed).
-        glm::vec3 rotate_plane_axis_ss = glm::normalize(start_target_ss);
-        if(glm::dot(joint_plane_normal_ss, pole_ss) < 0.0f)
-        {
-            rotate_plane_axis_ss = -rotate_plane_axis_ss;
-        }
-        glm::quat rotate_plane_ss = glm::angleAxis(std::acos(rotate_plane_cos_angle), rotate_plane_axis_ss);
+    const math::vec3 at_dir = at / math::length(at);
+    const math::vec3 c_new = a + at_dir * d;
 
-        // Apply twist if provided.
-        if(fabs(twist_angle) > 1e-5f)
+    // Cosine law for the hip angle between AC and AB.
+    float cos_a = (l1 * l1 + d * d - l2 * l2) / (2.f * l1 * d);
+    cos_a = glm::clamp(cos_a, -1.f, 1.f);
+    const float sin_a = std::sqrt(std::max(0.f, 1.f - cos_a * cos_a));
+
+    // Select the bend direction: pole side if provided, else keep the current
+    // bend direction to avoid popping.
+    auto perpendicularize = [&](const math::vec3& v) -> math::vec3
+    {
+        return v - glm::dot(v, at_dir) * at_dir;
+    };
+
+    math::vec3 knee_dir(0.f);
+    bool resolved = false;
+
+    if(glm::dot(pole, pole) > 1e-6f)
+    {
+        math::vec3 pp = perpendicularize(pole - a);
+        const float ppl = math::length(pp);
+        if(ppl > 1e-5f)
         {
-            glm::quat twist_ss = glm::angleAxis(twist_angle, glm::normalize(start_target_ss));
-            start_rot_ss = twist_ss * rotate_plane_ss * end_to_target_rot_ss;
-        }
-        else
-        {
-            start_rot_ss = rotate_plane_ss * end_to_target_rot_ss;
+            knee_dir = pp / ppl;
+            resolved = true;
         }
     }
 
-    // --- 7. Weighting and Final Output ---
-    // Force the scalar (w) to be positive.
-    if(start_rot_ss.w < 0.0f)
-        start_rot_ss = -start_rot_ss;
-    if(mid_rot.w < 0.0f)
-        mid_rot = -mid_rot;
-
-    // Blend with identity if weight is less than 1.
-    if(weight < 1.0f)
+    if(!resolved)
     {
-        start_rot_ss = glm::slerp(glm::identity<glm::quat>(), start_rot_ss, weight);
-        mid_rot = glm::slerp(glm::identity<glm::quat>(), mid_rot, weight);
+        math::vec3 cur = perpendicularize(b - a);
+        const float cl = math::length(cur);
+        if(cl > 1e-5f)
+        {
+            knee_dir = cur / cl;
+            resolved = true;
+        }
     }
 
-    // 'reached' is set when softening was applied and weight is full.
-    bool reached = target_softened && (weight >= 1.0f);
-
-    if(reached)
+    if(!resolved)
     {
-        mid_joint->set_rotation_local(glm::normalize(mid_rot));
-        start_joint->set_rotation_local(glm::normalize(start_rot_ss));
+        // Last-ditch fallback when the current pose is perfectly collinear.
+        knee_dir = math::cross(at_dir, math::vec3(0, 1, 0));
+        if(math::length(knee_dir) < 1e-5f)
+        {
+            knee_dir = math::cross(at_dir, math::vec3(1, 0, 0));
+        }
+        knee_dir = math::normalize(knee_dir);
     }
 
-    return reached;
-}
+    const math::vec3 b_new = a + at_dir * (l1 * cos_a) + knee_dir * (l1 * sin_a);
 
-auto solve_two_bone_ik_weighted(transform_component* start_joint,
-                                transform_component* mid_joint,
-                                transform_component* end_joint,
-                                const math::vec3& target,
-                                float weight = 1.0f,
-                                float soften = 1.0f,
-                                const math::vec3& pole = math::vec3(0, 0, 1),
-                                float twist_angle = 0.f) -> bool
-{
-    math::vec3 mid_axis = mid_joint->get_z_axis_global();
-    return solve_two_bone_ik_impl(start_joint, mid_joint, end_joint, target, pole, pole, twist_angle, weight, soften);
+    // Save original local rotations so we can blend by weight.
+    const math::quat start_local_orig = start_joint->get_rotation_local();
+    const math::quat mid_local_orig = mid_joint->get_rotation_local();
+
+    ik_vector<transform_component*> chain;
+    chain.push_back(start_joint);
+    chain.push_back(mid_joint);
+    chain.push_back(end_joint);
+
+    ik_vector<math::vec3> positions;
+    positions.push_back(a);
+    positions.push_back(b_new);
+    positions.push_back(c_new);
+
+    update_rotations_from_positions(chain, positions);
+
+    if(weight < 1.f)
+    {
+        start_joint->set_rotation_local(
+            math::normalize(glm::slerp(start_local_orig, start_joint->get_rotation_local(), weight)));
+        mid_joint->set_rotation_local(
+            math::normalize(glm::slerp(mid_local_orig, mid_joint->get_rotation_local(), weight)));
+    }
+
+    const float final_error = math::length(target - end_joint->get_position_global());
+    return final_error < 0.01f;
 }
 
 //--------------------------------------
-// CCD IK Solver Implementation (Parent-Chain Version)
+// Public API entry points.
 //--------------------------------------
-/*
-   This overload of CCDIK takes an end effector and a maximum chain length.
-   It builds the IK chain by following parent upward until it reaches the specified count.
-*/
+
 auto ik_set_position_ccd(entt::handle end_effector,
                          const math::vec3& target,
+                         const math::vec3& pole,
                          size_t num_bones_in_chain,
-                         float threshold,
-                         int max_iterations) -> bool
+                         int max_iterations,
+                         float threshold) -> bool
 {
     auto bones = bones_collect(end_effector, num_bones_in_chain);
-    return ccdik_advanced(bones, target, threshold, max_iterations);
+    return ccdik_advanced(bones, target, pole, threshold, max_iterations);
 }
 
 auto ik_set_position_fabrik(entt::handle end_effector,
                             const math::vec3& target,
+                            const math::vec3& pole,
                             size_t num_bones_in_chain,
-                            float threshold,
-                            int max_iterations) -> bool
+                            int max_iterations,
+                            float threshold) -> bool
 {
     auto bones = bones_collect(end_effector, num_bones_in_chain);
-    return fabrik(bones, target, threshold, max_iterations);
+    return fabrik(bones, target, pole, threshold, max_iterations);
 }
 
 auto ik_set_position_two_bone(entt::handle end_effector,
                               const math::vec3& target,
-                              const math::vec3& forward,
+                              const math::vec3& pole,
                               float weight,
-                              float soften,
-                              int max_iterations) -> bool
+                              float soften) -> bool
 {
+    // The analytical two-bone solver converges in a single call. If the chain
+    // could not be built (e.g. the end effector has fewer than two parents) we
+    // fall back to FABRIK, which at least still honors the pole.
     auto bones = bones_collect(end_effector, 2);
     if(bones.size() == 3)
     {
-        auto root = bones[0];
-        auto joint = bones[1];
-        auto end = bones[2];
-
-        for(int i = 0; i < max_iterations; ++i)
-        {
-            if(solve_two_bone_ik_weighted(root, joint, end, target, weight, soften, forward))
-            {
-                return true;
-            }
-        }
+        return solve_two_bone_ik(bones[0], bones[1], bones[2], target, pole, weight, soften);
     }
 
-    return fabrik(bones, target, 0.001f, max_iterations);
+    return fabrik(bones, target, pole, 0.001f, 10);
 }
 
 auto ik_look_at_position(entt::handle end_effector, const math::vec3& target, float weight) -> bool
