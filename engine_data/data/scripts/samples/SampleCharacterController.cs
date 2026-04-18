@@ -227,7 +227,7 @@ public class SampleCharacterController : ScriptComponent
         cc = owner.GetComponent<CharacterControllerComponent>();
         if (cc == null)
         {
-            Log.Error($"{nameof(CharacterController)} requires a {nameof(CharacterControllerComponent)} on the same entity.");
+            Log.Error($"{nameof(SampleCharacterController)} requires a {nameof(CharacterControllerComponent)} on the same entity.");
             return;
         }
 

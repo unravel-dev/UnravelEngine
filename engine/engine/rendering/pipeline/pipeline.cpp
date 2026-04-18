@@ -552,7 +552,7 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
                         return;
                     }
     
-                    auto distance = math::distance(bounds.get_center(), cam_pos);
+                    auto distance = math::distance2(bounds.get_center(), cam_pos);
                     particle_emitters.emplace_back(sort_key{&particle_emitter_comp, distance});
             });
         }
