@@ -487,6 +487,7 @@ namespace ImGui
 			// Set notification window flags
             if (current_toast->get_show_dismiss_button())
             {
+				flags &= ~ImGuiWindowFlags_NoInputs;
 				flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
             }
 
