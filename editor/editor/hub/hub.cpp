@@ -611,39 +611,66 @@ void hub::render_projects_list_view(rtti::context& ctx)
             });
         };
 
-        // Inspect before opening so we can warn about projects last opened by
-        // an older engine (the common upgrade flow) without committing to any
-        // I/O beyond reading project.cfg. `no_info_file` (legacy/freshly
-        // created projects) is intentionally not prompted about -
-        // `open_project` handles that silently.
+        // Inspect before opening so we can warn about suspicious states
+        // without committing to any I/O beyond reading project.cfg. Two cases
+        // trigger a confirmation prompt:
+        //   * `no_info_file`  - either a legacy project predating `project.cfg`
+        //                       or a folder that isn't a project at all; we
+        //                       want the user to acknowledge before we stamp
+        //                       a fresh signature onto it.
+        //   * `engine_older`  - the common upgrade flow where on-disk formats
+        //                       may have evolved since the project was saved.
         const auto report = pm.inspect_project(project_path);
-        if(report.status != project_manager::project_compat::engine_older)
+
+        if(report.status == project_manager::project_compat::ok)
         {
             queue_open();
             return;
         }
 
-        const std::string opened_by = report.on_disk.engine_version_opened.original.empty()
-                                          ? report.on_disk.engine_version_opened.to_string()
-                                          : report.on_disk.engine_version_opened.original;
         const std::string running = version::get_full();
 
-        const std::string message =
-            "This project was last opened with an older engine version than the one you are running.\n\n"
-            "  Project saved by: " + opened_by + "\n"
-            "  Running engine:   " + running + "\n\n"
-            "Opening it may cause data loss if the on-disk format has changed since then.\n"
-            "It is strongly recommended to back up the project folder yourself before proceeding.\n\n"
-            "Open the project anyway?";
+        std::string title;
+        std::string message;
+        std::string cancel_log;
+
+        if(report.status == project_manager::project_compat::no_info_file)
+        {
+            title = "Unrecognized project folder";
+            message = "The selected folder does not contain a project.cfg file.\n\n"
+                      "  Path:             " + project_path.string() + "\n"
+                      "  Running engine:   " + running + "\n\n"
+                      "This is either a legacy project created before project.cfg was introduced, "
+                      "or a folder that isn't an Unravel project at all.\n\n"
+                      "If you proceed, the engine will assume it is a project and create a fresh "
+                      "project.cfg inside it.\n\n"
+                      "Open this folder as a project?";
+            cancel_log = "Project open cancelled by user (no project.cfg).";
+        }
+        else // project_compat::engine_older
+        {
+            const std::string opened_by = report.on_disk.engine_version_opened.original.empty()
+                                              ? report.on_disk.engine_version_opened.to_string()
+                                              : report.on_disk.engine_version_opened.original;
+
+            title = "Project engine-version mismatch";
+            message = "This project was last opened with an older engine version than the one you are running.\n\n"
+                      "  Project saved by: " + opened_by + "\n"
+                      "  Running engine:   " + running + "\n\n"
+                      "Opening it may cause data loss if the on-disk format has changed since then.\n"
+                      "It is strongly recommended to back up the project folder yourself before proceeding.\n\n"
+                      "Open the project anyway?";
+            cancel_log = "Project open cancelled by user (engine-version mismatch).";
+        }
 
         ImBox::ShowConfirmation(
-            "Project engine-version mismatch",
+            title,
             message,
-            [queue_open](ImBox::ModalResult result)
+            [queue_open, cancel_log](ImBox::ModalResult result)
             {
                 if(!ImBox::IsConfirmation(result))
                 {
-                    APPLOG_INFO("Project open cancelled by user (engine-version mismatch).");
+                    APPLOG_INFO("{}", cancel_log);
                     return;
                 }
                 queue_open();
