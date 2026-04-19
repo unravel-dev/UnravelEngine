@@ -41,6 +41,7 @@ private:
                            const std::string& name,
                            const std::string& directory,
                            const std::chrono::system_clock::time_point& last_modified,
+                           const std::string& engine_version = {},
                            bool is_selected = false,
                            bool enable_interaction = true,
                            float form_width = 0.0f) -> bool;

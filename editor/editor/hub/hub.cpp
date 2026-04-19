@@ -135,6 +135,7 @@ auto hub::draw_project_card(const std::string& id,
                            const std::string& name, 
                            const std::string& directory, 
                            const std::chrono::system_clock::time_point& last_modified,
+                           const std::string& engine_version,
                            bool is_selected,
                            bool enable_interaction,
                            float form_width) -> bool
@@ -194,67 +195,96 @@ auto hub::draw_project_card(const std::string& id,
         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 8, ImGui::GetCursorPosY() + 4));
         ImGui::BeginGroup();
         {
-            // Project name (large, bold) with enhanced styling
-            ImGui::PushFont(ImGui::Font::Black);
-
-            ImGui::PushWindowFontScale(1.2);
-            if(is_hovered || is_selected)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_ButtonActive));
-                ImGui::Text("%s", name.c_str());
-                ImGui::PopStyleColor();
-            }
-            else
-            {
-                ImGui::Text("%s", name.c_str());
-            }
-            ImGui::PopWindowFontScale();
-            ImGui::PopFont();
-
-            ImGui::Spacing();
-            
-            // Project location and date in improved horizontal layout
+            // -------------------------------------------------------------
+            // Row 1: project name (top-left) | engine version (top-right)
+            // -------------------------------------------------------------
             ImGui::BeginGroup();
             {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.9f));
-                
-                // Location on the left
-                ImGui::Text(ICON_MDI_FOLDER " %s", directory.c_str());
-                
-                // Date aligned to the right
-                ImGui::SameLine();
-                try
+                ImGui::PushFont(ImGui::Font::Black);
+                ImGui::PushWindowFontScale(1.2f);
+                if(is_hovered || is_selected)
                 {
-                    auto date_text = fmt::format(ICON_MDI_CLOCK_OUTLINE " {:%m/%d/%Y}", last_modified);
-                    float date_width = ImGui::CalcTextSize(date_text.c_str()).x;
-                    float available_width = ImGui::GetContentRegionAvail().x;
-                    
-                    ImGui::AlignedItem(1.0f,
-                                      available_width,
-                                      date_width,
-                                      [&]()
-                                      {
-                                          ImGui::Text("%s", date_text.c_str());
-                                      });
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_ButtonActive));
+                    ImGui::Text("%s", name.c_str());
+                    ImGui::PopStyleColor();
                 }
-                FMT_CATCH(...)
+                else
                 {
-                    const char* unknown_text = ICON_MDI_CLOCK_OUTLINE " Unknown";
-                    float date_width = ImGui::CalcTextSize(unknown_text).x;
-                    float available_width = ImGui::GetContentRegionAvail().x;
-                    
-                    ImGui::AlignedItem(1.0f,
-                                      available_width,
-                                      date_width,
-                                      [&]()
-                                      {
-                                          ImGui::Text("%s", unknown_text);
-                                      });
+                    ImGui::Text("%s", name.c_str());
                 }
-                
-                ImGui::PopStyleColor();
+                ImGui::PopWindowFontScale();
+                ImGui::PopFont();
             }
             ImGui::EndGroup();
+
+            // Name occupies the row with a larger font; vertically center the
+            // engine version badge against the name's line so it sits in the
+            // corner rather than hugging the top edge.
+            const float name_row_height = ImGui::GetItemRectSize().y;
+
+            if(!engine_version.empty())
+            {
+                const auto engine_text = fmt::format(ICON_MDI_ENGINE_OUTLINE " Engine {}", engine_version);
+                const float engine_width = ImGui::CalcTextSize(engine_text.c_str()).x;
+
+                ImGui::SameLine();
+                const float available_w = ImGui::GetContentRegionAvail().x;
+                const float y_offset = (name_row_height - ImGui::GetTextLineHeight()) * 0.5f;
+
+                ImGui::AlignedItem(1.0f,
+                                   available_w,
+                                   engine_width,
+                                   [&]()
+                                   {
+                                       if(y_offset > 0.0f)
+                                       {
+                                           ImGui::SetCursorPosY(ImGui::GetCursorPosY() + y_offset);
+                                       }
+                                       ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.9f));
+                                       ImGui::TextUnformatted(engine_text.c_str());
+                                       ImGui::PopStyleColor();
+                                   });
+            }
+            ImGui::Spacing();
+
+            // -------------------------------------------------------------
+            // Row 2: directory (bottom-left) | date (bottom-right)
+            // -------------------------------------------------------------
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.9f));
+
+            ImGui::Text(ICON_MDI_FOLDER " %s", directory.c_str());
+            ImGui::SameLine();
+
+            try
+            {
+                const auto date_text = fmt::format(ICON_MDI_CLOCK_OUTLINE " {:%m/%d/%Y}", last_modified);
+                const float date_width = ImGui::CalcTextSize(date_text.c_str()).x;
+                const float available_width = ImGui::GetContentRegionAvail().x;
+
+                ImGui::AlignedItem(1.0f,
+                                   available_width,
+                                   date_width,
+                                   [&]()
+                                   {
+                                       ImGui::TextUnformatted(date_text.c_str());
+                                   });
+            }
+            FMT_CATCH(...)
+            {
+                const char* unknown_text = ICON_MDI_CLOCK_OUTLINE " Unknown";
+                const float date_width = ImGui::CalcTextSize(unknown_text).x;
+                const float available_width = ImGui::GetContentRegionAvail().x;
+
+                ImGui::AlignedItem(1.0f,
+                                   available_width,
+                                   date_width,
+                                   [&]()
+                                   {
+                                       ImGui::TextUnformatted(unknown_text);
+                                   });
+            }
+
+            ImGui::PopStyleColor();
         }
         ImGui::EndGroup();
     }
@@ -770,7 +800,18 @@ void hub::render_projects_list_view(rtti::context& ctx)
 
                     auto name = p.stem().string();
                     auto dir = p.parent_path().string();
-                    
+
+                    // Engine version the project was last opened with. Reads
+                    // project.cfg via inspect_project - cheap for a recent-list
+                    // sized set, and only runs while the hub is on-screen.
+                    std::string engine_version_str;
+                    const auto project_report = pm.inspect_project(p);
+                    if(project_report.status != project_manager::project_compat::no_info_file)
+                    {
+                        const auto& ver = project_report.on_disk.engine_version_opened;
+                        engine_version_str = ver.original.empty() ? ver.to_string() : ver.original;
+                    }
+
                     // Check if this project is selected
                     bool is_selected = (selected_project_ == prj.string());
                     
@@ -780,6 +821,7 @@ void hub::render_projects_list_view(rtti::context& ctx)
                         name,
                         dir,
                         system_time,
+                        engine_version_str,
                         is_selected,
                         true,
                         content_width
@@ -1332,7 +1374,15 @@ void hub::render_project_remover_view(rtti::context& ctx)
             auto ftime = fs::last_write_time(project_path / "settings" / "settings.cfg", ec);
             auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
                 ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
-            
+
+            std::string engine_version_str;
+            const auto project_report = pm.inspect_project(project_path);
+            if(project_report.status != project_manager::project_compat::no_info_file)
+            {
+                const auto& ver = project_report.on_disk.engine_version_opened;
+                engine_version_str = ver.original.empty() ? ver.to_string() : ver.original;
+            }
+
             ImGui::PushFont(ImGui::Font::Bold);
             ImGui::Text("Project Information");
             ImGui::PopFont();
@@ -1344,6 +1394,7 @@ void hub::render_project_remover_view(rtti::context& ctx)
                 project_name,
                 project_dir,
                 system_time,
+                engine_version_str,
                 false,  // Not selectable in this view
                 false,   // Disable interaction
                 form_width
