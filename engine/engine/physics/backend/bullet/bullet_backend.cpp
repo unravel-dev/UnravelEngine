@@ -1875,9 +1875,7 @@ void make_character_controller_body(bullet::world& world,
         cc.ghost.get(), cc.shape.get(), comp.get_step_height());
     cc.controller->setMaxSlope(math::radians(comp.get_slope_limit()));
     cc.controller->setGravity(world.dynamics_world->getGravity() * comp.get_gravity_scale());
-    cc.controller->setJumpSpeed(comp.get_jump_speed());
-    cc.controller->setFallSpeed(comp.get_fall_speed());
-    cc.controller->setMaxJumpHeight(comp.get_max_jump_height());
+    cc.controller->setFallSpeed(comp.get_terminal_velocity());
     cc.controller->setLinearDamping(comp.get_linear_damping());
     auto& transform = entity.get<transform_component>();
     const auto& p = transform.get_position_global();
@@ -1951,9 +1949,7 @@ void sync_character_controller_body(bullet::world& world,
         }
         if(comp.is_property_dirty(character_controller_property::movement_params))
         {
-            cc->controller->setJumpSpeed(comp.get_jump_speed());
-            cc->controller->setFallSpeed(comp.get_fall_speed());
-            cc->controller->setMaxJumpHeight(comp.get_max_jump_height());
+            cc->controller->setFallSpeed(comp.get_terminal_velocity());
             cc->controller->setLinearDamping(comp.get_linear_damping());
         }
     }

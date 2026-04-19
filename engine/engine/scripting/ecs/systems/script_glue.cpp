@@ -1817,11 +1817,11 @@ void internal_m2n_cc_move(entt::entity id, const math::vec3& displacement)
     }
 }
 
-void internal_m2n_cc_jump(entt::entity id, const math::vec3& direction)
+void internal_m2n_cc_jump(entt::entity id, const math::vec3& velocity)
 {
     if(auto comp = safe_get_component<character_controller_component>(id))
     {
-        comp->jump(direction);
+        comp->jump(velocity);
     }
 }
 
@@ -2004,54 +2004,20 @@ void internal_m2n_cc_set_gravity_scale(entt::entity id, float scale)
     }
 }
 
-auto internal_m2n_cc_get_jump_speed(entt::entity id) -> float
+auto internal_m2n_cc_get_terminal_velocity(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<character_controller_component>(id))
     {
-        return comp->get_jump_speed();
-    }
-    return 10.0f;
-}
-
-void internal_m2n_cc_set_jump_speed(entt::entity id, float speed)
-{
-    if(auto comp = safe_get_component<character_controller_component>(id))
-    {
-        comp->set_jump_speed(speed);
-    }
-}
-
-auto internal_m2n_cc_get_fall_speed(entt::entity id) -> float
-{
-    if(auto comp = safe_get_component<character_controller_component>(id))
-    {
-        return comp->get_fall_speed();
+        return comp->get_terminal_velocity();
     }
     return 55.0f;
 }
 
-void internal_m2n_cc_set_fall_speed(entt::entity id, float speed)
+void internal_m2n_cc_set_terminal_velocity(entt::entity id, float speed)
 {
     if(auto comp = safe_get_component<character_controller_component>(id))
     {
-        comp->set_fall_speed(speed);
-    }
-}
-
-auto internal_m2n_cc_get_max_jump_height(entt::entity id) -> float
-{
-    if(auto comp = safe_get_component<character_controller_component>(id))
-    {
-        return comp->get_max_jump_height();
-    }
-    return 0.0f;
-}
-
-void internal_m2n_cc_set_max_jump_height(entt::entity id, float height)
-{
-    if(auto comp = safe_get_component<character_controller_component>(id))
-    {
-        comp->set_max_jump_height(height);
+        comp->set_terminal_velocity(speed);
     }
 }
 
@@ -5058,12 +5024,8 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
         reg.add_internal_call("internal_m2n_cc_set_skin_width", internal_call(internal_m2n_cc_set_skin_width));
         reg.add_internal_call("internal_m2n_cc_get_gravity_scale", internal_call(internal_m2n_cc_get_gravity_scale));
         reg.add_internal_call("internal_m2n_cc_set_gravity_scale", internal_call(internal_m2n_cc_set_gravity_scale));
-        reg.add_internal_call("internal_m2n_cc_get_jump_speed", internal_call(internal_m2n_cc_get_jump_speed));
-        reg.add_internal_call("internal_m2n_cc_set_jump_speed", internal_call(internal_m2n_cc_set_jump_speed));
-        reg.add_internal_call("internal_m2n_cc_get_fall_speed", internal_call(internal_m2n_cc_get_fall_speed));
-        reg.add_internal_call("internal_m2n_cc_set_fall_speed", internal_call(internal_m2n_cc_set_fall_speed));
-        reg.add_internal_call("internal_m2n_cc_get_max_jump_height", internal_call(internal_m2n_cc_get_max_jump_height));
-        reg.add_internal_call("internal_m2n_cc_set_max_jump_height", internal_call(internal_m2n_cc_set_max_jump_height));
+        reg.add_internal_call("internal_m2n_cc_get_terminal_velocity", internal_call(internal_m2n_cc_get_terminal_velocity));
+        reg.add_internal_call("internal_m2n_cc_set_terminal_velocity", internal_call(internal_m2n_cc_set_terminal_velocity));
         reg.add_internal_call("internal_m2n_cc_get_linear_damping", internal_call(internal_m2n_cc_get_linear_damping));
         reg.add_internal_call("internal_m2n_cc_set_linear_damping", internal_call(internal_m2n_cc_set_linear_damping));
 

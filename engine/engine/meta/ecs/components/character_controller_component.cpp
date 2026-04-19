@@ -94,29 +94,13 @@ REFLECT(character_controller_component)
             entt::attribute{"pretty_name", "Collision Layers"},
             entt::attribute{"tooltip", "Layers (Include - Exclude) used when producing collisions."},
         })
-        .data<&character_controller_component::set_jump_speed, &character_controller_component::get_jump_speed>("jump_speed"_hs)
+        .data<&character_controller_component::set_terminal_velocity, &character_controller_component::get_terminal_velocity>("terminal_velocity"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "jump_speed"},
-            entt::attribute{"pretty_name", "Jump Speed"},
-            entt::attribute{"tooltip", "Initial vertical speed when jumping."},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"step", 0.5f},
-        })
-        .data<&character_controller_component::set_fall_speed, &character_controller_component::get_fall_speed>("fall_speed"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "fall_speed"},
-            entt::attribute{"pretty_name", "Fall Speed"},
-            entt::attribute{"tooltip", "Maximum terminal velocity when falling."},
+            entt::attribute{"name", "terminal_velocity"},
+            entt::attribute{"pretty_name", "Terminal Velocity"},
+            entt::attribute{"tooltip", "Maximum downward fall speed in m/s. Default 55 (skydiver terminal velocity)."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 1.0f},
-        })
-        .data<&character_controller_component::set_max_jump_height, &character_controller_component::get_max_jump_height>("max_jump_height"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "max_jump_height"},
-            entt::attribute{"pretty_name", "Max Jump Height"},
-            entt::attribute{"tooltip", "Maximum height the character can reach when jumping. 0 means unlimited."},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"step", 0.5f},
         })
         .data<&character_controller_component::set_linear_damping, &character_controller_component::get_linear_damping>("linear_damping"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -155,9 +139,7 @@ SAVE(character_controller_component)
     try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
     try_save(ar, ser20::make_nvp("include_layers", obj.get_collision_include_mask()));
     try_save(ar, ser20::make_nvp("exclude_layers", obj.get_collision_exclude_mask()));
-    try_save(ar, ser20::make_nvp("jump_speed", obj.get_jump_speed()));
-    try_save(ar, ser20::make_nvp("fall_speed", obj.get_fall_speed()));
-    try_save(ar, ser20::make_nvp("max_jump_height", obj.get_max_jump_height()));
+    try_save(ar, ser20::make_nvp("terminal_velocity", obj.get_terminal_velocity()));
     try_save(ar, ser20::make_nvp("linear_damping", obj.get_linear_damping()));
 }
 SAVE_INSTANTIATE(character_controller_component, ser20::oarchive_associative_t);
@@ -210,20 +192,11 @@ LOAD(character_controller_component)
     {
         obj.set_collision_exclude_mask(exclude_layers);
     }
-    float jump_speed{10.0f};
-    if(try_load(ar, ser20::make_nvp("jump_speed", jump_speed)))
+    float terminal_velocity{55.0f};
+    if(try_load(ar, ser20::make_nvp("terminal_velocity", terminal_velocity)) ||
+       try_load(ar, ser20::make_nvp("fall_speed", terminal_velocity)))
     {
-        obj.set_jump_speed(jump_speed);
-    }
-    float fall_speed{55.0f};
-    if(try_load(ar, ser20::make_nvp("fall_speed", fall_speed)))
-    {
-        obj.set_fall_speed(fall_speed);
-    }
-    float max_jump_height{0.0f};
-    if(try_load(ar, ser20::make_nvp("max_jump_height", max_jump_height)))
-    {
-        obj.set_max_jump_height(max_jump_height);
+        obj.set_terminal_velocity(terminal_velocity);
     }
     float linear_damping{0.0f};
     if(try_load(ar, ser20::make_nvp("linear_damping", linear_damping)))

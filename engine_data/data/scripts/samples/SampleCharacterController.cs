@@ -107,6 +107,9 @@ public class SampleCharacterController : ScriptComponent
     // Jump configuration
     // ---------------------------------------------------------------------
     [Header("Jump")]
+    [Tooltip("Initial upward speed (m/s) applied when the character jumps.")]
+    public float JumpSpeed = 2.0f;
+
     [Tooltip("Duration (seconds) after leaving ground during which a jump is still allowed.")]
     public float CoyoteTime = 0.15f;
 
@@ -488,7 +491,7 @@ public class SampleCharacterController : ScriptComponent
         bool jumpBuffered = timeSinceJumpPressed < JumpBuffer;
         if (canJumpNow && jumpBuffered)
         {
-            cc.Jump();
+            cc.Jump(JumpSpeed);
             timeSinceJumpPressed = float.MaxValue;
             timeSinceUngrounded = float.MaxValue;
         }

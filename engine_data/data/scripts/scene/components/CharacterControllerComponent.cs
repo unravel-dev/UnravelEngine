@@ -107,30 +107,13 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Initial vertical speed when jumping.
+        /// Maximum downward fall speed in m/s. Downward vertical velocity is clamped
+        /// to this magnitude each simulation step. Default is 55 (skydiver terminal velocity).
         /// </summary>
-        public float jumpSpeed
+        public float terminalVelocity
         {
-            get { return internal_m2n_cc_get_jump_speed(owner); }
-            set { internal_m2n_cc_set_jump_speed(owner, value); }
-        }
-
-        /// <summary>
-        /// Maximum terminal velocity when falling.
-        /// </summary>
-        public float fallSpeed
-        {
-            get { return internal_m2n_cc_get_fall_speed(owner); }
-            set { internal_m2n_cc_set_fall_speed(owner, value); }
-        }
-
-        /// <summary>
-        /// Maximum height the character can reach when jumping. 0 means unlimited.
-        /// </summary>
-        public float maxJumpHeight
-        {
-            get { return internal_m2n_cc_get_max_jump_height(owner); }
-            set { internal_m2n_cc_set_max_jump_height(owner, value); }
+            get { return internal_m2n_cc_get_terminal_velocity(owner); }
+            set { internal_m2n_cc_set_terminal_velocity(owner, value); }
         }
 
         /// <summary>
@@ -169,18 +152,22 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Makes the character jump. Pass Vector3.zero for a default upward jump,
-        /// or a direction vector for a directional jump.
+        /// Makes the character jump straight up with the given initial speed (m/s).
         /// </summary>
-        /// <param name="direction">The jump direction and magnitude. Use Vector3.zero for default upward jump.</param>
-        public void Jump(Vector3 direction)
+        /// <param name="speed">Initial upward speed in m/s. Must be greater than 0.</param>
+        public void Jump(float speed)
         {
-            internal_m2n_cc_jump(owner, direction);
+            internal_m2n_cc_jump(owner, new Vector3(0.0f, speed, 0.0f));
         }
 
-        public void Jump()
+        /// <summary>
+        /// Makes the character jump with an arbitrary world-space velocity. The vector's
+        /// magnitude is the jump speed and its direction is the jump axis.
+        /// </summary>
+        /// <param name="velocity">World-space jump velocity. Must be non-zero.</param>
+        public void Jump(Vector3 velocity)
         {
-            Jump(Vector3.zero);
+            internal_m2n_cc_jump(owner, velocity);
         }
 
         /// <summary>
@@ -206,7 +193,7 @@ namespace Unravel.Core
         private static extern void internal_m2n_cc_move(Entity eid, Vector3 displacement);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_cc_jump(Entity eid, Vector3 direction);
+        private static extern void internal_m2n_cc_jump(Entity eid, Vector3 velocity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_cc_apply_impulse(Entity eid, Vector3 impulse);
@@ -272,22 +259,10 @@ namespace Unravel.Core
         private static extern void internal_m2n_cc_set_gravity_scale(Entity eid, float scale);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_cc_get_jump_speed(Entity eid);
+        private static extern float internal_m2n_cc_get_terminal_velocity(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_cc_set_jump_speed(Entity eid, float speed);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_cc_get_fall_speed(Entity eid);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_cc_set_fall_speed(Entity eid, float speed);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_cc_get_max_jump_height(Entity eid);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_cc_set_max_jump_height(Entity eid, float height);
+        private static extern void internal_m2n_cc_set_terminal_velocity(Entity eid, float speed);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_cc_get_linear_damping(Entity eid);

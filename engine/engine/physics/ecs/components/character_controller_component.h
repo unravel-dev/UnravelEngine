@@ -81,18 +81,24 @@ public:
 
     void move(const math::vec3& displacement);
 
-    void jump(const math::vec3& direction = math::vec3{0.0f, 0.0f, 0.0f});
+    /**
+     * @brief Trigger a jump straight up with the given speed (m/s).
+     * @param speed Initial upward speed; must be > 0.
+     */
+    void jump(float speed);
+
+    /**
+     * @brief Trigger a directional jump. The velocity's magnitude is the jump speed
+     *        and its direction is the jump axis.
+     * @param velocity World-space jump velocity; must be non-zero.
+     */
+    void jump(const math::vec3& velocity);
+
     void apply_impulse(const math::vec3& impulse);
     void warp(const math::vec3& position);
 
-    void set_jump_speed(float speed);
-    auto get_jump_speed() const noexcept -> float;
-
-    void set_fall_speed(float speed);
-    auto get_fall_speed() const noexcept -> float;
-
-    void set_max_jump_height(float height);
-    auto get_max_jump_height() const noexcept -> float;
+    void set_terminal_velocity(float speed);
+    auto get_terminal_velocity() const noexcept -> float;
 
     void set_linear_velocity(const math::vec3& velocity);
     auto get_linear_velocity() const noexcept -> math::vec3;
@@ -125,9 +131,7 @@ private:
     float skin_width_{0.08f};
     float gravity_scale_{1.0f};
 
-    float jump_speed_{10.0f};
-    float fall_speed_{55.0f};
-    float max_jump_height_{0.0f};
+    float terminal_velocity_{55.0f};
     float linear_damping_{0.0f};
 
     layer_mask collision_include_mask_{layer_reserved::everything_layer};

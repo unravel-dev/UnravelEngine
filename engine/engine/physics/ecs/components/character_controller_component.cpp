@@ -160,9 +160,14 @@ void character_controller_component::move(const math::vec3& displacement)
     physics_system::move_character(*this, displacement);
 }
 
-void character_controller_component::jump(const math::vec3& direction)
+void character_controller_component::jump(float speed)
 {
-    physics_system::jump_character(*this, direction);
+    physics_system::jump_character(*this, math::vec3{0.0f, speed, 0.0f});
+}
+
+void character_controller_component::jump(const math::vec3& velocity)
+{
+    physics_system::jump_character(*this, velocity);
 }
 
 void character_controller_component::apply_impulse(const math::vec3& impulse)
@@ -175,52 +180,20 @@ void character_controller_component::warp(const math::vec3& position)
     physics_system::warp_character(*this, position);
 }
 
-void character_controller_component::set_jump_speed(float speed)
+void character_controller_component::set_terminal_velocity(float speed)
 {
-    if(math::epsilonEqual(jump_speed_, speed, math::epsilon<float>()))
+    if(math::epsilonEqual(terminal_velocity_, speed, math::epsilon<float>()))
     {
         return;
     }
-    jump_speed_ = speed;
+    terminal_velocity_ = speed;
     dirty_.set();
     set_property_dirty(character_controller_property::movement_params, true);
 }
 
-auto character_controller_component::get_jump_speed() const noexcept -> float
+auto character_controller_component::get_terminal_velocity() const noexcept -> float
 {
-    return jump_speed_;
-}
-
-void character_controller_component::set_fall_speed(float speed)
-{
-    if(math::epsilonEqual(fall_speed_, speed, math::epsilon<float>()))
-    {
-        return;
-    }
-    fall_speed_ = speed;
-    dirty_.set();
-    set_property_dirty(character_controller_property::movement_params, true);
-}
-
-auto character_controller_component::get_fall_speed() const noexcept -> float
-{
-    return fall_speed_;
-}
-
-void character_controller_component::set_max_jump_height(float height)
-{
-    if(math::epsilonEqual(max_jump_height_, height, math::epsilon<float>()))
-    {
-        return;
-    }
-    max_jump_height_ = height;
-    dirty_.set();
-    set_property_dirty(character_controller_property::movement_params, true);
-}
-
-auto character_controller_component::get_max_jump_height() const noexcept -> float
-{
-    return max_jump_height_;
+    return terminal_velocity_;
 }
 
 void character_controller_component::set_linear_velocity(const math::vec3& velocity)
