@@ -29,7 +29,7 @@ public:
         result.depth_tolerance = std::lerp(result.depth_tolerance, from.depth_tolerance, contribution);
         result.brightness = std::lerp(result.brightness, from.brightness, contribution);
         result.max_distance = std::lerp(result.max_distance, from.max_distance, contribution);
-        result.enable_half_res = contribution >= 0.5f ? from.enable_half_res : result.enable_half_res;
+        result.resolution = contribution >= 0.5f ? from.resolution : result.resolution;
 
         result.enable_multi_bounce = contribution >= 0.5f ? from.enable_multi_bounce : result.enable_multi_bounce;
         result.multi_bounce_intensity = std::lerp(result.multi_bounce_intensity, from.multi_bounce_intensity, contribution);

@@ -7,6 +7,31 @@
 namespace unravel
 {
 
+REFLECT_INLINE(trace_resolution)
+{
+    entt::meta_factory<trace_resolution>{}
+        .type("trace_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "trace_resolution"},
+            entt::attribute{"pretty_name", "Trace Resolution"},
+        })
+        .data<trace_resolution::full>("full"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "full"},
+            entt::attribute{"pretty_name", "Full"},
+        })
+        .data<trace_resolution::half>("half"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "half"},
+            entt::attribute{"pretty_name", "Half (1/2)"},
+        })
+        .data<trace_resolution::quarter>("quarter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "quarter"},
+            entt::attribute{"pretty_name", "Quarter (1/4)"},
+        });
+}
+
 REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
 {
     using fidelityfx_settings = ssr_pass::fidelityfx_ssr_settings;
@@ -232,11 +257,11 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip", "Screen edge fade end"},
         })
-        .data<&fidelityfx_settings::enable_half_res>("enable_half_res"_hs)
+        .data<&fidelityfx_settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "enable_half_res"},
-            entt::attribute{"pretty_name", "Half Resolution"},
-            entt::attribute{"tooltip", "Enable half resolution for SSR buffers"},
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Trace Resolution"},
+            entt::attribute{"tooltip", "Downscale divisor for SSR trace buffers.\nSSR is capped at Half at runtime - Quarter degrades Hi-Z traversal, temporal clamp and the denoiser severely."},
         })
         // .data<&fidelityfx_settings::enable_cone_tracing>("enable_cone_tracing"_hs)
         // .custom<entt::attributes>(entt::attributes{
@@ -378,7 +403,7 @@ SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_save(ar, ser20::make_nvp("roughness_depth_tolerance", obj.roughness_depth_tolerance));
     try_save(ar, ser20::make_nvp("fade_in_start", obj.fade_in_start));
     try_save(ar, ser20::make_nvp("fade_in_end", obj.fade_in_end));
-    try_save(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("enable_cone_tracing", obj.enable_cone_tracing));
     try_save(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
     try_save(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));
@@ -399,7 +424,16 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_load(ar, ser20::make_nvp("roughness_depth_tolerance", obj.roughness_depth_tolerance));
     try_load(ar, ser20::make_nvp("fade_in_start", obj.fade_in_start));
     try_load(ar, ser20::make_nvp("fade_in_end", obj.fade_in_end));
-    try_load(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    // Backwards compat: legacy scenes store the old boolean under `enable_half_res`.
+    // Try the new enum field first; fall back to the bool when missing.
+    if(!try_load(ar, ser20::make_nvp("resolution", obj.resolution)))
+    {
+        bool legacy_half_res = false;
+        if(try_load(ar, ser20::make_nvp("enable_half_res", legacy_half_res)))
+        {
+            obj.resolution = legacy_half_res ? trace_resolution::half : trace_resolution::full;
+        }
+    }
     try_load(ar, ser20::make_nvp("enable_cone_tracing", obj.enable_cone_tracing));
     try_load(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
     try_load(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));

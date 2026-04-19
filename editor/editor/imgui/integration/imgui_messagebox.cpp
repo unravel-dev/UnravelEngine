@@ -470,13 +470,14 @@ auto ShowQuestion(const std::string& title, const std::string& message,
 }
 
 auto ShowConfirmation(const std::string& title, const std::string& message, 
-                      std::function<void(ModalResult)> callback) -> std::shared_ptr<MsgBox>
+                      std::function<void(ModalResult)> callback, MessageType type) -> std::shared_ptr<MsgBox>
 {
     MsgBoxConfig config;
-    config.type = MessageType::Question;
+    config.type = type;
     return MsgBoxManager::GetInstance().ShowMessageBox(title, message, 
                                                         ModalResult::Ok | ModalResult::Cancel, config, callback);
 }
+
 
 auto ShowSaveConfirmation(const std::string& title, const std::string& message, 
                           std::function<void(ModalResult)> callback) -> std::shared_ptr<MsgBox>

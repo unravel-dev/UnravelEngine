@@ -6,6 +6,7 @@
 #include <graphics/texture.h>
 #include <graphics/render_pass.h>
 #include "tonemapping_pass.h"
+#include "trace_resolution.h"
 #include <array>
 
 namespace unravel
@@ -46,7 +47,9 @@ public:
         float roughness_depth_tolerance = 1.0f;         ///< Additional depth tolerance for rough surfaces
         float fade_in_start = 0.1f;                     ///< Screen edge fade start
         float fade_in_end = 0.2f;                       ///< Screen edge fade end
-        bool enable_half_res = false;                   ///< Enable half resolution for SSR buffers
+        /// Trace resolution divisor. SSR is runtime-capped at `half` because sub-half
+        /// tracing breaks Hi-Z traversal, temporal clamp and the spatial denoiser.
+        trace_resolution resolution = trace_resolution::full;
         // Cone tracing parameters
         bool enable_cone_tracing = false;                 ///< Enable cone tracing for glossy reflections
         cone_tracing_settings cone_tracing;             ///< Cone tracing specific settings
@@ -136,25 +139,25 @@ private:
                                    const gfx::frame_buffer::ptr& output)
         -> gfx::frame_buffer::ptr;
 
-    /// Creates or updates the SSR current framebuffer with size multiplier
-    auto create_or_update_ssr_curr_fb(gfx::render_view& rview, 
-                                      const gfx::frame_buffer::ptr& reference, 
-                                      bool enable_half_res) -> gfx::frame_buffer::ptr;
+    /// Creates or updates the SSR current framebuffer at the given trace resolution.
+    auto create_or_update_ssr_curr_fb(gfx::render_view& rview,
+                                      const gfx::frame_buffer::ptr& reference,
+                                      trace_resolution res) -> gfx::frame_buffer::ptr;
 
-    /// Creates or updates the SSR history texture with size multiplier
-    auto create_or_update_ssr_history_tex(gfx::render_view& rview, 
-                                          const gfx::frame_buffer::ptr& reference, 
-                                          bool enable_half_res) -> gfx::texture::ptr;
+    /// Creates or updates the SSR history texture at the given trace resolution.
+    auto create_or_update_ssr_history_tex(gfx::render_view& rview,
+                                          const gfx::frame_buffer::ptr& reference,
+                                          trace_resolution res) -> gfx::texture::ptr;
 
-    /// Creates or updates the SSR history temp framebuffer with size multiplier
-    auto create_or_update_ssr_history_temp_fb(gfx::render_view& rview, 
-                                              const gfx::frame_buffer::ptr& reference, 
-                                              bool enable_half_res) -> gfx::frame_buffer::ptr;
+    /// Creates or updates the SSR history temp framebuffer at the given trace resolution.
+    auto create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
+                                              const gfx::frame_buffer::ptr& reference,
+                                              trace_resolution res) -> gfx::frame_buffer::ptr;
 
-    /// Creates or updates the SSR denoised framebuffer for spatial denoising output
+    /// Creates or updates the SSR denoised framebuffer at the given trace resolution.
     auto create_or_update_ssr_denoised_fb(gfx::render_view& rview,
                                           const gfx::frame_buffer::ptr& reference,
-                                          bool enable_half_res) -> gfx::frame_buffer::ptr;
+                                          trace_resolution res) -> gfx::frame_buffer::ptr;
 
 
     // FidelityFX SSR Pixel Shader Program

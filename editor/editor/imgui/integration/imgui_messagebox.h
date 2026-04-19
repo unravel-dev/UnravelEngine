@@ -33,6 +33,11 @@ enum ModalResult
     CancelDelete = 1 << 17
 };
 
+inline auto IsConfirmation(ModalResult result) -> bool
+{
+    return result == ModalResult::Ok || result == ModalResult::Yes || result == ModalResult::YesToAll || result == ModalResult::Apply || result == ModalResult::Save;
+}
+
 /// @brief Message box types that determine appearance and icon
 enum class MessageType
 {
@@ -180,7 +185,7 @@ auto ShowQuestion(const std::string& title, const std::string& message,
 
 /// @brief Show a confirmation dialog with OK/Cancel buttons
 auto ShowConfirmation(const std::string& title, const std::string& message, 
-                      std::function<void(ModalResult)> callback = nullptr) -> std::shared_ptr<MsgBox>;
+                      std::function<void(ModalResult)> callback = nullptr, MessageType type = MessageType::Question) -> std::shared_ptr<MsgBox>;
 
 /// @brief Show a save confirmation dialog with Save/Don't Save/Cancel buttons
 auto ShowSaveConfirmation(const std::string& title, const std::string& message, 

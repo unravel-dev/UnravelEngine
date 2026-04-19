@@ -5,6 +5,7 @@
 #include <engine/rendering/camera.h>
 #include <graphics/texture.h>
 #include <graphics/render_pass.h>
+#include "trace_resolution.h"
 
 namespace unravel
 {
@@ -37,7 +38,9 @@ public:
         float depth_tolerance = 0.15f;
         float brightness = 0.5f;
         float max_distance = 20.0f;
-        bool enable_half_res = false;
+        /// Trace resolution divisor. SSIL tolerates `quarter` well because indirect
+        /// lighting is low-frequency and the bilateral upsample uses full-res guides.
+        trace_resolution resolution = trace_resolution::full;
 
         bool enable_multi_bounce = true;
         float multi_bounce_intensity = 0.8f;
@@ -87,13 +90,13 @@ private:
     auto create_or_update_ssil_fb(gfx::render_view& rview,
                                   const std::string& name,
                                   const gfx::frame_buffer::ptr& reference,
-                                  bool half_res,
+                                  trace_resolution res,
                                   uint64_t extra_flags = 0) -> gfx::frame_buffer::ptr;
 
     auto create_or_update_ssil_tex(gfx::render_view& rview,
                                    const std::string& name,
                                    const gfx::frame_buffer::ptr& reference,
-                                   bool half_res,
+                                   trace_resolution res,
                                    uint64_t extra_flags = 0) -> gfx::texture::ptr;
 
     // Trace program (fullscreen fragment shader)

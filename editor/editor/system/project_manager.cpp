@@ -1,4 +1,5 @@
 #include "project_manager.h"
+#include "version/version.h"
 #include <editor/assets/asset_watcher.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
@@ -6,6 +7,7 @@
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/meta/deploy/deploy.hpp>
 #include <editor/meta/project/project_editor_settings.hpp>
+#include <editor/meta/project/project_info.hpp>
 #include <editor/meta/settings/settings.hpp>
 #include <editor/meta/system/project_manager.hpp>
 
@@ -25,8 +27,11 @@
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
 
+#include <uuid/uuid.h>
+
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
+#include <hpp/uuid.hpp>
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
@@ -40,6 +45,7 @@ fs::path app_deploy_cfg = "app:/deploy/deploy.cfg";
 fs::path app_deploy_file = "deploy/deploy.cfg";
 fs::path app_settings_cfg = "app:/settings/settings.cfg";
 fs::path app_editor_cfg = "app:/editor/editor.cfg";
+fs::path app_project_cfg = "app:/project.cfg";
 fs::path editor_cfg = fs::persistent_path() / "unravel" / "editor.cfg";
 
 } // namespace
@@ -52,9 +58,11 @@ void project_manager::close_project(rtti::context& ctx)
         save_project_settings(ctx);
         save_deploy_settings();
         save_project_editor_settings();
+        save_project_info();
         project_settings_ = {};
         deploy_settings_ = {};
         project_editor_settings_ = {};
+        project_info_ = {};
     }
 
     ctx.remove<settings>();
@@ -125,6 +133,52 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     ls.begin_module("Scripting");
     scr.load_app_domain(ctx, true);
+
+    ls.begin_module("Project Info");
+    {
+        // Load or create the project signature file.
+        //
+        // * No file on disk: legacy project (or freshly created). Stamp the
+        //   current engine version in both `created` and `opened` and mint a
+        //   fresh GUID. This is the backward-compatibility path - opening an
+        //   older project simply writes a new `project.cfg` on the spot.
+        //
+        // * File present & engine_version_opened >= current engine: the
+        //   project is up to date (or from a newer engine entirely, which we
+        //   don't guard against in this path). Just update `opened` to the
+        //   running engine version.
+        //
+        // * File present & engine_version_opened is strictly older than the
+        //   running engine (across all version components): the project was
+        //   authored against an older build and is now being upgraded. We log
+        //   a loud warning but do NOT abort - the UI layer is expected to have
+        //   already shown a confirmation modal via `inspect_project`.
+        //   Headless/CLI opens intentionally proceed so automation is not
+        //   blocked by this.
+        const bool had_info_file = load_project_info();
+        const auto current = version::get_current();
+
+        if(!had_info_file)
+        {
+            project_info_.engine_version_created = current;
+            project_info_.project_guid = hpp::to_string(generate_uuid());
+            APPLOG_INFO("No project.cfg found - creating project signature "
+                        "(engine {}, guid {}).",
+                        current.to_string(),
+                        project_info_.project_guid);
+        }
+        else if(is_from_older_engine(project_info_.engine_version_opened, current))
+        {
+            APPLOG_WARNING("Project was last opened with an older engine ({} < {}). "
+                           "Proceeding - data loss is possible if the on-disk "
+                           "format has diverged.",
+                           project_info_.engine_version_opened.to_string(),
+                           current.to_string());
+        }
+
+        project_info_.engine_version_opened = current;
+        save_project_info();
+    }
 
     ls.begin_module("Project Settings");
     load_project_settings();
@@ -200,9 +254,68 @@ void project_manager::save_project_editor_settings()
     asset_writer::atomic_save_to_file(fs::resolve_protocol(app_editor_cfg).string(), project_editor_settings_);
 }
 
+auto project_manager::load_project_info() -> bool
+{
+    project_info_ = {};
+    return load_from_file(fs::resolve_protocol(app_project_cfg).string(), project_info_);
+}
+
+void project_manager::save_project_info()
+{
+    asset_writer::atomic_save_to_file(fs::resolve_protocol(app_project_cfg).string(), project_info_);
+}
+
 auto project_manager::get_project_editor_settings() -> project_editor_settings&
 {
     return project_editor_settings_;
+}
+
+auto project_manager::get_project_info() -> project_info&
+{
+    return project_info_;
+}
+
+auto project_manager::get_project_info() const -> const project_info&
+{
+    return project_info_;
+}
+
+auto project_manager::inspect_project(const fs::path& project_path) const -> project_compat_report
+{
+    project_compat_report report;
+
+    // We cannot rely on `app:/` here because the inspected project may not be
+    // the one currently open; resolve the on-disk path directly instead.
+    const fs::path info_path = project_path / "project.cfg";
+
+    fs::error_code ec;
+    if(!fs::exists(info_path, ec) || ec)
+    {
+        report.status = project_compat::no_info_file;
+        return report;
+    }
+
+    if(!load_from_file(info_path.string(), report.on_disk))
+    {
+        // The file exists but failed to parse. Treat as legacy so we'll
+        // rewrite it on open, but log - this is unusual and worth surfacing.
+        APPLOG_WARNING("project.cfg at {} exists but could not be parsed. "
+                       "It will be regenerated on open.",
+                       info_path.string());
+        report.status = project_compat::no_info_file;
+        report.on_disk = {};
+        return report;
+    }
+
+    if(is_from_older_engine(report.on_disk.engine_version_opened, version::get_current()))
+    {
+        report.status = project_compat::engine_older;
+    }
+    else
+    {
+        report.status = project_compat::ok;
+    }
+    return report;
 }
 
 void project_manager::create_project(rtti::context& ctx, const fs::path& project_path)

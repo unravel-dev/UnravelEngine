@@ -2,16 +2,22 @@
 #include "imgui_widgets/utils.h"
 #include <editor/events.h>
 #include "panels/panels_defs.h"
+#include <editor/editing/editing_manager.h>
+#include <editor/project/project_info.h>
 #include <editor/system/project_manager.h>
+#include <editor/editing/create_scene_modal.h>
+#include <editor/imgui/integration/imgui_notify.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/rendering/renderer.h>
 #include <hpp/optional.hpp>
-
+#include <logging/logging.h>
+#include <version/version.h>
 #include <filedialog/filedialog.h>
 #include <imgui/imgui.h>
 #include <imgui_widgets/markdown.h>
-#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <memory>
 
 namespace unravel
@@ -431,6 +437,23 @@ void hub::on_frame_ui_render(rtti::context& ctx, delta_t dt)
     {
         on_opened_project_render(ctx);
     }
+
+
+    // Render toasts on top of everything, at the end of your code!
+    // You should push style vars here
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.f); // Round borders
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(43.f / 255.f, 43.f / 255.f, 43.f / 255.f, 100.f / 255.f)); // Background color
+    ImGui::RenderNotifications(); // <-- Here we render all notifications
+    ImBox::RenderMessageBoxes();
+    create_scene_modal::render();
+    ImGui::PopStyleVar(1); // Don't forget to Pop()
+    ImGui::PopStyleColor(1);
+
+    if(ImGui::IsKeyPressed(ImGuiKey_F11))
+    {
+        ImGuiToast toast(ImGuiToastType_Info, "Hello, world!");
+        ImGui::PushNotification(toast);
+    }
 }
 
 void hub::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
@@ -521,20 +544,31 @@ void hub::on_start_page_render(rtti::context& ctx)
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    ImGui::OpenPopup("PROJECTS");
-
-    ImVec2 viewport_size = ImGui::GetMainViewport()->Size;
-    ImVec2 popup_size = ImVec2(viewport_size.x * 0.55f, viewport_size.y * 0.58f);
-    ImGui::SetNextWindowSize(popup_size, ImGuiCond_Appearing);
+    // The project chooser used to be a BeginPopupModal nested inside the
+    // full-viewport START PAGE window. That broke any *other* modal opened
+    // while the hub was visible (e.g. engine-version mismatch confirmation), because
+    // ImGui binds `OpenPopup` calls to the currently-active popup stack
+    // level - when the outer modal ended on the next frame, the inner popup
+    // was invalidated and `BeginPopupModal` returned false even though the
+    // user had not dismissed it.
+    //
+    // There is no functional need for this to be a modal: the START PAGE
+    // window already covers the entire viewport, so nothing behind it is
+    // interactable. We emulate the previous look (centered, rounded, padded,
+    // popup-coloured) with a plain child window instead.
+    const ImVec2 viewport_size = ImGui::GetMainViewport()->Size;
+    const ImVec2 chooser_size(viewport_size.x * 0.55f, viewport_size.y * 0.58f);
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos(ImVec2(cursor.x + std::max(0.0f, (avail.x - chooser_size.x) * 0.5f),
+                               cursor.y + std::max(0.0f, (avail.y - chooser_size.y) * 0.5f)));
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f, 28.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.0f, 10.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 10.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
 
-    ImGui::PushStyleColor(ImGuiCol_ModalWindowDimBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    
-    if(ImGui::BeginPopupModal("PROJECTS", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar))
+    if(ImGui::BeginChild("PROJECTS", chooser_size, ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
     {
         switch(current_view_)
         {
@@ -551,12 +585,11 @@ void hub::on_start_page_render(rtti::context& ctx)
                 render_project_samples_view(ctx);
                 break;
         }
-
-        ImGui::EndPopup();
     }
-    
+    ImGui::EndChild();
+
     ImGui::PopStyleColor();
-    ImGui::PopStyleVar(4);
+    ImGui::PopStyleVar(3);
 
     ImGui::End();
 }
@@ -568,11 +601,53 @@ void hub::render_projects_list_view(rtti::context& ctx)
     auto on_open_project = [&](const std::string& p)
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.queue_action("Open Project", [&ctx, &pm, p]() 
+        auto project_path = fs::path(p).make_preferred();
+
+        const auto queue_open = [&ctx, &pm, &em, project_path]()
         {
-            auto path = fs::path(p).make_preferred();
-            pm.open_project(ctx, path);
-        });
+            em.queue_action("Open Project", [&ctx, &pm, project_path]()
+            {
+                pm.open_project(ctx, project_path);
+            });
+        };
+
+        // Inspect before opening so we can warn about projects last opened by
+        // an older engine (the common upgrade flow) without committing to any
+        // I/O beyond reading project.cfg. `no_info_file` (legacy/freshly
+        // created projects) is intentionally not prompted about -
+        // `open_project` handles that silently.
+        const auto report = pm.inspect_project(project_path);
+        if(report.status != project_manager::project_compat::engine_older)
+        {
+            queue_open();
+            return;
+        }
+
+        const std::string opened_by = report.on_disk.engine_version_opened.original.empty()
+                                          ? report.on_disk.engine_version_opened.to_string()
+                                          : report.on_disk.engine_version_opened.original;
+        const std::string running = version::get_full();
+
+        const std::string message =
+            "This project was last opened with an older engine version than the one you are running.\n\n"
+            "  Project saved by: " + opened_by + "\n"
+            "  Running engine:   " + running + "\n\n"
+            "Opening it may cause data loss if the on-disk format has changed since then.\n"
+            "It is strongly recommended to back up the project folder yourself before proceeding.\n\n"
+            "Open the project anyway?";
+
+        ImBox::ShowConfirmation(
+            "Project engine-version mismatch",
+            message,
+            [queue_open](ImBox::ModalResult result)
+            {
+                if(!ImBox::IsConfirmation(result))
+                {
+                    APPLOG_INFO("Project open cancelled by user (engine-version mismatch).");
+                    return;
+                }
+                queue_open();
+            }, ImBox::MessageType::Warning);
     };
 
     ImGui::PushFont(ImGui::Font::Bold);
@@ -1102,7 +1177,6 @@ void hub::render_new_project_creator_view(rtti::context& ctx)
             {
                 auto project_path = fs::path(project_directory_) / project_name_;
                 on_create_project(project_path.string());
-                ImGui::CloseCurrentPopup();
                 current_view_ = view_state::projects_list;
                 project_name_.clear();
                 project_directory_.clear();

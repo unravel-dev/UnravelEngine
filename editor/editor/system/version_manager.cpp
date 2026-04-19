@@ -139,147 +139,27 @@ struct GitHubRelease
 };
 
 // ----------------------------- Version parsing & compare -----------------------------
+//
+// The core parser/comparator lives in <version/version.h>. We re-use those
+// canonical implementations and only keep the asset-name-specific logic
+// (which is a launcher concern, not a general version concern) here.
 
-struct EngineVersion
-{
-    int major = 0;
-    int minor = 0;
-    int patch = 0;
-    int commit_count = 0; // commit_count_since_tag
-    std::string sha;      // optional (without leading 'g' or with, we keep as-is)
+using EngineVersion = version::engine_version;
 
-    // Original string for debugging/logging
-    std::string original;
-};
-
-// Trim helpers
-static inline auto ltrim_sv(hpp::string_view s) -> hpp::string_view
-{
-    while(!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
-        s.remove_prefix(1);
-    return s;
-}
-static inline auto rtrim_sv(hpp::string_view s) -> hpp::string_view
-{
-    while(!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
-        s.remove_suffix(1);
-    return s;
-}
-static inline auto trim_sv(hpp::string_view s) -> hpp::string_view
-{
-    return rtrim_sv(ltrim_sv(s));
-}
-
-// Parse int from [pos..] until non-digit
-static auto parse_int_token(hpp::string_view s, size_t& pos, int& out) -> bool
-{
-    if(pos >= s.size() || !std::isdigit(static_cast<unsigned char>(s[pos])))
-        return false;
-    long long val = 0;
-    while(pos < s.size() && std::isdigit(static_cast<unsigned char>(s[pos])))
-    {
-        val = val * 10 + (s[pos] - '0');
-        if(val > 1'000'000'000LL)
-            return false;
-        ++pos;
-    }
-    out = static_cast<int>(val);
-    return true;
-}
-
-// Expect a specific char at pos
-static auto expect_char(hpp::string_view s, size_t& pos, char c) -> bool
-{
-    if(pos >= s.size() || s[pos] != c)
-        return false;
-    ++pos;
-    return true;
-}
-
-// Accept optional prefix like 'v'
-static auto strip_optional_v(hpp::string_view s) -> hpp::string_view
-{
-    s = trim_sv(s);
-    if(!s.empty() && (s.front() == 'v' || s.front() == 'V'))
-    {
-        s.remove_prefix(1);
-    }
-    return s;
-}
-
-// Parse versions like:
-//   "1.0.0-66-gc83fa23"
-//   "1.0.0-66"
-//   "1.0.0"
-// Also tolerates leading "v": "v1.0.0-66-g..."
+// Adapter: hpp::string_view is not implicitly convertible to std::string_view.
+// The parser API lives in <version/version.h> and takes std::string_view, so
+// we convert here at the boundary.
 static auto parse_engine_version(hpp::string_view ver) -> std::optional<EngineVersion>
 {
-    EngineVersion v;
-    v.original = std::string(trim_sv(ver));
-
-    hpp::string_view s = strip_optional_v(ver);
-    s = trim_sv(s);
-
-    size_t pos = 0;
-
-    if(!parse_int_token(s, pos, v.major))
-        return std::nullopt;
-    if(!expect_char(s, pos, '.'))
-        return std::nullopt;
-    if(!parse_int_token(s, pos, v.minor))
-        return std::nullopt;
-    if(!expect_char(s, pos, '.'))
-        return std::nullopt;
-    if(!parse_int_token(s, pos, v.patch))
-        return std::nullopt;
-
-    // Optional: -commit_count
-    if(pos < s.size() && s[pos] == '-')
-    {
-        ++pos;
-        if(!parse_int_token(s, pos, v.commit_count))
-            return std::nullopt;
-
-        // Optional: -gSHA or -SHA
-        if(pos < s.size() && s[pos] == '-')
-        {
-            ++pos;
-            hpp::string_view rest = s.substr(pos);
-            rest = trim_sv(rest);
-            if(!rest.empty())
-            {
-                v.sha = std::string(rest);
-                // Advance pos to consume the entire SHA string
-                pos = s.size();
-            }
-        }
-    }
-
-    // Must consume everything (except whitespace)
-    if(trim_sv(s.substr(pos)).size() != 0)
-    {
-        return std::nullopt;
-    }
-
-    return v;
+    return version::parse(std::string_view(ver.data(), ver.size()));
 }
 
-// Return -1 if a<b, 0 if equal, +1 if a>b
+// Back-compat alias for compare_versions: the shared implementation returns
+// int in exactly the same sign convention (-1 / 0 / +1).
+using version::compare;
 static auto compare_versions(const EngineVersion& a, const EngineVersion& b) -> int
 {
-    if(a.major != b.major)
-        return (a.major < b.major) ? -1 : 1;
-    if(a.minor != b.minor)
-        return (a.minor < b.minor) ? -1 : 1;
-    if(a.patch != b.patch)
-        return (a.patch < b.patch) ? -1 : 1;
-
-    // Your rule: "1.0.0-66 is newer than 1.0.0-61"
-    if(a.commit_count != b.commit_count)
-        return (a.commit_count < b.commit_count) ? -1 : 1;
-
-    // SHA doesn't define ordering; ignore.
-    return 0;
+    return version::compare(a, b);
 }
 
 // Extract version from asset filename.

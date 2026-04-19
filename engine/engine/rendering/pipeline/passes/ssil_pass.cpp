@@ -34,19 +34,16 @@ auto ssil_pass::init(rtti::context& ctx) -> bool
 auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
                                          const std::string& name,
                                          const gfx::frame_buffer::ptr& reference,
-                                         bool half_res,
+                                         trace_resolution res,
                                          uint64_t extra_flags) -> gfx::frame_buffer::ptr
 {
-    auto ref_sz = reference->get_size();
-    uint32_t w = half_res ? std::max(1u, ref_sz.width / 2) : ref_sz.width;
-    uint32_t h = half_res ? std::max(1u, ref_sz.height / 2) : ref_sz.height;
-    usize32_t target_size{w, h};
+    const auto target_size = compute_trace_size(reference->get_size(), res);
 
     auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, {w, h}))
+    if(gfx::needs_recreate(tex, target_size))
     {
         tex.reset();
-        tex = std::make_shared<gfx::texture>(w, h, false, 1,
+        tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
                                              gfx::texture_format::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                  BGFX_SAMPLER_V_CLAMP | extra_flags);
@@ -66,18 +63,16 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
 auto ssil_pass::create_or_update_ssil_tex(gfx::render_view& rview,
                                           const std::string& name,
                                           const gfx::frame_buffer::ptr& reference,
-                                          bool half_res,
+                                          trace_resolution res,
                                           uint64_t extra_flags) -> gfx::texture::ptr
 {
-    auto ref_sz = reference->get_size();
-    uint32_t w = half_res ? std::max(1u, ref_sz.width / 2) : ref_sz.width;
-    uint32_t h = half_res ? std::max(1u, ref_sz.height / 2) : ref_sz.height;
+    const auto target_size = compute_trace_size(reference->get_size(), res);
 
     auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, {w, h}))
+    if(gfx::needs_recreate(tex, target_size))
     {
         tex.reset();
-        tex = std::make_shared<gfx::texture>(w, h, false, 1,
+        tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
                                              gfx::texture_format::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST |
                                                  BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | extra_flags);
@@ -135,7 +130,7 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
 {
     APP_SCOPE_PERF("Rendering/SSIL/Trace Pass");
 
-    auto ssil_curr_fb = create_or_update_ssil_fb(rview, "SSIL_CURR", params.g_buffer, params.settings.enable_half_res);
+    auto ssil_curr_fb = create_or_update_ssil_fb(rview, "SSIL_CURR", params.g_buffer, params.settings.resolution);
 
     gfx::render_pass pass("Trace Pass");
     pass.bind(ssil_curr_fb.get());
@@ -170,11 +165,14 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 
+    // u_ssil_resolution.z now carries the full-res / trace-res divisor directly
+    // (1.0 = full, 2.0 = half, 4.0 = quarter); the shader feeds it straight into
+    // HizScreenPassToFullResUV.
     const auto gbuf_sz = params.g_buffer->get_size();
     const float ssil_resolution[4] = {static_cast<float>(gbuf_sz.width),
-                                        static_cast<float>(gbuf_sz.height),
-                                        params.settings.enable_half_res ? 1.0f : 0.0f,
-                                        0.0f};
+                                      static_cast<float>(gbuf_sz.height),
+                                      static_cast<float>(get_divisor(params.settings.resolution)),
+                                      0.0f};
     gfx::set_uniform(trace_program_.u_ssil_resolution, ssil_resolution);
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
@@ -201,8 +199,9 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 
     const int num_passes = std::clamp(settings.spatial_denoise.passes, 1, 5);
 
-    auto fb_a = create_or_update_ssil_fb(rview, "SSIL_DENOISED_A", ssil_curr, false, BGFX_TEXTURE_COMPUTE_WRITE);
-    auto fb_b = create_or_update_ssil_fb(rview, "SSIL_DENOISED_B", ssil_curr, false, BGFX_TEXTURE_COMPUTE_WRITE);
+    // ssil_curr already carries the trace resolution; denoise buffers match it 1:1.
+    auto fb_a = create_or_update_ssil_fb(rview, "SSIL_DENOISED_A", ssil_curr, trace_resolution::full, BGFX_TEXTURE_COMPUTE_WRITE);
+    auto fb_b = create_or_update_ssil_fb(rview, "SSIL_DENOISED_B", ssil_curr, trace_resolution::full, BGFX_TEXTURE_COMPUTE_WRITE);
     auto sz = fb_a->get_size();
     uint32_t gx = (sz.width + 7) / 8;
     uint32_t gy = (sz.height + 7) / 8;
@@ -248,9 +247,10 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
 {
     APP_SCOPE_PERF("Rendering/SSIL/Temporal Resolve Pass");
 
+    // ssil_input already carries the trace resolution; history buffers match it 1:1.
     auto old_history = rview.tex_safe_get("SSIL_HISTORY");
-    auto history_tex = create_or_update_ssil_tex(rview, "SSIL_HISTORY", ssil_input, false);
-    auto temp_fb = create_or_update_ssil_fb(rview, "SSIL_HISTORY_TEMP", ssil_input, false);
+    auto history_tex = create_or_update_ssil_tex(rview, "SSIL_HISTORY", ssil_input, trace_resolution::full);
+    auto temp_fb = create_or_update_ssil_fb(rview, "SSIL_HISTORY_TEMP", ssil_input, trace_resolution::full);
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
     // Seed it with the current frame and skip temporal this frame.

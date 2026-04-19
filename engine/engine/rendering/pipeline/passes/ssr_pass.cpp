@@ -96,27 +96,19 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     return ssr_output_fbo;
 }
 
-auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview, 
-                                            const gfx::frame_buffer::ptr& reference, 
-                                            bool enable_half_res) -> gfx::frame_buffer::ptr
+auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
+                                            const gfx::frame_buffer::ptr& reference,
+                                            trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    auto ref_sz = reference->get_size();
-    auto ref_format = gfx::texture_format::RGBA8;
-
-    // Calculate target size with multiplier
-    uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
-    uint32_t target_height = static_cast<uint32_t>(ref_sz.height * (enable_half_res ? 0.5f : 1.0f));
-    
-    // Ensure minimum size of 1x1
-    target_width = target_width > 0 ? target_width : 1;
-    target_height = target_height > 0 ? target_height : 1;
+    const auto target_size = compute_trace_size(reference->get_size(), res);
+    const auto ref_format = gfx::texture_format::RGBA8;
 
     auto& ssr_curr_tex = rview.tex_get_or_emplace("SSR_CURR");
-    if(gfx::needs_recreate(ssr_curr_tex, {target_width, target_height}, ref_format))
+    if(gfx::needs_recreate(ssr_curr_tex, target_size, ref_format))
     {
         ssr_curr_tex.reset();
-        ssr_curr_tex = std::make_shared<gfx::texture>(target_width,
-                                                      target_height,
+        ssr_curr_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                      target_size.height,
                                                       false,
                                                       1,
                                                       ref_format,
@@ -125,7 +117,6 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     }
 
     auto& ssr_curr_fbo = rview.fbo_get_or_emplace("SSR_CURR");
-    usize32_t target_size{target_width, target_height};
     if(gfx::needs_recreate(ssr_curr_fbo, target_size))
     {
         ssr_curr_fbo.reset();
@@ -136,27 +127,19 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     return ssr_curr_fbo;
 }
 
-auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview, 
-                                                const gfx::frame_buffer::ptr& reference, 
-                                                bool enable_half_res) -> gfx::texture::ptr
+auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
+                                                const gfx::frame_buffer::ptr& reference,
+                                                trace_resolution res) -> gfx::texture::ptr
 {
-    auto ref_sz = reference->get_size();
-    auto ref_format = gfx::texture_format::RGBA8;
-
-    // Calculate target size with multiplier
-    uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
-    uint32_t target_height = static_cast<uint32_t>(ref_sz.height * (enable_half_res ? 0.5f : 1.0f));
-    
-    // Ensure minimum size of 1x1
-    target_width = target_width > 0 ? target_width : 1;
-    target_height = target_height > 0 ? target_height : 1;
+    const auto target_size = compute_trace_size(reference->get_size(), res);
+    const auto ref_format = gfx::texture_format::RGBA8;
 
     auto& history_tex = rview.tex_get_or_emplace("SSR_HISTORY");
-    if(gfx::needs_recreate(history_tex, {target_width, target_height}, ref_format))
+    if(gfx::needs_recreate(history_tex, target_size, ref_format))
     {
         history_tex.reset();
-        history_tex = std::make_shared<gfx::texture>(target_width,
-                                                     target_height,
+        history_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                     target_size.height,
                                                      false,
                                                      1,
                                                      ref_format,
@@ -167,27 +150,19 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
     return history_tex;
 }
 
-auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview, 
-                                                    const gfx::frame_buffer::ptr& reference, 
-                                                    bool enable_half_res) -> gfx::frame_buffer::ptr
+auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
+                                                    const gfx::frame_buffer::ptr& reference,
+                                                    trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    auto ref_sz = reference->get_size();
-    auto ref_format = gfx::texture_format::RGBA8;
-
-    // Calculate target size with multiplier
-    uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
-    uint32_t target_height = static_cast<uint32_t>(ref_sz.height * (enable_half_res ? 0.5f : 1.0f));
-    
-    // Ensure minimum size of 1x1
-    target_width = target_width > 0 ? target_width : 1;
-    target_height = target_height > 0 ? target_height : 1;
+    const auto target_size = compute_trace_size(reference->get_size(), res);
+    const auto ref_format = gfx::texture_format::RGBA8;
 
     auto& temp_tex = rview.tex_get_or_emplace("SSR_HISTORY_TEMP");
-    if(gfx::needs_recreate(temp_tex, {target_width, target_height}, ref_format))
+    if(gfx::needs_recreate(temp_tex, target_size, ref_format))
     {
         temp_tex.reset();
-        temp_tex = std::make_shared<gfx::texture>(target_width,
-                                                  target_height,
+        temp_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                  target_size.height,
                                                   false,
                                                   1,
                                                   ref_format,
@@ -196,7 +171,6 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
     }
 
     auto& temp_fbo = rview.fbo_get_or_emplace("SSR_HISTORY_TEMP");
-    usize32_t target_size{target_width, target_height};
     if(gfx::needs_recreate(temp_fbo, target_size))
     {
         temp_fbo.reset();
@@ -308,22 +282,16 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
 
 auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
                                                 const gfx::frame_buffer::ptr& reference,
-                                                bool enable_half_res) -> gfx::frame_buffer::ptr
+                                                trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    auto ref_sz = reference->get_size();
-
-    uint32_t target_width = static_cast<uint32_t>(ref_sz.width * (enable_half_res ? 0.5f : 1.0f));
-    uint32_t target_height = static_cast<uint32_t>(ref_sz.height * (enable_half_res ? 0.5f : 1.0f));
-    target_width = target_width > 0 ? target_width : 1;
-    target_height = target_height > 0 ? target_height : 1;
-    usize32_t target_size{target_width, target_height};
+    const auto target_size = compute_trace_size(reference->get_size(), res);
 
     auto& denoised_tex = rview.tex_get_or_emplace("SSR_DENOISED");
     if(gfx::needs_recreate(denoised_tex, target_size))
     {
         denoised_tex.reset();
-        denoised_tex = std::make_shared<gfx::texture>(target_width,
-                                                      target_height,
+        denoised_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                      target_size.height,
                                                       false,
                                                       1,
                                                       gfx::texture_format::RGBA8,
@@ -354,7 +322,8 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
 
     APP_SCOPE_PERF("Rendering/SSR/Spatial Denoise Pass");
 
-    auto denoised_fbo = create_or_update_ssr_denoised_fb(rview, ssr_curr, false);
+    // ssr_curr is already at the trace resolution; do not downscale further.
+    auto denoised_fbo = create_or_update_ssr_denoised_fb(rview, ssr_curr, trace_resolution::full);
     auto denoised_tex = denoised_fbo->get_texture();
     auto ssr_size = denoised_fbo->get_size();
 
@@ -423,8 +392,9 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
 
 auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
-    // Get or create SSR current frame buffer using helper function (1.0f = full resolution)
-    auto ssr_curr_fbo = create_or_update_ssr_curr_fb(rview, params.g_buffer, params.settings.fidelityfx.enable_half_res);
+    // SSR caps at half resolution: sub-half breaks Hi-Z, temporal clamp and the denoiser.
+    const auto trace_res = clamp_to_half(params.settings.fidelityfx.resolution);
+    auto ssr_curr_fbo = create_or_update_ssr_curr_fb(rview, params.g_buffer, trace_res);
 
     // Generate blurred color buffer for cone tracing if enabled
     gfx::texture::ptr blurred_color_buffer = nullptr;
@@ -535,10 +505,11 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
         return nullptr;
     }
 
-    // Create or update SSR history texture and temp framebuffer using helper functions (1.0f = full resolution)
+    // History buffers match ssr_curr's size exactly; ssr_curr already carries the trace
+    // resolution, so we ask the helpers not to downscale any further.
     auto old_history = rview.tex_safe_get("SSR_HISTORY");
-    auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, false);
-    auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, false);
+    auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, trace_resolution::full);
+    auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, trace_resolution::full);
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
     // Seed it with the current frame and skip temporal this frame.

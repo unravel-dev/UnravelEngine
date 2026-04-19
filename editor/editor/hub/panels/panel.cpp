@@ -5,7 +5,6 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
-#include <editor/editing/create_scene_modal.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 
@@ -177,21 +176,6 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
     undo_redo_panel_->on_frame_ui_render(ctx);
 
 
-    // Render toasts on top of everything, at the end of your code!
-    // You should push style vars here
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.f); // Round borders
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(43.f / 255.f, 43.f / 255.f, 43.f / 255.f, 100.f / 255.f)); // Background color
-    ImGui::RenderNotifications(); // <-- Here we render all notifications
-    ImBox::RenderMessageBoxes();
-    create_scene_modal::render();
-    ImGui::PopStyleVar(1); // Don't forget to Pop()
-    ImGui::PopStyleColor(1);
-
-    if(ImGui::IsKeyPressed(ImGuiKey_F11))
-    {
-        ImGuiToast toast(ImGuiToastType_Info, "Hello, world!");
-        ImGui::PushNotification(toast);
-    }
 }
 
 auto imgui_panels::get_deploy_panel() -> deploy_panel&

@@ -39,7 +39,7 @@ public:
         r.roughness_depth_tolerance = std::lerp(r.roughness_depth_tolerance, f.roughness_depth_tolerance, contribution);
         r.fade_in_start = std::lerp(r.fade_in_start, f.fade_in_start, contribution);
         r.fade_in_end = std::lerp(r.fade_in_end, f.fade_in_end, contribution);
-        r.enable_half_res = contribution >= 0.5f ? f.enable_half_res : r.enable_half_res;
+        r.resolution = contribution >= 0.5f ? f.resolution : r.resolution;
 
         r.enable_cone_tracing = contribution >= 0.5f ? f.enable_cone_tracing : r.enable_cone_tracing;
         r.cone_tracing.cone_angle_bias = std::lerp(r.cone_tracing.cone_angle_bias, f.cone_tracing.cone_angle_bias, contribution);

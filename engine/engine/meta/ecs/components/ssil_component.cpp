@@ -164,11 +164,11 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"max", 100.0f},
             entt::attribute{"tooltip", "Maximum ray distance in world units. SSIL captures local bounce; distant GI comes from probes"},
         })
-        .data<&ssil_settings::enable_half_res>("enable_half_res"_hs)
+        .data<&ssil_settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "enable_half_res"},
-            entt::attribute{"pretty_name", "Half Resolution"},
-            entt::attribute{"tooltip", "Run SSIL trace at half resolution; each texel maps to the center of a 2×2 full-res G-buffer block (no UV mismatch). Indirect pass still samples the upscaled result at full res."},
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Trace Resolution"},
+            entt::attribute{"tooltip", "Downscale divisor for SSIL trace buffers.\nFull = reference quality, Half = ~4x faster, Quarter = ~16x faster (viable for indirect lighting because it is inherently low-frequency).\nThe indirect pass samples the upscaled result through the same full-res G-buffer UV."},
         })
         .data<&ssil_settings::enable_multi_bounce>("enable_multi_bounce"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -266,7 +266,7 @@ SAVE_INLINE(ssil_pass::ssil_settings)
     try_save(ar, ser20::make_nvp("depth_tolerance", obj.depth_tolerance));
     try_save(ar, ser20::make_nvp("brightness", obj.brightness));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
-    try_save(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("enable_multi_bounce", obj.enable_multi_bounce));
     try_save(ar, ser20::make_nvp("multi_bounce_intensity", obj.multi_bounce_intensity));
     try_save(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
@@ -284,7 +284,16 @@ LOAD_INLINE(ssil_pass::ssil_settings)
     try_load(ar, ser20::make_nvp("depth_tolerance", obj.depth_tolerance));
     try_load(ar, ser20::make_nvp("brightness", obj.brightness));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
-    try_load(ar, ser20::make_nvp("enable_half_res", obj.enable_half_res));
+    // Backwards compat: legacy scenes store the old boolean under `enable_half_res`.
+    // Try the new enum field first; fall back to the bool when missing.
+    if(!try_load(ar, ser20::make_nvp("resolution", obj.resolution)))
+    {
+        bool legacy_half_res = false;
+        if(try_load(ar, ser20::make_nvp("enable_half_res", legacy_half_res)))
+        {
+            obj.resolution = legacy_half_res ? trace_resolution::half : trace_resolution::full;
+        }
+    }
     try_load(ar, ser20::make_nvp("enable_multi_bounce", obj.enable_multi_bounce));
     try_load(ar, ser20::make_nvp("multi_bounce_intensity", obj.multi_bounce_intensity));
     try_load(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
