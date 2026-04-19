@@ -22,12 +22,12 @@ namespace unravel
 {
 namespace
 {
-auto to_bx(const math::vec3& data) -> bx::Vec3
+auto vec3_to_bx(const math::vec3& data) -> bx::Vec3
 {
     return {data.x, data.y, data.z};
 }
 
-auto from_bx(const bx::Vec3& data) -> math::vec3
+auto vec3_from_bx(const bx::Vec3& data) -> math::vec3
 {
     return {data.x, data.y, data.z};
 }
@@ -63,8 +63,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         else
         {
             bx::Aabb aabb;
-            aabb.min = to_bx(bounds.min);
-            aabb.max = to_bx(bounds.max);
+            aabb.min = vec3_to_bx(bounds.min);
+            aabb.max = vec3_to_bx(bounds.max);
             dd.encoder.pushTransform((const float*)world_transform);
             dd.encoder.draw(aabb);
             dd.encoder.popTransform();
@@ -90,7 +90,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setLod(3);
                 math::vec3 from = transform_comp.get_position_global();
                 math::vec3 to = from + transform_comp.get_z_axis_local() * adjacent;
-                dd.encoder.drawCone(to_bx(to), to_bx(from), oposite);
+                dd.encoder.drawCone(vec3_to_bx(to), vec3_to_bx(from), oposite);
             }
             {
                 auto tan_angle = math::tan(math::radians(light.spot_data.get_inner_angle() * 0.5f));
@@ -102,7 +102,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setLod(3);
                 math::vec3 from = transform_comp.get_position_global();
                 math::vec3 to = from + transform_comp.get_z_axis_local() * adjacent;
-                dd.encoder.drawCone(to_bx(to), to_bx(from), oposite);
+                dd.encoder.drawCone(vec3_to_bx(to), vec3_to_bx(from), oposite);
             }
         }
         else if(light.type == light_type::point)
@@ -125,13 +125,13 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             math::vec3 from1 = transform_comp.get_position_global();
             math::vec3 to1 = from1 + transform_comp.get_z_axis_local() * 1.0f;
 
-            bx::Cylinder cylinder = {to_bx(from1), to_bx(to1), 0.1f};
+            bx::Cylinder cylinder = {vec3_to_bx(from1), vec3_to_bx(to1), 0.1f};
 
             dd.encoder.draw(cylinder);
             math::vec3 from2 = to1;
             math::vec3 to2 = from2 + transform_comp.get_z_axis_local() * 0.5f;
 
-            bx::Cone cone = {to_bx(from2), to_bx(to2), 0.25f};
+            bx::Cone cone = {vec3_to_bx(from2), vec3_to_bx(to2), 0.25f};
             dd.encoder.draw(cone);
         }
     }
@@ -148,8 +148,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.setWireframe(true);
             dd.encoder.pushTransform((const float*)world_transform);
             bx::Aabb aabb;
-            aabb.min = to_bx(-probe.box_data.extents);
-            aabb.max = to_bx(probe.box_data.extents);
+            aabb.min = vec3_to_bx(-probe.box_data.extents);
+            aabb.max = vec3_to_bx(probe.box_data.extents);
             dd.encoder.draw(aabb);
             dd.encoder.popTransform();
             
@@ -188,8 +188,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             {
 
                 bx::Aabb aabb;
-                aabb.min = to_bx(volume.min);
-                aabb.max = to_bx(volume.max);
+                aabb.min = vec3_to_bx(volume.min);
+                aabb.max = vec3_to_bx(volume.max);
                 dd.encoder.draw(aabb);
             }
             {
@@ -197,8 +197,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
 
                 dd.encoder.setWireframe(true);
                 bx::Aabb aabb;
-                aabb.min = to_bx(volume.min);
-                aabb.max = to_bx(volume.max);
+                aabb.min = vec3_to_bx(volume.min);
+                aabb.max = vec3_to_bx(volume.max);
                 dd.encoder.draw(aabb);
             }
             {
@@ -206,8 +206,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setColor(0x1100ff00);
 
                 bx::Aabb aabb;
-                aabb.min = to_bx(volume.min - volume_comp.blend_distance);
-                aabb.max = to_bx(volume.max + volume_comp.blend_distance);
+                aabb.min = vec3_to_bx(volume.min - volume_comp.blend_distance);
+                aabb.max = vec3_to_bx(volume.max + volume_comp.blend_distance);
                 dd.encoder.draw(aabb);
             }
 
@@ -238,8 +238,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setColor(0xff00ffff);
                 dd.encoder.setWireframe(true);
                 bx::Aabb aabb;
-                aabb.min = to_bx(world_bounds.min);
-                aabb.max = to_bx(world_bounds.max);
+                aabb.min = vec3_to_bx(world_bounds.min);
+                aabb.max = vec3_to_bx(world_bounds.max);
                 dd.encoder.draw(aabb);
             }
         }
@@ -268,8 +268,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setWireframe(true);
                 dd.encoder.pushTransform((const float*)world_transform);
                 bx::Aabb aabb;
-                aabb.min = to_bx(bounds.min);
-                aabb.max = to_bx(bounds.max);
+                aabb.min = vec3_to_bx(bounds.min);
+                aabb.max = vec3_to_bx(bounds.max);
                 dd.encoder.draw(aabb);
                 dd.encoder.popTransform();
             }
@@ -297,8 +297,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                         {
                             dd.encoder.pushTransform((const float*)submesh_transform);
                             bx::Aabb aabb;
-                            aabb.min = to_bx(submesh->bbox.min);
-                            aabb.max = to_bx(submesh->bbox.max);
+                            aabb.min = vec3_to_bx(submesh->bbox.min);
+                            aabb.max = vec3_to_bx(submesh->bbox.max);
                             dd.encoder.draw(aabb);
                             dd.encoder.popTransform();
                         }
@@ -350,8 +350,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.setWireframe(true);
             dd.encoder.pushTransform((const float*)world_transform);
             bx::Aabb aabb;
-            aabb.min = to_bx(bbox.min);
-            aabb.max = to_bx(bbox.max);
+            aabb.min = vec3_to_bx(bbox.min);
+            aabb.max = vec3_to_bx(bbox.max);
             dd.encoder.draw(aabb);
             dd.encoder.popTransform();
         }
@@ -372,8 +372,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 dd.encoder.setColor(0xff00ffff);
                 dd.encoder.setWireframe(true);
                 bx::Aabb aabb;
-                aabb.min = to_bx(bounds.min);
-                aabb.max = to_bx(bounds.max);
+                aabb.min = vec3_to_bx(bounds.min);
+                aabb.max = vec3_to_bx(bounds.max);
                 dd.encoder.draw(aabb);
             }
         }
@@ -705,9 +705,9 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
 
         gfx::draw_billboard(dd.encoder,
                             icon->native_handle(),
-                            to_bx(world_transform.get_position()),
-                            to_bx(cam.get_position()),
-                            to_bx(cam.z_unit_axis()),
+                            vec3_to_bx(world_transform.get_position()),
+                            vec3_to_bx(cam.get_position()),
+                            vec3_to_bx(cam.z_unit_axis()),
                             em.billboard_data.size);
         dd.encoder.setColor(0xffffffff);
 
