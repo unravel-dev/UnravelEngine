@@ -55,14 +55,15 @@ auto undo_redo_stack::can_redo() const -> bool
     return current_index < actions.size(); 
 }
 
-void undo_redo_stack::undo()
+auto undo_redo_stack::undo() -> std::shared_ptr<editing_action_t>
 {
+    std::shared_ptr<editing_action_t> action = nullptr; 
     if (can_undo())
     {
         current_index--;
         if (current_index < actions.size() && actions[current_index])
         {
-            auto& action = actions[current_index];
+            action = actions[current_index];
 
             if(action->is_valid())
             {
@@ -78,15 +79,17 @@ void undo_redo_stack::undo()
             
         }
     }
+    return action;
 }
 
-void undo_redo_stack::redo()
+auto undo_redo_stack::redo() -> std::shared_ptr<editing_action_t>
 {
+    std::shared_ptr<editing_action_t> action = nullptr; 
     if (can_redo())
     {
         if (current_index < actions.size() && actions[current_index])
         {
-            auto& action = actions[current_index];
+            action = actions[current_index];
             if(action->is_valid())
             {
                 action->execution_count++;
@@ -101,6 +104,7 @@ void undo_redo_stack::redo()
         }
         current_index++;
     }
+    return nullptr;
 }
 
 void undo_redo_stack::clear()

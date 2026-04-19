@@ -714,7 +714,9 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         reflection_comp.set_probe(probe);
         if(preset == scene_preset::low)
         {
-            reflection_comp.set_faces_per_frame(0);
+            // Low-end preset: skip reflection bakes entirely to save GPU. Scripts can still call
+            // mark_dirty() later to force a one-off bake if absolutely needed.
+            reflection_comp.set_update_mode(probe_update_mode::on_demand);
         }
     }
 

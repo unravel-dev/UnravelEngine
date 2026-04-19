@@ -72,9 +72,10 @@ public:
     auto get_cubemap_fbo(size_t face) -> const gfx::frame_buffer::ptr&;
 
     /**
-     * @brief Updates the reflection probe component.
+     * @brief Advances the probe's update bookkeeping. Called once per frame by reflection_probe_system.
+     * @param[in] dt Frame delta time in seconds. Used to drive the realtime update interval.
      */
-    void update();
+    void update(float dt);
     void release_resources();
 
     /**
@@ -94,7 +95,21 @@ public:
      */
     void set_generation_frame(size_t face, uint64_t frame);
 
-    
+    /**
+     * @brief Requests the probe to rebuild its cubemap.
+     *
+     * The next reflection-generation pass will begin emitting new faces.
+     * When force_full_first_frame is true, all six faces are baked in a single frame
+     * (matching the first-ever-generation behavior) instead of being time-sliced by faces_per_frame.
+     * Use this for manual "Bake now" actions where the user wants an instant result.
+     */
+    void mark_dirty(bool force_full_first_frame = false);
+
+    /**
+     * @brief Returns true if the probe has pending or in-flight cubemap generation work.
+     */
+    auto is_dirty() const -> bool;
+
     /**
      * @brief Gets the number of faces generated per frame.
      * @return The number of faces generated per frame.
@@ -103,7 +118,7 @@ public:
 
     /**
      * @brief Sets the number of faces generated per frame.
-     * @param faces The number of faces to generate per frame.
+     * @param faces The number of faces to generate per frame (1-6). Only used while a bake is in progress.
      */
     void set_faces_per_frame(size_t faces) { faces_per_frame_ = faces; }
 
@@ -118,6 +133,29 @@ public:
      * @param apply True to apply prefiltering, false otherwise.
      */
     void set_apply_prefilter(bool apply) { apply_prefilter_ = apply; }
+
+    /**
+     * @brief Gets the probe's update policy.
+     */
+    auto get_update_mode() const -> probe_update_mode { return update_mode_; }
+
+    /**
+     * @brief Sets the probe's update policy.
+     * Switching INTO on_demand leaves the current bake state as-is; switching OUT of on_demand
+     * schedules a rebuild so the probe reflects its new behavior immediately.
+     */
+    void set_update_mode(probe_update_mode mode);
+
+    /**
+     * @brief Gets the realtime refresh interval in seconds. Only consulted for realtime probes.
+     */
+    auto get_update_interval() const -> float { return update_interval_; }
+
+    /**
+     * @brief Sets the realtime refresh interval in seconds.
+     * @param seconds 0 means "every available frame" (still time-sliced by faces_per_frame).
+     */
+    void set_update_interval(float seconds) { update_interval_ = seconds; }
 
 private:
     /**
@@ -139,10 +177,28 @@ private:
                                              uint64_t(-1)};
 
     bool apply_prefilter_{false};
-    size_t faces_per_frame_ = 1;       // Number of faces to generate per frame
-    size_t generated_faces_count_ = 0; // Number of faces generated in the current cycle
+    /// Number of faces to emit per frame while a bake is in progress (1-6).
+    /// Higher = faster bake but more work per frame; lower = smoother amortization.
+    size_t faces_per_frame_ = 1;
+    /// Number of faces generated in the current cycle.
+    size_t generated_faces_count_ = 0;
+    /// When true, all six faces are baked in a single frame instead of being time-sliced.
+    /// Stays true until the first bake completes, or while mark_dirty(true) is honored for manual "bake now" actions.
     bool first_generation_{true};
+    /// Seconds accumulated since the last realtime refresh started.
+    float time_since_last_refresh_ = 0.0f;
+    /// Has a bake been requested but not yet fully completed.
+    /// Default is false so a freshly constructed component stays dormant until someone explicitly
+    /// requests a bake via set_probe() (for non-on_demand probes) or mark_dirty().
+    bool has_pending_bake_{false};
 
+    /// When the probe should refresh its cubemap. "Once" is the default because it matches the
+    /// typical use case (probes covering static environment): bake on load, then stop. Scripts that
+    /// want full manual control should switch to "on_demand"; day/night probes should use "realtime".
+    probe_update_mode update_mode_{probe_update_mode::once};
+    /// Seconds between refreshes when update_mode_ == realtime. 0 means "every available frame"
+    /// (still time-sliced by faces_per_frame_).
+    float update_interval_{0.0f};
 };
 
 } // namespace unravel

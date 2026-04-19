@@ -28,6 +28,9 @@ struct editing_action_t : crtp_meta_type<editing_action_t>
     /// Called after first execution to release scope-bound references.
     /// Actions holding proxies should switch to resolver-based access.
     virtual void detach() {}
+    /// Whether this action mutates scene content (i.e. something that could invalidate reflection bakes,
+    /// auto-save state, etc.). Overridden to false by selection/focus-only actions.
+    virtual auto modifies_scene_content() const -> bool { return true; }
     
     // Note: Common merge checks (type equality, operation_id validation) are handled by undo_redo_stack.
     // Individual is_mergeable() implementations only need to check action-specific criteria.

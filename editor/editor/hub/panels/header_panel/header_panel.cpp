@@ -23,6 +23,7 @@
 #include <version/version.h>
 
 #include <editor/imgui/integration/imgui_messagebox.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
@@ -179,6 +180,35 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_deploy_panel().show(true);
             }
+
+            ImGui::EndMenu();
+        }
+
+        if(ImGui::BeginMenu("Build"))
+        {
+            if(ImGui::MenuItem(ICON_MDI_REFLECT_HORIZONTAL " Build Reflection Captures"))
+            {
+                const auto count = editor_actions::rebuild_reflection_probes(ctx, true);
+                ImGui::PushNotification(ImGuiToast(ImGuiToastType_Info,
+                                                   2000,
+                                                   "Rebuilding %zu reflection probe(s)",
+                                                   count));
+            }
+            ImGui::SetItemTooltip(
+                "Force all reflection probes in loaded scenes to rebuild their cubemaps.\n"
+                "Use after editing environment or static geometry.");
+
+            ImGui::Separator();
+
+            auto& em = ctx.get_cached<editing_manager>();
+            if(ImGui::MenuItem("Auto Rebuild Reflection Probes", nullptr, em.auto_rebuild_reflection_probes))
+            {
+                em.auto_rebuild_reflection_probes = !em.auto_rebuild_reflection_probes;
+            }
+            ImGui::SetItemTooltip(
+                "When enabled, reflection probes are automatically refreshed whenever the scene is\n"
+                "modified (moving objects, editing materials, etc). Disable for large scenes where the\n"
+                "background bakes become noticeable; use the Build menu to rebuild manually instead.");
 
             ImGui::EndMenu();
         }

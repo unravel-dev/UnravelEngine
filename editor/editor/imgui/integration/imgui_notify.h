@@ -46,7 +46,7 @@
 #define NOTIFY_FADE_IN_OUT_TIME			150			// Fade in and out duration
 #define NOTIFY_DEFAULT_DISMISS			3000		// Auto dismiss after X ms (default, applied only of no data provided in constructors)
 #define NOTIFY_OPACITY					1.0f		// 0-1 Toast opacity
-#define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing
+#define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs
 // Comment out if you don't want any separator between title and content
 #define NOTIFY_USE_SEPARATOR
 #define NOTIFY_USE_DISMISS_BUTTON		false		// If true, a dismiss button will be rendered in the top right corner of the toast
@@ -483,13 +483,15 @@ namespace ImGui
 			
 			SetNextWindowPos(window_pos, ImGuiCond_Always, pivot);
 			
+			auto flags = current_toast->get_window_flags();
 			// Set notification window flags
-            if (!current_toast->get_show_dismiss_button())
+            if (current_toast->get_show_dismiss_button())
             {
-                current_toast->set_window_flags(NOTIFY_TOAST_FLAGS | ImGuiWindowFlags_NoInputs);
+				flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
             }
+
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, toast_frame_padding);
-			Begin(window_name, nullptr, current_toast->get_window_flags());
+			Begin(window_name, nullptr, flags);
 			PopStyleVar();
 			// Here we render the toast content
 			{

@@ -40,6 +40,17 @@ struct editor_actions
     static void generate_script_workspace();
     static void open_workspace_on_file(const fs::path& file, int line = 0);
 
+    /**
+     * @brief Flags every reflection probe across all loaded scenes for rebuild.
+     *
+     * Mirrors Unreal's "Build > Build Reflection Captures" menu. When force_full_first_frame
+     * is true, each probe bakes all six faces in a single frame for instant visible results;
+     * when false, bakes are time-sliced to avoid editor hitches.
+     *
+     * @return Number of probes that were flagged.
+     */
+    static auto rebuild_reflection_probes(rtti::context& ctx, bool force_full_first_frame = true) -> size_t;
+
 };
 
 } // namespace unravel

@@ -18,6 +18,9 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <engine/rendering/ecs/components/reflection_probe_component.h>
+#include <engine/ecs/scene.h>
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/watcher.h>
@@ -1558,5 +1561,20 @@ void editor_actions::recompile_all(const std::string& group)
         fs::watcher::touch(path, false);
     }
     fs::watcher::resume();
+}
+
+auto editor_actions::rebuild_reflection_probes(rtti::context& /*ctx*/, bool force_full_first_frame) -> size_t
+{
+    size_t count = 0;
+    for(auto* scn : scene::get_all_scenes())
+    {
+        if(!scn || !scn->registry)
+        {
+            continue;
+        }
+
+        count += reflection_probe_system::mark_all_dirty(*scn, force_full_first_frame);
+    }
+    return count;
 }
 } // namespace unravel

@@ -137,37 +137,46 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
     return fbo;
 }
 
-void reflection_probe_component::update()
+void reflection_probe_component::update(float dt)
 {
+    // Dormant path: no active bake. Drive the realtime refresh timer and release transient resources.
+    if(!has_pending_bake_)
+    {
+        if(update_mode_ == probe_update_mode::realtime)
+        {
+            time_since_last_refresh_ += dt;
+            if(time_since_last_refresh_ >= update_interval_)
+            {
+                // Realtime refreshes start a new bake; keep time-slicing (first_generation_ stays false).
+                has_pending_bake_ = true;
+                time_since_last_refresh_ = 0.0f;
+            }
 
-    // Check if all faces have been generated; if so, reset the state
+        }
+        return;
+    }
+
+    // Active bake path: check whether all six faces have been emitted this cycle.
     bool fully_generated = true;
     for(auto& frame : generated_frame_)
     {
         fully_generated &= frame != uint64_t(-1);
     }
 
-
     if(fully_generated)
     {
+        // Bake cycle finished. Reset per-frame tracking and go dormant; on_demand/once probes stay
+        // quiet until someone calls mark_dirty() again, realtime probes will reschedule themselves.
         for(auto& frame : generated_frame_)
         {
-            frame = uint64_t(-1); // Reset to an initial invalid state
+            frame = uint64_t(-1);
         }
-    }
-
-    if(fully_generated)
-    {
         first_generation_ = false;
-    }
-    generated_faces_count_ = 0; // Reset the count of generated faces
-
-    
-    if(faces_per_frame_ == 0)
-    {
-        face_rviews_ = {};
+        has_pending_bake_ = false;
+        time_since_last_refresh_ = 0.0f;
     }
 
+    generated_faces_count_ = 0;
 }
 
 void reflection_probe_component::release_resources()
@@ -192,37 +201,100 @@ void reflection_probe_component::set_probe(const reflection_probe& probe)
 
     probe_ = probe;
 
-    // first_generation_ = true;
-    // generated_faces_count_ = 0;
+    // Edits to the probe data trigger an automatic rebuild, except for "on_demand" probes which
+    // are fully manual: the owner must call mark_dirty() explicitly (e.g. from script or from the
+    // editor Bake button). Switching INTO on_demand leaves the existing bake alone.
+    if(update_mode_ != probe_update_mode::on_demand)
+    {
+        mark_dirty();
+    }
+}
+
+void reflection_probe_component::set_update_mode(probe_update_mode mode)
+{
+    if(update_mode_ == mode)
+    {
+        return;
+    }
+
+    touch();
+
+    const auto previous = update_mode_;
+    update_mode_ = mode;
+    time_since_last_refresh_ = 0.0f;
+
+    // Transitioning out of on_demand means the probe should start honoring its schedule immediately,
+    // so kick off a bake. Transitioning into on_demand stops future automatic bakes but leaves the
+    // current cubemap intact.
+    if(previous == probe_update_mode::on_demand && mode != probe_update_mode::on_demand)
+    {
+        mark_dirty();
+    }
 }
 
 auto reflection_probe_component::already_generated() const -> bool
 {
+    // Short-circuit: probes with no outstanding bake are entirely "already generated" as far as
+    // the pipeline is concerned - they do not need any per-face rendering this frame.
+    if(!has_pending_bake_)
+    {
+        return true;
+    }
+
     bool generated = true;
     for(size_t i = 0; i < generated_frame_.size(); ++i)
     {
         generated &= already_generated(i);
     }
-    // Check if all faces have been generated in the current cycle
     return generated;
 }
 
 auto reflection_probe_component::already_generated(size_t face) const -> bool
 {
+    if(!has_pending_bake_)
+    {
+        return true;
+    }
+
+    // Time-slice: once we've emitted the per-frame budget, treat remaining faces as done-for-now.
+    // first_generation_ waives the budget so the initial bake produces a usable result in one frame.
     if(!first_generation_)
     {
-        if(generated_faces_count_ == faces_per_frame_)
+        if(faces_per_frame_ > 0 && generated_faces_count_ >= faces_per_frame_)
         {
             return true;
         }
     }
 
-    // Return true if the face has been generated in the current cycle
     return generated_frame_[face] != uint64_t(-1);
 }
 void reflection_probe_component::set_generation_frame(size_t face, uint64_t frame)
 {
     generated_frame_[face] = frame;
     generated_faces_count_++;
+}
+
+void reflection_probe_component::mark_dirty(bool force_full_first_frame)
+{
+    // Reset per-face tracking so the pipeline starts a new bake cycle.
+    for(auto& frame : generated_frame_)
+    {
+        frame = uint64_t(-1);
+    }
+    generated_faces_count_ = 0;
+    has_pending_bake_ = true;
+    time_since_last_refresh_ = 0.0f;
+
+    if(force_full_first_frame)
+    {
+        // first_generation_ semantics: when true, no per-frame face budget is enforced,
+        // so the pipeline pushes all six faces in a single frame. Good for manual "Bake now".
+        first_generation_ = true;
+    }
+}
+
+auto reflection_probe_component::is_dirty() const -> bool
+{
+    return has_pending_bake_;
 }
 } // namespace unravel

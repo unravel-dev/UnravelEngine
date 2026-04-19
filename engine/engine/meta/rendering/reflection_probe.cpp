@@ -55,6 +55,28 @@ REFLECT(reflection_probe)
             entt::attribute{"pretty_name", "Static Only"} 
         });
 
+    entt::meta_factory<probe_update_mode>{}
+        .type("probe_update_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_update_mode"},
+            entt::attribute{"pretty_name", "Update Mode"},
+        })
+        .data<probe_update_mode::on_demand>("on_demand"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "on_demand"},
+            entt::attribute{"pretty_name", "On Demand"}
+        })
+        .data<probe_update_mode::once>("once"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "once"},
+            entt::attribute{"pretty_name", "Once"}
+        })
+        .data<probe_update_mode::realtime>("realtime"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "realtime"},
+            entt::attribute{"pretty_name", "Realtime"}
+        });
+
     entt::meta_factory<reflection_probe::box>{}
         .type("box"_hs)
         .custom<entt::attributes>(entt::attributes{

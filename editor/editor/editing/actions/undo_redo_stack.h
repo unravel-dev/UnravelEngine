@@ -20,8 +20,8 @@ struct undo_redo_stack
     auto can_undo() const -> bool;
     auto can_redo() const -> bool;
     
-    void undo();
-    void redo();
+    auto undo() -> std::shared_ptr<editing_action_t>;
+    auto redo() -> std::shared_ptr<editing_action_t>;
     void clear();
 };
 

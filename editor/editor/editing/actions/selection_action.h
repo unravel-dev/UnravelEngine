@@ -25,6 +25,7 @@ struct selection_action_t : crtp_meta_type<selection_action_t, editing_action_t>
     auto is_mergeable(const editing_action_t& previous) const -> bool override;
     void merge_with(const editing_action_t& previous) override;
     auto is_valid() const -> bool override;
+    auto modifies_scene_content() const -> bool override { return false; }
 };
 
 } // namespace unravel

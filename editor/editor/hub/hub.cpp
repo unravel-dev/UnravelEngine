@@ -658,7 +658,7 @@ void hub::render_projects_list_view(rtti::context& ctx)
             return;
         }
 
-        const std::string running = version::get_full();
+        const std::string running = version::get_current().to_string();
 
         std::string title;
         std::string message;

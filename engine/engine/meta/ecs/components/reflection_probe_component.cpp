@@ -9,6 +9,13 @@ namespace unravel
 {
 REFLECT(reflection_probe_component)
 {
+    auto realtime_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<reflection_probe_component>();
+            return data != nullptr && data->get_update_mode() == probe_update_mode::realtime;
+        });
+
     entt::meta_factory<reflection_probe_component>{}
         .type("reflection_probe_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -26,13 +33,36 @@ REFLECT(reflection_probe_component)
             entt::attribute{"name", "probe"},
             entt::attribute{"pretty_name", "Probe"},
         })
+        .data<&reflection_probe_component::set_update_mode, &reflection_probe_component::get_update_mode>("update_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "update_mode"},
+            entt::attribute{"pretty_name", "Update Mode"},
+            entt::attribute{"group", "Update"},
+            entt::attribute{"tooltip",
+                "On Demand: never refreshes until explicitly requested (runtime default, cheapest)."
+                "\nOnce: bakes a single time on load or after edits, then stops."
+                "\nRealtime: refreshes continuously, time-sliced by Faces Per Frame and Update Interval."},
+        })
+        .data<&reflection_probe_component::set_update_interval, &reflection_probe_component::get_update_interval>("update_interval"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "update_interval"},
+            entt::attribute{"pretty_name", "Update Interval (s)"},
+            entt::attribute{"group", "Update"},
+            entt::attribute{"tooltip",
+                "Seconds between refreshes when Update Mode is Realtime. 0 means every available frame."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"predicate", realtime_predicate_entt},
+        })
         .data<&reflection_probe_component::set_faces_per_frame, &reflection_probe_component::get_faces_per_frame>("faces_per_frame"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "faces_per_frame"},
             entt::attribute{"pretty_name", "Faces Per Frame"},
             entt::attribute{"group", "Update"},
-            entt::attribute{"tooltip", "The number of faces to update per frame. Lower values improve performance but introduce lag on the probe."},
-            entt::attribute{"min", 0},
+            entt::attribute{"tooltip",
+                "Number of cubemap faces to refresh per frame while a bake is in progress. "
+                "Higher values finish bakes faster but cost more per frame. "
+                "Only applies while the probe is dirty; probes at rest cost nothing."},
+            entt::attribute{"min", 1},
             entt::attribute{"max", 6},
         })
         .data<&reflection_probe_component::set_apply_prefilter, &reflection_probe_component::get_apply_prefilter>("apply_prefilter"_hs)
@@ -47,6 +77,8 @@ REFLECT(reflection_probe_component)
 SAVE(reflection_probe_component)
 {
     try_save(ar, ser20::make_nvp("probe", obj.get_probe()));
+    try_save(ar, ser20::make_nvp("update_mode", obj.get_update_mode()));
+    try_save(ar, ser20::make_nvp("update_interval", obj.get_update_interval()));
     try_save(ar, ser20::make_nvp("faces_per_frame", obj.get_faces_per_frame()));
     try_save(ar, ser20::make_nvp("apply_prefilter", obj.get_apply_prefilter()));
 }
@@ -55,13 +87,26 @@ SAVE_INSTANTIATE(reflection_probe_component, ser20::oarchive_binary_t);
 
 LOAD(reflection_probe_component)
 {
+    // Load update_mode before the probe so that set_probe's on_demand gate sees the correct mode.
+    probe_update_mode update_mode = obj.get_update_mode();
+    if(try_load(ar, ser20::make_nvp("update_mode", update_mode)))
+    {
+        obj.set_update_mode(update_mode);
+    }
+
+    float update_interval = obj.get_update_interval();
+    if(try_load(ar, ser20::make_nvp("update_interval", update_interval)))
+    {
+        obj.set_update_interval(update_interval);
+    }
+
     reflection_probe probe;
     if(try_load(ar, ser20::make_nvp("probe", probe)))
     {
         obj.set_probe(probe);
     }
 
-    size_t faces_per_frame = 1;
+    size_t faces_per_frame = obj.get_faces_per_frame();
     if(try_load(ar, ser20::make_nvp("faces_per_frame", faces_per_frame)))
     {
         obj.set_faces_per_frame(faces_per_frame);

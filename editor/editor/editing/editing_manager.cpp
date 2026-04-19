@@ -846,9 +846,6 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
     {
         return;
     }
-    
-    has_unsaved_changes_ = true;
-
 
     action->merge_key = session.current_merge_key();
 
@@ -909,6 +906,8 @@ void editing_manager::execute_actions()
                 // Execute the action
                 action->execution_count++;
                 action->do_action();
+                
+                on_action_executed(action);
                 // Add to undo stack if the action is undoable
                 // Note: We need to handle merging here since the action is now executed
                 if (action->is_undoable())
@@ -916,6 +915,8 @@ void editing_manager::execute_actions()
                     // Move the action to the undo stack
                     undo_stack.push_if_undoable(std::move(action));
                 }
+
+                
             }
         }
 
@@ -923,21 +924,45 @@ void editing_manager::execute_actions()
 
 }
 
-void editing_manager::undo()
+auto editing_manager::undo() -> std::shared_ptr<editing_action_t>
 {
     if (undo_stack.can_undo())
     {
         has_unsaved_changes_ = true;
-        undo_stack.undo();
+        return undo_stack.undo();
     }
+    return nullptr;
 }
 
-void editing_manager::redo()
+auto editing_manager::redo() -> std::shared_ptr<editing_action_t>
 {
     if (undo_stack.can_redo())
     {
         has_unsaved_changes_ = true;
-        undo_stack.redo();
+        return undo_stack.redo();
+    }
+    return nullptr;
+}
+
+void editing_manager::on_action_executed(std::shared_ptr<editing_action_t> action)
+{
+    // Auto-rebuild reflection probes on any scene-mutating action while editing. This mirrors the
+    // experience of Unity/Unreal where moving environment geometry refreshes the bakes in the background.
+    // We intentionally do nothing in play mode - runtime behavior is governed by probe_update_mode.
+    if(action->modifies_scene_content())
+    {
+        has_unsaved_changes_ = true;
+
+        if(auto_rebuild_reflection_probes)
+        {
+            auto& ctx = engine::context();
+            auto& ev = ctx.get_cached<events>();
+            if(!ev.is_playing)
+            {
+                // Time-sliced rebuild so repeated gizmo drags don't stall the editor.
+                editor_actions::rebuild_reflection_probes(ctx, false);
+            }
+        }
     }
 }
 

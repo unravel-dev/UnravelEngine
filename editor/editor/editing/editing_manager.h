@@ -473,8 +473,8 @@ struct editing_manager
     void execute_actions();
     
     // Undo/Redo operations
-    void undo();
-    void redo();
+    auto undo() -> std::shared_ptr<editing_action_t>;
+    auto redo() -> std::shared_ptr<editing_action_t>;
     auto can_undo() const -> bool { return undo_stack.can_undo(); }
     auto can_redo() const -> bool { return undo_stack.can_redo(); }
     
@@ -499,12 +499,17 @@ struct editing_manager
 
     void unload_scenes_scripting(const std::vector<scene*>& scenes);
 
+    void on_action_executed(std::shared_ptr<editing_action_t> action);
+
     /// enable editor grid
     bool show_grid = true;
     /// enable editor icon gizmos
     bool show_icon_gizmos = true;
     /// enable wireframe selection
     bool wireframe_selection = true;
+    /// Automatically flag reflection probes dirty whenever the scene is modified (while not playing).
+    /// Mirrors Unity's "Auto Generate" lighting workflow: edits to static geometry cause probes to rebuild in the background.
+    bool auto_rebuild_reflection_probes = true;
     /// current manipulation gizmo operation.
     ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
     /// current manipulation gizmo space.
