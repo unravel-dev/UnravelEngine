@@ -168,6 +168,14 @@ struct scene
      */
      auto find_entity_by_uuid(const hpp::uuid& target_uuid) const -> entt::handle;
 
+     /**
+      * @brief Gets the scene from an entity handle.
+      * @param entity The entity handle.
+      * @return The scene if found, otherwise nullptr.
+      */
+     static auto get_scene(entt::handle entity) -> scene*;
+
+
     /**
      * @brief The source prefab asset handle for the scene.
      */

@@ -49,14 +49,14 @@ auto is_editing_label() -> bool
     return edit_label_;
 }
 
-void start_editing_label(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
+void start_editing_label(rtti::context& ctx, entt::handle entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
     em.select(entity);
     edit_label_ = true;
 }
 
-void stop_editing_label(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
+void stop_editing_label(rtti::context& ctx, entt::handle entity)
 {
     edit_label_ = false;
 }
@@ -65,221 +65,179 @@ void stop_editing_label(rtti::context& ctx, imgui_panels* panels, entt::handle e
 // Entity Creation Helper Functions
 // ============================================================================
 
-void create_empty_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+// Factory wrapper used by all create_* helpers below: runs the provided entity-producing lambda,
+// then layers a transform_set_parent_action_t so creation and parenting are independently undoable.
+// When start_label_edit is true the new entity is selected and the rename field is opened;
+// otherwise it is just selected (useful for drag-drop imports where immediate rename is undesirable).
+void queue_create_with_parent(rtti::context& ctx,
+                              entt::handle parent_entity,
+                              const std::string& action_name,
+                              std::function<entt::handle(rtti::context&, scene&)> producer,
+                              bool start_label_edit = true)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Empty Entity",
-        [&ctx, panels, parent_entity]() mutable
+    em.push_undo_stack_enabled(true);
+    em.queue_action<create_entities_action_t>(
+        action_name,
+        [&ctx, parent_entity, producer = std::move(producer), start_label_edit]() -> entt::handle
         {
             auto& em = ctx.get_cached<editing_manager>();
             auto* active_scene = em.get_active_scene(ctx);
-            if (active_scene) {
-                auto new_entity = active_scene->create_entity({}, parent_entity);
-                start_editing_label(ctx, panels, new_entity);
-            }
-        });
-}
-
-void create_empty_parent_entity(rtti::context& ctx, imgui_panels* panels, entt::handle child_entity)
-{
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Empty Parent Entity",
-        [&ctx, panels, child_entity]() mutable
-        {
-            auto current_parent = child_entity.get<transform_component>().get_parent();
-            auto& em = ctx.get_cached<editing_manager>();
-            auto* active_scene = em.get_active_scene(ctx);
-            
-            if (active_scene) {
-                auto new_entity = active_scene->create_entity({}, current_parent);
-                child_entity.get<transform_component>().set_parent(new_entity);
-                start_editing_label(ctx, panels, new_entity);
-            }
-        });
-}
-
-void create_mesh_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, const std::string& mesh_name)
-{
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Mesh Entity",
-        [&ctx, panels, parent_entity, mesh_name]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        if (active_scene) {
-            auto object = defaults::create_embedded_mesh_entity(ctx, *active_scene, mesh_name);
-
-            if(object)
+            if(!active_scene)
             {
-                object.get<transform_component>().set_parent(parent_entity, false);
+                return {};
             }
-            em.select(object);
-            start_editing_label(ctx, panels, object);
-        }
-    });
+
+            auto new_entity = producer(ctx, *active_scene);
+            if(!new_entity)
+            {
+                return {};
+            }
+
+            em.push_undo_stack_enabled(true);
+            em.queue_action<transform_set_parent_action_t>("", new_entity, entt::handle{}, parent_entity);
+            em.pop_undo_stack_enabled();
+
+            if(start_label_edit)
+            {
+                start_editing_label(ctx, new_entity);
+            }
+            else
+            {
+                em.select(new_entity);
+            }
+            return new_entity;
+        });
+    em.pop_undo_stack_enabled();
 }
 
-void create_text_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_empty_entity(rtti::context& ctx, entt::handle parent_entity)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Text Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_text_entity(ctx, *active_scene, "Text");
-
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return scn.create_entity();
+        });
 }
 
-void create_particle_emitter_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_empty_parent_entity(rtti::context& ctx, entt::handle child_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Particle Emitter Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_particle_emitter_entity(ctx, *active_scene, "Particle Emitter");
-        if(object)
-        {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+    em.push_undo_stack_enabled(true);
+    em.queue_action<create_entities_action_t>(
+            "Create Parent Entity",
+            [&ctx, child_entity]() -> entt::handle
+            {
+                auto& em = ctx.get_cached<editing_manager>();
+                auto* active_scene = em.get_active_scene(ctx);
+                if(!active_scene)
+                {
+                    return {};
+                }
+                auto current_parent = child_entity.get<transform_component>().get_parent();
+
+                auto new_entity = active_scene->create_entity();
+                em.push_undo_stack_enabled(true);
+                em.queue_action<transform_set_parent_action_t>("", new_entity, entt::handle{}, current_parent);
+                em.queue_action<transform_set_parent_action_t>("", child_entity, current_parent, new_entity);
+                em.pop_undo_stack_enabled();
+
+                start_editing_label(ctx, new_entity);
+
+                return new_entity;
+            });
+    em.pop_undo_stack_enabled();
 }
 
-void create_light_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, light_type type, const std::string& name)
+
+void create_mesh_entity(rtti::context& ctx, entt::handle parent_entity, const std::string& mesh_name)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Light Entity",
-        [&ctx, panels, parent_entity, type, name]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_light_entity(ctx, *active_scene, type, name);
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Mesh Entity",
+        [mesh_name](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_embedded_mesh_entity(ctx, scn, mesh_name);
+        });
 }
 
-void create_reflection_probe_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity, probe_type type, const std::string& name)
+void create_text_entity(rtti::context& ctx, entt::handle parent_entity)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Reflection Probe Entity",
-        [&ctx, panels, parent_entity, type, name]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_reflection_probe_entity(ctx, *active_scene, type, name);
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Text Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_text_entity(ctx, scn, "Text");
+        });
 }
 
-void create_camera_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_particle_emitter_entity(rtti::context& ctx, entt::handle parent_entity)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Camera Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_camera_entity(ctx, *active_scene, "Camera");
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Particle Emitter Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_particle_emitter_entity(ctx, scn, "Particle Emitter");
+        });
 }
 
-void create_volume_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_light_entity(rtti::context& ctx, entt::handle parent_entity, light_type type, const std::string& name)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Volume Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_volume_entity(ctx, *active_scene, "Volume");
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Light Entity",
+        [type, name](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_light_entity(ctx, scn, type, name);
+        });
 }
 
-void create_audio_source_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_reflection_probe_entity(rtti::context& ctx, entt::handle parent_entity, probe_type type, const std::string& name)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Audio Source Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_audio_source_entity(ctx, *active_scene, "Audio Source");
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Reflection Probe Entity",
+        [type, name](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_reflection_probe_entity(ctx, scn, type, name);
+        });
 }
 
-void create_ui_document_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_camera_entity(rtti::context& ctx, entt::handle parent_entity)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create UI Document Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_ui_document_entity(ctx, *active_scene, "UI Document");
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Camera Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_camera_entity(ctx, scn, "Camera");
+        });
 }
 
-void create_terrain_entity(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void create_volume_entity(rtti::context& ctx, entt::handle parent_entity)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Create Terrain Entity",
-        [&ctx, panels, parent_entity]() mutable
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        auto object = defaults::create_terrain(ctx, *active_scene);
-        if(object)
+    queue_create_with_parent(ctx, parent_entity, "Create Volume Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            object.get<transform_component>().set_parent(parent_entity, false);
-        }
-        em.select(object);
-        start_editing_label(ctx, panels, object);
-    });
+            return defaults::create_volume_entity(ctx, scn, "Volume");
+        });
+}
+
+void create_audio_source_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create Audio Source Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_audio_source_entity(ctx, scn, "Audio Source");
+        });
+}
+
+void create_ui_document_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create UI Document Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_ui_document_entity(ctx, scn, "UI Document");
+        });
+}
+
+void create_terrain_entity(rtti::context& ctx, entt::handle parent_entity)
+{
+    queue_create_with_parent(ctx, parent_entity, "Create Terrain Entity",
+        [](rtti::context& ctx, scene& scn) -> entt::handle
+        {
+            return defaults::create_terrain(ctx, scn);
+        });
 }
 
 // ============================================================================
@@ -299,7 +257,7 @@ auto process_drag_drop_source(entt::handle entity) -> bool
     return false;
 }
 
-void handle_entity_drop(rtti::context& ctx, imgui_panels* panels, entt::handle target_entity, entt::handle dropped_entity)
+void handle_entity_drop(rtti::context& ctx, entt::handle target_entity, entt::handle dropped_entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
 
@@ -330,44 +288,27 @@ void handle_entity_drop(rtti::context& ctx, imgui_panels* panels, entt::handle t
 
 void handle_mesh_drop(rtti::context& ctx, const std::string& absolute_path)
 {
-
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Drop Mesh",
-        [&ctx, absolute_path]() mutable
-    {
-        std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-        
-        if (active_scene) 
+    queue_create_with_parent(ctx, entt::handle{}, "Drop Mesh",
+        [absolute_path](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            auto object = defaults::create_mesh_entity_at(ctx, *active_scene, key);
-            em.select(object);
-        }
-    });
-
+            std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
+            return defaults::create_mesh_entity_at(ctx, scn, key);
+        },
+        false);
 }
 
 void handle_prefab_drop(rtti::context& ctx, const std::string& absolute_path)
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Drop Prefab",
-        [&ctx, absolute_path]() mutable
-    {
-        std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
-
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* active_scene = em.get_active_scene(ctx);
-    
-        if (active_scene) 
+    queue_create_with_parent(ctx, entt::handle{}, "Drop Prefab",
+        [absolute_path](rtti::context& ctx, scene& scn) -> entt::handle
         {
-            auto object = defaults::create_prefab_at(ctx, *active_scene, key);
-            em.select(object);
-        }
-    });
+            std::string key = fs::convert_to_protocol(fs::path(absolute_path)).generic_string();
+            return defaults::create_prefab_at(ctx, scn, key);
+        },
+        false);
 }
 
-void process_drag_drop_target(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
+void process_drag_drop_target(rtti::context& ctx, entt::handle entity)
 {
     if(!ImGui::BeginDragDropTarget())
     {
@@ -391,7 +332,7 @@ void process_drag_drop_target(rtti::context& ctx, imgui_panels* panels, entt::ha
         std::memcpy(&dropped, payload->Data, size_t(payload->DataSize));
         if(dropped)
         {
-            handle_entity_drop(ctx, panels, entity, dropped);
+            handle_entity_drop(ctx, entity, dropped);
         }
     }
 
@@ -420,11 +361,11 @@ void process_drag_drop_target(rtti::context& ctx, imgui_panels* panels, entt::ha
     ImGui::EndDragDropTarget();
 }
 
-void check_drag(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
+void check_drag(rtti::context& ctx, entt::handle entity)
 {
     if(!process_drag_drop_source(entity))
     {
-        process_drag_drop_target(ctx, panels, entity);
+        process_drag_drop_target(ctx, entity);
     }
 }
 
@@ -432,7 +373,7 @@ void check_drag(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
 // Context Menu Functions
 // ============================================================================
 
-void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void draw_3d_objects_menu(rtti::context& ctx, entt::handle parent_entity)
 {
     if(!ImGui::BeginMenu("3D Objects"))
     {
@@ -474,7 +415,7 @@ void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle
         {
             if(ImGui::MenuItem(name.c_str()))
             {
-                create_mesh_entity(ctx, panels, parent_entity, name);
+                create_mesh_entity(ctx, parent_entity, name);
             }
         }
         else
@@ -485,7 +426,7 @@ void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle
                 {
                     if(ImGui::MenuItem(n.c_str()))
                     {
-                        create_mesh_entity(ctx, panels, parent_entity, n);
+                        create_mesh_entity(ctx, parent_entity, n);
                     }
                 }
                 ImGui::EndMenu();
@@ -498,7 +439,7 @@ void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle
 
     if(ImGui::MenuItem("Text"))
     {
-        create_text_entity(ctx, panels, parent_entity);
+        create_text_entity(ctx, parent_entity);
     }
 
     ImGui::NextLine();
@@ -506,13 +447,13 @@ void draw_3d_objects_menu(rtti::context& ctx, imgui_panels* panels, entt::handle
 
     if(ImGui::MenuItem("Terrain"))
     {
-        create_terrain_entity(ctx, panels, parent_entity);
+        create_terrain_entity(ctx, parent_entity);
     }
 
     ImGui::EndMenu();
 }
 
-void draw_lighting_menu(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void draw_lighting_menu(rtti::context& ctx, entt::handle parent_entity)
 {
     if(!ImGui::BeginMenu("Lighting"))
     {
@@ -533,7 +474,7 @@ void draw_lighting_menu(rtti::context& ctx, imgui_panels* panels, entt::handle p
             const auto& type = p.second;
             if(ImGui::MenuItem(name.c_str()))
             {
-                create_light_entity(ctx, panels, parent_entity, type, name);
+                create_light_entity(ctx, parent_entity, type, name);
             }
         }
         ImGui::EndMenu();
@@ -553,7 +494,7 @@ void draw_lighting_menu(rtti::context& ctx, imgui_panels* panels, entt::handle p
 
             if(ImGui::MenuItem(name.c_str()))
             {
-                create_reflection_probe_entity(ctx, panels, parent_entity, type, name);
+                create_reflection_probe_entity(ctx, parent_entity, type, name);
             }
         }
         ImGui::EndMenu();
@@ -562,40 +503,40 @@ void draw_lighting_menu(rtti::context& ctx, imgui_panels* panels, entt::handle p
     ImGui::EndMenu();
 }
 
-void draw_common_menu_items(rtti::context& ctx, imgui_panels* panels, entt::handle parent_entity)
+void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
 {
     if(ImGui::MenuItem("Create Empty"))
     {
-        create_empty_entity(ctx, panels, parent_entity);
+        create_empty_entity(ctx, parent_entity);
     }
 
-    draw_3d_objects_menu(ctx, panels, parent_entity);
-    draw_lighting_menu(ctx, panels, parent_entity);
+    draw_3d_objects_menu(ctx, parent_entity);
+    draw_lighting_menu(ctx, parent_entity);
 
     if(ImGui::MenuItem("Camera"))
     {
-        create_camera_entity(ctx, panels, parent_entity);
+        create_camera_entity(ctx, parent_entity);
     }
 
     if(ImGui::MenuItem("Volume"))
     {
-        create_volume_entity(ctx, panels, parent_entity);
+        create_volume_entity(ctx, parent_entity);
     }
 
     if(ImGui::MenuItem("Audio Source"))
     {
-        create_audio_source_entity(ctx, panels, parent_entity);
+        create_audio_source_entity(ctx, parent_entity);
     }
 
     
     if(ImGui::MenuItem("Particle Emitter"))
     {
-        create_particle_emitter_entity(ctx, panels, parent_entity);
+        create_particle_emitter_entity(ctx, parent_entity);
     }
 
     if(ImGui::MenuItem("UI Document"))
     {
-        create_ui_document_entity(ctx, panels, parent_entity);
+        create_ui_document_entity(ctx, parent_entity);
     }
 }
 
@@ -608,10 +549,10 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
 
     if(ImGui::MenuItem("Create Empty Parent"))
     {
-        create_empty_parent_entity(ctx, panels, entity);
+        create_empty_parent_entity(ctx, entity);
     }
 
-    draw_common_menu_items(ctx, panels, entity);
+    draw_common_menu_items(ctx, entity);
 
     ImGui::Separator();
 
@@ -619,9 +560,9 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
     {
         auto& em = ctx.get_cached<editing_manager>();
         em.queue_action("Rename Entity",
-            [ctx, panels, entity]() mutable
+            [ctx, entity]() mutable
             {
-                start_editing_label(ctx, panels, entity);
+                start_editing_label(ctx, entity);
             });
     }
 
@@ -684,7 +625,7 @@ void draw_window_context_menu(rtti::context& ctx, imgui_panels* panels)
         return;
     }
 
-    draw_common_menu_items(ctx, panels, {});
+    draw_common_menu_items(ctx, {});
     ImGui::EndPopup();
 }
 
@@ -786,14 +727,14 @@ auto get_entity_display_label(entt::handle entity) -> std::string
     return icon + name +"###" + std::to_string(id);
 }
 
-void handle_entity_selection(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
+void handle_entity_selection(rtti::context& ctx, entt::handle entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto mode = em.get_select_mode();
     em.queue_action("Select Entity",
-        [&ctx, panels, entity, mode]() mutable
+        [&ctx, entity, mode]() mutable
         {
-            stop_editing_label(ctx, panels, entity);
+            stop_editing_label(ctx, entity);
             auto& em = ctx.get_cached<editing_manager>();
             em.select(entity, mode);
         });
@@ -805,9 +746,9 @@ void handle_entity_keyboard_shortcuts(rtti::context& ctx, imgui_panels* panels, 
     {
         auto& em = ctx.get_cached<editing_manager>();
         em.queue_action("Rename Entity",
-            [&ctx, panels, entity]() mutable
+            [&ctx, entity]() mutable
             {
-                start_editing_label(ctx, panels, entity);
+                start_editing_label(ctx, entity);
             });
     }
 
@@ -870,14 +811,14 @@ void draw_entity_name_editor(rtti::context& ctx, imgui_panels* panels, entt::han
             old_name,
             edit_name);
         em.pop_undo_stack_enabled();
-        stop_editing_label(ctx, panels, entity);
+        stop_editing_label(ctx, entity);
     }
 
     ImGui::PopItemWidth();
 
     if(ImGui::IsItemDeactivated())
     {
-        stop_editing_label(ctx, panels, entity);
+        stop_editing_label(ctx, entity);
     }
 }
 
@@ -938,7 +879,7 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     
     if(!is_editing_label())
     {
-        check_drag(ctx, panels, entity);
+        check_drag(ctx, entity);
         check_context_menu(ctx, panels, entity);
     }
     
@@ -965,7 +906,7 @@ void draw_entity(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
     {
         if(is_item_released_left || is_item_focus_changed)
         {
-            handle_entity_selection(ctx, panels, entity);
+            handle_entity_selection(ctx, entity);
         }
 
         if(em.is_selected(entity))
@@ -1143,7 +1084,7 @@ void hierarchy_panel::draw_ui(rtti::context& ctx)
     }
     ImGui::EndChild();
 
-    check_drag(ctx, parent_, {});
+    check_drag(ctx, {});
 }
 
 } // namespace unravel

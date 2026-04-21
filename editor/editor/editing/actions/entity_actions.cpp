@@ -87,6 +87,219 @@ void apply_subtree_uuid_preorder(entt::handle obj, const std::vector<hpp::uuid>&
 }
 } // namespace
 
+create_entities_action_t::create_entities_action_t(std::function<std::vector<entt::handle>()> factory_fn)
+    : factory(std::move(factory_fn))
+{
+    name = "Create Entities";
+}
+
+create_entities_action_t::create_entities_action_t(std::function<entt::handle()> factory_fn)
+{
+    name = "Create Entity";
+    auto single = std::move(factory_fn);
+    factory = [single = std::move(single)]() -> std::vector<entt::handle>
+    {
+        auto ent = single ? single() : entt::handle{};
+        if(!ent)
+        {
+            return {};
+        }
+        return {ent};
+    };
+}
+
+void create_entities_action_t::do_action()
+{
+    if(!captured)
+    {
+        if(!factory)
+        {
+            return;
+        }
+
+        auto produced = factory();
+        // Collapse to top-level only in case the factory returns a redundant parent/child pair.
+        auto roots = transform_component::get_top_level_entities(produced);
+
+        serialized_roots.reserve(roots.size());
+        root_entities.reserve(roots.size());
+        parent_entities.reserve(roots.size());
+        subtree_uuids.reserve(roots.size());
+
+        for(auto root : roots)
+        {
+            if(!root)
+            {
+                continue;
+            }
+            auto* id_comp = root.try_get<id_component>();
+            if(!id_comp || id_comp->id.is_nil())
+            {
+                continue;
+            }
+
+            entt::uhandle parent_uh{};
+            if(auto* tr = root.try_get<transform_component>())
+            {
+                auto parent = tr->get_parent();
+                if(parent && parent.try_get<id_component>())
+                {
+                    parent_uh = entt::make_uhandle(parent);
+                }
+            }
+
+            subtree_uuids.emplace_back();
+            collect_subtree_uuid_preorder(static_cast<entt::const_handle>(root), subtree_uuids.back());
+            if(subtree_uuids.back().empty())
+            {
+                subtree_uuids.pop_back();
+                continue;
+            }
+
+            std::stringstream ss;
+            save_to_stream(ss, static_cast<entt::const_handle>(root));
+            serialized_roots.emplace_back(ss.str());
+            root_entities.emplace_back(entt::make_uhandle(root));
+            parent_entities.emplace_back(parent_uh);
+        }
+
+        captured = true;
+        // Release any state held by the factory - subsequent redos restore from the snapshot.
+        factory = {};
+        return;
+    }
+
+    // Redo path: recreate each root from its serialized snapshot (mirrors delete_entities_action_t::undo_action).
+    if(root_entities.empty() || !root_entities.front().registry || serialized_roots.empty())
+    {
+        return;
+    }
+    entt::registry& registry = *root_entities.front().registry;
+    for(size_t i = 0; i < serialized_roots.size(); ++i)
+    {
+        auto restored = restore_root_from_serialized_subtree(registry, serialized_roots[i]);
+        if(!restored || i >= parent_entities.size())
+        {
+            continue;
+        }
+        if(i < subtree_uuids.size() && !subtree_uuids[i].empty())
+        {
+            size_t next_uid = 0;
+            apply_subtree_uuid_preorder(restored, subtree_uuids[i], next_uid);
+        }
+        const auto& parent_uh = parent_entities[i];
+        if(!parent_uh.registry || parent_uh.uuid.is_nil())
+        {
+            continue;
+        }
+        auto* tr = restored.try_get<transform_component>();
+        if(!tr)
+        {
+            continue;
+        }
+        auto desired_parent = parent_uh.resolve();
+        if(!desired_parent)
+        {
+            continue;
+        }
+        auto current_parent = tr->get_parent();
+        if(!current_parent || current_parent != desired_parent)
+        {
+            tr->set_parent(desired_parent, false);
+        }
+    }
+}
+
+void create_entities_action_t::undo_action()
+{
+    if(!captured)
+    {
+        return;
+    }
+
+    auto& ctx = engine::context();
+    auto& em = ctx.get_cached<editing_manager>();
+
+    // Re-snapshot each root before destroying it so that any out-of-band edits made since creation
+    // (or since the last redo) are preserved on the next redo - parent may also have changed.
+    for(size_t i = 0; i < root_entities.size(); ++i)
+    {
+        auto target = root_entities[i].resolve();
+        if(!target)
+        {
+            continue;
+        }
+
+        entt::uhandle parent_uh{};
+        if(auto* tr = target.try_get<transform_component>())
+        {
+            auto parent = tr->get_parent();
+            if(parent && parent.try_get<id_component>())
+            {
+                parent_uh = entt::make_uhandle(parent);
+            }
+        }
+        if(i < parent_entities.size())
+        {
+            parent_entities[i] = parent_uh;
+        }
+
+        if(i < subtree_uuids.size())
+        {
+            subtree_uuids[i].clear();
+            collect_subtree_uuid_preorder(static_cast<entt::const_handle>(target), subtree_uuids[i]);
+        }
+        if(i < serialized_roots.size())
+        {
+            std::stringstream ss;
+            save_to_stream(ss, static_cast<entt::const_handle>(target));
+            serialized_roots[i] = ss.str();
+        }
+
+        em.unselect(target);
+        prefab_override_context::mark_entity_as_removed(target);
+        target.destroy();
+    }
+}
+
+auto create_entities_action_t::is_mergeable(const editing_action_t& /*previous*/) const -> bool
+{
+    return false;
+}
+
+auto create_entities_action_t::is_valid() const -> bool
+{
+    if(!captured)
+    {
+        // Pre-execution: valid as long as we have a factory to run.
+        return static_cast<bool>(factory);
+    }
+    if(serialized_roots.empty() || serialized_roots.size() != root_entities.size()
+       || parent_entities.size() != root_entities.size())
+    {
+        return false;
+    }
+    if(subtree_uuids.size() != serialized_roots.size())
+    {
+        return false;
+    }
+    for(const auto& root_uh : root_entities)
+    {
+        if(!root_uh.registry || root_uh.uuid.is_nil())
+        {
+            return false;
+        }
+    }
+    for(const auto& uids : subtree_uuids)
+    {
+        if(uids.empty())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 delete_entities_action_t::delete_entities_action_t(std::vector<entt::handle> entities)
 {
     name = "Delete Entities";
@@ -666,15 +879,8 @@ void entity_add_script_component_action_t::do_action()
     {
         auto& ctx = engine::context();
         auto& script_sys = ctx.get_cached<script_system>();
-        mono::mono_type script_type{};
-        for(const auto& type : script_sys.get_all_scriptable_components())
-        {
-            if(type.get_fullname() == script_type_name)
-            {
-                script_type = type;
-                break;
-            }
-        }
+        auto script_type = script_sys.get_type_by_fullname(script_type_name);
+
         if(script_type.valid())
         {
             auto script_comp = ent.try_get<script_component>();
@@ -694,15 +900,8 @@ void entity_add_script_component_action_t::undo_action()
     {
         auto& ctx = engine::context();
         auto& script_sys = ctx.get_cached<script_system>();
-        mono::mono_type script_type{};
-        for(const auto& type : script_sys.get_all_scriptable_components())
-        {
-            if(type.get_fullname() == script_type_name)
-            {
-                script_type = type;
-                break;
-            }
-        }
+        auto script_type = script_sys.get_type_by_fullname(script_type_name);
+
         if(script_type.valid())
         {
             auto script_comp = ent.try_get<script_component>();
@@ -747,15 +946,8 @@ void entity_remove_script_component_action_t::do_action()
     {
         auto& ctx = engine::context();
         auto& script_sys = ctx.get_cached<script_system>();
-        mono::mono_type script_type{};
-        for(const auto& type : script_sys.get_all_scriptable_components())
-        {
-            if(type.get_fullname() == script_type_name)
-            {
-                script_type = type;
-                break;
-            }
-        }
+        auto script_type = script_sys.get_type_by_fullname(script_type_name);
+
         if(script_type.valid())
         {
             auto script_comp = ent.try_get<script_component>();
@@ -815,15 +1007,8 @@ void entity_remove_script_component_action_t::undo_action()
     {
         auto& ctx = engine::context();
         auto& script_sys = ctx.get_cached<script_system>();
-        mono::mono_type script_type{};
-        for(const auto& type : script_sys.get_all_scriptable_components())
-        {
-            if(type.get_fullname() == script_type_name)
-            {
-                script_type = type;
-                break;
-            }
-        }
+        auto script_type = script_sys.get_type_by_fullname(script_type_name);
+
         if(script_type.valid())
         {
             auto& script_comp = ent.get_or_emplace<script_component>();

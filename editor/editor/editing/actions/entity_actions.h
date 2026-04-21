@@ -6,6 +6,7 @@
 #include <engine/ecs/scene.h>
 #include <base/basetypes.hpp>
 #include <math/math.h>
+#include <functional>
 #include <sstream>
 #include <uuid/uuid.h>
 #include <vector>
@@ -14,6 +15,45 @@ namespace unravel
 {
 
 class material;
+
+/**
+ * @brief Undoable create for entity subtrees: invokes a user-supplied factory on first execution,
+ * snapshots the newly-created roots, and restores them with identical UUIDs on redo.
+ *
+ * This action is intentionally narrow: it only owns the creation/destruction lifecycle. Selection
+ * changes and any parent re-wiring that happens outside the factory are expected to be driven by
+ * separate actions. Any parent assigned by the factory itself (e.g. scene::create_entity(name, parent))
+ * is captured as part of the snapshot and re-applied on redo.
+ */
+struct create_entities_action_t : crtp_meta_type<create_entities_action_t, editing_action_t>
+{
+    /// Factory invoked on the first execution. Returns the newly-created root entities (may be empty).
+    /// Cleared after the first execution; subsequent redos use the captured snapshot.
+    std::function<std::vector<entt::handle>()> factory{};
+
+    /// Serialized bytes of each root, captured after the first factory execution.
+    std::vector<std::string> serialized_roots{};
+    /// Handles of each created root; the registry pointer persists even after the entity is destroyed.
+    std::vector<entt::uhandle> root_entities{};
+    /// Parent of each root (may hold a nil uuid for root-level entities). Refreshed on every undo.
+    std::vector<entt::uhandle> parent_entities{};
+    /// Preorder UUIDs per root subtree (same ordering as save_to_stream / flatten_hierarchy).
+    std::vector<std::vector<hpp::uuid>> subtree_uuids{};
+
+    /// True once the initial factory-driven creation has run and the snapshot is populated.
+    bool captured{false};
+
+    /// Multi-root constructor. The factory returns the set of newly-created roots.
+    create_entities_action_t(std::function<std::vector<entt::handle>()> factory);
+
+    /// Single-root convenience overload.
+    create_entities_action_t(std::function<entt::handle()> factory);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+};
 
 /**
  * @brief Undoable delete for entity subtrees: snapshots serialized roots at construction, deletes on do, restores on undo.

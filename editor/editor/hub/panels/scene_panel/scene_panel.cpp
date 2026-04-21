@@ -169,46 +169,58 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
         force);
 }
 
-// Handle mesh drop at cursor position
-void handle_mesh_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& mesh_path)
+// Factory wrapper for viewport drops: snapshots the current cursor position and camera,
+// runs the user-supplied producer inside an undoable create_entities_action_t, and selects
+// the resulting entity. No parenting action is layered - viewport drops land at scene root.
+void queue_create_at_cursor(rtti::context& ctx,
+                            const camera_component& camera_comp,
+                            const std::string& action_name,
+                            std::function<entt::handle(rtti::context&, scene&, const camera&, const math::vec2&)> producer)
 {
     auto cursor_pos = ImGui::GetMousePos();
     auto& em = ctx.get_cached<editing_manager>();
 
-    em.queue_action("Drop Mesh",
-                    [&ctx, camera = camera_comp.get_camera(), mesh_path, cursor_pos]()
-                    {
-                        auto& em = ctx.get_cached<editing_manager>();
-                        auto target_scene = em.get_active_scene(ctx);
+    em.push_undo_stack_enabled(true);
+    em.queue_action<create_entities_action_t>(
+        action_name,
+        [&ctx, camera = camera_comp.get_camera(), cursor_pos, producer = std::move(producer)]() -> entt::handle
+        {
+            auto& em = ctx.get_cached<editing_manager>();
+            auto* target_scene = em.get_active_scene(ctx);
+            if(!target_scene)
+            {
+                return {};
+            }
 
-                        auto object = defaults::create_mesh_entity_at(ctx,
-                                                                      *target_scene,
-                                                                      mesh_path,
-                                                                      camera,
-                                                                      math::vec2{cursor_pos.x, cursor_pos.y});
-                        em.select(object);
-                    });
+            auto object = producer(ctx, *target_scene, camera, math::vec2{cursor_pos.x, cursor_pos.y});
+            if(!object)
+            {
+                return {};
+            }
+            em.select(object);
+            return object;
+        });
+    em.pop_undo_stack_enabled();
+}
+
+// Handle mesh drop at cursor position
+void handle_mesh_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& mesh_path)
+{
+    queue_create_at_cursor(ctx, camera_comp, "Drop Mesh",
+        [mesh_path](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
+        {
+            return defaults::create_mesh_entity_at(ctx, scn, mesh_path, cam, cursor);
+        });
 }
 
 // Handle prefab drop at cursor position
 void handle_prefab_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& prefab_path)
 {
-    auto cursor_pos = ImGui::GetMousePos();
-    auto& em = ctx.get_cached<editing_manager>();
-
-    em.queue_action("Drop Prefab",
-                    [&ctx, camera = camera_comp.get_camera(), prefab_path, cursor_pos]()
-                    {
-                        auto& em = ctx.get_cached<editing_manager>();
-                        auto target_scene = em.get_active_scene(ctx);
-
-                        auto object = defaults::create_prefab_at(ctx,
-                                                                 *target_scene,
-                                                                 prefab_path,
-                                                                 camera,
-                                                                 math::vec2{cursor_pos.x, cursor_pos.y});
-                        em.select(object);
-                    });
+    queue_create_at_cursor(ctx, camera_comp, "Drop Prefab",
+        [prefab_path](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
+        {
+            return defaults::create_prefab_at(ctx, scn, prefab_path, cam, cursor);
+        });
 }
 
 // Reset material preview state

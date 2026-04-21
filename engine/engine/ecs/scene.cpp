@@ -339,6 +339,23 @@ auto scene::find_entity_by_uuid(const hpp::uuid& target_uuid) const -> entt::han
     return ::unravel::find_entity_by_uuid(*registry, target_uuid);
 }
 
+auto scene::get_scene(entt::handle entity) -> scene*
+{
+    if(!entity)
+    {
+        return nullptr;
+    }
+
+    for(auto scene : get_all_scenes())
+    {
+        if(scene->registry.get() == entity.registry())
+        {
+            return scene;
+        }
+    }
+    return nullptr;
+}
+
 auto scene::create_entity(const std::string& tag, entt::handle parent) -> entt::handle
 {
     return create_entity(*registry, tag, parent);
