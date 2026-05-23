@@ -99,6 +99,7 @@ struct transform_set_parent_action_t : crtp_meta_type<transform_set_parent_actio
     entt::uhandle new_parent{};
 
     transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p);
+    transform_set_parent_action_t(entt::uhandle ent, entt::uhandle old_p, entt::uhandle new_p);
 
     void do_action() override;
     void undo_action() override;

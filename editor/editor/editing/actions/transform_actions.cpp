@@ -301,9 +301,15 @@ void transform_skew_action_t::draw_in_inspector(rtti::context& ctx)
 
 // Transform Set Parent Action Implementation
 transform_set_parent_action_t::transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p)
-    : entity(entt::make_uhandle(ent)), old_parent(entt::make_uhandle(old_p)), new_parent(entt::make_uhandle(new_p))
+    : transform_set_parent_action_t(entt::make_uhandle(ent), entt::make_uhandle(old_p), entt::make_uhandle(new_p))
 {
-    if(new_p)
+    
+}
+
+transform_set_parent_action_t::transform_set_parent_action_t(entt::uhandle ent, entt::uhandle old_p, entt::uhandle new_p)
+    : entity(ent), old_parent(old_p), new_parent(new_p)
+{
+    if(new_p.resolve().valid())
     {
         name = "Set Parent";
     }

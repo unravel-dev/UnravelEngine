@@ -65,10 +65,11 @@ void stop_editing_label(rtti::context& ctx, entt::handle entity)
 // Entity Creation Helper Functions
 // ============================================================================
 
-// Factory wrapper used by all create_* helpers below: runs the provided entity-producing lambda,
-// then layers a transform_set_parent_action_t so creation and parenting are independently undoable.
-// When start_label_edit is true the new entity is selected and the rename field is opened;
-// otherwise it is just selected (useful for drag-drop imports where immediate rename is undesirable).
+// Factory wrapper used by all create_* helpers below. Creation + parenting happen inside a single
+// create_entities_action_t whose snapshot captures the parent link, so undo/redo treat the whole
+// "create at parent" as one atomic step. When start_label_edit is true the new entity is selected
+// and the rename field is opened; otherwise it is just selected (useful for drag-drop imports
+// where immediate rename is undesirable).
 void queue_create_with_parent(rtti::context& ctx,
                               entt::handle parent_entity,
                               const std::string& action_name,
@@ -79,7 +80,7 @@ void queue_create_with_parent(rtti::context& ctx,
     em.push_undo_stack_enabled(true);
     em.queue_action<create_entities_action_t>(
         action_name,
-        [&ctx, parent_entity, producer = std::move(producer), start_label_edit]() -> entt::handle
+        [&ctx, parent_uh = entt::make_uhandle(parent_entity), producer = std::move(producer), start_label_edit]() -> entt::handle
         {
             auto& em = ctx.get_cached<editing_manager>();
             auto* active_scene = em.get_active_scene(ctx);
@@ -94,9 +95,15 @@ void queue_create_with_parent(rtti::context& ctx,
                 return {};
             }
 
-            em.push_undo_stack_enabled(true);
-            em.queue_action<transform_set_parent_action_t>("", new_entity, entt::handle{}, parent_entity);
-            em.pop_undo_stack_enabled();
+            // Set parent inline: create_entities_action_t snapshots the parent uhandle in its
+            // subtree capture, so redo restores the hierarchy without a second action entry.
+            if(auto parent = parent_uh.resolve())
+            {
+                if(auto* tr = new_entity.try_get<transform_component>())
+                {
+                    tr->set_parent(parent, false);
+                }
+            }
 
             if(start_label_edit)
             {
@@ -122,30 +129,65 @@ void create_empty_entity(rtti::context& ctx, entt::handle parent_entity)
 
 void create_empty_parent_entity(rtti::context& ctx, entt::handle child_entity)
 {
+    if(!child_entity)
+    {
+        return;
+    }
+
     auto& em = ctx.get_cached<editing_manager>();
-    em.push_undo_stack_enabled(true);
-    em.queue_action<create_entities_action_t>(
-            "Create Parent Entity",
-            [&ctx, child_entity]() -> entt::handle
-            {
-                auto& em = ctx.get_cached<editing_manager>();
-                auto* active_scene = em.get_active_scene(ctx);
-                if(!active_scene)
+    auto current_parent = child_entity.get<transform_component>().get_parent();
+
+    // Shared slot so the second step can reference the wrapper produced by step 1.
+    auto created_uh = std::make_shared<entt::uhandle>();
+
+    auto seq = std::make_shared<sequence_action_t>();
+
+    // Step 1: create the wrapper entity and parent it under the child's original parent.
+    // create_entities_action_t snapshots the parent link, so redo restores the hierarchy
+    // without needing a separate set-parent action for the wrapper itself.
+    seq->add_step(
+        [&ctx, current_parent, created_uh]() -> std::shared_ptr<editing_action_t>
+        {
+            return std::make_shared<create_entities_action_t>(
+                [&ctx, current_parent, created_uh]() -> entt::handle
                 {
-                    return {};
-                }
-                auto current_parent = child_entity.get<transform_component>().get_parent();
+                    auto& em = ctx.get_cached<editing_manager>();
+                    auto* active_scene = em.get_active_scene(ctx);
+                    if(!active_scene)
+                    {
+                        return {};
+                    }
+                    auto new_entity = active_scene->create_entity();
+                    if(!new_entity)
+                    {
+                        return {};
+                    }
+                    if(current_parent)
+                    {
+                        new_entity.get<transform_component>().set_parent(current_parent, false);
+                    }
+                    *created_uh = entt::make_uhandle(new_entity);
+                    start_editing_label(ctx, new_entity);
+                    return new_entity;
+                });
+        });
 
-                auto new_entity = active_scene->create_entity();
-                em.push_undo_stack_enabled(true);
-                em.queue_action<transform_set_parent_action_t>("", new_entity, entt::handle{}, current_parent);
-                em.queue_action<transform_set_parent_action_t>("", child_entity, current_parent, new_entity);
-                em.pop_undo_stack_enabled();
+    // Step 2: reparent the original child under the new wrapper. Kept as a separate step
+    // so undo unwinds it BEFORE the wrapper is destroyed (otherwise the child would be
+    // swept up in the wrapper's subtree teardown).
+    seq->add_step(
+        [child_entity, current_parent, created_uh]() -> std::shared_ptr<editing_action_t>
+        {
+            auto new_wrapper = created_uh->resolve();
+            if(!new_wrapper)
+            {
+                return nullptr;
+            }
+            return std::make_shared<transform_set_parent_action_t>(child_entity, current_parent, new_wrapper);
+        });
 
-                start_editing_label(ctx, new_entity);
-
-                return new_entity;
-            });
+    em.push_undo_stack_enabled(true);
+    em.queue_action("Create Parent Entity", seq);
     em.pop_undo_stack_enabled();
 }
 

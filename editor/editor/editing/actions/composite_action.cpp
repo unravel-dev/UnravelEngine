@@ -106,4 +106,96 @@ void composite_action_t::draw_in_inspector(rtti::context& ctx)
     }
 }
 
+void sequence_action_t::add_step(std::function<std::shared_ptr<editing_action_t>()> factory)
+{
+    if(factory)
+    {
+        step_factories.push_back(std::move(factory));
+    }
+}
+
+void sequence_action_t::do_action()
+{
+    if(!first_run_done)
+    {
+        // First execution: invoke factories in order. Each factory runs AFTER the preceding
+        // sub-action has executed, so it can reference handles/values produced upstream.
+        for(auto& factory : step_factories)
+        {
+            if(!factory)
+            {
+                continue;
+            }
+            auto action = factory();
+            if(!action)
+            {
+                continue;
+            }
+            action->do_action();
+            sub_actions.push_back(std::move(action));
+        }
+        step_factories.clear();
+        first_run_done = true;
+        return;
+    }
+
+    // Redo path: replay captured sub-actions in order. Each sub-action owns its own
+    // first-vs-subsequent logic (e.g. create_entities_action_t restores from snapshot).
+    for(auto& action : sub_actions)
+    {
+        if(action)
+        {
+            action->do_action();
+        }
+    }
+}
+
+void sequence_action_t::undo_action()
+{
+    // Undo in reverse order so later steps are unwound before earlier ones.
+    for(auto it = sub_actions.rbegin(); it != sub_actions.rend(); ++it)
+    {
+        if(*it)
+        {
+            (*it)->undo_action();
+        }
+    }
+}
+
+auto sequence_action_t::is_valid() const -> bool
+{
+    if(!first_run_done)
+    {
+        return !step_factories.empty();
+    }
+    if(sub_actions.empty())
+    {
+        return false;
+    }
+    for(const auto& action : sub_actions)
+    {
+        if(!action || !action->is_valid())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto sequence_action_t::is_mergeable(const editing_action_t& /*previous*/) const -> bool
+{
+    return false;
+}
+
+void sequence_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    for(auto& action : sub_actions)
+    {
+        if(action)
+        {
+            action->draw_in_inspector(ctx);
+        }
+    }
+}
+
 } // namespace unravel
