@@ -1,6 +1,8 @@
 #pragma once
 #include "../asset_handle.h"
 
+#include <chrono>
+#include <cstddef>
 #include <filesystem/filesystem.h>
 #include <filesystem>
 #include <string_utils/utils.h>
@@ -24,6 +26,17 @@ auto atomic_copy_file(const fs::path& src, const fs::path& dst, fs::error_code& 
 void atomic_write_file(const fs::path& dst,
                        const std::function<void(const fs::path&)>& callback,
                        fs::error_code& ec) noexcept;
+
+//------------------------------------------------------------------------------
+// Scan a directory for stale temp files (matching `.<UUID>.temp`) and remove any
+// older than `min_age`. Use this at startup to recover from crashes or aborted
+// writes that left orphaned temp files behind.
+//
+// Returns the number of files successfully removed.
+//------------------------------------------------------------------------------
+auto cleanup_stale_temp_files(const fs::path& dir,
+                              bool recursive,
+                              std::chrono::seconds min_age = std::chrono::seconds(60)) noexcept -> std::size_t;
 
 template<typename T>
 auto resolve_meta_file(const asset_handle<T>& asset) -> fs::path

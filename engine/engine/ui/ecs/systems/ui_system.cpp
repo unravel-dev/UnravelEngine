@@ -46,6 +46,7 @@ namespace unravel
 {
 namespace
 {
+    uint64_t next_context_id = 0;
     Rml::Context* debug_target_context_ = nullptr;
 
     auto remove_context(Rml::Context* context) -> void
@@ -611,7 +612,8 @@ void ui_system::on_load_component(entt::registry& r, entt::entity e)
     {
         auto& ctx = engine::context();
         auto& system = ctx.get_cached<ui_system>();
-        system.load_ui_document(e, component, true);
+        auto handle = entt::handle(r, e);
+        system.load_ui_document(handle, component, true);
     }
 }
 
@@ -722,7 +724,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
             }
             if(!ui_comp.is_loaded())
             {
-                load_ui_document(entity, ui_comp, false);
+                load_ui_document(handle, ui_comp, false);
             }
             if(!ui_comp.document || !ui_comp.context)
             {
@@ -747,7 +749,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
         });
 }
 
-auto ui_system::load_ui_document(entt::entity entity, ui_document_component& component, bool log_error) -> bool
+auto ui_system::load_ui_document(entt::handle handle, ui_document_component& component, bool log_error) -> bool
 {
     APP_SCOPE_PERF("UI/Load UI Document");
     if(!component.asset)
@@ -770,7 +772,7 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
 
     if(!component.context)
     {
-        Rml::String context_name = "doc_" + std::to_string(entt::to_integral(entity));
+        Rml::String context_name = "doc_" + std::to_string(next_context_id++);
         int w = (component.render_mode == ui_render_mode::screen_space_overlay) ? 1024 : static_cast<int>(component.size.width);
         int h = (component.render_mode == ui_render_mode::screen_space_overlay) ? 768 : static_cast<int>(component.size.height);
         component.context = Rml::CreateContext(context_name, Rml::Vector2i(w, h));
@@ -778,7 +780,7 @@ auto ui_system::load_ui_document(entt::entity entity, ui_document_component& com
         {
             if(log_error)
             {
-                APPLOG_ERROR("Failed to create RmlUi context for document");
+                APPLOG_ERROR("Failed to create RmlUi context '{}' for document {}", context_name, component.asset.id());
             }
             return false;
         }

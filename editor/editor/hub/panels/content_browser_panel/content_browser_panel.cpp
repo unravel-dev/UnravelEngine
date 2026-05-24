@@ -210,6 +210,7 @@ auto draw_item(const content_browser_item& item)
     const auto& filename = item.entry.filename;
     const auto& file_ext = item.entry.extension;
     const auto& file_type = ex::get_type(file_ext, is_directory);
+    auto description = item.description;
     enum class entry_action
     {
         none,
@@ -269,6 +270,7 @@ auto draw_item(const content_browser_item& item)
     ImGui::ContentItem citem{};
     citem.texId = ImGui::ToId(item.icon);
     citem.name = name.c_str();
+    citem.description = description.c_str();
     citem.type = file_type.c_str();
     citem.type_font = file_type_font;
     citem.texture_size = texture_size;
@@ -373,6 +375,7 @@ auto draw_item(const content_browser_item& item)
     else
     {
         ImGui::AddItemTooltipEx("%s", filename.c_str());
+        ImGui::AddItemTooltipEx("%s", description.c_str());
 
         if(!file_type.empty())
         {
@@ -1264,6 +1267,7 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
     using entry_t = asset_handle<AssetType>;
     const auto& entry = am.find_asset<AssetType>(relative);
 
+    item.description = entry.uid().to_string();
     item.icon = tm.get_thumbnail(entry);
     item.is_selected = em.is_selected(entry);
     item.is_focused = em.is_focused(entry);

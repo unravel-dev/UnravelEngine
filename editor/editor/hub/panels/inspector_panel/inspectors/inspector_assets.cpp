@@ -256,10 +256,11 @@ auto pick_asset(ImGuiTextFilter& filter,
 
                                    // copy so that we can pass c_str
                                    auto name = asset.name();
-
+                                   auto description = asset.uid().to_string();
                                    ImGui::ContentItem citem{};
                                    citem.texId = ImGui::ToId(thumbnail);
                                    citem.name = name.c_str();
+                                   citem.description = description.c_str();
                                    citem.texture_size = texture_size;
                                    citem.image_size = item_size;
 

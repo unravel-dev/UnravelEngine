@@ -283,9 +283,9 @@ auto MsgBox::DrawButtons() -> void
             (result == ModalResult::Cancel && ImGui::IsKeyPressed(ImGuiKey_C)) ||
             (result == ModalResult::CancelDelete && ImGui::IsKeyPressed(ImGuiKey_Escape)) ||
             (result == ModalResult::CancelDelete && ImGui::IsKeyPressed(ImGuiKey_C)) ||
-            (result == ModalResult::Ok && ImGui::IsKeyPressed(ImGuiKey_Enter)) ||
-            (result == ModalResult::Save && ImGui::IsKeyPressed(ImGuiKey_Enter)) ||
-            (result == ModalResult::Delete && ImGui::IsKeyPressed(ImGuiKey_Enter)) ||
+            (result == ModalResult::Ok && ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) ||
+            (result == ModalResult::Save && ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) ||
+            (result == ModalResult::Delete && ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) ||
             (result == ModalResult::Yes && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
             (result == ModalResult::No && ImGui::IsKeyPressed(ImGuiKey_N)))
         {

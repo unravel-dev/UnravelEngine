@@ -255,8 +255,12 @@ auto asset_manager::get_metadata_for_path(const fs::path& path) const -> asset_d
 
 auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_database::meta
 {
+    // `databases_` is keyed by *protocol* (e.g. "app"), not by full asset key.
+    // The asset's metadata lives inside the database for its protocol, so we
+    // need to extract the protocol from the key before doing the map lookup.
     std::lock_guard<std::mutex> lock(db_mutex_);
-    const auto it = databases_.find(key);
+    const auto protocol = fs::extract_protocol(fs::path(key)).generic_string();
+    const auto it = databases_.find(protocol);
     if(it == databases_.cend())
     {
         static const asset_database::meta empty;

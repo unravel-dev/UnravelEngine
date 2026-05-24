@@ -16,10 +16,13 @@
 #include <assimp/material.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <array>
+#include <bx/allocator.h>
 #include <bx/file.h>
 #include <graphics/utils/bgfx_utils.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem/filesystem.h>
 #include <queue>
 #include <tuple>
@@ -36,14 +39,92 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
 void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& output_file,
                              const std::string& semantic, bool inverse);
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image);
+
+/**
+ * @brief Per-material scalar/vector multipliers from the KHR_materials_pbrSpecularGlossiness
+ * extension. The conversion bakes these into the produced base-color and MR textures so the
+ * caller can set the material's base_color / metallic / roughness factors to identity and
+ * avoid double-application at sample time.
+ */
+struct spec_gloss_factors_t
+{
+    float diffuse_r{1.0f};
+    float diffuse_g{1.0f};
+    float diffuse_b{1.0f};
+    float diffuse_a{1.0f};
+    float specular_r{1.0f};
+    float specular_g{1.0f};
+    float specular_b{1.0f};
+    float glossiness{1.0f};
+};
+
 void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
-                                            const bimg::ImageContainer* specular_image);
+                                            const bimg::ImageContainer* specular_image,
+                                            const spec_gloss_factors_t& factors,
+                                            std::vector<uint8_t>* out_mr_rgba8 = nullptr);
 auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool;
 auto perceived_brightness(float r, float g, float b) -> float;
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float;
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
                                                  const aiColor3D& specular_color,
                                                  float glossiness_factor) -> std::tuple<aiColor3D, float, float>;
+
+/**
+ * @brief Check that an image format is an uncompressed, non-float LDR layout we can
+ * safely byte-walk in our per-pixel conversion routines. Floating-point/HDR and
+ * block-compressed formats would silently corrupt if treated as 8-bit channels.
+ */
+inline auto is_supported_ldr_format(bimg::TextureFormat::Enum format) -> bool
+{
+    if(bimg::isCompressed(format) || bimg::isFloat(format))
+    {
+        return false;
+    }
+    uint32_t bpp = bimg::getBitsPerPixel(format);
+    return bpp == 8 || bpp == 16 || bpp == 24 || bpp == 32;
+}
+
+/**
+ * @brief Process-wide allocator used by bimg's conversion / allocation entry points.
+ * bgfx's entry::getAllocator() is in an anonymous namespace inside bgfx_utils.cpp so
+ * we keep our own bx::DefaultAllocator instance here.
+ */
+inline auto get_bimg_allocator() -> bx::AllocatorI*
+{
+    static thread_local bx::DefaultAllocator allocator;
+    return &allocator;
+}
+
+/**
+ * @brief Ensure an image container is RGBA8 layout. If the source is anything else
+ * (RGB8, R8, RG8 …) the result is a freshly allocated RGBA8 container — the caller
+ * is responsible for freeing it. Returns nullptr on failure. Pass-through (no copy)
+ * when the input is already RGBA8.
+ *
+ * Critical because the downstream PNG writer expects pitch = width*4 / RGBA8.
+ * Feeding it a 3-bpp RGB8 buffer produces garbage in the saved file.
+ */
+auto ensure_rgba8(bimg::ImageContainer* image, bool& owns_result) -> bimg::ImageContainer*
+{
+    owns_result = false;
+    if(!image)
+    {
+        return nullptr;
+    }
+    if(image->m_format == bimg::TextureFormat::RGBA8)
+    {
+        return image;
+    }
+    auto* converted = bimg::imageConvert(get_bimg_allocator(), bimg::TextureFormat::RGBA8, *image);
+    if(!converted)
+    {
+        APPLOG_WARNING("Mesh Importer: Failed to convert image to RGBA8 (source format = {})",
+                       bimg::getName(image->m_format));
+        return nullptr;
+    }
+    owns_result = true;
+    return converted;
+}
 
 auto has_rotation_channel(const aiAnimation* animation, const std::string& nodeName) -> bool
 {
@@ -1299,6 +1380,16 @@ void process_embedded_texture(const aiTexture* assimp_tex,
 namespace pixel_transforms
 {
     /**
+     * @brief Quantize a normalized float [0,1] to uint8 with proper rounding.
+     * Using truncation (static_cast<uint8_t>(x * 255.0f)) introduces a half-LSB
+     * bias toward zero that compounds when a texture is re-converted.
+     */
+    inline auto to_uint8(float value) -> uint8_t
+    {
+        return static_cast<uint8_t>(std::lround(math::clamp(value, 0.0f, 1.0f) * 255.0f));
+    }
+
+    /**
      * @brief Transform a single pixel based on format and transformation function
      */
     template<typename TransformFunc>
@@ -1311,13 +1402,13 @@ namespace pixel_transforms
             float g = pixel_data[1] / 255.0f;
             float b = pixel_data[2] / 255.0f;
             float a = pixel_data[3] / 255.0f;
-            
+
             auto [new_r, new_g, new_b, new_a] = transform_func(r, g, b, a);
-            
-            pixel_data[0] = static_cast<uint8_t>(math::clamp(new_r, 0.0f, 1.0f) * 255.0f);
-            pixel_data[1] = static_cast<uint8_t>(math::clamp(new_g, 0.0f, 1.0f) * 255.0f);
-            pixel_data[2] = static_cast<uint8_t>(math::clamp(new_b, 0.0f, 1.0f) * 255.0f);
-            pixel_data[3] = static_cast<uint8_t>(math::clamp(new_a, 0.0f, 1.0f) * 255.0f);
+
+            pixel_data[0] = to_uint8(new_r);
+            pixel_data[1] = to_uint8(new_g);
+            pixel_data[2] = to_uint8(new_b);
+            pixel_data[3] = to_uint8(new_a);
         }
         else if (bytes_per_pixel >= 3)
         {
@@ -1326,32 +1417,32 @@ namespace pixel_transforms
             float g = pixel_data[1] / 255.0f;
             float b = pixel_data[2] / 255.0f;
             float a = 1.0f; // Default alpha
-            
+
             auto [new_r, new_g, new_b, new_a] = transform_func(r, g, b, a);
-            
-            pixel_data[0] = static_cast<uint8_t>(math::clamp(new_r, 0.0f, 1.0f) * 255.0f);
-            pixel_data[1] = static_cast<uint8_t>(math::clamp(new_g, 0.0f, 1.0f) * 255.0f);
-            pixel_data[2] = static_cast<uint8_t>(math::clamp(new_b, 0.0f, 1.0f) * 255.0f);
+
+            pixel_data[0] = to_uint8(new_r);
+            pixel_data[1] = to_uint8(new_g);
+            pixel_data[2] = to_uint8(new_b);
         }
         else if (bytes_per_pixel == 2)
         {
             // Grayscale + Alpha format
             float luminance = pixel_data[0] / 255.0f;
             float a = pixel_data[1] / 255.0f;
-            
+
             auto [new_r, new_g, new_b, new_a] = transform_func(luminance, luminance, luminance, a);
-            
-            pixel_data[0] = static_cast<uint8_t>(math::clamp(new_r, 0.0f, 1.0f) * 255.0f); // Use red as luminance
-            pixel_data[1] = static_cast<uint8_t>(math::clamp(new_a, 0.0f, 1.0f) * 255.0f);
+
+            pixel_data[0] = to_uint8(new_r); // Use red as luminance
+            pixel_data[1] = to_uint8(new_a);
         }
         else if (bytes_per_pixel == 1)
         {
             // Grayscale format
             float luminance = pixel_data[0] / 255.0f;
-            
+
             auto [new_r, new_g, new_b, new_a] = transform_func(luminance, luminance, luminance, 1.0f);
-            
-            pixel_data[0] = static_cast<uint8_t>(math::clamp(new_r, 0.0f, 1.0f) * 255.0f);
+
+            pixel_data[0] = to_uint8(new_r);
         }
     }
 
@@ -1457,7 +1548,12 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
     {
         return;
     }
-    
+    if(!is_supported_ldr_format(image->m_format))
+    {
+        APPLOG_WARNING("Mesh Importer: Skipping {} conversion on unsupported texture format (compressed/float/non-byte-aligned)", semantic);
+        return;
+    }
+
     uint8_t* image_data = static_cast<uint8_t*>(image->m_data);
     uint32_t pixel_count = image->m_width * image->m_height;
     uint32_t bpp = bimg::getBitsPerPixel(image->m_format);
@@ -1579,7 +1675,14 @@ auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count,
 }
 
 /**
- * @brief Apply combined specular to metallic+roughness conversion (glTF style)
+ * @brief Apply combined specular to metallic+roughness conversion (glTF style).
+ * Output layout matches the glTF Metallic-Roughness texture convention:
+ *   R = (occlusion placeholder, set to 1.0)
+ *   G = roughness
+ *   B = metallic
+ *   A = 1.0
+ * The deferred geometry shader samples G for roughness and B for metallic when the
+ * same texture is bound to both the metalness and roughness slots.
  */
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image)
 {
@@ -1587,11 +1690,26 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
     {
         return;
     }
+    if(!is_supported_ldr_format(image->m_format))
+    {
+        APPLOG_WARNING("Mesh Importer: Skipping SpecularToMetallicRoughness conversion on unsupported texture format");
+        return;
+    }
 
     uint8_t* image_data = static_cast<uint8_t*>(image->m_data);
     uint32_t pixel_count = image->m_width * image->m_height;
     uint32_t bpp = bimg::getBitsPerPixel(image->m_format);
     uint32_t bytes_per_pixel = bpp / 8;
+
+    // The MR pack uses three distinct channels (R/G/B), so a single-channel or
+    // luminance+alpha source cannot represent the result. Bail loudly rather than
+    // silently dropping the metallic / roughness data via transform_pixel's
+    // channel-reduction fallback.
+    if(bytes_per_pixel < 3)
+    {
+        APPLOG_WARNING("Mesh Importer: Skipping SpecularToMetallicRoughness conversion on <3-channel source (cannot pack R/G/B)");
+        return;
+    }
 
     bool alpha_has_gloss = image_has_meaningful_alpha(image_data, pixel_count, bytes_per_pixel);
 
@@ -1618,17 +1736,35 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
 }
 
 /**
- * @brief Convert a diffuse texture to a proper metallic/roughness base color texture.
- * Uses the corresponding specular texture to compute per-pixel metallic and derive
- * the correct base color from the Khronos identity:
- *   baseColor = mix(diffuse * omsStr / (1-F0) / (1-m),
- *                   (specular - F0*(1-m)) / m,
+ * @brief Convert a diffuse/specular pair into PBR metallic-roughness textures.
+ *
+ * The Khronos spec-gloss → metal-rough math is performed in sRGB-encoded float space
+ * (i.e. 8-bit channels divided by 255), matching the reference Babylon.js / Khronos
+ * implementations. The perceptual luminance weighting in solve_metallic only matches
+ * when inputs stay in sRGB; do NOT degamma here.
+ *
+ * Per pixel we solve metallic with the proper diffuse luminance (much better than the
+ * mid-gray fallback used by `compute_metallic_from_specular`), then reconstruct base
+ * color using the official Khronos / Babylon reference identity:
+ *   baseColor = mix(diffuse * (1 - F0) / (1 - metallic * F0),
+ *                   specular - F0 * (1 - metallic),
  *                   metallic^2)
- * The diffuse_image is modified in-place. specular_image is read-only.
- * Both images must have the same dimensions.
+ *
+ * The diffuse_image is rewritten in-memory with the base color result. specular_image
+ * is read-only.
+ *
+ * If `out_mr_rgba8` is non-null, it is filled with `width*height*4` bytes of RGBA8
+ * metallic-roughness data matching the glTF MR convention (R=1, G=roughness,
+ * B=metallic_per_pixel, A=1). This gives a much more accurate metallic map than the
+ * fallback `SpecularToMetallic` path which has to assume a mid-gray diffuse.
+ *
+ * Both images must have the same dimensions and be byte-aligned LDR formats with at
+ * least 3 channels.
  */
 void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
-                                            const bimg::ImageContainer* specular_image)
+                                            const bimg::ImageContainer* specular_image,
+                                            const spec_gloss_factors_t& factors,
+                                            std::vector<uint8_t>* out_mr_rgba8)
 {
     if(!diffuse_image || !diffuse_image->m_data || !specular_image || !specular_image->m_data)
     {
@@ -1639,25 +1775,61 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
         APPLOG_WARNING("Mesh Importer: Diffuse/specular texture size mismatch for base color conversion");
         return;
     }
+    if(!is_supported_ldr_format(diffuse_image->m_format) || !is_supported_ldr_format(specular_image->m_format))
+    {
+        APPLOG_WARNING("Mesh Importer: Diffuse-to-base-color conversion requires uncompressed LDR textures; skipping");
+        return;
+    }
+
+    uint32_t d_bpp = bimg::getBitsPerPixel(diffuse_image->m_format) / 8;
+    uint32_t s_bpp = bimg::getBitsPerPixel(specular_image->m_format) / 8;
+    if(d_bpp < 3 || s_bpp < 3)
+    {
+        // We need actual RGB channels in both inputs; grayscale/L+A sources do not
+        // carry the chromatic information the spec-gloss identity needs.
+        APPLOG_WARNING("Mesh Importer: Diffuse-to-base-color conversion requires RGB inputs (diffuse={} bpp, specular={} bpp); skipping",
+                       d_bpp * 8, s_bpp * 8);
+        return;
+    }
 
     constexpr float dielectric_f0 = 0.04f;
     constexpr float epsilon = 1e-6f;
 
-    uint32_t pixel_count = diffuse_image->m_width * diffuse_image->m_height;
-    uint32_t d_bpp = bimg::getBitsPerPixel(diffuse_image->m_format) / 8;
-    uint32_t s_bpp = bimg::getBitsPerPixel(specular_image->m_format) / 8;
+    uint32_t width = diffuse_image->m_width;
+    uint32_t height = diffuse_image->m_height;
+    uint32_t pixel_count = width * height;
     auto* d_data = static_cast<uint8_t*>(diffuse_image->m_data);
     const auto* s_data = static_cast<const uint8_t*>(specular_image->m_data);
 
+    // The specular texture's alpha channel carries glossiness in many spec-gloss
+    // workflows (KHR_materials_pbrSpecularGlossiness "specularGlossinessTexture").
+    // Fall back to specular intensity as a roughness estimate when there is no
+    // meaningful alpha. Decide once for the whole texture to avoid per-pixel jitter.
+    bool spec_alpha_has_gloss = (s_bpp >= 4) && image_has_meaningful_alpha(s_data, pixel_count, s_bpp);
+
+    if(out_mr_rgba8 != nullptr)
+    {
+        out_mr_rgba8->assign(static_cast<size_t>(pixel_count) * 4, 0);
+    }
+
     for(uint32_t i = 0; i < pixel_count; ++i)
     {
-        float dr = static_cast<float>(d_data[i * d_bpp + 0]) / 255.0f;
-        float dg = static_cast<float>(d_data[i * d_bpp + 1]) / 255.0f;
-        float db = static_cast<float>(d_data[i * d_bpp + 2]) / 255.0f;
+        // Apply per-material multipliers from KHR_materials_pbrSpecularGlossiness:
+        //   final_diffuse_color    = diffuseTexture.rgb * diffuseFactor.rgb
+        //   final_specular_color   = specularTexture.rgb * specularFactor
+        //   final_glossiness       = specularTexture.a * glossinessFactor
+        // Baking the factors in here lets the caller set the material's base-color /
+        // metallic / roughness factor uniforms to identity and avoid double-application
+        // (the deferred shader does `albedo *= u_base_color` and `roughness *= tex.g`).
+        float dr = static_cast<float>(d_data[i * d_bpp + 0]) / 255.0f * factors.diffuse_r;
+        float dg = static_cast<float>(d_data[i * d_bpp + 1]) / 255.0f * factors.diffuse_g;
+        float db = static_cast<float>(d_data[i * d_bpp + 2]) / 255.0f * factors.diffuse_b;
 
-        float sr = static_cast<float>(s_data[i * s_bpp + 0]) / 255.0f;
-        float sg = static_cast<float>(s_data[i * s_bpp + 1]) / 255.0f;
-        float sb = (s_bpp >= 3) ? static_cast<float>(s_data[i * s_bpp + 2]) / 255.0f : sr;
+        float sr = static_cast<float>(s_data[i * s_bpp + 0]) / 255.0f * factors.specular_r;
+        float sg = static_cast<float>(s_data[i * s_bpp + 1]) / 255.0f * factors.specular_g;
+        float sb = static_cast<float>(s_data[i * s_bpp + 2]) / 255.0f * factors.specular_b;
+        float sa = (s_bpp >= 4) ? static_cast<float>(s_data[i * s_bpp + 3]) / 255.0f * factors.glossiness
+                                : factors.glossiness;
 
         float max_specular = std::max({sr, sg, sb});
         float one_minus_spec_str = 1.0f - max_specular;
@@ -1665,23 +1837,187 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
         float perc_s = perceived_brightness(sr, sg, sb);
         float metallic = solve_metallic(perc_d, perc_s, one_minus_spec_str);
 
-        float one_minus_m = std::max(1.0f - metallic, epsilon);
-        float m_safe = std::max(metallic, epsilon);
+        // Exact Khronos/Babylon reference formula for base color reconstruction:
+        //   baseColorFromDiffuse  = diffuse * (1 - F0) / (1 - metallic * F0)
+        //   baseColorFromSpecular = specular - F0 * (1 - metallic)
+        //   baseColor = mix(baseColorFromDiffuse, baseColorFromSpecular, metallic²)
+        // Earlier we used a `one_minus_spec_str / (1 - metallic)` factor in the diffuse
+        // term, which over-weighted the diffuse for high-metallic pixels and let things
+        // like the rust tones on a metal helm bleed into the final base color.
+        float denom = std::max(1.0f - metallic * dielectric_f0, epsilon);
+        float spec_offset = dielectric_f0 * (1.0f - metallic);
         float t = metallic * metallic;
 
-        auto base_d = [&](float d) { return d * one_minus_spec_str / (1.0f - dielectric_f0) / one_minus_m; };
-        auto base_s = [&](float s) { return (s - dielectric_f0 * (1.0f - metallic)) / m_safe; };
+        auto base_d = [&](float d) -> float { return d * (1.0f - dielectric_f0) / denom; };
+        auto base_s = [&](float s) -> float { return s - spec_offset; };
 
-        float br = math::clamp(math::mix(base_d(dr), base_s(sr), t), 0.0f, 1.0f);
-        float bg = math::clamp(math::mix(base_d(dg), base_s(sg), t), 0.0f, 1.0f);
-        float bb = math::clamp(math::mix(base_d(db), base_s(sb), t), 0.0f, 1.0f);
+        float br = math::mix(base_d(dr), base_s(sr), t);
+        float bg = math::mix(base_d(dg), base_s(sg), t);
+        float bb = math::mix(base_d(db), base_s(sb), t);
 
-        d_data[i * d_bpp + 0] = static_cast<uint8_t>(br * 255.0f);
-        d_data[i * d_bpp + 1] = static_cast<uint8_t>(bg * 255.0f);
-        d_data[i * d_bpp + 2] = static_cast<uint8_t>(bb * 255.0f);
+        d_data[i * d_bpp + 0] = pixel_transforms::to_uint8(br);
+        d_data[i * d_bpp + 1] = pixel_transforms::to_uint8(bg);
+        d_data[i * d_bpp + 2] = pixel_transforms::to_uint8(bb);
+
+        // Bake diffuseFactor.a into the base color alpha so material transparency
+        // doesn't get lost. Skip when no alpha channel is present.
+        if(d_bpp >= 4)
+        {
+            float da = static_cast<float>(d_data[i * d_bpp + 3]) / 255.0f * factors.diffuse_a;
+            d_data[i * d_bpp + 3] = pixel_transforms::to_uint8(da);
+        }
+
+        if(out_mr_rgba8 != nullptr)
+        {
+            float roughness = spec_alpha_has_gloss
+                                  ? (1.0f - sa)
+                                  : (1.0f - (sr + sg + sb) / 3.0f);
+
+            uint8_t* mr = out_mr_rgba8->data() + static_cast<size_t>(i) * 4;
+            mr[0] = 255;                                  // R = occlusion placeholder
+            mr[1] = pixel_transforms::to_uint8(roughness); // G = roughness
+            mr[2] = pixel_transforms::to_uint8(metallic);  // B = metallic
+            mr[3] = 255;                                  // A = 1.0
+        }
     }
 
-    APPLOG_TRACE("Mesh Importer: Applied diffuse-to-base-color conversion using specular texture");
+    APPLOG_TRACE("Mesh Importer: Applied diffuse-to-base-color conversion using specular texture{}",
+                 out_mr_rgba8 ? " (with sibling metallic-roughness map)" : "");
+}
+
+/**
+ * @brief Write a raw RGBA8 buffer to a PNG file. Used for sibling outputs that
+ * we synthesize directly without going through bimg::ImageContainer.
+ *
+ * We deliberately avoid TGA here: bimg::imageWriteTga dumps the source buffer
+ * raw under a Type-2 header, but the TGA spec mandates BGRA byte order on disk.
+ * Feeding it RGBA bytes (as bimg::ImageContainer stores them) produces a file
+ * that stb_image — and any other compliant TGA reader — re-interprets as BGRA,
+ * yielding an R↔B swap at load time. PNG carries explicit format metadata and
+ * imageWritePng honors the RGBA8 parameter, so this round-trips correctly.
+ */
+auto write_rgba8_png(const fs::path& output_file,
+                     uint32_t width,
+                     uint32_t height,
+                     const uint8_t* rgba8_data) -> bool
+{
+    bx::FileWriter writer;
+    bx::Error err;
+    if(!bx::open(&writer, output_file.string().c_str(), false, &err))
+    {
+        return false;
+    }
+    bimg::imageWritePng(&writer,
+                        width,
+                        height,
+                        width * 4,
+                        rgba8_data,
+                        bimg::TextureFormat::RGBA8,
+                        false,
+                        &err);
+    bx::close(&writer);
+    return err.isOk();
+}
+
+/**
+ * @brief Result of a spec-gloss → PBR texture conversion.
+ */
+struct spec_gloss_pbr_result
+{
+    bool diffuse_converted{false};    /// Diffuse mutated to base color and saved to base_color_relative.
+    std::string base_color_relative;  /// Relative path of the converted base color file (empty if not produced).
+    std::string mr_relative;          /// Relative path of the sibling metallic-roughness file (empty if not produced).
+};
+
+/**
+ * @brief Convert a diffuse+specular pair into PBR textures and save them.
+ *
+ * The caller supplies the exact destination paths so the file names can match the
+ * material's final semantic (e.g. `[2] BaseColor <model>.png`,
+ * `[3] MetallicRoughness <model>.png`) instead of leaking the source-texture
+ * naming through an awkward `_BaseColor` / `_MetallicRoughness` suffix.
+ *
+ * Both inputs are normalized to RGBA8 before processing — the per-pixel math
+ * reads R/G/B/A by byte offset, and `bimg::imageWritePng` expects pitch = width*4
+ * with an explicit format argument. The caller still owns and frees the original
+ * `diffuse_img` / `specular_img`; any intermediate RGBA8 conversions are managed
+ * internally.
+ */
+auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
+                                        const std::string& base_color_relative,
+                                        const std::string& mr_relative,
+                                        bimg::ImageContainer* diffuse_img,
+                                        const bimg::ImageContainer* specular_img,
+                                        const spec_gloss_factors_t& factors) -> spec_gloss_pbr_result
+{
+    spec_gloss_pbr_result result{};
+
+    if(!diffuse_img || !specular_img)
+    {
+        return result;
+    }
+
+    // Normalize both inputs to RGBA8 so byte-offset reads and the PNG writer see
+    // a consistent layout. imageConvert may return the same pointer if the source
+    // is already RGBA8.
+    bool diffuse_was_converted = false;
+    bool specular_was_converted = false;
+    bimg::ImageContainer* diffuse_rgba8 = ensure_rgba8(diffuse_img, diffuse_was_converted);
+    bimg::ImageContainer* specular_rgba8 = ensure_rgba8(const_cast<bimg::ImageContainer*>(specular_img), specular_was_converted);
+
+    auto free_intermediates = [&]()
+    {
+        if(diffuse_was_converted && diffuse_rgba8)
+        {
+            bimg::imageFree(diffuse_rgba8);
+        }
+        if(specular_was_converted && specular_rgba8)
+        {
+            bimg::imageFree(specular_rgba8);
+        }
+    };
+
+    if(!diffuse_rgba8 || !specular_rgba8)
+    {
+        APPLOG_WARNING("Mesh Importer: Spec-gloss conversion skipped — could not normalize inputs to RGBA8");
+        free_intermediates();
+        return result;
+    }
+
+    std::vector<uint8_t> mr_buffer;
+    apply_diffuse_to_base_color_conversion(diffuse_rgba8, specular_rgba8, factors, &mr_buffer);
+
+    // The conversion bails (logged) if formats are incompatible or sizes mismatch.
+    if(mr_buffer.empty())
+    {
+        APPLOG_WARNING("Mesh Importer: Spec-gloss conversion produced no output (size mismatch or unsupported format)");
+        free_intermediates();
+        return result;
+    }
+
+    if(!write_rgba8_png(output_dir / base_color_relative,
+                        diffuse_rgba8->m_width,
+                        diffuse_rgba8->m_height,
+                        static_cast<const uint8_t*>(diffuse_rgba8->m_data)))
+    {
+        APPLOG_WARNING("Mesh Importer: Failed to save converted base color texture: {}", base_color_relative);
+        free_intermediates();
+        return result;
+    }
+    result.diffuse_converted = true;
+    result.base_color_relative = base_color_relative;
+
+    if(write_rgba8_png(output_dir / mr_relative, diffuse_rgba8->m_width, diffuse_rgba8->m_height, mr_buffer.data()))
+    {
+        result.mr_relative = mr_relative;
+    }
+    else
+    {
+        APPLOG_WARNING("Mesh Importer: Failed to save sibling metallic-roughness texture for spec-gloss conversion");
+    }
+
+    free_intermediates();
+    return result;
 }
 
 /**
@@ -1722,22 +2058,10 @@ void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& outpu
         }
     }
     
-    // Write the processed data
-    bx::FileWriter writer;
-    bx::Error err;
-
-    if(bx::open(&writer, output_file.string().c_str(), false, &err))
-    {
-        bimg::imageWriteTga(&writer,
-                            width,
-                            height,
-                            width * 4,
-                            data.data(),
-                            false,
-                            false,
-                            &err);
-        bx::close(&writer);
-    }
+    // Write the processed data as PNG. Avoid TGA here for the same reason as
+    // write_rgba8_png: bimg::imageWriteTga writes the buffer raw under a Type-2
+    // header but TGA's wire format is BGRA, so RGBA bytes load back R↔B-swapped.
+    write_rgba8_png(output_file, width, height, data.data());
 }
 
 template<typename T>
@@ -1868,120 +2192,93 @@ auto detect_duplicate_specular_usage(const aiMaterial* material, material_workfl
 }
 
 /**
- * @brief Detect the material workflow used by analyzing available properties and textures
+ * @brief Detect the material workflow used by analyzing available properties and textures.
+ *
+ * Layering:
+ *   1. Definitive checks — an unambiguous indicator pins the workflow immediately. These
+ *      are the markers the glTF and KHR_materials_pbrSpecularGlossiness specs use to
+ *      identify the workflow, so we trust them and skip the heuristic.
+ *   2. Scored heuristic — only used when the definitive checks were inconclusive, e.g.
+ *      legacy formats (FBX/OBJ) that emit a soup of overlapping properties without a
+ *      strong workflow marker.
  */
 auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 {
-    // Check for metallic/roughness workflow indicators
-    bool has_metallic_factor = false;
-    bool has_roughness_factor = false;
-    bool has_base_color_factor = false;
-    bool has_metallic_texture = false;
-    bool has_roughness_texture = false;
-    bool has_metallic_roughness_texture = false;
-    bool has_base_color_texture = false;
-    
-    // Check for specular/gloss workflow indicators
-    bool has_specular_factor = false;
-    bool has_glossiness_factor = false;
-    bool has_diffuse_color = false;
-    bool has_specular_color = false;
-    bool has_specular_texture = false;
-    bool has_glossiness_texture = false;
-    bool has_diffuse_texture = false;
-    
-    // Check for legacy indicators
-    bool has_shininess = false;
-    bool has_reflectivity = false;
-    
     ai_real dummy_value{};
     aiColor3D dummy_color{};
     aiString path{};
-    
-    // Check for metallic/roughness properties
-    has_metallic_factor = material->Get(AI_MATKEY_METALLIC_FACTOR, dummy_value) == AI_SUCCESS;
-    has_roughness_factor = material->Get(AI_MATKEY_ROUGHNESS_FACTOR, dummy_value) == AI_SUCCESS;
-    has_base_color_factor = material->Get(AI_MATKEY_BASE_COLOR, dummy_color) == AI_SUCCESS;
-    
-    // Check for specular/gloss properties
-    has_specular_factor = material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS;
-    has_glossiness_factor = material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS;
-    has_diffuse_color = material->Get(AI_MATKEY_COLOR_DIFFUSE, dummy_color) == AI_SUCCESS;
-    has_specular_color = material->Get(AI_MATKEY_COLOR_SPECULAR, dummy_color) == AI_SUCCESS;
-    
-    // Check for legacy properties
-    has_shininess = material->Get(AI_MATKEY_SHININESS, dummy_value) == AI_SUCCESS;
-    has_reflectivity = material->Get(AI_MATKEY_REFLECTIVITY, dummy_value) == AI_SUCCESS;
-    
-    // Check for metallic/roughness textures
-    has_metallic_roughness_texture = material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &path) == AI_SUCCESS;
-    has_metallic_texture = material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, &path) == AI_SUCCESS;
-    has_roughness_texture = material->GetTexture(AI_MATKEY_ROUGHNESS_TEXTURE, &path) == AI_SUCCESS;
-    has_base_color_texture = material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &path) == AI_SUCCESS;
-    
-    // Check for specular/gloss textures
-    has_specular_texture = material->GetTexture(aiTextureType_SPECULAR, 0, &path) == AI_SUCCESS;
-    has_glossiness_texture = material->GetTexture(aiTextureType_SHININESS, 0, &path) == AI_SUCCESS;
-    has_diffuse_texture = material->GetTexture(aiTextureType_DIFFUSE, 0, &path) == AI_SUCCESS;
-    
-    // Calculate confidence scores with improved weighting
-    int metallic_roughness_score = 0;
-    int specular_gloss_score = 0;
-    
-    // Metallic/Roughness indicators (higher scores for strong indicators)
-    if(has_metallic_factor) metallic_roughness_score += 8;
-    if(has_roughness_factor) metallic_roughness_score += 8;
-    if(has_base_color_factor) metallic_roughness_score += 4;
-    if(has_metallic_roughness_texture) metallic_roughness_score += 12; // Combined texture is very strong indicator
-    if(has_metallic_texture) metallic_roughness_score += 10; // Standalone metallic texture is strong
-    if(has_roughness_texture) metallic_roughness_score += 6;
-    if(has_base_color_texture) metallic_roughness_score += 3;
-    
-    // Specular/Gloss indicators (higher scores for strong indicators)
-    if(has_specular_factor) specular_gloss_score += 8;
-    if(has_glossiness_factor) specular_gloss_score += 8;
-    if(has_diffuse_color) specular_gloss_score += 4;
-    if(has_specular_color) specular_gloss_score += 6;
-    if(has_specular_texture) specular_gloss_score += 10; // Specular texture is very strong indicator
-    if(has_glossiness_texture) specular_gloss_score += 10; // Gloss/Shininess texture is very strong indicator
-    if(has_diffuse_texture) specular_gloss_score += 6; // Diffuse texture in specular workflow
-    
-    // Legacy indicators (could be either, but lean towards specular)
-    if(has_shininess) specular_gloss_score += 4;
-    if(has_reflectivity) specular_gloss_score += 3;
-    
-    // Additional heuristics: check for specific combinations
-    // Strong metallic/roughness combination
-    if(has_metallic_factor && has_roughness_factor) 
-    {
-        metallic_roughness_score += 5;
-    }
-    
-    // Strong specular/gloss combination  
-    if(has_specular_texture && has_diffuse_texture) 
-    {
-        specular_gloss_score += 8; // Classic specular workflow combo
-    }
-    
-    if(has_specular_color && has_diffuse_color)
-    {
-        specular_gloss_score += 6; // Classic specular workflow combo
-    }
-    
-    // Log detection details for debugging
-    APPLOG_TRACE("Mesh Importer: Material workflow detection scores - Metallic/Roughness: {}, Specular/Gloss: {}", 
-                 metallic_roughness_score, specular_gloss_score);
-    
-    // Determine workflow based on scores with minimum threshold
-    if(metallic_roughness_score > specular_gloss_score && metallic_roughness_score >= 5)
-    {
-        return material_workflow::metallic_roughness;
-    }
-    else if(specular_gloss_score >= 5)
+
+    // ----- 1. Definitive specular-glossiness markers (checked first!) -----
+    // KHR_materials_pbrSpecularGlossiness mandates that authoring tools also write
+    // pbrMetallicRoughness fallback properties so MR-only engines can still load the
+    // asset. That means dual-authored SG files ALSO carry BASE_COLOR_TEXTURE /
+    // METALLIC_FACTOR / etc. Checking SG first ensures we honor the author's primary
+    // representation and route the spec-gloss texture through our conversion pipeline.
+    //
+    // We only treat the explicit KHR_materials_pbrSpecularGlossiness factors as
+    // definitive. aiTextureType_SHININESS / AI_MATKEY_SHININESS are intentionally
+    // NOT used here because legacy Phong materials also set them.
+    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
+       || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
     {
         return material_workflow::specular_gloss;
     }
-    
+
+    // ----- 2. Definitive metallic-roughness markers -----
+    // Each marker below is set ONLY by PBR-MR pipelines (glTF MR, modern FBX PBR
+    // exporters). Hitting any of them is enough to pin the workflow.
+    if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &path) == AI_SUCCESS
+       || material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &path) == AI_SUCCESS
+       || material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, &path) == AI_SUCCESS
+       || material->GetTexture(AI_MATKEY_ROUGHNESS_TEXTURE, &path) == AI_SUCCESS
+       || material->Get(AI_MATKEY_METALLIC_FACTOR, dummy_value) == AI_SUCCESS
+       || material->Get(AI_MATKEY_ROUGHNESS_FACTOR, dummy_value) == AI_SUCCESS
+       || material->Get(AI_MATKEY_BASE_COLOR, dummy_color) == AI_SUCCESS)
+    {
+        return material_workflow::metallic_roughness;
+    }
+
+    // ----- 3. Scored heuristic fallback (legacy / mixed-signal materials) -----
+    bool has_diffuse_color = material->Get(AI_MATKEY_COLOR_DIFFUSE, dummy_color) == AI_SUCCESS;
+    bool has_specular_color = material->Get(AI_MATKEY_COLOR_SPECULAR, dummy_color) == AI_SUCCESS;
+
+    bool has_shininess = material->Get(AI_MATKEY_SHININESS, dummy_value) == AI_SUCCESS;
+    bool has_reflectivity = material->Get(AI_MATKEY_REFLECTIVITY, dummy_value) == AI_SUCCESS;
+
+    bool has_specular_texture = material->GetTexture(aiTextureType_SPECULAR, 0, &path) == AI_SUCCESS;
+    bool has_glossiness_texture = material->GetTexture(aiTextureType_SHININESS, 0, &path) == AI_SUCCESS;
+    bool has_diffuse_texture = material->GetTexture(aiTextureType_DIFFUSE, 0, &path) == AI_SUCCESS;
+
+    int specular_gloss_score = 0;
+
+    // Specular/Gloss indicators
+    if(has_diffuse_color) specular_gloss_score += 4;
+    if(has_specular_color) specular_gloss_score += 6;
+    if(has_specular_texture) specular_gloss_score += 10;
+    if(has_glossiness_texture) specular_gloss_score += 10;
+    if(has_diffuse_texture) specular_gloss_score += 6;
+
+    // Legacy Phong indicators (only meaningful as a tie-breaker now that we exited
+    // before reaching here only when no definitive PBR markers were present)
+    if(has_shininess) specular_gloss_score += 4;
+    if(has_reflectivity) specular_gloss_score += 3;
+
+    // Classic spec-gloss combinations
+    if(has_specular_texture && has_diffuse_texture)
+    {
+        specular_gloss_score += 8;
+    }
+    if(has_specular_color && has_diffuse_color)
+    {
+        specular_gloss_score += 6;
+    }
+
+    APPLOG_TRACE("Mesh Importer: Material workflow heuristic score - Specular/Gloss: {}", specular_gloss_score);
+
+    if(specular_gloss_score >= 5)
+    {
+        return material_workflow::specular_gloss;
+    }
     return material_workflow::unknown;
 }
 
@@ -2020,6 +2317,18 @@ auto get_workflow_aware_texture(const aiMaterial* material,
         {
             return true;
         }
+        // Heuristic fallback for MR workflows: FBX exporters (Blender, Substance) often
+        // emit the combined MR texture under a property name Assimp can't categorize, so
+        // it ends up in aiTextureType_UNKNOWN. When we've already classified the material
+        // as MR and no canonical metallic texture is present, trust the unknown slot as
+        // the combined metallic-roughness map. Tagging it "MetallicRoughness" makes the
+        // extracted file land with a semantic-suffixed name instead of bare "Texture".
+        else if(workflow == material_workflow::metallic_roughness
+                && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
+        {
+            APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
+            return true;
+        }
         // For specular workflow, check if we should use combined processing
         else if(workflow == material_workflow::specular_gloss)
         {
@@ -2047,6 +2356,15 @@ auto get_workflow_aware_texture(const aiMaterial* material,
         {
             return true;
         }
+        // Same UNKNOWN-slot fallback as the metallic branch — the FBX MR pipeline reuses
+        // the same combined texture for both maps. The shader's combined-MR sampling path
+        // (G = roughness, B = metallic) handles this correctly per glTF convention.
+        else if(workflow == material_workflow::metallic_roughness
+                && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
+        {
+            APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
+            return true;
+        }
         // For specular/gloss workflow, convert gloss to roughness
         else if(workflow == material_workflow::specular_gloss)
         {
@@ -2068,7 +2386,7 @@ auto get_workflow_aware_texture(const aiMaterial* material,
             }
         }
     }
-    
+
     return false;
 }
 
@@ -2183,14 +2501,76 @@ void process_material(asset_manager& am,
     {
         return;
     }
-    
+
+    // Diagnostic: enumerate every texture slot Assimp populated on this material.
+    // Crucial for triaging "why isn't this texture assigned" cases — different exporters
+    // (Blender, Maya, 3DSMax, glTF) park PBR textures under wildly different aiTextureType
+    // values, and a single look at this log makes the routing obvious.
+    {
+        struct slot_info
+        {
+            aiTextureType type;
+            const char* name;
+        };
+        static constexpr std::array<slot_info, 21> slot_table = {{
+            {aiTextureType_DIFFUSE,           "DIFFUSE"},
+            {aiTextureType_SPECULAR,          "SPECULAR"},
+            {aiTextureType_AMBIENT,           "AMBIENT"},
+            {aiTextureType_EMISSIVE,          "EMISSIVE"},
+            {aiTextureType_HEIGHT,            "HEIGHT"},
+            {aiTextureType_NORMALS,           "NORMALS"},
+            {aiTextureType_SHININESS,         "SHININESS"},
+            {aiTextureType_OPACITY,           "OPACITY"},
+            {aiTextureType_DISPLACEMENT,      "DISPLACEMENT"},
+            {aiTextureType_LIGHTMAP,          "LIGHTMAP"},
+            {aiTextureType_REFLECTION,        "REFLECTION"},
+            {aiTextureType_BASE_COLOR,        "BASE_COLOR"},
+            {aiTextureType_NORMAL_CAMERA,     "NORMAL_CAMERA"},
+            {aiTextureType_EMISSION_COLOR,    "EMISSION_COLOR"},
+            {aiTextureType_METALNESS,         "METALNESS"},
+            {aiTextureType_DIFFUSE_ROUGHNESS, "DIFFUSE_ROUGHNESS"},
+            {aiTextureType_AMBIENT_OCCLUSION, "AMBIENT_OCCLUSION"},
+            {aiTextureType_SHEEN,             "SHEEN"},
+            {aiTextureType_CLEARCOAT,         "CLEARCOAT"},
+            {aiTextureType_TRANSMISSION,      "TRANSMISSION"},
+            {aiTextureType_UNKNOWN,           "UNKNOWN"},
+        }};
+
+        std::string slot_log;
+        for(const auto& slot : slot_table)
+        {
+            auto count = material->GetTextureCount(slot.type);
+            if(count == 0)
+            {
+                continue;
+            }
+            for(unsigned int i = 0; i < count; ++i)
+            {
+                aiString path{};
+                if(material->GetTexture(slot.type, i, &path) == AI_SUCCESS && path.length > 0)
+                {
+                    if(!slot_log.empty())
+                    {
+                        slot_log += ", ";
+                    }
+                    slot_log += fmt::format("{}[{}]={}", slot.name, i, path.C_Str());
+                }
+            }
+        }
+        aiString mat_name{};
+        material->Get(AI_MATKEY_NAME, mat_name);
+        APPLOG_TRACE("Mesh Importer: Material '{}' texture slots: {}",
+                     mat_name.length > 0 ? mat_name.C_Str() : "<unnamed>",
+                     slot_log.empty() ? "<none>" : slot_log);
+    }
+
     // Detect the material workflow before processing
     auto workflow = detect_material_workflow(material);
-    
-    APPLOG_TRACE("Mesh Importer: Material workflow detected: {}", 
+
+    APPLOG_TRACE("Mesh Importer: Material workflow detected: {}",
                  workflow == material_workflow::metallic_roughness ? "Metallic/Roughness" :
                  workflow == material_workflow::specular_gloss ? "Specular/Gloss" : "Unknown");
-    
+
     // log_materials(material);
 
     auto get_imported_texture = [&](const aiMaterial* material,
@@ -2302,7 +2682,10 @@ void process_material(asset_manager& am,
     {
         fs::path p(original_name);
         std::string suffix = semantic.empty() ? "converted" : semantic;
-        return (p.parent_path() / (p.stem().string() + "_" + suffix + ".tga")).generic_string();
+        // Use .png — TGA's wire format is BGRA but bimg::imageWriteTga dumps source
+        // bytes raw, so RGBA8 buffers round-trip back R↔B-swapped via stb_image.
+        // PNG carries explicit format metadata in the file.
+        return (p.parent_path() / (p.stem().string() + "_" + suffix + ".png")).generic_string();
     };
 
     auto process_texture = [&](imported_texture& texture, std::vector<imported_texture>& textures, bool force_process = false)
@@ -2384,66 +2767,202 @@ void process_material(asset_manager& am,
     //     mat.set_cull_type(double_sided ? cull_type::none : cull_type::counter_clockwise);
     // }
 
+    // Spec-gloss workflows: when both the diffuse and specular textures are present we
+    // produce a metallic-roughness map directly from the pair (using the proper per-pixel
+    // quadratic metallic solve). When this fires we record the MR file here so the
+    // METALLIC & ROUGHNESS block below can short-circuit and skip the less accurate
+    // SpecularToMetallic / SpecularToRoughness fallback path.
+    std::string combined_mr_relative;
+
+    // Mark an embedded-texture index as "already processed" so the post-import
+    // `process_embedded_textures` pass doesn't extract it under a generic name.
+    // Used by the spec-gloss path to suppress extraction of the raw diffuse/specular
+    // sources — we read them straight from pcData and only write the converted output.
+    auto mark_embedded_consumed = [&](int idx) -> void
+    {
+        if(idx < 0)
+        {
+            return;
+        }
+        auto it = std::find_if(textures.begin(),
+                               textures.end(),
+                               [&](const imported_texture& t) -> bool { return t.embedded_index == idx; });
+        if(it == textures.end())
+        {
+            imported_texture entry{};
+            entry.embedded_index = idx;
+            entry.process_count = 1;
+            textures.emplace_back(std::move(entry));
+        }
+        else if(it->process_count == 0)
+        {
+            it->process_count = 1;
+        }
+    };
+
+    // Build the final-semantic file name for a converted PBR output. For embedded
+    // sources we use the natural `[N] <Semantic> <model>.png` form so the file lives
+    // at the same slot the source would have occupied. For external sources we fall
+    // back to a `<stem>_<Semantic>.png` sibling.
+    auto build_converted_name = [&](int embedded_idx, const std::string& source_relative, const std::string& target_semantic) -> std::string
+    {
+        if(embedded_idx >= 0 && embedded_idx < static_cast<int>(scene->mNumTextures))
+        {
+            // Always emit PNG — write_rgba8_png is the only writer this path uses.
+            return fmt::format("[{}] {} {}.png", embedded_idx, target_semantic, filename.string());
+        }
+        fs::path src(source_relative);
+        return (src.parent_path() / (src.stem().string() + "_" + target_semantic + ".png")).generic_string();
+    };
+
+    // Track whether the per-pixel spec-gloss conversion succeeded for the BASE COLOR
+    // PROPERTY block below: when it did, the factors are already baked into the texture
+    // and the per-material uniforms must be set to identity to avoid double-application
+    // (the deferred shader does `albedo *= u_base_color`, `roughness *= tex.g`, etc.).
+    bool sg_textures_converted = false;
+
     // BASE COLOR TEXTURE - Use workflow-aware detection
     {
         imported_texture texture;
         if(get_workflow_aware_texture(material, workflow, "BaseColor", texture, get_imported_texture, false))
         {
-            process_texture(texture, textures);
-
-            // For specular workflow, convert the diffuse texture to proper base color
-            // using the specular texture for per-pixel metallic derivation.
             if(workflow == material_workflow::specular_gloss)
             {
+                // For spec-gloss we DO NOT extract the source diffuse/specular to disk.
+                // Instead we decode them directly from pcData (or from an external file
+                // when not embedded), run the conversion in memory, and write only the
+                // final-semantic outputs. This keeps the asset browser clean:
+                //   [N] BaseColor <model>.png
+                //   [M] MetallicRoughness <model>.png
                 aiString specular_path{};
-                if(material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0)
+                bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
+                                    && specular_path.length > 0;
+
+                // Read per-material factors from the KHR_materials_pbrSpecularGlossiness
+                // extension and bake them into the converted textures. Defaults from the
+                // glTF spec: diffuseFactor=1, specularFactor=1, glossinessFactor=1.
+                spec_gloss_factors_t factors{};
+                {
+                    aiColor4D diffuse_factor_color{1.0f, 1.0f, 1.0f, 1.0f};
+                    if(material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_factor_color) == AI_SUCCESS)
+                    {
+                        factors.diffuse_r = diffuse_factor_color.r;
+                        factors.diffuse_g = diffuse_factor_color.g;
+                        factors.diffuse_b = diffuse_factor_color.b;
+                        factors.diffuse_a = diffuse_factor_color.a;
+                    }
+
+                    aiColor3D specular_factor_color{1.0f, 1.0f, 1.0f};
+                    material->Get(AI_MATKEY_COLOR_SPECULAR, specular_factor_color);
+                    float specular_factor_scalar = 1.0f;
+                    material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor_scalar);
+                    factors.specular_r = specular_factor_color.r * specular_factor_scalar;
+                    factors.specular_g = specular_factor_color.g * specular_factor_scalar;
+                    factors.specular_b = specular_factor_color.b * specular_factor_scalar;
+
+                    float glossiness_factor = 1.0f;
+                    material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness_factor);
+                    factors.glossiness = glossiness_factor;
+                }
+
+                // Load diffuse — pcData if embedded, file on disk if external.
+                bimg::ImageContainer* diffuse_img = nullptr;
+                if(texture.embedded_index >= 0 && texture.embedded_index < static_cast<int>(scene->mNumTextures))
+                {
+                    const auto* embedded = scene->mTextures[texture.embedded_index];
+                    if(embedded->pcData && embedded->mHeight == 0)
+                    {
+                        diffuse_img = imageLoad(embedded->pcData, static_cast<uint32_t>(embedded->mWidth));
+                    }
+                }
+                else
+                {
+                    fs::path diffuse_file = output_dir / texture.name;
+                    diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
+                }
+
+                // Load specular.
+                bimg::ImageContainer* specular_img = nullptr;
+                int specular_idx = -1;
+                if(has_specular)
                 {
                     auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
                     if(spec_pair.first && spec_pair.first->pcData && spec_pair.first->mHeight == 0)
                     {
-                        fs::path diffuse_file = output_dir / texture.name;
-                        bimg::ImageContainer* diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
-                        bimg::ImageContainer* specular_img = imageLoad(spec_pair.first->pcData,
-                                                                      static_cast<uint32_t>(spec_pair.first->mWidth));
-                        if(diffuse_img && specular_img)
-                        {
-                            apply_diffuse_to_base_color_conversion(diffuse_img, specular_img);
-                            imageSave(diffuse_file.string().c_str(), diffuse_img);
-                            APPLOG_TRACE("Mesh Importer: Converted diffuse texture to base color: {}", texture.name);
-                        }
-                        if(specular_img)
-                        {
-                            bimg::imageFree(specular_img);
-                        }
-                        if(diffuse_img)
-                        {
-                            bimg::imageFree(diffuse_img);
-                        }
+                        specular_img = imageLoad(spec_pair.first->pcData,
+                                                 static_cast<uint32_t>(spec_pair.first->mWidth));
+                        specular_idx = spec_pair.second;
                     }
                     else if(!spec_pair.first)
                     {
-                        fs::path diffuse_file = output_dir / texture.name;
                         fs::path specular_file = output_dir / specular_path.C_Str();
-                        bimg::ImageContainer* diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
-                        bimg::ImageContainer* specular_img = imageLoad(bx::FilePath(specular_file.string().c_str()));
-                        if(diffuse_img && specular_img)
-                        {
-                            apply_diffuse_to_base_color_conversion(diffuse_img, specular_img);
-                            auto converted_name = make_converted_name(texture.name, "BaseColor");
-                            imageSave((output_dir / converted_name).string().c_str(), diffuse_img);
-                            texture.name = converted_name;
-                            APPLOG_TRACE("Mesh Importer: Converted diffuse texture to base color using external specular: {}", texture.name);
-                        }
-                        if(specular_img)
-                        {
-                            bimg::imageFree(specular_img);
-                        }
-                        if(diffuse_img)
-                        {
-                            bimg::imageFree(diffuse_img);
-                        }
+                        specular_img = imageLoad(bx::FilePath(specular_file.string().c_str()));
                     }
                 }
+
+                if(!diffuse_img)
+                {
+                    APPLOG_WARNING("Mesh Importer: Spec-gloss conversion skipped — failed to decode diffuse texture");
+                }
+                if(has_specular && !specular_img)
+                {
+                    APPLOG_WARNING("Mesh Importer: Spec-gloss conversion skipped — failed to decode specular texture: {}", specular_path.C_Str());
+                }
+
+                if(diffuse_img && specular_img)
+                {
+                    const std::string base_color_relative =
+                        build_converted_name(texture.embedded_index, texture.name, "BaseColor");
+                    const std::string mr_relative =
+                        build_converted_name(specular_idx, specular_path.C_Str(), "MetallicRoughness");
+
+                    auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
+                                                                   base_color_relative,
+                                                                   mr_relative,
+                                                                   diffuse_img,
+                                                                   specular_img,
+                                                                   factors);
+                    if(conv.diffuse_converted)
+                    {
+                        // Replace the texture name with the converted output, and suppress
+                        // extraction of the raw source under whatever auto-name it would
+                        // otherwise get.
+                        texture.name = conv.base_color_relative;
+                        mark_embedded_consumed(texture.embedded_index);
+                        sg_textures_converted = true;
+                        APPLOG_TRACE("Mesh Importer: Wrote converted base color (factors baked: D[{:.2f},{:.2f},{:.2f},{:.2f}] S[{:.2f},{:.2f},{:.2f}] G[{:.2f}]): {}",
+                                     factors.diffuse_r, factors.diffuse_g, factors.diffuse_b, factors.diffuse_a,
+                                     factors.specular_r, factors.specular_g, factors.specular_b, factors.glossiness,
+                                     texture.name);
+                    }
+                    if(!conv.mr_relative.empty())
+                    {
+                        combined_mr_relative = conv.mr_relative;
+                        mark_embedded_consumed(specular_idx);
+                        APPLOG_TRACE("Mesh Importer: Wrote converted metallic-roughness: {}", combined_mr_relative);
+                    }
+                }
+                else
+                {
+                    // Conversion didn't run — fall back to extracting the source so we
+                    // still ship *something* in the color slot, and the later texture
+                    // assignment finds a valid file.
+                    process_texture(texture, textures);
+                }
+
+                if(specular_img)
+                {
+                    bimg::imageFree(specular_img);
+                }
+                if(diffuse_img)
+                {
+                    bimg::imageFree(diffuse_img);
+                }
+            }
+            else
+            {
+                // Non-SG: extract the source as usual.
+                process_texture(texture, textures);
             }
 
             auto key = fs::convert_to_protocol(output_dir / texture.name);
@@ -2455,20 +2974,34 @@ void process_material(asset_manager& am,
         aiColor3D base_color_property{1.0f, 1.0f, 1.0f};
         float metallic_property = 0.0f;
         float roughness_property = 0.5f;
-        
-        // Use workflow-aware conversion to get proper values
-        process_material_with_workflow_conversion(material, workflow, 
-                                                base_color_property, 
-                                                metallic_property, 
-                                                roughness_property);
-        
-        // Set the converted base color
+
+        if(sg_textures_converted)
+        {
+            // The per-pixel SG conversion already baked the diffuseFactor, specularFactor
+            // and glossinessFactor into the texture output. The shader does
+            // `albedo = sample * u_base_color`, `metalness = u_surface_metalness * tex.b`,
+            // `roughness = u_surface_roughness * tex.g` — so we MUST set the per-material
+            // factors to identity here to avoid double-applying them.
+            base_color_property = {1.0f, 1.0f, 1.0f};
+            metallic_property = 1.0f;
+            roughness_property = 1.0f;
+        }
+        else
+        {
+            // No SG-texture conversion ran (no textures or non-SG workflow): fall back to
+            // the per-material conversion that maps property values from the material's
+            // workflow into MR equivalents.
+            process_material_with_workflow_conversion(material, workflow,
+                                                      base_color_property,
+                                                      metallic_property,
+                                                      roughness_property);
+        }
+
         math::color base_color{};
         base_color = {base_color_property.r, base_color_property.g, base_color_property.b};
         base_color = math::clamp(base_color.value, 0.0f, 1.0f);
         mat.set_base_color(base_color);
-        
-        // Store converted values for later use
+
         mat.set_metalness(math::clamp(metallic_property, 0.0f, 1.0f));
         mat.set_roughness(math::clamp(roughness_property, 0.0f, 1.0f));
     }
@@ -2477,8 +3010,23 @@ void process_material(asset_manager& am,
     bool uses_duplicate_specular = detect_duplicate_specular_usage(material, workflow);
     bool has_metallic_tex = false;
     bool has_roughness_tex = false;
-    
-    if(uses_duplicate_specular)
+
+    if(!combined_mr_relative.empty())
+    {
+        // The diffuse+specular conversion above already produced a sibling MR texture using the
+        // proper per-pixel metallic solve. Use it directly and skip the cheaper SpecularToMetallic /
+        // SpecularToRoughness fallback path that would otherwise overwrite this with a coarser result.
+        auto key = fs::convert_to_protocol(output_dir / combined_mr_relative);
+        auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
+
+        mat.set_metalness_map(texture_asset);
+        mat.set_roughness_map(texture_asset);
+        has_metallic_tex = true;
+        has_roughness_tex = true;
+
+        APPLOG_TRACE("Mesh Importer: Using sibling metallic-roughness map from spec-gloss conversion: {}", combined_mr_relative);
+    }
+    else if(uses_duplicate_specular)
     {
         imported_texture combined_texture;
         if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToMetallicRoughness", combined_texture))
@@ -2825,6 +3373,12 @@ auto perceived_brightness(float r, float g, float b) -> float
  *
  * The PBR identity for specular is: specular = lerp(dielectricF0, baseColor, metallic)
  * Combined with the diffuse identity, this yields a quadratic in metallic that we solve here.
+ *
+ * IMPORTANT: this routine is intentionally evaluated in sRGB-ENCODED float space (i.e. 8-bit
+ * channels divided by 255), matching the reference Khronos/Babylon implementation. The
+ * BT.601 perceptual luminance in `perceived_brightness` and the dielectric F0=0.04 are both
+ * calibrated for that color space. Do NOT degamma to linear before calling — it will skew
+ * the metallic estimate.
  */
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float
 {
@@ -2863,21 +3417,15 @@ auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color
 
     float metallic = solve_metallic(perceived_diffuse, perceived_specular, one_minus_specular_strength);
 
-    // Reconstruct base color from the two workflow identities:
-    //   dielectric contribution: baseColor ≈ diffuse * oneMinusSpecStrength / (1 - F0) / (1 - metallic)
-    //   metallic contribution:   baseColor ≈ (specular - F0 * (1 - metallic)) / metallic
-    // Blend with metallic² for a smooth perceptual transition.
-    float one_minus_metallic = std::max(1.0f - metallic, epsilon);
-    float metallic_safe = std::max(metallic, epsilon);
+    // Khronos/Babylon reference formula for base color reconstruction:
+    //   baseColorFromDiffuse  = diffuse * (1 - F0) / (1 - metallic * F0)
+    //   baseColorFromSpecular = specular - F0 * (1 - metallic)
+    //   baseColor = mix(baseColorFromDiffuse, baseColorFromSpecular, metallic²)
+    float denom = std::max(1.0f - metallic * dielectric_f0, epsilon);
+    float spec_offset = dielectric_f0 * (1.0f - metallic);
 
-    auto base_from_diffuse = [&](float d) -> float
-    {
-        return d * one_minus_specular_strength / (1.0f - dielectric_f0) / one_minus_metallic;
-    };
-    auto base_from_specular = [&](float s) -> float
-    {
-        return (s - dielectric_f0 * (1.0f - metallic)) / metallic_safe;
-    };
+    auto base_from_diffuse = [&](float d) -> float { return d * (1.0f - dielectric_f0) / denom; };
+    auto base_from_specular = [&](float s) -> float { return s - spec_offset; };
 
     float t = metallic * metallic;
     aiColor3D base_color;

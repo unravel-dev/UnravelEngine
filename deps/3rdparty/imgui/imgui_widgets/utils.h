@@ -94,6 +94,7 @@ struct IMGUI_API ContentItem
     ImVec2 image_size{};
     const char* name{"##name"};
     ImFont* name_font{};
+    const char* description{"##description"};
     const char* type{"##type"};
     ImFont* type_font{};
 

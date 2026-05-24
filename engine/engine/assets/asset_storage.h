@@ -236,53 +236,69 @@ public:
 
     /**
      * @brief Adds an asset to the database.
+     *
+     * If an entry already exists for `location`:
+     *   - `override == false`: returns the existing UUID and does nothing else.
+     *   - `override == true`:  updates the entry's metadata *in place*, keeping
+     *     the original UUID so that any link referencing it stays valid.
+     *
+     * Otherwise inserts a new entry keyed by `meta.uid`.
+     *
+     * The entire operation runs under a single lock: looking up the existing
+     * entry, deciding whether to insert vs. update, and mutating the map all
+     * happen atomically. The previous implementation released the lock between
+     * the lookup and the insert, which opened a TOC-TOU window where another
+     * thread could remove the entry and we'd end up inserting under a fresh
+     * random UUID instead of preserving the existing one (or, with override,
+     * creating a duplicate entry that aliased the same location under two
+     * different UUIDs).
+     *
      * @param location The location of the asset.
      * @param meta The metadata of the asset.
-     * @return The UUID of the added asset.
+     * @param override Whether to overwrite an existing entry's metadata.
+     * @return The UUID of the added (or pre-existing) asset.
      */
     auto add_asset(const std::string& location, const asset_meta& meta, bool override) -> hpp::uuid
     {
-        const auto& uid = get_uuid(location);
-        if(!override && !uid.is_nil())
-        {
-            return uid;
-        }
-
         std::lock_guard<std::mutex> lock(asset_mutex_);
+
+        auto existing = find_entry_by_location_unlocked(location);
+        if(existing != asset_meta_.end())
+        {
+            if(!override)
+            {
+                return existing->first;
+            }
+
+            // Update in place, preserving the existing UUID so that other
+            // assets that reference it (e.g. materials → textures) don't get
+            // orphaned by an override pass.
+            existing->second.location = location;
+            existing->second.meta = meta;
+            existing->second.meta.uid = existing->first;
+            return existing->first;
+        }
 
         auto& metainfo = asset_meta_[meta.uid];
         metainfo.location = location;
         metainfo.meta = meta;
-        // Keep original uid so that we dont break any links
-        if(!uid.is_nil())
-        {
-            metainfo.meta.uid = uid;
-        }
-        else
-        {
-            APPLOG_TRACE("{} - {} -> {}", __func__, hpp::to_string(metainfo.meta.uid), location);
-        }
-
+        APPLOG_TRACE("{} - {} -> {}", __func__, hpp::to_string(metainfo.meta.uid), location);
         return metainfo.meta.uid;
     }
 
     /**
      * @brief Gets the UUID of an asset based on its location.
      * @param location The location of the asset.
-     * @return The UUID of the asset.
+     * @return The UUID of the asset, or a nil UUID if not found.
      */
     auto get_uuid(const std::string& location) const -> const hpp::uuid&
     {
         std::lock_guard<std::mutex> lock(asset_mutex_);
 
-        for(const auto& kvp : asset_meta_)
+        auto it = find_entry_by_location_unlocked(location);
+        if(it != asset_meta_.end())
         {
-            const auto& uid = kvp.first;
-            const auto& metainfo = kvp.second;
-            if(metainfo.location == location)
-            {
-                return uid;
-            }
+            return it->first;
         }
 
         static const hpp::uuid uid;
@@ -293,13 +309,10 @@ public:
     {
         std::lock_guard<std::mutex> lock(asset_mutex_);
 
-        for(const auto& kvp : asset_meta_)
+        auto it = find_entry_by_location_unlocked(location);
+        if(it != asset_meta_.end())
         {
-            const auto& metainfo = kvp.second;
-            if(metainfo.location == location)
-            {
-                return metainfo;
-            }
+            return it->second;
         }
 
         static const meta empty;
@@ -368,6 +381,37 @@ public:
     }
 
 private:
+    /**
+     * @brief Linear-scan lookup by location. Caller must hold `asset_mutex_`.
+     *
+     * Returned iterator is into `asset_meta_` and remains valid for the
+     * duration of the lock (std::map iterators stay valid across insertions
+     * and across erases of *other* elements).
+     */
+    auto find_entry_by_location_unlocked(const std::string& location) -> database_t::iterator
+    {
+        for(auto it = asset_meta_.begin(); it != asset_meta_.end(); ++it)
+        {
+            if(it->second.location == location)
+            {
+                return it;
+            }
+        }
+        return asset_meta_.end();
+    }
+
+    auto find_entry_by_location_unlocked(const std::string& location) const -> database_t::const_iterator
+    {
+        for(auto it = asset_meta_.cbegin(); it != asset_meta_.cend(); ++it)
+        {
+            if(it->second.location == location)
+            {
+                return it;
+            }
+        }
+        return asset_meta_.cend();
+    }
+
     /// Mutex for asset database operations.
     mutable std::mutex asset_mutex_{};
     /// The asset database.+

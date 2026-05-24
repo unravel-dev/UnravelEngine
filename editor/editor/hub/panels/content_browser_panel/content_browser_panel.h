@@ -29,6 +29,7 @@ struct content_browser_item
     on_rename_t on_rename;
 
     gfx::texture::ptr icon;
+    std::string description;
     bool is_loading{};
     bool is_selected{};
     bool is_focused{};

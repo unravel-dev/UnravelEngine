@@ -684,6 +684,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         snapshot_prev_depth(rview, viewport_size);
     }
 
+    // Clear batch collector for this frame
+    batch_collector_.clear();
 
 }
 

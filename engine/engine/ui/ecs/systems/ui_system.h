@@ -143,7 +143,7 @@ private:
      * @param component The ui_document_component to load the document for
      * @return True if loading was successful, false otherwise
      */
-    auto load_ui_document(entt::entity entity, ui_document_component& component, bool log_error = true) -> bool;
+    auto load_ui_document(entt::handle entity, ui_document_component& component, bool log_error = true) -> bool;
 
 
 
