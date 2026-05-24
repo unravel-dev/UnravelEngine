@@ -2,6 +2,49 @@
 * Default styles for all the basic elements.
 */
 
+
+@font-face
+{
+	font-family: "monospace";
+	src: "engine:/data/fonts/RobotoMono/RobotoMono-VariableFont_wght.ttf";
+}
+
+
+@font-face
+{
+	font-family: "monospace";
+	src: "engine:/data/fonts/RobotoMono/RobotoMono-Italic-VariableFont_wght.ttf";
+	font-style: italic;
+}
+
+@font-face
+{
+	font-family: "Inter";
+	src: "engine:/data/fonts/Inter/InterVariable.ttf";
+}
+
+@font-face
+{
+	font-family: "Inter";
+	src: "engine:/data/fonts/Inter/InterVariable-Italic.ttf";
+	font-style: italic;
+}
+
+@font-face
+{
+	font-family: "OpenSans";
+	src: "engine:/data/fonts/OpenSans/OpenSans-VariableFont_wdth,wght.ttf";
+}
+
+@font-face
+{
+	font-family: "OpenSans";
+	src: "engine:/data/fonts/OpenSans/OpenSans-Italic-VariableFont_wdth,wght.ttf";
+	font-style: italic;
+}
+
+
+
 /* Base font settings */
 html, body {
 	font-family: 'Inter Variable';

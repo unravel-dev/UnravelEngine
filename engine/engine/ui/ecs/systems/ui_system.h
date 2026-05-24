@@ -89,6 +89,8 @@ struct ui_system
      * @brief Load fonts
      */
     void load_fonts();
+
+    void release_resources();
     
     /**
      * @brief Register component creation/destruction callbacks with ECS

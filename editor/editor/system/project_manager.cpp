@@ -10,7 +10,7 @@
 #include <editor/meta/project/project_info.hpp>
 #include <editor/meta/settings/settings.hpp>
 #include <editor/meta/system/project_manager.hpp>
-
+#include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
@@ -78,6 +78,9 @@ void project_manager::close_project(rtti::context& ctx)
 
     auto& ec = ctx.get_cached<ecs>();
     ec.unload_scene();
+
+    auto& ui = ctx.get_cached<ui_system>();
+    ui.release_resources();
 
     set_name({});
 

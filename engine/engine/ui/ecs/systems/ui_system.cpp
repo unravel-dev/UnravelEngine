@@ -587,7 +587,6 @@ void ui_system::load_font(const std::string& path)
 }
 
 void ui_system::load_fonts()
-
 {
     load_font("engine:/data/fonts/Inter/InterVariable.ttf");
     load_font("engine:/data/fonts/Inter/InterVariable-Italic.ttf");
@@ -640,6 +639,14 @@ void ui_system::register_component_callbacks(rtti::context& ctx)
     // creation and destruction. Implementation depends on your ECS system's
     // callback mechanism. For now, this is a placeholder for the architecture.
     APPLOG_INFO("UI component callbacks registered");
+}
+
+void ui_system::release_resources()
+{
+    Rml::ReleaseFontResources();
+    Rml::ReleaseRenderManagers();
+    Rml::ReleaseTextures();
+    Rml::ReleaseCompiledGeometry();
 }
 
 auto ui_system::is_debugger_enabled() const -> bool

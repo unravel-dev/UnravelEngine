@@ -689,7 +689,7 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
             skylight.set_cloud_speed(10.0f);
-            light.shadow_params.type = sm_impl::pcss;
+            light.shadow_params.type = sm_impl::pcf;
             light.contact_shadow.enabled = true;
 
         }
@@ -697,7 +697,7 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::volumetric);
             skylight.set_cloud_speed(10.0f);
-            light.shadow_params.type = sm_impl::pcss;
+            light.shadow_params.type = sm_impl::pcf;
             light.contact_shadow.enabled = true;
             light.shadow_params.resolution = sm_resolution::very_high;
         }
