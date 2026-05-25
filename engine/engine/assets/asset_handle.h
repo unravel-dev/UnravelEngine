@@ -3,8 +3,11 @@
 #include <engine/engine_export.h>
 #include <hpp/filesystem.hpp>
 #include <logging/logging.h>
+
+#include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <uuid/uuid.h>
 
@@ -18,8 +21,19 @@ struct asset_handle;
 
 /**
  * @struct asset_link
- * @brief Represents a link to an asset, including its task and weak pointer.
- * @tparam T The type of the asset.
+ * @brief Thread-safe link to an asset.
+ *
+ * The link's "logical state" (uid, id, task) lives in an immutable `state_t`
+ * snapshot held by `std::atomic<std::shared_ptr<state_t>>`. Readers do a
+ * single `state.load()` to obtain a coherent snapshot — no torn reads are
+ * possible even when another thread is concurrently invalidating or
+ * reloading the link.
+ *
+ * The weak-asset cache and the last-access timestamp are kept *outside* the
+ * snapshot so they can be updated without allocating a new snapshot on every
+ * cache hit / get() call. `weak_asset` is guarded by a small mutex (weak_ptr
+ * cannot be portably made atomic), `last_access_ns` is a relaxed int64
+ * atomic.
  */
 template<typename T>
 struct asset_link
@@ -27,32 +41,57 @@ struct asset_link
     using task_future_t = task_future<std::shared_ptr<T>>;
     using weak_asset_t = std::weak_ptr<T>;
 
-    /// Unique identifier for the asset.
-    hpp::uuid uid{};
-    /// String identifier for the asset.
-    std::string id{};
-    /// Task future for the asset (valid for both scheduled and deferred jobs).
-    task_future_t task{};
-    /// Weak pointer to the asset.
-    weak_asset_t weak_asset{};
-    /// Last time this asset was accessed via get(), used for eviction.
-    mutable std::chrono::steady_clock::time_point last_access{};
+    /**
+     * @brief Immutable snapshot of the link's logical state.
+     *
+     * New snapshots are published via `state.store(...)`. Once published,
+     * `state_t` instances are read-only and safe to share between threads
+     * without further synchronization.
+     */
+    struct state_t
+    {
+        /// Unique identifier for the asset.
+        hpp::uuid uid;
+        /// String identifier for the asset.
+        std::string id;
+        /// Task future for the asset (valid for both scheduled and deferred jobs).
+        task_future_t task;
+    };
+
+    /// Current snapshot. Initialized to an empty state so readers never see null.
+    std::atomic<std::shared_ptr<state_t>> state{std::make_shared<state_t>()};
+
+    /// Best-effort cache of the resolved asset. Updated on cache miss in get().
+    /// Guarded by `weak_asset_mtx` (weak_ptr can't be portably atomic). The
+    /// critical section is just a load or assignment, so contention is
+    /// negligible.
+    mutable std::mutex weak_asset_mtx;
+    mutable weak_asset_t weak_asset;
+
+    /// Last-access timestamp in nanoseconds-since-steady-epoch. Stored as
+    /// `std::atomic<int64_t>` so updates from the rendering hot path never
+    /// race with concurrent readers (and never block).
+    mutable std::atomic<int64_t> last_access_ns{0};
 };
 
 /**
  * @struct asset_handle
- * @brief Represents a handle to an asset, providing access and management functions.
- * @tparam T The type of the asset.
+ * @brief Thread-safe handle to an asset.
+ *
+ * The handle is a cheap value (shared_ptr to the link). All accessors are
+ * safe to call concurrently from any thread; mutators publish their changes
+ * atomically so other threads always observe a consistent state.
  */
 template<typename T>
 struct asset_handle
 {
     using asset_link_t = asset_link<T>;
+    using state_t = typename asset_link_t::state_t;
+    using state_ptr = std::shared_ptr<state_t>;
+    using task_future_t = typename asset_link_t::task_future_t;
 
     /**
      * @brief Equality operator for asset handles.
-     * @param rhs The right-hand side asset handle.
-     * @return True if the handles are equal, false otherwise.
      */
     auto operator==(const asset_handle& rhs) const -> bool
     {
@@ -62,7 +101,7 @@ struct asset_handle
     auto version() const -> uintptr_t
     {
         update_last_access();
-        return uintptr_t(get_cached_asset().get());
+        return uintptr_t(peek().get());
     }
 
     /**
@@ -76,37 +115,38 @@ struct asset_handle
 
     /**
      * @brief Gets the string identifier of the asset.
-     * @return The string identifier of the asset.
+     *
+     * Returns by value — the caller receives a snapshot of the current id.
+     * Binding to `const auto&` is still safe (the temporary's lifetime is
+     * extended to the binding's scope).
      */
-    auto id() const -> const std::string&
+    auto id() const -> std::string
     {
-        if(link_)
+        if(auto s = load_state())
         {
-            return link_->id;
+            return s->id;
         }
-
-        static const std::string empty;
-        return empty;
+        return {};
     }
 
     /**
      * @brief Gets the unique identifier of the asset.
-     * @return The unique identifier of the asset.
+     *
+     * Returns by value — the caller receives a snapshot of the current uid.
+     * Binding to `const auto&` is still safe (the temporary's lifetime is
+     * extended to the binding's scope).
      */
-    auto uid() const -> const hpp::uuid&
+    auto uid() const -> hpp::uuid
     {
-        if(link_)
+        if(auto s = load_state())
         {
-            return link_->uid;
+            return s->uid;
         }
-
-        static const hpp::uuid empty;
-        return empty;
+        return {};
     }
 
     /**
      * @brief Gets the name of the asset derived from its path.
-     * @return The name of the asset.
      */
     auto name() const -> std::string
     {
@@ -121,85 +161,92 @@ struct asset_handle
     /**
      * @brief Gets the shared pointer to the asset.
      * @param wait If true, waits for the task to complete if not ready.
-     * @return The shared pointer to the asset.
      *
-     * If the handle was registered with deferred loading, the first call
-     * to get() triggers the actual load on the thread pool. Subsequent
-     * calls behave as before (wait or poll).
+     * If the handle was registered with deferred loading, the first call to
+     * get() triggers the actual load on the thread pool. Subsequent calls
+     * behave as before (wait or poll).
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
         update_last_access();
 
-        if(auto cached_asset = get_cached_asset())
+        if(auto cached_asset = peek())
         {
             return cached_asset;
         }
 
-        if(is_deferred())
+        // Take a stable snapshot. Even if another thread invalidates the link
+        // mid-call, our local `s` keeps the old state alive for the duration.
+        auto s = load_state();
+        if(!s || !s->task.valid())
         {
-            link_->task.submit();
+            return empty_asset();
         }
 
-        bool valid = is_valid();
-        bool ready = is_ready();
-        bool should_get = ready || (!ready && wait);
-
-        if(valid && should_get)
+        if(!s->task.is_submitted())
         {
-            auto task = link_->task;
-            if(!ready)
-            {
-                task.change_priority(tpp::priority::high());
-            }
-
-            auto value = task.get();
-
-            if(value)
-            {
-                link_->weak_asset = value;
-                return value;
-            }
+            s->task.submit();
         }
 
-        static const std::shared_ptr<T> empty = std::make_shared<T>();
-        return empty;
+        const bool ready = s->task.is_ready();
+        const bool should_get = ready || wait;
+        if(!should_get)
+        {
+            return empty_asset();
+        }
+
+        // Copy the task locally; we may need to change priority. task.get()
+        // may block — we must hold no locks here.
+        auto task = s->task;
+        if(!ready)
+        {
+            task.change_priority(tpp::priority::high());
+        }
+
+        auto value = task.get();
+        if(value)
+        {
+            std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+            link_->weak_asset = value;
+            return value;
+        }
+        return empty_asset();
     }
 
     /**
-     * @brief Checks if the handle is valid.
-     * @return True if the handle is valid, false otherwise.
+     * @brief Checks if the handle references a task.
      */
     auto is_valid() const -> bool
     {
-        return link_ && link_->task.valid();
+        auto s = load_state();
+        return s && s->task.valid();
     }
 
     /**
      * @brief Checks if the task is ready.
-     * @return True if the task is ready, false otherwise.
      */
     auto is_ready() const -> bool
     {
-        return is_valid() && link_->task.is_ready();
+        auto s = load_state();
+        return s && s->task.valid() && s->task.is_ready();
     }
 
     /**
      * @brief Checks if the handle has a deferred job not yet submitted to workers.
-     * @return True if the task exists but hasn't been submitted.
      */
     auto is_deferred() const -> bool
     {
-        return is_valid() && !link_->task.is_submitted();
+        auto s = load_state();
+        return s && s->task.valid() && !s->task.is_submitted();
     }
 
     /**
-     * @brief Checks if the asset is currently loading (task exists but not ready).
-     * @return True if the asset load is in progress.
+     * @brief Checks if the asset is currently loading.
      */
     auto is_loading() const -> bool
     {
-        return is_valid() && link_->task.is_submitted() && !link_->task.is_ready();
+        auto s = load_state();
+        return s && s->task.valid() && s->task.is_submitted() && !s->task.is_ready();
     }
 
     /**
@@ -208,111 +255,148 @@ struct asset_handle
      */
     void submit()
     {
-        if(link_ && link_->task.valid() && !link_->task.is_submitted())
+        auto s = load_state();
+        if(s && s->task.valid() && !s->task.is_submitted())
         {
-            link_->task.submit();
+            s->task.submit();
         }
     }
 
     /**
      * @brief Demotes a fully loaded asset back to deferred state.
-     * Clears the task and cached asset but preserves ids.
-     * Caller should follow with load_from_file(deferred) to set up a new deferred task.
+     *
+     * Publishes a new snapshot that preserves uid / id but drops the task;
+     * also clears the weak-asset cache. Caller should follow with a
+     * load_from_file(deferred) to set up a new deferred task.
      */
     void demote_to_deferred()
     {
-        if(link_)
+        if(!link_)
         {
-            link_->task = {};
-            link_->weak_asset = {};
+            return;
         }
+
+        auto old = load_state();
+        auto fresh = std::make_shared<state_t>();
+        if(old)
+        {
+            fresh->uid = old->uid;
+            fresh->id = old->id;
+        }
+        link_->state.store(std::move(fresh), std::memory_order_release);
+
+        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        link_->weak_asset.reset();
     }
 
     /**
      * @brief Gets the last access timestamp.
-     * @return The time point of the last get() call.
      */
     auto last_access() const -> std::chrono::steady_clock::time_point
     {
-        if(link_)
+        if(!link_)
         {
-            return link_->last_access;
+            return {};
         }
-        return {};
+        const auto ns = link_->last_access_ns.load(std::memory_order_relaxed);
+        return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
     }
 
     /**
-     * @brief Gets the task ID.
-     * @return The task ID.
+     * @brief Gets the task ID (may be empty if there's no task).
      */
     auto task_id() const
     {
-        if(link_)
+        if(auto s = load_state(); s && s->task.valid())
         {
-            return link_->task.id;
+            return s->task.id;
         }
-
         return tpp::job_id{};
     }
 
     /**
      * @brief Sets the internal job future.
-     * @param future The task future to set.
+     *
+     * Publishes a new snapshot with the given task; preserves uid + id. Also
+     * clears the weak-asset cache so the next get() resolves the new task.
      */
-    void set_internal_job(const typename asset_link_t::task_future_t& future)
+    void set_internal_job(const task_future_t& future)
     {
         ensure();
-        link_->task = future;
-        link_->weak_asset = {};
+        publish_state(
+            [&](state_t& fresh) -> void
+            {
+                fresh.task = future;
+            });
+
+        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        link_->weak_asset.reset();
     }
 
     /**
-     * @brief Sets the internal IDs.
-     * @param internal_uid The unique identifier to set.
-     * @param internal_id The string identifier to set.
+     * @brief Sets the internal IDs (uid + string identifier).
+     *
+     * Publishes a new snapshot; preserves the current task.
      */
     void set_internal_ids(const hpp::uuid& internal_uid, const std::string& internal_id = get_empty_id())
     {
         ensure();
-        link_->uid = internal_uid;
-        link_->id = internal_id;
+        publish_state(
+            [&](state_t& fresh) -> void
+            {
+                fresh.uid = internal_uid;
+                fresh.id = internal_id;
+            });
     }
 
     /**
      * @brief Sets the internal string identifier.
-     * @param internal_id The string identifier to set.
+     *
+     * Publishes a new snapshot; preserves uid and task.
      */
     void set_internal_id(const std::string& internal_id = get_empty_id())
     {
         ensure();
-        link_->id = internal_id;
+        publish_state(
+            [&](state_t& fresh) -> void
+            {
+                fresh.id = internal_id;
+            });
     }
 
     /**
      * @brief Invalidates the handle, resetting its state.
+     *
+     * Publishes an empty snapshot so any concurrent reader observing the
+     * link after this call sees a fully-cleared state.
      */
     void invalidate()
     {
-        if(is_valid())
+        if(auto s = load_state(); s && s->task.valid())
         {
-            auto task_count = link_->task.use_count();
+            const auto task_count = s->task.use_count();
             if(task_count > 1)
             {
-                APPLOG_TRACE("{} - task leak use_count {}", id(), task_count);
+                APPLOG_TRACE("{} - task leak use_count {}", s->id, task_count);
             }
         }
-        set_internal_ids({});
-        set_internal_job({});
-    }
 
+        if(!link_)
+        {
+            return;
+        }
+        link_->state.store(std::make_shared<state_t>(), std::memory_order_release);
+
+        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        link_->weak_asset.reset();
+    }
 
     /**
      * @brief Gets an empty asset handle.
-     * @return The empty asset handle.
      */
     static auto get_empty() -> const asset_handle&
     {
-        static const asset_handle none_asset = []()
+        static const asset_handle none_asset = []() -> asset_handle
         {
             asset_handle asset;
             asset.set_internal_ids({});
@@ -322,13 +406,32 @@ struct asset_handle
     }
 
     /**
-     * @brief Gets an empty string identifier.
-     * @return The empty string identifier.
+     * @brief Gets the conventional empty string identifier ("None").
      */
     static auto get_empty_id() -> const std::string&
     {
         static const std::string empty{"None"};
         return empty;
+    }
+
+    /**
+     * @brief Returns the loaded asset if it is currently in memory, or
+     * nullptr otherwise.
+     *
+     * Unlike `get()`, this does NOT force-load, does NOT submit deferred
+     * tasks, does NOT wait, and does NOT update last-access. Intended for
+     * iteration use cases — e.g. walking the asset manager's loaded set to
+     * build a dependency graph — where we only care about what is already
+     * resident and must not have side effects.
+     */
+    auto peek() const -> std::shared_ptr<T>
+    {
+        if(!link_)
+        {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        return link_->weak_asset.lock();
     }
 
     /**
@@ -344,23 +447,58 @@ struct asset_handle
     }
 
 private:
+    /**
+     * @brief Loads the current immutable snapshot of the link's state.
+     */
+    auto load_state() const -> state_ptr
+    {
+        if(!link_)
+        {
+            return nullptr;
+        }
+        return link_->state.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Publishes a new snapshot built from the current one and a
+     * caller-supplied mutator. The mutator runs on a fresh copy; the old
+     * snapshot is left untouched (other readers that loaded it remain
+     * unaffected).
+     */
+    template<typename F>
+    void publish_state(F&& mutator)
+    {
+        auto old = load_state();
+        auto fresh = std::make_shared<state_t>();
+        if(old)
+        {
+            *fresh = *old;
+        }
+        std::forward<F>(mutator)(*fresh);
+        link_->state.store(std::move(fresh), std::memory_order_release);
+    }
+
+    /**
+     * @brief Returns the canonical "empty" asset shared by all handles
+     * whose load failed / has no task. Lifetime: process.
+     */
+    static auto empty_asset() -> std::shared_ptr<T>
+    {
+        static const std::shared_ptr<T> empty = std::make_shared<T>();
+        return empty;
+    }
 
     void update_last_access() const
     {
-        if(link_)
+        if(!link_)
         {
-            link_->last_access = std::chrono::steady_clock::now();
+            return;
         }
+        const auto now = std::chrono::steady_clock::now().time_since_epoch();
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+        link_->last_access_ns.store(ns, std::memory_order_relaxed);
     }
-    auto get_cached_asset() const -> std::shared_ptr<T>
-    {
-        if(link_)
-        {
-            return link_->weak_asset.lock();
-        }
 
-        return nullptr;
-    }
-    /// Shared pointer to the asset link.
+    /// Shared pointer to the asset link. Cheap to copy.
     std::shared_ptr<asset_link_t> link_;
 };

@@ -7,6 +7,7 @@
 #include <engine/assets/impl/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_manifest.h>
+#include <engine/assets/asset_dependency_graph.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/ecs.h>
 #include <engine/ecs/prefab.h>
@@ -24,6 +25,7 @@
 #include <engine/threading/threader.h>
 
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/thumbnail_invalidation.h>
 #include <editor/editing/thumbnail_manager.h>
 
 #include <filesystem/watcher.h>
@@ -187,6 +189,12 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
     {
         std::set<hpp::uuid> changed;
         std::set<hpp::uuid> removed;
+        // Dependents of every UUID in `removed`, computed *before* unload.
+        // Once `am.unload_asset` runs it invalidates the shared
+        // `asset_link_t`, after which other handles (e.g. a material's
+        // texture slot) report nil UUIDs and dependent enumeration silently
+        // misses them. Capturing here preserves the still-valid chain.
+        std::set<hpp::uuid> removed_dependents;
 
         for(const auto& entry : entries)
         {
@@ -201,7 +209,12 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                     auto asset = am.find_asset<T>(key);
                     if(asset)
                     {
-                        removed.emplace(asset.uid());
+                        const auto uid = asset.uid();
+                        removed.emplace(uid);
+
+                        const auto deps = asset_deps::find_transitive_loaded_dependents(am, uid);
+                        removed_dependents.insert(deps.begin(), deps.end());
+
                         am.unload_asset<T>(key);
                     }
                    
@@ -243,16 +256,35 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         if(!changed.empty() || !removed.empty())
         {
             tpp::invoke(tpp::main_thread::get_id(),
-                        [&tm, &em, &am, changed, removed]()
+                        [&tm, &em, &am, changed, removed, removed_dependents]()
                         {
-                            for(const auto& uid : removed)
-                            {
-                                tm.remove_thumbnail(uid);
-                            }
+                            // A change in any of these types can visually
+                            // affect a prefab thumbnail (texture in a
+                            // material, material on a mesh, mesh in a
+                            // model_component, animation on a prefab).
+                            // Because prefabs are stored as opaque serialized
+                            // buffers we don't walk them for explicit
+                            // references — instead the cascade conservatively
+                            // marks every loaded prefab thumbnail dirty when
+                            // one of these renderable types changes.
+                            constexpr bool affects_prefabs =
+                                std::is_same_v<T, gfx::texture> ||
+                                std::is_same_v<T, material> ||
+                                std::is_same_v<T, mesh> ||
+                                std::is_same_v<T, animation_clip>;
+
+                            // Deletions: drop the removed thumbnails, regen
+                            // every (pre-captured) dependent so missing-slot
+                            // visuals propagate.
+                            asset_deps::cascade_thumbnail_remove(am,
+                                                                 tm,
+                                                                 removed,
+                                                                 removed_dependents,
+                                                                 affects_prefabs);
 
                             for(const auto& uid : changed)
                             {
-                                tm.regenerate_thumbnail(uid);
+                                asset_deps::cascade_thumbnail_regen(am, tm, uid, affects_prefabs);
 
                                 if constexpr(std::is_same<T, prefab>::value)
                                 {
