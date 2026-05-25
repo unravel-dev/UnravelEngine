@@ -36,10 +36,5 @@ inline auto compute_trace_size(const usize32_t& ref, trace_resolution res) -> us
     return {std::max(1u, ref.width / d), std::max(1u, ref.height / d)};
 }
 
-/// Runtime-clamped resolution for passes that cannot tolerate sub-half tracing.
-inline auto clamp_to_half(trace_resolution res) -> trace_resolution
-{
-    return (get_divisor(res) > get_divisor(trace_resolution::half)) ? trace_resolution::half : res;
-}
 
 } // namespace unravel

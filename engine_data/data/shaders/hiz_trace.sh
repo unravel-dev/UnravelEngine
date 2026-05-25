@@ -205,19 +205,49 @@ vec3 HizProjectVsDirToSsDir(vec3 vs_pos, vec3 vs_dir, vec3 ss_origin)
     return ss_pj - ss_origin;
 }
 
-/// Map normalized UV in a reduced-resolution screen pass to full-res G-buffer / Hi-Z UV (texel block center).
-/// resolution_scale = full_width / pass_width (e.g. 2 when the pass is half-res). Use 1.0 for full-res.
-vec2 HizScreenPassToFullResUV(vec2 pass_uv, float resolution_scale, vec2 full_buffer_dim)
+/// Map normalized UV in a reduced-resolution screen pass to full-res G-buffer / Hi-Z UV
+/// (block centre, biased for FP-safe integer casts).
+///
+/// `resolution_scale` is PER-AXIS: (full_w / pass_w, full_h / pass_h).
+///
+/// At ODD full-res dimensions the per-axis float scale isn't integer (e.g.
+/// 1233/616 = 2.00162). If we map via the float scale directly --
+/// `(pass_px * scale + 0.5) / full_dim` -- then `uv * full_dim`'s fractional part drifts
+/// across the screen. Two failure modes follow:
+///
+///   1. The drift reaches EXACTLY 0 at the middle pass pixel (i = pass_dim/2), making
+///      the product `617.0` (etc.) integer-exact. `int()` / `ivec()` casts inside the
+///      trace then tip either side of that integer from FP roundoff, while neighbour
+///      columns cast unambiguously to the lower integer. The result is a one-column
+///      stride discontinuity in the integer PCG seed sequence and the Hi-Z `texelFetch`
+///      index, visible as a sharp seam through screen center.
+///   2. The smooth bilinear-weight drift across the screen makes some columns sample
+///      the gbuffer sharply (frac ~ 0 or ~ 1) and others smoothly (frac ~ 0.5). For
+///      surfaces with high-frequency normal/colour detail this manifests as moire.
+///
+/// We instead anchor everything to INTEGER math on the pass index: take the integer
+/// divisor `D = floor(scale)` (always 2/4/8 for trace_resolution::half/quarter/eighth)
+/// and map pass pixel `i` to the centre of its D-wide block of full-res pixels, i.e.
+/// `full_px = D*i + D/2 + eps`. The float scale never enters the per-pixel math; only
+/// the integer divisor does. This gives a clean STRIDE-D pattern across the screen at
+/// any full-res dimension (even or odd), so `uv * full_dim` has the same fractional
+/// part for every pass pixel and both bilinear weights and `ivec()` casts are uniform.
+/// The small `eps` shifts the otherwise-integer product `D*i + D/2` just off the integer
+/// boundary so the cast is unambiguous in either FP rounding direction; it's much
+/// smaller than half a pixel so it has no visible effect on the sample position.
+vec2 HizScreenPassToFullResUV(vec2 pass_uv, vec2 resolution_scale, vec2 full_buffer_dim)
 {
     BRANCH
-    if(resolution_scale < 1.5)
+    if(all(lessThan(resolution_scale, vec2_splat(1.5))))
     {
         return pass_uv;
     }
     vec2 pass_dim = full_buffer_dim / resolution_scale;
-    vec2 pass_px = floor(pass_uv * pass_dim - vec2_splat(0.5) + vec2_splat(1e-4));
-    pass_px = clamp(pass_px, vec2_splat(0.0), pass_dim - vec2_splat(1.0));
-    return clamp((pass_px * resolution_scale + vec2_splat(0.5)) / full_buffer_dim,
+    vec2 pass_px = floor(pass_uv * pass_dim);
+    pass_px = max(pass_px, vec2_splat(0.0));
+    vec2 divisor = floor(resolution_scale);
+    vec2 full_px = divisor * pass_px + 0.5 * divisor + vec2_splat(1e-3);
+    return clamp(full_px / full_buffer_dim,
                  vec2_splat(1e-5), vec2_splat(1.0 - 1e-5));
 }
 

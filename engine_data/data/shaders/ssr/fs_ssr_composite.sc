@@ -22,22 +22,18 @@ float GetRoughnessFade(float roughness)
 void main()
 {
     vec2 uv = v_texcoord0;
-    
+
     // Sample current frame confidence (this drives the blending)
     vec4 curr_ssr = texture2D(s_ssr_curr, uv);
     float ssr_confidence = curr_ssr.a;
 
-    
     // Sample temporally filtered SSR color
     vec4 ssr_history = texture2D(s_ssr_history, uv);
     vec3 ssr_color = ssr_history.rgb;
-	
-	float stability = ssr_history.a;                  // already 0-1
-	float alpha = clamp(ssr_confidence + (1.0 - ssr_confidence) * stability, 0.0, 1.0);
-	//float alpha     = mix(ssr_confidence,           // current frame trust
-    //                  1.0,                      // fall back to history
-    //                  stability * (1.0 - ssr_confidence));
-	//return;
+
+    float stability = ssr_history.a;                  // already 0-1
+    float alpha = clamp(ssr_confidence + (1.0 - ssr_confidence) * stability, 0.0, 1.0);
+
     // Sample G-buffer data for enhanced blending
     GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(uv, s_normal);
 

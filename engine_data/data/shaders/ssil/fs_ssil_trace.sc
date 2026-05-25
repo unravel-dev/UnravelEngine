@@ -32,8 +32,9 @@ uniform vec4 u_ssil_params2;
 #define u_frame_index     u_ssil_params2.y
 #define u_multi_bounce    u_ssil_params2.z
 
-/// xy = full G-buffer size (pixels); z = full_res / trace_res divisor
-/// (1.0 = full, 2.0 = half, 4.0 = quarter). Fed directly into HizScreenPassToFullResUV.
+/// xy = full G-buffer size (pixels); zw = per-axis (full_dim / trace_dim) scale.
+/// Per-axis is required because odd full-res W with even full-res H produces different
+/// X and Y ratios; see HizScreenPassToFullResUV docs in hiz_trace.sh.
 uniform vec4 u_ssil_resolution;
 
 #define BASE_LOD 0
@@ -84,7 +85,7 @@ vec3 SampleRadiance(vec2 hit_uv)
 void main()
 {
     vec2 uv = HizScreenPassToFullResUV(v_texcoord0,
-                                       max(u_ssil_resolution.z, 1.0),
+                                       max(u_ssil_resolution.zw, vec2_splat(1.0)),
                                        u_ssil_resolution.xy);
 
     GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughness(uv, s_normal);

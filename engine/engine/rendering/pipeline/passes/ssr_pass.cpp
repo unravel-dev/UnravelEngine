@@ -1,4 +1,5 @@
 #include "ssr_pass.h"
+#include <algorithm>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <graphics/graphics.h>
@@ -280,13 +281,14 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
     return blurred_tex;
 }
 
-auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
-                                                const gfx::frame_buffer::ptr& reference,
-                                                trace_resolution res) -> gfx::frame_buffer::ptr
+auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
+                                               const std::string& name,
+                                               const gfx::frame_buffer::ptr& reference,
+                                               trace_resolution res) -> gfx::frame_buffer::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
 
-    auto& denoised_tex = rview.tex_get_or_emplace("SSR_DENOISED");
+    auto& denoised_tex = rview.tex_get_or_emplace(name);
     if(gfx::needs_recreate(denoised_tex, target_size))
     {
         denoised_tex.reset();
@@ -299,7 +301,7 @@ auto ssr_pass::create_or_update_ssr_denoised_fb(gfx::render_view& rview,
                                                           BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     }
 
-    auto& denoised_fbo = rview.fbo_get_or_emplace("SSR_DENOISED");
+    auto& denoised_fbo = rview.fbo_get_or_emplace(name);
     if(gfx::needs_recreate(denoised_fbo, target_size))
     {
         denoised_fbo.reset();
@@ -322,33 +324,49 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
 
     APP_SCOPE_PERF("Rendering/SSR/Spatial Denoise Pass");
 
-    // ssr_curr is already at the trace resolution; do not downscale further.
-    auto denoised_fbo = create_or_update_ssr_denoised_fb(rview, ssr_curr, trace_resolution::full);
-    auto denoised_tex = denoised_fbo->get_texture();
-    auto ssr_size = denoised_fbo->get_size();
+    const int num_passes = std::clamp(settings.spatial_denoise.passes, 1, 5);
 
-    gfx::render_pass pass("Spatial Denoise Pass");
+    // ssr_curr already carries the trace resolution; denoise buffers match it 1:1.
+    // Two ping-pong framebuffers so the a-trous step doubles each iteration
+    // (1, 2, 4, ...) without aliasing reads against writes.
+    auto fb_a = create_or_update_ssr_denoise_fb(rview, "SSR_DENOISED_A", ssr_curr, trace_resolution::full);
+    auto fb_b = create_or_update_ssr_denoise_fb(rview, "SSR_DENOISED_B", ssr_curr, trace_resolution::full);
+    auto sz = fb_a->get_size();
+    const uint32_t gx = (sz.width + 7) / 8;
+    const uint32_t gy = (sz.height + 7) / 8;
 
-    spatial_denoise_compute_program_.program->begin();
+    auto src_tex = ssr_curr->get_texture();
+    gfx::frame_buffer::ptr dst_fb = fb_a;
 
-    gfx::set_texture(spatial_denoise_compute_program_.s_ssr_input, 0, ssr_curr->get_texture());
-    gfx::set_image(1, denoised_tex->native_handle(), 0, bgfx::Access::Write);
-    gfx::set_texture(spatial_denoise_compute_program_.s_normal, 2, g_buffer->get_texture(1));
-    gfx::set_texture(spatial_denoise_compute_program_.s_depth, 3, g_buffer->get_texture(4));
+    for(int i = 0; i < num_passes; ++i)
+    {
+        gfx::render_pass pass(fmt::format("Spatial Denoise Pass {}", i).c_str());
 
-    float denoise_params[4] = {1.0f,
-                                settings.spatial_denoise.depth_sigma,
-                                settings.spatial_denoise.normal_power,
-                                settings.spatial_denoise.luma_sigma};
-    gfx::set_uniform(spatial_denoise_compute_program_.u_denoise_params, denoise_params);
+        spatial_denoise_compute_program_.program->begin();
 
-    uint32_t groups_x = (ssr_size.width + 7) / 8;
-    uint32_t groups_y = (ssr_size.height + 7) / 8;
-    gfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), groups_x, groups_y, 1);
+        gfx::set_texture(spatial_denoise_compute_program_.s_ssr_input, 0, src_tex);
+        gfx::set_image(1, dst_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
+        gfx::set_texture(spatial_denoise_compute_program_.s_normal, 2, g_buffer->get_texture(1));
+        gfx::set_texture(spatial_denoise_compute_program_.s_depth, 3, g_buffer->get_texture(4));
 
-    spatial_denoise_compute_program_.program->end();
+        float denoise_params[4] = {
+            float(1 << i),
+            settings.spatial_denoise.depth_sigma,
+            settings.spatial_denoise.normal_power,
+            settings.spatial_denoise.luma_sigma};
+        gfx::set_uniform(spatial_denoise_compute_program_.u_denoise_params, denoise_params);
 
-    return denoised_fbo;
+        gfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), gx, gy, 1);
+
+        spatial_denoise_compute_program_.program->end();
+
+        src_tex = dst_fb->get_texture();
+        dst_fb = (dst_fb == fb_a) ? fb_b : fb_a;
+    }
+
+    // The final result lives in whichever fb we last *wrote* to, which is the
+    // one NOT pointed at by dst_fb (we flipped at the end of the loop).
+    return (dst_fb == fb_a) ? fb_b : fb_a;
 }
 
 auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
@@ -370,8 +388,10 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
     }
     else
     {
-        rview.fbo_remove("SSR_DENOISED");
-        rview.tex_remove("SSR_DENOISED");
+        rview.fbo_remove("SSR_DENOISED_A");
+        rview.tex_remove("SSR_DENOISED_A");
+        rview.fbo_remove("SSR_DENOISED_B");
+        rview.tex_remove("SSR_DENOISED_B");
     }
 
     // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST
@@ -393,7 +413,7 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
 auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
     // SSR caps at half resolution: sub-half breaks Hi-Z, temporal clamp and the denoiser.
-    const auto trace_res = clamp_to_half(params.settings.fidelityfx.resolution);
+    const auto trace_res = params.settings.fidelityfx.resolution;
     auto ssr_curr_fbo = create_or_update_ssr_curr_fb(rview, params.g_buffer, trace_res);
 
     // Generate blurred color buffer for cone tracing if enabled
@@ -438,23 +458,24 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     gfx::set_uniform(fidelityfx_pixel_program_.u_ssr_params, ssr_params);
 
             
-    // Calculate resolution scale: SSR buffer size / full resolution size
+    // Resolution scale MUST be per-axis. Computing a single scalar (e.g. full_w / half_w)
+    // and applying it to both axes silently breaks any case where the X and Y ratios
+    // disagree, which is exactly what happens at odd full-res W with even full-res H:
+    // e.g. (1233, 900) -> half (616, 450) gives X=2.00162 but Y=2.0. Reusing the X scale
+    // on the Y axis shifts the bottom half-res row's gbuffer fetch ~0.7 full-res pixels
+    // off, producing a garbage out-of-frustum ray origin and a visible noise band along
+    // the bottom of the viewport at odd widths.
     auto ssr_size = ssr_curr_fbo->get_size();
     auto g_buffer_size = params.g_buffer->get_size();
-    float ssr_resolution_scale = float(g_buffer_size.width) / float(ssr_size.width); // resolution scale factor
-    // Set Hi-Z parameters (buffer_width, buffer_height, num_depth_mips, ssr_resolution_scale)
-    float hiz_params[4] = {
-        0.0f,
-        0.0f,
-        0.0f,
-        ssr_resolution_scale // SSR resolution scale (1.0 = full res, 0.5 = half res, etc.)
-    };
+    const float ssr_scale_x = float(g_buffer_size.width) / float(ssr_size.width);
+    const float ssr_scale_y = float(g_buffer_size.height) / float(ssr_size.height);
+    // u_hiz_params layout: (hiz_width, hiz_height, scale_x, scale_y).
+    // num_mips was previously stored in .z but is unused by the shader.
+    float hiz_params[4] = {0.0f, 0.0f, ssr_scale_x, ssr_scale_y};
     if(params.hiz_buffer)
     {
         hiz_params[0] = float(params.hiz_buffer->info.width);
         hiz_params[1] = float(params.hiz_buffer->info.height);
-        hiz_params[2] = float(params.hiz_buffer->info.numMips); // Number of mips
-
     }
     gfx::set_uniform(fidelityfx_pixel_program_.u_hiz_params, hiz_params);
 
@@ -554,12 +575,13 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     };
     gfx::set_uniform(temporal_resolve_program_.u_motion_params, motion_params);
 
-    // Set fade parameters (fade_in_start, fade_in_end, ssr_resolution_scale, unused)
+    // Per-axis scale; see ssr trace pass for why scalar scale is wrong at odd full-res W.
     auto history_size = history_tex->get_size();
     auto g_buffer_size = g_buffer->get_size();
-    float ssr_resolution_scale = float(g_buffer_size.width) / float(history_size.width);
-    
-    float fade_params[4] = {settings.fade_in_start, settings.fade_in_end, ssr_resolution_scale, 0.0f};
+    const float ssr_scale_x = float(g_buffer_size.width) / float(history_size.width);
+    const float ssr_scale_y = float(g_buffer_size.height) / float(history_size.height);
+
+    float fade_params[4] = {settings.fade_in_start, settings.fade_in_end, ssr_scale_x, ssr_scale_y};
     gfx::set_uniform(temporal_resolve_program_.u_fade_params, fade_params);
 
     // Set previous frame view-projection matrix
@@ -641,8 +663,10 @@ void ssr_pass::release_resources(gfx::render_view& rview)
     rview.fbo_remove("SSR_HISTORY_TEMP");
     rview.tex_remove("SSR_HISTORY_TEMP");
     rview.tex_remove("SSR_BLURRED_COLOR");
-    rview.fbo_remove("SSR_DENOISED");
-    rview.tex_remove("SSR_DENOISED");
+    rview.fbo_remove("SSR_DENOISED_A");
+    rview.tex_remove("SSR_DENOISED_A");
+    rview.fbo_remove("SSR_DENOISED_B");
+    rview.tex_remove("SSR_DENOISED_B");
 }
 
 } // namespace unravel

@@ -65,6 +65,7 @@ public:
             float depth_sigma = 0.02f;      ///< Depth edge-stopping threshold (0.005 strict – 0.05 loose)
             float normal_power = 64.0f;     ///< Normal edge-stopping exponent (16 loose – 128 strict)
             float luma_sigma = 1.0f;        ///< Luminance edge-stopping threshold (0.3 sharp – 2.0 smooth)
+            int passes = 3;                 ///< Number of a-trous filter passes (step = 1, 2, 4, ... 1<<i)
         };
 
         bool enable_spatial_denoise = false;             ///< Enable spatial denoising before temporal resolve
@@ -154,10 +155,11 @@ private:
                                               const gfx::frame_buffer::ptr& reference,
                                               trace_resolution res) -> gfx::frame_buffer::ptr;
 
-    /// Creates or updates the SSR denoised framebuffer at the given trace resolution.
-    auto create_or_update_ssr_denoised_fb(gfx::render_view& rview,
-                                          const gfx::frame_buffer::ptr& reference,
-                                          trace_resolution res) -> gfx::frame_buffer::ptr;
+    /// Creates or updates a named SSR denoise ping-pong framebuffer at the given trace resolution.
+    auto create_or_update_ssr_denoise_fb(gfx::render_view& rview,
+                                         const std::string& name,
+                                         const gfx::frame_buffer::ptr& reference,
+                                         trace_resolution res) -> gfx::frame_buffer::ptr;
 
 
     // FidelityFX SSR Pixel Shader Program
@@ -165,7 +167,7 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_ssr_params;      // x: max_steps, y: depth_tolerance, z: max_rays, w: brightness
-        gfx::program::uniform_ptr u_hiz_params;      // x: buffer_width, y: buffer_height, z: num_depth_mips, w: half_res
+        gfx::program::uniform_ptr u_hiz_params;      // x: hiz_width, y: hiz_height, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_fade_params;     // x: fade_in_start, y: fade_in_end, z: roughness_depth_tolerance, w: facing_reflections_fading
         gfx::program::uniform_ptr u_cone_params;     // x: cone_angle_bias, y: max_mip_level, z: unused, w: unused
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
@@ -202,7 +204,7 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: roughness_sensitivity
         gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
-        gfx::program::uniform_ptr u_fade_params;      // x: fade_in_start, y: fade_in_end, z: unused, w: unused
+        gfx::program::uniform_ptr u_fade_params;      // x: fade_in_start, y: fade_in_end, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_ssr_curr;         // Current frame SSR result
         gfx::program::uniform_ptr s_ssr_history;      // Previous frame SSR history

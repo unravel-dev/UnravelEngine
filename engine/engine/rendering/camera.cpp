@@ -803,8 +803,13 @@ void camera::set_aa_data(const usize32_t& viewport_size,
         }
         case taa_jitter_mode::msaa_3_rotating:
         {
-            const float SamplesX[] = {-2.0f / 3.0f, 2.0f / 3.0f, 0.0f / 3.0f};
-            const float SamplesY[] = {-2.0f / 3.0f, 0.0f / 3.0f, 2.0f / 3.0f};
+            // Equilateral triangle inscribed in a circle of radius 0.4 px,
+            // centered at the pixel center (vertices at 90°/210°/330°). Keeps
+            // all offsets inside the standard [-0.5, +0.5] px convention used
+            // by the progressive / Halton / R2 / msaa_4 modes; side length
+            // r·√3 ≈ 0.69 px gives a per-frame step comparable to msaa_2.
+            const float SamplesX[] = {0.0f, -0.34641016f, 0.34641016f};
+            const float SamplesY[] = {0.4f, -0.2f, -0.2f};
             const std::uint32_t idx = temporal_frame_index % 3u;
             SampleX = SamplesX[idx];
             SampleY = SamplesY[idx];

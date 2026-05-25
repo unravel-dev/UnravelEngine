@@ -68,22 +68,16 @@ void main()
     float W_curr = curr.a;
     vec3 C_curr = curr.rgb;
 
-    // Neighborhood AABB clamp: prevent history from drifting beyond what
-    // the current frame produces. This is the key mechanism that stops
-    // multi-bounce energy from compounding over time.
-    vec2 texel = 1.0 / vec2(textureSize(s_ssil_curr, 0));
-    vec3 nb_min = C_curr;
-    vec3 nb_max = C_curr;
-    for(int dy = -1; dy <= 1; dy++)
-    {
-        for(int dx = -1; dx <= 1; dx++)
-        {
-            vec3 s = texture2DLod(s_ssil_curr, uv + vec2(float(dx), float(dy)) * texel, 0.0).rgb;
-            nb_min = min(nb_min, s);
-            nb_max = max(nb_max, s);
-        }
-    }
-    C_hist = clamp(C_hist, nb_min, nb_max);
+    // No neighborhood color clip on the SSIL history: the trace is a sparse
+    // Monte Carlo signal (a handful of cosine rays per pixel), so a 3x3 of
+    // the raw current frame is dominated by zero-hit samples. Any
+    // mu/sigma- or min/max-based clip built from that neighborhood
+    // collapses toward the noise floor and persistently drags converged
+    // history down -- and the dimming compounds through multi-bounce via
+    // s_prev_ssil. The trace already clamps prev_indirect and per-ray
+    // hit_color to 10 so the multi-bounce series cannot run away; the
+    // depth check below + edge_fade handle the disocclusion / stale-history
+    // cases the clip was nominally there for.
 
     float prev_surface_z = DecodeGBufferDepth(clamp(prev_uv, vec2_splat(0.0), vec2_splat(1.0)), s_prev_depth).depth01;
     bool depth_ok = abs(prev_surface_z - surface_z) < u_depth_threshold;
@@ -94,8 +88,16 @@ void main()
     float decay = mix(DECAY_MIN, DECAY_MAX, clamp(u_history_strength, 0.0, 1.0));
     W_hist *= decay;
 
-    float W_new = clamp(W_hist + W_curr, 0.0, u_max_accum_frames);
-    vec3 C_new = (C_hist * W_hist + C_curr * W_curr) / max(W_new, 1e-3);
+    // Weighted-mean accumulation. The divisor must be the actual sum of
+    // weights — NOT the saturation-clamped W_new — otherwise increasing
+    // u_max_accum_frames artificially shrinks C_curr's contribution to the
+    // numerator while leaving the denominator capped, dimming the SSIL signal
+    // as the accumulation window grows. W_new (capped at u_max_accum_frames)
+    // is only used as the round-tripped normalized weight in the alpha
+    // channel, so saturation still bounds the effective history half-life.
+    float W_total = W_hist + W_curr;
+    float W_new   = min(W_total, u_max_accum_frames);
+    vec3  C_new   = (C_hist * W_hist + C_curr * W_curr) / max(W_total, 1e-3);
 
-    gl_FragColor = vec4(C_new, W_new / u_max_accum_frames);
+    gl_FragColor = vec4(C_new, W_new / max(u_max_accum_frames, 1.0));
 }

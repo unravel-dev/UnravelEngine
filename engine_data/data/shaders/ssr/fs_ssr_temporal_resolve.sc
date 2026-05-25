@@ -28,8 +28,9 @@ uniform vec4 u_motion_params;
 uniform vec4 u_fade_params;
 #define u_fade_in_start           u_fade_params.x
 #define u_fade_in_end             u_fade_params.y
-#define u_ssr_resolution_scale    u_fade_params.z
-#define u_fade_unused_w           u_fade_params.w
+// Per-axis (full_dim / pass_dim) ratio. Scalar scale is wrong at odd full-res dims; see
+// HizScreenPassToFullResUV docs in hiz_trace.sh.
+#define u_ssr_resolution_scale    u_fade_params.zw
 
 uniform mat4 u_prev_view_proj;
 
@@ -134,11 +135,17 @@ vec4 ApplyTemporalAccumulation(
 
 
     // == 6. running mean merge =============================================
-    float W_new = clamp(W_hist + W_curr, 0.0, u_max_accum_frames);   // ≤ kMaxFrames
-    vec3  C_new = (C_hist * W_hist + C_curr * W_curr) / max(W_new, 1e-3);
+    // IMPORTANT: divide by the TRUE sum of weights (W_total), not by the
+    // clamp-capped W_new. Using the cap as the divisor breaks energy
+    // conservation once history saturates (numerator keeps growing while
+    // denominator is pinned), which manifests as brightness drift / reduced
+    // current-frame contribution at small max_accum_frames.
+    float W_total = W_hist + W_curr;
+    float W_new   = min(W_total, u_max_accum_frames);   // stored weight only
+    vec3  C_new   = (C_hist * W_hist + C_curr * W_curr) / max(W_total, 1e-3);
 
     // == 7. store: rgb = filtered colour, alpha = normalised weight ========
-    return vec4(C_new, W_new / u_max_accum_frames);
+    return vec4(C_new, W_new / max(u_max_accum_frames, 1.0));
 }
 
 void main()

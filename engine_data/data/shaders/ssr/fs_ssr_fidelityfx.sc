@@ -18,10 +18,12 @@ uniform vec4 u_ssr_params;
 #define u_brightness        u_ssr_params.w
 
 uniform vec4 u_hiz_params;
-#define u_hiz_width         u_hiz_params.x
-#define u_hiz_height        u_hiz_params.y
-#define u_hiz_num_mips      u_hiz_params.z
-#define u_ssr_resolution_scale u_hiz_params.w
+#define u_hiz_width            u_hiz_params.x
+#define u_hiz_height           u_hiz_params.y
+// Per-axis (full_dim / pass_dim) ratio. Must be per-axis because an odd full-res W with
+// an even full-res H produces different X and Y scales (e.g. 1233/616 vs 900/450), and
+// applying X's scale to the Y axis corrupts the bottom-row gbuffer fetch.
+#define u_ssr_resolution_scale u_hiz_params.zw
 
 uniform vec4 u_fade_params;
 #define u_fade_in_start     u_fade_params.x
@@ -407,6 +409,21 @@ void main()
     vec2 base_depth_resolution = HizGetDepthMipResolution(s_hiz, BASE_LOD);
     float surface_z = HizFetchDepth(s_hiz, base_depth_resolution * uv, BASE_LOD);
 
+    // Skip sky / background pixels. Without this the trace runs over depth==far
+    // pixels using garbage normals/positions and produces unstable samples that
+    // at half-res get smeared into visible bands along the bottom/edges by the
+    // bilinear upsample (SSIL has the same guard for the same reason).
+    BRANCH
+#ifdef INVERTED_DEPTH_RANGE
+    if(surface_z == 0.0)
+#else
+    if(surface_z == 1.0)
+#endif
+    {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+
     vec3 vs_normal = mul(u_view, vec4(normalData.world_normal, 0.0)).xyz;
 
     vec3 ss_ray_origin = vec3(uv, surface_z);
@@ -470,7 +487,10 @@ void main()
     }
 
 	output_color /= float(num_rays);
-    output_color.rgb /= 1 - Luminance(output_color.rgb);
+    // Inverse Reinhard to restore HDR range. Guard against luma -> 1 so we
+    // don't divide by ~0 (saturates RGBA8 to white and at half-res those
+    // saturated texels get bilinear-smeared across the upsampled edge rows).
+    output_color.rgb /= max(1.0 - Luminance(output_color.rgb), 1e-4);
 
     gl_FragColor = output_color;
 }

@@ -158,21 +158,31 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     gfx::set_uniform(trace_program_.u_ssil_params, ssil_params);
 
     float multi_bounce_val = multi_bounce_active ? params.settings.multi_bounce_intensity : 0.0f;
+    // The seed is fed straight into Rand3DPCG16 per pixel. Using the raw
+    // render frame (rather than render_frame % max_accum_frames) gives every
+    // frame a unique ray pattern, so the temporal accumulator averages over
+    // many distinct Monte Carlo samples instead of revisiting the same N
+    // patterns forever. Wrap to 16 bits to keep the float-precision domain
+    // ample.
     float ssil_params2[4] = {
         params.settings.max_distance,
-        float(gfx::get_render_frame() % params.settings.temporal.max_accum_frames),
+        float(gfx::get_render_frame() & 0xFFFFu),
         multi_bounce_val,
         0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 
-    // u_ssil_resolution.z now carries the full-res / trace-res divisor directly
-    // (1.0 = full, 2.0 = half, 4.0 = quarter); the shader feeds it straight into
-    // HizScreenPassToFullResUV.
+    // u_ssil_resolution: xy = full G-buffer size, zw = PER-AXIS (full / trace) scale.
+    // Per-axis is required: at odd full-res W with even full-res H (e.g. 1233 x 900)
+    // the X and Y ratios disagree (2.00162 vs 2.0) and applying a scalar across both
+    // axes shifts the bottom-row gbuffer fetch ~0.7 pixels off, producing an out-of-
+    // frustum view-space ray origin and a visible noise band at the viewport bottom.
+    // SSIL hid this under its smooth hemisphere kernel; SSR exposed it sharply.
     const auto gbuf_sz = params.g_buffer->get_size();
+    const auto trace_sz = ssil_curr_fb->get_size();
     const float ssil_resolution[4] = {static_cast<float>(gbuf_sz.width),
                                       static_cast<float>(gbuf_sz.height),
-                                      static_cast<float>(get_divisor(params.settings.resolution)),
-                                      0.0f};
+                                      static_cast<float>(gbuf_sz.width) / static_cast<float>(trace_sz.width),
+                                      static_cast<float>(gbuf_sz.height) / static_cast<float>(trace_sz.height)};
     gfx::set_uniform(trace_program_.u_ssil_resolution, ssil_resolution);
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
@@ -253,12 +263,23 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     auto temp_fb = create_or_update_ssil_fb(rview, "SSIL_HISTORY_TEMP", ssil_input, trace_resolution::full);
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
-    // Seed it with the current frame and skip temporal this frame.
-    // Also skip if previous-frame depth is not yet available (first frame).
+    // Seed both the persistent history AND the per-frame output with the
+    // current trace and skip temporal this frame. Also skip if previous-frame
+    // depth is not yet available (first frame). Without seeding temp_fb the
+    // first frame after a resize returns whatever stale memory the texture
+    // happened to own, which the deferred indirect-lighting pass then
+    // multiplies into the lighting buffer.
     if(history_tex != old_history || !prev_depth)
     {
-        gfx::render_pass blit_pass("History Init Blit Pass");
-        gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssil_input->get_texture()->native_handle(), 0, 0);
+        gfx::render_pass hist_blit_pass("History Init Blit Pass");
+        gfx::blit(hist_blit_pass.id,
+                  history_tex->native_handle(), 0, 0,
+                  ssil_input->get_texture()->native_handle(), 0, 0);
+
+        gfx::render_pass temp_blit_pass("Temporal Init Blit Pass");
+        gfx::blit(temp_blit_pass.id,
+                  temp_fb->get_texture()->native_handle(), 0, 0,
+                  ssil_input->get_texture()->native_handle(), 0, 0);
         return temp_fb->get_texture();
     }
 

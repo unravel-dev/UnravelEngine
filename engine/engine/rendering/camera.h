@@ -29,11 +29,19 @@ enum class taa_jitter_mode : std::uint8_t
     halton_2_3 = 1,
     /// R2 / recurrence lattice pair; alternative progressive 2D coverage.
     r2_low_discrepancy = 2,
-    /// Two-tap MSAA-style pattern, period 2.
+    /// Two-tap antipodal MSAA-style pattern, period 2. Per-axis range ±0.25 px;
+    /// the 2-frame average lands exactly on the pixel center, so the cycle is
+    /// well below the history-blend time constant → visually the most stable.
     msaa_2_rotating = 3,
-    /// Three-tap MSAA-style pattern, period 3.
+    /// Three-tap equilateral-triangle pattern, period 3, inscribed in a
+    /// radius-0.4 px circle (per-axis range [-0.346, +0.4]). Wider footprint
+    /// than msaa_2 → slightly softer AA, slightly more visible cycling.
     msaa_3_rotating = 4,
-    /// Four-tap MSAA-style pattern, period 4.
+    /// Four-tap rotated grid (D3D 4× MSAA standard, in 1/16-px units), period 4.
+    /// Per-axis range ±0.375 px. With history_blend ≈ 0.82 the 4-frame cycle
+    /// approaches the temporal filter's time constant, so the pattern can be
+    /// perceptible as a slow wobble — lower jitter_amplitude or raise
+    /// history_blend if it bothers you.
     msaa_4_rotating = 5,
 };
 

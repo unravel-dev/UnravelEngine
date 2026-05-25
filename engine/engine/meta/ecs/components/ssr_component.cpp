@@ -185,6 +185,14 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"min", 0.3f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "Luminance edge-stopping threshold. Lower = sharper, higher = smoother"},
+        })
+        .data<&spatial_denoise_settings::passes>("passes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "passes"},
+            entt::attribute{"pretty_name", "Passes"},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 5},
+            entt::attribute{"tooltip", "Number of a-trous filter passes. More passes = wider blur reach but higher cost"},
         });
 
     entt::meta_factory<fidelityfx_settings>{}
@@ -379,6 +387,7 @@ SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings)
     try_save(ar, ser20::make_nvp("depth_sigma", obj.depth_sigma));
     try_save(ar, ser20::make_nvp("normal_power", obj.normal_power));
     try_save(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
+    try_save(ar, ser20::make_nvp("passes", obj.passes));
 }
 SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::oarchive_binary_t);
@@ -388,6 +397,7 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings)
     try_load(ar, ser20::make_nvp("depth_sigma", obj.depth_sigma));
     try_load(ar, ser20::make_nvp("normal_power", obj.normal_power));
     try_load(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
+    try_load(ar, ser20::make_nvp("passes", obj.passes));
 }
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(ssr_pass::fidelityfx_ssr_settings::spatial_denoise_settings, ser20::iarchive_binary_t);
