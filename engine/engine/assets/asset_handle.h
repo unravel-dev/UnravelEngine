@@ -19,6 +19,59 @@ using task_future = tpp::job_shared_future<T>;
 template<typename T>
 struct asset_handle;
 
+namespace asset_detail
+{
+
+/// Portable atomic-shared-ptr wrapper.
+///
+/// C++20 specifies a `std::atomic<std::shared_ptr<T>>` partial specialisation that works lock-
+/// free without requiring `T` to be trivially copyable. However, that specialisation only ships
+/// in libstdc++ >= 11 and libc++ >= 16 (older standard libraries fall back to the primary
+/// `std::atomic<T>` template, whose `static_assert(__is_trivially_copyable(T))` fires because
+/// `std::shared_ptr<X>` -- with its ref-count and non-trivial destructor -- is NOT trivially
+/// copyable). On those older stdlibs we fall back to a plain `std::shared_ptr<T>` plus the
+/// C++11-era free-function atomics, which compile everywhere shared_ptr does. The free
+/// functions were deprecated in C++20, but they only entered the deprecation path on stdlibs
+/// that *also* ship the new specialisation -- so the feature-test pivot below avoids the
+/// deprecation diagnostic in both branches.
+///
+/// API mirrors the subset of `std::atomic<std::shared_ptr<T>>` that `asset_handle` actually uses
+/// (.load() / .store() with explicit memory orders), so the rest of this header is unchanged.
+template<typename T>
+class atomic_shared_ptr
+{
+public:
+    atomic_shared_ptr() = default;
+    explicit atomic_shared_ptr(std::shared_ptr<T> initial) : ptr_(std::move(initial)) {}
+
+    auto load(std::memory_order order = std::memory_order_seq_cst) const -> std::shared_ptr<T>
+    {
+#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
+        return ptr_.load(order);
+#else
+        return std::atomic_load_explicit(&ptr_, order);
+#endif
+    }
+
+    void store(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst)
+    {
+#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
+        ptr_.store(std::move(desired), order);
+#else
+        std::atomic_store_explicit(&ptr_, std::move(desired), order);
+#endif
+    }
+
+private:
+#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
+    std::atomic<std::shared_ptr<T>> ptr_{};
+#else
+    std::shared_ptr<T> ptr_{};
+#endif
+};
+
+} // namespace asset_detail
+
 /**
  * @struct asset_link
  * @brief Thread-safe link to an asset.
@@ -58,8 +111,13 @@ struct asset_link
         task_future_t task;
     };
 
-    /// Current snapshot. Initialized to an empty state so readers never see null.
-    std::atomic<std::shared_ptr<state_t>> state{std::make_shared<state_t>()};
+    /// Current snapshot. Initialised to an empty state so readers never see null.
+    ///
+    /// Wrapped in `asset_detail::atomic_shared_ptr` rather than `std::atomic<std::shared_ptr<...>>`
+    /// directly because the C++20 specialisation isn't available on libstdc++ < 11 / libc++ < 16
+    /// and the primary `std::atomic<T>` template static_asserts on shared_ptr's non-trivial
+    /// copyability. The wrapper presents the same `.load()` / `.store()` member API.
+    asset_detail::atomic_shared_ptr<state_t> state{std::make_shared<state_t>()};
 
     /// Best-effort cache of the resolved asset. Updated on cache miss in get().
     /// Guarded by `weak_asset_mtx` (weak_ptr can't be portably atomic). The
