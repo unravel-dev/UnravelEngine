@@ -68,7 +68,7 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
     auto now = std::chrono::steady_clock::now();
     auto dt = now - last_frame_time_;
 
-    if(dt < std::chrono::milliseconds(100) && completed != total)
+    if(dt < std::chrono::milliseconds(32) && completed != total)
     {
         return;
     }
