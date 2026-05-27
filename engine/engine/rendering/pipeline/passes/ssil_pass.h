@@ -25,7 +25,7 @@ public:
     /// Temporal accumulation parameters
     struct temporal_settings
     {
-        float history_strength = 1.0f;
+        float history_strength = 0.9f;
         float depth_threshold = 0.01f;
         int max_accum_frames = 8;
     };
@@ -36,7 +36,7 @@ public:
         int max_rays = 4;
         int max_steps = 64;
         float depth_tolerance = 0.15f;
-        float brightness = 0.6f;
+        float brightness = 0.5f;
         float max_distance = 20.0f;
         /// Trace resolution divisor. SSIL tolerates `quarter` well because indirect
         /// lighting is low-frequency and the bilateral upsample uses full-res guides.

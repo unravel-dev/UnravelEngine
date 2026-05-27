@@ -38,16 +38,31 @@ void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
     auto& exposure_tex = rview.tex_get_or_emplace("AUTO_EXPOSURE");
     if(gfx::needs_recreate(exposure_tex, {1, 1}))
     {
+        // Two-step init to dodge a bgfx GL-backend incompatibility: when
+        // BGFX_TEXTURE_COMPUTE_WRITE is set, bgfx creates the texture via glTexStorage2D
+        // (immutable storage), but the same code path then tries to upload any initial
+        // `_mem` payload via glTexImage2D -- which is GL_INVALID_OPERATION on immutable
+        // storage. So we create the texture with no initial data, then push the seed
+        // value through update_texture_2d (which routes to glTexSubImage2D, the API
+        // that *is* allowed on immutable storage). Reproduces for any R32F + COMPUTE_WRITE
+        // texture regardless of dimensions; size doesn't matter.
         exposure_tex.reset();
-        const float initial_exposure = 1.0f;
-        const gfx::memory_view* initial_pixel = gfx::copy(&initial_exposure, sizeof(initial_exposure));
         exposure_tex = std::make_shared<gfx::texture>(1,
                                                       1,
                                                       false,
                                                       1,
                                                       gfx::texture_format::R32F,
-                                                      BGFX_TEXTURE_COMPUTE_WRITE,
-                                                      initial_pixel);
+                                                      BGFX_TEXTURE_COMPUTE_WRITE);
+
+        // Seed the texel to 1.0 so any reader sampling AUTO_EXPOSURE before the very first
+        // run_average() (e.g. tonemapping on frame 0) sees a sane multiplier instead of
+        // whatever was in freshly-allocated storage. The AUTO_EXPOSURE_SNAP flag below
+        // makes run_average force-converge to the measured value on its first dispatch,
+        // so the seed only matters for that single-frame window.
+        const float             initial_exposure = 1.0f;
+        const gfx::memory_view* initial_pixel    = gfx::copy(&initial_exposure, sizeof(initial_exposure));
+        gfx::update_texture_2d(exposure_tex->native_handle(), 0, 0, 0, 0, 1, 1, initial_pixel);
+
         rview.data_get_or_emplace("AUTO_EXPOSURE_SNAP", 1u) = 1u;
     }
 }

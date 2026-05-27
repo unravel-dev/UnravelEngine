@@ -259,8 +259,8 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
 
     // ssil_input already carries the trace resolution; history buffers match it 1:1.
     auto old_history = rview.tex_safe_get("SSIL_HISTORY");
-    auto history_tex = create_or_update_ssil_tex(rview, "SSIL_HISTORY", ssil_input, trace_resolution::full);
-    auto temp_fb = create_or_update_ssil_fb(rview, "SSIL_HISTORY_TEMP", ssil_input, trace_resolution::full);
+    auto history_tex = create_or_update_ssil_tex(rview, "SSIL_HISTORY", ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
+    auto temp_fb = create_or_update_ssil_fb(rview, "SSIL_HISTORY_TEMP", ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
     // Seed both the persistent history AND the per-frame output with the
