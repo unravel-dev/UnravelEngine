@@ -107,6 +107,24 @@ struct simulation
     void set_time_scale(float time_scale = 1.0f);
     auto get_time_scale() const -> float;
 
+    //-----------------------------------------------------------------------------
+    //  Name : get_max_fps ()
+    /// <summary>
+    /// Returns the configured software FPS cap (0 means uncapped).
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_max_fps() const -> uint32_t;
+
+    //-----------------------------------------------------------------------------
+    //  Name : get_last_sleep_duration ()
+    /// <summary>
+    /// Returns how long run_one_frame spent sleeping during the last call.
+    /// Useful for stats overlays so they can distinguish actual CPU work
+    /// from time spent in the software frame limiter.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_last_sleep_duration() const -> duration_t;
+
 protected:
     float time_scale_{1.0f};
     /// minimum/maximum frames per second
@@ -119,6 +137,8 @@ protected:
     std::vector<duration_t> previous_timesteps_;
     /// next frame time step in seconds
     duration_t timestep_ = duration_t::zero();
+    /// time spent sleeping inside the last run_one_frame call
+    duration_t last_sleep_duration_ = duration_t::zero();
     /// current frame
     uint64_t frame_ = 0;
     /// how many frames to average for the smoothed time step

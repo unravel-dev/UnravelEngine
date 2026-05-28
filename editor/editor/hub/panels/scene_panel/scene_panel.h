@@ -68,13 +68,14 @@ private:
     void handle_viewport_interaction(rtti::context& ctx, const camera& camera, editing_manager& em);
     void handle_keyboard_shortcuts(editing_manager& em);
     void setup_camera_viewport(camera_component& camera_comp, const ImVec2& size, const ImVec2& pos);
-    void draw_scene_viewport(rtti::context& ctx, const ImVec2& size);
+    void draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos);
 
     // Handle prefab mode changes
     void handle_prefab_mode_changes(rtti::context& ctx);
 
     bool is_dragging_{};
     int visualize_passes_{-1};
+    int current_resolution_index_{0};
     scene panel_scene_{"scene_panel"};
 
     bool gizmo_at_center_{true};

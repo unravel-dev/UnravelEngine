@@ -4,6 +4,7 @@
 #include <engine/events.h>
 #include <engine/loading_screen.h>
 #include <engine/rendering/renderer.h>
+#include <simulation/simulation.h>
 #include <version/version.h>
 
 #include "assets/asset_watcher.h"
@@ -80,6 +81,17 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+
+    // {
+    //     auto& rend = ctx.get_cached<renderer>();
+    //     rend.set_vsync(false);
+
+    //     auto& sim = ctx.get_cached<simulation>();
+    //     auto primary_display = os::display::get_primary_display_index();
+    //     auto desktop_mode = os::display::get_desktop_mode(primary_display);
+    //     sim.set_max_fps(desktop_mode.refresh_rate > 0 ? desktop_mode.refresh_rate : 144);            // uncapped while focused (active)
+    //     sim.set_max_inactive_fps(30);  // throttled while unfocused
+    // }
 
     ls.begin_module("Editor UI");
     if(!ls.check(ctx.get_cached<imgui_interface>().init_basic(ctx)))

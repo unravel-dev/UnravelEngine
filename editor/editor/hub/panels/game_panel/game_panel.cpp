@@ -1,18 +1,18 @@
 #include "game_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
-#include "../../hub.h"
+#include "../viewport_resolution.h"
 #include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
 
 #include <algorithm>
+#include <editor/system/project_manager.h>
 #include <engine/ecs/ecs.h>
 #include <engine/events.h>
 #include <engine/input/input.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/settings/settings.h>
-#include <editor/system/project_manager.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 
 namespace unravel
@@ -78,55 +78,25 @@ void game_panel::set_visible_force(bool visible)
     is_visible_force_ = visible;
 }
 
-void game_panel::apply_resolution_to_camera(camera_component& camera_comp, const settings::resolution_settings::resolution& res, ImVec2 avail_size)
-{
-    ImVec2 viewport = avail_size;
-    if(res.aspect == 0.0f)
-    {
-        // Free aspect
-        viewport = avail_size;
-    }
-    else if(res.width > 0 && res.height > 0)
-    {
-        // Fixed resolution
-        viewport.x = static_cast<float>(res.width);
-        viewport.y = static_cast<float>(res.height);
-    }
-    else if(res.aspect > 0.0f)
-    {
-        float avail_aspect = avail_size.x / std::max(avail_size.y, 1.0f);
-        if(avail_aspect > res.aspect)
-        {
-            viewport.y = avail_size.y;
-            viewport.x = avail_size.y * res.aspect;
-        }
-        else
-        {
-            viewport.x = avail_size.x;
-            viewport.y = avail_size.x / res.aspect;
-        }
-    }
-    camera_comp.set_viewport_size({static_cast<std::uint32_t>(viewport.x), static_cast<std::uint32_t>(viewport.y)});
-}
-
 void game_panel::draw_ui(rtti::context& ctx)
 {
+    draw_menubar(ctx);
+
     if(!ctx.has<unravel::settings>())
     {
         return;
     }
 
-    draw_menubar(ctx);
-    auto& ec = ctx.get_cached<ecs>();
-    auto& ev = ctx.get_cached<events>();
-    auto size = ImGui::GetContentRegionAvail();
-    auto& settings = ctx.get<unravel::settings>();
-    if(settings.resolution.resolutions.empty())
+    const auto& s = ctx.get<unravel::settings>();
+    const auto* current_res = viewport_resolution::get_resolution(ctx, s.resolution.get_current_resolution_index());
+    if(!current_res)
     {
         return;
     }
-    const auto& resolutions = settings.resolution.resolutions;
-    current_resolution_index_ = settings.resolution.get_current_resolution_index();
+
+    auto& ec = ctx.get_cached<ecs>();
+    auto& ev = ctx.get_cached<events>();
+    auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
         bool rendered = false;
@@ -134,7 +104,7 @@ void game_panel::draw_ui(rtti::context& ctx)
         ec.get_scene().registry->view<camera_component>().each(
             [&](auto e, auto&& camera_comp)
             {
-                apply_resolution_to_camera(camera_comp, resolutions[std::clamp(current_resolution_index_, 0, (int)resolutions.size()-1)], size);
+                viewport_resolution::apply_to_camera(camera_comp, *current_res, size);
 
                 const auto& camera = camera_comp.get_camera();
                 const auto& rview = camera_comp.get_render_view();
@@ -199,39 +169,23 @@ void game_panel::draw_ui(rtti::context& ctx)
 
 void game_panel::draw_menubar(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& settings = pm.get_settings();
-    if(settings.resolution.resolutions.empty()) 
-    {
-        return;
-    }
-    const auto& resolutions = settings.resolution.resolutions;
-    current_resolution_index_ = settings.resolution.get_current_resolution_index();
     if(ImGui::BeginMenuBar())
     {
         ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
-        
-        
-        if(ImGui::BeginMenu(fmt::format("{} {}", resolutions[std::clamp(current_resolution_index_, 0, (int)resolutions.size()-1)].name, ICON_MDI_ARROW_DOWN_BOLD).c_str()))
-        {
-            for(int i = 0; i < (int)resolutions.size(); ++i)
-            {
-                if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_resolution_index_, i))
-                {
-                    settings.resolution.set_current_resolution_index(i);
-                    pm.save_project_settings(ctx);
-                }
-            }
 
-            if(ImGui::MenuItem("Edit ...", "", false))
+        if(ctx.has<unravel::settings>())
+        {
+            auto& pm = ctx.get_cached<project_manager>();
+            auto& s = pm.get_settings();
+            int index = s.resolution.get_current_resolution_index();
+            if(viewport_resolution::draw_menu(ctx, index))
             {
-                ctx.get_cached<hub>().open_project_settings(ctx, "Resolution");
+                s.resolution.set_current_resolution_index(index);
+                pm.save_project_settings(ctx);
             }
-            ImGui::EndMenu();
         }
-        ImGui::SetItemTooltipEx("%s", "Resolution Presets");
 
         if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
         {

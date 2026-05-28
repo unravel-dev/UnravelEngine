@@ -1,6 +1,7 @@
 #include "scene_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "../viewport_resolution.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/editing_manager.h>
@@ -1893,11 +1894,10 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
     }
 }
 
-void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
+void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos)
 {
     auto& em = ctx.get_cached<editing_manager>();
 
-    auto pos = ImGui::GetCursorScreenPos();
     auto camera_entity = get_camera();
     if(!camera_entity)
     {
@@ -1908,6 +1908,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     const auto& rview = camera_comp.get_render_view();
     const auto& obuffer = rview.fbo_safe_get("OBUFFER");
 
+    ImGui::SetCursorScreenPos(pos);
     if(obuffer && obuffer->get_attachment_count() > 0)
     {
         const auto& tex = obuffer->get_texture(0);
@@ -1915,7 +1916,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size)
     }
     else
     {
-        ImGui::Text("No render view");
+        ImGui::Dummy(size);
     }
 
     if(em.is_prefab_mode())
@@ -1999,7 +2000,6 @@ void scene_panel::draw_ui(rtti::context& ctx)
 {
     draw_menubar(ctx);
 
-    // auto& em = ctx.get_cached<editing_manager>();
     auto camera_entity = get_camera();
 
     bool has_edit_camera = camera_entity && camera_entity.all_of<transform_component, camera_component>();
@@ -2009,24 +2009,40 @@ void scene_panel::draw_ui(rtti::context& ctx)
         return;
     }
 
-    auto size = ImGui::GetContentRegionAvail();
-    if(size.x > 0 && size.y > 0)
+    auto avail = ImGui::GetContentRegionAvail();
+    if(avail.x <= 0 || avail.y <= 0)
     {
-        auto pos = ImGui::GetCursorScreenPos();
-        auto& camera_comp = camera_entity.get<camera_component>();
+        return;
+    }
 
-        setup_camera_viewport(camera_comp, size, pos);
-        draw_scene_viewport(ctx, size);
-        process_drag_drop_target(ctx, camera_comp);
+    // Determine the fitted viewport rectangle for the editor camera based on
+    // the resolution preset. We always fit the aspect within the available
+    // area so that picking and gizmos map 1:1 between screen pixels and the
+    // camera viewport. If no resolution is configured, the panel falls back
+    // to the full available area.
+    ImVec2 view_size = avail;
+    if(const auto* current_res = viewport_resolution::get_resolution(ctx, current_resolution_index_))
+    {
+        view_size = viewport_resolution::compute_fitted_size(*current_res, avail);
+    }
 
-        const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
-        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
+    const auto avail_origin = ImGui::GetCursorScreenPos();
+    const ImVec2 view_pos(avail_origin.x + (avail.x - view_size.x) * 0.5f,
+                          avail_origin.y + (avail.y - view_size.y) * 0.5f);
 
-        if(stats_overlay_state_.open_profiler_requested)
-        {
-            stats_overlay_state_.open_profiler_requested = false;
-            parent_->get_profiler_timeline_panel().show(true);
-        }
+    auto& camera_comp = camera_entity.get<camera_component>();
+
+    setup_camera_viewport(camera_comp, view_size, view_pos);
+    draw_scene_viewport(ctx, view_size, view_pos);
+    process_drag_drop_target(ctx, camera_comp);
+
+    const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
+    viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
+
+    if(stats_overlay_state_.open_profiler_requested)
+    {
+        stats_overlay_state_.open_profiler_requested = false;
+        parent_->get_profiler_timeline_panel().show(true);
     }
 }
 
@@ -2042,6 +2058,7 @@ void scene_panel::draw_menubar(rtti::context& ctx)
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
 
         draw_prefab_mode_header(ctx);
+        viewport_resolution::draw_menu(ctx, current_resolution_index_);
         draw_transform_tools(em);
         draw_gizmo_pivot_mode_menu(gizmo_at_center_);
         draw_coordinate_system_menu(em);

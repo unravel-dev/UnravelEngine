@@ -4,7 +4,6 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
-#include <engine/settings/settings.h>
 #include "../viewport_stats_overlay.h"
 
 namespace unravel
@@ -29,9 +28,6 @@ public:
 
 private:
     void draw_menubar(rtti::context& ctx);
-
-    int current_resolution_index_ = 0;
-    void apply_resolution_to_camera(camera_component& camera_comp, const settings::resolution_settings::resolution& res, ImVec2 avail_size);
 
     bool is_visible_force_{};
     int visualize_passes_{-1};

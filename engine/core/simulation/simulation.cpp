@@ -5,7 +5,6 @@
 
 namespace unravel
 {
-using namespace std::chrono_literals;
 
 simulation::simulation()
 {
@@ -24,48 +23,62 @@ void simulation::run_one_frame(bool is_active)
         max_fps = std::min(max_inactive_fps_, max_fps);
     }
 
-    duration_t elapsed = clock_t::now() - last_frame_timepoint_;
+    const auto wait_begin = clock_t::now();
+    duration_t elapsed = wait_begin - last_frame_timepoint_;
     if(max_fps > 0)
     {
-        duration_t target_duration = 1000ms / max_fps;
+        // Compute the target frame duration at the clock's native resolution
+        // BEFORE dividing. std::chrono::duration's operator/ does integer
+        // division on its stored representation, so `seconds(1) / 60` gives
+        // `seconds(0)` and `1000ms / 60` gives `16ms` (62.5 FPS), both losing
+        // the fractional part. Casting to duration_t (nanoseconds on
+        // Windows/Linux) first turns the dividend into 1'000'000'000, after
+        // which `/ 60 = 16'666'666 ns` ≈ 16.667 ms with sub-microsecond error.
+        const duration_t target_duration =
+            std::chrono::duration_cast<duration_t>(std::chrono::seconds(1)) / max_fps;
 
-        for(;;)
+        // Two-stage wait: a single coarse sleep that leaves a small safety
+        // margin to absorb OS scheduler jitter, then a yield-spin to the
+        // exact deadline. Matches the pacing approach used by Unity/Unreal.
+        // The margin trades a tiny amount of CPU for sub-millisecond timing
+        // accuracy independent of the platform timer resolution.
+        constexpr auto sleep_safety_margin = std::chrono::milliseconds(2);
+
+        const auto deadline = last_frame_timepoint_ + target_duration;
+        const auto coarse_until = deadline - sleep_safety_margin;
+
+        if(clock_t::now() < coarse_until)
         {
-            elapsed = clock_t::now() - last_frame_timepoint_;
-            if(elapsed >= target_duration)
-            {
-                break;
-            }
-
-            if(elapsed < duration_t(0))
-            {
-                break;
-            }
-            duration_t sleep_time = (target_duration - elapsed);
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(sleep_time);
-
-            if(sleep_time > std::chrono::microseconds(1000))
-            {
-                if(ms.count() > 0)
-                {
-                    sleep_time /= ms.count();
-                }
-
-                std::this_thread::sleep_for(sleep_time);
-            }
+            std::this_thread::sleep_until(coarse_until);
         }
+
+        while(clock_t::now() < deadline)
+        {
+            std::this_thread::yield();
+        }
+
+        elapsed = clock_t::now() - last_frame_timepoint_;
     }
 
     if(elapsed < duration_t(0))
     {
         elapsed = duration_t(0);
     }
-    last_frame_timepoint_ = clock_t::now();
+
+    const auto wait_end = clock_t::now();
+    last_sleep_duration_ = wait_end - wait_begin;
+    if(last_sleep_duration_ < duration_t(0))
+    {
+        last_sleep_duration_ = duration_t::zero();
+    }
+
+    last_frame_timepoint_ = wait_end;
 
     // if fps lower than minimum, clamp eplased time
     if(min_fps_ > 0)
     {
-        duration_t target_duration = 1000ms / min_fps_;
+        const duration_t target_duration =
+            std::chrono::duration_cast<duration_t>(std::chrono::seconds(1)) / min_fps_;
         if(elapsed > target_duration)
         {
             elapsed = target_duration;
@@ -150,5 +163,15 @@ void simulation::set_time_scale(float time_scale)
 auto simulation::get_time_scale() const -> float
 {
     return time_scale_;
+}
+
+auto simulation::get_max_fps() const -> uint32_t
+{
+    return max_fps_;
+}
+
+auto simulation::get_last_sleep_duration() const -> duration_t
+{
+    return last_sleep_duration_;
 }
 } // namespace unravel
