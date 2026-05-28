@@ -404,7 +404,7 @@ void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& ac
     constexpr float rotation_speed = 0.1f;
     constexpr float speed_multiplier = 5.0f;
     constexpr float hold_speed = 0.1f;
-    constexpr float fixed_dt = 0.0166f; // Fixed delta time
+    float fixed_dt = ImMin(0.0333f, ImGui::GetIO().DeltaTime); // Fixed delta time
 
     bool speed_boost_active = ImGui::IsKeyDown(shortcuts::modifier_camera_speed_boost);
     float movement_speed = calculate_movement_speed(base_movement_speed, speed_boost_active, speed_multiplier);

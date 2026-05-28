@@ -69,8 +69,8 @@ public:
     auto get_layout_manager() -> layout_manager&;
     auto get_layout_panel() -> layout_panel&;
 
-    /// Shared with @ref profiler_timeline_panel for bgfx view/encoder timing (Render Passes section).
-    auto gpu_bgfx_profiler_enabled() -> bool& { return gpu_bgfx_profiler_enabled_; }
+    /// Shared with @ref profiler_timeline_panel for gfx view/encoder timing (Render Passes section).
+    auto gpu_profiler_enabled() -> bool& { return gpu_profiler_enabled_; }
 
 private:
 
@@ -104,6 +104,6 @@ private:
         std::vector<std::string> drop_files{};
     } external_drop_data_;
 
-    bool gpu_bgfx_profiler_enabled_{false};
+    bool gpu_profiler_enabled_{false};
 };
 } // namespace unravel

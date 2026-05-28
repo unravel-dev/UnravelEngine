@@ -18,7 +18,7 @@ constexpr ImVec4 warning_color{1.0f, 0.7f, 0.0f, 1.0f};
 
 void draw_encoder_stats(const gfx::stats* stats, float item_height, float item_height_with_spacing, double to_cpu_ms)
 {
-    if(ImGui::BeginListBox("Encoders##GpuBgfxProfiler",
+    if(ImGui::BeginListBox("Encoders##GpuProfiler",
                            ImVec2(ImGui::GetWindowWidth(), stats->numEncoders * item_height_with_spacing)))
     {
         ImGuiListClipper clipper;
@@ -28,7 +28,7 @@ void draw_encoder_stats(const gfx::stats* stats, float item_height, float item_h
         {
             for(int32_t pos = clipper.DisplayStart; pos < clipper.DisplayEnd; ++pos)
             {
-                const bgfx::EncoderStats& encoder_stats = stats->encoderStats[pos];
+                const auto& encoder_stats = stats->encoderStats[pos];
                 ImGui::PushID(pos);
                 ImGui::Text("%3d", pos);
                 ImGui::SameLine(64.0f);
@@ -61,14 +61,14 @@ void draw_view_stats(const gfx::stats* stats,
 {
     constexpr int lines_per_view = 3;
     if(ImGui::BeginListBox(
-           "Views##GpuBgfxProfiler",
+           "Views##GpuProfiler",
            ImVec2(ImGui::GetWindowWidth(), stats->numViews * lines_per_view * item_height_with_spacing)))
     {
         const float max_width = profiler_max_width * profiler_scale;
 
         for(uint16_t pos = 0; pos < stats->numViews; ++pos)
         {
-            const bgfx::ViewStats& view_stats = stats->viewStats[pos];
+            const auto& view_stats = stats->viewStats[pos];
             const float cpu_time_elapsed =
                 static_cast<float>((view_stats.cpuTimeEnd - view_stats.cpuTimeBegin) * to_cpu_ms);
             const float gpu_time_elapsed =
@@ -112,12 +112,12 @@ void draw_view_stats(const gfx::stats* stats,
 
 } // namespace
 
-void draw_gpu_bgfx_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
+void draw_gpu_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
 {
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Bgfx view/encoder timing:");
+    ImGui::Text("View/encoder timing:");
     ImGui::SameLine();
-    if(ImGui::Checkbox("Enable##GpuBgfxProfiler", enable_profiler))
+    if(ImGui::Checkbox("Enable##GpuProfiler", enable_profiler))
     {
         gfx::set_debug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
     }

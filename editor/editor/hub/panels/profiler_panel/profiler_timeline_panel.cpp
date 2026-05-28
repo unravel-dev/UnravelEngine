@@ -90,7 +90,7 @@ auto lane_height_for_depth(uint16_t max_depth) -> float
 }
 
 /// Max nesting depth for lane height from timestamps, not stored @c ev.depth.
-/// Imbalanced profile_begin/end (e.g. GPU/bgfx callbacks) can inflate @c buf.depth while intervals
+/// Imbalanced profile_begin/end (e.g. GPU/gfx callbacks) can inflate @c buf.depth while intervals
 /// still nest only a few levels; max(ev.depth) then reserves dozens of empty rows.
 auto max_nesting_depth_for_thread_in_view(const std::vector<const frame_snapshot*>& frames,
                                           uint16_t thread_index,
@@ -900,7 +900,7 @@ void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
     if(ImGui::CollapsingHeader(ICON_MDI_CHIP "\tRender Passes"))
     {
         ImGui::PushFont(ImGui::Font::Mono);
-        draw_gpu_bgfx_submit_profiler_ui(gfx::get_stats(), &parent_->gpu_bgfx_profiler_enabled());
+        draw_gpu_submit_profiler_ui(gfx::get_stats(), &parent_->gpu_profiler_enabled());
         ImGui::PopFont();
     }
     profiler_draw_gpu_resources_section();
