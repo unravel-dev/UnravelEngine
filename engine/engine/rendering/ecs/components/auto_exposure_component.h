@@ -32,6 +32,12 @@ public:
         result.adaptation_speed_down = std::lerp(result.adaptation_speed_down, from.adaptation_speed_down, contribution);
         result.low_percentile = std::lerp(result.low_percentile, from.low_percentile, contribution);
         result.high_percentile = std::lerp(result.high_percentile, from.high_percentile, contribution);
+        result.metering_area = std::lerp(result.metering_area, from.metering_area, contribution);
+        // Metering mode is discrete and cannot be interpolated; the dominant volume wins.
+        if(contribution >= 0.5f)
+        {
+            result.metering_mode = from.metering_mode;
+        }
     }
 };
 

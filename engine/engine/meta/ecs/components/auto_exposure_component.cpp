@@ -8,6 +8,28 @@ namespace unravel
 
 REFLECT_INLINE(auto_exposure_pass::settings)
 {
+    entt::meta_factory<exposure_metering_mode>{}
+        .type("exposure_metering_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "exposure_metering_mode"},
+            entt::attribute{"pretty_name", "Metering Mode"},
+        })
+        .data<exposure_metering_mode::average>("average"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "average"},
+            entt::attribute{"pretty_name", "Average"},
+        })
+        .data<exposure_metering_mode::center_weighted>("center_weighted"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "center_weighted"},
+            entt::attribute{"pretty_name", "Center Weighted"},
+        })
+        .data<exposure_metering_mode::spot>("spot"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spot"},
+            entt::attribute{"pretty_name", "Spot"},
+        });
+
     entt::meta_factory<auto_exposure_pass::settings>{}
         .type("auto_exposure_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -17,30 +39,28 @@ REFLECT_INLINE(auto_exposure_pass::settings)
         .data<&auto_exposure_pass::settings::min_ev>("min_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "min_ev"},
-            entt::attribute{"pretty_name", "Min EV100"},
+            entt::attribute{"pretty_name", "Min EV"},
             entt::attribute{"min", -10.0f},
             entt::attribute{"max", 20.0f},
             entt::attribute{"step", 0.5f},
-            entt::attribute{"tooltip", "Lower limit for metered scene brightness in EV100 (ISO 100). "
-                "Controls how much the system can BRIGHTEN dark scenes. "
-                "Lower value = more brightening allowed. "
-                "Reference values: -4 = moonless night, 1 = dim indoor, "
-                "5 = home interior, 8 = office/overcast, 12 = daylight. "
-                "Only activates when the scene EV100 is below this threshold."},
+            entt::attribute{"tooltip", "Lower clamp for metered scene brightness (relative EV). "
+                "Controls how much the system can BRIGHTEN dark scenes: a LOWER value allows "
+                "more brightening (more upward adaptation headroom when moving into shadow/interiors). "
+                "Default -1 keeps it subtle (~1 stop). Only engages when the scene meters below this value."},
         })
         .data<&auto_exposure_pass::settings::max_ev>("max_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_ev"},
-            entt::attribute{"pretty_name", "Max EV100"},
+            entt::attribute{"pretty_name", "Max EV"},
             entt::attribute{"min", -10.0f},
             entt::attribute{"max", 24.0f},
             entt::attribute{"step", 0.5f},
-            entt::attribute{"tooltip", "Upper limit for metered scene brightness in EV100 (ISO 100). "
-                "Controls how much the system can DARKEN bright scenes. "
-                "Reference values: 12 = daylight, 15 = bright sun, "
-                "16 = snow/beach, 20 = extreme glare. "
-                "Only activates when the scene EV100 is above this threshold. "
-                "Use Compensation instead to shift overall brightness."},
+            entt::attribute{"tooltip", "Upper clamp for metered scene brightness (relative EV). "
+                "Controls how much the system can DARKEN bright scenes: a HIGHER value allows "
+                "more darkening. Lighting here is authored at a fixed reference exposure (not "
+                "physical cd/m2), so the default 0 pins the bright end at the authored daylight "
+                "level. Raise it only if very bright scenes should tone down below that. "
+                "Use Compensation to shift overall brightness."},
         })
         .data<&auto_exposure_pass::settings::compensation>("compensation"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -57,21 +77,21 @@ REFLECT_INLINE(auto_exposure_pass::settings)
         .data<&auto_exposure_pass::settings::adaptation_speed_up>("adaptation_speed_up"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "adaptation_speed_up"},
-            entt::attribute{"pretty_name", "Speed Up"},
+            entt::attribute{"pretty_name", "Adaptation Time Up"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Time in seconds for exposure to increase (scene getting darker, e.g. walking indoors)."
-                "Higher = slower adaptation, mimicking human eye dilation."
+            entt::attribute{"tooltip", "Time constant in SECONDS for exposure to increase (scene getting darker, e.g. walking indoors). "
+                "Higher = slower adaptation, mimicking human eye dilation. Adaptation happens in EV/log space. "
                 "Typically 2-5 seconds."},
         })
         .data<&auto_exposure_pass::settings::adaptation_speed_down>("adaptation_speed_down"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "adaptation_speed_down"},
-            entt::attribute{"pretty_name", "Speed Down"},
+            entt::attribute{"pretty_name", "Adaptation Time Down"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Time in seconds for exposure to decrease (scene getting brighter, e.g. walking outdoors)."
-                "Lower = faster adaptation, mimicking quick pupil constriction."
+            entt::attribute{"tooltip", "Time constant in SECONDS for exposure to decrease (scene getting brighter, e.g. walking outdoors). "
+                "Lower = faster adaptation, mimicking quick pupil constriction. Adaptation happens in EV/log space. "
                 "Typically 0.5-2 seconds."},
         })
         .data<&auto_exposure_pass::settings::low_percentile>("low_percentile"_hs)
@@ -98,6 +118,26 @@ REFLECT_INLINE(auto_exposure_pass::settings)
                 "Pixels above this percentile (sky, sun, specular highlights) are excluded."
                 "At 0.95 the brightest 5% of pixels are ignored."
                 "Lower this if bright sky or highlights are driving the exposure too low."},
+        })
+        .data<&auto_exposure_pass::settings::metering_mode>("metering_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "metering_mode"},
+            entt::attribute{"pretty_name", "Metering Mode"},
+            entt::attribute{"tooltip", "How pixels are spatially weighted when measuring scene brightness. "
+                "Average = whole frame equally. "
+                "Center Weighted = smooth falloff toward the edges (recommended, avoids sky/edges dominating). "
+                "Spot = only a central circle is measured."},
+        })
+        .data<&auto_exposure_pass::settings::metering_area>("metering_area"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "metering_area"},
+            entt::attribute{"pretty_name", "Metering Area"},
+            entt::attribute{"min", 0.05f},
+            entt::attribute{"max", 1.5f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip", "Size of the metering region (in screen-normalized units). "
+                "For Center Weighted this is the Gaussian falloff radius; for Spot it is the hard cutoff radius. "
+                "Has no effect in Average mode."},
         });
 }
 
@@ -110,6 +150,8 @@ SAVE_INLINE(auto_exposure_pass::settings)
     try_save(ar, ser20::make_nvp("adaptation_speed_down", obj.adaptation_speed_down));
     try_save(ar, ser20::make_nvp("low_percentile", obj.low_percentile));
     try_save(ar, ser20::make_nvp("high_percentile", obj.high_percentile));
+    try_save(ar, ser20::make_nvp("metering_mode", obj.metering_mode));
+    try_save(ar, ser20::make_nvp("metering_area", obj.metering_area));
 }
 SAVE_INSTANTIATE(auto_exposure_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(auto_exposure_pass::settings, ser20::oarchive_binary_t);
@@ -123,6 +165,8 @@ LOAD_INLINE(auto_exposure_pass::settings)
     try_load(ar, ser20::make_nvp("adaptation_speed_down", obj.adaptation_speed_down));
     try_load(ar, ser20::make_nvp("low_percentile", obj.low_percentile));
     try_load(ar, ser20::make_nvp("high_percentile", obj.high_percentile));
+    try_load(ar, ser20::make_nvp("metering_mode", obj.metering_mode));
+    try_load(ar, ser20::make_nvp("metering_area", obj.metering_area));
 }
 LOAD_INSTANTIATE(auto_exposure_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(auto_exposure_pass::settings, ser20::iarchive_binary_t);

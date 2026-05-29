@@ -85,7 +85,8 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == SSIL)
     {
-        color = texture2D(s_tex7, texcoord0).rgb;
+        vec4 ssil = texture2D(s_tex7, texcoord0);
+		color = ssil.rgb * ssil.a;
     }
 
     return vec4(color, 1.0f);

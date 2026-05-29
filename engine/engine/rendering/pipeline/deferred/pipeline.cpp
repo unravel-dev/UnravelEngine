@@ -347,6 +347,20 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto& ao = ao_map ? ao_map : mat.default_color_map();
     const auto& emissive = emissive_map ? emissive_map : mat.default_color_map();
 
+    // Resolve and pin every texture up front. asset_handle::get() returns a
+    // shared_ptr<texture>; holding our own copies for the duration of the
+    // submit keeps the texture objects alive even if the asset watcher
+    // thread invalidates/reloads these handles mid-frame (which happens
+    // intermittently right after a scene is opened). Without this, a texture
+    // resolved here could be released between the individual set_texture
+    // calls, leaving a dangling pointer for native_handle().
+    const auto albedo_tex = albedo.get();
+    const auto normal_tex = normal.get();
+    const auto roughness_tex = roughness.get();
+    const auto metalness_tex = metalness.get();
+    const auto ao_tex = ao.get();
+    const auto emissive_tex = emissive.get();
+
     const auto& base_color = mat.get_base_color();
     const auto& subsurface_color = mat.get_subsurface_color();
     const auto& emissive_color = mat.get_emissive_color();
@@ -356,12 +370,12 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto& dither_threshold = mat.get_dither_threshold();
     const auto& surface_data2 = mat.get_surface_data2();
 
-    gfx::set_texture(program.s_tex_color, 0, albedo.get());
-    gfx::set_texture(program.s_tex_normal, 1, normal.get());
-    gfx::set_texture(program.s_tex_roughness, 2, roughness.get());
-    gfx::set_texture(program.s_tex_metalness, 3, metalness.get());
-    gfx::set_texture(program.s_tex_ao, 4, ao.get());
-    gfx::set_texture(program.s_tex_emissive, 5, emissive.get());
+    gfx::set_texture(program.s_tex_color, 0, albedo_tex);
+    gfx::set_texture(program.s_tex_normal, 1, normal_tex);
+    gfx::set_texture(program.s_tex_roughness, 2, roughness_tex);
+    gfx::set_texture(program.s_tex_metalness, 3, metalness_tex);
+    gfx::set_texture(program.s_tex_ao, 4, ao_tex);
+    gfx::set_texture(program.s_tex_emissive, 5, emissive_tex);
 
     math::color premultiplied_emissive{
         emissive_color.value.r * emissive_intensity,
@@ -900,17 +914,8 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
 
         stats_.drawn_models++;
 
-        // Copy (don't reference) the mesh/material shared_ptrs out of the
-        // batch. Submitting the material calls asset_handle::get() on its
-        // textures, which can block and run a pending load inline right
-        // after a scene opens. That load can mutate the renderable set and
-        // cause batch_collector_ to rebuild its prepared batches, which
-        // would invalidate `batch` (and any reference into batch->key).
-        // Holding our own shared_ptr copies keeps the mesh and material -
-        // and therefore the textures they own - alive for the whole
-        // iteration even if the underlying batch storage goes away.
-        const auto mesh_ptr = batch->key.mesh_ptr;
-        const auto material_ptr = batch->key.material_ptr;
+        const auto& mesh_ptr = batch->key.mesh_ptr;
+        const auto& material_ptr = batch->key.material_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
 

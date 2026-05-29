@@ -3,6 +3,7 @@
 #include <engine/profiler/profiler.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <algorithm>
 
 namespace unravel
 {
@@ -72,9 +73,18 @@ auto auto_exposure_pass::get_exposure_texture(gfx::render_view& rview) const -> 
     return rview.tex_safe_get("AUTO_EXPOSURE");
 }
 
-void auto_exposure_pass::run_histogram(gfx::render_view& rview, const gfx::frame_buffer::ptr& input)
+void auto_exposure_pass::run_histogram(gfx::render_view& rview, const settings& config, const gfx::frame_buffer::ptr& input)
 {
     const auto input_size = input->get_size();
+
+    // Meter from a subsampled grid rather than the full-resolution buffer. The grid
+    // is capped to max_metering_dim on the long edge (aspect preserved), which keeps
+    // the histogram statistically equivalent while cutting texture bandwidth and the
+    // number of atomic increments dramatically at high resolutions.
+    const uint32_t longest = std::max(input_size.width, input_size.height);
+    const float scale = (longest > max_metering_dim) ? (float(max_metering_dim) / float(longest)) : 1.0f;
+    const uint32_t meter_width = std::max(1u, uint32_t(float(input_size.width) * scale));
+    const uint32_t meter_height = std::max(1u, uint32_t(float(input_size.height) * scale));
 
     gfx::render_pass pass("Auto Exposure Histogram");
 
@@ -86,11 +96,14 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const gfx::frame
 
     float log_range = max_log_lum - min_log_lum;
     float inv_log_range = 1.0f / log_range;
-    float params[4] = {min_log_lum, inv_log_range, float(input_size.width), float(input_size.height)};
+    float params[4] = {min_log_lum, inv_log_range, float(meter_width), float(meter_height)};
     gfx::set_uniform(histogram_program_.u_histogram_params, params);
 
-    uint32_t groups_x = (input_size.width + 15) / 16;
-    uint32_t groups_y = (input_size.height + 15) / 16;
+    float metering_params[4] = {float(static_cast<int>(config.metering_mode)), config.metering_area, 0.0f, 0.0f};
+    gfx::set_uniform(histogram_program_.u_metering_params, metering_params);
+
+    uint32_t groups_x = (meter_width + 15) / 16;
+    uint32_t groups_y = (meter_height + 15) / 16;
     bgfx::dispatch(pass.id, histogram_program_.program->native_handle(), groups_x, groups_y, 1);
 
     histogram_program_.program->end();
@@ -141,7 +154,7 @@ void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
 
     ensure_resources(rview);
 
-    run_histogram(rview, params.input);
+    run_histogram(rview, params.config, params.input);
     run_average(rview, params.config, params.delta_time);
 }
 

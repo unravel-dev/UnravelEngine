@@ -96,7 +96,10 @@ void main()
                 if (active_start < active_end)
                 {
                     uint active_count = active_end - active_start;
-                    float bin_center_log_lum = u_min_log_lum + (float(i) / 255.0) * u_log_lum_range;
+                    // Exact inverse of the histogram binning (bin = uint(t * 254 + 1)):
+                    // t = (bin - 1) / 254. Bin 0 (pure black) maps to the bottom of the range.
+                    float t = clamp((float(i) - 1.0) / 254.0, 0.0, 1.0);
+                    float bin_center_log_lum = u_min_log_lum + t * u_log_lum_range;
 
                     weighted_sum += bin_center_log_lum * float(active_count);
                     weight_total += float(active_count);
@@ -123,24 +126,26 @@ void main()
     float clamped_ev = clamp(avg_ev100, u_min_ev, u_max_ev);
 
     // Industry-standard exposure from EV100 (Frostbite/Unreal/Unity):
-    // exposure = 1 / (1.2 * 2^EV100) = exp2(-EV100) / 1.2
-    float target_exposure = exp2(-clamped_ev + u_compensation) / 1.2;
+    // exposure = exp2(-EV100) / 1.2. We adapt in log2 space, so work with the
+    // log of that target: log2(exposure) = -EV100 - log2(1.2), plus the EV bias.
+    float target_log_exposure = -clamped_ev + u_compensation - 0.263034; // log2(1.2)
 
     float prev_exposure = imageLoad(s_exposure, ivec2(0, 0)).x;
     // NaN fails (x == x); filter Inf and non-positive garbage from uninitialized storage.
     bool prev_ok = (prev_exposure == prev_exposure) && (prev_exposure > 0.0) && (prev_exposure < 1.0e10);
-    if (!prev_ok)
-    {
-        prev_exposure = target_exposure;
-    }
+    float prev_log_exposure = prev_ok ? log2(prev_exposure) : target_log_exposure;
 
-    float speed = (target_exposure > prev_exposure) ? u_speed_up : u_speed_down;
+    // Adapt in log2/EV space so the perceived adaptation rate is uniform across the
+    // brightness range (the eye responds logarithmically). Brightening the image
+    // (target > prev) uses the "up" time constant, darkening uses "down".
+    float speed = (target_log_exposure > prev_log_exposure) ? u_speed_up : u_speed_down;
     float adaptation_factor = 1.0 - exp(-u_delta_time / max(speed, 0.001));
-    float adapted_exposure = prev_exposure + (target_exposure - prev_exposure) * adaptation_factor;
+    float adapted_log_exposure = prev_log_exposure + (target_log_exposure - prev_log_exposure) * adaptation_factor;
 
+    float adapted_exposure = exp2(adapted_log_exposure);
     if ((adapted_exposure != adapted_exposure) || adapted_exposure <= 0.0 || adapted_exposure >= 1.0e10)
     {
-        adapted_exposure = target_exposure;
+        adapted_exposure = exp2(target_log_exposure);
     }
 
     imageStore(s_exposure, ivec2(0, 0), vec4(adapted_exposure, 0.0, 0.0, 0.0));
