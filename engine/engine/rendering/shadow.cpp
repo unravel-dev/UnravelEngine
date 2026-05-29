@@ -2338,7 +2338,8 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
     collector.prepare_batches(context);
     const auto& prepared_batches = collector.get_prepared_batches();
     
-    if (prepared_batches.empty()) {
+    if (prepared_batches.empty()) 
+    {
         return;
     }
     
@@ -2359,7 +2360,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         }
 
         // Get mesh from batch key
-        const auto& mesh_ptr = batch->key.mesh_ptr;
+        const auto mesh_ptr = batch->key.mesh_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
 
@@ -2410,7 +2411,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
 
     currentSmSettings->m_progPackInstanced->end();
 
-        // Update statistics
+    // Update statistics
     if(stats != nullptr)
     {
         const auto& batch_stats = collector.get_stats();
