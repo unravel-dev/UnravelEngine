@@ -900,9 +900,17 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
 
         stats_.drawn_models++;
 
-        // Get mesh and material from batch key
-        const auto& mesh_ptr = batch->key.mesh_ptr;
-        const auto& material_ptr = batch->key.material_ptr;
+        // Copy (don't reference) the mesh/material shared_ptrs out of the
+        // batch. Submitting the material calls asset_handle::get() on its
+        // textures, which can block and run a pending load inline right
+        // after a scene opens. That load can mutate the renderable set and
+        // cause batch_collector_ to rebuild its prepared batches, which
+        // would invalidate `batch` (and any reference into batch->key).
+        // Holding our own shared_ptr copies keeps the mesh and material -
+        // and therefore the textures they own - alive for the whole
+        // iteration even if the underlying batch storage goes away.
+        const auto mesh_ptr = batch->key.mesh_ptr;
+        const auto material_ptr = batch->key.material_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
 
