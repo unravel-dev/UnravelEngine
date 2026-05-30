@@ -11,6 +11,7 @@
 #include <engine/rendering/ecs/components/taa_component.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace unravel
@@ -25,6 +26,9 @@ struct volume_contribution
     float contribution;
     int priority;
     bool is_global;
+    /// World-space volume of the bounds (product of dimensions). Globals use the
+    /// maximum value so a smaller, more specific local always wins a tie.
+    float size;
 };
 
 /// Resolves an effect's on/off state across overlapping volumes using the same
@@ -93,6 +97,7 @@ auto resolve_post_process_volumes(scene& scn,
         [&](entt::entity e, const transform_component& transform_comp, const volume_component& volume_comp, const active_component& active_comp)
         {
             float contribution = 0.0f;
+            float size = std::numeric_limits<float>::max();
             if(volume_comp.mode == volume_mode::global)
             {
                 contribution = volume_comp.weight;
@@ -104,22 +109,41 @@ auto resolve_post_process_volumes(scene& scn,
                 const math::bbox world_bounds = math::bbox::mul(local_bounds, world_transform);
                 const float blend_factor = compute_blend_factor(world_bounds, camera_pos, volume_comp.blend_distance);
                 contribution = volume_comp.weight * blend_factor;
+                const math::vec3 dims = world_bounds.get_dimensions();
+                size = dims.x * dims.y * dims.z;
             }
             if(contribution > 0.0f)
             {
-                contributions.push_back({e, contribution, volume_comp.priority, volume_comp.mode == volume_mode::global});
+                contributions.push_back({e, contribution, volume_comp.priority, volume_comp.mode == volume_mode::global, size});
             }
         });
 
+    // Order volumes so the most authoritative one is applied last: the merge
+    // model seeds the result with the first volume and lets later volumes
+    // override it (see *_component::merge_into and enabled_resolver). Sorting
+    // ascending by priority makes a higher-priority volume win; the
+    // global-before-local tiebreak lets a local volume override a global at
+    // equal priority; for the same priority and type the larger contribution is
+    // applied last; and when contributions tie (e.g. the camera is fully inside
+    // two overlapping locals) the smaller, more specific volume is applied last
+    // so it wins.
     std::sort(contributions.begin(),
               contributions.end(),
               [](const volume_contribution& a, const volume_contribution& b)
               {
                   if(a.priority != b.priority)
                   {
-                      return a.priority > b.priority;
+                      return a.priority < b.priority;
                   }
-                  return a.is_global && !b.is_global;
+                  if(a.is_global != b.is_global)
+                  {
+                      return a.is_global && !b.is_global;
+                  }
+                  if(a.contribution != b.contribution)
+                  {
+                      return a.contribution < b.contribution;
+                  }
+                  return a.size > b.size;
               });
 
     bool first_auto_exposure = true;
