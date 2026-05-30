@@ -1703,9 +1703,11 @@ void deferred::run_ssil_pass(const camera& camera,
 
     if(ssil_params.settings.enable_multi_bounce && result)
     {
-        // Match SSIL output resolution (half when half-res trace is on). Upscaling the previous
-        // frame into a full-viewport PREV_SSIL blurs bright indirect across depth boundaries and
-        // causes severe multi-bounce light bleed; a 1:1 blit keeps history aligned with the trace.
+        // 1:1 blit of the SSIL output into PREV_SSIL. The output is full-res when the
+        // trace runs reduced-res (the joint-bilateral upsample pass already reconstructed
+        // it edge-aware), so feeding it back is safe -- the old failure mode was a NAIVE
+        // full-viewport upscale that bled bright indirect across depth boundaries. Sizing
+        // PREV_SSIL to the result keeps the blit a 1:1 copy regardless of trace resolution.
         const auto prev_sz = result->get_size();
         auto& prev_ssil = rview.tex_get_or_emplace("PREV_SSIL");
 

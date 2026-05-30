@@ -26,7 +26,10 @@ public:
     struct temporal_settings
     {
         float history_strength = 0.9f;
-        float depth_threshold = 0.01f;
+        /// Relative view-space depth tolerance for temporal disocclusion (fraction of
+        /// linear depth). The shader rejects history when |expected - stored| / stored
+        /// exceeds this, so it is scale-invariant (same value works near and far).
+        float depth_threshold = 0.05f;
         int max_accum_frames = 8;
     };
 
@@ -78,14 +81,27 @@ private:
     auto run_spatial_denoise(gfx::render_view& rview,
                              const gfx::frame_buffer::ptr& ssil_curr,
                              const gfx::frame_buffer::ptr& g_buffer,
+                             const gfx::texture::ptr& moments,
+                             const camera* cam,
                              const ssil_settings& settings) -> gfx::frame_buffer::ptr;
 
+    /// Returns true when the temporal pass produced valid luminance moments this frame
+    /// (i.e. the resolve shader ran). False on the first / disoccluded frame where the
+    /// history is merely seeded -- the denoiser then uses its spatial variance estimate.
     auto run_temporal_resolve(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& ssil_input,
                               const gfx::frame_buffer::ptr& g_buffer,
                               const gfx::texture::ptr& prev_depth,
                               const camera* cam,
-                              const ssil_settings& settings) -> gfx::texture::ptr;
+                              const ssil_settings& settings) -> bool;
+
+    /// Joint-bilateral upsample of a reduced-resolution SSIL buffer to the full
+    /// G-buffer resolution. Only invoked when the trace runs below full res.
+    auto run_upsample(gfx::render_view& rview,
+                      const gfx::frame_buffer::ptr& ssil_input,
+                      const gfx::frame_buffer::ptr& g_buffer,
+                      const camera* cam,
+                      const ssil_settings& settings) -> gfx::frame_buffer::ptr;
 
     auto create_or_update_ssil_fb(gfx::render_view& rview,
                                   const std::string& name,
@@ -98,6 +114,16 @@ private:
                                    const gfx::frame_buffer::ptr& reference,
                                    trace_resolution res,
                                    uint64_t extra_flags = 0) -> gfx::texture::ptr;
+
+    /// Creates / updates a two-attachment framebuffer (colour + luminance moments) used
+    /// by the temporal resolve pass for spatiotemporal variance (SVGF).
+    auto create_or_update_ssil_fb_mrt(gfx::render_view& rview,
+                                      const std::string& fbo_name,
+                                      const std::string& color_tex_name,
+                                      const std::string& moments_tex_name,
+                                      const gfx::frame_buffer::ptr& reference,
+                                      trace_resolution res,
+                                      uint64_t extra_flags = 0) -> gfx::frame_buffer::ptr;
 
     // Trace program (fullscreen fragment shader)
     struct trace_program : uniforms_cache
@@ -135,16 +161,22 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_denoise_params;
+        gfx::program::uniform_ptr u_denoise_params2;
         gfx::program::uniform_ptr s_ssil_input;
         gfx::program::uniform_ptr s_normal;
         gfx::program::uniform_ptr s_depth;
+        gfx::program::uniform_ptr s_ssil_moments;
+        gfx::program::uniform_ptr s_ssil_variance;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_denoise_params, "u_denoise_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_denoise_params2, "u_denoise_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_ssil_input, "s_ssil_input", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssil_moments, "s_ssil_moments", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssil_variance, "s_ssil_variance", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
@@ -160,6 +192,7 @@ private:
         gfx::program::uniform_ptr s_ssil_history;
         gfx::program::uniform_ptr s_depth;
         gfx::program::uniform_ptr s_prev_depth;
+        gfx::program::uniform_ptr s_ssil_moments_history;
 
         void cache_uniforms()
         {
@@ -169,10 +202,31 @@ private:
             cache_uniform(program.get(), s_ssil_history, "s_ssil_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssil_moments_history, "s_ssil_moments_history", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } temporal_program_;
+
+    // Joint-bilateral upsample program (fullscreen fragment shader)
+    struct upsample_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_upsample_params;
+        gfx::program::uniform_ptr s_ssil_input;
+        gfx::program::uniform_ptr s_normal;
+        gfx::program::uniform_ptr s_depth;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_upsample_params, "u_upsample_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_ssil_input, "s_ssil_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool { return program && program->is_valid(); }
+    } upsample_program_;
 };
 
 } // namespace unravel

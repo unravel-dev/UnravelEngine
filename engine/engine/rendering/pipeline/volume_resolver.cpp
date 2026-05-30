@@ -27,6 +27,37 @@ struct volume_contribution
     bool is_global;
 };
 
+/// Resolves an effect's on/off state across overlapping volumes using the same
+/// override model as the settings blend (see *_component::merge_into): the first
+/// contributing volume seeds the state, and any later volume whose contribution
+/// dominates (>= 0.5, e.g. the camera is inside a local volume) overrides it.
+/// This lets a local volume turn an effect on even when a global volume that has
+/// it disabled also contributes, which a contribution-weighted average could not.
+struct enabled_resolver
+{
+    bool seen = false;
+    bool enabled = false;
+
+    void accumulate(bool component_enabled, float contribution)
+    {
+        if(!seen)
+        {
+            enabled = component_enabled;
+            seen = true;
+            return;
+        }
+        if(contribution >= 0.5f)
+        {
+            enabled = component_enabled;
+        }
+    }
+
+    auto resolve() const -> bool
+    {
+        return seen && enabled;
+    }
+};
+
 auto compute_blend_factor(const math::bbox& world_bounds,
                           const math::vec3& camera_pos,
                           float blend_distance) -> float
@@ -98,22 +129,14 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_ssr = true;
     bool first_ssil = true;
     bool first_taa = true;
-    float auto_exposure_enabled_sum = 0.0f;
-    float auto_exposure_contrib_sum = 0.0f;
-    float bloom_enabled_sum = 0.0f;
-    float bloom_contrib_sum = 0.0f;
-    float tonemapping_enabled_sum = 0.0f;
-    float tonemapping_contrib_sum = 0.0f;
-    float fxaa_enabled_sum = 0.0f;
-    float fxaa_contrib_sum = 0.0f;
-    float ssr_enabled_sum = 0.0f;
-    float ssr_contrib_sum = 0.0f;
-    float assao_enabled_sum = 0.0f;
-    float assao_contrib_sum = 0.0f;
-    float ssil_enabled_sum = 0.0f;
-    float ssil_contrib_sum = 0.0f;
-    float taa_enabled_sum = 0.0f;
-    float taa_contrib_sum = 0.0f;
+    enabled_resolver auto_exposure_enabled;
+    enabled_resolver bloom_enabled;
+    enabled_resolver tonemapping_enabled;
+    enabled_resolver fxaa_enabled;
+    enabled_resolver ssr_enabled;
+    enabled_resolver assao_enabled;
+    enabled_resolver ssil_enabled;
+    enabled_resolver taa_enabled;
 
     for(const auto& c : contributions)
     {
@@ -122,8 +145,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* ae = handle.try_get<auto_exposure_component>(); ae && contrib > 0.0f)
         {
-            auto_exposure_enabled_sum += (ae->enabled ? 1.0f : 0.0f) * contrib;
-            auto_exposure_contrib_sum += contrib;
+            auto_exposure_enabled.accumulate(ae->enabled, contrib);
             if(ae->enabled)
             {
                 auto_exposure_component::merge_into(result.auto_exposure, ae->settings, contrib, first_auto_exposure);
@@ -133,8 +155,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* bloom = handle.try_get<bloom_component>(); bloom && contrib > 0.0f)
         {
-            bloom_enabled_sum += (bloom->enabled ? 1.0f : 0.0f) * contrib;
-            bloom_contrib_sum += contrib;
+            bloom_enabled.accumulate(bloom->enabled, contrib);
             if(bloom->enabled)
             {
                 bloom_component::merge_into(result.bloom, bloom->settings, contrib, first_bloom);
@@ -144,8 +165,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* tonemapping = handle.try_get<tonemapping_component>(); tonemapping && contrib > 0.0f)
         {
-            tonemapping_enabled_sum += (tonemapping->enabled ? 1.0f : 0.0f) * contrib;
-            tonemapping_contrib_sum += contrib;
+            tonemapping_enabled.accumulate(tonemapping->enabled, contrib);
             if(tonemapping->enabled)
             {
                 tonemapping_component::merge_into(result.tonemapping, tonemapping->settings, contrib, first_tonemapping);
@@ -155,14 +175,12 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* fxaa = handle.try_get<fxaa_component>(); fxaa && contrib > 0.0f)
         {
-            fxaa_enabled_sum += (fxaa->enabled ? 1.0f : 0.0f) * contrib;
-            fxaa_contrib_sum += contrib;
+            fxaa_enabled.accumulate(fxaa->enabled, contrib);
         }
 
         if(auto* taa = handle.try_get<taa_component>(); taa && contrib > 0.0f)
         {
-            taa_enabled_sum += (taa->enabled ? 1.0f : 0.0f) * contrib;
-            taa_contrib_sum += contrib;
+            taa_enabled.accumulate(taa->enabled, contrib);
             if(taa->enabled)
             {
                 taa_component::merge_into(result.taa, taa->settings, contrib, first_taa);
@@ -172,8 +190,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* ssr = handle.try_get<ssr_component>(); ssr && contrib > 0.0f)
         {
-            ssr_enabled_sum += (ssr->enabled ? 1.0f : 0.0f) * contrib;
-            ssr_contrib_sum += contrib;
+            ssr_enabled.accumulate(ssr->enabled, contrib);
             if(ssr->enabled)
             {
                 ssr_component::merge_into(result.ssr, ssr->settings, contrib, first_ssr);
@@ -183,8 +200,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* assao = handle.try_get<assao_component>(); assao && contrib > 0.0f)
         {
-            assao_enabled_sum += (assao->enabled ? 1.0f : 0.0f) * contrib;
-            assao_contrib_sum += contrib;
+            assao_enabled.accumulate(assao->enabled, contrib);
             if(assao->enabled)
             {
                 assao_component::merge_into(result.assao, assao->settings, contrib, first_assao);
@@ -194,8 +210,7 @@ auto resolve_post_process_volumes(scene& scn,
 
         if(auto* ssil = handle.try_get<ssil_component>(); ssil && contrib > 0.0f)
         {
-            ssil_enabled_sum += (ssil->enabled ? 1.0f : 0.0f) * contrib;
-            ssil_contrib_sum += contrib;
+            ssil_enabled.accumulate(ssil->enabled, contrib);
             if(ssil->enabled)
             {
                 ssil_component::merge_into(result.ssil, ssil->settings, contrib, first_ssil);
@@ -204,14 +219,14 @@ auto resolve_post_process_volumes(scene& scn,
         }
     }
 
-    result.has_auto_exposure = auto_exposure_contrib_sum > 0.0f && (auto_exposure_enabled_sum / auto_exposure_contrib_sum) > 0.5f;
-    result.has_bloom = bloom_contrib_sum > 0.0f && (bloom_enabled_sum / bloom_contrib_sum) > 0.5f;
-    result.has_tonemapping = tonemapping_contrib_sum > 0.0f && (tonemapping_enabled_sum / tonemapping_contrib_sum) > 0.5f;
-    result.has_fxaa = fxaa_contrib_sum > 0.0f && (fxaa_enabled_sum / fxaa_contrib_sum) > 0.5f;
-    result.has_taa = taa_contrib_sum > 0.0f && (taa_enabled_sum / taa_contrib_sum) > 0.5f;
-    result.has_ssr = ssr_contrib_sum > 0.0f && (ssr_enabled_sum / ssr_contrib_sum) > 0.5f;
-    result.has_assao = assao_contrib_sum > 0.0f && (assao_enabled_sum / assao_contrib_sum) > 0.5f;
-    result.has_ssil = ssil_contrib_sum > 0.0f && (ssil_enabled_sum / ssil_contrib_sum) > 0.5f;
+    result.has_auto_exposure = auto_exposure_enabled.resolve();
+    result.has_bloom = bloom_enabled.resolve();
+    result.has_tonemapping = tonemapping_enabled.resolve();
+    result.has_fxaa = fxaa_enabled.resolve();
+    result.has_taa = taa_enabled.resolve();
+    result.has_ssr = ssr_enabled.resolve();
+    result.has_assao = assao_enabled.resolve();
+    result.has_ssil = ssil_enabled.resolve();
 
     return result;
 }

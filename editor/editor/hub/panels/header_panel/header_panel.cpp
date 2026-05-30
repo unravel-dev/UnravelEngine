@@ -512,9 +512,10 @@ auto header_panel::calc_right_zone_width(const ImVec2& frame_padding, const ImVe
     float slider = 100.0f;
     float reset_btn = ImGui::CalcTextSize(ICON_MDI_UNDO_VARIANT).x + frame_padding.x * 2;
     float vsync_box = ImGui::CalcTextSize("Vsync").x + frame_padding.x * 2 + ImGui::GetFrameHeight() + item_spacing.x;
+    float max_fps_slider = 100.0f + item_spacing.x;
     float separator = item_spacing.x * 2 + 2.0f;
     return speed_icon + item_spacing.x + slider + item_spacing.x + reset_btn +
-           separator + vsync_box + item_spacing.x;
+           separator + vsync_box + max_fps_slider + item_spacing.x;
 }
 
 auto header_panel::calc_center_zone_width(const ImVec2& frame_padding, const ImVec2& item_spacing) -> float
@@ -624,6 +625,15 @@ void header_panel::draw_right_zone(rtti::context& ctx)
     {
         rend.set_vsync(vsync);
     }
+    ImGui::SameLine();
+    int max_fps = static_cast<int>(sim.get_max_fps());
+    ImGui::SetNextItemWidth(100.0f);
+    const char* max_fps_fmt = (max_fps <= 0) ? "Uncapped" : "%d FPS";
+    if(ImGui::KnobSliderScalarT("###Max FPS", &max_fps, 0, 240, max_fps_fmt, ImGuiSliderFlags_AlwaysClamp))
+    {
+        sim.set_max_fps(static_cast<uint32_t>(max_fps < 0 ? 0 : max_fps));
+    }
+    ImGui::SetItemTooltipEx("%s", "Max FPS (0 = uncapped)");
     ImGui::EndGroup();
 }
 

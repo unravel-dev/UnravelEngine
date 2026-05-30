@@ -23,7 +23,7 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"pretty_name", "Depth Sigma"},
             entt::attribute{"min", 0.005f},
             entt::attribute{"max", 0.05f},
-            entt::attribute{"tooltip", "Depth edge-stopping threshold. Lower = stricter edges"},
+            entt::attribute{"tooltip", "Depth edge-stopping threshold for the joint-bilateral a-trous filter.\nLower = stricter edges / sharper, higher = smoother."},
         })
         .data<&spatial_denoise_settings::normal_power>("normal_power"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -38,8 +38,8 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"name", "luma_sigma"},
             entt::attribute{"pretty_name", "Luma Sigma"},
             entt::attribute{"min", 0.3f},
-            entt::attribute{"max", 2.0f},
-            entt::attribute{"tooltip", "Luminance edge-stopping threshold. Lower = sharper, higher = smoother"},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"tooltip", "Variance-guided luminance edge-stop multiplier (phi). Scales the measured\nspatiotemporal luminance std-dev (temporal moments, spatial fallback when fresh):\nlower = sharper / more detail kept, higher = smoother."},
         })
         .data<&spatial_denoise_settings::passes>("passes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -74,8 +74,8 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"name", "depth_threshold"},
             entt::attribute{"pretty_name", "Edge Threshold"},
             entt::attribute{"min", 0.000f},
-            entt::attribute{"max", 0.030f},
-            entt::attribute{"tooltip", "Depth difference allowed before history is discarded"},
+            entt::attribute{"max", 0.200f},
+            entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation; higher =\nsmoother but more ghosting. ~0.05 is a good balance."},
         })
         .data<&temporal_settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
