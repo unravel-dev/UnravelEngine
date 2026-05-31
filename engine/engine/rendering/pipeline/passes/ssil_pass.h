@@ -39,7 +39,11 @@ public:
         int max_rays = 4;
         int max_steps = 64;
         float depth_tolerance = 0.15f;
-        float brightness = 0.3f;
+        /// Gain on the on-screen indirect BOUNCE only (the environment-miss fallback stays
+        /// at probe intensity). 1.0 is the physically-matched single-bounce strength, but
+        /// that reads strong with saturated albedos (e.g. a red floor bleeding onto walls),
+        /// so the default is a tamer 0.5; raise toward 1.0 for full physical colour bleed.
+        float brightness = 0.5f;
         float max_distance = 20.0f;
         /// Trace resolution divisor. SSIL tolerates `quarter` well because indirect
         /// lighting is low-frequency and the bilateral upsample uses full-res guides.
@@ -62,14 +66,23 @@ public:
         gfx::texture::ptr direct_lighting;
         gfx::texture::ptr prev_depth;
         gfx::texture::ptr prev_ssil;
+        /// Environment SH coefficients (9x3 R32F); sampled per ray as the miss fallback so
+        /// the trace integrates the environment where it escapes on-screen geometry. May be
+        /// null on the first frame, in which case the fallback is disabled (misses = 0).
+        gfx::texture::ptr irradiance_sh;
         const camera* cam{};
         ssil_settings settings;
     };
 
     auto init(rtti::context& ctx) -> bool;
 
-    /// Executes the full SSIL pipeline (trace -> denoise -> temporal).
-    /// Returns the SSIL output texture (RGB = indirect diffuse, A = confidence).
+    /// Executes the full SSIL pipeline (trace -> temporal -> denoise -> upsample).
+    /// Returns the SSIL output texture: RGB = full hemispherical indirect diffuse in
+    /// radiance-mean units (on-screen bounce where rays hit, environment SH where they
+    /// miss); the consumer multiplies by PI to reach eval_irradiance_sh's irradiance units.
+    /// A = confidence: single-frame ray-agreement from the trace, replaced by temporal
+    /// convergence when accumulation runs. The consumer blends toward the SH probe by this
+    /// alpha on noisy / disoccluded / unconverged pixels (mix(irradiance, ssil.rgb*PI, a)).
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
     /// Releases all GPU resources owned by this pass from the render_view.
@@ -139,6 +152,7 @@ private:
         gfx::program::uniform_ptr s_emissive;
         gfx::program::uniform_ptr s_albedo;
         gfx::program::uniform_ptr s_prev_ssil;
+        gfx::program::uniform_ptr s_irradiance;
 
         void cache_uniforms()
         {
@@ -151,6 +165,7 @@ private:
             cache_uniform(program.get(), s_emissive, "s_emissive", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_albedo, "s_albedo", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_prev_ssil, "s_prev_ssil", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }

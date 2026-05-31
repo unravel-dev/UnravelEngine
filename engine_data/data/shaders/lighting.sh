@@ -762,6 +762,35 @@ vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
     return irradiance;
 }
 
+// Evaluate environment RADIANCE L(dir) from the same SH coefficients used by
+// eval_irradiance_sh, but WITHOUT the cosine-lobe convolution constants (A_l). This is
+// the raw radiance reconstruction L(dir) = sum_k coeff_k * Y_k(dir) and is the value a
+// ray "sees" along an arbitrary direction (used as the screen-space miss fallback so a
+// trace that escapes geometry still integrates the environment instead of a hole).
+// SH radiance can ring negative; clamp to a non-negative value.
+vec3 eval_radiance_sh(sampler2D coeff_tex, vec3 dir)
+{
+    float x = dir.x, y = dir.y, z = dir.z;
+    float basis[9];
+    basis[0] = 0.282095;
+    basis[1] = 0.488603 * y;
+    basis[2] = 0.488603 * z;
+    basis[3] = 0.488603 * x;
+    basis[4] = 1.092548 * x * z;
+    basis[5] = 1.092548 * y * z;
+    basis[6] = 1.092548 * x * y;
+    basis[7] = 0.315392 * (3.0 * z * z - 1.0);
+    basis[8] = 0.546274 * (x * x - y * y);
+    vec3 radiance = vec3(0.0, 0.0, 0.0);
+    for(int k = 0; k < 9; k++)
+    {
+        radiance.r += texelFetch(coeff_tex, ivec2(k, 0), 0).r * basis[k];
+        radiance.g += texelFetch(coeff_tex, ivec2(k, 1), 0).r * basis[k];
+        radiance.b += texelFetch(coeff_tex, ivec2(k, 2), 0).r * basis[k];
+    }
+    return max(radiance, vec3_splat(0.0));
+}
+
 /*=============================================================================
     BRDF: Diffuse functions.
 =============================================================================*/

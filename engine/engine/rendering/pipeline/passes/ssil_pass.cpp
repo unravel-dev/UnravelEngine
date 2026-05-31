@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/default_textures.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
@@ -204,6 +205,13 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         gfx::set_texture(trace_program_.s_prev_ssil, 5, params.prev_ssil);
     }
 
+    // Environment SH for the per-ray miss fallback. Null on the first frame (the SH is
+    // computed later in the indirect pass and persists for the next frame), so bind black
+    // and signal the shader to disable the fallback (env_intensity = 0) until it exists.
+    const bool env_fallback_active = static_cast<bool>(params.irradiance_sh);
+    gfx::set_texture(trace_program_.s_irradiance, 6,
+                     env_fallback_active ? params.irradiance_sh : default_textures::get().black_texture());
+
     float ssil_params[4] = {
         float(params.settings.max_steps),
         float(params.settings.max_rays),
@@ -222,7 +230,7 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         params.settings.max_distance,
         float(gfx::get_render_frame() & 0xFFFFu),
         multi_bounce_val,
-        0.0f};
+        env_fallback_active ? 1.0f : 0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 
     // u_ssil_resolution: xy = full G-buffer size, zw = PER-AXIS (full / trace) scale.

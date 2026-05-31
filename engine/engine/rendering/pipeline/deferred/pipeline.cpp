@@ -1402,7 +1402,10 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
     
     const auto& ssil_tex = rview.tex_safe_get("SSIL");
-    gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().black_texture());
+    // Transparent (alpha 0) fallback when SSIL is disabled/absent so the shader's
+    // mix(irradiance, ssil.rgb, ssil.a) collapses to the pure SH probe. The opaque-black
+    // default (alpha 1) would instead force mix() to 0 and wipe out the ambient.
+    gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().transparent_texture());
     
 
     auto topology = gfx::clip_quad(1.0f);
@@ -1692,6 +1695,10 @@ void deferred::run_ssil_pass(const camera& camera,
     ssil_params.direct_lighting = rview.fbo_get("LBUFFER")->get_texture(0);
     ssil_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
     ssil_params.prev_ssil = rview.tex_safe_get("PREV_SSIL");
+    // Last frame's environment SH (the pass that computes it runs later, in the indirect
+    // lighting pass); used as the per-ray miss fallback so escaped rays integrate the
+    // environment. Persists across frames in the render_view, so it is null only on frame 0.
+    ssil_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     ssil_params.cam = &camera;
 
     rparams.fill_ssil_params(ssil_params);

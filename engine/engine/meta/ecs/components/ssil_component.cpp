@@ -154,7 +154,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"pretty_name", "Brightness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 5.0f},
-            entt::attribute{"tooltip", "SSIL brightness multiplier"},
+            entt::attribute{"tooltip", "Gain on the on-screen indirect BOUNCE only (the environment-miss fallback stays at\nprobe intensity, so unoccluded ambient matches the SH probe). 1.0 = physically-matched\nsingle bounce (reads strong with saturated albedos); 0.5 is the tamer default. Raise\ntoward 1.0 for full physical colour bleed."},
         })
         .data<&ssil_settings::max_distance>("max_distance"_hs)
         .custom<entt::attributes>(entt::attributes{

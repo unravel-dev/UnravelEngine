@@ -88,19 +88,20 @@ void main()
     float W_hist = hist.a * u_max_accum_frames;
     vec3 C_hist = hist.rgb;
 
-    float W_curr = curr.a;
+    // Each valid current frame contributes a unit sample to the running mean (standard
+    // exponential accumulation); temporal averaging is what reduces the trace noise. We only
+    // gate out sky (curr.a == 0). curr.a is otherwise the trace's single-frame confidence,
+    // consumed as the SH-fallback weight on the temporal-disabled path -- it is NOT used as
+    // an accumulation weight here (down-weighting noisy frames would just slow convergence).
+    float W_curr = (curr.a > 0.0) ? 1.0 : 0.0;
     vec3 C_curr = curr.rgb;
 
-    // No neighborhood color clip on the SSIL history: the trace is a sparse
-    // Monte Carlo signal (a handful of cosine rays per pixel), so a 3x3 of
-    // the raw current frame is dominated by zero-hit samples. Any
-    // mu/sigma- or min/max-based clip built from that neighborhood
-    // collapses toward the noise floor and persistently drags converged
-    // history down -- and the dimming compounds through multi-bounce via
-    // s_prev_ssil. The trace already clamps prev_indirect and per-ray
-    // hit_color to 10 so the multi-bounce series cannot run away; the
-    // depth check below + edge_fade handle the disocclusion / stale-history
-    // cases the clip was nominally there for.
+    // No neighborhood colour clip on the history. The trace is a noisy few-ray Monte Carlo
+    // signal, so a clamp box built from the current 3x3 is itself noisy: clamping the
+    // converged history into that per-frame box re-injects the very noise temporal
+    // accumulation exists to remove, producing crawling/boiling speckle. (TAA can clamp
+    // because its current frame is the clean rendered image; ours is not.) Disocclusion /
+    // stale-history rejection is handled by the relative-depth test + edge_fade below.
 
     // Disocclusion test: compare the depth the current world point WOULD have had
     // last frame (expected_prev_z) against the depth actually stored at prev_uv.

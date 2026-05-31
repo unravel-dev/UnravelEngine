@@ -44,9 +44,10 @@ auto default_textures::get() -> default_textures&
 
 void default_textures::generate()
 {
-    black_   = create_4x4_rgba8(0, 0, 0, 255);
-    white_   = create_4x4_rgba8(255, 255, 255, 255);
-    missing_ = create_4x4_rgba8(255, 0, 255, 255);
+    black_       = create_4x4_rgba8(0, 0, 0, 255);
+    white_       = create_4x4_rgba8(255, 255, 255, 255);
+    missing_     = create_4x4_rgba8(255, 0, 255, 255);
+    transparent_ = create_4x4_rgba8(0, 0, 0, 0);
 
     cloud_noise_.generate();
 }
@@ -56,6 +57,7 @@ void default_textures::clear()
     black_.reset();
     white_.reset();
     missing_.reset();
+    transparent_.reset();
 
     cloud_noise_.clear();
 }
