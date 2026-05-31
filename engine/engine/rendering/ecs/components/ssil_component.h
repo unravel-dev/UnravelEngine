@@ -27,6 +27,7 @@ public:
         result.max_rays = int(std::lerp(float(result.max_rays), float(from.max_rays), contribution));
         result.max_steps = int(std::lerp(float(result.max_steps), float(from.max_steps), contribution));
         result.depth_tolerance = std::lerp(result.depth_tolerance, from.depth_tolerance, contribution);
+        result.thickness = std::lerp(result.thickness, from.thickness, contribution);
         result.brightness = std::lerp(result.brightness, from.brightness, contribution);
         result.max_distance = std::lerp(result.max_distance, from.max_distance, contribution);
         result.resolution = contribution >= 0.5f ? from.resolution : result.resolution;

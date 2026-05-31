@@ -38,7 +38,7 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"name", "luma_sigma"},
             entt::attribute{"pretty_name", "Luma Sigma"},
             entt::attribute{"min", 0.3f},
-            entt::attribute{"max", 4.0f},
+            entt::attribute{"max", 32.0f},
             entt::attribute{"tooltip", "Variance-guided luminance edge-stop multiplier (phi). Scales the measured\nspatiotemporal luminance std-dev (temporal moments, spatial fallback when fresh):\nlower = sharper / more detail kept, higher = smoother."},
         })
         .data<&spatial_denoise_settings::passes>("passes"_hs)
@@ -55,7 +55,7 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"pretty_name", "Full-Res Passes"},
             entt::attribute{"min", 0},
             entt::attribute{"max", 5},
-            entt::attribute{"tooltip", "Mixed-resolution split: how many a-trous passes run at the trace resolution. The\nREMAINING (wide) passes run at half res (cache-coherent, ~4x cheaper); a bilateral\nupsample then restores sharp silhouettes from the full-res G-buffer. 0 (recommended)\n= all half res: indirect light is low-frequency, so a full-res pass adds no visible\ndetail, gets downsampled away, and steals reach from the wide passes (more noise).\n>= Passes = all full res (no speedup)."},
+            entt::attribute{"tooltip", "Mixed-resolution split: how many a-trous passes run at the trace resolution. The\nREMAINING (wide) passes run at half res (cache-coherent, ~4x cheaper); a bilateral\nupsample then restores sharp silhouettes from the full-res G-buffer. 0 lets the pass\nchoose the cheapest split; when temporal moments exist it is promoted to one full-res\npass so stable variance is consumed before the half-res tier. >= Passes = all full res."},
         })
         .data<&spatial_denoise_settings::max_step>("max_step"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -163,6 +163,14 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip", "Depth tolerance for hit validation"},
+        })
+        .data<&ssil_settings::thickness>("thickness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "thickness"},
+            entt::attribute{"pretty_name", "Thickness"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"tooltip", "Extra view-space hit-acceptance band added on top of Depth Tolerance, scaled by hit\ndistance. Far hits resolve against coarser Hi-Z depth, so a fixed band over-rejects\nthem and leaks the environment fallback through occluders; raising thickness closes\nthat leak. Too high over-occludes (darkening). 0 = fixed band only."},
         })
         .data<&ssil_settings::brightness>("brightness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -284,6 +292,7 @@ SAVE_INLINE(ssil_pass::ssil_settings)
     try_save(ar, ser20::make_nvp("max_rays", obj.max_rays));
     try_save(ar, ser20::make_nvp("max_steps", obj.max_steps));
     try_save(ar, ser20::make_nvp("depth_tolerance", obj.depth_tolerance));
+    try_save(ar, ser20::make_nvp("thickness", obj.thickness));
     try_save(ar, ser20::make_nvp("brightness", obj.brightness));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
@@ -302,6 +311,7 @@ LOAD_INLINE(ssil_pass::ssil_settings)
     try_load(ar, ser20::make_nvp("max_rays", obj.max_rays));
     try_load(ar, ser20::make_nvp("max_steps", obj.max_steps));
     try_load(ar, ser20::make_nvp("depth_tolerance", obj.depth_tolerance));
+    try_load(ar, ser20::make_nvp("thickness", obj.thickness));
     try_load(ar, ser20::make_nvp("brightness", obj.brightness));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
     // Backwards compat: legacy scenes store the old boolean under `enable_half_res`.

@@ -18,19 +18,17 @@ public:
     {
         float depth_sigma = 0.02f;
         float normal_power = 64.0f;
-        float luma_sigma = 1.0f;
-        int passes = 5;
+        float luma_sigma = 16.0f;
+
+        int passes = 4;
         /// Mixed-resolution split: the first `full_res_passes` a-trous passes run at the trace
         /// resolution; the REMAINING passes run at half that resolution, where their wide
         /// dilation is cache-coherent and ~4x cheaper. The bilateral upsample reconstructs
         /// sharp silhouettes from the full-res G-buffer regardless of where the blur ran.
         ///
-        /// Default 0 (denoise entirely at half res) is best for indirect diffuse: it is
-        /// low-frequency, so a full-res pass adds no perceptible detail -- worse, it is
-        /// downsampled away (round-tripped), it steals budget from the wide half-res passes
-        /// (narrower reach -> more noise), and it seeds a tighter variance that under-blurs.
-        /// Raise only if a future higher-frequency signal (e.g. glossy GI) needs full-res
-        /// detail; >= passes disables the optimization (all full res).
+        /// Default 0 lets the pass choose the cheapest split. When temporal moments are
+        /// available, it is automatically promoted to one trace-resolution pass so the
+        /// stable variance is consumed before the wide half-res tier.
         int full_res_passes = 0;
         /// Upper bound on the a-trous dilation (in texels, within each tier). The step normally
         /// doubles each pass (1,2,4,8,...); capping it turns the widest passes into same-cost
@@ -46,7 +44,7 @@ public:
         /// linear depth). The shader rejects history when |expected - stored| / stored
         /// exceeds this, so it is scale-invariant (same value works near and far).
         float depth_threshold = 0.05f;
-        int max_accum_frames = 8;
+        int max_accum_frames = 16;
     };
 
     /// SSIL settings
@@ -55,6 +53,11 @@ public:
         int max_rays = 4;
         int max_steps = 64;
         float depth_tolerance = 0.15f;
+        /// Extra view-space hit-acceptance band ("thickness"), added on top of
+        /// depth_tolerance and scaled by hit distance. Far hits resolve against coarser
+        /// Hi-Z depth, so a fixed band over-rejects them and leaks the environment fallback
+        /// through occluders; raising thickness closes that leak (too high over-occludes).
+        float thickness = 0.5f;
         /// Gain on the on-screen indirect BOUNCE only (the environment-miss fallback stays
         /// at probe intensity). 1.0 is the physically-matched single-bounce strength, but
         /// that reads strong with saturated albedos (e.g. a red floor bleeding onto walls),
@@ -96,9 +99,8 @@ public:
     /// Returns the SSIL output texture: RGB = full hemispherical indirect diffuse in
     /// radiance-mean units (on-screen bounce where rays hit, environment SH where they
     /// miss); the consumer multiplies by PI to reach eval_irradiance_sh's irradiance units.
-    /// A = confidence: single-frame ray-agreement from the trace, replaced by temporal
-    /// convergence when accumulation runs. The consumer blends toward the SH probe by this
-    /// alpha on noisy / disoccluded / unconverged pixels (mix(irradiance, ssil.rgb*PI, a)).
+    /// A = SSIL blend weight: trace coverage without temporal, accumulated screen-hit
+    /// evidence when temporal is enabled (mix(irradiance, ssil.rgb*PI, a)).
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
     /// Releases all GPU resources owned by this pass from the render_view.
@@ -160,6 +162,8 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_ssil_params;
         gfx::program::uniform_ptr u_ssil_params2;
+        /// x = distance-scaled hit-acceptance thickness (see ssil_settings::thickness).
+        gfx::program::uniform_ptr u_ssil_params3;
         /// xy = G-buffer (full) width/height; z = 1 when tracing at half resolution (UV from gl_FragCoord).
         gfx::program::uniform_ptr u_ssil_resolution;
         gfx::program::uniform_ptr s_color;
@@ -174,6 +178,7 @@ private:
         {
             cache_uniform(program.get(), u_ssil_params, "u_ssil_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_ssil_params2, "u_ssil_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_ssil_params3, "u_ssil_params3", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_ssil_resolution, "u_ssil_resolution", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_color, "s_color", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);

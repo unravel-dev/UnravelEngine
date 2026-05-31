@@ -12,9 +12,7 @@
  *     freshly disoccluded / sparse regions still blur, and tightens as the estimate
  *     converges so detail is preserved.
  *
- * Accumulation is confidence-weighted (by each tap's alpha = trace/temporal sample
- * count), so holes and low-history pixels fill from valid same-surface neighbours while
- * fully converged regions (alpha ~= 1 everywhere) are unaffected.
+ * RGB is filtered as radiance. Alpha is filtered separately as the SSIL blend weight.
  */
 
 #include "../bgfx_compute.sh"
@@ -43,7 +41,10 @@ uniform vec4 u_denoise_params;
 uniform vec4 u_denoise_params2;
 #define u_has_moments  u_denoise_params2.x
 #define u_first_pass   u_denoise_params2.y
-#define u_frame_seed   u_denoise_params2.z
+/// A-trous kernel radius in taps (1 => 3x3 / 8 taps, 2 => 5x5 / 24 taps). The wide half-
+/// resolution tier uses radius 1 (indirect diffuse is low-frequency, so the outer ring
+/// adds little) with a larger dilation step to keep its reach; the full-res tier uses 2.
+#define u_kernel_radius u_denoise_params2.w
 
 #define KW0 0.375
 #define KW1 0.25
@@ -51,11 +52,6 @@ uniform vec4 u_denoise_params2;
 
 // Luminance-sigma floor so the edge-stop never fully collapses on flat regions.
 #define LUMA_SIGMA_EPS 0.05
-// Max luminance-sigma multiplier applied to zero-history pixels. They are essentially
-// raw single-frame noise, so the luminance edge-stop is widened until it is a near pure
-// geometry blur; it ramps back to 1.0 as temporal/spatial confidence accumulates.
-#define HISTORY_BLUR_BOOST 8.0
-
 float ssil_kernel_weight(int dx, int dy)
 {
     int ax = abs(dx);
@@ -164,8 +160,7 @@ void main()
         {
             vec2 moments = texelFetch(s_ssil_moments, coord, 0).rg;
             float temporal_variance = max(0.0, moments.y - moments.x * moments.x);
-            float temporal_trust = clamp(center.a, 0.0, 1.0);
-            variance = mix(spatial_variance, temporal_variance, temporal_trust);
+            variance = temporal_variance;
         }
     }
     else
@@ -173,15 +168,11 @@ void main()
         variance = ssil_prefiltered_variance(coord, size);
     }
 
-    // Widen the luminance edge-stop for low-history pixels (raw noise), tighten it as the
-    // estimate converges. Bounded, so it never blows up the way a 1/confidence term does.
-    float history_boost = mix(HISTORY_BLUR_BOOST, 1.0, clamp(center.a, 0.0, 1.0));
-    float luma_sigma = u_luma_sigma * history_boost * (sqrt(variance) + LUMA_SIGMA_EPS);
+    float luma_sigma = u_luma_sigma * (sqrt(variance) + LUMA_SIGMA_EPS);
 
-    // Two accumulators:
-    //   colour  -> confidence + edge-stop weighted (fills holes, denoises radiance).
-    //   coverage-> geometry-only weighted alpha, for the propagated confidence channel.
-    float center_color_w = KW0 * max(center.a, 0.0);
+    // Two accumulators: radiance is always valid on surfaces (including environment
+    // fallback); alpha is the separate final blend-weight signal.
+    float center_color_w = KW0;
     vec3 color_sum = center.rgb * center_color_w;
     float color_w_sum = center_color_w;
     float variance_num = variance * center_color_w * center_color_w;
@@ -189,24 +180,26 @@ void main()
     float geom_sum = KW0;
     float coverage_sum = KW0 * clamp(center.a, 0.0, 1.0);
 
-    // Per-pixel kernel rotation. A fixed axis-aligned a-trous lattice makes neighbouring
-    // pixels filter near-identical dilated sample sets, so kernel truncation around bright
-    // features and the dilated comb show up as static rectangular / grid banding. Rotating
-    // the lattice by a per-pixel angle decorrelates neighbours: the structured grid becomes
-    // incoherent high-frequency noise that the temporal pass averages away (ReLAX/ReBLUR).
-    // The seed advances each frame (u_frame_seed) so temporal accumulation integrates many
-    // distinct orientations, converging the spatial filter far faster than a static rotation.
-    // The irrational per-axis offset keeps successive frames' seeds well decorrelated.
-    float angle = ssil_hash12(vec2(coord) + vec2(u_frame_seed, u_frame_seed * 0.7548777)) * 6.2831853;
+    // Keep the final spatial filter deterministic. This pass runs after temporal resolve,
+    // so per-frame kernel jitter would show up directly as crawling speckles.
+    float angle = ssil_hash12(vec2(coord)) * 6.2831853;
     float sa = sin(angle);
     float ca = cos(angle);
     vec2 base_uv = (vec2(coord) + 0.5) * texel_size;
+
+    int radius = int(u_kernel_radius);
+    if(radius < 1)
+        radius = 2;
 
     for(int y = -2; y <= 2; ++y)
     {
         for(int x = -2; x <= 2; ++x)
         {
             if(x == 0 && y == 0)
+                continue;
+            // Skip the outer ring when running the narrow (radius-1) kernel. Done before any
+            // texture work so the half-res tier actually pays for only its 8 taps.
+            if(abs(x) > radius || abs(y) > radius)
                 continue;
 
             // Rotated, dilated tap offset (in trace-buffer texels) sampled bilinearly.
@@ -235,8 +228,7 @@ void main()
 
             float kernel_w = ssil_kernel_weight(x, y);
             float geom_w = kernel_w * depth_w * normal_w;
-            float sample_alpha = max(sample_value.a, 0.0);
-            float color_w = geom_w * luma_w * sample_alpha;
+            float color_w = geom_w * luma_w;
 
             color_sum += sample_value.rgb * color_w;
             color_w_sum += color_w;

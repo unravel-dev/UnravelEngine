@@ -244,6 +244,9 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
         env_fallback_active ? 1.0f : 0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params2, ssil_params2);
 
+    float ssil_params3[4] = {params.settings.thickness, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(trace_program_.u_ssil_params3, ssil_params3);
+
     // u_ssil_resolution: xy = full G-buffer size, zw = PER-AXIS (full / trace) scale.
     // Per-axis is required: at odd full-res W with even full-res H (e.g. 1233 x 900)
     // the X and Y ratios disagree (2.00162 vs 2.0) and applying a scalar across both
@@ -292,7 +295,6 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     const float depth_sigma = settings.spatial_denoise.depth_sigma;
     const float normal_power = settings.spatial_denoise.normal_power;
     const float luma_sigma = settings.spatial_denoise.luma_sigma;
-    const float frame_seed = float(gfx::get_render_frame() & 0xFFFFu);
 
     // Mixed resolution: keep `full_passes` narrow passes at the trace resolution (preserving
     // local detail + feeding a clean edge-aware signal into the downsample), then run the
@@ -301,6 +303,13 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     // restores sharp silhouettes). Falls back to all-full-res if the helper programs are
     // unavailable or there are no passes to push down.
     int full_passes = std::clamp(settings.spatial_denoise.full_res_passes, 0, num_passes);
+    if(has_moments)
+    {
+        // The temporal resolve writes moments at the trace resolution. Run at least one
+        // trace-resolution pass so the denoiser can consume that stable variance before
+        // the mixed half-res tier falls back to propagated spatial variance.
+        full_passes = std::max(full_passes, 1);
+    }
     const bool mixed = downsample_program_.is_valid() && upsample_program_.is_valid() &&
                        (num_passes - full_passes) > 0;
     if(!mixed)
@@ -344,6 +353,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
                           int step,
                           bool first_pass,
                           bool use_moments,
+                          int kernel_radius,
                           const std::string& label) -> void
     {
         gfx::render_pass pass(label.c_str());
@@ -365,9 +375,9 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         float denoise_params[4] = {float(step), depth_sigma, normal_power, luma_sigma};
         gfx::set_uniform(denoise_program_.u_denoise_params, denoise_params);
 
-        // .z = per-frame rotation seed so the a-trous kernel orientation differs each frame;
-        // temporal accumulation then averages over many orientations.
-        float denoise_params2[4] = {use_moments ? 1.0f : 0.0f, first_pass ? 1.0f : 0.0f, frame_seed, 0.0f};
+        // .w = kernel radius (2 => 5x5 full-res tier, 1 => 3x3 wide half-res tier).
+        float denoise_params2[4] = {use_moments ? 1.0f : 0.0f, first_pass ? 1.0f : 0.0f, 0.0f,
+                                    float(kernel_radius)};
         gfx::set_uniform(denoise_program_.u_denoise_params2, denoise_params2);
 
         gfx::dispatch(pass.id, denoise_program_.program->native_handle(), dgx, dgy, 1);
@@ -386,7 +396,8 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 
     for(int i = 0; i < full_passes; ++i)
     {
-        run_atrous(src_tex, dst_fb, var_src, var_dst, gx, gy, std::min(1 << i, max_step), i == 0, has_moments,
+        // Full-res tier preserves local detail -> full 5x5 (radius 2) kernel.
+        run_atrous(src_tex, dst_fb, var_src, var_dst, gx, gy, std::min(1 << i, max_step), i == 0, has_moments, 2,
                    fmt::format("Spatial Denoise Pass {}", i));
 
         src_tex = dst_fb->get_texture();
@@ -441,8 +452,10 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     for(int j = 0; j < half_passes; ++j)
     {
         // The first half-res pass recomputes its own spatial variance (there are no half-res
-        // temporal moments), so it runs with first_pass = true, has_moments = false.
-        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << j, max_step), j == 0, false,
+        // temporal moments), so it runs with first_pass = true, has_moments = false. The wide
+        // tier uses the narrow 3x3 (radius 1) kernel -- indirect diffuse is low-frequency, so
+        // the outer ring adds little -- with the dilation step doubled to keep its reach.
+        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << (j + 1), max_step), j == 0, false, 1,
                    fmt::format("Spatial Denoise Half Pass {}", j));
 
         half_src = half_dst->get_texture();

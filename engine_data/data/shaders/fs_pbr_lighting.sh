@@ -525,10 +525,9 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // The trace stores it in radiance-mean units; multiply by PI here to put it in the SAME
     // irradiance units as the SH probe (cosine-importance MC of radiance estimates E/PI).
     // It REPLACES the SH probe by its alpha rather than adding to it -- adding would
-    // double-count the environment. Alpha is a confidence weight (single-frame ray-agreement
-    // from the trace, or temporal convergence when accumulation is enabled), so noisy /
-    // freshly disoccluded / unconverged pixels fall back to the SH probe. When SSIL is
-    // disabled the bound fallback has alpha 0 -> pure SH.
+    // double-count the environment. Alpha is the SSIL blend weight: per-frame trace
+    // coverage when temporal is off, accumulated screen-hit evidence when temporal is on.
+    // When SSIL is disabled the bound fallback has alpha 0 -> pure SH.
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
     vec3 indirect_diffuse = mix(irradiance, ssil_sample.rgb * PI, ssil_sample.a);
 

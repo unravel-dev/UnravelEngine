@@ -9,9 +9,9 @@ $input v_texcoord0
  * cosine-weighted mean estimates the full (screen-occluded) hemispherical
  * irradiance rather than only the on-screen bounce. RGB is left in radiance-mean
  * units; the consumer applies the PI factor that converts it to irradiance units
- * (matching eval_irradiance_sh) at blend time. Alpha carries a single-frame
- * reliability (ray-agreement) confidence so SSIL degrades gracefully to the SH
- * probe when temporal/denoise are disabled.
+ * (matching eval_irradiance_sh) at blend time. Alpha carries the screen-hit
+ * coverage/replacement weight so SSIL degrades gracefully to the SH probe where
+ * the trace is mostly environment fallback.
  * Supports multi-bounce by feeding back the previous frame's denoised SSIL
  * output, attenuated by the hit surface's diffuse albedo for energy conservation.
  */
@@ -46,6 +46,21 @@ uniform vec4 u_ssil_params2;
 /// > 0 enables the SH environment radiance fallback for rays that miss on-screen
 /// geometry (0 on the first frame before the SH coefficients exist).
 #define u_env_intensity   u_ssil_params2.w
+
+uniform vec4 u_ssil_params3;
+/// View-space acceptance-band ("thickness") added on top of u_depth_tolerance, scaled by
+/// the hit distance. Far hits resolve against a coarser Hi-Z depth, so a fixed band over-
+/// rejects them and leaks environment light; widening it with distance reduces that leak.
+#define u_thickness       u_ssil_params3.x
+
+// Spatial ray stratification tile. The hemisphere strata are spread across an
+// SSIL_STRATA_TILE x SSIL_STRATA_TILE block of pixels so that a low per-pixel ray count
+// still integrates SSIL_STRATA_TILE^2 distinct directions across a denoiser footprint
+// (the per-pixel noise becomes anti-correlated with its neighbours and averages out under
+// the spatial + temporal filters). Each pixel's mean stays an unbiased estimate because it
+// is still an average of independent cosine-importance samples.
+#define SSIL_STRATA_TILE  2
+#define SSIL_STRATA_COUNT (SSIL_STRATA_TILE * SSIL_STRATA_TILE)
 
 /// xy = full G-buffer size (pixels); zw = per-axis (full_dim / trace_dim) scale.
 /// Per-axis is required because odd full-res W with even full-res H produces different
@@ -102,11 +117,10 @@ vec3 SampleRadiance(vec2 hit_uv)
     BRANCH
     if(u_multi_bounce > 0.0)
     {
-        // Weight the fed-back indirect by its own confidence (alpha), matching how the
-        // lighting pass consumes SSIL (mix by alpha). Low-confidence / unconverged history
-        // contributes proportionally less to the bounce instead of full strength.
+        // Weight the fed-back indirect by its final blend weight, matching how the
+        // lighting pass blends SSIL against the SH probe.
         vec4 prev = texture2DLod(s_prev_ssil, hit_uv, 0.0);
-        vec3 prev_indirect = min(prev.rgb * prev.a, vec3_splat(10.0));
+        vec3 prev_indirect = prev.rgb * prev.a;
 
         radiance += hit_diffuse * prev_indirect * u_multi_bounce;
     }
@@ -151,13 +165,22 @@ void main()
 
     int ray_count = max(num_rays, 1);
     vec3 accumulated = vec3_splat(0.0);
-    // Per-ray luminance moments -> single-frame reliability (coefficient of variation).
-    float sum_l = 0.0;
-    float sum_l2 = 0.0;
+    float total_hit_weight = 0.0;
+
+    // Spatial stratum: which slice of the SSIL_STRATA_COUNT virtual sample budget this
+    // pixel owns, picked by its position inside the SSIL_STRATA_TILE block. Neighbours own
+    // different slices, so together the block covers the full hemisphere sequence. Use the
+    // TRACE-pixel coordinate (gl_FragCoord), not scaled_uv: at reduced trace resolution
+    // scaled_uv is the full-res block centre, whose parity is constant across trace pixels
+    // and would collapse every pixel onto the same stratum.
+    ivec2 pix = ivec2(gl_FragCoord.xy);
+    int stratum = (pix.x & (SSIL_STRATA_TILE - 1)) + (pix.y & (SSIL_STRATA_TILE - 1)) * SSIL_STRATA_TILE;
+    int strata_budget = ray_count * SSIL_STRATA_COUNT;
+    int strata_base = stratum * ray_count;
 
     LOOP for(int i = 0; i < ray_count; ++i)
     {
-        vec2 E = Hammersley16(uint(i), uint(ray_count), rnd);
+        vec2 E = Hammersley16(uint(strata_base + i), uint(strata_budget), rnd);
         vec3 vs_sample_dir = ImportanceSampleCosine(E, vs_normal);
 
         // Environment radiance along this ray (world space) -- the value the ray
@@ -188,52 +211,38 @@ void main()
                 BRANCH
                 if(hit_dist < u_max_distance)
                 {
+                    // Distance-aware thickness: widen the view-space acceptance band with
+                    // hit distance so coarse far-field Hi-Z depth does not falsely reject
+                    // hits (which would leak the environment fallback through occluders).
+                    float effective_tol = u_depth_tolerance +
+                                          u_thickness * (hit_dist / max(u_max_distance, 1e-3));
                     float confidence = HizValidateHit(s_hiz, s_normal, ss_hit_pos, uv,
-                                                       vs_ray_origin, vs_hit, screen_size, u_depth_tolerance);
+                                                       vs_ray_origin, vs_hit, screen_size, effective_tol);
 
                     BRANCH
                     if(confidence > 0.0)
                     {
                         // brightness scales the on-screen bounce only; the environment
                         // fallback stays at probe intensity so unoccluded ambient matches SH.
-                        vec3 hit_color = min(SampleRadiance(ss_hit_pos.xy), vec3_splat(10.0)) * u_brightness;
+                        vec3 hit_color = SampleRadiance(ss_hit_pos.xy) * u_brightness;
                         float dist_atten = 1.0 - smoothstep(0.0, u_max_distance, hit_dist);
                         float w = clamp(confidence * dist_atten, 0.0, 1.0);
                         // A confident near hit occludes the environment and replaces it
                         // with the bounce; a weak/distant hit only partially occludes it.
                         ray_radiance = mix(env_radiance, hit_color, w);
+                        total_hit_weight += w;
                     }
                 }
             }
         }
 
-        // Accumulate in a tonemapped (Reinhard) domain so one bright sample cannot
-        // dominate the few-ray mean; the average is inverted back to HDR afterwards.
-        ray_radiance = min(ray_radiance, vec3_splat(10.0));
-        float ray_l = Luminance(ray_radiance);
-        sum_l += ray_l;
-        sum_l2 += ray_l * ray_l;
-        accumulated += ray_radiance / (1.0 + ray_l);
+        accumulated += ray_radiance;
     }
 
     vec3 result = accumulated / float(ray_count);
-    // Inverse Reinhard to restore HDR range (0.25 floor bounds amplification -> no fireflies).
-    result /= max(1.0 - Luminance(result), 0.25);
     // result stays in radiance-mean units (NOT * PI). The PI factor that puts it in
-    // irradiance units (matching eval_irradiance_sh) is applied by the consumer at blend
-    // time -- keeping the stored buffer small leaves the denoise/temporal luminance scales
-    // (luma_sigma etc.) unchanged from the pre-environment-fallback tuning.
-
-    // Single-frame reliability in alpha: coefficient of variation across the few rays.
-    // When rays disagree wildly (a pixel straddling a shadow/sky boundary) the few-ray
-    // estimate is noisy, so report LOW confidence and let the consumer blend back toward
-    // the smooth SH probe. This keeps SSIL usable on its own (temporal/denoise are optional
-    // and overwrite alpha with a convergence weight when enabled). Uniform pixels -- whether
-    // bright (open) or dark (deep shadow) -- have ~0 variance and stay at full confidence.
-    float mean_l = sum_l / float(ray_count);
-    float var_l = max(sum_l2 / float(ray_count) - mean_l * mean_l, 0.0);
-    float cov = sqrt(var_l) / (mean_l + 0.05);
-    float confidence = 1.0 / (1.0 + cov * cov);
+    // irradiance units (matching eval_irradiance_sh) is applied by the consumer at blend time.
+    float confidence = clamp(total_hit_weight / float(ray_count), 0.0, 1.0);
 
     gl_FragColor = vec4(result, confidence);
 }

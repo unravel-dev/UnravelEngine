@@ -64,18 +64,33 @@ void main()
     vec2 base = floor(lr_coordf);
     vec2 frac_uv = lr_coordf - base;
 
+    // A 2x2 gather only spans one low-res texel; at quarter/eighth trace res a full-res
+    // pixel falls between samples that are 4-8 texels apart, so 2x2 cannot cover the
+    // reconstruction footprint (blocky edges / leaks). Widen the gather with the scale:
+    // half -> radius 1 (the original 2x2), quarter -> 2 (4x4), eighth -> 3 (6x6).
+    int up_radius = int(clamp(ceil(max(resolution_scale.x, resolution_scale.y) * 0.5), 1.0, 3.0));
+
     vec4 accum = vec4_splat(0.0);
     float total_w = 0.0;
 
-    for(int dy = 0; dy <= 1; ++dy)
+    // Static bounds cover the max radius (3); taps outside the active radius are skipped.
+    for(int dy = -2; dy <= 3; ++dy)
     {
-        for(int dx = 0; dx <= 1; ++dx)
+        for(int dx = -2; dx <= 3; ++dx)
         {
+            if(dx < 1 - up_radius || dx > up_radius || dy < 1 - up_radius || dy > up_radius)
+                continue;
+
             vec2 off = vec2(float(dx), float(dy));
             ivec2 tc = ivec2(clamp(base + off, vec2_splat(0.0), lr_dim - vec2_splat(1.0)));
 
-            float bw = (dx == 0 ? (1.0 - frac_uv.x) : frac_uv.x) *
-                       (dy == 0 ? (1.0 - frac_uv.y) : frac_uv.y);
+            // Separable tent footprint of half-width up_radius. At radius 1 it reduces
+            // exactly to the bilinear weights; wider radii spread the footprint smoothly.
+            vec2 fd = abs(off - frac_uv) / float(up_radius);
+            float bw = max(0.0, 1.0 - fd.x) * max(0.0, 1.0 - fd.y);
+            BRANCH
+            if(bw <= 0.0)
+                continue;
 
             vec2 tap_uv = (vec2(tc) + vec2_splat(0.5)) / lr_dim;
             // Full-res block centre the low-res tap was traced from -- gives a

@@ -11,8 +11,7 @@
  * This pass produces that half-res input. A plain box downsample would average colour across
  * depth/normal discontinuities and bleed indirect light through silhouettes, so each of the
  * 2x2 source texels is weighted by its geometric similarity (relative view-space depth +
- * world-normal) to the block centre. Colour AND the confidence alpha are carried so the
- * downstream a-trous passes keep their confidence-weighted accumulation.
+ * world-normal) to the block centre. RGB radiance and alpha coverage are carried together.
  */
 
 #include "../bgfx_compute.sh"
@@ -20,7 +19,7 @@
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
 
-SAMPLER2D(s_ssil_input, 0); // higher-res SSIL colour + confidence
+SAMPLER2D(s_ssil_input, 0); // higher-res SSIL radiance + coverage
 IMAGE2D_WO(i_ssil_output, rgba16f, 1);
 SAMPLER2D(s_normal, 2); // full-res G-buffer normal
 SAMPLER2D(s_depth, 3);  // full-res G-buffer depth
