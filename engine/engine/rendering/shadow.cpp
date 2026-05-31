@@ -2360,7 +2360,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         }
 
         // Get mesh from batch key
-        const auto& mesh_ptr = batch->key.mesh_ptr;
+        const auto mesh_ptr = batch->key.mesh_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
 

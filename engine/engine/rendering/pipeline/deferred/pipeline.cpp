@@ -914,8 +914,8 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
 
         stats_.drawn_models++;
 
-        const auto& mesh_ptr = batch->key.mesh_ptr;
-        const auto& material_ptr = batch->key.material_ptr;
+        const auto mesh_ptr = batch->key.mesh_ptr;
+        const auto material_ptr = batch->key.material_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
 
