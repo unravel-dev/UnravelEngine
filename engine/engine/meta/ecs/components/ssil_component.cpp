@@ -48,6 +48,22 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"min", 1},
             entt::attribute{"max", 5},
             entt::attribute{"tooltip", "Number of a-trous filter passes. More passes = wider blur reach but higher cost"},
+        })
+        .data<&spatial_denoise_settings::full_res_passes>("full_res_passes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "full_res_passes"},
+            entt::attribute{"pretty_name", "Full-Res Passes"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 5},
+            entt::attribute{"tooltip", "Mixed-resolution split: how many a-trous passes run at the trace resolution. The\nREMAINING (wide) passes run at half res (cache-coherent, ~4x cheaper); a bilateral\nupsample then restores sharp silhouettes from the full-res G-buffer. 0 (recommended)\n= all half res: indirect light is low-frequency, so a full-res pass adds no visible\ndetail, gets downsampled away, and steals reach from the wide passes (more noise).\n>= Passes = all full res (no speedup)."},
+        })
+        .data<&spatial_denoise_settings::max_step>("max_step"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_step"},
+            entt::attribute{"pretty_name", "Max Step"},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 16},
+            entt::attribute{"tooltip", "Caps the a-trous dilation (trace texels). The step normally doubles each pass\n(1,2,4,8,16); the widely-dilated late passes scatter taps and thrash the texture\ncache, costing far more than early passes. Lower this (e.g. 8) to flatten that\ncost spike with minimal quality loss; 16 = uncapped doubling."},
         });
 }
 
@@ -223,6 +239,8 @@ SAVE_INLINE(ssil_pass::spatial_denoise_settings)
     try_save(ar, ser20::make_nvp("normal_power", obj.normal_power));
     try_save(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
     try_save(ar, ser20::make_nvp("passes", obj.passes));
+    try_save(ar, ser20::make_nvp("full_res_passes", obj.full_res_passes));
+    try_save(ar, ser20::make_nvp("max_step", obj.max_step));
 }
 SAVE_INSTANTIATE(ssil_pass::spatial_denoise_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(ssil_pass::spatial_denoise_settings, ser20::oarchive_binary_t);
@@ -233,6 +251,8 @@ LOAD_INLINE(ssil_pass::spatial_denoise_settings)
     try_load(ar, ser20::make_nvp("normal_power", obj.normal_power));
     try_load(ar, ser20::make_nvp("luma_sigma", obj.luma_sigma));
     try_load(ar, ser20::make_nvp("passes", obj.passes));
+    try_load(ar, ser20::make_nvp("full_res_passes", obj.full_res_passes));
+    try_load(ar, ser20::make_nvp("max_step", obj.max_step));
 }
 LOAD_INSTANTIATE(ssil_pass::spatial_denoise_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(ssil_pass::spatial_denoise_settings, ser20::iarchive_binary_t);

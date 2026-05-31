@@ -39,6 +39,8 @@ public:
         result.spatial_denoise.normal_power = std::lerp(result.spatial_denoise.normal_power, from.spatial_denoise.normal_power, contribution);
         result.spatial_denoise.luma_sigma = std::lerp(result.spatial_denoise.luma_sigma, from.spatial_denoise.luma_sigma, contribution);
         result.spatial_denoise.passes = int(std::lerp(float(result.spatial_denoise.passes), float(from.spatial_denoise.passes), contribution));
+        result.spatial_denoise.full_res_passes = int(std::lerp(float(result.spatial_denoise.full_res_passes), float(from.spatial_denoise.full_res_passes), contribution));
+        result.spatial_denoise.max_step = int(std::lerp(float(result.spatial_denoise.max_step), float(from.spatial_denoise.max_step), contribution));
 
         result.enable_temporal_accumulation = contribution >= 0.5f ? from.enable_temporal_accumulation : result.enable_temporal_accumulation;
         result.temporal.history_strength = std::lerp(result.temporal.history_strength, from.temporal.history_strength, contribution);

@@ -19,7 +19,23 @@ public:
         float depth_sigma = 0.02f;
         float normal_power = 64.0f;
         float luma_sigma = 1.0f;
-        int passes = 4;
+        int passes = 5;
+        /// Mixed-resolution split: the first `full_res_passes` a-trous passes run at the trace
+        /// resolution; the REMAINING passes run at half that resolution, where their wide
+        /// dilation is cache-coherent and ~4x cheaper. The bilateral upsample reconstructs
+        /// sharp silhouettes from the full-res G-buffer regardless of where the blur ran.
+        ///
+        /// Default 0 (denoise entirely at half res) is best for indirect diffuse: it is
+        /// low-frequency, so a full-res pass adds no perceptible detail -- worse, it is
+        /// downsampled away (round-tripped), it steals budget from the wide half-res passes
+        /// (narrower reach -> more noise), and it seeds a tighter variance that under-blurs.
+        /// Raise only if a future higher-frequency signal (e.g. glossy GI) needs full-res
+        /// detail; >= passes disables the optimization (all full res).
+        int full_res_passes = 0;
+        /// Upper bound on the a-trous dilation (in texels, within each tier). The step normally
+        /// doubles each pass (1,2,4,8,...); capping it turns the widest passes into same-cost
+        /// repeated-step passes (which also fill holes better) at a small loss of filter reach.
+        int max_step = 16;
     };
 
     /// Temporal accumulation parameters
@@ -196,6 +212,27 @@ private:
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } denoise_program_;
+
+    // Geometry-aware 2x downsample compute program. Produces the half-resolution input the
+    // wide a-trous passes run on (see cs_ssil_downsample.sc).
+    struct downsample_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_downsample_params;
+        gfx::program::uniform_ptr s_ssil_input;
+        gfx::program::uniform_ptr s_normal;
+        gfx::program::uniform_ptr s_depth;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_downsample_params, "u_downsample_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_ssil_input, "s_ssil_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool { return program && program->is_valid(); }
+    } downsample_program_;
 
     // Temporal resolve program (fullscreen fragment shader)
     struct temporal_program : uniforms_cache

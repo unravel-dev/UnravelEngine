@@ -30,6 +30,10 @@ SAMPLER2D(s_ssil_moments, 4);
 SAMPLER2D(s_ssil_variance, 5);
 IMAGE2D_WO(i_ssil_variance_output, r16f, 6);
 
+// Resolution-agnostic: every position is derived from this dispatch's output size vs the
+// full-res G-buffer, so the SAME shader runs the full-res tier and the half-res wide tier
+// of the mixed-resolution denoiser (see ssil_pass::run_spatial_denoise) with no changes.
+
 uniform vec4 u_denoise_params;
 #define u_step_size    u_denoise_params.x
 #define u_depth_sigma  u_denoise_params.y
