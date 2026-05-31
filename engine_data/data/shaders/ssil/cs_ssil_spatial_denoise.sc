@@ -152,15 +152,16 @@ void main()
     BRANCH
     if(u_first_pass > 0.5)
     {
-        float spatial_variance = ssil_spatial_luma_variance(coord, size);
-        variance = spatial_variance;
-
         BRANCH
         if(u_has_moments > 0.5)
         {
             vec2 moments = texelFetch(s_ssil_moments, coord, 0).rg;
             float temporal_variance = max(0.0, moments.y - moments.x * moments.x);
             variance = temporal_variance;
+        }
+        else
+        {
+            variance = ssil_spatial_luma_variance(coord, size);
         }
     }
     else

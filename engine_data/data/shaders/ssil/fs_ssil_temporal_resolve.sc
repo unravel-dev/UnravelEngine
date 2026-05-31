@@ -9,6 +9,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../hiz_trace.sh"
 
 SAMPLER2D(s_ssil_curr, 0);
 SAMPLER2D(s_ssil_history, 1);
@@ -23,6 +24,9 @@ uniform vec4 u_temporal_params;
 #define u_history_strength      u_temporal_params.y
 #define u_depth_threshold       u_temporal_params.z
 #define u_max_accum_frames      u_temporal_params.w
+
+/// xy = full G-buffer size; zw = per-axis full / temporal-target scale.
+uniform vec4 u_temporal_resolution;
 
 uniform mat4 u_prev_view_proj;
 
@@ -62,8 +66,11 @@ vec3 SSIL_ComputePreviousFrameSample(vec2 uv, float z)
 void main()
 {
     vec2 uv = v_texcoord0;
+    vec2 full_uv = HizScreenPassToFullResUV(uv,
+                                            max(u_temporal_resolution.zw, vec2_splat(1.0)),
+                                            u_temporal_resolution.xy);
     vec4 curr = texture2D(s_ssil_curr, uv);
-    float surface_z = DecodeGBufferDepth(uv, s_depth).depth01;
+    float surface_z = DecodeGBufferDepth(full_uv, s_depth).depth01;
     bool valid_surface =
 #ifdef INVERTED_DEPTH_RANGE
         surface_z != 0.0;
@@ -90,7 +97,7 @@ void main()
         return;
     }
 
-    vec3 prev_sample = SSIL_ComputePreviousFrameSample(uv, surface_z);
+    vec3 prev_sample = SSIL_ComputePreviousFrameSample(full_uv, surface_z);
     vec2 prev_uv = prev_sample.xy;
     float expected_prev_z = prev_sample.z;
 

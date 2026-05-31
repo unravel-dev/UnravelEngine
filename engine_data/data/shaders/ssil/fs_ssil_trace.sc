@@ -118,9 +118,10 @@ vec3 SampleRadiance(vec2 hit_uv)
     if(u_multi_bounce > 0.0)
     {
         // Weight the fed-back indirect by its final blend weight, matching how the
-        // lighting pass blends SSIL against the SH probe.
+        // lighting pass blends SSIL against the SH probe. SSIL history stores a radiance
+        // mean; multiply by PI to convert it to irradiance before Lambertian bounce.
         vec4 prev = texture2DLod(s_prev_ssil, hit_uv, 0.0);
-        vec3 prev_indirect = prev.rgb * prev.a;
+        vec3 prev_indirect = prev.rgb * PI * prev.a;
 
         radiance += hit_diffuse * prev_indirect * u_multi_bounce;
     }
@@ -183,15 +184,8 @@ void main()
         vec2 E = Hammersley16(uint(strata_base + i), uint(strata_budget), rnd);
         vec3 vs_sample_dir = ImportanceSampleCosine(E, vs_normal);
 
-        // Environment radiance along this ray (world space) -- the value the ray
-        // integrates if it escapes on-screen geometry. Becomes the per-ray default so
-        // the cosine-weighted mean of all rays estimates the FULL hemispherical
-        // irradiance (occluded by what the screen can see) rather than only the bounce.
-        vec3 ws_sample_dir = normalize(mul(u_invView, vec4(vs_sample_dir, 0.0)).xyz);
-        vec3 env_radiance = (u_env_intensity > 0.0)
-                                ? eval_radiance_sh(s_irradiance, ws_sample_dir) * u_env_intensity
-                                : vec3_splat(0.0);
-        vec3 ray_radiance = env_radiance;
+        vec3 hit_radiance = vec3_splat(0.0);
+        float hit_weight = 0.0;
 
         vec3 ss_ray_dir = HizProjectVsDirToSsDir(vs_ray_origin, vs_sample_dir, ss_ray_origin);
 
@@ -227,15 +221,27 @@ void main()
                         vec3 hit_color = SampleRadiance(ss_hit_pos.xy) * u_brightness;
                         float dist_atten = 1.0 - smoothstep(0.0, u_max_distance, hit_dist);
                         float w = clamp(confidence * dist_atten, 0.0, 1.0);
-                        // A confident near hit occludes the environment and replaces it
-                        // with the bounce; a weak/distant hit only partially occludes it.
-                        ray_radiance = mix(env_radiance, hit_color, w);
+                        hit_radiance = hit_color;
+                        hit_weight = w;
                         total_hit_weight += w;
                     }
                 }
             }
         }
 
+        // Environment radiance along this ray (world space) is needed only for misses or
+        // partial-confidence hits. Fully accepted screen hits replace it completely.
+        vec3 env_radiance = vec3_splat(0.0);
+        BRANCH
+        if(u_env_intensity > 0.0 && hit_weight < 1.0)
+        {
+            vec3 ws_sample_dir = normalize(mul(u_invView, vec4(vs_sample_dir, 0.0)).xyz);
+            env_radiance = eval_radiance_sh(s_irradiance, ws_sample_dir) * u_env_intensity;
+        }
+
+        // A confident near hit occludes the environment and replaces it with the bounce; a
+        // weak/distant hit only partially occludes it.
+        vec3 ray_radiance = mix(env_radiance, hit_radiance, hit_weight);
         accumulated += ray_radiance;
     }
 

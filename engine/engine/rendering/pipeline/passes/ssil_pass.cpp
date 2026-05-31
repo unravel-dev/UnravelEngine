@@ -424,8 +424,11 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     uint32_t hgy = (half_sz.height + 7) / 8;
     auto var_ha = make_variance_tex("SSIL_VARIANCE_HALF_A", half_sz);
     auto var_hb = make_variance_tex("SSIL_VARIANCE_HALF_B", half_sz);
+    const bool has_downsampled_variance = full_passes > 0;
 
     // Geometry-aware downsample of the full-res tier result into the half-res input.
+    // When a full-res tier ran, carry its variance with the colour so the wide half-res
+    // passes keep the temporal/spatial variance guidance instead of recomputing it.
     {
         gfx::render_pass ds_pass("SSIL Downsample Pass");
         ds_pass.set_view_proj(cam->get_view(), cam->get_projection());
@@ -435,8 +438,10 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::set_image(1, half_a->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(downsample_program_.s_normal, 2, g_buffer->get_texture(1));
         gfx::set_texture(downsample_program_.s_depth, 3, g_buffer->get_texture(4));
+        gfx::set_texture(downsample_program_.s_ssil_variance, 4, var_src);
+        gfx::set_image(5, var_ha->native_handle(), 0, bgfx::Access::Write);
 
-        float ds_params[4] = {depth_sigma, normal_power, 0.0f, 0.0f};
+        float ds_params[4] = {depth_sigma, normal_power, has_downsampled_variance ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_downsample_params, ds_params);
 
         gfx::dispatch(ds_pass.id, downsample_program_.program->native_handle(), hgx, hgy, 1);
@@ -446,16 +451,18 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     const int half_passes = num_passes - full_passes;
     auto half_src = half_a->get_texture();
     gfx::frame_buffer::ptr half_dst = half_b;
-    gfx::texture::ptr hvar_src = var_hb;
-    gfx::texture::ptr hvar_dst = var_ha;
+    gfx::texture::ptr hvar_src = has_downsampled_variance ? var_ha : var_hb;
+    gfx::texture::ptr hvar_dst = has_downsampled_variance ? var_hb : var_ha;
 
     for(int j = 0; j < half_passes; ++j)
     {
-        // The first half-res pass recomputes its own spatial variance (there are no half-res
-        // temporal moments), so it runs with first_pass = true, has_moments = false. The wide
-        // tier uses the narrow 3x3 (radius 1) kernel -- indirect diffuse is low-frequency, so
-        // the outer ring adds little -- with the dilation step doubled to keep its reach.
-        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << (j + 1), max_step), j == 0, false, 1,
+        // If the downsample carried full-res variance, propagate it; otherwise the first
+        // half-res pass computes a fresh spatial estimate.
+        const bool first_half_pass = !has_downsampled_variance && j == 0;
+        // The wide tier uses the narrow 3x3 (radius 1) kernel -- indirect diffuse is low-
+        // frequency, so the outer ring adds little -- with the dilation step doubled to keep
+        // its reach.
+        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << (j + 1), max_step), first_half_pass, false, 1,
                    fmt::format("Spatial Denoise Half Pass {}", j));
 
         half_src = half_dst->get_texture();
@@ -512,6 +519,13 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     auto temp_fb = create_or_update_ssil_fb_mrt(rview, "SSIL_HISTORY_TEMP", "SSIL_HISTORY_TEMP", "SSIL_MOMENTS_TEMP",
                                                 ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
     auto moments_temp = rview.tex_safe_get("SSIL_MOMENTS_TEMP");
+    const auto gbuf_sz = g_buffer->get_size();
+    const auto temporal_sz = ssil_input->get_size();
+    const float temporal_resolution[4] = {
+        static_cast<float>(gbuf_sz.width),
+        static_cast<float>(gbuf_sz.height),
+        static_cast<float>(gbuf_sz.width) / static_cast<float>(temporal_sz.width),
+        static_cast<float>(gbuf_sz.height) / static_cast<float>(temporal_sz.height)};
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
     // Seed both outputs by running the temporal shader in "disabled" mode. That writes
@@ -535,6 +549,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         float temporal_params[4] = {0.0f, settings.temporal.history_strength, settings.temporal.depth_threshold,
                                     float(settings.temporal.max_accum_frames)};
         gfx::set_uniform(temporal_program_.u_temporal_params, temporal_params);
+        gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
 
         auto prev_vp = cam->get_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
@@ -573,6 +588,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         settings.temporal.depth_threshold,
         float(settings.temporal.max_accum_frames)};
     gfx::set_uniform(temporal_program_.u_temporal_params, temporal_params);
+    gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
 
     auto prev_vp = cam->get_prev_view_projection();
     gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());

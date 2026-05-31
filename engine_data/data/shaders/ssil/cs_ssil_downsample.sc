@@ -23,10 +23,13 @@ SAMPLER2D(s_ssil_input, 0); // higher-res SSIL radiance + coverage
 IMAGE2D_WO(i_ssil_output, rgba16f, 1);
 SAMPLER2D(s_normal, 2); // full-res G-buffer normal
 SAMPLER2D(s_depth, 3);  // full-res G-buffer depth
+SAMPLER2D(s_ssil_variance, 4);
+IMAGE2D_WO(i_ssil_variance_output, r16f, 5);
 
 uniform vec4 u_downsample_params;
 #define u_depth_sigma  u_downsample_params.x
 #define u_normal_power u_downsample_params.y
+#define u_has_variance u_downsample_params.z
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -53,6 +56,7 @@ void main()
 #endif
     {
         imageStore(i_ssil_output, coord, vec4_splat(0.0));
+        imageStore(i_ssil_variance_output, coord, vec4_splat(0.0));
         return;
     }
 
@@ -63,6 +67,7 @@ void main()
     ivec2 base = coord * 2;
 
     vec4 accum = vec4_splat(0.0);
+    float variance_accum = 0.0;
     float total_w = 0.0;
 
     for(int dy = 0; dy <= 1; ++dy)
@@ -82,6 +87,11 @@ void main()
 
             float w = dw * nw;
             accum += texelFetch(s_ssil_input, tc, 0) * w;
+            BRANCH
+            if(u_has_variance > 0.5)
+            {
+                variance_accum += texelFetch(s_ssil_variance, tc, 0).r * w * w;
+            }
             total_w += w;
         }
     }
@@ -89,5 +99,11 @@ void main()
     // Fall back to the matching block texel if every tap was rejected (thin feature) so the
     // half-res pixel is never left black.
     vec4 result = (total_w > 1e-4) ? (accum / total_w) : texelFetch(s_ssil_input, base, 0);
+    float variance = (u_has_variance > 0.5)
+                         ? ((total_w > 1e-4)
+                                ? (variance_accum / max(total_w * total_w, 1e-6))
+                                : texelFetch(s_ssil_variance, base, 0).r)
+                         : 0.0;
     imageStore(i_ssil_output, coord, result);
+    imageStore(i_ssil_variance_output, coord, vec4_splat(variance));
 }

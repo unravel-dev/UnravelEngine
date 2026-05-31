@@ -227,6 +227,7 @@ private:
         gfx::program::uniform_ptr s_ssil_input;
         gfx::program::uniform_ptr s_normal;
         gfx::program::uniform_ptr s_depth;
+        gfx::program::uniform_ptr s_ssil_variance;
 
         void cache_uniforms()
         {
@@ -234,6 +235,7 @@ private:
             cache_uniform(program.get(), s_ssil_input, "s_ssil_input", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssil_variance, "s_ssil_variance", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
@@ -244,6 +246,7 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;
+        gfx::program::uniform_ptr u_temporal_resolution;
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr s_ssil_curr;
         gfx::program::uniform_ptr s_ssil_history;
@@ -254,6 +257,7 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_temporal_params, "u_temporal_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_temporal_resolution, "u_temporal_resolution", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), s_ssil_curr, "s_ssil_curr", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssil_history, "s_ssil_history", gfx::uniform_type::Sampler);
