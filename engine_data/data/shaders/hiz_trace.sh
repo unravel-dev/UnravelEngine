@@ -77,7 +77,14 @@ bool HizAdvanceRay(vec3 ss_ray_origin,
     bool above_surface = surface_z > ss_pos.z;
 #endif
 
+#if BGFX_SHADER_LANGUAGE_GLSL
+    // Avoid floatBitsToUint in GLSL fragment shaders: shaderc promotes any fragment shader
+    // using bit reinterpretation builtins to GLSL 430, where legacy MRT writes are removed.
+    // t_min is selected directly from t.x/t.y/t.z, so equality is stable for this branch.
+    bool skipped_tile = t_min != t.z && above_surface;
+#else
     bool skipped_tile = floatBitsToUint(t_min) != floatBitsToUint(t.z) && above_surface;
+#endif
     curr_t = above_surface ? t_min : curr_t;
     ss_pos = ss_ray_origin + curr_t * ss_ray_dir;
 

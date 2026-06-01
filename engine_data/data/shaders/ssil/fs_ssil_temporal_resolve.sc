@@ -30,15 +30,15 @@ uniform vec4 u_temporal_resolution;
 
 uniform mat4 u_prev_view_proj;
 
-#if BGFX_SHADER_LANGUAGE_GLSL
-layout(location = 0) out vec4 ssil_color_out;
-layout(location = 1) out vec4 ssil_moments_out;
-#define SSIL_COLOR_OUT   ssil_color_out
-#define SSIL_MOMENTS_OUT ssil_moments_out
-#else
+//#if BGFX_SHADER_LANGUAGE_GLSL
+//layout(location = 0) out vec4 ssil_color_out;
+//layout(location = 1) out vec4 ssil_moments_out;
+//#define SSIL_COLOR_OUT   ssil_color_out
+//#define SSIL_MOMENTS_OUT ssil_moments_out
+//#else
 #define SSIL_COLOR_OUT   gl_FragData[0]
 #define SSIL_MOMENTS_OUT gl_FragData[1]
-#endif
+//#endif
 
 #define DECAY_MIN 0.85
 #define DECAY_MAX 0.99

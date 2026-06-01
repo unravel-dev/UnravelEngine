@@ -349,7 +349,7 @@ vec3 GenerateReflectionRay(vec3 V, vec3 N, float roughness, vec2 texCoord, uint 
 {
 #if HAMMERSLEY_TYPE > 0
     BRANCH
-    if(num_rays == 1)
+    if(num_rays == uint(1))
     {
         return reflect(-V, N);
     }
@@ -430,7 +430,7 @@ void main()
     vec3 vs_ray_origin = HizComputeViewspacePosition(ss_ray_origin.xy, ss_ray_origin.z);
     vec3 vs_ray_dir = normalize(vs_ray_origin);
 
-    uint num_rays = 1;
+    uint num_rays = uint(1);
 #if HAMMERSLEY_TYPE > 0
 	num_rays = uint(u_max_rays);
 #endif
@@ -446,7 +446,7 @@ void main()
                                          1.0 - smoothstep(0.2, 0.8, roughness)));
     max_iterations = min(max_iterations, adaptive_max_iterations);
 
-    LOOP for(uint i = 0; i < num_rays; ++i)
+    LOOP for(uint i = uint(0); i < num_rays; ++i)
     {
         vec3 vs_reflected_dir = GenerateReflectionRay(-vs_ray_dir, vs_normal, roughness, uv, i, num_rays, frame_number);
         vec3 ss_ray_dir = HizProjectVsDirToSsDir(vs_ray_origin, vs_reflected_dir, ss_ray_origin);
