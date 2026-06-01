@@ -342,8 +342,16 @@ auto get_format_info(texture_format fmt) -> format_details
         case texture_format::RGB8:
             return {false, false, 3};
         case texture_format::R8:
+        case texture_format::R8I:
+        case texture_format::R8U:
+        case texture_format::R8S:
         case texture_format::R16:
+        case texture_format::R16I:
+        case texture_format::R16U:
+        case texture_format::R16S:
         case texture_format::R16F:
+        case texture_format::R32I:
+        case texture_format::R32U:
         case texture_format::R32F:
             // Single channel, might or might not be HDR:
             // R16F / R32F is single-channel float => isHdr = true
@@ -357,7 +365,15 @@ auto get_format_info(texture_format fmt) -> format_details
             }
 
         case texture_format::RG8:
+        case texture_format::RG8I:
+        case texture_format::RG8U:
+        case texture_format::RG8S:
         case texture_format::RG16:
+        case texture_format::RG16I:
+        case texture_format::RG16U:
+        case texture_format::RG16S:
+        case texture_format::RG32I:
+        case texture_format::RG32U:
             // 2 channels, integer, not HDR
             return {false, false, 2};
         case texture_format::RG16F:
@@ -373,6 +389,16 @@ auto get_format_info(texture_format fmt) -> format_details
             // Or if you're ignoring them, just do:
             return {false, false, 3}; // e.g., default to “no alpha, no HDR, 3 channels”
     }
+}
+
+auto is_compressed_format(texture_format fmt) -> bool
+{
+    return fmt < texture_format::Unknown;
+}
+
+auto normal_map_needs_z_reconstruction(texture_format fmt) -> bool
+{
+    return get_format_info(fmt).num_channels == 2;
 }
 
 auto to_string(texture_format fmt) -> std::string

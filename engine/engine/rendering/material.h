@@ -4,7 +4,9 @@
 #include "gpu_program.h"
 #include <engine/assets/asset_handle.h>
 
+#include <graphics/format.h>
 #include <graphics/graphics.h>
+#include <graphics/texture.h>
 #include <math/math.h>
 #include <reflection/registration.h>
 #include <serialization/serialization.h>
@@ -257,6 +259,10 @@ public:
         math::vec4 surface_data2{};
 
         surface_data2[0] = metalness_roughness_combined() ? 1.0f : 0.0f;
+        const auto& normal_map = normal_map_ ? normal_map_ : default_normal_map();
+        const auto normal_texture = normal_map.get();
+        surface_data2[1] =
+            normal_texture && gfx::normal_map_needs_z_reconstruction(normal_texture->info.format) ? 1.0f : 0.0f;
 
         return surface_data2;
     }

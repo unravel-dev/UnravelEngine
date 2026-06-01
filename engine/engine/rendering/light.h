@@ -204,7 +204,7 @@ struct light
     /// Data specific to directional lights.
     directional directional_data;
     /// The color of the light.
-    math::color color = {1.0f, 1.0f, 1.0f, 1.0f};
+    math::color color = math::color(255, 244, 214, 255);
     /// The intensity of the light.
     float intensity = 5.0f;
 

@@ -10,6 +10,7 @@
 
 #include <graphics/shader.h>
 #include <graphics/texture.h>
+#include <graphics/utils/bgfx_utils.h>
 #include <logging/logging.h>
 #include <uuid/uuid.h>
 
@@ -174,6 +175,19 @@ void copy_compiled_file(const fs::path& from, const fs::path& to)
     }
 }
 
+auto get_input_texture_format(const fs::path& input_path) -> gfx::texture_format
+{
+    bimg::ImageContainer* image = imageLoad(bx::FilePath(input_path.string().c_str()), bgfx::TextureFormat::Count);
+    if(image == nullptr)
+    {
+        return gfx::texture_format::RGBA8;
+    }
+
+    const auto format = static_cast<gfx::texture_format>(image->m_format);
+    bimg::imageFree(image);
+    return format;
+}
+
 auto select_compressed_format(gfx::texture_format input_format,
                               const fs::path& extension,
                               texture_importer_meta::compression_quality quality) -> gfx::texture_format
@@ -200,16 +214,21 @@ auto select_compressed_format(gfx::texture_format input_format,
 
     // 2) Single channel => BC4
     //    e.g., for grayscale height map or single-channel mask
-    if(info.num_hannels == 1)
+    if(info.num_channels == 1)
     {
         return gfx::texture_format::BC4;
     }
 
     // 3) Two channel => BC5
     //    e.g., typical for 2D vector data, normal map XY
-    if(info.num_hannels == 2)
+    if(info.num_channels == 2)
     {
         return gfx::texture_format::BC5;
+    }
+
+    if(input_format == gfx::texture_format::BC1)
+    {
+        return gfx::texture_format::BC3;
     }
 
     // 4) If we reach here, we have 3 or 4 channels in LDR.
@@ -302,8 +321,8 @@ auto compile_texture_to_file(const fs::path& input_path,
         quality.max_size = texture_importer_meta::texture_size::size_2048;
     }
 
-    auto format =
-        select_compressed_format(gfx::texture_format::RGBA8, input_path.extension(), quality.compression);
+    const auto input_format = get_input_texture_format(input_path);
+    auto format = select_compressed_format(input_format, input_path.extension(), quality.compression);
     
     std::vector<std::string> args_array = {
         "-f",
@@ -314,7 +333,7 @@ auto compile_texture_to_file(const fs::path& input_path,
         "dds",
     };
     
-    if(try_compress && format != gfx::texture_format::Unknown)
+    if(try_compress && format != gfx::texture_format::Unknown && format != input_format)
     {
         args_array.emplace_back("-t");
         args_array.emplace_back(gfx::to_string(format));

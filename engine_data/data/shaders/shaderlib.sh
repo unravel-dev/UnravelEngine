@@ -381,17 +381,23 @@ vec3 fixCubeLookup(vec3 _v, float _lod, float _topLevelCubeSize)
 	return _v;
 }
 
-vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpiness )
+vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpiness, float reconstructZ )
 {
     vec3 normal = texture2D(bumpTexture, texCoords).xyz;
   	normal = normal * 2.0f - 1.0f;
 
-#ifdef NORMAL_MAP_2CHANNEL
-  	normal.z  = sqrt(1.0 - dot(normal.xy, normal.xy) );
-#elif NORMAL_MAP_Y_UP
-  	normal.y = -normal.y;
+#if NORMAL_MAP_Y_UP
+    normal.y = -normal.y;
 #endif
-	  normal.xy *= bumpiness;
+
+	normal.xy *= bumpiness;
+
+	BRANCH
+	if(reconstructZ > 0.5f)
+	{
+  		normal.z = sqrt(max(0.0f, 1.0f - dot(normal.xy, normal.xy)));
+	}
+
     return normalize(normal);
 }
 

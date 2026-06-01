@@ -41,10 +41,12 @@ struct format_details
 {
     bool has_alpha_channel{};
     bool is_hdr{};
-    int  num_hannels{};
+    int  num_channels{};
 };
 
 auto get_format_info(texture_format fmt) -> format_details;
+auto is_compressed_format(texture_format fmt) -> bool;
+auto normal_map_needs_z_reconstruction(texture_format fmt) -> bool;
 auto to_string(texture_format fmt) -> std::string;
 
 } // namespace gfx

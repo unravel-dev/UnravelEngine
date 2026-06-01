@@ -29,6 +29,7 @@ uniform vec4 u_dither_threshold; //.x = alpha threshold .y = distance threshold
 #define u_surface_bumpiness u_surface_data.z
 #define u_surface_alpha_test_value u_surface_data.w
 #define u_surface_metalness_roughness_combined u_surface_data2.x
+#define u_surface_normal_reconstruct_z u_surface_data2.y
 
 #define u_camear_near u_camera_clip_planes.x
 #define u_camear_far u_camera_clip_planes.y
@@ -65,7 +66,7 @@ void main()
 	float alpha_test_value = u_surface_alpha_test_value;
 
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
-	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness );
+	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z );
 
 	//mat3 tangent_to_world_space = computeTangentToWorldSpaceMatrix(normalize(v_wnormal), normalize(view_direction), texcoords.xy);
 	mat3 tangent_to_world_space = constructTangentToWorldSpaceMatrix(normalize(v_wtangent), normalize(v_wbitangent), normalize(v_wnormal));

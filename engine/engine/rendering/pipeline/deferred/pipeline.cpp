@@ -368,7 +368,7 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto& surface_data = mat.get_surface_data();
     const auto& tiling = mat.get_tiling();
     const auto& dither_threshold = mat.get_dither_threshold();
-    const auto& surface_data2 = mat.get_surface_data2();
+    const auto surface_data2 = mat.get_surface_data2();
 
     gfx::set_texture(program.s_tex_color, 0, albedo_tex);
     gfx::set_texture(program.s_tex_normal, 1, normal_tex);

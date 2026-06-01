@@ -220,8 +220,19 @@ inline auto get_format_version<unravel::audio_clip>() -> uint64_t
     return 1;
 }
 
+template<>
+inline auto get_format_version<gfx::texture>() -> uint64_t
+{
+    return 1;
+}
+
 inline auto get_format_version(const std::string& extension) -> uint64_t
 {
+    if(is_format<gfx::texture>(extension))
+    {
+        return get_format_version<gfx::texture>();
+    }
+
     if(is_format<unravel::mesh>(extension))
     {
         return get_format_version<unravel::mesh>();
