@@ -30,6 +30,16 @@ uniform vec4 u_temporal_resolution;
 
 uniform mat4 u_prev_view_proj;
 
+#if BGFX_SHADER_LANGUAGE_GLSL >= 330
+layout(location = 0) out vec4 ssil_color_out;
+layout(location = 1) out vec4 ssil_moments_out;
+#define SSIL_COLOR_OUT   ssil_color_out
+#define SSIL_MOMENTS_OUT ssil_moments_out
+#else
+#define SSIL_COLOR_OUT   gl_FragData[0]
+#define SSIL_MOMENTS_OUT gl_FragData[1]
+#endif
+
 #define DECAY_MIN 0.85
 #define DECAY_MAX 0.99
 #define EDGE_FADE_MARGIN 0.05
@@ -83,17 +93,17 @@ void main()
     BRANCH
     if(!valid_surface)
     {
-        gl_FragData[0] = curr;
-        gl_FragData[1] = vec4(luma_curr, luma_curr * luma_curr, curr.a, 0.0);
+        SSIL_COLOR_OUT = curr;
+        SSIL_MOMENTS_OUT = vec4(luma_curr, luma_curr * luma_curr, curr.a, 0.0);
         return;
     }
 
     BRANCH
     if(u_enable_temporal <= 0.5)
     {
-        gl_FragData[0] = curr;
-        gl_FragData[1] = vec4(luma_curr, luma_curr * luma_curr, curr.a,
-                              1.0 / max(u_max_accum_frames, 1.0));
+        SSIL_COLOR_OUT = curr;
+        SSIL_MOMENTS_OUT = vec4(luma_curr, luma_curr * luma_curr, curr.a,
+                                1.0 / max(u_max_accum_frames, 1.0));
         return;
     }
 
@@ -172,6 +182,6 @@ void main()
     float hit_history = hit_new / max(u_max_accum_frames, 1.0);
     float blend_weight = saturate(hit_new);
 
-    gl_FragData[0] = vec4(C_new, blend_weight);
-    gl_FragData[1] = vec4(mu1_new, mu2_new, hit_history, W_new / max(u_max_accum_frames, 1.0));
+    SSIL_COLOR_OUT = vec4(C_new, blend_weight);
+    SSIL_MOMENTS_OUT = vec4(mu1_new, mu2_new, hit_history, W_new / max(u_max_accum_frames, 1.0));
 }
