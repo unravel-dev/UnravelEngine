@@ -1667,7 +1667,7 @@ void profiler_timeline_panel::draw_lane_frame_boundaries(
 
 void profiler_timeline_panel::draw_aggregate_section()
 {
-    if(!ImGui::CollapsingHeader(ICON_MDI_CLOCK_OUTLINE "\tAggregate Profiler Data"))
+    if(!ImGui::CollapsingHeader(ICON_MDI_CLOCK_OUTLINE "\tAggregate"))
     {
         return;
     }

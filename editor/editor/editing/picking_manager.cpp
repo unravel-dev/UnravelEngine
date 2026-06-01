@@ -450,7 +450,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         const auto& pick_view = pick_camera.get_view();
         const auto& pick_proj = pick_camera.get_projection();
 
-        gfx::render_pass pass("Picking Buffer Pass");
+        gfx::render_pass pass("Picking/Buffer Pass");
         // ID buffer clears to black, which represents clicking on nothing (background)
         pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x000000ff, 1.0f, 0);
         pass.set_view_proj(pick_view, pick_proj);
@@ -714,7 +714,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
             return;
         }
 
-        gfx::render_pass pass("Picking Buffer Blit Pass");
+        gfx::render_pass pass("Picking/Buffer Blit Pass");
         pass.touch();
         // Blit and read
         gfx::blit(pass.id, blit_tex_->native_handle(), 0, 0, surface_->get_texture()->native_handle());

@@ -80,7 +80,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     if(history_tex != old_history)
     {
-        gfx::render_pass init_pass("TAA History Init");
+        gfx::render_pass init_pass("TAA/History Init");
         gfx::blit(init_pass.id,
                   history_tex->native_handle(),
                   0,
@@ -93,7 +93,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     APP_SCOPE_PERF("Rendering/TAA Pass");
 
-    gfx::render_pass pass("TAA Resolve Pass");
+    gfx::render_pass pass("TAA/Resolve Pass");
     pass.bind(temp_fbo.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
 
@@ -123,7 +123,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     program_.program->end();
     gfx::discard();
 
-    gfx::render_pass hist_pass("TAA History Blit");
+    gfx::render_pass hist_pass("TAA/History Blit");
     gfx::blit(hist_pass.id,
               history_tex->native_handle(),
               0,
@@ -134,7 +134,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     if(params.output)
     {
-        gfx::render_pass out_pass("TAA Output Blit");
+        gfx::render_pass out_pass("TAA/Output Blit");
         gfx::blit(out_pass.id,
                   params.output->get_texture(0)->native_handle(),
                   0,

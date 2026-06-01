@@ -11,6 +11,18 @@ struct render_pass
     static void push_scope(const char* name);
     static void pop_scope();
 
+    struct scope
+    {
+        scope(const char* name)
+        {
+            push_scope(name);
+        }
+        ~scope()
+        {
+            pop_scope();
+        }
+    };
+
     //-----------------------------------------------------------------------------
     //  Name : render_pass ()
     /// <summary>

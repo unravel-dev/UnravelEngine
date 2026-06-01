@@ -112,7 +112,7 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     const auto& input = params.input;
     auto output = create_or_update_output_fb(rview, params.input, params.output);
 
-    gfx::render_pass pass("Tonemapping Pass");
+    gfx::render_pass pass("Tonemapping/Pass");
     pass.bind(output.get());
 
     const auto output_size = output->get_size();

@@ -355,7 +355,7 @@ void renderer::frame_begin(rtti::context& /*ctx*/, delta_t /*dt*/)
 void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
 {
     APP_SCOPE_PERF("Graphics Frame Submit");
-    gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer Update Pass");
+    gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer/Update Pass");
     pass.bind();
 
     gfx::frame();

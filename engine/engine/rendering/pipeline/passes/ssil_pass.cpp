@@ -398,7 +398,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     {
         // Full-res tier preserves local detail -> full 5x5 (radius 2) kernel.
         run_atrous(src_tex, dst_fb, var_src, var_dst, gx, gy, std::min(1 << i, max_step), i == 0, has_moments, 2,
-                   fmt::format("Spatial Denoise Pass {}", i));
+                   fmt::format("Spatial Denoise/Full Pass {}", i));
 
         src_tex = dst_fb->get_texture();
         dst_fb = (dst_fb == fb_a) ? fb_b : fb_a;
@@ -430,7 +430,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     // When a full-res tier ran, carry its variance with the colour so the wide half-res
     // passes keep the temporal/spatial variance guidance instead of recomputing it.
     {
-        gfx::render_pass ds_pass("SSIL Downsample Pass");
+        gfx::render_pass ds_pass("Spatial Denoise/Downsample Pass");
         ds_pass.set_view_proj(cam->get_view(), cam->get_projection());
 
         downsample_program_.program->begin();
@@ -463,7 +463,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         // frequency, so the outer ring adds little -- with the dilation step doubled to keep
         // its reach.
         run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << (j + 1), max_step), first_half_pass, false, 1,
-                   fmt::format("Spatial Denoise Half Pass {}", j));
+                   fmt::format("Spatial Denoise/Half Pass {}", j));
 
         half_src = half_dst->get_texture();
         half_dst = (half_dst == half_a) ? half_b : half_a;
@@ -477,7 +477,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     // sharply because the upsample rejects cross-edge taps using the full-res G-buffer.
     auto out_fb = dst_fb;
     {
-        gfx::render_pass up_pass("SSIL Internal Upsample Pass");
+        gfx::render_pass up_pass("Spatial Denoise/Upsample To Trace Resolution Pass");
         up_pass.bind(out_fb.get());
         up_pass.set_view_proj(cam->get_view(), cam->get_projection());
 
@@ -622,7 +622,7 @@ auto ssil_pass::run_upsample(gfx::render_view& rview,
     // Output matches the full G-buffer resolution (reference = g_buffer, res = full).
     auto out_fb = create_or_update_ssil_fb(rview, "SSIL_UPSAMPLED", g_buffer, trace_resolution::full);
 
-    gfx::render_pass pass("Upsample Pass");
+    gfx::render_pass pass("Output/Upsample To Full Resolution Pass");
     pass.bind(out_fb.get());
     // Required so the shader's computeViewSpacePosition (u_invProj/u_view) is valid
     // for the linear-depth edge-stopping weight.

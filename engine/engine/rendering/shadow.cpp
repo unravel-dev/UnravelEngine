@@ -1793,8 +1793,9 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
 
     bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, gfx::get_caps()->homogeneousDepth);
 
+    
     /// begin generating
-    gfx::render_pass shadowmap_pass_0("Shadowmap Pass 0");
+    gfx::render_pass shadowmap_pass_0("ShadowmapPass 0");
     gfx::render_pass shadowmap_pass_1("Shadowmap Pass 1");
     gfx::render_pass shadowmap_pass_2("Shadowmap Pass 2");
     gfx::render_pass shadowmap_pass_3("Shadowmap Pass 3");

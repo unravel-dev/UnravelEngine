@@ -235,7 +235,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
     }
 
     const uint32_t num_mips = settings.cone_tracing.max_mip_level + 1;
-    gfx::render_pass pass("Blur Compute SSR Pass");
+    gfx::render_pass pass("Blur Compute Pass");
 
     // Process each mip level using unified blur shader
     for(int mip = 0; mip < num_mips; ++mip)

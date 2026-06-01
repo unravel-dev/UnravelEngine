@@ -86,7 +86,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const settings& 
     const uint32_t meter_width = std::max(1u, uint32_t(float(input_size.width) * scale));
     const uint32_t meter_height = std::max(1u, uint32_t(float(input_size.height) * scale));
 
-    gfx::render_pass pass("Auto Exposure Histogram");
+    gfx::render_pass pass("Auto Exposure/Histogram");
 
     histogram_program_.program->begin();
 
@@ -117,7 +117,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const settings& co
         return;
     }
 
-    gfx::render_pass pass("Auto Exposure Average");
+    gfx::render_pass pass("Auto Exposure/Average");
 
     average_program_.program->begin();
 

@@ -97,11 +97,11 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
         draw_loading_overlay(stage, completed, total, current_job);
     
         auto& main_surface = window->get_surface();
-        gfx::render_pass pass("Loading ImGui Pass");
+        gfx::render_pass pass("ImGui/Loading Pass");
         pass.bind(main_surface.get());
         imguiEndFrame(pass.id);
     
-        gfx::render_pass end_pass(gfx::render_pass::get_max_pass_id(), "Loading Backbuffer");
+        gfx::render_pass end_pass(gfx::render_pass::get_max_pass_id(), "Backbuffer/Loading Present");
         end_pass.bind();
         gfx::frame();
     }
@@ -265,7 +265,7 @@ void imgui_interface::on_frame_ui_render(rtti::context& ctx, delta_t dt)
 
     ev.on_frame_ui_render(ctx, dt);
 
-    gfx::render_pass pass("ImGui Pass");
+    gfx::render_pass pass("ImGui/Pass");
     pass.bind(main_surface.get());
     imguiEndFrame(pass.id);
 }

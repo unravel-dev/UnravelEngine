@@ -126,7 +126,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
         auto mip0_size = mip0_fbo->get_size();
 
-        gfx::render_pass pass("Bloom Karis Downsample");
+        gfx::render_pass pass("Bloom/Karis Downsample");
         pass.bind(mip0_fbo.get());
         pass.set_view_proj({}, {});
         pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -173,7 +173,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         const auto& fbo = get_mip_fbo(rview, i + 1);
 
-        gfx::render_pass pass("Bloom Downsample Pass");
+        gfx::render_pass pass("Bloom/Downsample Pass");
         pass.bind(fbo.get());
         pass.set_view_proj({}, {});
         pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -201,7 +201,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     // the multi-scale bloom contribution from smaller mips.
     {
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
-        gfx::render_pass clear_pass("Bloom Clear MIP0 Pass");
+        gfx::render_pass clear_pass("Bloom/Clear MIP0 Pass");
         clear_pass.bind(mip0_fbo.get());
         clear_pass.set_view_proj(nullptr, nullptr);
         clear_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
@@ -221,7 +221,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         const auto& fbo = get_mip_fbo(rview, out_idx);
 
-        gfx::render_pass pass("Bloom Upsample Pass");
+        gfx::render_pass pass("Bloom/Upsample Pass");
         pass.bind(fbo.get());
         pass.set_view_proj({}, {});
 
@@ -250,7 +250,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     // The texture sampler bilinearly upscales the half-res bloom.
     auto output = create_or_update_output_fb(rview, input, params.output);
 
-    gfx::render_pass pass("Bloom Combine Pass");
+    gfx::render_pass pass("Bloom/Combine Pass");
     pass.bind(output.get());
     pass.set_view_proj({}, {});
 

@@ -176,7 +176,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
     update_uniforms(0, viewMtx, projMtx, dims);
 
-    gfx::render_pass pass("ASSAO Pass");
+    gfx::render_pass pass("ASSAO/Pass");
     auto view = pass.id;
 
     {
@@ -256,7 +256,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
         if(ssaoPass == 1 && m_settings.quality_level == 3)
         {
-            gfx::render_pass pass(fmt::format("Importance Map Pass {}", ssaoPass).c_str());
+            gfx::render_pass pass(fmt::format("ASSAO/Importance Map Pass {}", ssaoPass).c_str());
             view = pass.id;
         }
 
@@ -478,7 +478,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 #endif
 
     {
-        gfx::render_pass pass("Update G-Buffer AO Pass");
+        gfx::render_pass pass("ASSAO/Update G-Buffer AO Pass");
         const auto& aoMapTex = rview.tex_get("ASSAO_AO_MAP");
         bgfx::setImage(0, params.color_ao->native_handle(), 0, bgfx::Access::ReadWrite);
         bgfx::setImage(1, aoMapTex->native_handle(), 0, bgfx::Access::Read);
