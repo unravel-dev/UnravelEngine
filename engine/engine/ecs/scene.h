@@ -24,7 +24,7 @@ struct on_load_bus
 };
 
 template<class T>
-inline auto on_load(entt::registry& reg) -> on_load_bus<T>::sink_t
+inline auto on_load(entt::registry& reg) -> typename on_load_bus<T>::sink_t
 {
     auto& ctx = reg.ctx();
     if(!ctx.contains<on_load_bus<T>>())
