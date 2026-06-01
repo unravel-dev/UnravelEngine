@@ -30,7 +30,7 @@ uniform vec4 u_temporal_resolution;
 
 uniform mat4 u_prev_view_proj;
 
-#if BGFX_SHADER_LANGUAGE_GLSL >= 330
+#if BGFX_SHADER_LANGUAGE_GLSL
 layout(location = 0) out vec4 ssil_color_out;
 layout(location = 1) out vec4 ssil_moments_out;
 #define SSIL_COLOR_OUT   ssil_color_out
