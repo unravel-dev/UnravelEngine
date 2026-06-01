@@ -44,7 +44,7 @@ namespace rendering
 struct visibility_data
 {
     entt::handle entity;
-    lod_data lod_data;
+    unravel::lod_data lod_data;
 };
 
 using visibility_set_models_t = hpp::small_vector<visibility_data>;

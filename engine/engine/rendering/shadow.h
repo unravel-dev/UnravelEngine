@@ -584,7 +584,7 @@ struct adaptive_shadow_params
 struct shadow_visibility_data
 {
     entt::handle entity;
-    lod_data lod_data;
+    unravel::lod_data lod_data;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 

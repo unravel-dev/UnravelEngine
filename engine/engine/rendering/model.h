@@ -100,7 +100,7 @@ struct submesh_pose_mat4
     auto add_transform(const std::vector<uint32_t>& submesh_indices, const math::mat4& transform, bool active) -> uint32_t
     {
         // Add the transform to the pool
-        uint32_t transform_index = static_cast<uint32_t>(transforms.size());
+        uint32_t trans_index = static_cast<uint32_t>(transforms.size());
         transforms.emplace_back(transform);
         
         // Find the maximum submesh index to ensure we have enough space
@@ -119,10 +119,10 @@ struct submesh_pose_mat4
         // Map all submesh indices to this transform
         for(uint32_t submesh_index : submesh_indices)
         {
-            submesh_to_transform_indices[submesh_index].emplace_back(transform_index, active);
+            submesh_to_transform_indices[submesh_index].emplace_back(transform_index{trans_index, active});
         }
         
-        return transform_index;
+        return trans_index;
     }
     
     /**
