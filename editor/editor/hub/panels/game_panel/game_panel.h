@@ -21,6 +21,7 @@ public:
     void on_frame_update(rtti::context& ctx, delta_t dt);
     void on_frame_before_render(rtti::context& ctx, delta_t dt);
     void on_frame_render(rtti::context& ctx, delta_t dt);
+    void on_project_opened();
     void set_visible_force(bool visible);
 
     void draw_ui(rtti::context& ctx) override;
@@ -31,6 +32,7 @@ private:
 
     bool is_visible_force_{};
     int visualize_passes_{-1};
+    int m_skip_frames_{0};
 
     imgui_panels* parent_{};
     viewport_stats_overlay::state stats_overlay_state_{};

@@ -419,6 +419,8 @@ void hub::open_project_settings(rtti::context& ctx, const std::string& hint)
 void hub::on_project_opened(rtti::context& ctx)
 {
     panels_.get_dockspace().refresh();
+    panels_.get_scene_panel().on_project_opened();
+    panels_.get_game_panel().on_project_opened();
 }
 
 void hub::on_frame_update(rtti::context& ctx, delta_t dt)

@@ -62,6 +62,12 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
 
+    if(m_skip_frames_ > 0)
+    {
+        m_skip_frames_--;
+        return;
+    }
+
     path.render_scene(scene, dt);
 
     is_visible_force_ = false;
@@ -78,9 +84,35 @@ void game_panel::set_visible_force(bool visible)
     is_visible_force_ = visible;
 }
 
+void game_panel::on_project_opened()
+{
+    m_skip_frames_ = 100;
+}
+
 void game_panel::draw_ui(rtti::context& ctx)
 {
     draw_menubar(ctx);
+
+    if(m_skip_frames_ > 0)
+    {
+        auto spinner_size = ImGui::GetContentRegionAvail().y * 0.2f;
+
+        ImGui::SetCursorPosY(ImGui::GetContentRegionAvail().y * 0.5f - spinner_size * 0.5f);
+        ImGui::AlignedItem(0.5f,
+                           ImGui::GetContentRegionAvail().x,
+                           spinner_size,
+                           [spinner_size]()
+                           {
+                                ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner", 
+                                    ImSpinner::Radius{spinner_size * 0.5f},
+                                    ImSpinner::Thickness{6.0f},
+                                    ImSpinner::Color{ImSpinner::white},
+                                    ImSpinner::Speed{6.0f});
+
+                               ImGui::TextUnformatted("Loading project...");
+                           });
+        return;
+    }
 
     if(!ctx.has<unravel::settings>())
     {

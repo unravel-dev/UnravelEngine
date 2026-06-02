@@ -29,6 +29,8 @@ public:
 
     auto get_auto_save_prefab() const -> bool;
 
+    void on_project_opened();
+
     // Drag selection methods
     auto is_drag_selection_active() const -> bool { return is_drag_selecting_; }
     auto get_drag_selection_rect() const -> ImRect { return ImRect(drag_start_pos_, drag_current_pos_); }
@@ -101,5 +103,7 @@ private:
     std::string fullscreen_name_{};
 
     viewport_stats_overlay::state stats_overlay_state_{};
+
+    int m_skip_frames_{0};
 };
 } // namespace unravel
