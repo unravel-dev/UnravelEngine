@@ -543,7 +543,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
             {
                 gather_visible_models(scn, nullptr, query, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
                 {
-                    dirty_models.emplace_back(entity, lod_data);
+                    dirty_models.emplace_back(shadow::shadow_visibility_data{entity, lod_data});
                 });
                 queried = true;
             }

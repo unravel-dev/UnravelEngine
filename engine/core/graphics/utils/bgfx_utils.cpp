@@ -326,6 +326,11 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
     uint32_t size = 0;
     void* data = loadMem(&reader, entry::getAllocator(), _filePath, &size);
 
+    if(data == nullptr)
+    {
+        return nullptr;
+    }
+
     return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
 }
 
