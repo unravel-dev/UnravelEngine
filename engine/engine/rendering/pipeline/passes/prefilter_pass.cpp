@@ -30,14 +30,14 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
     const auto& ti = params.output_cube->info;
     uint8_t max_mips = ti.numMips;
 
-    if(bgfx::getRendererType() == bgfx::RendererType::Direct3D12)
-    {
-        APP_SCOPE_PERF("Rendering/Env Mip Gen Pass");
-        for(uint8_t face = 0; face < 6; ++face)
-        {
-            generate_mips(params.input_faces[face]);
-        }
-    }
+    // if(bgfx::getRendererType() == bgfx::RendererType::Direct3D12)
+    // {
+    //     APP_SCOPE_PERF("Rendering/Env Mip Gen Pass");
+    //     for(uint8_t face = 0; face < 6; ++face)
+    //     {
+    //         generate_mips(params.input_faces[face]);
+    //     }
+    // }
 
     // Simple copy if disabled
     {

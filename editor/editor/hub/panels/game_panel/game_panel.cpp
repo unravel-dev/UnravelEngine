@@ -109,7 +109,6 @@ void game_panel::draw_ui(rtti::context& ctx)
                                     ImSpinner::Color{ImSpinner::white},
                                     ImSpinner::Speed{6.0f});
 
-                               ImGui::TextUnformatted("Loading project...");
                            });
         return;
     }
