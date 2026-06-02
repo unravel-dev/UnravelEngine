@@ -177,21 +177,27 @@ vec3 tonemap_aces(vec3 color)
     color = a / b;
 
     result = mul(ACESOutputMat, color);
-    return saturate(result) * 1.8f;
+    return saturate(result);
 }
 
-// Luminance only fit of ACES
-// Oversatures brights similar to Reinhard in luminance
-// https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
-vec3 tonemap_aces_luminance(vec3 color)
+float aces_filmic_curve(float x)
 {
     const float a = 2.51;
     const float b = 0.03;
     const float c = 2.43;
     const float d = 0.59;
     const float e = 0.14;
-    vec3 x = color * 0.6;
-    return saturate((x * (a * x + b)) / (x * (c * x + d ) + e));
+    return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+// Luminance-preserving ACES fit. The curve is evaluated on luminance,
+// then applied as a scalar to RGB so hue ratios survive the tone map.
+// https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+vec3 tonemap_aces_luminance(vec3 color)
+{
+    float lum = luminance(color);
+    float mapped_lum = aces_filmic_curve(lum);
+    return color * (mapped_lum / max(lum, 1e-5));
 }
 
 // Reinhard Extended (with white point)
@@ -286,7 +292,7 @@ vec3 agx_core(vec3 val, vec3 slope, vec3 offset, vec3 power, float saturation)
 
     // Input transform (inset)
     val = mul(agx_mat, val);
-    //val = max(val, vec3_splat(1e-10));
+    val = max(val, vec3_splat(1e-10));
 
     // Log2 space encoding
     val = clamp(log2(val), min_ev, max_ev);

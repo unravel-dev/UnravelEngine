@@ -590,7 +590,7 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     volume_comp.mode = mode;
 
     object.emplace<assao_component>();
-    object.emplace<auto_exposure_component>().enabled = false;
+    object.emplace<auto_exposure_component>();
     object.emplace<bloom_component>();
     object.emplace<tonemapping_component>();
     object.emplace<fxaa_component>();

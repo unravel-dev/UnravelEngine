@@ -33,7 +33,7 @@ public:
     struct settings
     {
         float exposure = 1.0f;
-        tonemapping_method method = tonemapping_method::aces_lum;
+        tonemapping_method method = tonemapping_method::neutral;
     };
 
     struct run_params
