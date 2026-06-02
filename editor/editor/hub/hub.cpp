@@ -1100,11 +1100,15 @@ void hub::render_project_samples_view(rtti::context& ctx)
 void hub::render_new_project_creator_view(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
 
     auto on_create_project = [&](const std::string& p)
     {
-        auto path = fs::path(p).make_preferred();
-        pm.create_project(ctx, path);
+        em.queue_action("Create Project", [&ctx, &pm, p]()
+        {
+            auto path = fs::path(p).make_preferred();
+            pm.create_project(ctx, path);
+        });
     };
 
     // Header section with title and back button

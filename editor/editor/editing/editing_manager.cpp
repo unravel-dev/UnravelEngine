@@ -1,4 +1,5 @@
 #include "editing_manager.h"
+#include "base/basetypes.hpp"
 #include "engine/profiler/profiler.h"
 #include "imgui/imgui.h"
 #include "logging/logging.h"
@@ -109,6 +110,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     {
         scripting.wait_for_jobs_to_finish(ctx);
+        on_frame_update(ctx, delta_t(0.016667f));
     }
 
 
@@ -146,6 +148,8 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     }
     {
         scripting.wait_for_jobs_to_finish(ctx);
+        on_frame_update(ctx, delta_t(0.016667f));
+
     }
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_app_domain");
@@ -181,6 +185,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     auto& scripting = ctx.get_cached<script_system>();
     {
         scripting.wait_for_jobs_to_finish(ctx);
+        on_frame_update(ctx, delta_t(0.016667f));
     }
     
     undo_stack.clear();
@@ -214,6 +219,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     scripting.unload_engine_domain();
     {
         scripting.wait_for_jobs_to_finish(ctx);
+        on_frame_update(ctx, delta_t(0.016667f));
 
     }
     scripting.load_engine_domain(ctx, false);
