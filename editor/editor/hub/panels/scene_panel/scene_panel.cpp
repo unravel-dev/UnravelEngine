@@ -1462,7 +1462,7 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 
 void scene_panel::on_project_opened()
 {
-    m_skip_frames_ = 100;
+    // m_skip_frames_ = 100;
 }
 
 auto scene_panel::get_window_flags() const -> ImGuiWindowFlags

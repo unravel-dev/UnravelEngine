@@ -86,7 +86,7 @@ void game_panel::set_visible_force(bool visible)
 
 void game_panel::on_project_opened()
 {
-    m_skip_frames_ = 100;
+    // m_skip_frames_ = 100;
 }
 
 void game_panel::draw_ui(rtti::context& ctx)

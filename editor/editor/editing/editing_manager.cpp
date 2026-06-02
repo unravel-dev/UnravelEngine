@@ -239,49 +239,51 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
 void editing_manager::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
 {
-    if(waiting_for_compilation_before_play_)
-    {
-        return;
-    }
-    undo_stack.clear();
+    queue_action("Script Recompile", [&]() {
+        if(waiting_for_compilation_before_play_)
+        {
+            return;
+        }
+        undo_stack.clear();
 
-    save_selection(ctx);
+        save_selection(ctx);
 
-    
-    push_undo_stack_enabled(false);  
+        
+        push_undo_stack_enabled(false);  
 
-    clear(false);
+        clear(false);
 
-    const auto& scenes = scene::get_all_scenes();
-    caches_.clear();
-    for(auto scn : scenes)
-    {
-        auto& cache = caches_[scn->tag];
-        cache.scn = scn;
-        save_checkpoint(ctx, cache);
-        cache.scn = nullptr;
-    }
+        const auto& scenes = scene::get_all_scenes();
+        caches_.clear();
+        for(auto scn : scenes)
+        {
+            auto& cache = caches_[scn->tag];
+            cache.scn = scn;
+            save_checkpoint(ctx, cache);
+            cache.scn = nullptr;
+        }
 
-    // Unload scenes BEFORE unloading domains to prevent script_component destructors
-    // from trying to free GC handles from the old domain
-    unload_scenes_scripting(scenes);
+        // Unload scenes BEFORE unloading domains to prevent script_component destructors
+        // from trying to free GC handles from the old domain
+        unload_scenes_scripting(scenes);
 
-    auto& scripting = ctx.get_cached<script_system>();
-    scripting.unload_app_domain();
-    scripting.unload_engine_domain();
-    scripting.load_engine_domain(ctx, false);
-    scripting.load_app_domain(ctx, false);
+        auto& scripting = ctx.get_cached<script_system>();
+        scripting.unload_app_domain();
+        scripting.unload_engine_domain();
+        scripting.load_engine_domain(ctx, false);
+        scripting.load_app_domain(ctx, false);
 
-    for(auto scn : scenes)
-    {
-        auto& cache = caches_[scn->tag];
-        cache.scn = scn;
-        load_checkpoint(ctx, cache, true);
-        cache.scn = nullptr;
-    }
+        for(auto scn : scenes)
+        {
+            auto& cache = caches_[scn->tag];
+            cache.scn = scn;
+            load_checkpoint(ctx, cache, true);
+            cache.scn = nullptr;
+        }
 
-    caches_.clear();
-    pop_undo_stack_enabled();
+        caches_.clear();
+        pop_undo_stack_enabled();
+    });
 }
 
 void editing_manager::save_selection(rtti::context& ctx)

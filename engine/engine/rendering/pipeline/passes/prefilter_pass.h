@@ -47,16 +47,6 @@ private:
         std::unique_ptr<gpu_program> program;
     } cs_;
 
-    struct mip_downsample_prog : uniforms_cache
-    {
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
-        }
-
-        gfx::program::uniform_ptr u_params;  ///< vec4: x=width, y=height
-        std::unique_ptr<gpu_program> program;
-    } mip_downsample_;
 };
 
 } // namespace unravel
