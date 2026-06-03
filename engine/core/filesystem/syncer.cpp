@@ -1,7 +1,24 @@
 #include "syncer.h"
 #include "watcher.h"
+
+#include <algorithm>
+
+#define POOLSTL_STD_SUPPLEMENT 1
+#include <poolstl/poolstl.hpp>
 namespace fs
 {
+
+static auto extract_entry_extension(const fs::path& path) -> std::string
+{
+    auto entry_path = path;
+    std::string entry_extension;
+    while(entry_path.has_extension())
+    {
+        entry_extension = entry_path.extension().string() + entry_extension;
+        entry_path.replace_extension();
+    }
+    return entry_extension;
+}
 
 static void ensure_directory_exists(const fs::path& path)
 {
@@ -103,25 +120,10 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
     const auto on_change = [this, on_progress](const auto& entries, bool is_initial_listing)
     {
-        size_t completed = 0;
-        for(const auto& entry : entries)
+        const auto process_entry = [this, is_initial_listing](const watcher::entry& entry)
         {
-            bool is_directory = (entry.type == fs::file_type::directory);
-            auto entry_path = entry.path;
-            std::string entry_extension;
-            while(entry_path.has_extension())
-            {
-                entry_extension = entry_path.extension().string() + entry_extension;
-                entry_path.replace_extension();
-            }
-
-            if(is_initial_listing)
-            {
-                if(on_progress)
-                {
-                    on_progress(completed, entries.size(), entry_extension);
-                }
-            }
+            const bool is_directory = (entry.type == fs::file_type::directory);
+            const std::string entry_extension = extract_entry_extension(entry.path);
 
             switch(entry.status)
             {
@@ -184,12 +186,45 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
                         callback(entry_extension, p, synced_renamed);
                     }
                 }
-
                 break;
                 default:
                     break;
             }
-            completed++;
+        };
+
+        const auto run_parallel = [&](auto begin, auto end)
+        {
+            std::for_each(poolstl::par, begin, end, process_entry);
+        };
+
+        if(entries.empty())
+        {
+            return;
+        }
+
+        // Progress must run on the watcher thread (not pool workers). Batch entries so
+        // on_progress fires a bounded number of times while work still runs in parallel.
+        if(!is_initial_listing || !on_progress)
+        {
+            run_parallel(entries.begin(), entries.end());
+            return;
+        }
+
+        constexpr size_t k_max_progress_updates = 16;
+        const size_t progress_stride =
+            std::max<size_t>(1, (entries.size() + k_max_progress_updates - 1) / k_max_progress_updates);
+
+        size_t completed = 0;
+        for(size_t offset = 0; offset < entries.size(); offset += progress_stride)
+        {
+            const auto chunk_begin = entries.begin() + static_cast<std::ptrdiff_t>(offset);
+            const auto chunk_end =
+                entries.begin() + static_cast<std::ptrdiff_t>(std::min(offset + progress_stride, entries.size()));
+
+            run_parallel(chunk_begin, chunk_end);
+
+            completed = std::min(offset + progress_stride, entries.size());
+            on_progress(completed, entries.size(), extract_entry_extension(std::prev(chunk_end)->path));
         }
     };
     using namespace std::literals;

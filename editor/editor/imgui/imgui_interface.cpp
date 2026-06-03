@@ -1,4 +1,5 @@
 #include "imgui_interface.h"
+#include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
 #include "integration/imgui_style.h"
 #include <editor/events.h>
@@ -136,7 +137,7 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
     constexpr float card_width = 480.0f;
     float card_x = (viewport->WorkSize.x - card_width) * 0.5f;
     float card_y = viewport->WorkSize.y * 0.38f;
-    ImGui::SetCursorPos(ImVec2(card_x, card_y));
+    ImGui::SetNextWindowPos(ImVec2(card_x, card_y));
 
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f, 28.0f));

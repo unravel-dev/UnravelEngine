@@ -20,7 +20,7 @@ set_target_properties(${target_name} PROPERTIES
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
-target_link_libraries(${target_name} PUBLIC Threads::Threads)
+target_link_libraries(${target_name} PUBLIC Threads::Threads poolSTL::poolSTL)
 
 target_link_libraries(${target_name} PUBLIC hpp base wtr.hdr_watcher)
 

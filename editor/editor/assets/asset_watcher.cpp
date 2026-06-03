@@ -1,6 +1,7 @@
 #include "asset_watcher.h"
 #include "engine/ui/ui_tree.h"
 #include "filesystem/filesystem.h"
+#include "threadpp/thread.h"
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_compiler.h>
@@ -53,6 +54,17 @@ auto checking_dependencies_job_name() -> std::string
 }
 
 
+auto get_absolute_source_path(const fs::path& source_file_path) -> fs::path
+{
+    auto absolute_source = fs::resolve_protocol(
+        fs::replace(fs::convert_to_protocol(source_file_path), ex::get_meta_directory(), ex::get_data_directory()));
+    if(absolute_source.extension() == ".meta")
+    {
+        absolute_source.replace_extension();
+    }
+    return absolute_source;
+}
+
 /// Check if recompilation is needed based on manifest.
 /// Resolves include dependencies via asset_compiler::resolve_dependencies<T> so that
 /// changes in included files are detected through the combined SHA.
@@ -75,24 +87,22 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
         APPLOG_WARNING("Failed to load manifest for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
-    auto absolute_source = fs::resolve_protocol(
-        fs::replace(fs::convert_to_protocol(source_file_path), ex::get_meta_directory(), ex::get_data_directory()));
-    if(absolute_source.extension() == ".meta")
-    {
-        absolute_source.replace_extension();
-    }
-    std::set<fs::path> deps;
-    asset_compiler::resolve_dependencies<T>(absolute_source, deps);
-    if(asset_compiler::is_source_file_changed(source_file_path, manifest, deps))
-    {
-        APPLOG_WARNING("Source file changed for {}, recompilation needed", compiled_output_path.string());
-        return true;
-    }
+
     if(asset_compiler::is_compiled_format_changed(source_file_path, manifest))
     {
         APPLOG_WARNING("Compiled format changed for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
+
+    std::set<fs::path> deps;
+    asset_compiler::resolve_dependencies<T>(get_absolute_source_path(source_file_path), deps);
+
+    if(asset_compiler::is_source_file_changed(source_file_path, manifest, deps))
+    {
+        APPLOG_WARNING("Source file changed for {}, recompilation needed", compiled_output_path.string());
+        return true;
+    }
+
     return false;
 }
 
