@@ -1,6 +1,8 @@
 #include "mesh_importer.h"
 #include "bimg/bimg.h"
 
+#include "../asset_extensions.h"
+
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <math/math.h>
@@ -717,6 +719,42 @@ auto get_texture_extension(const aiTexture* texture) -> std::string
     }
 
     return extension;
+}
+
+/**
+ * @brief When a material references a texture path that does not exist on disk, try the
+ * same basename with other image extensions (e.g. material says .png but only .dds exists).
+ */
+auto resolve_external_texture_path(const fs::path& base_dir, fs::path relative_path) -> fs::path
+{
+    fs::error_code ec;
+    if(fs::exists(base_dir / relative_path, ec))
+    {
+        return relative_path;
+    }
+
+    const auto& extensions = ex::get_suported_formats<gfx::texture>();
+    const auto parent = relative_path.parent_path();
+    const auto stem = relative_path.stem().string();
+    const auto requested_ext = string_utils::to_lower(relative_path.extension().string());
+
+    for(const auto& ext : extensions)
+    {
+        if(ext == requested_ext)
+        {
+            continue;
+        }
+        fs::path alternate = parent / (stem + ext);
+        if(fs::exists(base_dir / alternate, ec))
+        {
+            APPLOG_WARNING("Mesh Importer: Texture '{}' not found, using '{}' instead",
+                         relative_path.generic_string(),
+                         alternate.generic_string());
+            return alternate;
+        }
+    }
+
+    return relative_path;
 }
 
 auto get_embedded_texture_name(const aiTexture* texture,
@@ -1652,8 +1690,12 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
 }
 
 /**
- * @brief Detect whether an image has meaningful alpha data (not all-opaque).
+ * @brief True when the alpha channel modulates gloss/roughness or cut-out opacity.
  * Samples a subset of pixels for performance.
+ *
+ * CryEngine / DXT5 spec maps store gloss in alpha at full opacity (alpha = 255), so a
+ * transparency-only test (alpha < 255) never fires and we fall back to the RGB intensity
+ * path, forcing roughness to ~1 on dark specular RGB.
  */
 auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool
 {
@@ -1663,13 +1705,23 @@ auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count,
     }
     uint32_t sample_count = std::min(pixel_count, 256u);
     uint32_t step = std::max(1u, pixel_count / sample_count);
+    uint8_t min_a = 255;
+    uint8_t max_a = 0;
     uint32_t non_opaque = 0;
     for(uint32_t i = 0; i < pixel_count; i += step)
     {
-        if(image_data[i * bytes_per_pixel + 3] < 255)
+        const uint8_t a = image_data[i * bytes_per_pixel + 3];
+        min_a = std::min(min_a, a);
+        max_a = std::max(max_a, a);
+        if(a < 255)
         {
             non_opaque++;
         }
+    }
+    constexpr uint8_t k_min_gloss_range = 8;
+    if((max_a - min_a) >= k_min_gloss_range)
+    {
+        return true;
     }
     return (non_opaque > sample_count / 10);
 }
@@ -1683,6 +1735,9 @@ auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count,
  *   A = 1.0
  * The deferred geometry shader samples G for roughness and B for metallic when the
  * same texture is bound to both the metalness and roughness slots.
+ *
+ * Prefer the diffuse + specular pair path (`apply_diffuse_to_base_color_conversion`) for
+ * Bistro-style assets; it has the diffuse colors needed for the Khronos metallic solve.
  */
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image)
 {
@@ -1801,11 +1856,10 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
     auto* d_data = static_cast<uint8_t*>(diffuse_image->m_data);
     const auto* s_data = static_cast<const uint8_t*>(specular_image->m_data);
 
-    // The specular texture's alpha channel carries glossiness in many spec-gloss
-    // workflows (KHR_materials_pbrSpecularGlossiness "specularGlossinessTexture").
-    // Fall back to specular intensity as a roughness estimate when there is no
-    // meaningful alpha. Decide once for the whole texture to avoid per-pixel jitter.
-    bool spec_alpha_has_gloss = (s_bpp >= 4) && image_has_meaningful_alpha(s_data, pixel_count, s_bpp);
+    // KHR_materials_pbrSpecularGlossiness / CryEngine _spec: RGB = specular, A = glossiness.
+    // When the specular map has alpha, always use it for per-pixel gloss (not cut-out opacity).
+    // Fall back to specular RGB intensity only for RGB-only spec sources.
+    bool spec_alpha_has_gloss = (s_bpp >= 4);
 
     if(out_mr_rgba8 != nullptr)
     {
@@ -2152,6 +2206,52 @@ enum class material_workflow
 };
 
 /**
+ * @brief True when the material has dedicated PBR metallic/roughness inputs (not legacy Phong shininess alone).
+ */
+auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> bool
+{
+    if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, nullptr) == AI_SUCCESS)
+    {
+        return true;
+    }
+
+    if(material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, nullptr) == AI_SUCCESS)
+    {
+        return true;
+    }
+
+    if(material->GetTextureCount(aiTextureType_METALNESS) > 0)
+    {
+        return true;
+    }
+
+    if(material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0)
+    {
+        return true;
+    }
+
+    if(material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0)
+    {
+        return true;
+    }
+
+    ai_real metallic_factor = 0.0f;
+    if(material->Get(AI_MATKEY_METALLIC_FACTOR, metallic_factor) == AI_SUCCESS && metallic_factor > 0.0f)
+    {
+        // FBX/glTF dual-authorship often writes a bogus MR metallic factor alongside a specular map.
+        aiString specular_path{};
+        const bool has_specular_texture =
+            material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
+        if(!has_specular_texture)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * @brief Check if the same texture is used for both metallic and roughness conversion
  */
 auto detect_duplicate_specular_usage(const aiMaterial* material, material_workflow workflow) -> bool
@@ -2225,17 +2325,21 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
     }
 
     // ----- 2. Definitive metallic-roughness markers -----
-    // Each marker below is set ONLY by PBR-MR pipelines (glTF MR, modern FBX PBR
-    // exporters). Hitting any of them is enough to pin the workflow.
-    if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &path) == AI_SUCCESS
-       || material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &path) == AI_SUCCESS
-       || material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, &path) == AI_SUCCESS
-       || material->GetTexture(AI_MATKEY_ROUGHNESS_TEXTURE, &path) == AI_SUCCESS
-       || material->Get(AI_MATKEY_METALLIC_FACTOR, dummy_value) == AI_SUCCESS
-       || material->Get(AI_MATKEY_ROUGHNESS_FACTOR, dummy_value) == AI_SUCCESS
-       || material->Get(AI_MATKEY_BASE_COLOR, dummy_color) == AI_SUCCESS)
+    // Dedicated MR textures or an explicit metallic factor. Do not treat ROUGHNESS_FACTOR alone as MR when a
+    // specular map is present — FBX/legacy exports often carry both.
+    if(has_definitive_metallic_roughness_evidence(material))
     {
         return material_workflow::metallic_roughness;
+    }
+
+    // Specular texture without any MR map/factor is a strong specular-gloss signal (Bistro / CryEngine).
+    aiString specular_path{};
+    const bool has_specular_map =
+        material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
+    if(has_specular_map && !has_definitive_metallic_roughness_evidence(material))
+    {
+        APPLOG_TRACE("Mesh Importer: Specular texture without dedicated metallic inputs — treating as specular/gloss workflow");
+        return material_workflow::specular_gloss;
     }
 
     // ----- 3. Scored heuristic fallback (legacy / mixed-signal materials) -----
@@ -2405,7 +2509,8 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     bool has_metallic = (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS);
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
-    if (workflow == material_workflow::specular_gloss && (!has_base_color || !has_metallic || !has_roughness))
+    // Spec-gloss assets (including KHR dual-authorship) often carry bogus MR fallback factors; derive PBR from SG inputs.
+    if(workflow == material_workflow::specular_gloss)
     {
         aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
         material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
@@ -2431,21 +2536,15 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
         auto [converted_base_color, converted_metallic, converted_roughness] = 
             convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
         
-        if (!has_base_color)
+        if(!has_base_color)
         {
             base_color = converted_base_color;
             APPLOG_TRACE("Mesh Importer: Converted base color from specular/diffuse workflow");
         }
-        if (!has_metallic)
-        {
-            metallic = converted_metallic;
-            APPLOG_TRACE("Mesh Importer: Converted metallic factor from specular workflow: {:.3f}", metallic);
-        }
-        if (!has_roughness)
-        {
-            roughness = converted_roughness;
-            APPLOG_TRACE("Mesh Importer: Converted roughness from specular workflow: {:.3f}", roughness);
-        }
+        metallic = converted_metallic;
+        roughness = converted_roughness;
+        APPLOG_TRACE("Mesh Importer: Converted PBR factors from specular/gloss workflow: metallic={:.3f}, roughness={:.3f}",
+                     metallic, roughness);
     }
     else
     {
@@ -2459,10 +2558,7 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
         
         if (!has_metallic)
         {
-            if (material->Get(AI_MATKEY_REFLECTIVITY, metallic) != AI_SUCCESS)
-            {
-                metallic = 0.0f;
-            }
+            metallic = 0.0f;
         }
         
         if (!has_roughness)
@@ -2635,11 +2731,17 @@ void process_material(asset_manager& am,
                     }
                     else
                     {
-                        // doesnt exist. so try to import it
-                        fs::copy_file(old_filepath, fixed_filepath, ec);
+                        old_filepath = output_dir / resolve_external_texture_path(output_dir, fs::path(tex.name));
+                        fixed_relative = resolve_external_texture_path(output_dir, fixed_relative);
+                        fixed_filepath = output_dir / fixed_relative;
+                        if(fs::exists(old_filepath, ec))
+                        {
+                            fs::copy_file(old_filepath, fixed_filepath, ec);
+                        }
                     }
                     tex.name = fixed_relative.generic_string();
                 }
+                tex.name = resolve_external_texture_path(output_dir, fs::path(tex.name)).generic_string();
             }
             tex.semantic = semantic;
             bool use_alpha = flags & aiTextureFlags_UseAlpha;
@@ -2752,20 +2854,13 @@ void process_material(asset_manager& am,
         }
     };
 
-    // technically there is a difference between MASK and BLEND mode
-    // but for our purposes it's enough if we sort properly
-    // aiString alpha_mode;
-    // material->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode);
-    // aiString alpha_mode_opaque;
-    // alpha_mode_opaque.Set("OPAQUE");
-
-    // out.blend = alphaMode != alphaModeOpaque;
-
-    // bool double_sided{};
-    // if(material->Get(AI_MATKEY_TWOSIDED, double_sided) == AI_SUCCESS)
-    // {
-    //     mat.set_cull_type(double_sided ? cull_type::none : cull_type::counter_clockwise);
-    // }
+    {
+        ai_real two_sided{};
+        if(material->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS && two_sided != 0.0)
+        {
+            mat.set_cull_type(cull_type::none);
+        }
+    }
 
     // Spec-gloss workflows: when both the diffuse and specular textures are present we
     // produce a metallic-roughness map directly from the pair (using the proper per-pixel
@@ -2860,9 +2955,16 @@ void process_material(asset_manager& am,
                     factors.specular_g = specular_factor_color.g * specular_factor_scalar;
                     factors.specular_b = specular_factor_color.b * specular_factor_scalar;
 
-                    float glossiness_factor = 1.0f;
-                    material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness_factor);
-                    factors.glossiness = glossiness_factor;
+                    factors.glossiness = 1.0f;
+                    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, factors.glossiness) != AI_SUCCESS)
+                    {
+                        float shininess = 32.0f;
+                        if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+                        {
+                            factors.glossiness =
+                                math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
+                        }
+                    }
                 }
 
                 // Load diffuse — pcData if embedded, file on disk if external.
@@ -2895,7 +2997,8 @@ void process_material(asset_manager& am,
                     }
                     else if(!spec_pair.first)
                     {
-                        fs::path specular_file = output_dir / specular_path.C_Str();
+                        fs::path specular_relative = resolve_external_texture_path(output_dir, fs::path(specular_path.C_Str()));
+                        fs::path specular_file = output_dir / specular_relative;
                         specular_img = imageLoad(bx::FilePath(specular_file.string().c_str()));
                     }
                 }
@@ -3140,6 +3243,11 @@ void process_material(asset_manager& am,
             has_property |= material->Get(AI_MATKEY_GLTF_TEXTURE_SCALE(normals_type, 0), property) == AI_SUCCESS;
         }
 
+        if(!has_property)
+        {
+            has_property |= material->Get(AI_MATKEY_BUMPSCALING, property) == AI_SUCCESS;
+        }
+
         if(has_property)
         {
             mat.set_bumpiness(property);
@@ -3243,6 +3351,38 @@ void process_material(asset_manager& am,
             emissive = {property.r, property.g, property.b};
             emissive = math::clamp(emissive.value, 0.0f, 1.0f);
             mat.set_emissive_color(emissive);
+            mat.set_emissive_intensity(5.0f);
+        }
+    }
+    // EMISSIVE INTENSITY (glTF KHR: emissiveIntensity; premultiplied in deferred submit)
+    {
+        ai_real intensity = 1.0f;
+        if(material->Get(AI_MATKEY_EMISSIVE_INTENSITY, intensity) == AI_SUCCESS)
+        {
+            mat.set_emissive_intensity(math::clamp(intensity, 0.0f, 100.0f));
+        }
+
+        ai_real texture_strength = 1.0f;
+        if(material->Get(AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_EMISSION_COLOR, 0), texture_strength) == AI_SUCCESS
+           || material->Get(AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_EMISSIVE, 0), texture_strength) == AI_SUCCESS)
+        {
+            mat.set_emissive_intensity(math::clamp(mat.get_emissive_intensity() * texture_strength, 0.0f, 100.0f));
+        }
+    }
+    // ALPHA CUTOUT / OPACITY (feeds deferred_geom alpha-test discard)
+    {
+        ai_real alpha_cutoff{};
+        if(material->Get(AI_MATKEY_GLTF_ALPHACUTOFF, alpha_cutoff) == AI_SUCCESS)
+        {
+            mat.set_alpha_test_value(math::clamp(alpha_cutoff, 0.0f, 1.0f));
+        }
+        else
+        {
+            ai_real opacity = 1.0f;
+            if(material->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS)
+            {
+                mat.set_alpha_test_value(math::clamp(1.0f - opacity, 0.0f, 1.0f));
+            }
         }
     }
 }

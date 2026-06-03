@@ -185,7 +185,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"name", "max_distance"},
             entt::attribute{"pretty_name", "Max Distance"},
             entt::attribute{"min", 0.5f},
-            entt::attribute{"max", 100.0f},
+            entt::attribute{"max", 500.0f},
             entt::attribute{"tooltip", "Maximum ray distance in world units. SSIL captures local bounce; distant GI comes from probes"},
         })
         .data<&ssil_settings::resolution>("resolution"_hs)

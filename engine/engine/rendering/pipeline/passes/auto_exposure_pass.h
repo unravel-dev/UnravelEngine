@@ -27,7 +27,7 @@ public:
         /// Lower clamp for metered scene brightness in EV100. A LOWER value lets the
         /// system BRIGHTEN dark scenes more (eye adaptation walking into shadow).
         /// -1 keeps brightening subtle (~1 stop), which matches this engine's authored look.
-        float min_ev = -1.0f;
+        float min_ev = -4.0f;
         /// Upper clamp for metered scene brightness in EV100. A HIGHER value lets the
         /// system DARKEN bright scenes more. This engine's lighting is authored at a
         /// fixed reference exposure rather than calibrated to physical cd/m2, so the

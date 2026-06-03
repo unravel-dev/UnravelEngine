@@ -63,7 +63,7 @@ public:
         /// that reads strong with saturated albedos (e.g. a red floor bleeding onto walls),
         /// so the default is a tamer 0.5; raise toward 1.0 for full physical colour bleed.
         float brightness = 0.5f;
-        float max_distance = 20.0f;
+        float max_distance = 300.0f;
         /// Trace resolution divisor. SSIL tolerates `quarter` well because indirect
         /// lighting is low-frequency and the bilateral upsample uses full-res guides.
         trace_resolution resolution = trace_resolution::full;

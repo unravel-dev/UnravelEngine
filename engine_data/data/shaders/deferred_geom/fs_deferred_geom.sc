@@ -88,7 +88,7 @@ void main()
 	float threshold = mix(1.0f - abs_param, abs_param, is_positive);  // Positive: abs_param, Negative: 1-abs_param
 	bool lod_discard = (dither - threshold) * sign(lod_param) > 0.0f;
 
-	if((albedo_color.a + (dither * (1.0f - alpha_test_value)) < 1.0f) ||
+	if((albedo_color.a + 0.01f + (dither * (1.0f - alpha_test_value)) < 1.0f) ||
 	(distance_factor + dither < 1.0f) ||
 	lod_discard)
 	{
