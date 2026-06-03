@@ -20,6 +20,7 @@ namespace stl = tinystl;
 
 #include "bgfx_utils.h"
 
+#include <bimg/bimg.h>
 #include <bimg/decode.h>
 
 #include <bgfx/bgfx.h>
@@ -212,6 +213,291 @@ static void imageReleaseCb(void* _ptr, void* _userData)
     bimg::imageFree(imageContainer);
 }
 
+static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageContainer,
+                                                    uint64_t _flags,
+                                                    bgfx::TextureInfo* _info)
+{
+    if(NULL == imageContainer)
+    {
+        return BGFX_INVALID_HANDLE;
+    }
+
+    const bgfx::Memory* mem = bgfx::makeRef(
+        imageContainer->m_data,
+        imageContainer->m_size,
+        imageReleaseCb,
+        imageContainer);
+
+    if(NULL != _info)
+    {
+        bgfx::calcTextureSize(
+            *_info,
+            uint16_t(imageContainer->m_width),
+            uint16_t(imageContainer->m_height),
+            uint16_t(imageContainer->m_depth),
+            imageContainer->m_cubeMap,
+            1 < imageContainer->m_numMips,
+            imageContainer->m_numLayers,
+            bgfx::TextureFormat::Enum(imageContainer->m_format));
+    }
+
+    if(imageContainer->m_cubeMap)
+    {
+        return bgfx::createTextureCube(
+            uint16_t(imageContainer->m_width),
+            1 < imageContainer->m_numMips,
+            imageContainer->m_numLayers,
+            bgfx::TextureFormat::Enum(imageContainer->m_format),
+            _flags,
+            mem);
+    }
+
+    if(1 < imageContainer->m_depth)
+    {
+        return bgfx::createTexture3D(
+            uint16_t(imageContainer->m_width),
+            uint16_t(imageContainer->m_height),
+            uint16_t(imageContainer->m_depth),
+            1 < imageContainer->m_numMips,
+            bgfx::TextureFormat::Enum(imageContainer->m_format),
+            _flags,
+            mem);
+    }
+
+    if(bgfx::isTextureValid(0, false, imageContainer->m_numLayers, bgfx::TextureFormat::Enum(imageContainer->m_format), _flags))
+    {
+        return bgfx::createTexture2D(
+            uint16_t(imageContainer->m_width),
+            uint16_t(imageContainer->m_height),
+            1 < imageContainer->m_numMips,
+            imageContainer->m_numLayers,
+            bgfx::TextureFormat::Enum(imageContainer->m_format),
+            _flags,
+            mem);
+    }
+
+    return BGFX_INVALID_HANDLE;
+}
+
+namespace
+{
+
+auto can_flip_normal_y_format(bimg::TextureFormat::Enum _format) -> bool
+{
+    if(bimg::isCompressed(_format) || bimg::isFloat(_format))
+    {
+        return false;
+    }
+
+    return bimg::getUnpack(_format) != nullptr && bimg::getPack(_format) != nullptr;
+}
+
+auto flip_normal_y_mip_ldr(bimg::ImageMip& _mip, bimg::TextureFormat::Enum _format) -> bool
+{
+    const bimg::UnpackFn unpack = bimg::getUnpack(_format);
+    const bimg::PackFn pack = bimg::getPack(_format);
+    if(nullptr == unpack || nullptr == pack)
+    {
+        return false;
+    }
+
+    const uint32_t bpp = bimg::getBitsPerPixel(_format);
+    if(0 == bpp || (bpp % 8) != 0)
+    {
+        return false;
+    }
+
+    const uint32_t bytes_per_pixel = bpp / 8;
+    const uint32_t width = _mip.m_width;
+    const uint32_t height = _mip.m_height;
+    const uint32_t depth = bx::max<uint32_t>(1, _mip.m_depth);
+    const uint32_t row_stride = width * bytes_per_pixel;
+    const uint32_t slice_stride = row_stride * height;
+
+    uint8_t* slice = const_cast<uint8_t*>(_mip.m_data);
+    for(uint32_t zz = 0; zz < depth; ++zz)
+    {
+        uint8_t* row = slice + zz * slice_stride;
+        for(uint32_t yy = 0; yy < height; ++yy)
+        {
+            uint8_t* pixel = row;
+            for(uint32_t xx = 0; xx < width; ++xx)
+            {
+                float rgba[4];
+                unpack(rgba, pixel);
+                rgba[1] = 1.0f - rgba[1];
+                pack(pixel, rgba);
+                pixel += bytes_per_pixel;
+            }
+            row += row_stride;
+        }
+    }
+
+    return true;
+}
+
+auto flip_normal_y_all_mips_ldr(bimg::ImageContainer* _image) -> bool
+{
+    if(!can_flip_normal_y_format(_image->m_format))
+    {
+        return false;
+    }
+
+    for(uint8_t mip = 0; mip < _image->m_numMips; ++mip)
+    {
+        for(uint16_t layer = 0; layer < _image->m_numLayers; ++layer)
+        {
+            bimg::ImageMip mipData;
+            if(!bimg::imageGetRawData(*_image, layer, mip, _image->m_data, _image->m_size, mipData))
+            {
+                continue;
+            }
+
+            if(!flip_normal_y_mip_ldr(mipData, _image->m_format))
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+auto ensure_rgba8_opaque_alpha(bimg::ImageContainer* _image) -> void
+{
+    if(nullptr == _image)
+    {
+        return;
+    }
+
+    if(_image->m_format != bimg::TextureFormat::RGBA8)
+    {
+        return;
+    }
+
+    for(uint8_t mip = 0; mip < _image->m_numMips; ++mip)
+    {
+        for(uint16_t layer = 0; layer < _image->m_numLayers; ++layer)
+        {
+            bimg::ImageMip mipData;
+            if(!bimg::imageGetRawData(*_image, layer, mip, _image->m_data, _image->m_size, mipData))
+            {
+                continue;
+            }
+
+            const uint32_t width = mipData.m_width;
+            const uint32_t height = mipData.m_height;
+            const uint32_t depth = bx::max<uint32_t>(1, mipData.m_depth);
+            const uint32_t row_stride = width * 4;
+            const uint32_t slice_stride = row_stride * height;
+
+            uint8_t* slice = const_cast<uint8_t*>(mipData.m_data);
+            for(uint32_t zz = 0; zz < depth; ++zz)
+            {
+                uint8_t* row = slice + zz * slice_stride;
+                for(uint32_t yy = 0; yy < height; ++yy)
+                {
+                    uint8_t* pixel = row;
+                    for(uint32_t xx = 0; xx < width; ++xx)
+                    {
+                        // PNG RGB sources often decode with alpha=0; make preview/texturec input opaque.
+                        if(0 == pixel[3])
+                        {
+                            pixel[3] = 255;
+                        }
+                        pixel += 4;
+                    }
+                    row += row_stride;
+                }
+            }
+        }
+    }
+}
+
+} // namespace
+
+bool imageFlipTangentSpaceNormalY(bimg::ImageContainer*& _image)
+{
+    if(NULL == _image)
+    {
+        return false;
+    }
+
+    if(bimg::isCompressed(_image->m_format))
+    {
+        bimg::ImageContainer* decoded =
+            bimg::imageConvert(entry::getAllocator(), bimg::TextureFormat::RGBA8, *_image);
+        if(NULL == decoded)
+        {
+            return false;
+        }
+
+        bimg::imageFree(_image);
+        _image = decoded;
+    }
+
+    if(!flip_normal_y_all_mips_ldr(_image))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool imagePrepareNormalMapBakePng(bimg::ImageContainer*& _image)
+{
+    if(nullptr == _image)
+    {
+        return false;
+    }
+
+    if(_image->m_format != bimg::TextureFormat::RGBA8)
+    {
+        bimg::ImageContainer* converted =
+            bimg::imageConvert(entry::getAllocator(), bimg::TextureFormat::RGBA8, *_image);
+        if(nullptr == converted)
+        {
+            return false;
+        }
+
+        bimg::imageFree(_image);
+        _image = converted;
+    }
+
+    ensure_rgba8_opaque_alpha(_image);
+    return true;
+}
+
+bgfx::TextureHandle loadTexture(const void* _data,
+                                uint32_t _size,
+                                uint64_t _flags,
+                                uint8_t _skip,
+                                bgfx::TextureInfo* _info,
+                                bimg::Orientation::Enum* _orientation,
+                                const char* _name)
+{
+    BX_UNUSED(_skip);
+    bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+
+    bimg::ImageContainer* imageContainer = bimg::imageParse(entry::getAllocator(), _data, _size);
+    if(NULL != imageContainer)
+    {
+        if(NULL != _orientation)
+        {
+            *_orientation = imageContainer->m_orientation;
+        }
+
+        handle = loadTextureFromContainer(imageContainer, _flags, _info);
+
+        if(bgfx::isValid(handle) && NULL != _name)
+        {
+            bgfx::setName(handle, _name, int32_t(bx::strLen(_name)));
+        }
+    }
+
+    return handle;
+}
+
 bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
                                 const bx::FilePath& _filePath,
                                 uint64_t _flags,
@@ -224,81 +510,11 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
 
     uint32_t size;
     void* data = load(_reader, entry::getAllocator(), _filePath, &size);
-    if (NULL != data)
+    if(NULL != data)
     {
-        bimg::ImageContainer* imageContainer = bimg::imageParse(entry::getAllocator(), data, size);
-
-        if (NULL != imageContainer)
-        {
-            if (NULL != _orientation)
-            {
-                *_orientation = imageContainer->m_orientation;
-            }
-
-            const bgfx::Memory* mem = bgfx::makeRef(
-                imageContainer->m_data
-                , imageContainer->m_size
-                , imageReleaseCb
-                , imageContainer
-                );
-            unload(data);
-
-            if (NULL != _info)
-            {
-                bgfx::calcTextureSize(
-                    *_info
-                    , uint16_t(imageContainer->m_width)
-                    , uint16_t(imageContainer->m_height)
-                    , uint16_t(imageContainer->m_depth)
-                    , imageContainer->m_cubeMap
-                    , 1 < imageContainer->m_numMips
-                    , imageContainer->m_numLayers
-                    , bgfx::TextureFormat::Enum(imageContainer->m_format)
-                    );
-            }
-
-            if (imageContainer->m_cubeMap)
-            {
-                handle = bgfx::createTextureCube(
-                    uint16_t(imageContainer->m_width)
-                    , 1 < imageContainer->m_numMips
-                    , imageContainer->m_numLayers
-                    , bgfx::TextureFormat::Enum(imageContainer->m_format)
-                    , _flags
-                    , mem
-                    );
-            }
-            else if (1 < imageContainer->m_depth)
-            {
-                handle = bgfx::createTexture3D(
-                    uint16_t(imageContainer->m_width)
-                    , uint16_t(imageContainer->m_height)
-                    , uint16_t(imageContainer->m_depth)
-                    , 1 < imageContainer->m_numMips
-                    , bgfx::TextureFormat::Enum(imageContainer->m_format)
-                    , _flags
-                    , mem
-                    );
-            }
-            else if (bgfx::isTextureValid(0, false, imageContainer->m_numLayers, bgfx::TextureFormat::Enum(imageContainer->m_format), _flags) )
-            {
-                handle = bgfx::createTexture2D(
-                    uint16_t(imageContainer->m_width)
-                    , uint16_t(imageContainer->m_height)
-                    , 1 < imageContainer->m_numMips
-                    , imageContainer->m_numLayers
-                    , bgfx::TextureFormat::Enum(imageContainer->m_format)
-                    , _flags
-                    , mem
-                    );
-            }
-
-            if (bgfx::isValid(handle) )
-            {
-                const bx::StringView name(_filePath);
-                bgfx::setName(handle, name.getPtr(), name.getLength() );
-            }
-        }
+        const bx::StringView name(_filePath);
+        handle = loadTexture(data, size, _flags, _skip, _info, _orientation, name.getPtr());
+        unload(data);
     }
 
     return handle;

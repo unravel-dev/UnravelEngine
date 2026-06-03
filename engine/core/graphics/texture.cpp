@@ -18,6 +18,23 @@ texture::texture(const char* _path,
     flags = _flags;
 }
 
+texture::texture(const void* _data,
+                 std::uint32_t _size,
+                 std::uint64_t _flags,
+                 std::uint8_t _skip,
+                 texture_info* _info,
+                 const char* _name)
+{
+    handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name);
+
+    if(_info != nullptr)
+    {
+        *_info = info;
+    }
+
+    flags = _flags;
+}
+
 texture::texture(std::uint16_t _width,
                  std::uint16_t _height,
                  bool _hasMips,

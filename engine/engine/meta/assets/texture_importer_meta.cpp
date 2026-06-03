@@ -174,6 +174,11 @@ REFLECT(texture_importer_meta)
             entt::attribute{"name", "generate_mipmaps"},
             entt::attribute{"pretty_name", "Generate Mipmaps"},
         })
+        .data<&texture_importer_meta::invert_normal_y>("invert_normal_y"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "invert_normal_y"},
+            entt::attribute{"pretty_name", "Invert Normal Y (Bake)"},
+        })
         .data<&texture_importer_meta::quality>("quality"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "quality"},
@@ -202,6 +207,7 @@ SAVE(texture_importer_meta)
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
+    try_save(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_save(ar, ser20::make_nvp("quality", obj.quality));
 }
 SAVE_INSTANTIATE(texture_importer_meta, ser20::oarchive_associative_t);
@@ -212,6 +218,7 @@ LOAD(texture_importer_meta)
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("type", obj.type));
     try_load(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
+    try_load(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_load(ar, ser20::make_nvp("quality", obj.quality));
 }
 LOAD_INSTANTIATE(texture_importer_meta, ser20::iarchive_associative_t);

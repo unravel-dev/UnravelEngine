@@ -58,6 +58,8 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
 
     texture_type type{texture_type::automatic};
     bool generate_mipmaps{true};
+    /// Bake OpenGL/DirectX normal Y difference into texels at compile (normal_map type only).
+    bool invert_normal_y{false};
 
     struct quality_meta
     {

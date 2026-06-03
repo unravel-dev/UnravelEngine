@@ -160,19 +160,17 @@ auto run_process(const std::string& process,
 //     return ok;
 // }
 
-void copy_compiled_file(const fs::path& from, const fs::path& to)
+bool copy_compiled_file(const fs::path& from, const fs::path& to)
 {
     fs::error_code err;
     asset_writer::atomic_copy_file(from, to, err);
 
-    if(!err)
-    {
-        //APPLOG_INFO("Successful compilation of {0} -> {1}", str_input, to.string());
-    }
-    else
+    if(err)
     {
         APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", from.string(), to.filename().string(), err.message());
     }
+
+    return !err;
 }
 
 auto get_input_texture_format(const fs::path& input_path) -> gfx::texture_format
@@ -194,7 +192,17 @@ auto select_compressed_format(gfx::texture_format input_format,
 {
     if(quality == texture_importer_meta::compression_quality::none)
     {
-        return gfx::texture_format::Unknown;
+        return input_format;
+    }
+
+    if(input_format == gfx::texture_format::BC1)
+    {
+        return gfx::texture_format::BC3;
+    }
+
+    if(gfx::is_compressed_format(input_format))
+    {
+        return input_format;
     }
 
     auto info = gfx::get_format_info(input_format);
@@ -224,11 +232,6 @@ auto select_compressed_format(gfx::texture_format input_format,
     if(info.num_channels == 2)
     {
         return gfx::texture_format::BC5;
-    }
-
-    if(input_format == gfx::texture_format::BC1)
-    {
-        return gfx::texture_format::BC3;
     }
 
     // 4) If we reach here, we have 3 or 4 channels in LDR.
@@ -276,6 +279,64 @@ auto select_compressed_format(gfx::texture_format input_format,
         // fallback
         return gfx::texture_format::BC3;
     }
+
+    return input_format;
+}
+
+auto bake_normal_map_input_if_needed(const fs::path& input_path,
+                                     const texture_importer_meta& importer,
+                                     fs::path& temp_baked_path) -> fs::path
+{
+    temp_baked_path.clear();
+
+    if(!importer.invert_normal_y)
+    {
+        return input_path;
+    }
+
+    bimg::ImageContainer* image = imageLoad(bx::FilePath(input_path.string().c_str()));
+    if(nullptr == image)
+    {
+        APPLOG_ERROR("Failed to load texture for normal Y bake: {0}", input_path.string());
+        return input_path;
+    }
+
+    if(!imageFlipTangentSpaceNormalY(image))
+    {
+        bimg::imageFree(image);
+        APPLOG_ERROR("Failed to flip normal map Y for: {0}", input_path.string());
+        return input_path;
+    }
+
+    if(!imagePrepareNormalMapBakePng(image))
+    {
+        bimg::imageFree(image);
+        APPLOG_ERROR("Failed to prepare baked normal map PNG for: {0}", input_path.string());
+        return input_path;
+    }
+
+    fs::error_code err;
+    // Always feed texturec a lossless RGBA8 PNG (avoids broken BC re-encode and zero-alpha PNG previews).
+    temp_baked_path = fs::temp_directory_path(err) / (input_path.stem().string() + "_normal_y.png");
+    if(err || temp_baked_path.empty())
+    {
+        bimg::imageFree(image);
+        APPLOG_ERROR("Failed to resolve temp path for normal Y bake: {0}", input_path.string());
+        return input_path;
+    }
+
+    if(!imageSave(temp_baked_path.string().c_str(), image))
+    {
+        bimg::imageFree(image);
+        fs::remove(temp_baked_path, err);
+        temp_baked_path.clear();
+        APPLOG_ERROR("Failed to write baked normal map: {0}", input_path.string());
+        return input_path;
+    }
+
+    bimg::imageFree(image);
+    APPLOG_INFO("Baked invert normal Y for {0} -> {1}", input_path.filename().string(), temp_baked_path.filename().string());
+    return temp_baked_path;
 }
 
 auto compile_texture_to_file(const fs::path& input_path, 
@@ -283,7 +344,11 @@ auto compile_texture_to_file(const fs::path& input_path,
                             const texture_importer_meta& importer,
                             const std::string& protocol) -> bool
 {
-    std::string str_input = input_path.string();
+    fs::path temp_baked_path;
+    const fs::path compile_input = bake_normal_map_input_if_needed(input_path, importer, temp_baked_path);
+    const bool using_temp_input = !temp_baked_path.empty();
+
+    std::string str_input = compile_input.string();
     std::string str_output = output_path.string();
     
     bool try_compress = protocol == "app";
@@ -321,145 +386,160 @@ auto compile_texture_to_file(const fs::path& input_path,
         quality.max_size = texture_importer_meta::texture_size::size_2048;
     }
 
-    const auto input_format = get_input_texture_format(input_path);
-    auto format = select_compressed_format(input_format, input_path.extension(), quality.compression);
+    const auto input_format = get_input_texture_format(compile_input);
+    auto format = select_compressed_format(input_format, compile_input.extension(), quality.compression);
     
-    std::vector<std::string> args_array = {
-        "-f",
-        str_input,
-        "-o",
-        str_output,
-        "--as",
-        "dds",
-    };
-    
-    if(try_compress && format != gfx::texture_format::Unknown && format != input_format)
+    if(input_format != format)
     {
-        args_array.emplace_back("-t");
-        args_array.emplace_back(gfx::to_string(format));
-
-        if(format == gfx::texture_format::BC7 || format == gfx::texture_format::BC6H)
+        std::vector<std::string> args_array = {
+            "-f",
+            str_input,
+            "-o",
+            str_output,
+            "--as",
+            "dds",
+        };
+        
+        if(try_compress && format != input_format)
         {
-            APPLOG_INFO("Compressing to {0}. May take a while.", gfx::to_string(format));
+            args_array.emplace_back("-t");
+            args_array.emplace_back(gfx::to_string(format));
 
-            args_array.emplace_back("-q");
-            args_array.emplace_back("fastest");
+            if(format == gfx::texture_format::BC7 || format == gfx::texture_format::BC6H)
+            {
+                APPLOG_INFO("Compressing to {0}. May take a while.", gfx::to_string(format));
+
+                args_array.emplace_back("-q");
+                args_array.emplace_back("fastest");
+            }
+            else if(quality.compression == texture_importer_meta::compression_quality::high_quality)
+            {
+                args_array.emplace_back("-q");
+                args_array.emplace_back("highest");
+            }
         }
-        else if(quality.compression == texture_importer_meta::compression_quality::high_quality)
+
+        if(importer.generate_mipmaps)
         {
-            args_array.emplace_back("-q");
-            args_array.emplace_back("highest");
+            args_array.emplace_back("-m");
+        }
+
+        switch(quality.max_size)
+        {
+            case texture_importer_meta::texture_size::project_default:
+            {
+                break;
+            }
+            case texture_importer_meta::texture_size::size_32:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("32");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_64:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("64");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_128:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("128");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_256:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("256");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_512:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("512");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_1024:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("1024");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_2048:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("2048");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_4096:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("4096");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_8192:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("8192");
+                break;
+            }
+            case texture_importer_meta::texture_size::size_16384:
+            {
+                args_array.emplace_back("--max");
+                args_array.emplace_back("16384");
+                break;
+            }
+        }
+
+        switch(importer.type)
+        {
+            case texture_importer_meta::texture_type::equirect:
+            {
+                args_array.emplace_back("--equirect");
+                break;
+            }
+
+            case texture_importer_meta::texture_type::normal_map:
+            {
+                args_array.emplace_back("--normalmap");
+                break;
+            }
+
+            default:
+                break;
+        }
+
+        std::string error;
+        
+        // Create an empty file at the output location so the process can write to it
+        {
+            std::ofstream output_file(str_output);
+            (void)output_file;
+        }
+        
+        auto texturec = fs::resolve_protocol("binary:/texturec");
+        
+        // Run the texture compiler directly to the temporary output location
+        bool compiled = run_process(texturec.string(), args_array, false, error);
+        if(!compiled)
+        {
+            APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
+            fs::remove(str_output);
+            return false;
         }
     }
-
-    if(importer.generate_mipmaps)
+    else
     {
-        args_array.emplace_back("-m");
+        copy_compiled_file(compile_input, output_path);
     }
 
-    switch(quality.max_size)
+    if(using_temp_input)
     {
-        case texture_importer_meta::texture_size::project_default:
-        {
-            break;
-        }
-        case texture_importer_meta::texture_size::size_32:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("32");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_64:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("64");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_128:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("128");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_256:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("256");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_512:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("512");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_1024:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("1024");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_2048:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("2048");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_4096:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("4096");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_8192:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("8192");
-            break;
-        }
-        case texture_importer_meta::texture_size::size_16384:
-        {
-            args_array.emplace_back("--max");
-            args_array.emplace_back("16384");
-            break;
-        }
+        fs::error_code remove_err;
+        fs::remove(temp_baked_path, remove_err);
     }
 
-    switch(importer.type)
-    {
-        case texture_importer_meta::texture_type::equirect:
-        {
-            args_array.emplace_back("--equirect");
-            break;
-        }
-
-        case texture_importer_meta::texture_type::normal_map:
-        {
-            args_array.emplace_back("--normalmap");
-            break;
-        }
-
-        default:
-            break;
-    }
-
-    std::string error;
-    
-    // Create an empty file at the output location so the process can write to it
-    {
-        std::ofstream output_file(str_output);
-        (void)output_file;
-    }
-    
-    auto texturec = fs::resolve_protocol("binary:/texturec");
-    
-    // Run the texture compiler directly to the temporary output location
-    if(!run_process(texturec.string(), args_array, false, error))
-    {
-        APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
-        fs::remove(str_output);
-        return false;
-    }
     
     return true;
 }

@@ -40,10 +40,27 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 bgfx::TextureInfo* _info = NULL,
                                 bimg::Orientation::Enum* _orientation = NULL);
 
+/// Load a texture from memory (DDS, KTX, PNG, etc.). @a _name is optional debug label.
+bgfx::TextureHandle loadTexture(const void* _data,
+                                uint32_t _size,
+                                uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
+                                uint8_t _skip = 0,
+                                bgfx::TextureInfo* _info = NULL,
+                                bimg::Orientation::Enum* _orientation = NULL,
+                                const char* _name = NULL);
+
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
 bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
 bool imageSave(const char* saveAs, bimg::ImageContainer* image);
+
+/// Flip tangent-space normal map Y (tangent-space +Y / green channel via bimg unpack/pack).
+/// Preserves the container format for uncompressed sources. Compressed inputs are
+/// decoded to RGBA8 and left as RGBA8 (no lossy re-encode back to BC).
+bool imageFlipTangentSpaceNormalY(bimg::ImageContainer*& _image);
+
+/// Prepare a flipped normal map for PNG bake export (RGBA8, opaque alpha when unused).
+bool imagePrepareNormalMapBakePng(bimg::ImageContainer*& _image);
 
 ///
 void calcTangents(void* _vertices,
