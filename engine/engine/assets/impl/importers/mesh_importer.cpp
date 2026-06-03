@@ -1997,6 +1997,41 @@ struct spec_gloss_pbr_result
  * `diffuse_img` / `specular_img`; any intermediate RGBA8 conversions are managed
  * internally.
  */
+auto convert_specular_only_to_mr_texture(const fs::path& output_dir,
+                                         const std::string& mr_relative,
+                                         bimg::ImageContainer* specular_img) -> bool
+{
+    if(!specular_img || mr_relative.empty())
+    {
+        return false;
+    }
+
+    bool specular_was_converted = false;
+    bimg::ImageContainer* specular_rgba8 = ensure_rgba8(specular_img, specular_was_converted);
+    if(!specular_rgba8)
+    {
+        return false;
+    }
+
+    apply_specular_to_metallic_roughness_conversion(specular_rgba8);
+
+    const bool saved = write_rgba8_png(output_dir / mr_relative,
+                                       specular_rgba8->m_width,
+                                       specular_rgba8->m_height,
+                                       static_cast<const uint8_t*>(specular_rgba8->m_data));
+
+    if(specular_was_converted)
+    {
+        bimg::imageFree(specular_rgba8);
+    }
+
+    if(saved)
+    {
+        APPLOG_TRACE("Mesh Importer: Wrote metallic-roughness from specular only (base color unchanged): {}", mr_relative);
+    }
+    return saved;
+}
+
 auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
                                         const std::string& base_color_relative,
                                         const std::string& mr_relative,
@@ -2206,6 +2241,63 @@ enum class material_workflow
 };
 
 /**
+ * @brief True when a diffuse-path texture is already authored base color (PBR specular workflow),
+ * not legacy Phong/Bistro diffuse that must be reconstructed with the specular map.
+ */
+auto path_stem_suggests_base_color(const fs::path& path) -> bool
+{
+    std::string stem = string_utils::to_lower(path.stem().string());
+    if(stem.find("basecolor") != std::string::npos || stem.find("base_color") != std::string::npos ||
+       stem.find("base-color") != std::string::npos || stem.find("albedo") != std::string::npos)
+    {
+        return true;
+    }
+    return false;
+}
+
+auto material_has_base_color_texture_slot(const aiMaterial* material) -> bool
+{
+    aiString path{};
+    if(material->GetTexture(aiTextureType_BASE_COLOR, 0, &path) == AI_SUCCESS && path.length > 0)
+    {
+        return true;
+    }
+    if(material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &path) == AI_SUCCESS && path.length > 0)
+    {
+        return true;
+    }
+    return false;
+}
+
+auto diffuse_slot_is_authoritative_base_color(const aiMaterial* material) -> bool
+{
+    if(material_has_base_color_texture_slot(material))
+    {
+        return true;
+    }
+
+    aiString diffuse_path{};
+    if(material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0)
+    {
+        return path_stem_suggests_base_color(fs::path(diffuse_path.C_Str()));
+    }
+    return false;
+}
+
+/**
+ * @brief Legacy Bistro/CryEngine spec-gloss needs Khronos diffuse+specular → baseColor solve.
+ * PBR specular (glTF core base color + KHR specular, or BaseColor-named diffuse) keeps base color as-is.
+ */
+auto use_legacy_spec_gloss_base_color_conversion(const aiMaterial* material, material_workflow workflow) -> bool
+{
+    if(workflow != material_workflow::specular_gloss)
+    {
+        return false;
+    }
+    return !diffuse_slot_is_authoritative_base_color(material);
+}
+
+/**
  * @brief True when the material has dedicated PBR metallic/roughness inputs (not legacy Phong shininess alone).
  */
 auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> bool
@@ -2318,8 +2410,9 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
     // We only treat the explicit KHR_materials_pbrSpecularGlossiness factors as
     // definitive. aiTextureType_SHININESS / AI_MATKEY_SHININESS are intentionally
     // NOT used here because legacy Phong materials also set them.
-    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
-       || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
+    if((material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
+        || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
+       && !diffuse_slot_is_authoritative_base_color(material))
     {
         return material_workflow::specular_gloss;
     }
@@ -2338,7 +2431,14 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
         material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
     if(has_specular_map && !has_definitive_metallic_roughness_evidence(material))
     {
-        APPLOG_TRACE("Mesh Importer: Specular texture without dedicated metallic inputs — treating as specular/gloss workflow");
+        if(diffuse_slot_is_authoritative_base_color(material))
+        {
+            APPLOG_TRACE("Mesh Importer: Specular map with authoritative base color — PBR specular workflow");
+        }
+        else
+        {
+            APPLOG_TRACE("Mesh Importer: Specular texture without dedicated metallic inputs — treating as legacy specular/gloss workflow");
+        }
         return material_workflow::specular_gloss;
     }
 
@@ -2509,8 +2609,9 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     bool has_metallic = (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS);
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
-    // Spec-gloss assets (including KHR dual-authorship) often carry bogus MR fallback factors; derive PBR from SG inputs.
-    if(workflow == material_workflow::specular_gloss)
+    // Legacy spec-gloss (Bistro): derive base color + MR from diffuse/specular factors.
+    // PBR specular (authoritative base color texture/slot): use core PBR factors when present.
+    if(workflow == material_workflow::specular_gloss && use_legacy_spec_gloss_base_color_conversion(material, workflow))
     {
         aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
         material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
@@ -2665,7 +2766,10 @@ void process_material(asset_manager& am,
 
     APPLOG_TRACE("Mesh Importer: Material workflow detected: {}",
                  workflow == material_workflow::metallic_roughness ? "Metallic/Roughness" :
-                 workflow == material_workflow::specular_gloss ? "Specular/Gloss" : "Unknown");
+                 workflow == material_workflow::specular_gloss
+                     ? (use_legacy_spec_gloss_base_color_conversion(material, workflow) ? "Specular/Gloss (legacy)"
+                                                                                        : "Specular/Gloss (PBR base color)")
+                     : "Unknown");
 
     // log_materials(material);
 
@@ -2921,9 +3025,59 @@ void process_material(asset_manager& am,
         imported_texture texture;
         if(get_workflow_aware_texture(material, workflow, "BaseColor", texture, get_imported_texture, false))
         {
-            if(workflow == material_workflow::specular_gloss)
+            if(workflow == material_workflow::specular_gloss
+               && !use_legacy_spec_gloss_base_color_conversion(material, workflow))
             {
-                // For spec-gloss we DO NOT extract the source diffuse/specular to disk.
+                APPLOG_TRACE("Mesh Importer: PBR specular workflow — base color texture used as-is");
+
+                process_texture(texture, textures);
+
+                aiString specular_path{};
+                const bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
+                                          && specular_path.length > 0;
+
+                bimg::ImageContainer* specular_img = nullptr;
+                int specular_idx = -1;
+                if(has_specular)
+                {
+                    auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
+                    if(spec_pair.first && spec_pair.first->pcData && spec_pair.first->mHeight == 0)
+                    {
+                        specular_img = imageLoad(spec_pair.first->pcData,
+                                                 static_cast<uint32_t>(spec_pair.first->mWidth));
+                        specular_idx = spec_pair.second;
+                    }
+                    else if(!spec_pair.first)
+                    {
+                        const fs::path specular_relative =
+                            resolve_external_texture_path(output_dir, fs::path(specular_path.C_Str()));
+                        specular_img = imageLoad(bx::FilePath((output_dir / specular_relative).string().c_str()));
+                    }
+                }
+
+                if(has_specular && !specular_img)
+                {
+                    APPLOG_WARNING("Mesh Importer: PBR specular — failed to decode specular for MR conversion: {}",
+                                   specular_path.C_Str());
+                }
+                else if(specular_img)
+                {
+                    combined_mr_relative =
+                        build_converted_name(specular_idx, specular_path.C_Str(), "MetallicRoughness");
+                    if(convert_specular_only_to_mr_texture(output_dir, combined_mr_relative, specular_img))
+                    {
+                        mark_embedded_consumed(specular_idx);
+                    }
+                    else
+                    {
+                        combined_mr_relative.clear();
+                    }
+                    bimg::imageFree(specular_img);
+                }
+            }
+            else if(workflow == material_workflow::specular_gloss)
+            {
+                // Legacy spec-gloss: decode diffuse+specular in memory, Khronos baseColor + MR solve.
                 // Instead we decode them directly from pcData (or from an external file
                 // when not embedded), run the conversion in memory, and write only the
                 // final-semantic outputs. This keeps the asset browser clean:
@@ -3188,9 +3342,8 @@ void process_material(asset_manager& am,
         }
     }
 
-    // Converted textures already contain the full PBR values. The shader multiplies
-    // factor × texture, so set factors to 1.0 to avoid double-application.
-    if(workflow == material_workflow::specular_gloss)
+    // Legacy spec-gloss texture conversion bakes factors into pixels; avoid double-application.
+    if(workflow == material_workflow::specular_gloss && sg_textures_converted)
     {
         if(has_metallic_tex)
         {
