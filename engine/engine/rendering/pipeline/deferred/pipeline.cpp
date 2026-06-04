@@ -641,7 +641,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         gather_visible_models(scn, &camera, params.vflags, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
         {
-            visibility_set.emplace_back(entity, lod_data);
+            visibility_set.emplace_back(visibility_data{entity, lod_data});
         });
     }
 

@@ -26,8 +26,14 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem/filesystem.h>
+#include <numeric>
 #include <queue>
 #include <tuple>
+#include <unordered_set>
+#include <unordered_map>
+
+#define POOLSTL_STD_SUPPLEMENT 1
+#include <poolstl/poolstl.hpp>
 
 namespace unravel
 {
@@ -2232,69 +2238,145 @@ void log_materials(const aiMaterial* material)
     }
 }
 
-// Add workflow detection and conversion functions
+// Material input workflows (all compile to engine metallic-roughness + base color).
 enum class material_workflow
 {
     unknown,
-    metallic_roughness,
-    specular_gloss
+    metallic_roughness,       // glTF/FBX PBR MR: base color + metallic/roughness maps/factors
+    khr_specular_glossiness,  // KHR_materials_pbrSpecularGlossiness: Khronos bake diffuse+spec textures
+    phong_specular_gloss,     // CryEngine/Bistro/Phong: diffuse is albedo, spec map -> MR only
 };
 
-/**
- * @brief True when a diffuse-path texture is already authored base color (PBR specular workflow),
- * not legacy Phong/Bistro diffuse that must be reconstructed with the specular map.
- */
-auto path_stem_suggests_base_color(const fs::path& path) -> bool
+auto workflow_uses_spec_gloss_conversion(material_workflow workflow) -> bool
 {
-    std::string stem = string_utils::to_lower(path.stem().string());
-    if(stem.find("basecolor") != std::string::npos || stem.find("base_color") != std::string::npos ||
-       stem.find("base-color") != std::string::npos || stem.find("albedo") != std::string::npos)
-    {
-        return true;
-    }
-    return false;
+    return workflow == material_workflow::khr_specular_glossiness
+           || workflow == material_workflow::phong_specular_gloss;
 }
 
-auto material_has_base_color_texture_slot(const aiMaterial* material) -> bool
+auto material_workflow_label(material_workflow workflow) -> const char*
 {
-    aiString path{};
-    if(material->GetTexture(aiTextureType_BASE_COLOR, 0, &path) == AI_SUCCESS && path.length > 0)
+    switch(workflow)
     {
-        return true;
+    case material_workflow::metallic_roughness:
+        return "Metallic/Roughness";
+    case material_workflow::khr_specular_glossiness:
+        return "KHR Specular/Glossiness";
+    case material_workflow::phong_specular_gloss:
+        return "Phong Specular/Gloss";
+    default:
+        return "Unknown";
     }
-    if(material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &path) == AI_SUCCESS && path.length > 0)
-    {
-        return true;
-    }
-    return false;
 }
 
-auto diffuse_slot_is_authoritative_base_color(const aiMaterial* material) -> bool
+auto normalize_material_texture_path(const fs::path& path) -> std::string
 {
-    if(material_has_base_color_texture_slot(material))
-    {
-        return true;
-    }
-
-    aiString diffuse_path{};
-    if(material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0)
-    {
-        return path_stem_suggests_base_color(fs::path(diffuse_path.C_Str()));
-    }
-    return false;
+    return string_utils::to_lower(path.lexically_normal().generic_string());
 }
 
-/**
- * @brief Legacy Bistro/CryEngine spec-gloss needs Khronos diffuse+specular → baseColor solve.
- * PBR specular (glTF core base color + KHR specular, or BaseColor-named diffuse) keeps base color as-is.
- */
-auto use_legacy_spec_gloss_base_color_conversion(const aiMaterial* material, material_workflow workflow) -> bool
+auto material_texture_paths_equal(const fs::path& left, const fs::path& right) -> bool
 {
-    if(workflow != material_workflow::specular_gloss)
+    if(left.empty() || right.empty())
     {
         return false;
     }
-    return !diffuse_slot_is_authoritative_base_color(material);
+    return normalize_material_texture_path(left) == normalize_material_texture_path(right);
+}
+
+/**
+ * @brief True when the diffuse path is already the material's authored base color (PBR), not
+ * KHR spec-gloss extension albedo that must be reconstructed with the specular map.
+ *
+ * Uses Assimp texture slots only — no filename heuristics:
+ *   - BASE_COLOR alone → dedicated PBR base color (e.g. Vespa BaseColor.dds).
+ *   - BASE_COLOR and DIFFUSE bound to the same path → MR base color is the albedo source.
+ *   - BASE_COLOR and DIFFUSE differ → dual-authored glTF (MR fallback vs KHR SG diffuse).
+ */
+auto base_color_texture_is_authoritative(const aiMaterial* material) -> bool
+{
+    aiString base_path{};
+    aiString diffuse_path{};
+    const bool has_base =
+        (material->GetTexture(aiTextureType_BASE_COLOR, 0, &base_path) == AI_SUCCESS && base_path.length > 0)
+        || (material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_path) == AI_SUCCESS && base_path.length > 0);
+    const bool has_diffuse =
+        material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0;
+
+    if(has_base && has_diffuse)
+    {
+        return material_texture_paths_equal(fs::path(base_path.C_Str()), fs::path(diffuse_path.C_Str()));
+    }
+
+    return has_base;
+}
+
+auto material_shading_is_phong_family(aiShadingMode shading) -> bool
+{
+    switch(shading)
+    {
+    case aiShadingMode_Phong:
+    case aiShadingMode_Blinn:
+    case aiShadingMode_Minnaert:
+    case aiShadingMode_Gouraud:
+    case aiShadingMode_Flat:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief glTF KHR_materials_pbrSpecularGlossiness: extension diffuse is not final base color.
+ *
+ * CryEngine / Bistro also write AI_MATKEY_GLOSSINESS_FACTOR (and sometimes PBR_BRDF) while still
+ * using Phong-style DIFFUSE + SPECULAR tilings — those are phong_specular_gloss, not KHR.
+ *
+ * True KHR SG from the glTF2 importer is dual-authored: MR fallback in BASE_COLOR, extension
+ * albedo in DIFFUSE, with different texture paths, on a PBR_BRDF material.
+ */
+auto material_is_khr_specular_glossiness_input(const aiMaterial* material) -> bool
+{
+    if(base_color_texture_is_authoritative(material))
+    {
+        return false;
+    }
+
+    aiShadingMode shading = aiShadingMode_Flat;
+    if(material->Get(AI_MATKEY_SHADING_MODEL, shading) == AI_SUCCESS
+       && material_shading_is_phong_family(shading))
+    {
+        return false;
+    }
+
+    ai_real glossiness_factor_dummy = 0.0f;
+    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness_factor_dummy) != AI_SUCCESS)
+    {
+        return false;
+    }
+
+    aiString base_path{};
+    aiString diffuse_path{};
+    const bool has_base =
+        (material->GetTexture(aiTextureType_BASE_COLOR, 0, &base_path) == AI_SUCCESS && base_path.length > 0)
+        || (material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_path) == AI_SUCCESS && base_path.length > 0);
+    const bool has_diffuse =
+        material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0;
+
+    if(!has_base || !has_diffuse)
+    {
+        return false;
+    }
+
+    if(material_texture_paths_equal(fs::path(base_path.C_Str()), fs::path(diffuse_path.C_Str())))
+    {
+        return false;
+    }
+
+    if(material->Get(AI_MATKEY_SHADING_MODEL, shading) != AI_SUCCESS)
+    {
+        return false;
+    }
+
+    return shading == aiShadingMode_PBR_BRDF;
 }
 
 /**
@@ -2327,18 +2409,9 @@ auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> b
         return true;
     }
 
-    ai_real metallic_factor = 0.0f;
-    if(material->Get(AI_MATKEY_METALLIC_FACTOR, metallic_factor) == AI_SUCCESS && metallic_factor > 0.0f)
-    {
-        // FBX/glTF dual-authorship often writes a bogus MR metallic factor alongside a specular map.
-        aiString specular_path{};
-        const bool has_specular_texture =
-            material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
-        if(!has_specular_texture)
-        {
-            return true;
-        }
-    }
+    // Do not treat AI_MATKEY_METALLIC_FACTOR / ROUGHNESS_FACTOR alone as MR workflow.
+    // CryEngine and dual-authored glTF exports set fallback factors (often 1.0) on Phong tilings
+    // that only have a DIFFUSE map — use phong_specular_gloss + derived factors instead.
 
     return false;
 }
@@ -2348,7 +2421,7 @@ auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> b
  */
 auto detect_duplicate_specular_usage(const aiMaterial* material, material_workflow workflow) -> bool
 {
-    if(workflow != material_workflow::specular_gloss)
+    if(!workflow_uses_spec_gloss_conversion(workflow))
     {
         return false;
     }
@@ -2384,15 +2457,9 @@ auto detect_duplicate_specular_usage(const aiMaterial* material, material_workfl
 }
 
 /**
- * @brief Detect the material workflow used by analyzing available properties and textures.
+ * @brief Classify material input workflow before converting to engine metallic-roughness.
  *
- * Layering:
- *   1. Definitive checks — an unambiguous indicator pins the workflow immediately. These
- *      are the markers the glTF and KHR_materials_pbrSpecularGlossiness specs use to
- *      identify the workflow, so we trust them and skip the heuristic.
- *   2. Scored heuristic — only used when the definitive checks were inconclusive, e.g.
- *      legacy formats (FBX/OBJ) that emit a soup of overlapping properties without a
- *      strong workflow marker.
+ * Order: KHR spec-gloss extension layout → MR evidence → Phong/CryEngine factors/maps → heuristic.
  */
 auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 {
@@ -2400,21 +2467,10 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
     aiColor3D dummy_color{};
     aiString path{};
 
-    // ----- 1. Definitive specular-glossiness markers (checked first!) -----
-    // KHR_materials_pbrSpecularGlossiness mandates that authoring tools also write
-    // pbrMetallicRoughness fallback properties so MR-only engines can still load the
-    // asset. That means dual-authored SG files ALSO carry BASE_COLOR_TEXTURE /
-    // METALLIC_FACTOR / etc. Checking SG first ensures we honor the author's primary
-    // representation and route the spec-gloss texture through our conversion pipeline.
-    //
-    // We only treat the explicit KHR_materials_pbrSpecularGlossiness factors as
-    // definitive. aiTextureType_SHININESS / AI_MATKEY_SHININESS are intentionally
-    // NOT used here because legacy Phong materials also set them.
-    if((material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
-        || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
-       && !diffuse_slot_is_authoritative_base_color(material))
+    // ----- 1. KHR_materials_pbrSpecularGlossiness (extension diffuse != MR base color) -----
+    if(material_is_khr_specular_glossiness_input(material))
     {
-        return material_workflow::specular_gloss;
+        return material_workflow::khr_specular_glossiness;
     }
 
     // ----- 2. Definitive metallic-roughness markers -----
@@ -2429,20 +2485,21 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
     aiString specular_path{};
     const bool has_specular_map =
         material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
-    if(has_specular_map && !has_definitive_metallic_roughness_evidence(material))
+    // ----- 3. Phong / CryEngine spec+gloss (factors and/or maps, not KHR extension layout) -----
+    if((material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
+        || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
+       && !base_color_texture_is_authoritative(material))
     {
-        if(diffuse_slot_is_authoritative_base_color(material))
-        {
-            APPLOG_TRACE("Mesh Importer: Specular map with authoritative base color — PBR specular workflow");
-        }
-        else
-        {
-            APPLOG_TRACE("Mesh Importer: Specular texture without dedicated metallic inputs — treating as legacy specular/gloss workflow");
-        }
-        return material_workflow::specular_gloss;
+        return material_workflow::phong_specular_gloss;
     }
 
-    // ----- 3. Scored heuristic fallback (legacy / mixed-signal materials) -----
+    if(has_specular_map && !has_definitive_metallic_roughness_evidence(material))
+    {
+        APPLOG_TRACE("Mesh Importer: Specular map without MR inputs — Phong specular/gloss (diffuse pass-through)");
+        return material_workflow::phong_specular_gloss;
+    }
+
+    // ----- 4. Scored heuristic fallback (mixed-signal materials) -----
     bool has_diffuse_color = material->Get(AI_MATKEY_COLOR_DIFFUSE, dummy_color) == AI_SUCCESS;
     bool has_specular_color = material->Get(AI_MATKEY_COLOR_SPECULAR, dummy_color) == AI_SUCCESS;
 
@@ -2477,13 +2534,585 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
         specular_gloss_score += 6;
     }
 
-    APPLOG_TRACE("Mesh Importer: Material workflow heuristic score - Specular/Gloss: {}", specular_gloss_score);
+    APPLOG_TRACE("Mesh Importer: Material workflow heuristic score - Phong spec/gloss: {}", specular_gloss_score);
 
     if(specular_gloss_score >= 5)
     {
-        return material_workflow::specular_gloss;
+        return material_workflow::phong_specular_gloss;
     }
     return material_workflow::unknown;
+}
+
+auto make_texture_catalog_key(const imported_texture& tex) -> std::string
+{
+    if(tex.embedded_index >= 0)
+    {
+        return fmt::format("e:{}:{}", tex.embedded_index, tex.semantic);
+    }
+    return fmt::format("x:{}:{}", tex.name, tex.semantic);
+}
+
+auto needs_external_texture_conversion(const imported_texture& tex) -> bool
+{
+    return tex.embedded_index < 0 &&
+           (tex.semantic == "GlossToRoughness" || tex.semantic == "SpecularToRoughness" ||
+            tex.semantic == "SpecularToMetallic" || tex.semantic == "SpecularToMetallicRoughness" || tex.inverse);
+}
+
+auto make_converted_texture_name(const std::string& original_name, const std::string& semantic) -> std::string
+{
+    fs::path p(original_name);
+    const std::string suffix = semantic.empty() ? "converted" : semantic;
+    return (p.parent_path() / (p.stem().string() + "_" + suffix + ".png")).generic_string();
+}
+
+auto build_converted_texture_name(const fs::path& filename,
+                                  const aiScene* scene,
+                                  int embedded_idx,
+                                  const std::string& source_relative,
+                                  const std::string& target_semantic) -> std::string
+{
+    if(embedded_idx >= 0 && embedded_idx < static_cast<int>(scene->mNumTextures))
+    {
+        return fmt::format("[{}] {} {}.png", embedded_idx, target_semantic, filename.string());
+    }
+    fs::path src(source_relative);
+    return (src.parent_path() / (src.stem().string() + "_" + target_semantic + ".png")).generic_string();
+}
+
+auto spec_gloss_factors_key(const spec_gloss_factors_t& factors) -> std::string
+{
+    return fmt::format("{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}_{:.4f}",
+                       factors.diffuse_r,
+                       factors.diffuse_g,
+                       factors.diffuse_b,
+                       factors.diffuse_a,
+                       factors.specular_r,
+                       factors.specular_g,
+                       factors.specular_b,
+                       factors.glossiness);
+}
+
+class texture_catalog
+{
+public:
+    auto resolve(imported_texture& tex) const -> bool
+    {
+        const auto it = entries_.find(make_texture_catalog_key(tex));
+        if(it == entries_.end())
+        {
+            return false;
+        }
+        tex.name = it->second.name;
+        tex.flags = it->second.flags;
+        tex.inverse = it->second.inverse;
+        tex.process_count = it->second.process_count;
+        tex.semantic = it->second.semantic;
+        tex.embedded_index = it->second.embedded_index;
+        return true;
+    }
+
+    void register_entry(const imported_texture& lookup_key, imported_texture result)
+    {
+        entries_[make_texture_catalog_key(lookup_key)] = std::move(result);
+    }
+
+    void append_to_manifest(std::vector<imported_texture>& textures) const
+    {
+        for(const auto& kvp : entries_)
+        {
+            const auto& entry = kvp.second;
+            const auto exists = std::find_if(textures.begin(),
+                                             textures.end(),
+                                             [&](const imported_texture& rhs)
+                                             {
+                                                 return rhs.embedded_index == entry.embedded_index
+                                                     && rhs.name == entry.name && rhs.semantic == entry.semantic;
+                                             });
+            if(exists == textures.end())
+            {
+                textures.push_back(entry);
+            }
+        }
+    }
+
+    void merge_from(const texture_catalog& other)
+    {
+        for(const auto& kvp : other.entries_)
+        {
+            entries_[kvp.first] = kvp.second;
+        }
+    }
+
+    auto has_output_for_lookup(const imported_texture& lookup_key, const std::string& expected_output_relative) const -> bool
+    {
+        imported_texture probe = lookup_key;
+        if(!resolve(probe))
+        {
+            return false;
+        }
+        return probe.name == expected_output_relative;
+    }
+
+private:
+    std::unordered_map<std::string, imported_texture> entries_;
+};
+
+enum class texture_job_type : uint8_t
+{
+    embedded_extract,
+    external_convert,
+    spec_gloss_pair,
+    specular_to_mr,
+};
+
+struct texture_job
+{
+    texture_job_type type{};
+    imported_texture desc{};
+    imported_texture specular_desc{};
+    spec_gloss_factors_t spec_gloss_factors{};
+    std::string output_base_color_relative;
+    std::string output_mr_relative;
+};
+
+class texture_job_store
+{
+public:
+    auto jobs() const -> const std::vector<texture_job>&
+    {
+        return jobs_;
+    }
+
+    auto try_add(texture_job job) -> bool
+    {
+        const std::string dedupe = make_dedupe_key(job);
+        if(!dedupe_keys_.insert(dedupe).second)
+        {
+            return false;
+        }
+        jobs_.push_back(std::move(job));
+        return true;
+    }
+
+private:
+    static auto make_dedupe_key(const texture_job& job) -> std::string
+    {
+        switch(job.type)
+        {
+            case texture_job_type::embedded_extract:
+            case texture_job_type::external_convert:
+                return make_texture_catalog_key(job.desc);
+            case texture_job_type::spec_gloss_pair:
+                return fmt::format("sg:{}:{}:{}",
+                                   make_texture_catalog_key(job.desc),
+                                   make_texture_catalog_key(job.specular_desc),
+                                   spec_gloss_factors_key(job.spec_gloss_factors));
+            case texture_job_type::specular_to_mr:
+                return fmt::format("mr:{}", job.output_mr_relative);
+            default:
+                return {};
+        }
+    }
+
+    std::vector<texture_job> jobs_;
+    std::unordered_set<std::string> dedupe_keys_;
+};
+
+struct material_import_env
+{
+    enum class phase_t
+    {
+        collect,
+        bind
+    };
+
+    phase_t phase{phase_t::bind};
+    const fs::path* filename{};
+    const fs::path* output_dir{};
+    const aiScene* scene{};
+    texture_job_store* job_store{};
+    texture_catalog* catalog{};
+};
+
+auto load_image_for_texture_desc(const aiScene* scene,
+                                 const fs::path& output_dir,
+                                 const imported_texture& tex,
+                                 const char* assimp_path_cstr = nullptr) -> bimg::ImageContainer*
+{
+    if(tex.embedded_index >= 0 && tex.embedded_index < static_cast<int>(scene->mNumTextures))
+    {
+        const auto* embedded = scene->mTextures[tex.embedded_index];
+        if(embedded->pcData && embedded->mHeight == 0)
+        {
+            return imageLoad(embedded->pcData, static_cast<uint32_t>(embedded->mWidth));
+        }
+        return nullptr;
+    }
+
+    if(assimp_path_cstr != nullptr && assimp_path_cstr[0] != '\0')
+    {
+        const fs::path relative = resolve_external_texture_path(output_dir, fs::path(assimp_path_cstr));
+        return imageLoad(bx::FilePath((output_dir / relative).string().c_str()));
+    }
+
+    return imageLoad(bx::FilePath((output_dir / tex.name).string().c_str()));
+}
+
+void mark_embedded_consumed_index(int idx, std::unordered_set<int>& consumed, texture_catalog& catalog)
+{
+    if(idx < 0)
+    {
+        return;
+    }
+    consumed.insert(idx);
+    imported_texture entry{};
+    entry.embedded_index = idx;
+    entry.process_count = 1;
+    catalog.register_entry(entry, entry);
+}
+
+auto get_texture_job_output_paths(const texture_job& job) -> std::vector<std::string>
+{
+    std::vector<std::string> paths;
+    switch(job.type)
+    {
+        case texture_job_type::embedded_extract:
+            if(!job.desc.name.empty())
+            {
+                paths.push_back(job.desc.name);
+            }
+            break;
+        case texture_job_type::external_convert:
+            paths.push_back(make_converted_texture_name(job.desc.name, job.desc.semantic));
+            break;
+        case texture_job_type::spec_gloss_pair:
+            if(!job.output_base_color_relative.empty())
+            {
+                paths.push_back(job.output_base_color_relative);
+            }
+            if(!job.output_mr_relative.empty())
+            {
+                paths.push_back(job.output_mr_relative);
+            }
+            break;
+        case texture_job_type::specular_to_mr:
+            if(!job.output_mr_relative.empty())
+            {
+                paths.push_back(job.output_mr_relative);
+            }
+            break;
+        default:
+            break;
+    }
+    return paths;
+}
+
+struct texture_job_disjoint_set
+{
+    explicit texture_job_disjoint_set(size_t count) : parent_(count)
+    {
+        std::iota(parent_.begin(), parent_.end(), size_t{0});
+    }
+
+    auto find(size_t index) -> size_t
+    {
+        while(parent_[index] != index)
+        {
+            parent_[index] = parent_[parent_[index]];
+            index = parent_[index];
+        }
+        return index;
+    }
+
+    void unite(size_t a, size_t b)
+    {
+        a = find(a);
+        b = find(b);
+        if(a != b)
+        {
+            parent_[b] = a;
+        }
+    }
+
+    std::vector<size_t> parent_;
+};
+
+auto build_texture_job_composite_groups(const std::vector<texture_job>& jobs) -> std::vector<std::vector<size_t>>
+{
+    if(jobs.empty())
+    {
+        return {};
+    }
+
+    texture_job_disjoint_set disjoint_set(jobs.size());
+    std::unordered_map<std::string, size_t> path_to_job_index;
+
+    for(size_t job_index = 0; job_index < jobs.size(); ++job_index)
+    {
+        for(const auto& output_path : get_texture_job_output_paths(jobs[job_index]))
+        {
+            if(output_path.empty())
+            {
+                continue;
+            }
+
+            const auto existing = path_to_job_index.find(output_path);
+            if(existing == path_to_job_index.end())
+            {
+                path_to_job_index.emplace(output_path, job_index);
+            }
+            else
+            {
+                disjoint_set.unite(job_index, existing->second);
+            }
+        }
+    }
+
+    std::unordered_map<size_t, std::vector<size_t>> groups_by_root;
+    groups_by_root.reserve(jobs.size());
+    for(size_t job_index = 0; job_index < jobs.size(); ++job_index)
+    {
+        groups_by_root[disjoint_set.find(job_index)].push_back(job_index);
+    }
+
+    std::vector<std::vector<size_t>> composites;
+    composites.reserve(groups_by_root.size());
+    for(auto& kvp : groups_by_root)
+    {
+        auto& group = kvp.second;
+        std::sort(group.begin(), group.end());
+        composites.push_back(std::move(group));
+    }
+
+    std::sort(composites.begin(),
+              composites.end(),
+              [](const std::vector<size_t>& lhs, const std::vector<size_t>& rhs)
+              {
+                  return lhs.front() < rhs.front();
+              });
+
+    return composites;
+}
+
+void sort_imported_textures(std::vector<imported_texture>& textures)
+{
+    std::sort(textures.begin(),
+              textures.end(),
+              [](const imported_texture& lhs, const imported_texture& rhs)
+              {
+                  if(lhs.embedded_index != rhs.embedded_index)
+                  {
+                      return lhs.embedded_index < rhs.embedded_index;
+                  }
+                  if(lhs.semantic != rhs.semantic)
+                  {
+                      return lhs.semantic < rhs.semantic;
+                  }
+                  return lhs.name < rhs.name;
+              });
+}
+
+void execute_texture_job(const texture_job& job,
+                         const fs::path& filename,
+                         const fs::path& output_dir,
+                         const aiScene* scene,
+                         texture_catalog& catalog,
+                         std::unordered_set<int>& consumed_embedded)
+{
+    switch(job.type)
+    {
+        case texture_job_type::embedded_extract:
+        {
+            imported_texture result = job.desc;
+            std::vector<imported_texture> scratch;
+            scratch.push_back(result);
+            const auto* embedded = scene->mTextures[result.embedded_index];
+            process_embedded_texture(embedded, static_cast<size_t>(result.embedded_index), filename, output_dir, scratch);
+            result = scratch.back();
+            catalog.register_entry(job.desc, result);
+            consumed_embedded.insert(result.embedded_index);
+            break;
+        }
+        case texture_job_type::external_convert:
+        {
+            imported_texture result = job.desc;
+            fs::path original_file = output_dir / result.name;
+            const auto converted_name = make_converted_texture_name(result.name, result.semantic);
+            fs::path converted_file = output_dir / converted_name;
+            bimg::ImageContainer* image = imageLoad(bx::FilePath(original_file.string().c_str()));
+            if(image)
+            {
+                apply_texture_conversion(image, result.semantic, result.inverse);
+                imageSave(converted_file.string().c_str(), image);
+                bimg::imageFree(image);
+                result.name = converted_name;
+                APPLOG_TRACE("Mesh Importer: Applied {} conversion to external texture: {}", result.semantic, result.name);
+            }
+            catalog.register_entry(job.desc, result);
+            break;
+        }
+        case texture_job_type::spec_gloss_pair:
+        {
+            bimg::ImageContainer* diffuse_img = load_image_for_texture_desc(scene, output_dir, job.desc);
+            bimg::ImageContainer* specular_img =
+                load_image_for_texture_desc(scene, output_dir, job.specular_desc, nullptr);
+
+            if(diffuse_img && specular_img)
+            {
+                auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
+                                                               job.output_base_color_relative,
+                                                               job.output_mr_relative,
+                                                               diffuse_img,
+                                                               specular_img,
+                                                               job.spec_gloss_factors);
+                if(conv.diffuse_converted)
+                {
+                    imported_texture base_result = job.desc;
+                    base_result.name = conv.base_color_relative;
+                    catalog.register_entry(job.desc, base_result);
+                    mark_embedded_consumed_index(job.desc.embedded_index, consumed_embedded, catalog);
+                }
+                if(!conv.mr_relative.empty())
+                {
+                    imported_texture mr_lookup = job.specular_desc;
+                    imported_texture mr_result = job.specular_desc;
+                    mr_result.name = conv.mr_relative;
+                    catalog.register_entry(mr_lookup, mr_result);
+                    mark_embedded_consumed_index(job.specular_desc.embedded_index, consumed_embedded, catalog);
+                }
+            }
+            if(specular_img)
+            {
+                bimg::imageFree(specular_img);
+            }
+            if(diffuse_img)
+            {
+                bimg::imageFree(diffuse_img);
+            }
+            break;
+        }
+        case texture_job_type::specular_to_mr:
+        {
+            bimg::ImageContainer* specular_img =
+                load_image_for_texture_desc(scene, output_dir, job.specular_desc, nullptr);
+            if(specular_img && convert_specular_only_to_mr_texture(output_dir, job.output_mr_relative, specular_img))
+            {
+                imported_texture mr_result = job.specular_desc;
+                mr_result.name = job.output_mr_relative;
+                catalog.register_entry(job.specular_desc, mr_result);
+                mark_embedded_consumed_index(job.specular_desc.embedded_index, consumed_embedded, catalog);
+            }
+            if(specular_img)
+            {
+                bimg::imageFree(specular_img);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+void execute_texture_job_composite(const std::vector<texture_job>& jobs,
+                                 const std::vector<size_t>& job_indices,
+                                 const fs::path& filename,
+                                 const fs::path& output_dir,
+                                 const aiScene* scene,
+                                 texture_catalog& catalog,
+                                 std::unordered_set<int>& consumed_embedded)
+{
+    for(const size_t job_index : job_indices)
+    {
+        execute_texture_job(jobs[job_index], filename, output_dir, scene, catalog, consumed_embedded);
+    }
+}
+
+void run_texture_jobs_parallel(texture_job_store& store,
+                              const fs::path& filename,
+                              const fs::path& output_dir,
+                              const aiScene* scene,
+                              texture_catalog& catalog,
+                              std::unordered_set<int>& consumed_embedded)
+{
+    const auto& jobs = store.jobs();
+    if(jobs.empty())
+    {
+        return;
+    }
+
+    const auto composites = build_texture_job_composite_groups(jobs);
+    APPLOG_TRACE("Mesh Importer: Running {} texture job composites ({} jobs) in parallel",
+                 composites.size(),
+                 jobs.size());
+
+    struct composite_result_t
+    {
+        texture_catalog catalog;
+        std::unordered_set<int> consumed_embedded;
+    };
+
+    std::vector<composite_result_t> composite_results(composites.size());
+
+    std::vector<size_t> composite_order(composites.size());
+    std::iota(composite_order.begin(), composite_order.end(), size_t{0});
+
+    std::for_each(poolstl::par,
+                  composite_order.begin(),
+                  composite_order.end(),
+                  [&](const size_t composite_index)
+                  {
+                      auto& result = composite_results[composite_index];
+                      execute_texture_job_composite(jobs,
+                                                    composites[composite_index],
+                                                    filename,
+                                                    output_dir,
+                                                    scene,
+                                                    result.catalog,
+                                                    result.consumed_embedded);
+                  });
+
+    for(auto& result : composite_results)
+    {
+        catalog.merge_from(result.catalog);
+        consumed_embedded.insert(result.consumed_embedded.begin(), result.consumed_embedded.end());
+    }
+}
+
+void mark_embedded_consumed_from_textures(const std::vector<imported_texture>& textures,
+                                          std::unordered_set<int>& consumed_embedded)
+{
+    for(const auto& tex : textures)
+    {
+        if(tex.embedded_index >= 0 && tex.process_count > 0)
+        {
+            consumed_embedded.insert(tex.embedded_index);
+        }
+    }
+}
+
+void collect_orphan_embedded_texture_jobs(const aiScene* scene,
+                                          const fs::path& filename,
+                                          texture_job_store& store,
+                                          const std::unordered_set<int>& consumed_embedded)
+{
+    for(size_t i = 0; i < scene->mNumTextures; ++i)
+    {
+        if(consumed_embedded.count(static_cast<int>(i)) > 0)
+        {
+            continue;
+        }
+
+        imported_texture tex{};
+        tex.embedded_index = static_cast<int>(i);
+        tex.semantic = "Texture";
+        tex.name = get_embedded_texture_name(scene->mTextures[i], i, filename, tex.semantic);
+
+        texture_job job{};
+        job.type = texture_job_type::embedded_extract;
+        job.desc = tex;
+        store.try_add(std::move(job));
+    }
 }
 
 /**
@@ -2499,12 +3128,19 @@ auto get_workflow_aware_texture(const aiMaterial* material,
 {
     if(target_semantic == "BaseColor")
     {
-        // Try base color first, then diffuse as fallback
-        if(get_imported_texture(material, AI_MATKEY_BASE_COLOR_TEXTURE, "BaseColor", tex))
+        if(workflow == material_workflow::phong_specular_gloss)
+        {
+            if(get_imported_texture(material, aiTextureType_DIFFUSE, 0, "BaseColor", tex))
+            {
+                return true;
+            }
+        }
+        else if(get_imported_texture(material, AI_MATKEY_BASE_COLOR_TEXTURE, "BaseColor", tex))
         {
             return true;
         }
-        else if(get_imported_texture(material, aiTextureType_DIFFUSE, 0, "BaseColor", tex))
+
+        if(get_imported_texture(material, aiTextureType_DIFFUSE, 0, "BaseColor", tex))
         {
             return true;
         }
@@ -2534,7 +3170,7 @@ auto get_workflow_aware_texture(const aiMaterial* material,
             return true;
         }
         // For specular workflow, check if we should use combined processing
-        else if(workflow == material_workflow::specular_gloss)
+        else if(workflow_uses_spec_gloss_conversion(workflow))
         {
             if(use_combined_specular)
             {
@@ -2570,7 +3206,7 @@ auto get_workflow_aware_texture(const aiMaterial* material,
             return true;
         }
         // For specular/gloss workflow, convert gloss to roughness
-        else if(workflow == material_workflow::specular_gloss)
+        else if(workflow_uses_spec_gloss_conversion(workflow))
         {
             if(use_combined_specular)
             {
@@ -2609,9 +3245,9 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     bool has_metallic = (material->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS);
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
-    // Legacy spec-gloss (Bistro): derive base color + MR from diffuse/specular factors.
-    // PBR specular (authoritative base color texture/slot): use core PBR factors when present.
-    if(workflow == material_workflow::specular_gloss && use_legacy_spec_gloss_base_color_conversion(material, workflow))
+    // KHR spec-gloss: derive MR (+ optional base color) from diffuse/specular/gloss factors when textures are absent.
+    // Phong/CryEngine: use diffuse as base color tint and shininess/gloss for roughness (factors not fully baked).
+    if(workflow == material_workflow::khr_specular_glossiness)
     {
         aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
         material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
@@ -2644,38 +3280,89 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
         }
         metallic = converted_metallic;
         roughness = converted_roughness;
-        APPLOG_TRACE("Mesh Importer: Converted PBR factors from specular/gloss workflow: metallic={:.3f}, roughness={:.3f}",
+        APPLOG_TRACE("Mesh Importer: Converted PBR factors from KHR spec/gloss: metallic={:.3f}, roughness={:.3f}",
                      metallic, roughness);
     }
-    else
+    else if(workflow == material_workflow::phong_specular_gloss)
     {
-        if (!has_base_color)
+        // Instance albedo tint is AI_MATKEY_COLOR_DIFFUSE (CryEngine material color).
+        // AI_MATKEY_BASE_COLOR is often a white MR fallback and must not override the tint.
+        aiColor3D diffuse_tint{1.0f, 1.0f, 1.0f};
+        if(material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_tint) != AI_SUCCESS)
         {
-            if (material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color) != AI_SUCCESS)
+            diffuse_tint = aiColor3D{1.0f, 1.0f, 1.0f};
+        }
+        base_color = diffuse_tint;
+
+        aiColor3D diffuse_color = diffuse_tint;
+
+        aiColor3D specular_color{0.04f, 0.04f, 0.04f};
+        float specular_factor = 1.0f;
+        material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
+        material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
+        specular_color.r *= specular_factor;
+        specular_color.g *= specular_factor;
+        specular_color.b *= specular_factor;
+
+        float glossiness = 0.5f;
+        if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
+        {
+            float shininess = 32.0f;
+            if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+            {
+                glossiness = math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
+            }
+        }
+
+        // Phong has no metallic slot, but specular RGB + diffuse + gloss map to MR (KHR appendix).
+        // Ignore bogus AI_MATKEY_METALLIC_FACTOR / ROUGHNESS_FACTOR from dual-authored exports.
+        auto [converted_base_color, derived_metallic, derived_roughness] =
+            convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
+        metallic = derived_metallic;
+        roughness = derived_roughness;
+        APPLOG_TRACE("Mesh Importer: Phong spec/gloss -> MR factors: metallic={:.3f}, roughness={:.3f}",
+                     metallic, roughness);
+    }
+    else if(workflow == material_workflow::metallic_roughness)
+    {
+        if(!has_base_color)
+        {
+            if(material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color) != AI_SUCCESS)
             {
                 base_color = aiColor3D{1.0f, 1.0f, 1.0f};
             }
         }
-        
-        if (!has_metallic)
+
+        if(!has_metallic)
         {
             metallic = 0.0f;
         }
-        
-        if (!has_roughness)
+
+        if(!has_roughness)
         {
             float shininess = 32.0f;
             if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
             {
                 roughness = std::sqrt(2.0f / (shininess + 2.0f));
-                APPLOG_TRACE("Mesh Importer: Converted roughness from legacy shininess: {:.1f} -> {:.3f}", 
-                           shininess, roughness);
             }
             else
             {
                 roughness = 0.5f;
             }
         }
+    }
+    else
+    {
+        if(!has_base_color)
+        {
+            if(material->Get(AI_MATKEY_COLOR_DIFFUSE, base_color) != AI_SUCCESS)
+            {
+                base_color = aiColor3D{1.0f, 1.0f, 1.0f};
+            }
+        }
+
+        metallic = 0.0f;
+        roughness = 0.5f;
     }
     
     APPLOG_TRACE("Mesh Importer: Final PBR values - BaseColor: ({:.3f}, {:.3f}, {:.3f}), "
@@ -2692,12 +3379,16 @@ void process_material(asset_manager& am,
                       const aiScene* scene,
                       const aiMaterial* material,
                       pbr_material& mat,
-                      std::vector<imported_texture>& textures)
+                      std::vector<imported_texture>& textures,
+                      material_import_env& env)
 {
     if(!material)
     {
         return;
     }
+
+    const bool collecting = (env.phase == material_import_env::phase_t::collect);
+    const bool binding = (env.phase == material_import_env::phase_t::bind);
 
     // Diagnostic: enumerate every texture slot Assimp populated on this material.
     // Crucial for triaging "why isn't this texture assigned" cases — different exporters
@@ -2764,12 +3455,7 @@ void process_material(asset_manager& am,
     // Detect the material workflow before processing
     auto workflow = detect_material_workflow(material);
 
-    APPLOG_TRACE("Mesh Importer: Material workflow detected: {}",
-                 workflow == material_workflow::metallic_roughness ? "Metallic/Roughness" :
-                 workflow == material_workflow::specular_gloss
-                     ? (use_legacy_spec_gloss_base_color_conversion(material, workflow) ? "Specular/Gloss (legacy)"
-                                                                                        : "Specular/Gloss (PBR base color)")
-                     : "Unknown");
+    APPLOG_TRACE("Mesh Importer: Material workflow detected: {}", material_workflow_label(workflow));
 
     // log_materials(material);
 
@@ -2874,38 +3560,56 @@ void process_material(asset_manager& am,
         return false;
     };
 
-    auto needs_external_conversion = [](const imported_texture& tex) -> bool
+    auto enqueue_simple_texture_job = [&](const imported_texture& texture)
     {
-        return tex.embedded_index < 0 &&
-               (tex.semantic == "GlossToRoughness" ||
-                tex.semantic == "SpecularToRoughness" ||
-                tex.semantic == "SpecularToMetallic" ||
-                tex.semantic == "SpecularToMetallicRoughness" ||
-                tex.inverse);
-    };
-
-    auto make_converted_name = [](const std::string& original_name, const std::string& semantic) -> std::string
-    {
-        fs::path p(original_name);
-        std::string suffix = semantic.empty() ? "converted" : semantic;
-        // Use .png — TGA's wire format is BGRA but bimg::imageWriteTga dumps source
-        // bytes raw, so RGBA8 buffers round-trip back R↔B-swapped via stb_image.
-        // PNG carries explicit format metadata in the file.
-        return (p.parent_path() / (p.stem().string() + "_" + suffix + ".png")).generic_string();
-    };
-
-    auto process_texture = [&](imported_texture& texture, std::vector<imported_texture>& textures, bool force_process = false)
-    {
+        if(!env.job_store)
+        {
+            return;
+        }
+        texture_job job{};
+        job.desc = texture;
         if(texture.embedded_index >= 0)
         {
-            auto it = std::find_if(std::begin(textures),
-                                   std::end(textures),
+            job.type = texture_job_type::embedded_extract;
+        }
+        else if(needs_external_texture_conversion(texture))
+        {
+            job.type = texture_job_type::external_convert;
+        }
+        else
+        {
+            return;
+        }
+        env.job_store->try_add(std::move(job));
+    };
+
+    auto process_texture = [&](imported_texture& texture, std::vector<imported_texture>& textures_vec, bool /*force_process*/ = false)
+    {
+        if(collecting)
+        {
+            enqueue_simple_texture_job(texture);
+            if(texture.embedded_index < 0 && !needs_external_texture_conversion(texture) && env.catalog)
+            {
+                env.catalog->register_entry(texture, texture);
+            }
+            return;
+        }
+
+        if(binding && env.catalog && env.catalog->resolve(texture))
+        {
+            return;
+        }
+
+        if(texture.embedded_index >= 0)
+        {
+            auto it = std::find_if(std::begin(textures_vec),
+                                   std::end(textures_vec),
                                    [&](const imported_texture& rhs)
                                    {
                                        return rhs.embedded_index == texture.embedded_index
                                            && rhs.semantic == texture.semantic;
                                    });
-            if(it != std::end(textures))
+            if(it != std::end(textures_vec))
             {
                 texture.name = it->name;
                 texture.flags = it->flags;
@@ -2916,35 +3620,34 @@ void process_material(asset_manager& am,
         }
         else
         {
-            auto it = std::find_if(std::begin(textures),
-                                   std::end(textures),
+            auto it = std::find_if(std::begin(textures_vec),
+                                   std::end(textures_vec),
                                    [&](const imported_texture& rhs)
                                    {
-                                       return rhs.embedded_index < 0
-                                           && rhs.name == texture.name
+                                       return rhs.embedded_index < 0 && rhs.name == texture.name
                                            && rhs.semantic == texture.semantic;
                                    });
-            if(it != std::end(textures))
+            if(it != std::end(textures_vec))
             {
-                if(needs_external_conversion(texture))
+                if(needs_external_texture_conversion(texture))
                 {
-                    texture.name = make_converted_name(texture.name, texture.semantic);
+                    texture.name = make_converted_texture_name(texture.name, texture.semantic);
                 }
                 return;
             }
         }
 
-        textures.emplace_back(texture);
+        textures_vec.emplace_back(texture);
 
         if(texture.embedded_index >= 0)
         {
             const auto& embedded_texture = scene->mTextures[texture.embedded_index];
-            process_embedded_texture(embedded_texture, texture.embedded_index, filename, output_dir, textures);
+            process_embedded_texture(embedded_texture, texture.embedded_index, filename, output_dir, textures_vec);
         }
-        else if(needs_external_conversion(texture))
+        else if(needs_external_texture_conversion(texture))
         {
             fs::path original_file = output_dir / texture.name;
-            auto converted_name = make_converted_name(texture.name, texture.semantic);
+            const auto converted_name = make_converted_texture_name(texture.name, texture.semantic);
             fs::path converted_file = output_dir / converted_name;
             bimg::ImageContainer* image = imageLoad(bx::FilePath(original_file.string().c_str()));
             if(image)
@@ -2958,6 +3661,7 @@ void process_material(asset_manager& am,
         }
     };
 
+    if(binding)
     {
         ai_real two_sided{};
         if(material->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS && two_sided != 0.0)
@@ -2973,123 +3677,65 @@ void process_material(asset_manager& am,
     // SpecularToMetallic / SpecularToRoughness fallback path.
     std::string combined_mr_relative;
 
-    // Mark an embedded-texture index as "already processed" so the post-import
-    // `process_embedded_textures` pass doesn't extract it under a generic name.
-    // Used by the spec-gloss path to suppress extraction of the raw diffuse/specular
-    // sources — we read them straight from pcData and only write the converted output.
-    auto mark_embedded_consumed = [&](int idx) -> void
-    {
-        if(idx < 0)
-        {
-            return;
-        }
-        auto it = std::find_if(textures.begin(),
-                               textures.end(),
-                               [&](const imported_texture& t) -> bool { return t.embedded_index == idx; });
-        if(it == textures.end())
-        {
-            imported_texture entry{};
-            entry.embedded_index = idx;
-            entry.process_count = 1;
-            textures.emplace_back(std::move(entry));
-        }
-        else if(it->process_count == 0)
-        {
-            it->process_count = 1;
-        }
-    };
-
-    // Build the final-semantic file name for a converted PBR output. For embedded
-    // sources we use the natural `[N] <Semantic> <model>.png` form so the file lives
-    // at the same slot the source would have occupied. For external sources we fall
-    // back to a `<stem>_<Semantic>.png` sibling.
-    auto build_converted_name = [&](int embedded_idx, const std::string& source_relative, const std::string& target_semantic) -> std::string
-    {
-        if(embedded_idx >= 0 && embedded_idx < static_cast<int>(scene->mNumTextures))
-        {
-            // Always emit PNG — write_rgba8_png is the only writer this path uses.
-            return fmt::format("[{}] {} {}.png", embedded_idx, target_semantic, filename.string());
-        }
-        fs::path src(source_relative);
-        return (src.parent_path() / (src.stem().string() + "_" + target_semantic + ".png")).generic_string();
-    };
-
     // Track whether the per-pixel spec-gloss conversion succeeded for the BASE COLOR
     // PROPERTY block below: when it did, the factors are already baked into the texture
     // and the per-material uniforms must be set to identity to avoid double-application
     // (the deferred shader does `albedo *= u_base_color`, `roughness *= tex.g`, etc.).
-    bool sg_textures_converted = false;
+    bool khr_textures_baked = false;
 
     // BASE COLOR TEXTURE - Use workflow-aware detection
     {
         imported_texture texture;
         if(get_workflow_aware_texture(material, workflow, "BaseColor", texture, get_imported_texture, false))
         {
-            if(workflow == material_workflow::specular_gloss
-               && !use_legacy_spec_gloss_base_color_conversion(material, workflow))
+            if(workflow == material_workflow::phong_specular_gloss)
             {
-                APPLOG_TRACE("Mesh Importer: PBR specular workflow — base color texture used as-is");
-
+                APPLOG_TRACE("Mesh Importer: Phong spec/gloss - diffuse used as base color, spec -> MR");
                 process_texture(texture, textures);
 
                 aiString specular_path{};
                 const bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
                                           && specular_path.length > 0;
 
-                bimg::ImageContainer* specular_img = nullptr;
+                imported_texture specular_tex{};
                 int specular_idx = -1;
-                if(has_specular)
+                if(has_specular && get_imported_texture(material, aiTextureType_SPECULAR, 0, "Specular", specular_tex))
                 {
                     auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
-                    if(spec_pair.first && spec_pair.first->pcData && spec_pair.first->mHeight == 0)
-                    {
-                        specular_img = imageLoad(spec_pair.first->pcData,
-                                                 static_cast<uint32_t>(spec_pair.first->mWidth));
-                        specular_idx = spec_pair.second;
-                    }
-                    else if(!spec_pair.first)
-                    {
-                        const fs::path specular_relative =
-                            resolve_external_texture_path(output_dir, fs::path(specular_path.C_Str()));
-                        specular_img = imageLoad(bx::FilePath((output_dir / specular_relative).string().c_str()));
-                    }
+                    specular_idx = spec_pair.second;
                 }
 
-                if(has_specular && !specular_img)
+                if(collecting && has_specular && env.job_store)
                 {
-                    APPLOG_WARNING("Mesh Importer: PBR specular — failed to decode specular for MR conversion: {}",
-                                   specular_path.C_Str());
+                    texture_job job{};
+                    job.type = texture_job_type::specular_to_mr;
+                    job.specular_desc = specular_tex;
+                    job.output_mr_relative = build_converted_texture_name(filename,
+                                                                          scene,
+                                                                          specular_idx,
+                                                                          specular_path.C_Str(),
+                                                                          "MetallicRoughness");
+                    env.job_store->try_add(std::move(job));
                 }
-                else if(specular_img)
+                else if(binding && has_specular && env.catalog)
                 {
-                    combined_mr_relative =
-                        build_converted_name(specular_idx, specular_path.C_Str(), "MetallicRoughness");
-                    if(convert_specular_only_to_mr_texture(output_dir, combined_mr_relative, specular_img))
+                    const std::string expected_mr = build_converted_texture_name(filename,
+                                                                                 scene,
+                                                                                 specular_idx,
+                                                                                 specular_path.C_Str(),
+                                                                                 "MetallicRoughness");
+                    if(env.catalog->has_output_for_lookup(specular_tex, expected_mr))
                     {
-                        mark_embedded_consumed(specular_idx);
+                        combined_mr_relative = expected_mr;
                     }
-                    else
-                    {
-                        combined_mr_relative.clear();
-                    }
-                    bimg::imageFree(specular_img);
                 }
             }
-            else if(workflow == material_workflow::specular_gloss)
+            else if(workflow == material_workflow::khr_specular_glossiness)
             {
-                // Legacy spec-gloss: decode diffuse+specular in memory, Khronos baseColor + MR solve.
-                // Instead we decode them directly from pcData (or from an external file
-                // when not embedded), run the conversion in memory, and write only the
-                // final-semantic outputs. This keeps the asset browser clean:
-                //   [N] BaseColor <model>.png
-                //   [M] MetallicRoughness <model>.png
                 aiString specular_path{};
-                bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
-                                    && specular_path.length > 0;
+                const bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
+                                          && specular_path.length > 0;
 
-                // Read per-material factors from the KHR_materials_pbrSpecularGlossiness
-                // extension and bake them into the converted textures. Defaults from the
-                // glTF spec: diffuseFactor=1, specularFactor=1, glossinessFactor=1.
                 spec_gloss_factors_t factors{};
                 {
                     aiColor4D diffuse_factor_color{1.0f, 1.0f, 1.0f, 1.0f};
@@ -3121,109 +3767,85 @@ void process_material(asset_manager& am,
                     }
                 }
 
-                // Load diffuse — pcData if embedded, file on disk if external.
-                bimg::ImageContainer* diffuse_img = nullptr;
-                if(texture.embedded_index >= 0 && texture.embedded_index < static_cast<int>(scene->mNumTextures))
-                {
-                    const auto* embedded = scene->mTextures[texture.embedded_index];
-                    if(embedded->pcData && embedded->mHeight == 0)
-                    {
-                        diffuse_img = imageLoad(embedded->pcData, static_cast<uint32_t>(embedded->mWidth));
-                    }
-                }
-                else
-                {
-                    fs::path diffuse_file = output_dir / texture.name;
-                    diffuse_img = imageLoad(bx::FilePath(diffuse_file.string().c_str()));
-                }
-
-                // Load specular.
-                bimg::ImageContainer* specular_img = nullptr;
+                imported_texture specular_tex{};
                 int specular_idx = -1;
-                if(has_specular)
+                if(has_specular && get_imported_texture(material, aiTextureType_SPECULAR, 0, "Specular", specular_tex))
                 {
                     auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
-                    if(spec_pair.first && spec_pair.first->pcData && spec_pair.first->mHeight == 0)
-                    {
-                        specular_img = imageLoad(spec_pair.first->pcData,
-                                                 static_cast<uint32_t>(spec_pair.first->mWidth));
-                        specular_idx = spec_pair.second;
-                    }
-                    else if(!spec_pair.first)
-                    {
-                        fs::path specular_relative = resolve_external_texture_path(output_dir, fs::path(specular_path.C_Str()));
-                        fs::path specular_file = output_dir / specular_relative;
-                        specular_img = imageLoad(bx::FilePath(specular_file.string().c_str()));
-                    }
+                    specular_idx = spec_pair.second;
                 }
 
-                if(!diffuse_img)
+                if(collecting && has_specular && env.job_store)
                 {
-                    APPLOG_WARNING("Mesh Importer: Spec-gloss conversion skipped — failed to decode diffuse texture");
+                    texture_job job{};
+                    job.type = texture_job_type::spec_gloss_pair;
+                    job.desc = texture;
+                    job.specular_desc = specular_tex;
+                    job.spec_gloss_factors = factors;
+                    job.output_base_color_relative =
+                        build_converted_texture_name(filename, scene, texture.embedded_index, texture.name, "BaseColor");
+                    job.output_mr_relative = build_converted_texture_name(filename,
+                                                                          scene,
+                                                                          specular_idx,
+                                                                          specular_path.C_Str(),
+                                                                          "MetallicRoughness");
+                    env.job_store->try_add(std::move(job));
                 }
-                if(has_specular && !specular_img)
+                else if(binding && has_specular && env.catalog)
                 {
-                    APPLOG_WARNING("Mesh Importer: Spec-gloss conversion skipped — failed to decode specular texture: {}", specular_path.C_Str());
-                }
+                    const std::string expected_base = build_converted_texture_name(filename,
+                                                                                   scene,
+                                                                                   texture.embedded_index,
+                                                                                   texture.name,
+                                                                                   "BaseColor");
+                    const std::string expected_mr = build_converted_texture_name(filename,
+                                                                                 scene,
+                                                                                 specular_idx,
+                                                                                 specular_path.C_Str(),
+                                                                                 "MetallicRoughness");
 
-                if(diffuse_img && specular_img)
-                {
-                    const std::string base_color_relative =
-                        build_converted_name(texture.embedded_index, texture.name, "BaseColor");
-                    const std::string mr_relative =
-                        build_converted_name(specular_idx, specular_path.C_Str(), "MetallicRoughness");
-
-                    auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
-                                                                   base_color_relative,
-                                                                   mr_relative,
-                                                                   diffuse_img,
-                                                                   specular_img,
-                                                                   factors);
-                    if(conv.diffuse_converted)
+                    if(env.catalog->has_output_for_lookup(texture, expected_base))
                     {
-                        // Replace the texture name with the converted output, and suppress
-                        // extraction of the raw source under whatever auto-name it would
-                        // otherwise get.
-                        texture.name = conv.base_color_relative;
-                        mark_embedded_consumed(texture.embedded_index);
-                        sg_textures_converted = true;
+                        texture.name = expected_base;
+                        khr_textures_baked = true;
                         APPLOG_TRACE("Mesh Importer: Wrote converted base color (factors baked: D[{:.2f},{:.2f},{:.2f},{:.2f}] S[{:.2f},{:.2f},{:.2f}] G[{:.2f}]): {}",
-                                     factors.diffuse_r, factors.diffuse_g, factors.diffuse_b, factors.diffuse_a,
-                                     factors.specular_r, factors.specular_g, factors.specular_b, factors.glossiness,
+                                     factors.diffuse_r,
+                                     factors.diffuse_g,
+                                     factors.diffuse_b,
+                                     factors.diffuse_a,
+                                     factors.specular_r,
+                                     factors.specular_g,
+                                     factors.specular_b,
+                                     factors.glossiness,
                                      texture.name);
                     }
-                    if(!conv.mr_relative.empty())
+
+                    if(env.catalog->has_output_for_lookup(specular_tex, expected_mr))
                     {
-                        combined_mr_relative = conv.mr_relative;
-                        mark_embedded_consumed(specular_idx);
+                        combined_mr_relative = expected_mr;
                         APPLOG_TRACE("Mesh Importer: Wrote converted metallic-roughness: {}", combined_mr_relative);
+                    }
+
+                    if(!khr_textures_baked)
+                    {
+                        process_texture(texture, textures);
                     }
                 }
                 else
                 {
-                    // Conversion didn't run — fall back to extracting the source so we
-                    // still ship *something* in the color slot, and the later texture
-                    // assignment finds a valid file.
                     process_texture(texture, textures);
-                }
-
-                if(specular_img)
-                {
-                    bimg::imageFree(specular_img);
-                }
-                if(diffuse_img)
-                {
-                    bimg::imageFree(diffuse_img);
                 }
             }
             else
             {
-                // Non-SG: extract the source as usual.
                 process_texture(texture, textures);
             }
 
-            auto key = fs::convert_to_protocol(output_dir / texture.name);
-            mat.set_color_map(am.get_asset<gfx::texture>(key.generic_string()));
+            if(binding)
+            {
+                auto key = fs::convert_to_protocol(output_dir / texture.name);
+                mat.set_color_map(am.get_asset<gfx::texture>(key.generic_string()));
+            }
         }
     }
     // BASE COLOR PROPERTY - Use workflow-aware conversion
@@ -3232,10 +3854,10 @@ void process_material(asset_manager& am,
         float metallic_property = 0.0f;
         float roughness_property = 0.5f;
 
-        if(sg_textures_converted)
+        if(khr_textures_baked)
         {
-            // The per-pixel SG conversion already baked the diffuseFactor, specularFactor
-            // and glossinessFactor into the texture output. The shader does
+            // KHR spec-gloss texture bake already applied diffuse/specular/gloss factors.
+            // The shader does
             // `albedo = sample * u_base_color`, `metalness = u_surface_metalness * tex.b`,
             // `roughness = u_surface_roughness * tex.g` — so we MUST set the per-material
             // factors to identity here to avoid double-applying them.
@@ -3245,7 +3867,7 @@ void process_material(asset_manager& am,
         }
         else
         {
-            // No SG-texture conversion ran (no textures or non-SG workflow): fall back to
+            // No KHR texture bake (Phong pass-through or factor-only): map material properties to MR.
             // the per-material conversion that maps property values from the material's
             // workflow into MR equivalents.
             process_material_with_workflow_conversion(material, workflow,
@@ -3270,18 +3892,19 @@ void process_material(asset_manager& am,
 
     if(!combined_mr_relative.empty())
     {
-        // The diffuse+specular conversion above already produced a sibling MR texture using the
-        // proper per-pixel metallic solve. Use it directly and skip the cheaper SpecularToMetallic /
-        // SpecularToRoughness fallback path that would otherwise overwrite this with a coarser result.
-        auto key = fs::convert_to_protocol(output_dir / combined_mr_relative);
-        auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
+        if(binding)
+        {
+            auto key = fs::convert_to_protocol(output_dir / combined_mr_relative);
+            auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
 
-        mat.set_metalness_map(texture_asset);
-        mat.set_roughness_map(texture_asset);
-        has_metallic_tex = true;
-        has_roughness_tex = true;
+            mat.set_metalness_map(texture_asset);
+            mat.set_roughness_map(texture_asset);
+            has_metallic_tex = true;
+            has_roughness_tex = true;
 
-        APPLOG_TRACE("Mesh Importer: Using sibling metallic-roughness map from spec-gloss conversion: {}", combined_mr_relative);
+            APPLOG_TRACE("Mesh Importer: Using sibling metallic-roughness map from spec-gloss conversion: {}",
+                         combined_mr_relative);
+        }
     }
     else if(uses_duplicate_specular)
     {
@@ -3289,16 +3912,20 @@ void process_material(asset_manager& am,
         if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToMetallicRoughness", combined_texture))
         {
             process_texture(combined_texture, textures);
-            
-            auto key = fs::convert_to_protocol(output_dir / combined_texture.name);
-            auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
-            
-            mat.set_metalness_map(texture_asset);
-            mat.set_roughness_map(texture_asset);
-            has_metallic_tex = true;
-            has_roughness_tex = true;
-            
-            APPLOG_TRACE("Mesh Importer: Converting single specular texture to combined metallic/roughness: {}", combined_texture.name);
+
+            if(binding)
+            {
+                auto key = fs::convert_to_protocol(output_dir / combined_texture.name);
+                auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
+
+                mat.set_metalness_map(texture_asset);
+                mat.set_roughness_map(texture_asset);
+                has_metallic_tex = true;
+                has_roughness_tex = true;
+
+                APPLOG_TRACE("Mesh Importer: Converting single specular texture to combined metallic/roughness: {}",
+                             combined_texture.name);
+            }
         }
     }
     else
@@ -3309,41 +3936,47 @@ void process_material(asset_manager& am,
             {
                 process_texture(texture, textures);
 
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_metalness_map(am.get_asset<gfx::texture>(key.generic_string()));
-                has_metallic_tex = true;
-                
-                if(texture.semantic == "SpecularToMetallic")
+                if(binding)
                 {
-                    APPLOG_TRACE("Mesh Importer: Converting specular texture to metallic: {}", texture.name);
+                    auto key = fs::convert_to_protocol(output_dir / texture.name);
+                    mat.set_metalness_map(am.get_asset<gfx::texture>(key.generic_string()));
+                    has_metallic_tex = true;
+
+                    if(texture.semantic == "SpecularToMetallic")
+                    {
+                        APPLOG_TRACE("Mesh Importer: Converting specular texture to metallic: {}", texture.name);
+                    }
                 }
             }
         }
-        
+
         {
             imported_texture texture;
             if(get_workflow_aware_texture(material, workflow, "Roughness", texture, get_imported_texture, uses_duplicate_specular))
             {
                 process_texture(texture, textures);
 
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_roughness_map(am.get_asset<gfx::texture>(key.generic_string()));
-                has_roughness_tex = true;
-                
-                if(texture.semantic == "GlossToRoughness")
+                if(binding)
                 {
-                    APPLOG_TRACE("Mesh Importer: Converting gloss texture to roughness: {}", texture.name);
-                }
-                else if(texture.semantic == "SpecularToRoughness")
-                {
-                    APPLOG_TRACE("Mesh Importer: Converting specular texture to roughness: {}", texture.name);
+                    auto key = fs::convert_to_protocol(output_dir / texture.name);
+                    mat.set_roughness_map(am.get_asset<gfx::texture>(key.generic_string()));
+                    has_roughness_tex = true;
+
+                    if(texture.semantic == "GlossToRoughness")
+                    {
+                        APPLOG_TRACE("Mesh Importer: Converting gloss texture to roughness: {}", texture.name);
+                    }
+                    else if(texture.semantic == "SpecularToRoughness")
+                    {
+                        APPLOG_TRACE("Mesh Importer: Converting specular texture to roughness: {}", texture.name);
+                    }
                 }
             }
         }
     }
 
-    // Legacy spec-gloss texture conversion bakes factors into pixels; avoid double-application.
-    if(workflow == material_workflow::specular_gloss && sg_textures_converted)
+    // Baked or converted MR textures store per-pixel metal/rough in tex channels; scalar is a multiplier.
+    if(khr_textures_baked)
     {
         if(has_metallic_tex)
         {
@@ -3353,6 +3986,12 @@ void process_material(asset_manager& am,
         {
             mat.set_roughness(1.0f);
         }
+    }
+    else if(workflow == material_workflow::phong_specular_gloss && has_metallic_tex && has_roughness_tex
+            && mat.metalness_roughness_combined())
+    {
+        mat.set_metalness(1.0f);
+        mat.set_roughness(1.0f);
     }
 
     // NORMAL TEXTURE
@@ -3382,8 +4021,11 @@ void process_material(asset_manager& am,
         {
             process_texture(texture, textures);
 
-            auto key = fs::convert_to_protocol(output_dir / texture.name);
-            mat.set_normal_map(am.get_asset<gfx::texture>(key.generic_string()));
+            if(binding)
+            {
+                auto key = fs::convert_to_protocol(output_dir / texture.name);
+                mat.set_normal_map(am.get_asset<gfx::texture>(key.generic_string()));
+            }
         }
     }
     // NORMAL BUMP PROPERTY
@@ -3443,8 +4085,11 @@ void process_material(asset_manager& am,
         {
             process_texture(texture, textures);
 
-            auto key = fs::convert_to_protocol(output_dir / texture.name);
-            mat.set_ao_map(am.get_asset<gfx::texture>(key.generic_string()));
+            if(binding)
+            {
+                auto key = fs::convert_to_protocol(output_dir / texture.name);
+                mat.set_ao_map(am.get_asset<gfx::texture>(key.generic_string()));
+            }
         }
     }
 
@@ -3484,10 +4129,19 @@ void process_material(asset_manager& am,
         {
             process_texture(texture, textures);
 
-            auto key = fs::convert_to_protocol(output_dir / texture.name);
-            mat.set_emissive_map(am.get_asset<gfx::texture>(key.generic_string()));
+            if(binding)
+            {
+                auto key = fs::convert_to_protocol(output_dir / texture.name);
+                mat.set_emissive_map(am.get_asset<gfx::texture>(key.generic_string()));
+            }
         }
     }
+
+    if(collecting)
+    {
+        return;
+    }
+
     // EMISSIVE COLOR PROPERTY
     {
         aiColor3D property{};
@@ -3547,17 +4201,62 @@ void process_materials(asset_manager& am,
                        std::vector<imported_material>& materials,
                        std::vector<imported_texture>& textures)
 {
-    if(scene->mNumMaterials > 0)
+    if(scene->mNumMaterials == 0)
     {
-        materials.resize(scene->mNumMaterials);
+        return;
     }
 
+    materials.resize(scene->mNumMaterials);
+
+    texture_job_store job_store;
+    texture_catalog catalog;
+    std::unordered_set<int> consumed_embedded;
+    std::vector<imported_texture> collect_scratch;
+
+    material_import_env collect_env{};
+    collect_env.phase = material_import_env::phase_t::collect;
+    collect_env.filename = &filename;
+    collect_env.output_dir = &output_dir;
+    collect_env.scene = scene;
+    collect_env.job_store = &job_store;
+    collect_env.catalog = &catalog;
+
+    APPLOG_TRACE("Mesh Importer: Collecting texture import jobs for {} materials ...", scene->mNumMaterials);
+    for(size_t i = 0; i < scene->mNumMaterials; ++i)
+    {
+        pbr_material dummy;
+        process_material(am,
+                         filename,
+                         output_dir,
+                         scene,
+                         scene->mMaterials[i],
+                         dummy,
+                         collect_scratch,
+                         collect_env);
+    }
+
+    APPLOG_TRACE("Mesh Importer: Running {} texture import jobs ...", job_store.jobs().size());
+    run_texture_jobs_parallel(job_store, filename, output_dir, scene, catalog, consumed_embedded);
+
+    textures.clear();
+    catalog.append_to_manifest(textures);
+    sort_imported_textures(textures);
+
+    material_import_env bind_env{};
+    bind_env.phase = material_import_env::phase_t::bind;
+    bind_env.filename = &filename;
+    bind_env.output_dir = &output_dir;
+    bind_env.scene = scene;
+    bind_env.catalog = &catalog;
+
+    APPLOG_TRACE("Mesh Importer: Binding {} materials to textures ...", scene->mNumMaterials);
     for(size_t i = 0; i < scene->mNumMaterials; ++i)
     {
         const aiMaterial* assimp_mat = scene->mMaterials[i];
 
         auto mat = std::make_shared<pbr_material>();
-        process_material(am, filename, output_dir, scene, assimp_mat, *mat, textures);
+        process_material(am, filename, output_dir, scene, assimp_mat, *mat, textures, bind_env);
+
         std::string assimp_mat_name = assimp_mat->GetName().C_Str();
         if(assimp_mat_name.empty())
         {
@@ -3566,6 +4265,19 @@ void process_materials(asset_manager& am,
         materials[i].mat = mat;
         materials[i].name = string_utils::replace(fmt::format("[{}] {}", i, assimp_mat_name), ".", "_");
     }
+
+    mark_embedded_consumed_from_textures(textures, consumed_embedded);
+
+    texture_job_store orphan_job_store;
+    collect_orphan_embedded_texture_jobs(scene, filename, orphan_job_store, consumed_embedded);
+    if(!orphan_job_store.jobs().empty())
+    {
+        APPLOG_TRACE("Mesh Importer: Running {} orphan embedded texture jobs ...", orphan_job_store.jobs().size());
+        run_texture_jobs_parallel(orphan_job_store, filename, output_dir, scene, catalog, consumed_embedded);
+        catalog.append_to_manifest(textures);
+    }
+
+    sort_imported_textures(textures);
 }
 
 void process_embedded_textures(asset_manager& am,
@@ -3603,11 +4315,8 @@ void process_imported_scene(asset_manager& am,
 
     auto name_to_index_lut = assign_node_indices(scene);
 
-    APPLOG_TRACE("Mesh Importer: Processing materials ...");
+    APPLOG_TRACE("Mesh Importer: Processing materials (collect jobs → run jobs → bind) ...");
     process_materials(am, filename, output_dir, scene, materials, textures);
-
-    APPLOG_TRACE("Mesh Importer: Processing embedded textures ...");
-    process_embedded_textures(am, filename, output_dir, scene, textures);
 
     APPLOG_TRACE("Mesh Importer: Processing meshes ...");
     process_meshes(scene, load_data);
