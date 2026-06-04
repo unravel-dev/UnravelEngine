@@ -194,7 +194,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
         const auto run_parallel = [&](auto begin, auto end)
         {
-            std::for_each(//poolstl::par, 
+            std::for_each(poolstl::par, 
                 begin, end, process_entry);
         };
 
