@@ -51,7 +51,7 @@ inline auto get_suported_formats<unravel::font>() -> const std::vector<std::stri
 template<>
 inline auto get_suported_formats<gfx::texture>() -> const std::vector<std::string>&
 {
-    static std::vector<std::string> formats = {".etex", ".png", ".jpg", ".jpeg", ".tga", ".dds", ".ktx", ".pvr", ".exr", ".hdr", ".bmp", ".gif", ".psd"};
+    static std::vector<std::string> formats = {".etex", ".png", ".jpg", ".jpeg", ".tga", ".dds", ".ktx", ".ktx2", ".pvr", ".exr", ".hdr", ".bmp", ".gif", ".psd"};
     return formats;
 }
 

@@ -2384,12 +2384,14 @@ auto material_is_khr_specular_glossiness_input(const aiMaterial* material) -> bo
  */
 auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> bool
 {
-    if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, nullptr) == AI_SUCCESS)
+    aiString path1;
+    if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &path1) == AI_SUCCESS)
     {
         return true;
     }
 
-    if(material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, nullptr) == AI_SUCCESS)
+    aiString path2;
+    if(material->GetTexture(AI_MATKEY_METALLIC_TEXTURE, &path2) == AI_SUCCESS)
     {
         return true;
     }

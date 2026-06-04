@@ -38,7 +38,8 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
                                 uint8_t _skip = 0,
                                 bgfx::TextureInfo* _info = NULL,
-                                bimg::Orientation::Enum* _orientation = NULL);
+                                bimg::Orientation::Enum* _orientation = NULL,
+                                bx::Error* _err = NULL);
 
 /// Load a texture from memory (DDS, KTX, PNG, etc.). @a _name is optional debug label.
 bgfx::TextureHandle loadTexture(const void* _data,
@@ -47,7 +48,8 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 uint8_t _skip = 0,
                                 bgfx::TextureInfo* _info = NULL,
                                 bimg::Orientation::Enum* _orientation = NULL,
-                                const char* _name = NULL);
+                                const char* _name = NULL,
+                                bx::Error* _err = NULL);
 
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);

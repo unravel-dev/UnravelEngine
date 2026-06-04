@@ -389,7 +389,7 @@ auto compile_texture_to_file(const fs::path& input_path,
     const auto input_format = get_input_texture_format(compile_input);
     auto format = select_compressed_format(input_format, compile_input.extension(), quality.compression);
     
-    if(input_format != format)
+    if(input_format != format && compile_input.extension() != ".ktx2")
     {
         std::vector<std::string> args_array = {
             "-f",

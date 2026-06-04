@@ -8,7 +8,8 @@ texture::texture(const char* _path,
                  std::uint8_t _skip /*= 0 */,
                  texture_info* _info /*= nullptr*/)
 {
-    handle_ = loadTexture(_path, _flags, _skip, &info);
+    bx::Error err;
+    handle_ = loadTexture(_path, _flags, _skip, &info, nullptr, &err);
 
     if(_info != nullptr)
     {
@@ -25,7 +26,8 @@ texture::texture(const void* _data,
                  texture_info* _info,
                  const char* _name)
 {
-    handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name);
+    bx::Error err;
+    handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name, &err);
 
     if(_info != nullptr)
     {

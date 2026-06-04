@@ -474,12 +474,26 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
                                 bimg::Orientation::Enum* _orientation,
-                                const char* _name)
+                                const char* _name,
+                                bx::Error* _err)
 {
     BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
 
-    bimg::ImageContainer* imageContainer = bimg::imageParse(entry::getAllocator(), _data, _size);
+    if (NULL != _info)
+	{
+		bx::memSet(_info, 0, sizeof(*_info) );
+		_info->format = bgfx::TextureFormat::Unknown;
+	}
+
+	if (NULL != _orientation)
+	{
+		*_orientation = bimg::Orientation::R0;
+	}
+
+    bx::Error localErr;
+    bx::Error* err = (NULL != _err) ? _err : &localErr;
+    bimg::ImageContainer* imageContainer = bimg::imageParse(entry::getAllocator(), _data, _size, bimg::TextureFormat::Count, err);
     if(NULL != imageContainer)
     {
         if(NULL != _orientation)
@@ -503,10 +517,22 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
                                 uint64_t _flags,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
-                                bimg::Orientation::Enum* _orientation)
+                                bimg::Orientation::Enum* _orientation,
+                                bx::Error* _err)
 {
     BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
+
+    if (NULL != _info)
+	{
+		bx::memSet(_info, 0, sizeof(*_info) );
+		_info->format = bgfx::TextureFormat::Unknown;
+	}
+
+	if (NULL != _orientation)
+	{
+		*_orientation = bimg::Orientation::R0;
+	}
 
     uint32_t size;
     void* data = load(_reader, entry::getAllocator(), _filePath, &size);
@@ -524,10 +550,11 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint64_t _flags,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
-                                bimg::Orientation::Enum* _orientation)
+                                bimg::Orientation::Enum* _orientation,
+                                bx::Error* _err)
 {
     entry::FileReader reader;
-    return loadTexture(&reader, _filePath, _flags, _skip, _info, _orientation);
+    return loadTexture(&reader, _filePath, _flags, _skip, _info, _orientation, _err);
 }
 
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat)
