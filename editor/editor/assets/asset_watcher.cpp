@@ -8,6 +8,7 @@
 #include <engine/assets/impl/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_manifest.h>
+#include <engine/assets/impl/asset_writer.h>
 #include <engine/assets/asset_dependency_graph.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/ecs.h>
@@ -313,7 +314,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "", false);
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
 }
 
 template<typename T>
@@ -365,7 +366,7 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "", false);
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
 }
 
 template<typename T>
@@ -470,7 +471,7 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                                               priority,
                                               [&am, ref_path, output, job_name]()
                                               {
-                                                  APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
+                                                //   APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
                                                   asset_compiler::compile<gfx::shader>(am, ref_path, output);
                                               });
             }
@@ -613,7 +614,10 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
             }
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 
-            save_to_file(synced_path.string(), meta);
+            asset_writer::atomic_write_file(synced_path.string(), [&](const fs::path& temp) -> void
+            {
+                save_to_file(temp.string(), meta);
+            }, err);
         }
     };
 
@@ -807,8 +811,6 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                                  bool wait,
                                  const on_wait_progress_t& on_progress)
 {
-    // fs::watcher::watch_removals(false);
-
     auto& w = watched_protocols_[protocol];
 
     auto data_protocol = ex::get_data_directory_no_slash(protocol);
@@ -831,18 +833,23 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                        wait,
                        on_progress);
 
-    // fs::watcher::watch_removals(true);
 }
 
 void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protocol)
 {
-    auto& w = watched_protocols_[protocol];
+    auto it = watched_protocols_.find(protocol);
+    if(it == watched_protocols_.end())
+    {
+        return;
+    }
+
+    auto& w = it->second;
 
     unwatch(w.watchers);
     w.meta_syncer.unsync();
     w.cache_syncer.unsync();
 
-    watched_protocols_.erase(protocol);
+    watched_protocols_.erase(it);
 
     auto& am = ctx.get_cached<asset_manager>();
     am.unload_group(protocol);

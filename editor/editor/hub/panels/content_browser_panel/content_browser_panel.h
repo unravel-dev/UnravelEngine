@@ -45,6 +45,8 @@ public:
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
 
+    void on_project_closed(rtti::context& ctx);
+
     void draw_ui(rtti::context& ctx) override;
 
     auto get_window_flags() const -> ImGuiWindowFlags override;
@@ -78,6 +80,8 @@ private:
     void prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete);
 
     fs::directory_cache cache_;
+
+    std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     ImGuiTextFilter filter_;
     fs::path root_;

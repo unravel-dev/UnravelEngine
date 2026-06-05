@@ -30,15 +30,14 @@ auto watcher::watch(const fs::path& path,
                     bool initial_list,
                     clock_t::duration poll_interval,
                     notify_callback callback,
-                    const std::string& watcher_name,
-                    bool watch_removals) -> std::uint64_t
+                    const std::string& watcher_name) -> std::uint64_t
 {
     auto& wd = get_watcher();
     if(!wd.watching_)
     {
         wd.start();
     }
-    return wd.watch_impl(path, filter, recursive, initial_list, poll_interval, std::move(callback), watcher_name, watch_removals);
+    return wd.watch_impl(path, filter, recursive, initial_list, poll_interval, std::move(callback), watcher_name);
 }
 
 void watcher::unwatch(std::uint64_t key)
@@ -95,11 +94,6 @@ void watcher::resume()
     wd.resume();
 }
 
-void watcher::watch_removals(bool value)
-{
-    auto& wd = get_watcher();
-    wd.watch_removals(value);
-}
 auto to_string(const watcher::entry& e) -> std::string
 {
     static auto file_type_to_string = [](file_type type) -> std::string

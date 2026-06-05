@@ -1,6 +1,7 @@
 #include "project_manager.h"
 #include "version/version.h"
 #include <editor/assets/asset_watcher.h>
+#include <editor/events.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
@@ -52,6 +53,9 @@ fs::path editor_cfg = fs::persistent_path() / "unravel" / "editor.cfg";
 
 void project_manager::close_project(rtti::context& ctx)
 {
+    auto& ui_ev = ctx.get_cached<ui_events>();
+    ui_ev.on_close_project.emit(ctx);
+
     if(has_open_project())
     {
         save_editor_settings();

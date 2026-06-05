@@ -57,6 +57,7 @@ public:
         , should_refresh_(rhs.should_refresh_.load())
         , filter_(std::move(rhs.filter_))
     {
+        rhs.unwatch();
         watch();
     }
 
@@ -75,6 +76,7 @@ public:
 
     cache& operator=(cache&& rhs) noexcept
     {
+        rhs.unwatch();
         unwatch();
         path_ = std::move(rhs.path_);
         scan_frequency_ = std::move(rhs.scan_frequency_);
@@ -196,6 +198,14 @@ public:
         return path_;
     }
 
+    void clear()
+    {
+        unwatch();
+        path_.clear();
+        entries_.clear();
+        should_refresh_ = true;
+    }
+
     void set_path(const fs::path& path, const fs::pattern_filter& filter)
     {
         if(path_ == path)
@@ -260,7 +270,11 @@ private:
     }
     void unwatch()
     {
-        watcher::unwatch(watch_id_);
+        if(watch_id_ != 0)
+        {
+            watcher::unwatch(watch_id_);
+            watch_id_ = 0;
+        }
     }
 
     ///

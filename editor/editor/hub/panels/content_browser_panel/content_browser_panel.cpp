@@ -1,4 +1,6 @@
 #include "content_browser_panel.h"
+#include <editor/events.h>
+#include <editor/system/project_manager.h>
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "filesystem/filesystem.h"
@@ -571,6 +573,14 @@ content_browser_panel::content_browser_panel(imgui_panels* parent, const char* n
 }
 void content_browser_panel::init(rtti::context& ctx)
 {
+    auto& ui_ev = ctx.get_cached<ui_events>();
+    ui_ev.on_close_project.connect(sentinel_, 100, this, &content_browser_panel::on_project_closed);
+}
+
+void content_browser_panel::on_project_closed(rtti::context& /*ctx*/)
+{
+    cache_.clear();
+    root_.clear();
 }
 
 void content_browser_panel::deinit(rtti::context& ctx)
@@ -605,6 +615,16 @@ void content_browser_panel::handle_external_drop(rtti::context& ctx)
 
 void content_browser_panel::draw(rtti::context& ctx)
 {
+    auto& pm = ctx.get_cached<project_manager>();
+    if(!pm.has_open_project())
+    {
+        if(!cache_.get_path().empty())
+        {
+            on_project_closed(ctx);
+        }
+        return;
+    }
+
     auto& em = ctx.get_cached<editing_manager>();
 
     const auto root_path = fs::resolve_protocol("app:/data");

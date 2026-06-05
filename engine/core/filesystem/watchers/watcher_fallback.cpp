@@ -1,11 +1,15 @@
 #include "watcher_fallback.h"
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <iostream>
+#include <mutex>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <base/platform/thread.hpp>
 #include <hpp/event.hpp>
-
-
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
 
@@ -122,9 +126,9 @@ public:
         paused_ = false;
     }
 
-    void watch_removals(bool value)
+    void request_immediate_poll()
     {
-        watch_removals_ = value;
+        last_poll_ = watcher::clock_t::time_point{};
     }
 
     //-----------------------------------------------------------------------------
@@ -137,9 +141,12 @@ public:
     //-----------------------------------------------------------------------------
     void watch()
     {
+        // const auto started = std::chrono::steady_clock::now();
+
         observed_changes changes;
-        bool paused = paused_;
-        if(!paused)
+        seen_keys_this_scan_.clear();
+        seen_keys_this_scan_.reserve(entries_.size());
+        if(!paused_.load())
         {
             if(!buffered_changes_.entries.empty())
             {
@@ -162,7 +169,18 @@ public:
                 poll_entry(entry, changes);
             }
         }
-        if(paused)
+        process_modifications(entries_, changes, seen_keys_this_scan_, root_);
+
+        
+        // const auto elapsed = std::chrono::steady_clock::now() - started;
+        // const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+        // std::cout << "process_modifications: " << elapsed_ms << " ms"
+        //           << " (" << changes.created.size() << " created, "
+        //           << entries_.size() << " cached, "
+        //           << changes.entries.size() << " events)"
+        //           << " root=" << root_.string() << std::endl;
+
+        if(paused_.load())
         {
             if(!changes.entries.empty())
             {
@@ -171,10 +189,6 @@ public:
         }
         else
         {
-            //if(watch_removals_)
-            {
-                process_modifications(entries_, changes);
-            }
             if(!changes.entries.empty())
             {
                 on_changes.emit(changes.entries);
@@ -226,108 +240,156 @@ public:
     };
 
 
-    template<typename Container>
-    static auto check_if_renamed(watcher::entry& e, Container& container) -> bool
+    static void remove_missing_candidate(const std::string& key,
+                                         uintmax_t size,
+                                         std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
     {
-
-        auto it = std::begin(container);
-        while(it != std::end(container))
+        auto size_it = missing_by_size.find(size);
+        if(size_it == missing_by_size.end())
         {
-            auto& fi = it->second;
-            fs::error_code err;
-            if(!fs::exists(fi.path, err))
-            {
-
-                if(e.size == fi.size)
-                {
-                    auto diff = (e.last_mod_time - fi.last_mod_time);
-                    auto d = std::chrono::duration_cast<std::chrono::milliseconds>(diff);
-
-                    if(d <= std::chrono::milliseconds(0))
-                    {
-                        bool same_extensions = check_if_same_extension(e.path, fi.path);
-                        if(same_extensions)
-                        {
-                            e.status = watcher::entry_status::renamed;
-                            e.last_path = fi.path;
-                            e.event_time = std::chrono::system_clock::now();
-
-                                   // remove the cached old path entry
-                            container.erase(it);
-                            return true;
-                        }
-                    }
-
-                }
-
-            }
-
-            it++;
+            return;
         }
-
-        return false;
-
-    };
+        auto& candidates = size_it->second;
+        for(std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            if(candidates[i] != key)
+            {
+                continue;
+            }
+            candidates[i] = candidates.back();
+            candidates.pop_back();
+            if(candidates.empty())
+            {
+                missing_by_size.erase(size_it);
+            }
+            return;
+        }
+    }
 
     template<typename Container>
-    static void check_for_removed(std::vector<watcher::entry>& entries, Container& container)
+    static void collect_missing_entries(const Container& old_entries,
+                                        const std::unordered_set<std::string>& seen_keys,
+                                        std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
     {
-
-        auto it = std::begin(container);
-        while(it != std::end(container))
+        for(const auto& kvp : old_entries)
         {
-            auto& fi = it->second;
-            fs::error_code err;
-            if(!fs::exists(fi.path, err))
+            if(seen_keys.find(kvp.first) == seen_keys.end())
             {
-                fi.status = watcher::entry_status::removed;
-                fi.event_time = std::chrono::system_clock::now();
-                entries.push_back(fi);
-
-                it = container.erase(it);
-            }
-            else
-            {
-                it++;
+                missing_by_size[kvp.second.size].push_back(kvp.first);
             }
         }
     }
 
+    template<typename Container>
+    static auto try_match_rename(watcher::entry& e,
+                                 Container& old_entries,
+                                 std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size) -> bool
+    {
+        auto size_it = missing_by_size.find(e.size);
+        if(size_it == missing_by_size.end())
+        {
+            return false;
+        }
+
+        auto& candidates = size_it->second;
+        for(std::size_t i = 0; i < candidates.size(); ++i)
+        {
+            const auto& key = candidates[i];
+            auto entry_it = old_entries.find(key);
+            if(entry_it == old_entries.end())
+            {
+                continue;
+            }
+
+            const auto& fi = entry_it->second;
+            auto diff = (e.last_mod_time - fi.last_mod_time);
+            auto d = std::chrono::duration_cast<std::chrono::milliseconds>(diff);
+            if(d > std::chrono::milliseconds(0))
+            {
+                continue;
+            }
+            if(!check_if_same_extension(e.path, fi.path))
+            {
+                continue;
+            }
+
+            e.status = watcher::entry_status::renamed;
+            e.last_path = fi.path;
+            e.event_time = std::chrono::system_clock::now();
+            old_entries.erase(entry_it);
+
+            candidates[i] = candidates.back();
+            candidates.pop_back();
+            if(candidates.empty())
+            {
+                missing_by_size.erase(size_it);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    template<typename Container>
+    static void emit_remaining_removed(std::vector<watcher::entry>& entries,
+                                       Container& old_entries,
+                                       std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
+    {
+        for(auto& size_group : missing_by_size)
+        {
+            for(const auto& key : size_group.second)
+            {
+                auto it = old_entries.find(key);
+                if(it == old_entries.end())
+                {
+                    continue;
+                }
+                auto fi = it->second;
+                fi.status = watcher::entry_status::removed;
+                fi.event_time = std::chrono::system_clock::now();
+                entries.push_back(std::move(fi));
+                old_entries.erase(it);
+            }
+        }
+    }
 
     template<typename Container>
     static void process_modifications(Container& old_entries,
-                                      observed_changes& changes)
+                                      observed_changes& changes,
+                                      const std::unordered_set<std::string>& seen_keys,
+                                      const fs::path& listener_root)
     {
-        using namespace std::literals;
-
 
         std::vector<size_t> renamed_dirs;
+        std::unordered_map<uintmax_t, std::vector<std::string>> missing_by_size;
+        collect_missing_entries(old_entries, seen_keys, missing_by_size);
 
         for(auto idx : changes.created)
         {
             auto& e = changes.entries[idx];
 
-            //check if parent_dir was renamed
             if(check_if_parent_dir_was_renamed(renamed_dirs, changes.entries, e))
             {
-
-                // remove the cached old path entry
-                old_entries.erase(e.last_path.string());
+                const auto key = e.last_path.string();
+                auto old_it = old_entries.find(key);
+                if(old_it != old_entries.end())
+                {
+                    remove_missing_candidate(key, old_it->second.size, missing_by_size);
+                    old_entries.erase(old_it);
+                }
                 continue;
             }
 
-            // check for rename heuristic
-            if(check_if_renamed(e, old_entries))
+            if(!missing_by_size.empty() && try_match_rename(e, old_entries, missing_by_size))
             {
                 if(e.type == fs::file_type::directory)
                 {
                     renamed_dirs.emplace_back(idx);
                 }
-                continue;
             }
-
         }
-        check_for_removed(changes.entries, old_entries);
+
+        emit_remaining_removed(changes.entries, old_entries, missing_by_size);
     }
   
     //-----------------------------------------------------------------------------
@@ -346,8 +408,8 @@ public:
         auto time = entry.last_write_time( err);
         auto size = entry.file_size( err);
         fs::file_status status = entry.status( err);
-        // add a new modification time to the map
         std::string key = entry.path().string();
+        seen_keys_this_scan_.insert(key);
         auto it = entries_.find(key);
         if(it != entries_.end())
         {
@@ -423,7 +485,7 @@ private:
 
     std::atomic<bool> paused_ = {false};
 
-    std::atomic<bool> watch_removals_ = {true};
+    std::unordered_set<std::string> seen_keys_this_scan_;
 
     observed_changes buffered_changes_;
 };
@@ -464,15 +526,6 @@ public:
             listener_->on_changes.disconnect(slot_key_);
         }
     }
-
-    void watch_removals(bool value)
-    {
-        if(listener_)
-        {
-            listener_->watch_removals(value);
-        }
-    }
-    
     
     void pause()
     {
@@ -482,17 +535,6 @@ public:
     void resume()
     {
         paused_ = false;
-        // Process buffered changes
-        if(!buffered_changes_.empty())
-        {
-            std::vector<watcher::entry> changes_to_process;
-            std::swap(changes_to_process, buffered_changes_);
-            
-            if(!changes_to_process.empty() && callback_)
-            {
-                callback_(changes_to_process, false);
-            }
-        }
     }
     
     auto get_path() const -> const fs::path&
@@ -629,15 +671,32 @@ private:
     
     auto is_path_under_watch(const fs::path& event_path) const -> bool
     {
-        // Path-level filtering: When reusing a parent listener, we receive events for
-        // the entire parent directory tree. We must filter to only events under our specific path.
         fs::error_code ec;
-        auto canonical_event_path = fs::weakly_canonical(event_path, ec);
-        auto canonical_watch_path = fs::weakly_canonical(path_, ec);
-        
-        // Check if event path is under our watched path
-        auto rel = canonical_event_path.lexically_relative(canonical_watch_path);
-        return !(rel.empty() || rel.string().substr(0, 2) == "..");
+        fs::path watch_path = fs::weakly_canonical(path_, ec);
+        if(ec)
+        {
+            watch_path = fs::absolute(path_, ec);
+            if(ec)
+            {
+                watch_path = path_;
+            }
+            watch_path = watch_path.lexically_normal();
+        }
+        fs::path resolved_event_path = fs::weakly_canonical(event_path, ec);
+        if(ec)
+        {
+            resolved_event_path = fs::absolute(event_path, ec);
+            if(ec)
+            {
+                resolved_event_path = event_path;
+            }
+            resolved_event_path = resolved_event_path.lexically_normal();
+        }
+        if(resolved_event_path == watch_path)
+        {
+            return true;
+        }
+        return fs::is_any_parent_path(watch_path, resolved_event_path);
     }
     
     fs::path path_;
@@ -661,21 +720,33 @@ watcher_fallback::~watcher_fallback()
 void watcher_fallback::pause()
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    globally_paused_ = true;
+    for(auto& kvp : directory_listeners_)
+    {
+        kvp.second->pause();
+    }
     for(auto& kvp : watchers_)
     {
-        auto& w = kvp.second;
-        w->pause();
+        kvp.second->pause();
     }
 }
 
 void watcher_fallback::resume()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for(auto& kvp : watchers_)
     {
-        auto& w = kvp.second;
-        w->resume();
+        std::lock_guard<std::mutex> lock(mutex_);
+        globally_paused_ = false;
+        for(auto& kvp : directory_listeners_)
+        {
+            kvp.second->resume();
+            kvp.second->request_immediate_poll();
+        }
+        for(auto& kvp : watchers_)
+        {
+            kvp.second->resume();
+        }
     }
+    cv_.notify_all();
 }
 
 void watcher_fallback::wait_all(watcher::clock_t::duration duration)
@@ -707,12 +778,20 @@ void watcher_fallback::start()
             using namespace std::literals;
             while(watching_)
             {
+                if(globally_paused_.load())
+                {
+                    std::unique_lock<std::mutex> lock(mutex_);
+                    cv_.wait_for(lock, 500ms);
+                    continue;
+                }
+
                 watcher::clock_t::duration sleep_time = 99999h;
 
                 // iterate through each directory listener and check for modification
                 std::map<fs::path, std::shared_ptr<directory_listener>> listeners;
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
+                    prune_stale_listeners();
                     listeners = directory_listeners_;
                 }
 
@@ -748,8 +827,7 @@ auto watcher_fallback::watch_impl(const fs::path& path,
                               bool initial_list,
                               watcher::clock_t::duration poll_interval,
                               watcher::notify_callback callback,
-                              const std::string& watcher_name,
-                              bool watch_removals
+                              const std::string& watcher_name
                             ) -> std::uint64_t
 {
     if(!callback)
@@ -762,6 +840,10 @@ auto watcher_fallback::watch_impl(const fs::path& path,
         std::lock_guard<std::mutex> lock(mutex_);
         fs::error_code err;
         fs::path abs_path = fs::absolute(path, err);
+        if(!err)
+        {
+            abs_path = abs_path.lexically_normal();
+        }
         auto it = directory_listeners_.find(abs_path);
         if(it != directory_listeners_.end())
         {
@@ -774,7 +856,6 @@ auto watcher_fallback::watch_impl(const fs::path& path,
                 if(existing_listener->get_recursive() && fs::is_any_parent_path(watched_path, abs_path))
                 {
                     listener = existing_listener;
-                    listener->watch_removals(watch_removals);
 
                     break;
                 }
@@ -793,32 +874,43 @@ auto watcher_fallback::watch_impl(const fs::path& path,
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_[key] = impl;
     }
-    impl->watch_removals(watch_removals);
+    if(globally_paused_)
+    {
+        listener->pause();
+        impl->pause();
+    }
     cv_.notify_all();
     return key;
+}
+
+void watcher_fallback::prune_stale_listeners()
+{
+    for(auto it = directory_listeners_.begin(); it != directory_listeners_.end();)
+    {
+        const auto& listener = it->second;
+        const bool referenced = std::any_of(watchers_.begin(),
+                                              watchers_.end(),
+                                              [&listener](const auto& kvp) -> bool
+                                              {
+                                                  return kvp.second && kvp.second->get_listener() == listener;
+                                              });
+        if(!referenced)
+        {
+            it = directory_listeners_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 void watcher_fallback::unwatch_impl(std::uint64_t key)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        
         watchers_.erase(key);
-        
-        std::set<fs::path> stale_listeners;
-        {
-            for(auto& [path, listener] : directory_listeners_)
-            {
-                if(listener.use_count() == 1)
-                {
-                    stale_listeners.insert(path);
-                }
-            }
-        }
-        for(const auto& path : stale_listeners)
-        {
-            directory_listeners_.erase(path);
-        }
+        prune_stale_listeners();
     }
     cv_.notify_all();
 }
@@ -833,13 +925,4 @@ void watcher_fallback::unwatch_all_impl()
     cv_.notify_all();
 }
 
-void watcher_fallback::watch_removals(bool value)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    for(auto& kvp : directory_listeners_)
-    {
-        auto& l = kvp.second;
-        l->watch_removals(value);
-    }
-}
 } // namespace fs

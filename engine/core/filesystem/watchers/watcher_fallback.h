@@ -46,8 +46,7 @@ public:
                     bool initial_list,
                     watcher::clock_t::duration poll_interval,
                     watcher::notify_callback callback,
-                    const std::string& watcher_name,
-                    bool watch_removals) -> std::uint64_t;
+                    const std::string& watcher_name) -> std::uint64_t;
 
     void unwatch_impl(std::uint64_t key);
 
@@ -55,8 +54,6 @@ public:
 
     void pause();
     void resume();
-
-    void watch_removals(bool value);
 
     void wait_all(watcher::clock_t::duration duration);
 
@@ -85,6 +82,8 @@ public:
     /// Atomic bool sync
     std::atomic<bool> watching_ = {false};
 
+    std::atomic<bool> globally_paused_ = {false};
+
     std::condition_variable cv_;
     /// Thread that polls for changes
     std::thread thread_;
@@ -95,6 +94,8 @@ public:
     /// Directory listeners (shared per directory)
     class directory_listener;
     std::map<fs::path, std::shared_ptr<directory_listener>> directory_listeners_;
+
+    void prune_stale_listeners();
 };
 
 } // namespace fs
