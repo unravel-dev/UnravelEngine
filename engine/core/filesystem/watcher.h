@@ -55,7 +55,8 @@ public:
                       bool initial_list,
                       clock_t::duration poll_interval,
                       notify_callback callback,
-                      const std::string& watcher_name = "") -> std::uint64_t;
+                      const std::string& watcher_name = "",
+                      bool watch_removals = true) -> std::uint64_t;
 
     //-----------------------------------------------------------------------------
     //  Name : unwatch ()
@@ -97,6 +98,8 @@ public:
     /// </summary>
     //-----------------------------------------------------------------------------
     static void resume();
+
+    static void watch_removals(bool value);
 };
 
 auto to_string(const watcher::entry& e) -> std::string;

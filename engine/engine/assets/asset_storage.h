@@ -284,7 +284,7 @@ public:
         auto& metainfo = asset_meta_[meta.uid];
         metainfo.location = location;
         metainfo.meta = meta;
-        APPLOG_TRACE("{} - {} -> {}", __func__, hpp::to_string(metainfo.meta.uid), location);
+        // APPLOG_TRACE("{} - {} -> {}", __func__, hpp::to_string(metainfo.meta.uid), location);
         return metainfo.meta.uid;
     }
 

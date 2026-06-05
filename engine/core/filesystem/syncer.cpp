@@ -2,6 +2,10 @@
 #include "watcher.h"
 
 #include <algorithm>
+#include <mutex>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
@@ -31,6 +35,64 @@ static void ensure_directory_exists(const fs::path& path)
     {
         fs::create_directories(path, err);
     }
+}
+
+/// Tracks directories already created during one on_change invocation.
+struct directory_create_cache
+{
+    void ensure_exists(const fs::path& path)
+    {
+        const fs::path directory = path.has_extension() ? path.parent_path() : path;
+        if(directory.empty())
+        {
+            return;
+        }
+        const std::string key = directory.lexically_normal().generic_string();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if(!created_directories_.insert(key).second)
+            {
+                return;
+            }
+        }
+        fs::error_code err;
+        fs::create_directories(directory, err);
+    }
+
+private:
+    std::mutex mutex_;
+    std::unordered_set<std::string> created_directories_;
+};
+
+/// Paths that share a key are processed on one worker in order (create -> rename, etc.).
+static auto entry_serialization_key(const fs::path& watch_root, const fs::watcher::entry& entry) -> std::string
+{
+    const auto normalize_key = [](const fs::path& path) -> std::string
+    {
+        return path.lexically_normal().generic_string();
+    };
+
+    if(entry.status == fs::watcher::entry_status::renamed)
+    {
+        const fs::path parent_old = entry.last_path.parent_path();
+        const fs::path parent_new = entry.path.parent_path();
+        if(parent_old == parent_new)
+        {
+            const fs::path key = parent_old.empty() ? watch_root : parent_old;
+            return normalize_key(key);
+        }
+        // Cross-directory rename: keep ordering relative to the rest of the tree.
+        return normalize_key(watch_root);
+    }
+
+    if(entry.type == fs::file_type::directory)
+    {
+        return normalize_key(entry.path);
+    }
+
+    const fs::path parent = entry.path.parent_path();
+    const fs::path key = parent.empty() ? watch_root : parent;
+    return normalize_key(key);
 }
 
 syncer::~syncer()
@@ -120,7 +182,8 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
     const auto on_change = [this, on_progress](const auto& entries, bool is_initial_listing)
     {
-        const auto process_entry = [this, is_initial_listing](const watcher::entry& entry)
+        directory_create_cache directory_cache;
+        const auto process_entry = [this, is_initial_listing, &directory_cache](const watcher::entry& entry)
         {
             const bool is_directory = (entry.type == fs::file_type::directory);
             const std::string entry_extension = extract_entry_extension(entry.path);
@@ -133,6 +196,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
                     for(const auto& synced_entry : synced_entries)
                     {
+                        //directory_cache.ensure_exists(synced_entry);
                         ensure_directory_exists(synced_entry);
                     }
 
@@ -192,10 +256,39 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
             }
         };
 
-        const auto run_parallel = [&](auto begin, auto end)
+        const fs::path watch_root = get_watch_path();
+
+        // Parallel across directory subtrees; sequential within each group so dependent
+        // watcher events (e.g. create then rename in the same folder) stay ordered.
+        const auto run_entry_batch = [&](auto begin, auto end)
         {
-            std::for_each(poolstl::par, 
-                begin, end, process_entry);
+            // std::unordered_map<std::string, std::vector<const fs::watcher::entry*>> groups;
+
+            // for(auto it = begin; it != end; ++it)
+            // {
+            //     const std::string key = entry_serialization_key(watch_root, *it);
+            //     groups[key].push_back(&(*it));
+            // }
+
+            // std::vector<std::vector<const fs::watcher::entry*>> group_list;
+            // group_list.reserve(groups.size());
+            // for(auto& group : groups)
+            // {
+            //     group_list.push_back(std::move(group.second));
+            // }
+
+            // const auto process_group = [&](const std::vector<const fs::watcher::entry*>& group_entries)
+            // {
+            //     for(const fs::watcher::entry* entry : group_entries)
+            //     {
+            //         process_entry(*entry);
+            //     }
+            // };
+
+            // std::for_each(poolstl::par, group_list.begin(), group_list.end(), process_group);
+
+            std::for_each(//poolstl::par, 
+                    begin, end, process_entry);
         };
 
         if(entries.empty())
@@ -207,7 +300,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
         // on_progress fires a bounded number of times while work still runs in parallel.
         if(!is_initial_listing || !on_progress)
         {
-            run_parallel(entries.begin(), entries.end());
+            run_entry_batch(entries.begin(), entries.end());
             return;
         }
 
@@ -222,7 +315,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
             const auto chunk_end =
                 entries.begin() + static_cast<std::ptrdiff_t>(std::min(offset + progress_stride, entries.size()));
 
-            run_parallel(chunk_begin, chunk_end);
+            run_entry_batch(chunk_begin, chunk_end);
 
             completed = std::min(offset + progress_stride, entries.size());
             on_progress(completed, entries.size(), extract_entry_extension(std::prev(chunk_end)->path));

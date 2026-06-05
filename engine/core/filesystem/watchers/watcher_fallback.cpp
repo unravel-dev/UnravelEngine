@@ -117,6 +117,11 @@ public:
         paused_ = false;
     }
 
+    void watch_removals(bool value)
+    {
+        watch_removals_ = value;
+    }
+
     //-----------------------------------------------------------------------------
     //  Name : watch ()
     /// <summary>
@@ -161,7 +166,10 @@ public:
         }
         else
         {
-            process_modifications(entries_, changes);
+            //if(watch_removals_)
+            {
+                process_modifications(entries_, changes);
+            }
             if(!changes.entries.empty())
             {
                 on_changes.emit(changes.entries);
@@ -410,6 +418,8 @@ private:
 
     std::atomic<bool> paused_ = {false};
 
+    std::atomic<bool> watch_removals_ = {true};
+
     observed_changes buffered_changes_;
 };
 
@@ -449,6 +459,15 @@ public:
             listener_->on_changes.disconnect(slot_key_);
         }
     }
+
+    void watch_removals(bool value)
+    {
+        if(listener_)
+        {
+            listener_->watch_removals(value);
+        }
+    }
+    
     
     void pause()
     {
@@ -724,7 +743,9 @@ auto watcher_fallback::watch_impl(const fs::path& path,
                               bool initial_list,
                               watcher::clock_t::duration poll_interval,
                               watcher::notify_callback callback,
-                              const std::string& watcher_name) -> std::uint64_t
+                              const std::string& watcher_name,
+                              bool watch_removals
+                            ) -> std::uint64_t
 {
     if(!callback)
     {
@@ -748,6 +769,8 @@ auto watcher_fallback::watch_impl(const fs::path& path,
                 if(existing_listener->get_recursive() && fs::is_any_parent_path(watched_path, abs_path))
                 {
                     listener = existing_listener;
+                    listener->watch_removals(watch_removals);
+
                     break;
                 }
             }
@@ -765,6 +788,7 @@ auto watcher_fallback::watch_impl(const fs::path& path,
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_[key] = impl;
     }
+    impl->watch_removals(watch_removals);
     cv_.notify_all();
     return key;
 }
@@ -804,5 +828,13 @@ void watcher_fallback::unwatch_all_impl()
     cv_.notify_all();
 }
 
-
+void watcher_fallback::watch_removals(bool value)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    for(auto& kvp : directory_listeners_)
+    {
+        auto& l = kvp.second;
+        l->watch_removals(value);
+    }
+}
 } // namespace fs

@@ -7,6 +7,34 @@ namespace fs
 namespace detail
 {
 
+bool is_case_insensitive()
+{
+    static bool is_insensitive = []()
+    {
+        auto timestamp = fs::file_time_type::clock::now();
+        auto temp_path = fs::temp_directory_path();
+
+        auto salt = std::to_string(int64_t(timestamp.time_since_epoch().count())) + std::to_string(std::rand());
+        std::string temp_name_lower = "_case_sensitivity_test_" + salt + ".txt";
+        std::string temp_name_upper = "_CASE_SENSITIVITY_TEST_" + salt + ".txt";
+
+        auto file_lower = temp_path / temp_name_lower;
+        auto file_upper = temp_path / temp_name_upper;
+        {
+            std::ofstream os;
+            os.open(file_lower);
+        }
+
+        fs::error_code ec;
+        bool result = fs::equivalent(file_upper, file_lower, ec);
+        fs::remove(file_lower, ec);
+
+        return result;
+    }();
+
+    return is_insensitive;
+}
+
 namespace
 {
 bool is_parent_path(const path& parent, const path& child)
@@ -122,33 +150,6 @@ auto read_stream_into_container(std::basic_istream<CharT, Traits>& in, Container
 
 } // namespace detail
 
-bool is_case_insensitive()
-{
-    static bool is_insensitive = []()
-    {
-        auto timestamp = fs::file_time_type::clock::now();
-        auto temp_path = fs::temp_directory_path();
-
-        auto salt = std::to_string(int64_t(timestamp.time_since_epoch().count())) + std::to_string(std::rand());
-        std::string temp_name_lower = "_case_sensitivity_test_" + salt + ".txt";
-        std::string temp_name_upper = "_CASE_SENSITIVITY_TEST_" + salt + ".txt";
-
-        auto file_lower = temp_path / temp_name_lower;
-        auto file_upper = temp_path / temp_name_upper;
-        {
-            std::ofstream os;
-            os.open(file_lower);
-        }
-
-        fs::error_code ec;
-        bool result = fs::equivalent(file_upper, file_lower, ec);
-        fs::remove(file_lower, ec);
-
-        return result;
-    }();
-
-    return is_insensitive;
-}
 
 byte_array_t read_stream(std::istream& stream)
 {

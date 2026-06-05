@@ -54,6 +54,14 @@ auto checking_dependencies_job_name() -> std::string
 }
 
 
+template<typename T>
+auto checking_for_recompilation_job_name() -> std::string
+{
+    return fmt::format("Checking for recompilation of {}", ex::get_type<T>());
+}
+
+
+
 auto get_absolute_source_path(const fs::path& source_file_path) -> fs::path
 {
     auto absolute_source = fs::resolve_protocol(
@@ -96,7 +104,6 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
 
     std::set<fs::path> deps;
     asset_compiler::resolve_dependencies<T>(get_absolute_source_path(source_file_path), deps);
-
     if(asset_compiler::is_source_file_changed(source_file_path, manifest, deps))
     {
         APPLOG_WARNING("Source file changed for {}, recompilation needed", compiled_output_path.string());
@@ -210,7 +217,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         {
             auto key = get_asset_key(entry.path);
 
-            APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "{}", fs::to_string(entry));
+            // APPLOG_TRACE_LOC(loc.file_name(), int(loc.line()), loc.function_name(), "{}", fs::to_string(entry));
 
             if(entry.type == fs::file_type::regular)
             {
@@ -306,7 +313,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "", false);
 }
 
 template<typename T>
@@ -326,7 +333,7 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
 
         for(const auto& entry : entries)
         {
-            APPLOG_TRACE("{}", fs::to_string(entry));
+            // APPLOG_TRACE("{}", fs::to_string(entry));
 
             if(entry.type == fs::file_type::regular)
             {
@@ -358,7 +365,7 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "", false);
 }
 
 template<typename T>
@@ -723,7 +730,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
         APPLOG_TRACE("Waiting for jobs to complete... (this may take a while)");
         hpp::source_location loc = hpp::source_location::current();
         ts.pool->wait_all_polling(tpp::priority::category::normal,
-                          [loc, &on_progress](const tpp::thread_pool::progress_info& info)
+                          [&on_progress](const tpp::thread_pool::progress_info& info)
                           {
                               if(on_progress)
                               {
@@ -800,6 +807,8 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                                  bool wait,
                                  const on_wait_progress_t& on_progress)
 {
+    // fs::watcher::watch_removals(false);
+
     auto& w = watched_protocols_[protocol];
 
     auto data_protocol = ex::get_data_directory_no_slash(protocol);
@@ -821,6 +830,8 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                        fs::resolve_protocol(cache_protocol),
                        wait,
                        on_progress);
+
+    // fs::watcher::watch_removals(true);
 }
 
 void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protocol)

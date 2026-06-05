@@ -46,7 +46,8 @@ public:
                     bool initial_list,
                     watcher::clock_t::duration poll_interval,
                     watcher::notify_callback callback,
-                    const std::string& watcher_name) -> std::uint64_t;
+                    const std::string& watcher_name,
+                    bool watch_removals) -> std::uint64_t;
 
     void unwatch_impl(std::uint64_t key);
 
@@ -54,6 +55,8 @@ public:
 
     void pause();
     void resume();
+
+    void watch_removals(bool value);
 
     void wait_all(watcher::clock_t::duration duration);
 
