@@ -3375,6 +3375,47 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
                 has_roughness ? "R" : "r");
 }
 
+auto is_material_two_sided(const aiMaterial* material) -> bool
+{
+    if(!material)
+    {
+        return false;
+    }
+
+    // Assimp stores TWOSIDED as bool/int depending on the importer; the bool
+    // Get() specialization handles all of those. ai_real does not.
+    bool two_sided = false;
+    if(material->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS && two_sided)
+    {
+        return true;
+    }
+
+    // FBX (and some Unity exports) encode double-sided in the material name but
+    // never set AI_MATKEY_TWOSIDED — Assimp's FBX converter ignores Model::Culling.
+    aiString mat_name{};
+    if(material->Get(AI_MATKEY_NAME, mat_name) == AI_SUCCESS && mat_name.length > 0)
+    {
+        const std::string name = string_utils::to_lower(mat_name.C_Str());
+        static constexpr std::array<const char*, 6> markers = {
+            "doublesided",
+            "double-sided",
+            "double sided",
+            "twosided",
+            "two-sided",
+            "two sided",
+        };
+        for(const char* marker : markers)
+        {
+            if(name.find(marker) != std::string::npos)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void process_material(asset_manager& am,
                       const fs::path& filename,
                       const fs::path& output_dir,
@@ -3663,13 +3704,9 @@ void process_material(asset_manager& am,
         }
     };
 
-    if(binding)
+    if(binding && is_material_two_sided(material))
     {
-        ai_real two_sided{};
-        if(material->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS && two_sided != 0.0)
-        {
-            mat.set_cull_type(cull_type::none);
-        }
+        mat.set_cull_type(cull_type::none);
     }
 
     // Spec-gloss workflows: when both the diffuse and specular textures are present we
