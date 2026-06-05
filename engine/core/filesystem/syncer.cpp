@@ -196,8 +196,8 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
                     for(const auto& synced_entry : synced_entries)
                     {
-                        directory_cache.ensure_exists(synced_entry);
-                        // ensure_directory_exists(synced_entry);
+                        // directory_cache.ensure_exists(synced_entry);
+                        ensure_directory_exists(synced_entry);
                     }
 
                     auto callback = this->get_on_created_callback(entry_extension);
@@ -262,33 +262,33 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
         // watcher events (e.g. create then rename in the same folder) stay ordered.
         const auto run_entry_batch = [&](auto begin, auto end)
         {
-            std::unordered_map<std::string, std::vector<const fs::watcher::entry*>> groups;
+            // std::unordered_map<std::string, std::vector<const fs::watcher::entry*>> groups;
 
-            for(auto it = begin; it != end; ++it)
-            {
-                const std::string key = entry_serialization_key(watch_root, *it);
-                groups[key].push_back(&(*it));
-            }
+            // for(auto it = begin; it != end; ++it)
+            // {
+            //     const std::string key = entry_serialization_key(watch_root, *it);
+            //     groups[key].push_back(&(*it));
+            // }
 
-            std::vector<std::vector<const fs::watcher::entry*>> group_list;
-            group_list.reserve(groups.size());
-            for(auto& group : groups)
-            {
-                group_list.push_back(std::move(group.second));
-            }
+            // std::vector<std::vector<const fs::watcher::entry*>> group_list;
+            // group_list.reserve(groups.size());
+            // for(auto& group : groups)
+            // {
+            //     group_list.push_back(std::move(group.second));
+            // }
 
-            const auto process_group = [&](const std::vector<const fs::watcher::entry*>& group_entries)
-            {
-                for(const fs::watcher::entry* entry : group_entries)
-                {
-                    process_entry(*entry);
-                }
-            };
+            // const auto process_group = [&](const std::vector<const fs::watcher::entry*>& group_entries)
+            // {
+            //     for(const fs::watcher::entry* entry : group_entries)
+            //     {
+            //         process_entry(*entry);
+            //     }
+            // };
 
-            std::for_each(poolstl::par, group_list.begin(), group_list.end(), process_group);
+            // std::for_each(poolstl::par, group_list.begin(), group_list.end(), process_group);
 
-            // std::for_each(//poolstl::par, 
-            //         begin, end, process_entry);
+            std::for_each(//poolstl::par, 
+                    begin, end, process_entry);
         };
 
         if(entries.empty())
@@ -298,28 +298,28 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
 
         // Progress must run on the watcher thread (not pool workers). Batch entries so
         // on_progress fires a bounded number of times while work still runs in parallel.
-        if(!is_initial_listing || !on_progress)
-        {
+        // if(!is_initial_listing || !on_progress)
+        // {
             run_entry_batch(entries.begin(), entries.end());
-            return;
-        }
+        //     return;
+        // }
 
-        constexpr size_t k_max_progress_updates = 16;
-        const size_t progress_stride =
-            std::max<size_t>(1, (entries.size() + k_max_progress_updates - 1) / k_max_progress_updates);
+        // constexpr size_t k_max_progress_updates = 16;
+        // const size_t progress_stride =
+        //     std::max<size_t>(1, (entries.size() + k_max_progress_updates - 1) / k_max_progress_updates);
 
-        size_t completed = 0;
-        for(size_t offset = 0; offset < entries.size(); offset += progress_stride)
-        {
-            const auto chunk_begin = entries.begin() + static_cast<std::ptrdiff_t>(offset);
-            const auto chunk_end =
-                entries.begin() + static_cast<std::ptrdiff_t>(std::min(offset + progress_stride, entries.size()));
+        // size_t completed = 0;
+        // for(size_t offset = 0; offset < entries.size(); offset += progress_stride)
+        // {
+        //     const auto chunk_begin = entries.begin() + static_cast<std::ptrdiff_t>(offset);
+        //     const auto chunk_end =
+        //         entries.begin() + static_cast<std::ptrdiff_t>(std::min(offset + progress_stride, entries.size()));
 
-            run_entry_batch(chunk_begin, chunk_end);
+        //     run_entry_batch(chunk_begin, chunk_end);
 
-            completed = std::min(offset + progress_stride, entries.size());
-            on_progress(completed, entries.size(), extract_entry_extension(std::prev(chunk_end)->path));
-        }
+        //     completed = std::min(offset + progress_stride, entries.size());
+        //     on_progress(completed, entries.size(), extract_entry_extension(std::prev(chunk_end)->path));
+        // }
     };
     using namespace std::literals;
     const fs::path watch_dir = get_watch_path();
