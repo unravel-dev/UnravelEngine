@@ -614,10 +614,12 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
             }
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 
-            asset_writer::atomic_write_file(synced_path.string(), [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), meta);
-            }, err);
+            // asset_writer::atomic_write_file(synced_path.string(), [&](const fs::path& temp) -> void
+            // {
+            //     save_to_file(temp.string(), meta);
+            // }, err);
+
+            save_to_file(synced_path.string(), meta);
         }
     };
 
@@ -811,6 +813,7 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                                  bool wait,
                                  const on_wait_progress_t& on_progress)
 {
+    auto start_time = std::chrono::steady_clock::now();
     auto& w = watched_protocols_[protocol];
 
     auto data_protocol = ex::get_data_directory_no_slash(protocol);
@@ -833,6 +836,9 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                        wait,
                        on_progress);
 
+    auto end_time = std::chrono::steady_clock::now();
+    auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    APPLOG_TRACE("Asset watcher {} took {}ms to watch assets", protocol, elapsed_time.count());
 }
 
 void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protocol)
