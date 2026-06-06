@@ -9,6 +9,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 
 #include <engine/ecs/ecs.h>
+#include <glm/gtc/epsilon.hpp>
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
 #include <engine/threading/threader.h>
@@ -22,6 +23,30 @@ namespace unravel
 
 namespace
 {
+auto remap_root_motion_translation(const math::vec3& delta, const math::quat& correction) noexcept -> math::vec3
+{
+    if(math::all(math::epsilonEqual(correction,
+                                     math::identity<math::quat>(),
+                                     math::epsilon<float>())))
+    {
+        return delta;
+    }
+
+    return correction * delta;
+}
+
+auto remap_root_motion_rotation(const math::quat& delta, const math::quat& correction) noexcept -> math::quat
+{
+    if(math::all(math::epsilonEqual(correction,
+                                     math::identity<math::quat>(),
+                                     math::epsilon<float>())))
+    {
+        return delta;
+    }
+
+    return correction * delta * glm::conjugate(correction);
+}
+
 void on_play_begin_impl(animation_component& comp)
 {
     if(comp.get_autoplay())
@@ -168,6 +193,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
 
                           bool apply_root_motion = animation_comp.get_apply_root_motion();
                           auto retargeting_mode = animation_comp.get_retargeting_mode();
+                          const auto facing_correction = model_comp.get_facing_adjustment_rotation();
 
                           player.update_poses(
                               model_comp.get_bind_pose(),
@@ -220,8 +246,9 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                                                                 motion_result.bone_position_weights);
                                           armature_transform_comp.set_position_local(result_positon_local);
 
-                                          math::vec3 delta_translation_logical =
-                                              motion_result.root_transform_delta.get_translation();
+                                          math::vec3 delta_translation_logical = remap_root_motion_translation(
+                                              motion_result.root_transform_delta.get_translation(),
+                                              facing_correction);
 
                                           // // Apply scaling if needed (for example, if BoneRoot’s scale differs
                                           // significantly)
@@ -262,8 +289,9 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                           armature_transform_comp.set_rotation_local(result_rotation_local);
 
                                           // --- Rotation ---
-                                          math::quat delta_rotation_logical =
-                                              motion_result.root_transform_delta.get_rotation();
+                                          math::quat delta_rotation_logical = remap_root_motion_rotation(
+                                              motion_result.root_transform_delta.get_rotation(),
+                                              facing_correction);
 
                                           // Optionally blend this delta toward identity:
                                           auto result_rotate_local = math::slerp(math::identity<math::quat>(),

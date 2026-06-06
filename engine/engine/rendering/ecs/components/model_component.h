@@ -148,6 +148,16 @@ public:
     auto get_bind_pose() const -> const animation_pose&;
 
     /**
+     * @brief Armature root entity (first node of the imported skeleton hierarchy).
+     */
+    auto get_armature_root_entity() const -> entt::handle;
+
+    /**
+     * @brief Local rotation of the armature root (used for root motion / IK remapping).
+     */
+    auto get_facing_adjustment_rotation() const -> math::quat;
+
+    /**
      * @brief Gets the per-view LOD data for a specific camera/view.
      * Creates a new entry if this is the first access from this view.
      * @param view_id Unique identifier for the view (typically camera pointer as uintptr_t).

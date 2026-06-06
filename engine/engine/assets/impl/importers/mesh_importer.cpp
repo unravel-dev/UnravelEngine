@@ -778,6 +778,25 @@ auto try_accumulate_animation_bounding_boxes(const animation_bounding_box_map& b
     return found;
 }
 
+void apply_import_facing_correction_to_load_data(mesh::load_data& load_data)
+{
+    if(!load_data.root_node)
+    {
+        return;
+    }
+
+    load_data.root_node->local_transform.rotate(math::radians(math::vec3{0.0f, 180.0f, 0.0f}));
+
+    if(!load_data.bbox.is_populated())
+    {
+        return;
+    }
+
+    math::transform correction;
+    correction.set_rotation(glm::angleAxis(math::pi<float>(), math::vec3(0.0f, 1.0f, 0.0f)));
+    load_data.bbox = math::bbox::mul(load_data.bbox, correction);
+}
+
 void accumulate_bounds_from_armature(const mesh::load_data& load_data, math::bbox& out)
 {
     if(!load_data.root_node)
@@ -4745,6 +4764,8 @@ void process_imported_scene(asset_manager& am,
         accumulate_bounds_from_armature(load_data, load_data.bbox);
     }
 
+    apply_import_facing_correction_to_load_data(load_data);
+
     APPLOG_TRACE("Mesh Importer: bbox min {}, max {}", load_data.bbox.min, load_data.bbox.max);
 }
 
@@ -4922,7 +4943,7 @@ auto load_mesh_data_from_file(asset_manager& am,
 
     // clang-format off
 
-    uint32_t flags = aiProcess_FlipUVs                      |
+    uint32_t flags = aiProcess_ConvertToLeftHanded                      |
                      aiProcess_RemoveComponent              |
                      aiProcess_Triangulate                  |
                      aiProcess_CalcTangentSpace             |

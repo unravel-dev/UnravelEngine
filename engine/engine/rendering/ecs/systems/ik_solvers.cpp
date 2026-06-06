@@ -5,11 +5,73 @@
 #include <hpp/small_vector.hpp>
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/epsilon.hpp>
 
 namespace unravel
 {
 template<typename T>
 using ik_vector = hpp::small_vector<T>;
+
+namespace
+{
+auto has_facing_correction(const math::quat& correction) -> bool
+{
+    return !math::all(math::epsilonEqual(correction,
+                                         math::identity<math::quat>(),
+                                         math::epsilon<float>()));
+}
+
+/// Same similarity transform as root-motion rotation remapping: clip/bind-space
+/// delta -> entity/world-space delta under the import facing correction.
+auto remap_ik_rotation_delta(const math::quat& delta, const math::quat& correction) -> math::quat
+{
+    if(!has_facing_correction(correction))
+    {
+        return delta;
+    }
+
+    return math::normalize(correction * delta * glm::conjugate(correction));
+}
+
+auto rotation_between_directions(const math::vec3& from,
+                                 const math::vec3& to,
+                                 const math::quat& correction) -> math::quat
+{
+    math::vec3 from_dir = from;
+    math::vec3 to_dir = to;
+
+    if(has_facing_correction(correction))
+    {
+        const math::quat inv_correction = glm::inverse(correction);
+        from_dir = inv_correction * from_dir;
+        to_dir = inv_correction * to_dir;
+    }
+
+    return remap_ik_rotation_delta(math::from_to_rotation(from_dir, to_dir), correction);
+}
+} // namespace
+
+auto find_facing_adjustment_rotation(entt::handle entity) -> math::quat
+{
+    entt::handle current = entity;
+    while(current)
+    {
+        if(auto* model = current.try_get<model_component>())
+        {
+            return model->get_facing_adjustment_rotation();
+        }
+
+        auto* trans = current.try_get<transform_component>();
+        if(!trans)
+        {
+            break;
+        }
+
+        current = trans->get_parent();
+    }
+
+    return math::identity<math::quat>();
+}
 
 auto bones_collect(entt::handle end_effector, size_t num_bones_in_chain) -> ik_vector<transform_component*>
 {
@@ -134,7 +196,8 @@ void apply_pole_constraint(ik_vector<math::vec3>& positions, const math::vec3& p
 // compose it with the bone's existing local rotation.
 // -----------------------------------------------------------------------------
 void update_rotations_from_positions(ik_vector<transform_component*>& chain,
-                                     const ik_vector<math::vec3>& positions)
+                                     const ik_vector<math::vec3>& positions,
+                                     const math::quat& facing_correction)
 {
     const size_t n = chain.size();
     for(size_t i = 0; i + 1 < n; ++i)
@@ -161,15 +224,8 @@ void update_rotations_from_positions(ik_vector<transform_component*>& chain,
             continue;
         }
 
-        math::vec3 axis = math::cross(current_dir, desired_dir);
-        if(math::length(axis) < 1e-5f)
-        {
-            continue;
-        }
-        axis = math::normalize(axis);
-
-        const float angle = math::acos(dot);
-        const math::quat rotation_delta = math::angleAxis(angle, axis);
+        const math::quat rotation_delta =
+            rotation_between_directions(current_dir, desired_dir, facing_correction);
 
         auto parent = bone->get_parent();
         transform_component* parent_trans = parent ? parent.try_get<transform_component>() : nullptr;
@@ -185,6 +241,7 @@ void update_rotations_from_positions(ik_vector<transform_component*>& chain,
 auto ccdik_advanced(ik_vector<transform_component*>& chain,
                     math::vec3 target,
                     const math::vec3& pole,
+                    const math::quat& facing_correction,
                     float threshold = 0.001f,
                     int maxIterations = 10,
                     float damping_error_threshold = 0.5f,
@@ -264,10 +321,9 @@ auto ccdik_advanced(ik_vector<transform_component*>& chain,
             float damped_angle = angle * damping_factor;
             // ---------------------------
 
-            // Compute the rotation quaternion (in global space) for the damped angle.
-            math::quat rotation_delta = math::angleAxis(damped_angle, rotation_axis);
+            math::quat rotation_delta =
+                remap_ik_rotation_delta(math::angleAxis(damped_angle, rotation_axis), facing_correction);
 
-            // Convert the global rotation to the bone's local space.
             auto parent = bone->get_parent();
             transform_component* parent_trans = parent ? parent.try_get<transform_component>() : nullptr;
             math::quat parent_global_rot =
@@ -310,7 +366,7 @@ auto ccdik_advanced(ik_vector<transform_component*>& chain,
             positions[i] = chain[i]->get_position_global();
         }
         apply_pole_constraint(positions, pole);
-        update_rotations_from_positions(chain, positions);
+        update_rotations_from_positions(chain, positions, facing_correction);
     }
 
     const float final_error = math::length(target - get_end_position(end_effector));
@@ -331,6 +387,7 @@ auto ccdik_advanced(ik_vector<transform_component*>& chain,
 auto fabrik(ik_vector<transform_component*>& chain,
             const math::vec3& target,
             const math::vec3& pole,
+            const math::quat& facing_correction,
             float threshold = 0.001f,
             int max_iterations = 10) -> bool
 {
@@ -405,10 +462,7 @@ auto fabrik(ik_vector<transform_component*>& chain,
     // Done after position convergence so the end effector stays at the target.
     apply_pole_constraint(positions, pole);
 
-    // STEP 4: Derive bone rotations from the final joint positions.
-    update_rotations_from_positions(chain, positions);
-
-    // (Optionally update the end effector orientation if desired.)
+    update_rotations_from_positions(chain, positions, facing_correction);
 
     return true;
 }
@@ -433,6 +487,7 @@ auto solve_two_bone_ik(transform_component* start_joint,
                        transform_component* end_joint,
                        const math::vec3& target,
                        const math::vec3& pole,
+                       const math::quat& facing_correction,
                        float weight,
                        float soften) -> bool
 {
@@ -534,7 +589,7 @@ auto solve_two_bone_ik(transform_component* start_joint,
     positions.push_back(b_new);
     positions.push_back(c_new);
 
-    update_rotations_from_positions(chain, positions);
+    update_rotations_from_positions(chain, positions, facing_correction);
 
     if(weight < 1.f)
     {
@@ -560,7 +615,8 @@ auto ik_set_position_ccd(entt::handle end_effector,
                          float threshold) -> bool
 {
     auto bones = bones_collect(end_effector, num_bones_in_chain);
-    return ccdik_advanced(bones, target, pole, threshold, max_iterations);
+    const auto facing_correction = find_facing_adjustment_rotation(end_effector);
+    return ccdik_advanced(bones, target, pole, facing_correction, threshold, max_iterations);
 }
 
 auto ik_set_position_fabrik(entt::handle end_effector,
@@ -571,7 +627,8 @@ auto ik_set_position_fabrik(entt::handle end_effector,
                             float threshold) -> bool
 {
     auto bones = bones_collect(end_effector, num_bones_in_chain);
-    return fabrik(bones, target, pole, threshold, max_iterations);
+    const auto facing_correction = find_facing_adjustment_rotation(end_effector);
+    return fabrik(bones, target, pole, facing_correction, threshold, max_iterations);
 }
 
 auto ik_set_position_two_bone(entt::handle end_effector,
@@ -584,12 +641,20 @@ auto ik_set_position_two_bone(entt::handle end_effector,
     // could not be built (e.g. the end effector has fewer than two parents) we
     // fall back to FABRIK, which at least still honors the pole.
     auto bones = bones_collect(end_effector, 2);
+    const auto facing_correction = find_facing_adjustment_rotation(end_effector);
     if(bones.size() == 3)
     {
-        return solve_two_bone_ik(bones[0], bones[1], bones[2], target, pole, weight, soften);
+        return solve_two_bone_ik(bones[0],
+                                 bones[1],
+                                 bones[2],
+                                 target,
+                                 pole,
+                                 facing_correction,
+                                 weight,
+                                 soften);
     }
 
-    return fabrik(bones, target, pole, 0.001f, 10);
+    return fabrik(bones, target, pole, facing_correction, 0.001f, 10);
 }
 
 auto ik_look_at_position(entt::handle end_effector, const math::vec3& target, float weight) -> bool
@@ -598,11 +663,18 @@ auto ik_look_at_position(entt::handle end_effector, const math::vec3& target, fl
 
     auto bone = bones.front();
 
+    const auto facing_correction = find_facing_adjustment_rotation(end_effector);
+
     // 1) compute the desired “look at” rotation
     math::vec3 eye = bone->get_position_global();
     math::transform lookM = math::lookAt(eye, target, bone->get_y_axis_global());
     lookM = math::inverse(lookM);
     math::quat desired = lookM.get_rotation();
+
+    if(has_facing_correction(facing_correction))
+    {
+        desired = math::normalize(desired * glm::inverse(facing_correction));
+    }
 
     // 2) fetch current rotation
     math::quat current = bone->get_rotation_global();
@@ -615,5 +687,10 @@ auto ik_look_at_position(entt::handle end_effector, const math::vec3& target, fl
 
     // bone->look_at(target, bone->get_y_axis_global());
     return true;
+}
+
+auto ik_get_facing_adjustment_rotation(entt::handle end_effector) -> math::quat
+{
+    return find_facing_adjustment_rotation(end_effector);
 }
 } // namespace unravel

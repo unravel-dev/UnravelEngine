@@ -40,4 +40,9 @@ auto ik_look_at_position(entt::handle end_effector,
                          const math::vec3& target,
                          float weight = 1.0f) -> bool;
 
+/**
+ * @brief Returns the armature root local rotation for the model owning this bone.
+ */
+auto ik_get_facing_adjustment_rotation(entt::handle end_effector) -> math::quat;
+
 } // namespace unravel

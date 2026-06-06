@@ -2,6 +2,7 @@
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/mesh.h>
 
 
 namespace unravel
@@ -70,7 +71,7 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
         // immediately add this node to the reference pose.
         animation_pose::node ref_node;
         ref_node.desc.index = node->index;          // Use the node's index
-        ref_node.transform = node->local_transform; // Save its local (bind) transform
+        ref_node.transform = node->local_transform;
         ref_pose.nodes.push_back(ref_node);
     }
 
@@ -107,6 +108,7 @@ auto process_armature(const mesh& render_mesh,
     }
 
     const auto& skin_data = render_mesh.get_skin_bind_data();
+
     process_node(root, skin_data, parent, nodes, ref_pose);
 
     return true;
@@ -350,6 +352,52 @@ auto model_component::is_skinned() const -> bool
 auto model_component::get_bind_pose() const -> const animation_pose&
 {
     return bind_pose_;
+}
+
+auto model_component::get_armature_root_entity() const -> entt::handle
+{
+    auto lod = model_.get_lod(0);
+    if(!lod)
+    {
+        return {};
+    }
+
+    const auto mesh = lod.get();
+    const auto& armature = mesh->get_armature();
+    if(!armature)
+    {
+        return {};
+    }
+
+    for(const auto& entity : armature_entities_)
+    {
+        if(entity && entity.get<tag_component>().name == armature->name)
+        {
+            return entity;
+        }
+    }
+
+    if(!armature_entities_.empty())
+    {
+        return armature_entities_.front();
+    }
+
+    return {};
+}
+
+auto model_component::get_facing_adjustment_rotation() const -> math::quat
+{
+    if(auto root = get_armature_root_entity())
+    {
+        return root.get<transform_component>().get_rotation_local();
+    }
+
+    if(!bind_pose_.nodes.empty())
+    {
+        return bind_pose_.nodes.front().transform.get_rotation();
+    }
+
+    return math::identity<math::quat>();
 }
 
 void model_component::on_create_component(entt::registry& r, entt::entity e)
