@@ -381,7 +381,9 @@ set(CPACK_PACKAGE_DESCRIPTION "UnravelEngine is a great tool for developing game
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "UnravelEngine-${CPACK_PACKAGE_VERSION}")
 set(CPACK_THREADS 0)
 if(WIN32)
-    set(CPACK_GENERATOR "ZIP;NSIS")
+    #set(CPACK_GENERATOR "ZIP;NSIS")
+    set(CPACK_GENERATOR "ZIP")
+
     set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}\\\\rc\\\\UnravelEngine.ico")
     set(CPACK_NSIS_INSTALLED_ICON_NAME "${CMAKE_SOURCE_DIR}\\\\rc\\\\UnravelEngine.ico")
     set(CPACK_WIX_PRODUCT_ICON "${CMAKE_SOURCE_DIR}/rc/UnravelEngine.ico")
@@ -405,7 +407,8 @@ endif()
 
 # For Linux DEB or RPM:
 if(UNIX AND NOT APPLE)
-    set(CPACK_GENERATOR "ZIP;DEB;")
+    #set(CPACK_GENERATOR "ZIP;DEB;")
+    set(CPACK_GENERATOR "ZIP")
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/unravel-engine")
 endif()
 # Include CPack
