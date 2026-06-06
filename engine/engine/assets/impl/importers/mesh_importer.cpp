@@ -27,6 +27,8 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem/filesystem.h>
+#include <functional>
+#include <optional>
 #include <numeric>
 #include <queue>
 #include <string_view>
@@ -550,6 +552,38 @@ auto calculate_bone_transform(const aiNode* node,
 }
 
 using animation_bounding_box_map = std::unordered_map<const aiAnimation*, std::vector<math::bbox>>;
+using mesh_attaching_nodes_map = std::unordered_map<unsigned int, std::vector<const aiNode*>>;
+
+struct affected_mesh_entry
+{
+    const aiMesh* mesh{};
+    std::vector<const aiNode*> attaching_nodes;
+};
+
+auto build_mesh_attaching_nodes_map(const aiScene* scene) -> mesh_attaching_nodes_map
+{
+    mesh_attaching_nodes_map map;
+    if(!scene || !scene->mRootNode)
+    {
+        return map;
+    }
+
+    const std::function<void(const aiNode*)> visit = [&](const aiNode* node)
+    {
+        for(unsigned int i = 0; i < node->mNumMeshes; ++i)
+        {
+            map[node->mMeshes[i]].push_back(node);
+        }
+
+        for(unsigned int i = 0; i < node->mNumChildren; ++i)
+        {
+            visit(node->mChildren[i]);
+        }
+    };
+
+    visit(scene->mRootNode);
+    return map;
+}
 
 auto transform_point(const aiMatrix4x4& transform, const aiVector3D& point) -> math::vec3
 {
@@ -560,38 +594,53 @@ auto transform_point(const aiMatrix4x4& transform, const aiVector3D& point) -> m
 auto get_transformed_vertices(const aiMesh* mesh,
                               const aiScene* scene,
                               float time_in_seconds,
-                              const aiAnimation* animation) -> std::vector<math::vec3>
+                              const aiAnimation* animation,
+                              const std::vector<const aiNode*>& attaching_nodes) -> std::vector<math::vec3>
 {
-    std::vector<math::vec3> transformed_vertices(mesh->mNumVertices, math::vec3(0.0f));
+    if(mesh->mNumBones > 0)
+    {
+        std::vector<math::vec3> transformed_vertices(mesh->mNumVertices, math::vec3(0.0f));
 
-    // Iterate over bones in the mesh using parallel execution
-    std::for_each(
-        //poolstl::par,//std::execution::par,
-        mesh->mBones,
-        mesh->mBones + mesh->mNumBones,
-        [&](const aiBone* bone)
+        std::for_each(mesh->mBones,
+                      mesh->mBones + mesh->mNumBones,
+                      [&](const aiBone* bone)
+                      {
+                          const aiMatrix4x4 bone_offset = bone->mOffsetMatrix;
+                          const aiMatrix4x4 bone_transform = calculate_bone_transform(scene->mRootNode,
+                                                                                      bone->mName,
+                                                                                      animation,
+                                                                                      time_in_seconds,
+                                                                                      aiMatrix4x4());
+
+                          std::for_each(bone->mWeights,
+                                        bone->mWeights + bone->mNumWeights,
+                                        [&](const aiVertexWeight& weight)
+                                        {
+                                            const unsigned int vertex_id = weight.mVertexId;
+                                            const float weight_value = weight.mWeight;
+                                            const aiVector3D position = mesh->mVertices[vertex_id];
+                                            const math::vec3 transformed_pos =
+                                                transform_point(bone_transform * bone_offset, position);
+                                            transformed_vertices[vertex_id] += transformed_pos * weight_value;
+                                        });
+                      });
+
+        return transformed_vertices;
+    }
+
+    std::vector<math::vec3> transformed_vertices;
+    transformed_vertices.reserve(mesh->mNumVertices * std::max<size_t>(1, attaching_nodes.size()));
+
+    for(const aiNode* node : attaching_nodes)
+    {
+        const aiMatrix4x4 node_transform =
+            calculate_bone_transform(scene->mRootNode, node->mName, animation, time_in_seconds, aiMatrix4x4());
+
+        for(unsigned int i = 0; i < mesh->mNumVertices; ++i)
         {
-            aiMatrix4x4 bone_offset = bone->mOffsetMatrix;
-
-            // Calculate or retrieve the cached bone transformation for this frame
-            aiMatrix4x4 bone_transform =
-                calculate_bone_transform(scene->mRootNode, bone->mName, animation, time_in_seconds, aiMatrix4x4());
-
-            // Apply the bone transformation to vertices influenced by this bone
-            std::for_each(bone->mWeights,
-                          bone->mWeights + bone->mNumWeights,
-                          [&](const aiVertexWeight& weight)
-                          {
-                              unsigned int vertex_id = weight.mVertexId;
-                              float weight_value = weight.mWeight;
-
-                              aiVector3D position = mesh->mVertices[vertex_id];
-                              math::vec3 transformed_pos = transform_point(bone_transform * bone_offset, position);
-
-                              // Accumulate the influence of this bone for each vertex
-                              transformed_vertices[vertex_id] += transformed_pos * weight_value;
-                          });
-        });
+            transformed_vertices.push_back(transform_point(node_transform, mesh->mVertices[i]));
+        }
+    }
 
     return transformed_vertices;
 }
@@ -648,41 +697,148 @@ auto get_affected_bones_and_children(const aiScene* scene, const aiAnimation* an
     return affected_bones;
 }
 
-// Function to check if a mesh is affected by the animation (directly or indirectly)
-auto is_mesh_affected_by_animation(const aiMesh* mesh, const std::unordered_set<std::string>& affected_bones) -> bool
+// Function to check if a mesh is affected by the animation (skinned bones or node-attached rigid meshes).
+auto is_mesh_affected_by_animation(unsigned int mesh_index,
+                                   const aiMesh* mesh,
+                                   const std::unordered_set<std::string>& affected_nodes,
+                                   const mesh_attaching_nodes_map& attaching_nodes) -> bool
 {
     for(unsigned int i = 0; i < mesh->mNumBones; ++i)
     {
-        if(affected_bones.find(mesh->mBones[i]->mName.C_Str()) != affected_bones.end())
+        if(affected_nodes.find(mesh->mBones[i]->mName.C_Str()) != affected_nodes.end())
         {
-            return true; // This mesh is influenced by at least one bone affected by the animation
+            return true;
         }
     }
-    return false; // No bones from this mesh are affected by the animation
+
+    const auto it = attaching_nodes.find(mesh_index);
+    if(it != attaching_nodes.end())
+    {
+        for(const aiNode* node : it->second)
+        {
+            if(affected_nodes.find(node->mName.C_Str()) != affected_nodes.end())
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 auto get_affected_meshes(const aiScene* scene,
-                         const aiAnimation* animation,
-                         const std::unordered_set<std::string>& affected_bones)
+                         const std::unordered_set<std::string>& affected_nodes,
+                         const mesh_attaching_nodes_map& attaching_nodes) -> std::vector<affected_mesh_entry>
 {
-    std::vector<const aiMesh*> affected_meshes;
+    std::vector<affected_mesh_entry> affected_meshes;
     for(unsigned int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index)
     {
         const aiMesh* mesh = scene->mMeshes[mesh_index];
-
-        // Skip the mesh if it is not affected by the animation
-        if(is_mesh_affected_by_animation(mesh, affected_bones))
+        if(!is_mesh_affected_by_animation(mesh_index, mesh, affected_nodes, attaching_nodes))
         {
-            affected_meshes.emplace_back(mesh);
+            continue;
         }
+
+        affected_mesh_entry entry;
+        entry.mesh = mesh;
+        const auto it = attaching_nodes.find(mesh_index);
+        if(it != attaching_nodes.end())
+        {
+            entry.attaching_nodes = it->second;
+        }
+        affected_meshes.emplace_back(std::move(entry));
     }
 
     return affected_meshes;
 }
 
+auto try_accumulate_animation_bounding_boxes(const animation_bounding_box_map& boxes, math::bbox& out) -> bool
+{
+    bool found = false;
+    for(const auto& kvp : boxes)
+    {
+        for(const auto& box : kvp.second)
+        {
+            if(!box.is_populated())
+            {
+                continue;
+            }
+
+            if(!found)
+            {
+                out = {};
+                found = true;
+            }
+
+            out.add_point(box.min);
+            out.add_point(box.max);
+        }
+    }
+
+    return found;
+}
+
+void accumulate_bounds_from_armature(const mesh::load_data& load_data, math::bbox& out)
+{
+    if(!load_data.root_node)
+    {
+        return;
+    }
+
+    const std::function<void(const mesh::armature_node&, const math::transform&)> visit =
+        [&](const mesh::armature_node& node, const math::transform& parent_transform)
+    {
+        const math::transform world_transform = parent_transform * node.local_transform;
+
+        for(uint32_t submesh_index : node.submeshes)
+        {
+            if(submesh_index >= load_data.submeshes.size())
+            {
+                continue;
+            }
+
+            const auto transformed_bbox =
+                math::bbox::mul(load_data.submeshes[submesh_index].bbox, world_transform);
+            out.add_point(transformed_bbox.min);
+            out.add_point(transformed_bbox.max);
+        }
+
+        for(const auto& child : node.children)
+        {
+            if(child)
+            {
+                visit(*child, world_transform);
+            }
+        }
+    };
+
+    visit(*load_data.root_node, math::transform::identity());
+}
+
+/// Evenly spaced animation samples used to expand import-time bounds (ticks, not seconds).
+constexpr unsigned int animation_bounds_sample_count = 5;
+
+auto build_animation_sample_times(float animation_duration_ticks) -> std::vector<float>
+{
+    std::vector<float> times;
+    times.reserve(animation_bounds_sample_count);
+
+    if(animation_duration_ticks <= 0.0f || animation_bounds_sample_count <= 1)
+    {
+        times.push_back(0.0f);
+        return times;
+    }
+
+    for(unsigned int i = 0; i < animation_bounds_sample_count; ++i)
+    {
+        times.push_back(animation_duration_ticks * float(i) / float(animation_bounds_sample_count - 1));
+    }
+
+    return times;
+}
+
 // Main function to compute bounding boxes for animations, skipping unaffected meshes
-auto compute_bounding_boxes_for_animations(const aiScene* scene, float sample_interval = 0.2f)
-    -> animation_bounding_box_map
+auto compute_bounding_boxes_for_animations(const aiScene* scene) -> animation_bounding_box_map
 {
     APPLOG_TRACE_PERF(std::chrono::seconds);
 
@@ -693,62 +849,46 @@ auto compute_bounding_boxes_for_animations(const aiScene* scene, float sample_in
         return animation_bounding_boxes;
     }
 
-    float total_steps = 0;
+    const auto attaching_nodes = build_mesh_attaching_nodes_map(scene);
+
     for(unsigned int anim_index = 0; anim_index < scene->mNumAnimations; ++anim_index)
     {
         const aiAnimation* animation = scene->mAnimations[anim_index];
+        auto& boxes = animation_bounding_boxes[animation];
 
-        animation_bounding_boxes[animation].clear();
+        const float animation_duration = float(animation->mDuration);
+        const auto sample_times = build_animation_sample_times(animation_duration);
+        boxes.reserve(sample_times.size());
 
-        float animation_duration = (float)animation->mDuration;
-        float ticks_per_second = (animation->mTicksPerSecond != 0.0f) ? (float)animation->mTicksPerSecond : 25.0f;
-        float steps = animation_duration / (sample_interval * ticks_per_second);
-        total_steps += steps;
-    }
+        const auto affected_nodes = get_affected_bones_and_children(scene, animation);
+        const auto affected_meshes = get_affected_meshes(scene, affected_nodes, attaching_nodes);
 
-    std::atomic<size_t> current_steps = 0;
-
-    std::for_each(
-        //poolstl::par,//std::execution::par,
-        scene->mAnimations,
-        scene->mAnimations + scene->mNumAnimations,
-        [&](const aiAnimation* animation)
+        for(const float time : sample_times)
         {
-            float animation_duration = (float)animation->mDuration;
-            float ticks_per_second = (animation->mTicksPerSecond != 0.0f) ? (float)animation->mTicksPerSecond : 25.0f;
-            float steps = animation_duration / (sample_interval * ticks_per_second);
+            math::bbox sample_bounds;
 
-            auto& boxes = animation_bounding_boxes[animation];
-            boxes.reserve(size_t(steps));
-
-            // Collect the bones affected by the animation (both direct and indirect)
-            auto affected_bones = get_affected_bones_and_children(scene, animation);
-            auto affected_meshes = get_affected_meshes(scene, animation, affected_bones);
-            // For each keyframe (or sample the animation at regular intervals)
-            // for(float time = 0.0f; time <= animation_duration; time += (sample_interval * ticks_per_second))
+            for(const auto& entry : affected_meshes)
             {
-                float time = 0.0f;
-                float percent = (float(current_steps) / total_steps) * 100.0f;
+                const auto transformed_vertices =
+                    get_transformed_vertices(entry.mesh, scene, time, animation, entry.attaching_nodes);
 
-                for(const auto& mesh : affected_meshes)
+                auto frame_bounding_box = calculate_bounding_box(transformed_vertices);
+                if(!frame_bounding_box.is_populated())
                 {
-                    // Get transformed vertices for this time/frame
-                    auto transformed_vertices = get_transformed_vertices(mesh, scene, time, animation);
-
-                    // Compute the bounding box for this frame
-                    auto frame_bounding_box = calculate_bounding_box(transformed_vertices);
-
-                    // Inflate the box by some margin to account for skipped frames
-                    frame_bounding_box.inflate(frame_bounding_box.get_extents() * 0.05f);
-
-                    // Store the bounding box (for later use)
-                    boxes.push_back(frame_bounding_box);
+                    continue;
                 }
 
-                // APPLOG_TRACE("Mesh Importer : Animation precompute bounding box progress {:.2f}%", percent);
-                current_steps++;
+                frame_bounding_box.inflate(frame_bounding_box.get_extents() * 0.05f);
+                sample_bounds.add_point(frame_bounding_box.min);
+                sample_bounds.add_point(frame_bounding_box.max);
             }
-        });
+
+            if(sample_bounds.is_populated())
+            {
+                boxes.push_back(sample_bounds);
+            }
+        }
+    }
 
     return animation_bounding_boxes;
 }
@@ -2917,19 +3057,46 @@ auto try_synchronous_spec_gloss_pair_mr(const fs::path& output_dir,
     return conv.mr_relative;
 }
 
-auto texture_file_exists(const fs::path& output_dir, const std::string& relative) -> bool
+auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> std::optional<fs::path>
 {
-    fs::error_code err;
     if(relative.empty())
     {
-        return false;
+        return std::nullopt;
     }
-    if(fs::exists(output_dir / relative, err))
+
+    relative = resolve_external_texture_path(output_dir, relative);
+
+    fs::error_code err;
+    fs::path absolute = relative.is_absolute() ? relative : (output_dir / relative);
+    absolute = fs::weakly_canonical(absolute, err);
+    if(err || !fs::exists(absolute, err))
     {
-        return true;
+        return std::nullopt;
     }
-    const fs::path resolved = resolve_external_texture_path(output_dir, fs::path(relative));
-    return fs::exists(output_dir / resolved, err);
+
+    return absolute;
+}
+
+auto texture_file_exists(const fs::path& output_dir, const std::string& relative) -> bool
+{
+    return resolve_texture_on_disk(output_dir, fs::path(relative)).has_value();
+}
+
+auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> std::optional<std::string>
+{
+    const auto absolute = resolve_texture_on_disk(output_dir, fs::path(relative));
+    if(!absolute)
+    {
+        return std::nullopt;
+    }
+
+    const fs::path key = fs::convert_to_protocol(*absolute);
+    if(!fs::has_known_protocol(key))
+    {
+        return std::nullopt;
+    }
+
+    return key.generic_string();
 }
 
 auto find_spec_gloss_mr_relative(const texture_catalog* catalog,
@@ -3732,6 +3899,14 @@ void process_material(asset_manager& am,
                     tex.name = fixed_relative.generic_string();
                 }
                 tex.name = resolve_external_texture_path(output_dir, fs::path(tex.name)).generic_string();
+
+                if(!texture_file_exists(output_dir, tex.name))
+                {
+                    APPLOG_WARNING("Mesh Importer: External texture '{}' not found on disk — skipping '{}'",
+                                   path.C_Str(),
+                                   semantic);
+                    return false;
+                }
             }
             tex.semantic = semantic;
             bool use_alpha = flags & aiTextureFlags_UseAlpha;
@@ -3788,7 +3963,8 @@ void process_material(asset_manager& am,
         if(collecting)
         {
             enqueue_simple_texture_job(texture);
-            if(texture.embedded_index < 0 && !needs_external_texture_conversion(texture) && env.catalog)
+            if(texture.embedded_index < 0 && !needs_external_texture_conversion(texture) && env.catalog
+               && texture_file_exists(*env.output_dir, texture.name))
             {
                 env.catalog->register_entry(texture, texture);
             }
@@ -4029,8 +4205,14 @@ void process_material(asset_manager& am,
 
             if(binding)
             {
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_color_map(am.get_asset<gfx::texture>(key.generic_string()));
+                if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
+                {
+                    mat.set_color_map(am.get_asset<gfx::texture>(*key));
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Could not bind base color texture '{}'", texture.name);
+                }
             }
         }
     }
@@ -4082,16 +4264,22 @@ void process_material(asset_manager& am,
     {
         if(binding)
         {
-            auto key = fs::convert_to_protocol(output_dir / combined_mr_relative);
-            auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
+            if(const auto key = try_make_texture_asset_key(output_dir, combined_mr_relative))
+            {
+                auto texture_asset = am.get_asset<gfx::texture>(*key);
 
-            mat.set_metalness_map(texture_asset);
-            mat.set_roughness_map(texture_asset);
-            has_metallic_tex = true;
-            has_roughness_tex = true;
+                mat.set_metalness_map(texture_asset);
+                mat.set_roughness_map(texture_asset);
+                has_metallic_tex = true;
+                has_roughness_tex = true;
 
-            APPLOG_TRACE("Mesh Importer: Using sibling metallic-roughness map from spec-gloss conversion: {}",
-                         combined_mr_relative);
+                APPLOG_TRACE("Mesh Importer: Using sibling metallic-roughness map from spec-gloss conversion: {}",
+                             combined_mr_relative);
+            }
+            else
+            {
+                APPLOG_WARNING("Mesh Importer: Could not bind metallic-roughness texture '{}'", combined_mr_relative);
+            }
         }
     }
     else if(khr_combined_specular_mr && combined_mr_relative.empty())
@@ -4103,16 +4291,23 @@ void process_material(asset_manager& am,
 
             if(binding)
             {
-                auto key = fs::convert_to_protocol(output_dir / combined_texture.name);
-                auto texture_asset = am.get_asset<gfx::texture>(key.generic_string());
+                if(const auto key = try_make_texture_asset_key(output_dir, combined_texture.name))
+                {
+                    auto texture_asset = am.get_asset<gfx::texture>(*key);
 
-                mat.set_metalness_map(texture_asset);
-                mat.set_roughness_map(texture_asset);
-                has_metallic_tex = true;
-                has_roughness_tex = true;
+                    mat.set_metalness_map(texture_asset);
+                    mat.set_roughness_map(texture_asset);
+                    has_metallic_tex = true;
+                    has_roughness_tex = true;
 
-                APPLOG_TRACE("Mesh Importer: Converting single specular texture to combined metallic/roughness: {}",
-                             combined_texture.name);
+                    APPLOG_TRACE("Mesh Importer: Converting single specular texture to combined metallic/roughness: {}",
+                                 combined_texture.name);
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Could not bind specular-to-MR texture '{}'",
+                                   combined_texture.name);
+                }
             }
         }
     }
@@ -4126,9 +4321,15 @@ void process_material(asset_manager& am,
 
                 if(binding)
                 {
-                    auto key = fs::convert_to_protocol(output_dir / texture.name);
-                    mat.set_metalness_map(am.get_asset<gfx::texture>(key.generic_string()));
-                    has_metallic_tex = true;
+                    if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
+                    {
+                        mat.set_metalness_map(am.get_asset<gfx::texture>(*key));
+                        has_metallic_tex = true;
+                    }
+                    else
+                    {
+                        APPLOG_WARNING("Mesh Importer: Could not bind metallic texture '{}'", texture.name);
+                    }
                 }
             }
         }
@@ -4141,13 +4342,19 @@ void process_material(asset_manager& am,
 
                 if(binding)
                 {
-                    auto key = fs::convert_to_protocol(output_dir / texture.name);
-                    mat.set_roughness_map(am.get_asset<gfx::texture>(key.generic_string()));
-                    has_roughness_tex = true;
-
-                    if(texture.semantic == "ShininessToRoughness")
+                    if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                     {
-                        APPLOG_TRACE("Mesh Importer: Converting shininess texture to roughness: {}", texture.name);
+                        mat.set_roughness_map(am.get_asset<gfx::texture>(*key));
+                        has_roughness_tex = true;
+
+                        if(texture.semantic == "ShininessToRoughness")
+                        {
+                            APPLOG_TRACE("Mesh Importer: Converting shininess texture to roughness: {}", texture.name);
+                        }
+                    }
+                    else
+                    {
+                        APPLOG_WARNING("Mesh Importer: Could not bind roughness texture '{}'", texture.name);
                     }
                 }
             }
@@ -4193,8 +4400,14 @@ void process_material(asset_manager& am,
 
             if(binding)
             {
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_normal_map(am.get_asset<gfx::texture>(key.generic_string()));
+                if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
+                {
+                    mat.set_normal_map(am.get_asset<gfx::texture>(*key));
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Could not bind normal texture '{}'", texture.name);
+                }
             }
         }
     }
@@ -4257,8 +4470,14 @@ void process_material(asset_manager& am,
 
             if(binding)
             {
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_ao_map(am.get_asset<gfx::texture>(key.generic_string()));
+                if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
+                {
+                    mat.set_ao_map(am.get_asset<gfx::texture>(*key));
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Could not bind occlusion texture '{}'", texture.name);
+                }
             }
         }
     }
@@ -4301,8 +4520,14 @@ void process_material(asset_manager& am,
 
             if(binding)
             {
-                auto key = fs::convert_to_protocol(output_dir / texture.name);
-                mat.set_emissive_map(am.get_asset<gfx::texture>(key.generic_string()));
+                if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
+                {
+                    mat.set_emissive_map(am.get_asset<gfx::texture>(*key));
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Could not bind emissive texture '{}'", texture.name);
+                }
             }
         }
     }
@@ -4498,27 +4723,26 @@ void process_imported_scene(asset_manager& am,
     process_animations(scene, filename, load_data, name_to_index_lut, animations);
 
     APPLOG_TRACE("Mesh Importer: Processing animations bounding boxes ...");
-    auto boxes = compute_bounding_boxes_for_animations(scene);
+    const auto boxes = compute_bounding_boxes_for_animations(scene);
 
-    if(!boxes.empty())
+    math::bbox animation_bounds;
+    if(try_accumulate_animation_bounding_boxes(boxes, animation_bounds))
     {
-        load_data.bbox = {};
-        for(const auto& kvp : boxes)
+        // Animation bounds only cover affected meshes — expand the static scene bounds, never replace.
+        if(load_data.bbox.is_populated())
         {
-            for(const auto& box : kvp.second)
-            {
-                load_data.bbox.add_point(box.min);
-                load_data.bbox.add_point(box.max);
-            }
+            load_data.bbox.add_point(animation_bounds.min);
+            load_data.bbox.add_point(animation_bounds.max);
+        }
+        else
+        {
+            load_data.bbox = animation_bounds;
         }
     }
     else if(!load_data.bbox.is_populated())
     {
-        for(const auto& submesh : load_data.submeshes)
-        {
-            load_data.bbox.add_point(submesh.bbox.min);
-            load_data.bbox.add_point(submesh.bbox.max);
-        }
+        load_data.bbox = {};
+        accumulate_bounds_from_armature(load_data, load_data.bbox);
     }
 
     APPLOG_TRACE("Mesh Importer: bbox min {}, max {}", load_data.bbox.min, load_data.bbox.max);

@@ -14,7 +14,29 @@ namespace unravel
 
 namespace
 {
-    
+
+auto is_submesh_visible(const math::frustum& frustum,
+                        const mesh& m,
+                        uint32_t lod_index,
+                        uint32_t submesh_index,
+                        const math::mat4& world_matrix) -> bool
+{
+    const auto& submeshes = m.get_submeshes(lod_index);
+    if(submesh_index >= submeshes.size())
+    {
+        return true;
+    }
+
+    const auto* submesh = submeshes[submesh_index];
+    if(!submesh)
+    {
+        return true;
+    }
+
+    const math::transform world_transform(world_matrix);
+    return frustum.test_obb(submesh->bbox, world_transform);
+}
+
 auto compute_bounds_screen_radius_squared(const math::vec3& origin,
                                                 float radius,
                                                 const math::vec3& view_origin,
@@ -496,7 +518,8 @@ void model::submit(const math::mat4& world_transform,
                    const pose_mat4& bone_transforms,
                    const std::vector<pose_mat4>& skinning_transforms,
                    unsigned int lod,
-                   const submit_callbacks& callbacks) const
+                   const submit_callbacks& callbacks,
+                   const math::frustum* frustum) const
 {
     const auto lod_mesh = get_lod(lod);
     if(!lod_mesh)
@@ -508,6 +531,7 @@ void model::submit(const math::mat4& world_transform,
 
     auto skinned_submeshes_count = mesh->get_skinned_submeshes_count(lod);
     auto non_skinned_submeshes_count = mesh->get_non_skinned_submeshes_count(lod);
+    const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod);
 
     submit_callbacks::params params;
 
@@ -526,7 +550,7 @@ void model::submit(const math::mat4& world_transform,
             callbacks.setup_params_per_instance(params);
         }
 
-        auto render_submesh = [this](const std::shared_ptr<unravel::mesh>& mesh,
+        auto render_submesh = [this, frustum, cull_submeshes](const std::shared_ptr<unravel::mesh>& mesh,
                                      uint32_t lod,
                                      uint32_t group_id,
                                      const math::mat4& matrix,
@@ -556,6 +580,12 @@ void model::submit(const math::mat4& world_transform,
                         const auto* transform = pose.get_transform(index, i);
                         if(transform)
                         {
+                            if(cull_submeshes
+                               && !is_submesh_visible(*frustum, *mesh, lod, index, *transform))
+                            {
+                                continue;
+                            }
+
                             gfx::set_world_transform(*transform);
                             mesh->bind_render_buffers_for_submesh(submesh, lod);
                             params.preserve_state = (&index != &indices.back());
@@ -565,6 +595,12 @@ void model::submit(const math::mat4& world_transform,
                 }
                 else
                 {
+                    if(cull_submeshes
+                       && !is_submesh_visible(*frustum, *mesh, lod, index, matrix))
+                    {
+                        continue;
+                    }
+
                     gfx::set_world_transform(matrix);
                     mesh->bind_render_buffers_for_submesh(submesh, lod);
                     params.preserve_state = &index != &indices.back();
@@ -671,7 +707,8 @@ void model::submit_for_batching(batch_collector& collector,
                                 const math::mat4& world_transform,
                                 const submesh_pose_mat4& submesh_transforms,
                                 uint32_t lod_index,
-                                float lod_param) const
+                                float lod_param,
+                                const math::frustum* frustum) const
 {
     auto mesh_asset = get_lod(lod_index);
     if(!mesh_asset)
@@ -684,6 +721,8 @@ void model::submit_for_batching(batch_collector& collector,
     {
         return;
     }
+
+    const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod_index);
 
     // Iterate over data groups (material groups)
     const auto data_group_count = mesh->get_data_groups_count();
@@ -718,6 +757,12 @@ void model::submit_for_batching(batch_collector& collector,
                     {
                         continue;
                     }
+
+                    if(cull_submeshes
+                       && !is_submesh_visible(*frustum, *mesh, lod_index, submesh_index, *transform_ptr))
+                    {
+                        continue;
+                    }
                     
                     // Create batch key
                     batch_key key(mesh, material_ptr, lod_index, submesh_index);
@@ -736,6 +781,12 @@ void model::submit_for_batching(batch_collector& collector,
             }
             else
             {
+                if(cull_submeshes
+                   && !is_submesh_visible(*frustum, *mesh, lod_index, submesh_index, world_transform))
+                {
+                    continue;
+                }
+
                 // No specific transform for this submesh - use world transform
                 batch_key key(mesh, material_ptr, lod_index, submesh_index);
                 if (!key.is_valid())

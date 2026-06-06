@@ -2158,21 +2158,16 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         const auto& world_transform = transform_comp.get_transform_global();
         const auto& world_bounds = model_comp.get_world_bounds();
 
-        
-        // For directional lights, perform additional swept sphere test using camera frustum
+        // For directional lights, perform additional swept AABB test using camera frustum
         bool should_render = true;
         if(LightType::DirectionalLight == settings_.m_lightType && cam != nullptr)
         {
             const auto& camera_frustum = cam->get_frustum();
-            
-            // Convert world bounds to bounding sphere
-            const auto& bounds_center = world_bounds.get_center();
+
             const auto& bounds_extents = world_bounds.get_extents();
             const float bounds_radius = math::length(bounds_extents);
-            math::bsphere bounds_sphere(bounds_center, bounds_radius);
-            
-            // Get light direction (stored in directional_light_.m_position)
-            math::vec3 light_direction(
+
+            const math::vec3 light_direction(
                 directional_light_.m_position.m_x,
                 directional_light_.m_position.m_y,
                 directional_light_.m_position.m_z
@@ -2181,10 +2176,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             // across the full shadow range, including its bounding radius.
             const float max_distance = currentSmSettings->m_far + bounds_radius;
 
-            // Test swept sphere against camera frustum
-            // should_render = camera_frustum.test_swept_sphere(bounds_sphere, light_direction, max_distance);
             should_render = camera_frustum.test_swept_aabb(world_bounds, light_direction, max_distance);
-
         }
         
         if(!should_render)
@@ -2236,7 +2228,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             if (can_batch)
             {
                 // Collect this model for batching in this specific cascade
-                model.submit_for_batching(cascade_batch_collectors_[ii], world_transform, submesh_transforms, lod_data.current_lod_index);
+                model.submit_for_batching(cascade_batch_collectors_[ii], world_transform, submesh_transforms, lod_data.current_lod_index, 0.0f, &lightFrustums[ii]);
             }
             else
             {
@@ -2284,7 +2276,8 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                              bone_transforms,
                              skinning_matrices,
                              lod_data.current_lod_index,
-                             callbacks);
+                             callbacks,
+                             &lightFrustums[ii]);
             }
 
             any_rendered = true;

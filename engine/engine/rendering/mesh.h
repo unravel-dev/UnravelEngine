@@ -925,6 +925,19 @@ public:
      * @return size_t The number of submeshes.
      */
     auto get_submeshes_count(uint32_t lod_index = 0) const -> size_t;
+
+    /// Submesh count at or above which per-submesh frustum culling is worthwhile.
+    static constexpr size_t many_submeshes_threshold = 8;
+
+    /**
+     * @brief Returns true when this LOD has enough submeshes to benefit from per-submesh culling.
+     * @param lod_index LOD index (0 = base, 1+ = simplified)
+     */
+    auto has_many_submeshes(uint32_t lod_index = 0) const -> bool
+    {
+        return get_submeshes_count(lod_index) >= many_submeshes_threshold;
+    }
+
     /**
      * @brief Gets the number of skinned submeshes for this mesh.
      * @param lod_index LOD index (0 = base, 1+ = simplified)

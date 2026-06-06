@@ -744,6 +744,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     // Clear batch collector for this frame
     batch_collector_.clear();
 
+    const auto& view_frustum = camera.get_frustum();
+
     for(const auto& element : visibility_set)
     {
         const auto& entity = element.entity;
@@ -833,11 +835,11 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         if (can_batch)
         {
             // Collect this model for batching with appropriate transforms            
-            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x);
+            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum);
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x);
+                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum);
             }
         }
         else
@@ -848,7 +850,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                          bone_transforms,
                          skinning_matrices,
                          current_lod_index,
-                         callbacks);
+                         callbacks,
+                         &view_frustum);
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
                 callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
@@ -863,7 +866,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                              bone_transforms,
                              skinning_matrices,
                              target_lod_index,
-                             callbacks);
+                             callbacks,
+                             &view_frustum);
             }
         }
     }

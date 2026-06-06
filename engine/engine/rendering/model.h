@@ -442,13 +442,15 @@ public:
      * @param skinning_transforms The skinning matrices per submesh.
      * @param lod The level of detail to render.
      * @param callbacks The submit callbacks.
+     * @param frustum Optional view frustum for per-submesh culling on large meshes.
      */
     void submit(const math::mat4& world_transform,
                 const submesh_pose_mat4& submesh_transforms,
                 const pose_mat4& bone_transforms,
                 const std::vector<pose_mat4>& skinning_transforms,
                 unsigned int lod,
-                const submit_callbacks& callbacks) const;
+                const submit_callbacks& callbacks,
+                const math::frustum* frustum = nullptr) const;
 
     /**
      * @brief Collects this model into a batch collector for instanced rendering.
@@ -457,12 +459,14 @@ public:
      * @param submesh_transforms The submesh transforms (many-to-many mapping).
      * @param lod_index The level of detail to use.
      * @param lod_param The LOD transition parameter (for smooth LOD transitions).
+     * @param frustum Optional view frustum for per-submesh culling on large meshes.
      */
     void submit_for_batching(batch_collector& collector,
                             const math::mat4& world_transform,
                             const submesh_pose_mat4& submesh_transforms,
                             uint32_t lod_index,
-                            float lod_param = 0.0f) const;
+                            float lod_param = 0.0f,
+                            const math::frustum* frustum = nullptr) const;
 
     /**
      * @brief Gets the default material.

@@ -50,6 +50,12 @@ REFLECT(model_component)
             entt::attribute{"pretty_name", "Casts Reflection"},
             entt::attribute{"tooltip", "Is the model participating in reflection generation?"},
         })
+        .data<nullptr, &model_component::get_world_bounds>("world_bounds"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "world_bounds"},
+            entt::attribute{"pretty_name", "World Bounds"},
+            entt::attribute{"tooltip", "The world bounds of the model."},
+        })
         .data<&model_component::set_model, &model_component::get_model>("model"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "model"},
