@@ -1,5 +1,6 @@
 #include "mesh_importer.h"
 #include "bimg/bimg.h"
+#include "bimg/encode.h"
 
 #include "../asset_extensions.h"
 
@@ -69,8 +70,8 @@ struct spec_gloss_factors_t
 void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
                                             const bimg::ImageContainer* specular_image,
                                             const spec_gloss_factors_t& factors,
-                                            std::vector<uint8_t>* out_mr_rgba8 = nullptr);
-auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool;
+                                            std::vector<uint8_t>* out_mr_rgba8 = nullptr,
+                                            bool rewrite_diffuse_to_base_color = true);
 auto perceived_brightness(float r, float g, float b) -> float;
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float;
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
@@ -132,6 +133,53 @@ auto ensure_rgba8(bimg::ImageContainer* image, bool& owns_result) -> bimg::Image
     }
     owns_result = true;
     return converted;
+}
+
+/**
+ * @brief Bilinear upscale/downscale an RGBA8 image to the target dimensions.
+ * Returns a newly allocated container the caller must free, or nullptr on failure.
+ */
+auto resize_rgba8_image_to(const bimg::ImageContainer* src, uint32_t target_w, uint32_t target_h) -> bimg::ImageContainer*
+{
+    if(!src || !src->m_data || target_w == 0 || target_h == 0)
+    {
+        return nullptr;
+    }
+    if(src->m_width == target_w && src->m_height == target_h)
+    {
+        return nullptr;
+    }
+
+    bimg::ImageContainer* src32f =
+        bimg::imageConvert(get_bimg_allocator(), bimg::TextureFormat::RGBA32F, *src, false);
+    if(!src32f)
+    {
+        return nullptr;
+    }
+
+    bimg::ImageContainer* dst32f = bimg::imageAlloc(get_bimg_allocator(),
+                                                    bimg::TextureFormat::RGBA32F,
+                                                    static_cast<uint16_t>(target_w),
+                                                    static_cast<uint16_t>(target_h),
+                                                    1,
+                                                    1,
+                                                    false,
+                                                    false);
+    if(!dst32f || !bimg::imageResizeRgba32fLinear(dst32f, src32f))
+    {
+        bimg::imageFree(src32f);
+        if(dst32f)
+        {
+            bimg::imageFree(dst32f);
+        }
+        return nullptr;
+    }
+
+    bimg::imageFree(src32f);
+
+    auto* dst8 = bimg::imageConvert(get_bimg_allocator(), bimg::TextureFormat::RGBA8, *dst32f, false);
+    bimg::imageFree(dst32f);
+    return dst8;
 }
 
 auto has_rotation_channel(const aiAnimation* animation, const std::string& nodeName) -> bool
@@ -1491,49 +1539,14 @@ namespace pixel_transforms
     }
 
     /**
-     * @brief Approximate metallic from specular-only pixel using perceived brightness.
-     * Without the corresponding diffuse pixel we assume a mid-grey diffuse (0.5) for
-     * the quadratic solve. This gives a much better approximation than a linear remap.
+     * @brief Convert Phong shininess exponent map to roughness (Beckmann/Unity variance mapping).
+     * Texture texels are treated as normalized exponent; scaled to a reference max of 128.
      */
-    auto specular_to_metallic_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
+    auto shininess_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
     {
-        constexpr float assumed_diffuse = 0.5f;
-        float max_specular = std::max({r, g, b});
-        float one_minus_specular_strength = 1.0f - max_specular;
-        float perc_diffuse = perceived_brightness(assumed_diffuse, assumed_diffuse, assumed_diffuse);
-        float perc_specular = perceived_brightness(r, g, b);
-        float metallic = solve_metallic(perc_diffuse, perc_specular, one_minus_specular_strength);
-        return std::make_tuple(metallic, metallic, metallic, 1.0f);
-    }
-
-    /**
-     * @brief Convert glossiness to roughness
-     */
-    auto gloss_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
-    {
-        // This semantic is only used for dedicated glossiness maps (aiTextureType_SHININESS).
-        // Simply invert RGB: Roughness = 1 - Glossiness. Preserve alpha.
-        return std::make_tuple(1.0f - r, 1.0f - g, 1.0f - b, a);
-    }
-
-    /**
-     * @brief Convert specular texture alpha (gloss) to roughness.
-     * Used when the texture is known to carry glossiness in the alpha channel.
-     */
-    auto specular_alpha_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
-    {
-        float roughness = 1.0f - a;
-        return std::make_tuple(roughness, roughness, roughness, 1.0f);
-    }
-
-    /**
-     * @brief Convert specular intensity to roughness estimate.
-     * Used when the texture has no meaningful alpha channel.
-     */
-    auto specular_intensity_to_roughness_pixel(float r, float g, float b, float a) -> std::tuple<float, float, float, float>
-    {
-        float specular_intensity = (r + g + b) / 3.0f;
-        float roughness = 1.0f - specular_intensity;
+        constexpr float k_reference_max_shininess = 128.0f;
+        const float shininess = std::max(std::max({r, g, b}) * k_reference_max_shininess, 1.0f);
+        const float roughness = std::sqrt(2.0f / (shininess + 2.0f));
         return std::make_tuple(roughness, roughness, roughness, 1.0f);
     }
 
@@ -1605,54 +1618,18 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
     
     if(semantic == "SpecularToMetallicRoughness")
     {
-        // Use the combined conversion function
         apply_specular_to_metallic_roughness_conversion(image);
         return;
     }
-    else if(semantic == "GlossToRoughness")
+    else if(semantic == "ShininessToRoughness")
     {
         for(uint32_t i = 0; i < pixel_count; ++i)
         {
             uint32_t pixel_index = i * bytes_per_pixel;
-            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel, 
-                                            pixel_transforms::gloss_to_roughness_pixel);
+            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
+                                            pixel_transforms::shininess_to_roughness_pixel);
         }
-        APPLOG_TRACE("Mesh Importer: Applied GlossToRoughness conversion to texture");
-    }
-    else if(semantic == "SpecularToRoughness")
-    {
-        bool alpha_has_gloss = image_has_meaningful_alpha(image_data, pixel_count, bytes_per_pixel);
-
-        if(alpha_has_gloss)
-        {
-            for(uint32_t i = 0; i < pixel_count; ++i)
-            {
-                uint32_t pixel_index = i * bytes_per_pixel;
-                pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
-                                                pixel_transforms::specular_alpha_to_roughness_pixel);
-            }
-            APPLOG_TRACE("Mesh Importer: Applied SpecularToRoughness conversion (alpha=gloss) to texture");
-        }
-        else
-        {
-            for(uint32_t i = 0; i < pixel_count; ++i)
-            {
-                uint32_t pixel_index = i * bytes_per_pixel;
-                pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
-                                                pixel_transforms::specular_intensity_to_roughness_pixel);
-            }
-            APPLOG_TRACE("Mesh Importer: Applied SpecularToRoughness conversion (intensity) to texture");
-        }
-    }
-    else if(semantic == "SpecularToMetallic")
-    {
-        for(uint32_t i = 0; i < pixel_count; ++i)
-        {
-            uint32_t pixel_index = i * bytes_per_pixel;
-            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel, 
-                                            pixel_transforms::specular_to_metallic_pixel);
-        }
-        APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallic conversion to texture");
+        APPLOG_TRACE("Mesh Importer: Applied ShininessToRoughness conversion to texture");
     }
     else if(semantic == "ExtractMetallicChannel")
     {
@@ -1696,43 +1673,6 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
 }
 
 /**
- * @brief True when the alpha channel modulates gloss/roughness or cut-out opacity.
- * Samples a subset of pixels for performance.
- *
- * CryEngine / DXT5 spec maps store gloss in alpha at full opacity (alpha = 255), so a
- * transparency-only test (alpha < 255) never fires and we fall back to the RGB intensity
- * path, forcing roughness to ~1 on dark specular RGB.
- */
-auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count, uint32_t bytes_per_pixel) -> bool
-{
-    if(bytes_per_pixel < 4)
-    {
-        return false;
-    }
-    uint32_t sample_count = std::min(pixel_count, 256u);
-    uint32_t step = std::max(1u, pixel_count / sample_count);
-    uint8_t min_a = 255;
-    uint8_t max_a = 0;
-    uint32_t non_opaque = 0;
-    for(uint32_t i = 0; i < pixel_count; i += step)
-    {
-        const uint8_t a = image_data[i * bytes_per_pixel + 3];
-        min_a = std::min(min_a, a);
-        max_a = std::max(max_a, a);
-        if(a < 255)
-        {
-            non_opaque++;
-        }
-    }
-    constexpr uint8_t k_min_gloss_range = 8;
-    if((max_a - min_a) >= k_min_gloss_range)
-    {
-        return true;
-    }
-    return (non_opaque > sample_count / 10);
-}
-
-/**
  * @brief Apply combined specular to metallic+roughness conversion (glTF style).
  * Output layout matches the glTF Metallic-Roughness texture convention:
  *   R = (occlusion placeholder, set to 1.0)
@@ -1742,8 +1682,8 @@ auto image_has_meaningful_alpha(const uint8_t* image_data, uint32_t pixel_count,
  * The deferred geometry shader samples G for roughness and B for metallic when the
  * same texture is bound to both the metalness and roughness slots.
  *
- * Prefer the diffuse + specular pair path (`apply_diffuse_to_base_color_conversion`) for
- * Bistro-style assets; it has the diffuse colors needed for the Khronos metallic solve.
+ * Prefer the diffuse + specular pair path (`apply_diffuse_to_base_color_conversion`) when
+ * a matching albedo texture is available — it uses per-pixel diffuse for the Khronos solve.
  */
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image)
 {
@@ -1772,15 +1712,17 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
         return;
     }
 
-    bool alpha_has_gloss = image_has_meaningful_alpha(image_data, pixel_count, bytes_per_pixel);
+    // KHR spec/gloss combined maps: alpha is glossiness when RGBA (not cut-out opacity).
+    const bool alpha_has_gloss = (bytes_per_pixel >= 4);
 
     if(alpha_has_gloss)
     {
         for(uint32_t i = 0; i < pixel_count; ++i)
         {
             uint32_t pixel_index = i * bytes_per_pixel;
-            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
-                                            pixel_transforms::specular_to_metallic_roughness_alpha_pixel);
+            pixel_transforms::transform_pixel(&image_data[pixel_index],
+                                                bytes_per_pixel,
+                                                pixel_transforms::specular_to_metallic_roughness_alpha_pixel);
         }
         APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallicRoughness conversion (alpha=gloss) to texture");
     }
@@ -1789,8 +1731,9 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
         for(uint32_t i = 0; i < pixel_count; ++i)
         {
             uint32_t pixel_index = i * bytes_per_pixel;
-            pixel_transforms::transform_pixel(&image_data[pixel_index], bytes_per_pixel,
-                                            pixel_transforms::specular_to_metallic_roughness_intensity_pixel);
+            pixel_transforms::transform_pixel(&image_data[pixel_index],
+                                                bytes_per_pixel,
+                                                pixel_transforms::specular_to_metallic_roughness_intensity_pixel);
         }
         APPLOG_TRACE("Mesh Importer: Applied SpecularToMetallicRoughness conversion (intensity) to texture");
     }
@@ -1816,8 +1759,7 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
  *
  * If `out_mr_rgba8` is non-null, it is filled with `width*height*4` bytes of RGBA8
  * metallic-roughness data matching the glTF MR convention (R=1, G=roughness,
- * B=metallic_per_pixel, A=1). This gives a much more accurate metallic map than the
- * fallback `SpecularToMetallic` path which has to assume a mid-gray diffuse.
+ * B=metallic_per_pixel, A=1).
  *
  * Both images must have the same dimensions and be byte-aligned LDR formats with at
  * least 3 channels.
@@ -1825,7 +1767,8 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
 void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
                                             const bimg::ImageContainer* specular_image,
                                             const spec_gloss_factors_t& factors,
-                                            std::vector<uint8_t>* out_mr_rgba8)
+                                            std::vector<uint8_t>* out_mr_rgba8,
+                                            bool rewrite_diffuse_to_base_color)
 {
     if(!diffuse_image || !diffuse_image->m_data || !specular_image || !specular_image->m_data)
     {
@@ -1862,7 +1805,7 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
     auto* d_data = static_cast<uint8_t*>(diffuse_image->m_data);
     const auto* s_data = static_cast<const uint8_t*>(specular_image->m_data);
 
-    // KHR_materials_pbrSpecularGlossiness / CryEngine _spec: RGB = specular, A = glossiness.
+    // KHR_materials_pbrSpecularGlossiness: RGB = specular, A = glossiness.
     // When the specular map has alpha, always use it for per-pixel gloss (not cut-out opacity).
     // Fall back to specular RGB intensity only for RGB-only spec sources.
     bool spec_alpha_has_gloss = (s_bpp >= 4);
@@ -1911,20 +1854,23 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
         auto base_d = [&](float d) -> float { return d * (1.0f - dielectric_f0) / denom; };
         auto base_s = [&](float s) -> float { return s - spec_offset; };
 
-        float br = math::mix(base_d(dr), base_s(sr), t);
-        float bg = math::mix(base_d(dg), base_s(sg), t);
-        float bb = math::mix(base_d(db), base_s(sb), t);
-
-        d_data[i * d_bpp + 0] = pixel_transforms::to_uint8(br);
-        d_data[i * d_bpp + 1] = pixel_transforms::to_uint8(bg);
-        d_data[i * d_bpp + 2] = pixel_transforms::to_uint8(bb);
-
-        // Bake diffuseFactor.a into the base color alpha so material transparency
-        // doesn't get lost. Skip when no alpha channel is present.
-        if(d_bpp >= 4)
+        if(rewrite_diffuse_to_base_color)
         {
-            float da = static_cast<float>(d_data[i * d_bpp + 3]) / 255.0f * factors.diffuse_a;
-            d_data[i * d_bpp + 3] = pixel_transforms::to_uint8(da);
+            float br = math::mix(base_d(dr), base_s(sr), t);
+            float bg = math::mix(base_d(dg), base_s(sg), t);
+            float bb = math::mix(base_d(db), base_s(sb), t);
+
+            d_data[i * d_bpp + 0] = pixel_transforms::to_uint8(br);
+            d_data[i * d_bpp + 1] = pixel_transforms::to_uint8(bg);
+            d_data[i * d_bpp + 2] = pixel_transforms::to_uint8(bb);
+
+            // Bake diffuseFactor.a into the base color alpha so material transparency
+            // doesn't get lost. Skip when no alpha channel is present.
+            if(d_bpp >= 4)
+            {
+                float da = static_cast<float>(d_data[i * d_bpp + 3]) / 255.0f * factors.diffuse_a;
+                d_data[i * d_bpp + 3] = pixel_transforms::to_uint8(da);
+            }
         }
 
         if(out_mr_rgba8 != nullptr)
@@ -1934,15 +1880,16 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
                                   : (1.0f - (sr + sg + sb) / 3.0f);
 
             uint8_t* mr = out_mr_rgba8->data() + static_cast<size_t>(i) * 4;
-            mr[0] = 255;                                  // R = occlusion placeholder
-            mr[1] = pixel_transforms::to_uint8(roughness); // G = roughness
-            mr[2] = pixel_transforms::to_uint8(metallic);  // B = metallic
-            mr[3] = 255;                                  // A = 1.0
+            mr[0] = 255; // R = occlusion placeholder
+            mr[1] = pixel_transforms::to_uint8(roughness);
+            mr[2] = pixel_transforms::to_uint8(metallic);
+            mr[3] = 255;
         }
     }
 
-    APPLOG_TRACE("Mesh Importer: Applied diffuse-to-base-color conversion using specular texture{}",
-                 out_mr_rgba8 ? " (with sibling metallic-roughness map)" : "");
+    APPLOG_TRACE("Mesh Importer: Applied spec-gloss conversion{} (rewrite base color: {})",
+                 out_mr_rgba8 ? " with sibling metallic-roughness map" : "",
+                 rewrite_diffuse_to_base_color);
 }
 
 /**
@@ -1989,61 +1936,13 @@ struct spec_gloss_pbr_result
     std::string mr_relative;          /// Relative path of the sibling metallic-roughness file (empty if not produced).
 };
 
-/**
- * @brief Convert a diffuse+specular pair into PBR textures and save them.
- *
- * The caller supplies the exact destination paths so the file names can match the
- * material's final semantic (e.g. `[2] BaseColor <model>.png`,
- * `[3] MetallicRoughness <model>.png`) instead of leaking the source-texture
- * naming through an awkward `_BaseColor` / `_MetallicRoughness` suffix.
- *
- * Both inputs are normalized to RGBA8 before processing — the per-pixel math
- * reads R/G/B/A by byte offset, and `bimg::imageWritePng` expects pitch = width*4
- * with an explicit format argument. The caller still owns and frees the original
- * `diffuse_img` / `specular_img`; any intermediate RGBA8 conversions are managed
- * internally.
- */
-auto convert_specular_only_to_mr_texture(const fs::path& output_dir,
-                                         const std::string& mr_relative,
-                                         bimg::ImageContainer* specular_img) -> bool
-{
-    if(!specular_img || mr_relative.empty())
-    {
-        return false;
-    }
-
-    bool specular_was_converted = false;
-    bimg::ImageContainer* specular_rgba8 = ensure_rgba8(specular_img, specular_was_converted);
-    if(!specular_rgba8)
-    {
-        return false;
-    }
-
-    apply_specular_to_metallic_roughness_conversion(specular_rgba8);
-
-    const bool saved = write_rgba8_png(output_dir / mr_relative,
-                                       specular_rgba8->m_width,
-                                       specular_rgba8->m_height,
-                                       static_cast<const uint8_t*>(specular_rgba8->m_data));
-
-    if(specular_was_converted)
-    {
-        bimg::imageFree(specular_rgba8);
-    }
-
-    if(saved)
-    {
-        APPLOG_TRACE("Mesh Importer: Wrote metallic-roughness from specular only (base color unchanged): {}", mr_relative);
-    }
-    return saved;
-}
-
 auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
                                         const std::string& base_color_relative,
                                         const std::string& mr_relative,
                                         bimg::ImageContainer* diffuse_img,
                                         const bimg::ImageContainer* specular_img,
-                                        const spec_gloss_factors_t& factors) -> spec_gloss_pbr_result
+                                        const spec_gloss_factors_t& factors,
+                                        bool bake_base_color = true) -> spec_gloss_pbr_result
 {
     spec_gloss_pbr_result result{};
 
@@ -2060,8 +1959,15 @@ auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
     bimg::ImageContainer* diffuse_rgba8 = ensure_rgba8(diffuse_img, diffuse_was_converted);
     bimg::ImageContainer* specular_rgba8 = ensure_rgba8(const_cast<bimg::ImageContainer*>(specular_img), specular_was_converted);
 
+    bool specular_resized = false;
+    bimg::ImageContainer* specular_work = specular_rgba8;
+
     auto free_intermediates = [&]()
     {
+        if(specular_resized && specular_work)
+        {
+            bimg::imageFree(specular_work);
+        }
         if(diffuse_was_converted && diffuse_rgba8)
         {
             bimg::imageFree(diffuse_rgba8);
@@ -2079,8 +1985,35 @@ auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
         return result;
     }
 
+    if(diffuse_rgba8->m_width != specular_rgba8->m_width || diffuse_rgba8->m_height != specular_rgba8->m_height)
+    {
+        bimg::ImageContainer* resized =
+            resize_rgba8_image_to(specular_rgba8, diffuse_rgba8->m_width, diffuse_rgba8->m_height);
+        if(!resized)
+        {
+            APPLOG_WARNING("Mesh Importer: Failed to resize specular {}x{} to match diffuse {}x{} for spec-gloss conversion",
+                           specular_rgba8->m_width,
+                           specular_rgba8->m_height,
+                           diffuse_rgba8->m_width,
+                           diffuse_rgba8->m_height);
+            free_intermediates();
+            return result;
+        }
+        specular_work = resized;
+        specular_resized = true;
+        APPLOG_TRACE("Mesh Importer: Upscaled specular {}x{} -> {}x{} for spec-gloss pair conversion",
+                     specular_rgba8->m_width,
+                     specular_rgba8->m_height,
+                     diffuse_rgba8->m_width,
+                     diffuse_rgba8->m_height);
+    }
+
     std::vector<uint8_t> mr_buffer;
-    apply_diffuse_to_base_color_conversion(diffuse_rgba8, specular_rgba8, factors, &mr_buffer);
+    apply_diffuse_to_base_color_conversion(diffuse_rgba8,
+                                           specular_work,
+                                           factors,
+                                           &mr_buffer,
+                                           bake_base_color);
 
     // The conversion bails (logged) if formats are incompatible or sizes mismatch.
     if(mr_buffer.empty())
@@ -2090,17 +2023,20 @@ auto convert_spec_gloss_to_pbr_textures(const fs::path& output_dir,
         return result;
     }
 
-    if(!write_rgba8_png(output_dir / base_color_relative,
-                        diffuse_rgba8->m_width,
-                        diffuse_rgba8->m_height,
-                        static_cast<const uint8_t*>(diffuse_rgba8->m_data)))
+    if(bake_base_color)
     {
-        APPLOG_WARNING("Mesh Importer: Failed to save converted base color texture: {}", base_color_relative);
-        free_intermediates();
-        return result;
+        if(!write_rgba8_png(output_dir / base_color_relative,
+                            diffuse_rgba8->m_width,
+                            diffuse_rgba8->m_height,
+                            static_cast<const uint8_t*>(diffuse_rgba8->m_data)))
+        {
+            APPLOG_WARNING("Mesh Importer: Failed to save converted base color texture: {}", base_color_relative);
+            free_intermediates();
+            return result;
+        }
+        result.diffuse_converted = true;
+        result.base_color_relative = base_color_relative;
     }
-    result.diffuse_converted = true;
-    result.base_color_relative = base_color_relative;
 
     if(write_rgba8_png(output_dir / mr_relative, diffuse_rgba8->m_width, diffuse_rgba8->m_height, mr_buffer.data()))
     {
@@ -2130,7 +2066,7 @@ void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& outpu
     std::memcpy(data.data(), assimp_tex->pcData, width * height * 4);
     
     // Apply conversions to the copied data
-    if(semantic == "GlossToRoughness" || semantic == "SpecularToRoughness" || semantic == "SpecularToMetallic" || semantic == "SpecularToMetallicRoughness")
+    if(semantic == "ShininessToRoughness" || semantic == "SpecularToMetallicRoughness")
     {
         // Create a temporary image container for conversion
         bimg::ImageContainer image;
@@ -2244,13 +2180,23 @@ enum class material_workflow
     unknown,
     metallic_roughness,       // glTF/FBX PBR MR: base color + metallic/roughness maps/factors
     khr_specular_glossiness,  // KHR_materials_pbrSpecularGlossiness: Khronos bake diffuse+spec textures
-    phong_specular_gloss,     // CryEngine/Bistro/Phong: diffuse is albedo, spec map -> MR only
+    phong_specular_gloss,     // Legacy Phong/Blinn: diffuse pass-through, shininess -> roughness
 };
 
-auto workflow_uses_spec_gloss_conversion(material_workflow workflow) -> bool
+auto phong_shininess_exponent_to_roughness(float shininess) -> float
 {
-    return workflow == material_workflow::khr_specular_glossiness
-           || workflow == material_workflow::phong_specular_gloss;
+    return math::clamp(std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
+}
+
+/**
+ * @brief FBX 3dsMax PBR materials store useGlossiness to disambiguate roughness vs gloss maps.
+ */
+auto fbx_roughness_texture_is_native_roughness(const aiMaterial* material) -> bool
+{
+    int use_glossiness = 0;
+    return material != nullptr
+           && material->Get("$raw.3dsMax|main|useGlossiness", aiTextureType_NONE, 0, use_glossiness) == AI_SUCCESS
+           && use_glossiness == 2;
 }
 
 auto material_workflow_label(material_workflow workflow) -> const char*
@@ -2309,6 +2255,29 @@ auto base_color_texture_is_authoritative(const aiMaterial* material) -> bool
     return has_base;
 }
 
+auto texture_path_indicates_base_color(const std::string& relative_path) -> bool
+{
+    const std::string lower = string_utils::to_lower(fs::path(relative_path).stem().string());
+    static constexpr std::array<const char*, 3> markers = {
+        "basecolor",
+        "base_color",
+        "base-color",
+    };
+    for(const char* marker : markers)
+    {
+        if(lower.find(marker) != std::string::npos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto albedo_texture_is_explicit_base_color(const imported_texture& albedo_tex) -> bool
+{
+    return albedo_tex.semantic == "BaseColor" || texture_path_indicates_base_color(albedo_tex.name);
+}
+
 auto material_shading_is_phong_family(aiShadingMode shading) -> bool
 {
     switch(shading)
@@ -2324,65 +2293,36 @@ auto material_shading_is_phong_family(aiShadingMode shading) -> bool
     }
 }
 
-/**
- * @brief glTF KHR_materials_pbrSpecularGlossiness: extension diffuse is not final base color.
- *
- * CryEngine / Bistro also write AI_MATKEY_GLOSSINESS_FACTOR (and sometimes PBR_BRDF) while still
- * using Phong-style DIFFUSE + SPECULAR tilings — those are phong_specular_gloss, not KHR.
- *
- * True KHR SG from the glTF2 importer is dual-authored: MR fallback in BASE_COLOR, extension
- * albedo in DIFFUSE, with different texture paths, on a PBR_BRDF material.
- */
-auto material_is_khr_specular_glossiness_input(const aiMaterial* material) -> bool
+auto material_has_pbr_brdf_shading(const aiMaterial* material) -> bool
 {
-    if(base_color_texture_is_authoritative(material))
-    {
-        return false;
-    }
-
     aiShadingMode shading = aiShadingMode_Flat;
-    if(material->Get(AI_MATKEY_SHADING_MODEL, shading) == AI_SUCCESS
-       && material_shading_is_phong_family(shading))
-    {
-        return false;
-    }
-
-    ai_real glossiness_factor_dummy = 0.0f;
-    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness_factor_dummy) != AI_SUCCESS)
-    {
-        return false;
-    }
-
-    aiString base_path{};
-    aiString diffuse_path{};
-    const bool has_base =
-        (material->GetTexture(aiTextureType_BASE_COLOR, 0, &base_path) == AI_SUCCESS && base_path.length > 0)
-        || (material->GetTexture(AI_MATKEY_BASE_COLOR_TEXTURE, &base_path) == AI_SUCCESS && base_path.length > 0);
-    const bool has_diffuse =
-        material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) == AI_SUCCESS && diffuse_path.length > 0;
-
-    if(!has_base || !has_diffuse)
-    {
-        return false;
-    }
-
-    if(material_texture_paths_equal(fs::path(base_path.C_Str()), fs::path(diffuse_path.C_Str())))
-    {
-        return false;
-    }
-
-    if(material->Get(AI_MATKEY_SHADING_MODEL, shading) != AI_SUCCESS)
-    {
-        return false;
-    }
-
-    return shading == aiShadingMode_PBR_BRDF;
+    return material->Get(AI_MATKEY_SHADING_MODEL, shading) == AI_SUCCESS && shading == aiShadingMode_PBR_BRDF;
 }
 
 /**
- * @brief True when the material has dedicated PBR metallic/roughness inputs (not legacy Phong shininess alone).
+ * @brief Assimp only writes AI_MATKEY_GLOSSINESS_FACTOR for glTF KHR_materials_pbrSpecularGlossiness.
  */
-auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> bool
+auto material_has_glossiness_factor(const aiMaterial* material) -> bool
+{
+    ai_real glossiness = 0.0f;
+    return material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) == AI_SUCCESS;
+}
+
+/**
+ * @brief KHR rebakes extension diffuse into PBR base color. Phong keeps diffuse as albedo.
+ */
+auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflow,
+                                                       const aiMaterial* material) -> bool
+{
+    return workflow == material_workflow::khr_specular_glossiness
+           && !base_color_texture_is_authoritative(material);
+}
+
+/**
+ * @brief True when the material has dedicated PBR metallic/roughness texture slots.
+ * Factor-only evidence is handled separately (requires PBR_BRDF, no glossiness factor).
+ */
+auto has_metallic_roughness_texture_evidence(const aiMaterial* material) -> bool
 {
     aiString path1;
     if(material->GetTexture(AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, &path1) == AI_SUCCESS)
@@ -2411,137 +2351,145 @@ auto has_definitive_metallic_roughness_evidence(const aiMaterial* material) -> b
         return true;
     }
 
-    // Do not treat AI_MATKEY_METALLIC_FACTOR / ROUGHNESS_FACTOR alone as MR workflow.
-    // CryEngine and dual-authored glTF exports set fallback factors (often 1.0) on Phong tilings
-    // that only have a DIFFUSE map — use phong_specular_gloss + derived factors instead.
+    if(material->GetTextureCount(aiTextureType_MAYA_SPECULAR_ROUGHNESS) > 0)
+    {
+        return true;
+    }
+
+    // FBX / legacy exporters sometimes park combined MR maps in UNKNOWN (see Assimp #5969).
+    if(material->GetTextureCount(aiTextureType_UNKNOWN) > 0)
+    {
+        ai_real metallic_dummy = 0.0f;
+        if(material_has_pbr_brdf_shading(material)
+           || material->Get(AI_MATKEY_METALLIC_FACTOR, metallic_dummy) == AI_SUCCESS)
+        {
+            return true;
+        }
+    }
 
     return false;
 }
 
 /**
- * @brief Check if the same texture is used for both metallic and roughness conversion
+ * @brief PBR_BRDF material with MR factors and no KHR glossiness factor (per Assimp material.h guidance).
  */
-auto detect_duplicate_specular_usage(const aiMaterial* material, material_workflow workflow) -> bool
+auto has_native_mr_factor_evidence(const aiMaterial* material) -> bool
 {
-    if(!workflow_uses_spec_gloss_conversion(workflow))
+    if(material_has_glossiness_factor(material))
     {
         return false;
     }
-    
-    // Check if we have dedicated metallic/roughness textures - if so, no duplication
-    bool has_metallic_texture = (material->GetTextureCount(aiTextureType_METALNESS) > 0) ||
-                               (material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0);
-    bool has_roughness_texture = (material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0) ||
-                                (material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0);
-    bool has_glossiness_texture = (material->GetTextureCount(aiTextureType_SHININESS) > 0);
-    
-    // If we have dedicated textures, no need for specular conversion
-    if(has_metallic_texture || has_roughness_texture || has_glossiness_texture)
+    if(!material_has_pbr_brdf_shading(material))
     {
         return false;
     }
-    
-    // Check if we have a specular texture that would be used for both conversions
-    bool has_specular_texture = (material->GetTextureCount(aiTextureType_SPECULAR) > 0);
-    
-    if(has_specular_texture)
+    ai_real dummy = 0.0f;
+    return material->Get(AI_MATKEY_METALLIC_FACTOR, dummy) == AI_SUCCESS
+           || material->Get(AI_MATKEY_ROUGHNESS_FACTOR, dummy) == AI_SUCCESS;
+}
+
+/**
+ * @brief Legacy Phong/Blinn material signals from Assimp (shininess exponent, not KHR glossiness).
+ */
+auto is_phong_legacy_material(const aiMaterial* material) -> bool
+{
+    if(material_has_glossiness_factor(material))
     {
-        // The logic in get_workflow_aware_texture would use the same specular texture for:
-        // 1. "Metallic" -> SpecularToMetallic conversion 
-        // 2. "Roughness" -> SpecularToRoughness conversion
-        // This is a duplication that should use SpecularToMetallicRoughness instead
-        
-        APPLOG_TRACE("Mesh Importer: Detected duplicate specular usage - same texture would be used for both metallic and roughness conversion");
+        return false;
+    }
+    if(has_metallic_roughness_texture_evidence(material))
+    {
+        return false;
+    }
+    if(has_native_mr_factor_evidence(material))
+    {
+        return false;
+    }
+
+    aiShadingMode shading = aiShadingMode_Flat;
+    if(material->Get(AI_MATKEY_SHADING_MODEL, shading) == AI_SUCCESS
+       && material_shading_is_phong_family(shading))
+    {
         return true;
     }
-    
+
+    ai_real shininess = 0.0f;
+    if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+    {
+        return true;
+    }
+
+    if(material->GetTextureCount(aiTextureType_SHININESS) > 0)
+    {
+        return true;
+    }
+
+    if(!material_has_pbr_brdf_shading(material) && material->GetTextureCount(aiTextureType_SPECULAR) > 0)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @brief KHR specular-only fallback: convert one specular map to combined MR (no diffuse pair).
+ */
+auto khr_needs_combined_specular_mr(const aiMaterial* material, material_workflow workflow) -> bool
+{
+    if(workflow != material_workflow::khr_specular_glossiness)
+    {
+        return false;
+    }
+
+    if(material->GetTextureCount(aiTextureType_METALNESS) > 0
+       || material->GetTextureCount(aiTextureType_GLTF_METALLIC_ROUGHNESS) > 0
+       || material->GetTextureCount(aiTextureType_DIFFUSE_ROUGHNESS) > 0)
+    {
+        return false;
+    }
+
+    if(material->GetTextureCount(aiTextureType_SPECULAR) > 0)
+    {
+        APPLOG_TRACE("Mesh Importer: KHR specular-only -> combined SpecularToMetallicRoughness conversion");
+        return true;
+    }
+
     return false;
 }
 
 /**
  * @brief Classify material input workflow before converting to engine metallic-roughness.
  *
- * Order: KHR spec-gloss extension layout → MR evidence → Phong/CryEngine factors/maps → heuristic.
+ * Order: KHR (glossiness factor) → native MR (textures / PBR factors) → Phong legacy → unknown.
  */
 auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 {
-    ai_real dummy_value{};
-    aiColor3D dummy_color{};
-    aiString path{};
-
-    // ----- 1. KHR_materials_pbrSpecularGlossiness (extension diffuse != MR base color) -----
-    if(material_is_khr_specular_glossiness_input(material))
+    if(material_has_glossiness_factor(material))
     {
+        APPLOG_TRACE("Mesh Importer: Workflow=KHR (AI_MATKEY_GLOSSINESS_FACTOR present)");
         return material_workflow::khr_specular_glossiness;
     }
 
-    // ----- 2. Definitive metallic-roughness markers -----
-    // Dedicated MR textures or an explicit metallic factor. Do not treat ROUGHNESS_FACTOR alone as MR when a
-    // specular map is present — FBX/legacy exports often carry both.
-    if(has_definitive_metallic_roughness_evidence(material))
+    if(has_metallic_roughness_texture_evidence(material))
     {
+        APPLOG_TRACE("Mesh Importer: Workflow=MR (dedicated metallic/roughness texture slots)");
         return material_workflow::metallic_roughness;
     }
 
-    // Specular texture without any MR map/factor is a strong specular-gloss signal (Bistro / CryEngine).
-    aiString specular_path{};
-    const bool has_specular_map =
-        material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS && specular_path.length > 0;
-    // ----- 3. Phong / CryEngine spec+gloss (factors and/or maps, not KHR extension layout) -----
-    if((material->Get(AI_MATKEY_GLOSSINESS_FACTOR, dummy_value) == AI_SUCCESS
-        || material->Get(AI_MATKEY_SPECULAR_FACTOR, dummy_value) == AI_SUCCESS)
-       && !base_color_texture_is_authoritative(material))
+    if(has_native_mr_factor_evidence(material))
     {
+        APPLOG_TRACE("Mesh Importer: Workflow=MR (PBR_BRDF + metallic/roughness factors, no glossiness)");
+        return material_workflow::metallic_roughness;
+    }
+
+    if(is_phong_legacy_material(material))
+    {
+        APPLOG_TRACE("Mesh Importer: Workflow=Phong (shininess/specular legacy signals)");
         return material_workflow::phong_specular_gloss;
     }
 
-    if(has_specular_map && !has_definitive_metallic_roughness_evidence(material))
-    {
-        APPLOG_TRACE("Mesh Importer: Specular map without MR inputs — Phong specular/gloss (diffuse pass-through)");
-        return material_workflow::phong_specular_gloss;
-    }
-
-    // ----- 4. Scored heuristic fallback (mixed-signal materials) -----
-    bool has_diffuse_color = material->Get(AI_MATKEY_COLOR_DIFFUSE, dummy_color) == AI_SUCCESS;
-    bool has_specular_color = material->Get(AI_MATKEY_COLOR_SPECULAR, dummy_color) == AI_SUCCESS;
-
-    bool has_shininess = material->Get(AI_MATKEY_SHININESS, dummy_value) == AI_SUCCESS;
-    bool has_reflectivity = material->Get(AI_MATKEY_REFLECTIVITY, dummy_value) == AI_SUCCESS;
-
-    bool has_specular_texture = material->GetTexture(aiTextureType_SPECULAR, 0, &path) == AI_SUCCESS;
-    bool has_glossiness_texture = material->GetTexture(aiTextureType_SHININESS, 0, &path) == AI_SUCCESS;
-    bool has_diffuse_texture = material->GetTexture(aiTextureType_DIFFUSE, 0, &path) == AI_SUCCESS;
-
-    int specular_gloss_score = 0;
-
-    // Specular/Gloss indicators
-    if(has_diffuse_color) specular_gloss_score += 4;
-    if(has_specular_color) specular_gloss_score += 6;
-    if(has_specular_texture) specular_gloss_score += 10;
-    if(has_glossiness_texture) specular_gloss_score += 10;
-    if(has_diffuse_texture) specular_gloss_score += 6;
-
-    // Legacy Phong indicators (only meaningful as a tie-breaker now that we exited
-    // before reaching here only when no definitive PBR markers were present)
-    if(has_shininess) specular_gloss_score += 4;
-    if(has_reflectivity) specular_gloss_score += 3;
-
-    // Classic spec-gloss combinations
-    if(has_specular_texture && has_diffuse_texture)
-    {
-        specular_gloss_score += 8;
-    }
-    if(has_specular_color && has_diffuse_color)
-    {
-        specular_gloss_score += 6;
-    }
-
-    APPLOG_TRACE("Mesh Importer: Material workflow heuristic score - Phong spec/gloss: {}", specular_gloss_score);
-
-    if(specular_gloss_score >= 5)
-    {
-        return material_workflow::phong_specular_gloss;
-    }
+    APPLOG_TRACE("Mesh Importer: Workflow=Unknown (no KHR/MR/Phong signals)");
     return material_workflow::unknown;
 }
 
@@ -2551,14 +2499,14 @@ auto make_texture_catalog_key(const imported_texture& tex) -> std::string
     {
         return fmt::format("e:{}:{}", tex.embedded_index, tex.semantic);
     }
-    return fmt::format("x:{}:{}", tex.name, tex.semantic);
+    return fmt::format("x:{}:{}", normalize_material_texture_path(fs::path(tex.name)), tex.semantic);
 }
 
 auto needs_external_texture_conversion(const imported_texture& tex) -> bool
 {
     return tex.embedded_index < 0 &&
-           (tex.semantic == "GlossToRoughness" || tex.semantic == "SpecularToRoughness" ||
-            tex.semantic == "SpecularToMetallic" || tex.semantic == "SpecularToMetallicRoughness" || tex.inverse);
+           (tex.semantic == "ShininessToRoughness"
+            || tex.semantic == "SpecularToMetallicRoughness" || tex.inverse);
 }
 
 auto make_converted_texture_name(const std::string& original_name, const std::string& semantic) -> std::string
@@ -2593,6 +2541,44 @@ auto spec_gloss_factors_key(const spec_gloss_factors_t& factors) -> std::string
                        factors.specular_g,
                        factors.specular_b,
                        factors.glossiness);
+}
+
+auto gather_spec_gloss_factors(const aiMaterial* material) -> spec_gloss_factors_t
+{
+    spec_gloss_factors_t factors{};
+    if(!material)
+    {
+        return factors;
+    }
+
+    aiColor4D diffuse_factor_color{1.0f, 1.0f, 1.0f, 1.0f};
+    if(material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_factor_color) == AI_SUCCESS)
+    {
+        factors.diffuse_r = diffuse_factor_color.r;
+        factors.diffuse_g = diffuse_factor_color.g;
+        factors.diffuse_b = diffuse_factor_color.b;
+        factors.diffuse_a = diffuse_factor_color.a;
+    }
+
+    aiColor3D specular_factor_color{1.0f, 1.0f, 1.0f};
+    material->Get(AI_MATKEY_COLOR_SPECULAR, specular_factor_color);
+    float specular_factor_scalar = 1.0f;
+    material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor_scalar);
+    factors.specular_r = specular_factor_color.r * specular_factor_scalar;
+    factors.specular_g = specular_factor_color.g * specular_factor_scalar;
+    factors.specular_b = specular_factor_color.b * specular_factor_scalar;
+
+    factors.glossiness = 1.0f;
+    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, factors.glossiness) != AI_SUCCESS)
+    {
+        float shininess = 32.0f;
+        if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+        {
+            factors.glossiness = math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
+        }
+    }
+
+    return factors;
 }
 
 class texture_catalog
@@ -2665,7 +2651,6 @@ enum class texture_job_type : uint8_t
     embedded_extract,
     external_convert,
     spec_gloss_pair,
-    specular_to_mr,
 };
 
 struct texture_job
@@ -2676,6 +2661,8 @@ struct texture_job
     spec_gloss_factors_t spec_gloss_factors{};
     std::string output_base_color_relative;
     std::string output_mr_relative;
+    /// When true, KHR pair bake rewrites diffuse into reconstructed base color.
+    bool bake_base_color{true};
 };
 
 class texture_job_store
@@ -2706,12 +2693,11 @@ private:
             case texture_job_type::external_convert:
                 return make_texture_catalog_key(job.desc);
             case texture_job_type::spec_gloss_pair:
-                return fmt::format("sg:{}:{}:{}",
+                return fmt::format("sg:{}:{}:{}:{}",
                                    make_texture_catalog_key(job.desc),
                                    make_texture_catalog_key(job.specular_desc),
-                                   spec_gloss_factors_key(job.spec_gloss_factors));
-            case texture_job_type::specular_to_mr:
-                return fmt::format("mr:{}", job.output_mr_relative);
+                                   spec_gloss_factors_key(job.spec_gloss_factors),
+                                   job.bake_base_color ? "bc" : "mr");
             default:
                 return {};
         }
@@ -2761,6 +2747,91 @@ auto load_image_for_texture_desc(const aiScene* scene,
     return imageLoad(bx::FilePath((output_dir / tex.name).string().c_str()));
 }
 
+auto try_synchronous_spec_gloss_pair_mr(const fs::path& output_dir,
+                                        const aiScene* scene,
+                                        const imported_texture& pair_source,
+                                        const imported_texture& specular_tex,
+                                        const spec_gloss_factors_t& factors,
+                                        const std::string& expected_mr,
+                                        bool bake_base_color) -> std::string
+{
+    bimg::ImageContainer* diffuse_img = load_image_for_texture_desc(scene, output_dir, pair_source);
+    bimg::ImageContainer* specular_img = load_image_for_texture_desc(scene, output_dir, specular_tex);
+
+    if(!diffuse_img)
+    {
+        APPLOG_WARNING("Mesh Importer: Bind-time pair MR could not load diffuse: {}", pair_source.name);
+    }
+    if(!specular_img)
+    {
+        APPLOG_WARNING("Mesh Importer: Bind-time pair MR could not load specular: {}", specular_tex.name);
+    }
+
+    if(!diffuse_img || !specular_img)
+    {
+        if(diffuse_img)
+        {
+            bimg::imageFree(diffuse_img);
+        }
+        if(specular_img)
+        {
+            bimg::imageFree(specular_img);
+        }
+        return {};
+    }
+
+    auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
+                                                   std::string{},
+                                                   expected_mr,
+                                                   diffuse_img,
+                                                   specular_img,
+                                                   factors,
+                                                   bake_base_color);
+    bimg::imageFree(diffuse_img);
+    bimg::imageFree(specular_img);
+
+    if(!conv.mr_relative.empty())
+    {
+        APPLOG_TRACE("Mesh Importer: Bind-time pair metallic-roughness bake: {}", conv.mr_relative);
+    }
+    return conv.mr_relative;
+}
+
+auto texture_file_exists(const fs::path& output_dir, const std::string& relative) -> bool
+{
+    fs::error_code err;
+    if(relative.empty())
+    {
+        return false;
+    }
+    if(fs::exists(output_dir / relative, err))
+    {
+        return true;
+    }
+    const fs::path resolved = resolve_external_texture_path(output_dir, fs::path(relative));
+    return fs::exists(output_dir / resolved, err);
+}
+
+auto find_spec_gloss_mr_relative(const texture_catalog* catalog,
+                                 const fs::path& output_dir,
+                                 const imported_texture& specular_tex,
+                                 const std::string& expected_mr) -> std::string
+{
+    if(catalog)
+    {
+        imported_texture probe = specular_tex;
+        if(catalog->resolve(probe) && !probe.name.empty() && texture_file_exists(output_dir, probe.name))
+        {
+            return probe.name;
+        }
+    }
+    if(texture_file_exists(output_dir, expected_mr))
+    {
+        return expected_mr;
+    }
+    return {};
+}
+
 void mark_embedded_consumed_index(int idx, std::unordered_set<int>& consumed, texture_catalog& catalog)
 {
     if(idx < 0)
@@ -2793,12 +2864,6 @@ auto get_texture_job_output_paths(const texture_job& job) -> std::vector<std::st
             {
                 paths.push_back(job.output_base_color_relative);
             }
-            if(!job.output_mr_relative.empty())
-            {
-                paths.push_back(job.output_mr_relative);
-            }
-            break;
-        case texture_job_type::specular_to_mr:
             if(!job.output_mr_relative.empty())
             {
                 paths.push_back(job.output_mr_relative);
@@ -2960,6 +3025,17 @@ void execute_texture_job(const texture_job& job,
             bimg::ImageContainer* specular_img =
                 load_image_for_texture_desc(scene, output_dir, job.specular_desc, nullptr);
 
+            if(!diffuse_img)
+            {
+                APPLOG_WARNING("Mesh Importer: Spec-gloss pair job could not load diffuse texture: {}",
+                               job.desc.name);
+            }
+            if(!specular_img)
+            {
+                APPLOG_WARNING("Mesh Importer: Spec-gloss pair job could not load specular texture: {}",
+                               job.specular_desc.name);
+            }
+
             if(diffuse_img && specular_img)
             {
                 auto conv = convert_spec_gloss_to_pbr_textures(output_dir,
@@ -2967,7 +3043,8 @@ void execute_texture_job(const texture_job& job,
                                                                job.output_mr_relative,
                                                                diffuse_img,
                                                                specular_img,
-                                                               job.spec_gloss_factors);
+                                                               job.spec_gloss_factors,
+                                                               job.bake_base_color);
                 if(conv.diffuse_converted)
                 {
                     imported_texture base_result = job.desc;
@@ -2982,6 +3059,13 @@ void execute_texture_job(const texture_job& job,
                     mr_result.name = conv.mr_relative;
                     catalog.register_entry(mr_lookup, mr_result);
                     mark_embedded_consumed_index(job.specular_desc.embedded_index, consumed_embedded, catalog);
+                    APPLOG_TRACE("Mesh Importer: Wrote pair metallic-roughness: {}", conv.mr_relative);
+                }
+                else
+                {
+                    APPLOG_WARNING("Mesh Importer: Spec-gloss pair job produced no metallic-roughness output ({} + {})",
+                                   job.desc.name,
+                                   job.specular_desc.name);
                 }
             }
             if(specular_img)
@@ -2991,23 +3075,6 @@ void execute_texture_job(const texture_job& job,
             if(diffuse_img)
             {
                 bimg::imageFree(diffuse_img);
-            }
-            break;
-        }
-        case texture_job_type::specular_to_mr:
-        {
-            bimg::ImageContainer* specular_img =
-                load_image_for_texture_desc(scene, output_dir, job.specular_desc, nullptr);
-            if(specular_img && convert_specular_only_to_mr_texture(output_dir, job.output_mr_relative, specular_img))
-            {
-                imported_texture mr_result = job.specular_desc;
-                mr_result.name = job.output_mr_relative;
-                catalog.register_entry(job.specular_desc, mr_result);
-                mark_embedded_consumed_index(job.specular_desc.embedded_index, consumed_embedded, catalog);
-            }
-            if(specular_img)
-            {
-                bimg::imageFree(specular_img);
             }
             break;
         }
@@ -3125,12 +3192,13 @@ auto get_workflow_aware_texture(const aiMaterial* material,
                                material_workflow workflow,
                                const std::string& target_semantic,
                                imported_texture& tex,
-                               GetTextureFunc get_imported_texture,
-                               bool use_combined_specular = false) -> bool
+                               GetTextureFunc get_imported_texture) -> bool
 {
     if(target_semantic == "BaseColor")
     {
-        if(workflow == material_workflow::phong_specular_gloss)
+        // KHR and Phong: extension/legacy albedo lives in DIFFUSE; BASE_COLOR is often MR fallback.
+        if(workflow == material_workflow::khr_specular_glossiness
+           || workflow == material_workflow::phong_specular_gloss)
         {
             if(get_imported_texture(material, aiTextureType_DIFFUSE, 0, "BaseColor", tex))
             {
@@ -3149,81 +3217,56 @@ auto get_workflow_aware_texture(const aiMaterial* material,
     }
     else if(target_semantic == "Metallic")
     {
-        // For metallic, check if we have a combined metallic/roughness texture
-        if(get_imported_texture(material, AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, "MetallicRoughness", tex))
+        // Dual-authored KHR glTF carries MR fallback textures — ignore them when glossiness is present.
+        if(workflow != material_workflow::khr_specular_glossiness)
         {
-            return true;
-        }
-        // Otherwise try standalone metallic
-        else if(get_imported_texture(material, AI_MATKEY_METALLIC_TEXTURE, "Metallic", tex))
-        {
-            return true;
-        }
-        // Heuristic fallback for MR workflows: FBX exporters (Blender, Substance) often
-        // emit the combined MR texture under a property name Assimp can't categorize, so
-        // it ends up in aiTextureType_UNKNOWN. When we've already classified the material
-        // as MR and no canonical metallic texture is present, trust the unknown slot as
-        // the combined metallic-roughness map. Tagging it "MetallicRoughness" makes the
-        // extracted file land with a semantic-suffixed name instead of bare "Texture".
-        else if(workflow == material_workflow::metallic_roughness
-                && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
-        {
-            APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
-            return true;
-        }
-        // For specular workflow, check if we should use combined processing
-        else if(workflow_uses_spec_gloss_conversion(workflow))
-        {
-            if(use_combined_specular)
+            if(get_imported_texture(material, AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, "MetallicRoughness", tex))
             {
-                // Skip individual processing - combined processing will handle this
-                return false;
+                return true;
             }
-            else if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToMetallic", tex))
+            if(get_imported_texture(material, AI_MATKEY_METALLIC_TEXTURE, "Metallic", tex))
             {
-                tex.inverse = false; // Special processing: extract metallic info from specular
+                return true;
+            }
+            // FBX exporters often emit combined MR under aiTextureType_UNKNOWN when canonical
+            // slots are empty. Allow recovery for native MR and unknown workflows, not KHR/Phong.
+            if(workflow != material_workflow::phong_specular_gloss
+               && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
+            {
+                APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
                 return true;
             }
         }
     }
     else if(target_semantic == "Roughness")
     {
-        // For roughness, check if we have a combined metallic/roughness texture
-        if(get_imported_texture(material, AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, "MetallicRoughness", tex))
+        if(workflow != material_workflow::khr_specular_glossiness)
         {
-            return true;
-        }
-        // Try standalone roughness
-        else if(get_imported_texture(material, AI_MATKEY_ROUGHNESS_TEXTURE, "Roughness", tex))
-        {
-            return true;
-        }
-        // Same UNKNOWN-slot fallback as the metallic branch — the FBX MR pipeline reuses
-        // the same combined texture for both maps. The shader's combined-MR sampling path
-        // (G = roughness, B = metallic) handles this correctly per glTF convention.
-        else if(workflow == material_workflow::metallic_roughness
-                && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
-        {
-            APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
-            return true;
-        }
-        // For specular/gloss workflow, convert gloss to roughness
-        else if(workflow_uses_spec_gloss_conversion(workflow))
-        {
-            if(use_combined_specular)
+            if(get_imported_texture(material, AI_MATKEY_GLTF_PBRMETALLICROUGHNESS_METALLICROUGHNESS_TEXTURE, "MetallicRoughness", tex))
             {
-                // Skip individual processing - combined processing will handle this
-                return false;
-            }
-            else if(get_imported_texture(material, aiTextureType_SHININESS, 0, "GlossToRoughness", tex))
-            {
-                tex.inverse = true; // Roughness = 1 - Gloss
                 return true;
             }
-            // Try specular texture as fallback (may contain gloss in alpha)
-            else if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToRoughness", tex))
+            if(get_imported_texture(material, AI_MATKEY_ROUGHNESS_TEXTURE, "Roughness", tex))
             {
-                tex.inverse = true;
+                return true;
+            }
+            if(workflow != material_workflow::phong_specular_gloss
+               && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
+            {
+                APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
+                return true;
+            }
+        }
+
+        if(workflow == material_workflow::phong_specular_gloss)
+        {
+            if(fbx_roughness_texture_is_native_roughness(material)
+               && get_imported_texture(material, aiTextureType_DIFFUSE_ROUGHNESS, 0, "Roughness", tex))
+            {
+                return true;
+            }
+            if(get_imported_texture(material, aiTextureType_SHININESS, 0, "ShininessToRoughness", tex))
+            {
                 return true;
             }
         }
@@ -3235,7 +3278,7 @@ auto get_workflow_aware_texture(const aiMaterial* material,
 /**
  * @brief Process material with intelligent property extraction and conversion.
  * First tries to get actual PBR properties, then converts missing ones from available data.
- * For specular/gloss workflows, gathers inputs once and performs a single conversion call.
+ * KHR spec/gloss factor conversion uses Khronos formulas; Phong uses shininess exponent mapping.
  */
 void process_material_with_workflow_conversion(const aiMaterial* material, 
                                              material_workflow workflow,
@@ -3248,7 +3291,6 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     bool has_roughness = (material->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS);
     
     // KHR spec-gloss: derive MR (+ optional base color) from diffuse/specular/gloss factors when textures are absent.
-    // Phong/CryEngine: use diffuse as base color tint and shininess/gloss for roughness (factors not fully baked).
     if(workflow == material_workflow::khr_specular_glossiness)
     {
         aiColor3D diffuse_color{1.0f, 1.0f, 1.0f};
@@ -3287,8 +3329,7 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
     }
     else if(workflow == material_workflow::phong_specular_gloss)
     {
-        // Instance albedo tint is AI_MATKEY_COLOR_DIFFUSE (CryEngine material color).
-        // AI_MATKEY_BASE_COLOR is often a white MR fallback and must not override the tint.
+        // Albedo tint is COLOR_DIFFUSE; BASE_COLOR is often a white MR fallback on dual-authored assets.
         aiColor3D diffuse_tint{1.0f, 1.0f, 1.0f};
         if(material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_tint) != AI_SUCCESS)
         {
@@ -3296,33 +3337,17 @@ void process_material_with_workflow_conversion(const aiMaterial* material,
         }
         base_color = diffuse_tint;
 
-        aiColor3D diffuse_color = diffuse_tint;
-
-        aiColor3D specular_color{0.04f, 0.04f, 0.04f};
-        float specular_factor = 1.0f;
-        material->Get(AI_MATKEY_COLOR_SPECULAR, specular_color);
-        material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor);
-        specular_color.r *= specular_factor;
-        specular_color.g *= specular_factor;
-        specular_color.b *= specular_factor;
-
-        float glossiness = 0.5f;
-        if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) != AI_SUCCESS)
+        metallic = 0.0f;
+        float shininess = 32.0f;
+        if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
         {
-            float shininess = 32.0f;
-            if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
-            {
-                glossiness = math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
-            }
+            roughness = phong_shininess_exponent_to_roughness(shininess);
         }
-
-        // Phong has no metallic slot, but specular RGB + diffuse + gloss map to MR (KHR appendix).
-        // Ignore bogus AI_MATKEY_METALLIC_FACTOR / ROUGHNESS_FACTOR from dual-authored exports.
-        auto [converted_base_color, derived_metallic, derived_roughness] =
-            convert_specular_gloss_to_metallic_roughness(diffuse_color, specular_color, glossiness);
-        metallic = derived_metallic;
-        roughness = derived_roughness;
-        APPLOG_TRACE("Mesh Importer: Phong spec/gloss -> MR factors: metallic={:.3f}, roughness={:.3f}",
+        else
+        {
+            roughness = 0.5f;
+        }
+        APPLOG_TRACE("Mesh Importer: Phong -> MR factors: metallic={:.3f}, roughness={:.3f}",
                      metallic, roughness);
     }
     else if(workflow == material_workflow::metallic_roughness)
@@ -3709,163 +3734,153 @@ void process_material(asset_manager& am,
         mat.set_cull_type(cull_type::none);
     }
 
-    // Spec-gloss workflows: when both the diffuse and specular textures are present we
-    // produce a metallic-roughness map directly from the pair (using the proper per-pixel
-    // quadratic metallic solve). When this fires we record the MR file here so the
-    // METALLIC & ROUGHNESS block below can short-circuit and skip the less accurate
-    // SpecularToMetallic / SpecularToRoughness fallback path.
+    // KHR spec-gloss: diffuse + specular pair -> Khronos bake (base color + MR).
     std::string combined_mr_relative;
 
-    // Track whether the per-pixel spec-gloss conversion succeeded for the BASE COLOR
-    // PROPERTY block below: when it did, the factors are already baked into the texture
-    // and the per-material uniforms must be set to identity to avoid double-application
-    // (the deferred shader does `albedo *= u_base_color`, `roughness *= tex.g`, etc.).
     bool khr_textures_baked = false;
+    bool spec_gloss_mr_baked = false;
 
     // BASE COLOR TEXTURE - Use workflow-aware detection
     {
         imported_texture texture;
-        if(get_workflow_aware_texture(material, workflow, "BaseColor", texture, get_imported_texture, false))
+        if(get_workflow_aware_texture(material, workflow, "BaseColor", texture, get_imported_texture))
         {
-            if(workflow == material_workflow::phong_specular_gloss)
+            if(workflow == material_workflow::khr_specular_glossiness)
             {
-                APPLOG_TRACE("Mesh Importer: Phong spec/gloss - diffuse used as base color, spec -> MR");
-                process_texture(texture, textures);
-
                 aiString specular_path{};
-                const bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
-                                          && specular_path.length > 0;
+                bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
+                                    && specular_path.length > 0;
+
+                const spec_gloss_factors_t factors = gather_spec_gloss_factors(material);
+                const bool bake_base_color =
+                    should_reconstruct_base_color_for_spec_gloss_pair(workflow, material);
+
+                imported_texture pair_albedo{};
+                const bool has_pair_albedo =
+                    get_imported_texture(material,
+                                         aiTextureType_DIFFUSE,
+                                         0,
+                                         bake_base_color ? "Diffuse" : "BaseColor",
+                                         pair_albedo);
+                const imported_texture& pair_source = has_pair_albedo ? pair_albedo : texture;
 
                 imported_texture specular_tex{};
-                int specular_idx = -1;
-                if(has_specular && get_imported_texture(material, aiTextureType_SPECULAR, 0, "Specular", specular_tex))
+                if(has_specular
+                   && !get_imported_texture(material, aiTextureType_SPECULAR, 0, "Specular", specular_tex))
                 {
-                    auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
-                    specular_idx = spec_pair.second;
+                    APPLOG_WARNING("Mesh Importer: Material has SPECULAR slot but texture path could not be resolved");
+                    has_specular = false;
                 }
 
-                if(collecting && has_specular && env.job_store)
+                if(has_specular)
                 {
-                    texture_job job{};
-                    job.type = texture_job_type::specular_to_mr;
-                    job.specular_desc = specular_tex;
-                    job.output_mr_relative = build_converted_texture_name(filename,
-                                                                          scene,
-                                                                          specular_idx,
-                                                                          specular_path.C_Str(),
-                                                                          "MetallicRoughness");
-                    env.job_store->try_add(std::move(job));
-                }
-                else if(binding && has_specular && env.catalog)
-                {
-                    const std::string expected_mr = build_converted_texture_name(filename,
-                                                                                 scene,
-                                                                                 specular_idx,
-                                                                                 specular_path.C_Str(),
-                                                                                 "MetallicRoughness");
-                    if(env.catalog->has_output_for_lookup(specular_tex, expected_mr))
+                    if(bake_base_color)
                     {
-                        combined_mr_relative = expected_mr;
+                        APPLOG_TRACE("Mesh Importer: {} - extension diffuse + specular pair -> PBR bake",
+                                     material_workflow_label(workflow));
                     }
-                }
-            }
-            else if(workflow == material_workflow::khr_specular_glossiness)
-            {
-                aiString specular_path{};
-                const bool has_specular = (material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) == AI_SUCCESS)
-                                          && specular_path.length > 0;
-
-                spec_gloss_factors_t factors{};
-                {
-                    aiColor4D diffuse_factor_color{1.0f, 1.0f, 1.0f, 1.0f};
-                    if(material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_factor_color) == AI_SUCCESS)
+                    else
                     {
-                        factors.diffuse_r = diffuse_factor_color.r;
-                        factors.diffuse_g = diffuse_factor_color.g;
-                        factors.diffuse_b = diffuse_factor_color.b;
-                        factors.diffuse_a = diffuse_factor_color.a;
+                        APPLOG_TRACE("Mesh Importer: {} - diffuse pass-through, specular pair -> MR only",
+                                     material_workflow_label(workflow));
                     }
 
-                    aiColor3D specular_factor_color{1.0f, 1.0f, 1.0f};
-                    material->Get(AI_MATKEY_COLOR_SPECULAR, specular_factor_color);
-                    float specular_factor_scalar = 1.0f;
-                    material->Get(AI_MATKEY_SPECULAR_FACTOR, specular_factor_scalar);
-                    factors.specular_r = specular_factor_color.r * specular_factor_scalar;
-                    factors.specular_g = specular_factor_color.g * specular_factor_scalar;
-                    factors.specular_b = specular_factor_color.b * specular_factor_scalar;
-
-                    factors.glossiness = 1.0f;
-                    if(material->Get(AI_MATKEY_GLOSSINESS_FACTOR, factors.glossiness) != AI_SUCCESS)
+                    if(collecting && env.job_store)
                     {
-                        float shininess = 32.0f;
-                        if(material->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS)
+                        texture_job job{};
+                        job.type = texture_job_type::spec_gloss_pair;
+                        job.desc = pair_source;
+                        job.specular_desc = specular_tex;
+                        job.spec_gloss_factors = factors;
+                        job.bake_base_color = bake_base_color;
+                        job.output_base_color_relative = build_converted_texture_name(filename,
+                                                                                    scene,
+                                                                                    pair_source.embedded_index,
+                                                                                    pair_source.name,
+                                                                                    "BaseColor");
+                        job.output_mr_relative = build_converted_texture_name(filename,
+                                                                              scene,
+                                                                              specular_tex.embedded_index,
+                                                                              specular_tex.name,
+                                                                              "MetallicRoughness");
+                        env.job_store->try_add(std::move(job));
+                    }
+                    else if(binding && env.catalog)
+                    {
+                        const std::string expected_base = build_converted_texture_name(filename,
+                                                                                       scene,
+                                                                                       pair_source.embedded_index,
+                                                                                       pair_source.name,
+                                                                                       "BaseColor");
+                        const std::string expected_mr = build_converted_texture_name(filename,
+                                                                                     scene,
+                                                                                     specular_tex.embedded_index,
+                                                                                     specular_tex.name,
+                                                                                     "MetallicRoughness");
+
+                        if(bake_base_color && env.catalog->has_output_for_lookup(pair_source, expected_base))
                         {
-                            factors.glossiness =
-                                math::clamp(1.0f - std::sqrt(2.0f / (shininess + 2.0f)), 0.0f, 1.0f);
+                            texture.name = expected_base;
+                            khr_textures_baked = true;
+                            APPLOG_TRACE("Mesh Importer: Wrote converted base color (factors baked: D[{:.2f},{:.2f},{:.2f},{:.2f}] S[{:.2f},{:.2f},{:.2f}] G[{:.2f}]): {}",
+                                         factors.diffuse_r,
+                                         factors.diffuse_g,
+                                         factors.diffuse_b,
+                                         factors.diffuse_a,
+                                         factors.specular_r,
+                                         factors.specular_g,
+                                         factors.specular_b,
+                                         factors.glossiness,
+                                         texture.name);
+                        }
+
+                        const std::string found_mr =
+                            find_spec_gloss_mr_relative(env.catalog, output_dir, specular_tex, expected_mr);
+                        if(!found_mr.empty())
+                        {
+                            combined_mr_relative = found_mr;
+                            spec_gloss_mr_baked = true;
+                            if(found_mr == expected_mr)
+                            {
+                                APPLOG_TRACE("Mesh Importer: Using pair metallic-roughness: {}", combined_mr_relative);
+                            }
+                            else
+                            {
+                                APPLOG_TRACE("Mesh Importer: Using catalog metallic-roughness: {} (expected {})",
+                                             combined_mr_relative,
+                                             expected_mr);
+                            }
+                        }
+                        else
+                        {
+                            const std::string synced_mr = try_synchronous_spec_gloss_pair_mr(output_dir,
+                                                                                             scene,
+                                                                                             pair_source,
+                                                                                             specular_tex,
+                                                                                             factors,
+                                                                                             expected_mr,
+                                                                                             bake_base_color);
+                            if(!synced_mr.empty())
+                            {
+                                combined_mr_relative = synced_mr;
+                                spec_gloss_mr_baked = true;
+                                imported_texture mr_result = specular_tex;
+                                mr_result.name = synced_mr;
+                                env.catalog->register_entry(specular_tex, mr_result);
+                            }
+                            else
+                            {
+                                APPLOG_WARNING("Mesh Importer: Pair metallic-roughness not found (expected {}) and bind-time bake failed",
+                                               expected_mr);
+                            }
+                        }
+
+                        if(!khr_textures_baked)
+                        {
+                            process_texture(texture, textures);
                         }
                     }
-                }
-
-                imported_texture specular_tex{};
-                int specular_idx = -1;
-                if(has_specular && get_imported_texture(material, aiTextureType_SPECULAR, 0, "Specular", specular_tex))
-                {
-                    auto spec_pair = scene->GetEmbeddedTextureAndIndex(specular_path.C_Str());
-                    specular_idx = spec_pair.second;
-                }
-
-                if(collecting && has_specular && env.job_store)
-                {
-                    texture_job job{};
-                    job.type = texture_job_type::spec_gloss_pair;
-                    job.desc = texture;
-                    job.specular_desc = specular_tex;
-                    job.spec_gloss_factors = factors;
-                    job.output_base_color_relative =
-                        build_converted_texture_name(filename, scene, texture.embedded_index, texture.name, "BaseColor");
-                    job.output_mr_relative = build_converted_texture_name(filename,
-                                                                          scene,
-                                                                          specular_idx,
-                                                                          specular_path.C_Str(),
-                                                                          "MetallicRoughness");
-                    env.job_store->try_add(std::move(job));
-                }
-                else if(binding && has_specular && env.catalog)
-                {
-                    const std::string expected_base = build_converted_texture_name(filename,
-                                                                                   scene,
-                                                                                   texture.embedded_index,
-                                                                                   texture.name,
-                                                                                   "BaseColor");
-                    const std::string expected_mr = build_converted_texture_name(filename,
-                                                                                 scene,
-                                                                                 specular_idx,
-                                                                                 specular_path.C_Str(),
-                                                                                 "MetallicRoughness");
-
-                    if(env.catalog->has_output_for_lookup(texture, expected_base))
-                    {
-                        texture.name = expected_base;
-                        khr_textures_baked = true;
-                        APPLOG_TRACE("Mesh Importer: Wrote converted base color (factors baked: D[{:.2f},{:.2f},{:.2f},{:.2f}] S[{:.2f},{:.2f},{:.2f}] G[{:.2f}]): {}",
-                                     factors.diffuse_r,
-                                     factors.diffuse_g,
-                                     factors.diffuse_b,
-                                     factors.diffuse_a,
-                                     factors.specular_r,
-                                     factors.specular_g,
-                                     factors.specular_b,
-                                     factors.glossiness,
-                                     texture.name);
-                    }
-
-                    if(env.catalog->has_output_for_lookup(specular_tex, expected_mr))
-                    {
-                        combined_mr_relative = expected_mr;
-                        APPLOG_TRACE("Mesh Importer: Wrote converted metallic-roughness: {}", combined_mr_relative);
-                    }
-
-                    if(!khr_textures_baked)
+                    else
                     {
                         process_texture(texture, textures);
                     }
@@ -3895,24 +3910,26 @@ void process_material(asset_manager& am,
 
         if(khr_textures_baked)
         {
-            // KHR spec-gloss texture bake already applied diffuse/specular/gloss factors.
-            // The shader does
-            // `albedo = sample * u_base_color`, `metalness = u_surface_metalness * tex.b`,
-            // `roughness = u_surface_roughness * tex.g` — so we MUST set the per-material
-            // factors to identity here to avoid double-applying them.
+            // KHR pair bake baked diffuse/specular/gloss into the base-color and MR textures.
             base_color_property = {1.0f, 1.0f, 1.0f};
             metallic_property = 1.0f;
             roughness_property = 1.0f;
         }
         else
         {
-            // No KHR texture bake (Phong pass-through or factor-only): map material properties to MR.
-            // the per-material conversion that maps property values from the material's
-            // workflow into MR equivalents.
             process_material_with_workflow_conversion(material, workflow,
                                                       base_color_property,
                                                       metallic_property,
                                                       roughness_property);
+            if(spec_gloss_mr_baked)
+            {
+                // MR pair bake baked specular/gloss into the texture; diffuse tint stays on uniforms.
+                metallic_property = 1.0f;
+                roughness_property = 1.0f;
+                APPLOG_TRACE("Mesh Importer: MR texture drives shading — uniform multipliers: metallic={:.3f}, roughness={:.3f}",
+                             metallic_property,
+                             roughness_property);
+            }
         }
 
         math::color base_color{};
@@ -3924,8 +3941,8 @@ void process_material(asset_manager& am,
         mat.set_roughness(math::clamp(roughness_property, 0.0f, 1.0f));
     }
 
-    // METALLIC & ROUGHNESS TEXTURES - Check for duplicate specular usage first
-    bool uses_duplicate_specular = detect_duplicate_specular_usage(material, workflow);
+    // METALLIC & ROUGHNESS TEXTURES
+    const bool khr_combined_specular_mr = khr_needs_combined_specular_mr(material, workflow);
     bool has_metallic_tex = false;
     bool has_roughness_tex = false;
 
@@ -3945,7 +3962,7 @@ void process_material(asset_manager& am,
                          combined_mr_relative);
         }
     }
-    else if(uses_duplicate_specular)
+    else if(khr_combined_specular_mr && combined_mr_relative.empty())
     {
         imported_texture combined_texture;
         if(get_imported_texture(material, aiTextureType_SPECULAR, 0, "SpecularToMetallicRoughness", combined_texture))
@@ -3971,7 +3988,7 @@ void process_material(asset_manager& am,
     {
         {
             imported_texture texture;
-            if(get_workflow_aware_texture(material, workflow, "Metallic", texture, get_imported_texture, uses_duplicate_specular))
+            if(get_workflow_aware_texture(material, workflow, "Metallic", texture, get_imported_texture))
             {
                 process_texture(texture, textures);
 
@@ -3980,18 +3997,13 @@ void process_material(asset_manager& am,
                     auto key = fs::convert_to_protocol(output_dir / texture.name);
                     mat.set_metalness_map(am.get_asset<gfx::texture>(key.generic_string()));
                     has_metallic_tex = true;
-
-                    if(texture.semantic == "SpecularToMetallic")
-                    {
-                        APPLOG_TRACE("Mesh Importer: Converting specular texture to metallic: {}", texture.name);
-                    }
                 }
             }
         }
 
         {
             imported_texture texture;
-            if(get_workflow_aware_texture(material, workflow, "Roughness", texture, get_imported_texture, uses_duplicate_specular))
+            if(get_workflow_aware_texture(material, workflow, "Roughness", texture, get_imported_texture))
             {
                 process_texture(texture, textures);
 
@@ -4001,33 +4013,18 @@ void process_material(asset_manager& am,
                     mat.set_roughness_map(am.get_asset<gfx::texture>(key.generic_string()));
                     has_roughness_tex = true;
 
-                    if(texture.semantic == "GlossToRoughness")
+                    if(texture.semantic == "ShininessToRoughness")
                     {
-                        APPLOG_TRACE("Mesh Importer: Converting gloss texture to roughness: {}", texture.name);
-                    }
-                    else if(texture.semantic == "SpecularToRoughness")
-                    {
-                        APPLOG_TRACE("Mesh Importer: Converting specular texture to roughness: {}", texture.name);
+                        APPLOG_TRACE("Mesh Importer: Converting shininess texture to roughness: {}", texture.name);
                     }
                 }
             }
         }
     }
 
-    // Baked or converted MR textures store per-pixel metal/rough in tex channels; scalar is a multiplier.
-    if(khr_textures_baked)
-    {
-        if(has_metallic_tex)
-        {
-            mat.set_metalness(1.0f);
-        }
-        if(has_roughness_tex)
-        {
-            mat.set_roughness(1.0f);
-        }
-    }
-    else if(workflow == material_workflow::phong_specular_gloss && has_metallic_tex && has_roughness_tex
-            && mat.metalness_roughness_combined())
+    // Combined MR textures store per-pixel metal/rough; the scalar uniform is only a multiplier.
+    if(has_metallic_tex && has_roughness_tex
+       && (khr_textures_baked || spec_gloss_mr_baked || workflow == material_workflow::khr_specular_glossiness))
     {
         mat.set_metalness(1.0f);
         mat.set_roughness(1.0f);
