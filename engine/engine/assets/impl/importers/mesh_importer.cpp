@@ -29,6 +29,7 @@
 #include <filesystem/filesystem.h>
 #include <numeric>
 #include <queue>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 #include <unordered_map>
@@ -2318,6 +2319,113 @@ auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflo
            && !base_color_texture_is_authoritative(material);
 }
 
+auto string_ends_with(std::string_view value, std::string_view suffix) -> bool
+{
+    return value.size() >= suffix.size()
+           && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+/**
+ * @brief Lumberyard Bistro FBX export: paired *BaseColor* + *Specular* DDS paths (not CryEngine *_spec*).
+ */
+auto lumberyard_bistro_basecolor_specular_pair(const aiMaterial* material) -> bool
+{
+    if(material == nullptr)
+    {
+        return false;
+    }
+
+    aiString diffuse_path{};
+    aiString specular_path{};
+    if(material->GetTexture(aiTextureType_DIFFUSE, 0, &diffuse_path) != AI_SUCCESS || diffuse_path.length == 0)
+    {
+        return false;
+    }
+    if(material->GetTexture(aiTextureType_SPECULAR, 0, &specular_path) != AI_SUCCESS || specular_path.length == 0)
+    {
+        return false;
+    }
+
+    const std::string diffuse_stem =
+        string_utils::to_lower(fs::path(diffuse_path.C_Str()).stem().string());
+    const std::string specular_stem =
+        string_utils::to_lower(fs::path(specular_path.C_Str()).stem().string());
+
+    if(!string_ends_with(diffuse_stem, "_basecolor") || !string_ends_with(specular_stem, "_specular"))
+    {
+        return false;
+    }
+
+    constexpr std::string_view k_basecolor_suffix = "_basecolor";
+    constexpr std::string_view k_specular_suffix = "_specular";
+    const std::string diffuse_prefix =
+        diffuse_stem.substr(0, diffuse_stem.size() - k_basecolor_suffix.size());
+    const std::string specular_prefix =
+        specular_stem.substr(0, specular_stem.size() - k_specular_suffix.size());
+    return diffuse_prefix == specular_prefix;
+}
+
+/**
+ * @brief CryEngine / Lumberyard Bistro: combined MR+AO is stored in SPECULAR
+ * (glTF layout: R=occlusion, G=roughness, B=metallic).
+ */
+auto specular_texture_path_looks_like_packed_mr(const aiMaterial* material) -> bool
+{
+    if(material == nullptr)
+    {
+        return false;
+    }
+
+    if(lumberyard_bistro_basecolor_specular_pair(material))
+    {
+        return true;
+    }
+
+    aiString path{};
+    if(material->GetTexture(aiTextureType_SPECULAR, 0, &path) != AI_SUCCESS || path.length == 0)
+    {
+        return false;
+    }
+
+    const std::string stem = string_utils::to_lower(fs::path(path.C_Str()).stem().string());
+    if(string_ends_with(stem, "_spec"))
+    {
+        return true;
+    }
+    return stem.find("_spec_") != std::string::npos;
+}
+
+/**
+ * @brief Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro / CryEngine _spec).
+ * Not KHR spec/gloss and not Phong specular-color maps.
+ */
+auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool
+{
+    if(material == nullptr || material_has_glossiness_factor(material))
+    {
+        return false;
+    }
+    if(material->GetTextureCount(aiTextureType_SPECULAR) == 0)
+    {
+        return false;
+    }
+    if(material->GetTextureCount(aiTextureType_SHININESS) > 0)
+    {
+        return false;
+    }
+
+    const bool has_albedo_texture = material->GetTextureCount(aiTextureType_DIFFUSE) > 0
+                                    || material->GetTextureCount(aiTextureType_BASE_COLOR) > 0;
+    if(!has_albedo_texture)
+    {
+        return false;
+    }
+
+    // Path naming is the reliable Bistro/CryEngine signal. Do not require COLOR_SPECULAR ≈ white:
+    // Assimp FBX keeps Phong defaults (often ~0.2–0.5) even though the engine multiplies by white.
+    return specular_texture_path_looks_like_packed_mr(material);
+}
+
 /**
  * @brief True when the material has dedicated PBR metallic/roughness texture slots.
  * Factor-only evidence is handled separately (requires PBR_BRDF, no glossiness factor).
@@ -2365,6 +2473,11 @@ auto has_metallic_roughness_texture_evidence(const aiMaterial* material) -> bool
         {
             return true;
         }
+    }
+
+    if(material_has_packed_mr_in_specular_slot(material))
+    {
+        return true;
     }
 
     return false;
@@ -2473,7 +2586,14 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow
 
     if(has_metallic_roughness_texture_evidence(material))
     {
-        APPLOG_TRACE("Mesh Importer: Workflow=MR (dedicated metallic/roughness texture slots)");
+        if(material_has_packed_mr_in_specular_slot(material))
+        {
+            APPLOG_TRACE("Mesh Importer: Workflow=MR (packed metallic-roughness in aiTextureType_SPECULAR)");
+        }
+        else
+        {
+            APPLOG_TRACE("Mesh Importer: Workflow=MR (dedicated metallic/roughness texture slots)");
+        }
         return material_workflow::metallic_roughness;
     }
 
@@ -3236,6 +3356,12 @@ auto get_workflow_aware_texture(const aiMaterial* material,
                 APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
                 return true;
             }
+            if(material_has_packed_mr_in_specular_slot(material)
+               && get_imported_texture(material, aiTextureType_SPECULAR, 0, "MetallicRoughness", tex))
+            {
+                APPLOG_TRACE("Mesh Importer: Using packed metallic-roughness from aiTextureType_SPECULAR");
+                return true;
+            }
         }
     }
     else if(target_semantic == "Roughness")
@@ -3254,6 +3380,12 @@ auto get_workflow_aware_texture(const aiMaterial* material,
                && get_imported_texture(material, aiTextureType_UNKNOWN, 0, "MetallicRoughness", tex))
             {
                 APPLOG_TRACE("Mesh Importer: Recovering metallic-roughness texture from aiTextureType_UNKNOWN slot");
+                return true;
+            }
+            if(material_has_packed_mr_in_specular_slot(material)
+               && get_imported_texture(material, aiTextureType_SPECULAR, 0, "MetallicRoughness", tex))
+            {
+                APPLOG_TRACE("Mesh Importer: Using packed metallic-roughness from aiTextureType_SPECULAR");
                 return true;
             }
         }
@@ -4023,8 +4155,10 @@ void process_material(asset_manager& am,
     }
 
     // Combined MR textures store per-pixel metal/rough; the scalar uniform is only a multiplier.
+    const bool packed_mr_specular = material_has_packed_mr_in_specular_slot(material);
     if(has_metallic_tex && has_roughness_tex
-       && (khr_textures_baked || spec_gloss_mr_baked || workflow == material_workflow::khr_specular_glossiness))
+       && (khr_textures_baked || spec_gloss_mr_baked || workflow == material_workflow::khr_specular_glossiness
+           || packed_mr_specular))
     {
         mat.set_metalness(1.0f);
         mat.set_roughness(1.0f);
