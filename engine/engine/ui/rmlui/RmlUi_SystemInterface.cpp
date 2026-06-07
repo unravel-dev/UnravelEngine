@@ -282,7 +282,7 @@ auto input_event_handler(Rml::Context* context, const os::event& event) -> bool
             break;
     }
 
-    return !handled; // Return true if event should continue propagating
+    return !handled; // false = consumed by RmlUi, true = propagate to game input
 }
 
 auto convert_key(os::key::code ospp_key) -> Rml::Input::KeyIdentifier

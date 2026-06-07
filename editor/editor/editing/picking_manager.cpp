@@ -18,6 +18,9 @@
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
+
+#include <algorithm>
+#include <unordered_set>
 namespace unravel
 {
 
@@ -361,6 +364,60 @@ auto should_skip_selection_for_additive_pick(const editing_manager& em,
     return false;
 }
 
+/**
+ * @brief Removes entities that are descendants of another entity in the same candidate set.
+ * Used by area selection so a box around a parent does not also select its children.
+ */
+auto filter_area_selection_roots(std::vector<entt::handle>& candidates) -> void
+{
+    candidates.erase(
+        std::remove_if(candidates.begin(),
+                       candidates.end(),
+                       [&](const entt::handle& entity)
+                       {
+                           for(const auto& other : candidates)
+                           {
+                               if(other != entity && is_ancestor_of(other, entity))
+                               {
+                                   return true;
+                               }
+                           }
+                           return false;
+                       }),
+        candidates.end());
+}
+
+auto resolve_area_selection_candidates(entt::registry& registry, std::vector<entt::handle> candidates)
+    -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> resolved;
+    resolved.reserve(candidates.size());
+
+    std::unordered_set<entt::entity> seen;
+    for(const auto& candidate : candidates)
+    {
+        if(!candidate)
+        {
+            continue;
+        }
+
+        auto logical = get_logical_top_level_entity(registry, candidate);
+        if(!logical)
+        {
+            continue;
+        }
+
+        const auto entity_id = logical.entity();
+        if(seen.insert(entity_id).second)
+        {
+            resolved.push_back(logical);
+        }
+    }
+
+    filter_area_selection_roots(resolved);
+    return resolved;
+}
+
 } // namespace
 
 constexpr int picking_manager::tex_id_dim;
@@ -386,56 +443,53 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
     {
         const auto& pick_camera = *pick_camera_;
 
-        auto on_pick_failed = [&](auto e)
-        {
-            auto ue = target_scene->create_handle(e);
+        std::vector<entt::handle> in_area_candidates;
+        in_area_candidates.reserve(64);
 
-
-            if(std::find(picked_entities_.begin(), picked_entities_.end(), ue) == picked_entities_.end())
-            {
-                em.unselect(ue);
-            }
-
-        };
-
-        auto on_pick_success = [&](auto e)
-        {
-            auto id = ENTT_ID_TYPE(e);
-            process_pick_result(ctx, target_scene, id);
-        };
-
-        // Area picking supports three types of entities:
-        // Type 1: Position-only picking for entities with just transform_component (no visual bounds)
         target_scene->registry->view<transform_component, active_component>().each(
-            [&](auto e, auto&& transform_comp, auto&& active)
+            [&](auto e, auto&& transform_comp, auto&&)
             {
                 const auto& world_transform = transform_comp.get_transform_global();
                 const auto& world_position = world_transform.get_position();
 
-               
-
                 if(!pick_camera.get_frustum().test_point(world_position))
                 {
-                    on_pick_failed(e);
                     return;
                 }
 
-                // Test if position is in selection area
                 if(!is_position_in_selection_area(world_position, pick_camera, pick_position_, pick_area_))
                 {
-                    on_pick_failed(e);
                     return;
                 }
 
-                on_pick_success(e);
+                in_area_candidates.push_back(target_scene->create_handle(e));
+            });
+
+        const auto area_selection =
+            resolve_area_selection_candidates(*target_scene->registry, std::move(in_area_candidates));
+
+        target_scene->registry->view<transform_component, active_component>().each(
+            [&](auto e, auto&&, auto&&)
+            {
+                auto handle = target_scene->create_handle(e);
+                const bool in_area_selection =
+                    std::find(area_selection.begin(), area_selection.end(), handle) != area_selection.end();
+
+                if(in_area_selection)
+                {
+                    process_pick_result(ctx, target_scene, ENTT_ID_TYPE(e));
+                    return;
+                }
+
+                if(std::find(picked_entities_.begin(), picked_entities_.end(), handle) == picked_entities_.end())
+                {
+                    em.unselect(handle);
+                }
             });
 
         pick_camera_.reset();
         original_camera_.reset();
         pick_position_ = {};
-        // pick_area_ = {};
-
-        // picked_entities_.clear();
         return;
     }
 
@@ -800,7 +854,8 @@ void picking_manager::process_pick_result(rtti::context& ctx, scene* target_scen
         {
             auto logical_pick = get_logical_top_level_entity(*target_scene->registry, picked_entity);
 
-            if(!em.is_selected(logical_pick))
+            const bool is_area_picking = pick_area_.x > 0.0f && pick_area_.y > 0.0f;
+            if(is_area_picking || !em.is_selected(logical_pick))
             {
                 picked_entity = logical_pick;
             }

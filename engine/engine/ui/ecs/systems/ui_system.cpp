@@ -21,6 +21,7 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/StreamMemory.h>
@@ -47,13 +48,12 @@ namespace unravel
 namespace
 {
     uint64_t next_context_id = 0;
-    Rml::Context* debug_target_context_ = nullptr;
 
-    auto remove_context(Rml::Context* context) -> void
+    auto remove_context(Rml::Context* context, Rml::Context*& debug_target_context) -> void
     {
-        if(debug_target_context_ == context)
+        if(debug_target_context == context)
         {
-            debug_target_context_ = nullptr;
+            debug_target_context = nullptr;
             Rml::Debugger::SetContext(nullptr);
         }
         if(context)
@@ -138,7 +138,7 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
                 ui_comp.document->Close();
                 ui_comp.document = nullptr;
             }
-            remove_context(ui_comp.context);
+            remove_context(ui_comp.context, debug_target_context_);
             ui_comp.context = nullptr;
         }
     }
@@ -146,7 +146,7 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
     debug_target_context_ = nullptr;
     if(debug_context_)
     {
-        remove_context(debug_context_);
+        remove_context(debug_context_, debug_target_context_);
         debug_context_ = nullptr;
     }
     Rml::Debugger::Shutdown();
@@ -167,7 +167,7 @@ void ui_system::update_ui_document_common(entt::handle handle, ui_document_compo
         }
         if(ui_comp.context)
         {
-            remove_context(ui_comp.context);
+            remove_context(ui_comp.context, debug_target_context_);
             ui_comp.context = nullptr;
         }
     }
@@ -494,92 +494,6 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
     }
 }
 
-void ui_system::on_os_event(rtti::context& ctx, os::event& event)
-{
-    auto& ecs_system = ctx.get_cached<ecs>();
-    auto& scene = ecs_system.get_scene();
-    auto& input = ctx.get_cached<input_system>();
-    bool is_input_allowed = input.manager.is_input_allowed();
-    Rml::Context* target_context = nullptr;
-
-    if(is_input_allowed)
-    {
-        if(Rml::Debugger::IsVisible() && debug_context_)
-        {
-            if(process_event(scene, debug_context_, event))
-            {
-                target_context = debug_context_;
-            }
-        }
-        
-        scene.registry->view<ui_document_component, active_component>().each(
-            [&](entt::entity, ui_document_component& ui_comp, active_component& active)
-            {
-                if(ui_comp.context && ui_comp.is_enabled())
-                {
-                    if(process_event(scene, ui_comp.context, event))
-                    {
-                        target_context = ui_comp.context;
-                    }
-                }
-            });
-    }
-    
-
-    if(target_context || !is_input_allowed)
-    {
-
-        if(event.type == os::events::mouse_button)
-        {
-            scene.registry->view<ui_document_component>().each(
-                [&](entt::entity, ui_document_component& ui_comp)
-                {
-                 
-                    if(ui_comp.context && (ui_comp.context != target_context || !is_input_allowed))
-                    {
-                        ui_comp.context->ProcessMouseLeave();
-    
-                        auto focus_element = ui_comp.context->GetFocusElement();
-                        if(focus_element)
-                        {
-                            focus_element->Blur();
-                        }
-                    }
-                });
-
-            if(target_context)
-            {
-                event = {};
-            }
-
-        }
-        
-    }
-}
-
-auto ui_system::is_not_root_element(scene& scn, Rml::Element* element) -> bool
-{
-    if(!element)
-    {
-        return false;
-    }
-    if(element->GetTagName() == "#root")
-    {
-        return false;
-    }
-
-    auto view = scn.registry->view<ui_document_component>();
-    for(auto entity : view)
-    {
-        auto& ui_comp = view.get<ui_document_component>(entity);
-        if(ui_comp.document == element)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 void ui_system::load_font(const std::string& path)
 {
     const Rml::String font_path = fs::resolve_protocol(path).string();
@@ -627,8 +541,8 @@ void ui_system::on_destroy_component(entt::registry& r, entt::entity e)
             component.document->Close();
             component.document = nullptr;
         }
-
-        remove_context(component.context);
+        Rml::Context* null_context = nullptr;
+        remove_context(component.context, null_context);
         component.context = nullptr;
     }
     component.framebuffer.reset();
@@ -660,45 +574,6 @@ void ui_system::set_debugger_enabled(bool enabled)
     Rml::Debugger::SetVisible(enabled);
 }
 
-auto ui_system::process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool
-{
-    if(!context->ProcessMouseMove(x, y, 0))
-    {
-        auto hover_element = context->GetHoverElement();
-        if(is_not_root_element(scn, hover_element))
-        {
-            if(debug_target_context_ != context)
-            {
-                debug_target_context_ = context;
-                Rml::Debugger::SetContext(context);
-            }
-
-            return true;
-        }
-    }
-    return false;
-}
-
-auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& event) -> bool
-{
-    if(!context)
-    {
-        return false;
-    }
-    if(RmlEngine::input_event_handler(context, event))
-    {
-        if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
-        {
-            auto hover_element = context->GetHoverElement();
-            if(is_not_root_element(scn, hover_element))
-            {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
 {
     auto& ev = ctx.get_cached<events>();
@@ -718,7 +593,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
                 }
                 if(ui_comp.context)
                 {
-                    remove_context(ui_comp.context);
+                    remove_context(ui_comp.context, debug_target_context_);
                     ui_comp.context = nullptr;
                 }
             }

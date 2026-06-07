@@ -4572,7 +4572,6 @@ void process_material(asset_manager& am,
             emissive = {property.r, property.g, property.b};
             emissive = math::clamp(emissive.value, 0.0f, 1.0f);
             mat.set_emissive_color(emissive);
-            mat.set_emissive_intensity(5.0f);
         }
     }
     // EMISSIVE INTENSITY (glTF KHR: emissiveIntensity; premultiplied in deferred submit)

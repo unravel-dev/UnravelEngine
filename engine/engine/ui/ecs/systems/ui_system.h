@@ -100,7 +100,6 @@ struct ui_system
 
     auto is_debugger_enabled() const -> bool;
     void set_debugger_enabled(bool enabled);
-private:
 
     /**
      * @brief Update UI documents (load, reload, visibility). No camera dependency.
@@ -149,17 +148,31 @@ private:
 
     auto is_not_root_element(scene& scn, Rml::Element* element) -> bool;
 
+    // OS event input routing (implemented in ui_system_input.cpp)
+    struct ui_pointer_dispatch_result
+    {
+        Rml::Context* target_context = nullptr;
+    };
+
+    auto find_keyboard_context(scene& scn) const -> Rml::Context*;
+    auto try_consume_keyboard_event(scene& scn, os::event& event) -> bool;
+    auto dispatch_pointer_event(rtti::context& ctx, scene& scn, os::event& event) -> ui_pointer_dispatch_result;
+    void apply_mouse_press_focus(scene& scn, os::event& event, Rml::Context* target_context, bool input_allowed);
+
+    void blur_ui_context(Rml::Context* context) const;
+    void refresh_mouse_state(rtti::context& ctx, scene& scn);
+    auto process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool;
+    auto process_event(scene& scn, Rml::Context* context, os::event& event) -> bool;
+
     void load_font(const std::string& path);
 
     /// Ensure framebuffer exists for document; create or resize if needed
     void ensure_document_framebuffer(ui_document_component& comp);
+    private:
 
-
-    auto process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool;
-
-    auto process_event(scene& scn, Rml::Context* context, os::event& event) -> bool;
     /// Debug/legacy context (empty, used for RmlUi debugger host - menu, info, log)
     Rml::Context* debug_context_ = nullptr;
+    Rml::Context* debug_target_context_ = nullptr;
     std::shared_ptr<RmlUi_RenderLayerStack> debug_render_layer_stack_ = nullptr;
 
 

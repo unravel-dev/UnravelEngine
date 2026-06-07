@@ -117,9 +117,18 @@ namespace RmlEngine
  * @brief Process ospp event and forward to RmlUi context
  * @param context RmlUi context to receive events
  * @param event ospp event to process
- * @return True if event should continue propagating, false if handled
+ * @return true if the event should propagate to game input; false if RmlUi consumed it
  */
 auto input_event_handler(Rml::Context* context, const os::event& event) -> bool;
+
+/**
+ * @brief Forward an event to RmlUi and report whether it was consumed.
+ * @return true when RmlUi handled the event and game input should ignore it
+ */
+inline auto consume_input_event(Rml::Context* context, const os::event& event) -> bool
+{
+    return !input_event_handler(context, event);
+}
 
 /**
  * @brief Convert ospp key code to RmlUi key identifier
