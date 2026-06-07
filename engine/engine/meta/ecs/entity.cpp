@@ -4,6 +4,7 @@
 #include <serialization/archives/yaml.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <filesystem/mapped_file_reader.h>
 #include <serialization/serialization.h>
 #include "components/all_components.h"
 #include <engine/engine.h>
@@ -985,8 +986,12 @@ void load_from_stream(std::istream& stream, entt::handle& obj)
 
 void load_from_file(const std::string& absolute_path, entt::handle& obj)
 {
-    std::ifstream stream(absolute_path);
-    load_from_stream(stream, obj);
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
+    {
+        return;
+    }
+    load_from_stream(input.stream(), obj);
 }
 
 void load_from_stream_bin(std::istream& stream, entt::handle& obj)
@@ -1008,10 +1013,12 @@ void load_from_stream_bin(std::istream& stream, entt::handle& obj)
 
 void load_from_file_bin(const std::string& absolute_path, entt::handle& obj)
 {
-    // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-    std::ifstream stream(absolute_path, std::ios::binary);
-    load_from_stream_bin(stream, obj);
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
+    {
+        return;
+    }
+    load_from_stream_bin(input.stream(), obj);
 }
 
 auto load_from_prefab_out(const asset_handle<prefab>& pfb,
@@ -1294,10 +1301,12 @@ void load_from_stream(std::istream& stream, scene& scn)
 }
 void load_from_file(const std::string& absolute_path, scene& scn)
 {
-    // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-    std::ifstream stream(absolute_path);
-    load_from_stream(stream, scn);
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
+    {
+        return;
+    }
+    load_from_stream(input.stream(), scn);
 }
 void load_from_stream_bin(std::istream& stream, scene& scn)
 {
@@ -1321,10 +1330,12 @@ void load_from_stream_bin(std::istream& stream, scene& scn)
 }
 void load_from_file_bin(const std::string& absolute_path, scene& scn)
 {
-    // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-    std::ifstream stream(absolute_path, std::ios::binary);
-    load_from_stream_bin(stream, scn);
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
+    {
+        return;
+    }
+    load_from_stream_bin(input.stream(), scn);
 }
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool

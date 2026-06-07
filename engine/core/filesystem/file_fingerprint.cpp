@@ -1,11 +1,11 @@
 #include "file_fingerprint.h"
-#include "mio.hpp"
+#include "mapped_file_reader.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
 #include <array>
-#include <fstream>
+#include <istream>
 #include <vector>
 
 namespace fs
@@ -153,7 +153,7 @@ auto hash_mapped_fingerprint(const char* data, size_t size, bool normalize_text_
     return xxh128_to_hex(XXH3_128bits(data, size));
 }
 
-auto hash_stream_fingerprint(std::ifstream& file, bool normalize_text_line_endings) -> std::string
+auto hash_stream_fingerprint(std::istream& file, bool normalize_text_line_endings) -> std::string
 {
     std::vector<char> buffer(64 * 1024);
     if(normalize_text_line_endings)
@@ -200,18 +200,16 @@ auto hash_stream_fingerprint(std::ifstream& file, bool normalize_text_line_endin
 
 auto hash_file_fingerprint(const path& file_path, bool normalize_text_line_endings) -> std::string
 {
-    std::error_code error;
-    mio::mmap_source mapped = mio::make_mmap_source(file_path.string(), error);
-    if(!error && mapped.is_mapped())
-    {
-        return hash_mapped_fingerprint(mapped.data(), mapped.size(), normalize_text_line_endings);
-    }
-    std::ifstream file(file_path, std::ios::binary);
-    if(!file.is_open())
+    mapped_file_reader input(file_path);
+    if(!input.is_open())
     {
         return {};
     }
-    return hash_stream_fingerprint(file, normalize_text_line_endings);
+    if(input.is_mapped())
+    {
+        return hash_mapped_fingerprint(input.data(), input.size(), normalize_text_line_endings);
+    }
+    return hash_stream_fingerprint(input.stream(), normalize_text_line_endings);
 }
 
 auto combine_file_fingerprints(const std::string& first_fingerprint,

@@ -6,6 +6,7 @@
 #include <engine/meta/core/math/bbox.hpp>
 
 #include <fstream>
+#include <filesystem/mapped_file_reader.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -321,22 +322,28 @@ void save_to_file_bin(const std::string& absolute_path, const mesh::load_data& o
 
 void load_from_file(const std::string& absolute_path, mesh::load_data& obj)
 {
-    std::ifstream stream(absolute_path);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        auto ar = ser20::create_iarchive_associative(stream);
-        try_load(ar, ser20::make_nvp("mesh", obj));
+        return;
     }
+
+    auto ar = input.is_mapped()
+    ? ser20::create_iarchive_associative(input.data(), input.size())
+    : ser20::create_iarchive_associative(input.stream());
+
+    try_load(ar, ser20::make_nvp("mesh", obj));
 }
 
 void load_from_file_bin(const std::string& absolute_path, mesh::load_data& obj)
 {
-    std::ifstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("mesh", obj));
+        return;
     }
+    ser20::iarchive_binary_t ar(input.stream());
+    try_load(ar, ser20::make_nvp("mesh", obj));
 }
 
 } // namespace unravel

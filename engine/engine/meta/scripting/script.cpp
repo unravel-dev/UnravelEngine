@@ -1,6 +1,7 @@
 #include "script.hpp"
 
 #include <fstream>
+#include <filesystem/mapped_file_reader.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -53,21 +54,25 @@ void save_to_file_bin(const std::string& absolute_path, const script::sptr& obj)
 
 void load_from_file(const std::string& absolute_path, script::sptr& obj)
 {
-    std::ifstream stream(absolute_path);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        auto ar = ser20::create_iarchive_associative(stream);
-        try_load(ar, ser20::make_nvp("script", *obj));
+        return;
     }
+    auto ar = input.is_mapped()
+    ? ser20::create_iarchive_associative(input.data(), input.size())
+    : ser20::create_iarchive_associative(input.stream());
+    try_load(ar, ser20::make_nvp("script", *obj));
 }
 
 void load_from_file_bin(const std::string& absolute_path, script::sptr& obj)
 {
-    std::ifstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("script", *obj));
+        return;
     }
+    ser20::iarchive_binary_t ar(input.stream());
+    try_load(ar, ser20::make_nvp("script", *obj));
 }
 } // namespace unravel

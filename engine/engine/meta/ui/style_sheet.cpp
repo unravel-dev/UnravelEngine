@@ -1,5 +1,6 @@
 #include "style_sheet.hpp"
 #include <filesystem/filesystem.h>
+#include <filesystem/mapped_file_reader.h>
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -62,21 +63,28 @@ void save_to_file_bin(const std::string& absolute_path, const style_sheet::sptr&
 
 void load_from_file(const std::string& absolute_path, style_sheet::sptr& obj)
 {
-    std::ifstream stream(absolute_path);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        obj->content = fs::read_stream_str(stream);
+        return;
     }
+    if(input.is_mapped())
+    {
+        obj->content.assign(input.data(), input.size());
+        return;
+    }
+    obj->content = fs::read_stream_str(input.stream());
 }
 
 void load_from_file_bin(const std::string& absolute_path, style_sheet::sptr& obj)
 {
-    std::ifstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("style_sheet", *obj));
+        return;
     }
+    ser20::iarchive_binary_t ar(input.stream());
+    try_load(ar, ser20::make_nvp("style_sheet", *obj));
 }
 
 } // namespace unravel

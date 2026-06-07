@@ -1,6 +1,7 @@
 #include "audio_clip.hpp"
 #include <audiopp/loaders/loader.h>
 #include <fstream>
+#include <filesystem/mapped_file_reader.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include <serialization/types/chrono.hpp>
@@ -154,11 +155,12 @@ auto load_from_file(const std::string& absolute_path, audio::sound_data& obj, st
 
 void load_from_file_bin(const std::string& absolute_path, audio::sound_data& obj)
 {
-    std::ifstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
+    fs::mapped_file_reader input(absolute_path);
+    if(!input.is_open())
     {
-        ser20::iarchive_binary_t ar(stream);
-        try_load(ar, ser20::make_nvp("sound_data", obj));
+        return;
     }
+    ser20::iarchive_binary_t ar(input.stream());
+    try_load(ar, ser20::make_nvp("sound_data", obj));
 }
 } // namespace unravel

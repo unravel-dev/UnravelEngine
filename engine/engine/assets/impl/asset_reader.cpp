@@ -17,6 +17,7 @@
 #include <engine/assets/impl/asset_extensions.h>
 #include <cstdint>
 #include <filesystem/filesystem.h>
+#include <filesystem/mapped_file_reader.h>
 #include <graphics/shader.h>
 #include <graphics/texture.h>
 #include <logging/logging.h>
@@ -121,6 +122,17 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
     return true;
 }
 
+auto load_texture_from_path(const std::string& path) -> gfx::texture::ptr
+{
+    fs::mapped_file_reader input(path);
+    if(input.is_mapped() && input.size() > 0 && input.size() <= UINT32_MAX)
+    {
+        const auto size = static_cast<std::uint32_t>(input.size());
+        return std::make_shared<gfx::texture>(input.data(), size, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE, 0, nullptr, path.c_str());
+    }
+    return std::make_shared<gfx::texture>(path.c_str());
+}
+
 } // namespace detail
 
 template<>
@@ -130,7 +142,7 @@ auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::text
     return detail::schedule_load<gfx::texture>(pool, output, key, {},
         [](const std::string& path)
         {
-            return std::make_shared<gfx::texture>(path.c_str());
+            return detail::load_texture_from_path(path);
         }, mode);
 }
 
@@ -142,10 +154,22 @@ auto load_from_file<gfx::shader>(tpp::thread_pool& pool, asset_handle<gfx::shade
         gfx::get_current_renderer_filename_extension(),
         [key](const std::string& path)
         {
-            auto stream = std::ifstream{path, std::ios::binary};
-            auto read_memory = fs::read_stream(stream);
+            fs::mapped_file_reader input(path);
+            if(!input.is_open())
+            {
+                return std::shared_ptr<gfx::shader>{};
+            }
 
-            const gfx::memory_view* mem = gfx::copy(read_memory.data(), static_cast<std::uint32_t>(read_memory.size()));
+            const gfx::memory_view* mem = nullptr;
+            if(input.is_mapped() && input.size() <= UINT32_MAX)
+            {
+                mem = gfx::copy(input.data(), static_cast<std::uint32_t>(input.size()));
+            }
+            else
+            {
+                auto read_memory = fs::read_stream(input.stream());
+                mem = gfx::copy(read_memory.data(), static_cast<std::uint32_t>(read_memory.size()));
+            }
 
             auto shader = std::make_shared<gfx::shader>(mem);
 
