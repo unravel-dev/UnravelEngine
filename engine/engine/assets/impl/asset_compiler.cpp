@@ -705,7 +705,7 @@ auto write_manifest_file(const fs::path& input_path, const fs::path& output_path
     resolve_dependencies<T>(input_path, deps);
 
     asset_manifest manifest(input_path);
-    manifest.compute_source_sha(input_path, deps);
+    manifest.compute_source_fingerprint(input_path, deps);
     auto manifest_path = get_manifest_path(output_path);
 
     bool ok = false;

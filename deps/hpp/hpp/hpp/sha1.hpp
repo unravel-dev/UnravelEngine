@@ -338,6 +338,62 @@ public:
 			feed(&lf, 1);
 		};
 
+		auto process_text_chunk = [&](const unsigned char* p, size_t n) {
+			size_t i = 0;
+			while(i < n)
+			{
+				if(last_was_cr)
+				{
+					const unsigned char c = p[i++];
+					if(c == '\n')
+					{
+						feed_lf();
+						last_was_cr = false;
+					}
+					else
+					{
+						feed_lf();
+						last_was_cr = false;
+						if(c == '\r')
+						{
+							last_was_cr = true;
+						}
+						else if(c == '\n')
+						{
+							feed_lf();
+						}
+						else
+						{
+							feed(&c, 1);
+						}
+					}
+					continue;
+				}
+				const size_t start = i;
+				while(i < n && p[i] != '\r' && p[i] != '\n')
+				{
+					++i;
+				}
+				if(i > start)
+				{
+					feed(p + start, i - start);
+				}
+				if(i >= n)
+				{
+					break;
+				}
+				const unsigned char c = p[i++];
+				if(c == '\r')
+				{
+					last_was_cr = true;
+				}
+				else
+				{
+					feed_lf();
+				}
+			}
+		};
+
 		// robust read loop
 		for (;;)
 		{
@@ -358,35 +414,7 @@ public:
 					}
 				}
 
-				// Normalize newlines in a streaming-safe way
-				size_t i = 0;
-				while (i < n)
-				{
-					unsigned char c = p[i++];
-
-					if (last_was_cr) {
-						if (c == '\n') {
-							// CRLF across boundary -> single LF
-							feed_lf();
-							last_was_cr = false;
-							continue;
-						} else {
-							// Lone CR -> LF
-							feed_lf();
-							last_was_cr = false;
-							// fall through to handle current c
-						}
-					}
-
-					if (c == '\r') {
-						// Could be CRLF or lone CR; defer decision
-						last_was_cr = true;
-					} else if (c == '\n') {
-						feed_lf();
-					} else {
-						feed(&c, 1);
-					}
-				}
+				process_text_chunk(p, n);
 			}
 			else
 			{
