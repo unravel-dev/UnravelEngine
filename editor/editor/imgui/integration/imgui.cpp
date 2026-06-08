@@ -446,6 +446,19 @@ struct OcornutImguiContext
                                                                           _fontSize,
                                                                           &config,
                                                                           ranges);
+
+            for(uint32_t ii = 0; ii < BX_COUNTOF(s_fontRangeMerge); ++ii)
+            {
+                const FontRangeMerge& frm = s_fontRangeMerge[ii];
+
+                ImFontConfig merge_config;
+                merge_config.FontDataOwnedByAtlas = false;
+                merge_config.MergeMode = true;
+                ImFormatString(merge_config.Name, IM_ARRAYSIZE(merge_config.Name), "%s", frm.name);
+
+                io.Fonts->AddFontFromMemoryTTF((void*)frm.data, (int)frm.size, _fontSize, &merge_config, frm.ranges);
+            }
+
             ImFormatString(config.Name, IM_ARRAYSIZE(config.Name), "Inter-Black");
             m_font[ImGui::Font::Black] = io.Fonts->AddFontFromMemoryTTF((void*)inter_black_ttf,
                                                                           sizeof(inter_black_ttf),
