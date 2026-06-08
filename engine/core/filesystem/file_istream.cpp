@@ -1,7 +1,6 @@
 #include "file_istream.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdio>
 #include <utility>
 
@@ -33,7 +32,7 @@ public:
         : file_(other.file_)
         , owns_file_(other.owns_file_)
         , cached_size_(other.cached_size_)
-        , buffer_(other.buffer_)
+        , underflow_char_(other.underflow_char_)
     {
         other.file_ = nullptr;
         other.owns_file_ = false;
@@ -50,7 +49,7 @@ public:
             file_ = other.file_;
             owns_file_ = other.owns_file_;
             cached_size_ = other.cached_size_;
-            buffer_ = other.buffer_;
+            underflow_char_ = other.underflow_char_;
             other.file_ = nullptr;
             other.owns_file_ = false;
             other.cached_size_ = -1;
@@ -157,31 +156,43 @@ protected:
         {
             return traits_type::to_int_type(*gptr());
         }
-        if(refill_buffer() == 0)
+        if(file_ == nullptr)
         {
             return traits_type::eof();
         }
-        return traits_type::to_int_type(*gptr());
+        if(std::fread(&underflow_char_, 1, 1, file_) != 1)
+        {
+            invalidate_get_area();
+            return traits_type::eof();
+        }
+        setg(&underflow_char_, &underflow_char_, &underflow_char_ + 1);
+        return traits_type::to_int_type(underflow_char_);
     }
 
     auto xsgetn(char* dest, std::streamsize count) -> std::streamsize override
     {
-        if(count <= 0 || dest == nullptr)
+        if(count <= 0 || dest == nullptr || file_ == nullptr)
         {
             return 0;
         }
         std::streamsize copied = 0;
+        if(gptr() != egptr())
+        {
+            const std::streamsize available = static_cast<std::streamsize>(egptr() - gptr());
+            const std::streamsize chunk = std::min(count, available);
+            traits_type::copy(dest, gptr(), static_cast<std::size_t>(chunk));
+            gbump(static_cast<int>(chunk));
+            copied += chunk;
+        }
         while(copied < count)
         {
-            if(gptr() == egptr() && refill_buffer() == 0)
+            const std::size_t bytes_read =
+                std::fread(dest + copied, 1, static_cast<std::size_t>(count - copied), file_);
+            if(bytes_read == 0)
             {
                 break;
             }
-            const std::streamsize available = static_cast<std::streamsize>(egptr() - gptr());
-            const std::streamsize chunk = std::min(count - copied, available);
-            traits_type::copy(dest + copied, gptr(), static_cast<std::size_t>(chunk));
-            gbump(static_cast<int>(chunk));
-            copied += chunk;
+            copied += static_cast<std::streamsize>(bytes_read);
         }
         return copied;
     }
@@ -240,18 +251,6 @@ private:
         return cached_size_;
     }
 
-    auto refill_buffer() -> std::size_t
-    {
-        const std::size_t bytes_read = std::fread(buffer_.data(), 1, buffer_.size(), file_);
-        if(bytes_read == 0)
-        {
-            invalidate_get_area();
-            return 0;
-        }
-        setg(buffer_.data(), buffer_.data(), buffer_.data() + bytes_read);
-        return bytes_read;
-    }
-
     void invalidate_get_area()
     {
         setg(nullptr, nullptr, nullptr);
@@ -270,7 +269,7 @@ private:
     FILE* file_ = nullptr;
     bool owns_file_ = false;
     long long cached_size_ = -1;
-    std::array<char, file_stream_detail::default_buffer_size> buffer_{};
+    char underflow_char_ = '\0';
 };
 
 auto open_read_buffer(const std::string& absolute_path, std::ios_base::openmode mode)
