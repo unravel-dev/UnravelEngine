@@ -54,11 +54,16 @@ auto resolve_ui_tree_dependency_path(const fs::path& href_value, const fs::path&
     return fs::absolute(base_file_path.parent_path() / href_value);
 }
 
+auto visit_key_for_path(const fs::path& file_path) -> std::string
+{
+    return fs::absolute(file_path).string();
+}
+
 void resolve_shader_dependencies(const fs::path& file_path,
                                  std::vector<fs::path>& processed_files,
-                                 std::unordered_set<fs::path>& visited)
+                                 std::unordered_set<std::string>& visited)
 {
-    if(!visited.insert(file_path).second)
+    if(!visited.insert(visit_key_for_path(file_path)).second)
     {
         return;
     }
@@ -98,9 +103,9 @@ void resolve_shader_dependencies(const fs::path& file_path,
 
 void resolve_ui_tree_dependencies(const fs::path& file_path,
                                   std::vector<fs::path>& processed_files,
-                                  std::unordered_set<fs::path>& visited)
+                                  std::unordered_set<std::string>& visited)
 {
-    if(!visited.insert(file_path).second)
+    if(!visited.insert(visit_key_for_path(file_path)).second)
     {
         return;
     }
@@ -144,14 +149,14 @@ void resolve_ui_tree_dependencies(const fs::path& file_path,
 template<>
 void resolve_dependencies<gfx::shader>(const fs::path& file_path, std::vector<fs::path>& processed_files)
 {
-    std::unordered_set<fs::path> visited;
+    std::unordered_set<std::string> visited;
     resolve_shader_dependencies(file_path, processed_files, visited);
 }
 
 template<>
 void resolve_dependencies<ui_tree>(const fs::path& file_path, std::vector<fs::path>& processed_files)
 {
-    std::unordered_set<fs::path> visited;
+    std::unordered_set<std::string> visited;
     resolve_ui_tree_dependencies(file_path, processed_files, visited);
 }
 
