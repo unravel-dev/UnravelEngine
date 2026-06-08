@@ -34,6 +34,7 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <algorithm>
 #include <set>
 
 namespace unravel
@@ -103,7 +104,7 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
         return true;
     }
 
-    std::set<fs::path> deps;
+    std::vector<fs::path> deps;
     asset_compiler::resolve_dependencies<T>(get_absolute_source_path(source_file_path), deps);
     if(asset_compiler::is_source_file_changed(source_file_path, manifest, deps))
     {
@@ -117,9 +118,9 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
 template<typename T>
 auto has_depencency(const fs::path& file, const fs::path& dep_to_check) -> bool
 {
-    std::set<fs::path> dependecies;
+    std::vector<fs::path> dependecies;
     asset_compiler::resolve_dependencies<T>(file, dependecies);
-    return dependecies.contains(dep_to_check);
+    return std::find(dependecies.begin(), dependecies.end(), dep_to_check) != dependecies.end();
 }
 
 auto remove_meta_tag(const fs::path& synced_path) -> fs::path

@@ -7,7 +7,7 @@
 namespace fs
 {
 
-/// xxHash3 128-bit fingerprints (hex). Bump when the hashing scheme changes.
+/// xxHash3 128-bit fingerprints (hex). Bump when the hashing or dependency-ordering scheme changes.
 inline constexpr uint64_t current_source_fingerprint_version = 1;
 
 /// Hash a file's contents. Text assets normalize CRLF to LF before hashing.

@@ -53,7 +53,7 @@ include(GetGitRevisionDescription)
 # Include the module for checking compiler flags
 include(CheckCXXCompilerFlag)
 
-git_describe(GIT_VERSION --tags)
+git_describe(GIT_VERSION --tags --abbrev=8)
 
 #parse the version information into pieces.
 string(REGEX REPLACE "^v([0-9]+)\\..*" "\\1" GIT_VERSION_MAJOR "${GIT_VERSION}")

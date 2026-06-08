@@ -701,7 +701,7 @@ template<typename T>
 auto write_manifest_file(const fs::path& input_path, const fs::path& output_path) -> bool
 {
     APP_SCOPE_PERF("Write Manifest File");
-    std::set<fs::path> deps;
+    std::vector<fs::path> deps;
     resolve_dependencies<T>(input_path, deps);
 
     asset_manifest manifest(input_path);

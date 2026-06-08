@@ -24,12 +24,11 @@ auto hash_file(const fs::path& file_path) -> std::string
 
 void asset_manifest::compute_source_fingerprint(const fs::path& source_key)
 {
-    std::set<fs::path> empty;
-    compute_source_fingerprint(source_key, empty);
+    compute_source_fingerprint(source_key, {});
 }
 
 void asset_manifest::compute_source_fingerprint(const fs::path& source_key,
-                                                const std::set<fs::path>& dependency_paths)
+                                                const std::vector<fs::path>& dependency_paths)
 {
     auto source_file_path = fs::resolve_protocol(source_key);
     try
@@ -44,6 +43,7 @@ void asset_manifest::compute_source_fingerprint(const fs::path& source_key,
             }
             return;
         }
+
         std::vector<std::string> fingerprints;
         fingerprints.reserve(dependency_paths.size());
         for(const auto& dep_path : dependency_paths)
@@ -60,6 +60,7 @@ void asset_manifest::compute_source_fingerprint(const fs::path& source_key,
             }
             fingerprints.push_back(fingerprint);
         }
+
         if(fingerprints.empty())
         {
             source_fingerprint = "";
@@ -167,7 +168,7 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
 
 auto is_source_file_changed(const fs::path& source_path,
                             const asset_manifest& manifest,
-                            const std::set<fs::path>& dependency_paths) -> bool
+                            const std::vector<fs::path>& dependency_paths) -> bool
 {
     if(!is_fingerprint_algorithm_current(manifest))
     {

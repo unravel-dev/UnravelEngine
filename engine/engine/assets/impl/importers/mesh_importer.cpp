@@ -936,11 +936,45 @@ auto get_texture_extension(const aiTexture* texture) -> std::string
 }
 
 /**
+ * @brief Normalize file paths from Assimp (often Windows-style backslashes on every host).
+ * Uses forward slashes so relative paths resolve consistently across platforms.
+ *
+ * fs::path::generic_string() only changes how an already-parsed path is printed; on POSIX
+ * backslash is not a separator, so "Textures\\file.dds" stays one filename unless we fix
+ * the string before constructing fs::path.
+ */
+auto normalize_assimp_path(std::string path) -> fs::path
+{
+    if(path.empty())
+    {
+        return {};
+    }
+
+    string_utils::replace(path, "\\", "/");
+    return fs::path(path).lexically_normal();
+}
+
+auto normalize_assimp_path(const fs::path& path) -> fs::path
+{
+    return normalize_assimp_path(path.generic_string());
+}
+
+auto normalize_assimp_path(const char* path) -> fs::path
+{
+    if(path == nullptr || path[0] == '\0')
+    {
+        return {};
+    }
+    return normalize_assimp_path(std::string(path));
+}
+
+/**
  * @brief When a material references a texture path that does not exist on disk, try the
  * same basename with other image extensions (e.g. material says .png but only .dds exists).
  */
 auto resolve_external_texture_path(const fs::path& base_dir, fs::path relative_path) -> fs::path
 {
+    relative_path = normalize_assimp_path(relative_path);
     fs::error_code ec;
     if(fs::exists(base_dir / relative_path, ec))
     {
@@ -1586,7 +1620,7 @@ void process_embedded_texture(const aiTexture* assimp_tex,
     }
     else if(assimp_tex->mFilename.length > 0)
     {
-        texture.name = fs::path(assimp_tex->mFilename.C_Str()).filename().string();
+        texture.name = normalize_assimp_path(assimp_tex->mFilename.C_Str()).filename().string();
     }
     else
     {
@@ -2376,7 +2410,7 @@ auto material_workflow_label(material_workflow workflow) -> const char*
 
 auto normalize_material_texture_path(const fs::path& path) -> std::string
 {
-    return string_utils::to_lower(path.lexically_normal().generic_string());
+    return string_utils::to_lower(normalize_assimp_path(path).generic_string());
 }
 
 auto material_texture_paths_equal(const fs::path& left, const fs::path& right) -> bool
@@ -2417,7 +2451,7 @@ auto base_color_texture_is_authoritative(const aiMaterial* material) -> bool
 
 auto texture_path_indicates_base_color(const std::string& relative_path) -> bool
 {
-    const std::string lower = string_utils::to_lower(fs::path(relative_path).stem().string());
+    const std::string lower = string_utils::to_lower(normalize_assimp_path(relative_path).stem().string());
     static constexpr std::array<const char*, 3> markers = {
         "basecolor",
         "base_color",
@@ -2506,9 +2540,9 @@ auto lumberyard_bistro_basecolor_specular_pair(const aiMaterial* material) -> bo
     }
 
     const std::string diffuse_stem =
-        string_utils::to_lower(fs::path(diffuse_path.C_Str()).stem().string());
+        string_utils::to_lower(normalize_assimp_path(diffuse_path.C_Str()).stem().string());
     const std::string specular_stem =
-        string_utils::to_lower(fs::path(specular_path.C_Str()).stem().string());
+        string_utils::to_lower(normalize_assimp_path(specular_path.C_Str()).stem().string());
 
     if(!string_ends_with(diffuse_stem, "_basecolor") || !string_ends_with(specular_stem, "_specular"))
     {
@@ -2546,7 +2580,7 @@ auto specular_texture_path_looks_like_packed_mr(const aiMaterial* material) -> b
         return false;
     }
 
-    const std::string stem = string_utils::to_lower(fs::path(path.C_Str()).stem().string());
+    const std::string stem = string_utils::to_lower(normalize_assimp_path(path.C_Str()).stem().string());
     if(string_ends_with(stem, "_spec"))
     {
         return true;
@@ -3019,11 +3053,12 @@ auto load_image_for_texture_desc(const aiScene* scene,
 
     if(assimp_path_cstr != nullptr && assimp_path_cstr[0] != '\0')
     {
-        const fs::path relative = resolve_external_texture_path(output_dir, fs::path(assimp_path_cstr));
+        const fs::path relative = resolve_external_texture_path(output_dir, normalize_assimp_path(assimp_path_cstr));
         return imageLoad(bx::FilePath((output_dir / relative).string().c_str()));
     }
 
-    return imageLoad(bx::FilePath((output_dir / tex.name).string().c_str()));
+    const fs::path relative = resolve_external_texture_path(output_dir, normalize_assimp_path(tex.name));
+    return imageLoad(bx::FilePath((output_dir / relative).string().c_str()));
 }
 
 auto try_synchronous_spec_gloss_pair_mr(const fs::path& output_dir,
@@ -3827,7 +3862,7 @@ void process_material(asset_manager& am,
                     {
                         slot_log += ", ";
                     }
-                    slot_log += fmt::format("{}[{}]={}", slot.name, i, path.C_Str());
+                    slot_log += fmt::format("{}[{}]={}", slot.name, i, normalize_assimp_path(path.C_Str()).generic_string());
                 }
             }
         }
@@ -3887,18 +3922,18 @@ void process_material(asset_manager& am,
             }
             else
             {
-                tex.name = path.C_Str();
-                auto texture_filepath = fs::path(tex.name);
+                const fs::path assimp_path = normalize_assimp_path(path.C_Str());
+                tex.name = assimp_path.generic_string();
 
-                auto extension = texture_filepath.extension().string();
-                auto texture_dir = texture_filepath.parent_path();
-                auto texture_filename = texture_filepath.filename().stem().string();
-                auto fixed_name = string_utils::replace(texture_filename, ".", "_");
+                const auto extension = assimp_path.extension().string();
+                const auto texture_dir = assimp_path.parent_path();
+                const auto texture_filename = assimp_path.filename().stem().string();
+                const auto fixed_name = string_utils::replace(texture_filename, ".", "_");
                 if(fixed_name != texture_filename)
                 {
-                    auto old_filepath = output_dir / tex.name;
-                    auto fixed_relative = texture_dir / (fixed_name + extension);
-                    auto fixed_filepath = output_dir / fixed_relative;
+                    fs::path fixed_relative = texture_dir / (fixed_name + extension);
+                    fs::path old_filepath = output_dir / assimp_path;
+                    fs::path fixed_filepath = output_dir / fixed_relative;
 
                     fs::error_code ec;
                     if(fs::exists(old_filepath, ec))
@@ -3907,7 +3942,7 @@ void process_material(asset_manager& am,
                     }
                     else
                     {
-                        old_filepath = output_dir / resolve_external_texture_path(output_dir, fs::path(tex.name));
+                        old_filepath = output_dir / resolve_external_texture_path(output_dir, assimp_path);
                         fixed_relative = resolve_external_texture_path(output_dir, fixed_relative);
                         fixed_filepath = output_dir / fixed_relative;
                         if(fs::exists(old_filepath, ec))
@@ -3917,12 +3952,12 @@ void process_material(asset_manager& am,
                     }
                     tex.name = fixed_relative.generic_string();
                 }
-                tex.name = resolve_external_texture_path(output_dir, fs::path(tex.name)).generic_string();
+                tex.name = resolve_external_texture_path(output_dir, assimp_path).generic_string();
 
                 if(!texture_file_exists(output_dir, tex.name))
                 {
                     APPLOG_WARNING("Mesh Importer: External texture '{}' not found on disk — skipping '{}'",
-                                   path.C_Str(),
+                                   assimp_path.generic_string(),
                                    semantic);
                     return false;
                 }

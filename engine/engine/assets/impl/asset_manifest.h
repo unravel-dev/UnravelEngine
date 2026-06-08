@@ -1,19 +1,29 @@
 #pragma once
+
 #include <filesystem/filesystem.h>
+
 #include <filesystem/file_fingerprint.h>
+
 #include <chrono>
+
 #include <string>
-#include <set>
+
+#include <vector>
+
 #include "asset_extensions.h"
+
+
 
 namespace unravel
 {
+
 namespace asset_compiler
 {
 
 /// Manifest data for compiled assets
 struct asset_manifest
 {
+
     /// Content fingerprint of source inputs (xxHash3 128-bit hex).
     std::string source_fingerprint;
 
@@ -28,16 +38,20 @@ struct asset_manifest
     asset_manifest(const fs::path& key)
     {
         format_version = ex::get_format_version(key.extension().string());
+
         fingerprint_version = fs::current_source_fingerprint_version;
     }
 
     /// Compute fingerprint from source file only
     void compute_source_fingerprint(const fs::path& source_key);
 
-    /// Compute fingerprint from source file + all resolved dependency file paths.
+    /// Compute fingerprint from dependency files in source parse order.
     /// If dependency_paths is empty, falls back to source-only fingerprint.
-    void compute_source_fingerprint(const fs::path& source_key, const std::set<fs::path>& dependency_paths);
+    void compute_source_fingerprint(const fs::path& source_key, const std::vector<fs::path>& dependency_paths);
+
 };
+
+
 
 /// Generate manifest file path from compiled asset path
 auto get_manifest_path(const fs::path& compiled_asset_path) -> fs::path;
@@ -54,11 +68,13 @@ auto is_source_file_changed(const fs::path& source_path, const asset_manifest& m
 /// Check if source file or any of its dependencies have changed compared to manifest
 auto is_source_file_changed(const fs::path& source_path,
                             const asset_manifest& manifest,
-                            const std::set<fs::path>& dependency_paths) -> bool;
+                            const std::vector<fs::path>& dependency_paths) -> bool;
 
 auto is_compiled_format_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool;
 
 auto is_fingerprint_algorithm_current(const asset_manifest& manifest) -> bool;
 
 } // namespace asset_compiler
+
 } // namespace unravel
+

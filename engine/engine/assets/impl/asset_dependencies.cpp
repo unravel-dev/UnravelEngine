@@ -3,53 +3,25 @@
 
 #include <engine/ui/ui_tree.h>
 #include <graphics/shader.h>
+#include <string_utils/utils.h>
 
+#include <algorithm>
 #include <fstream>
+#include <unordered_set>
 
 namespace unravel
 {
 namespace asset_compiler
 {
 
-template<>
-void resolve_dependencies<gfx::shader>(const fs::path& file_path, std::set<fs::path>& processed_files)
-{
-    if(!processed_files.insert(file_path).second)
-    {
-        return;
-    }
-    std::ifstream file(file_path);
-    if(!file.is_open())
-    {
-        return;
-    }
-    const std::string include_keyword = "#include";
-    std::string line;
-    while(std::getline(file, line))
-    {
-        line.erase(0, line.find_first_not_of(" \t"));
-        if(line.compare(0, include_keyword.length(), include_keyword) != 0)
-        {
-            continue;
-        }
-        size_t start = line.find_first_of("\"<") + 1;
-        size_t end = line.find_last_of("\">");
-        if(start == std::string::npos || end == std::string::npos || start >= end)
-        {
-            continue;
-        }
-        if(line[start - 1] == '<' && line[end] == '>')
-        {
-            continue;
-        }
-        std::string include_path = line.substr(start, end - start);
-        fs::path resolved_path = fs::absolute(file_path.parent_path() / include_path);
-        resolve_dependencies<gfx::shader>(resolved_path, processed_files);
-    }
-}
-
 namespace
 {
+/// Shader/DCC exports may use Windows separators; normalize before fs::path parsing on POSIX.
+auto normalize_dependency_path_string(std::string path) -> std::string
+{
+    string_utils::replace(path, "\\", "/");
+    return path;
+}
 
 auto extract_href_from_link_tag(hpp::string_view link_tag) -> hpp::string_view
 {
@@ -82,20 +54,65 @@ auto resolve_ui_tree_dependency_path(const fs::path& href_value, const fs::path&
     return fs::absolute(base_file_path.parent_path() / href_value);
 }
 
-} // namespace
-
-template<>
-void resolve_dependencies<ui_tree>(const fs::path& file_path, std::set<fs::path>& processed_files)
+void resolve_shader_dependencies(const fs::path& file_path,
+                                 std::vector<fs::path>& processed_files,
+                                 std::unordered_set<fs::path>& visited)
 {
-    if(!processed_files.insert(file_path).second)
+    if(!visited.insert(file_path).second)
     {
         return;
     }
+
+    processed_files.push_back(file_path);
+
     std::ifstream file(file_path);
     if(!file.is_open())
     {
         return;
     }
+
+    const std::string include_keyword = "#include";
+    std::string line;
+    while(std::getline(file, line))
+    {
+        line.erase(0, line.find_first_not_of(" \t"));
+        if(line.compare(0, include_keyword.length(), include_keyword) != 0)
+        {
+            continue;
+        }
+        size_t start = line.find_first_of("\"<") + 1;
+        size_t end = line.find_last_of("\">");
+        if(start == std::string::npos || end == std::string::npos || start >= end)
+        {
+            continue;
+        }
+        if(line[start - 1] == '<' && line[end] == '>')
+        {
+            continue;
+        }
+        const std::string include_path = normalize_dependency_path_string(line.substr(start, end - start));
+        const fs::path resolved_path = fs::absolute(file_path.parent_path() / fs::path(include_path));
+        resolve_shader_dependencies(resolved_path, processed_files, visited);
+    }
+}
+
+void resolve_ui_tree_dependencies(const fs::path& file_path,
+                                  std::vector<fs::path>& processed_files,
+                                  std::unordered_set<fs::path>& visited)
+{
+    if(!visited.insert(file_path).second)
+    {
+        return;
+    }
+
+    processed_files.push_back(file_path);
+
+    std::ifstream file(file_path);
+    if(!file.is_open())
+    {
+        return;
+    }
+
     std::string content_str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     hpp::string_view content(content_str);
     size_t pos = 0;
@@ -115,11 +132,27 @@ void resolve_dependencies<ui_tree>(const fs::path& file_path, std::set<fs::path>
             auto extension = resolved_path.extension().string();
             if(std::find(supported_deps.begin(), supported_deps.end(), extension) != supported_deps.end())
             {
-                resolve_dependencies<ui_tree>(resolved_path, processed_files);
+                resolve_ui_tree_dependencies(resolved_path, processed_files, visited);
             }
         }
         pos = tag_end + 1;
     }
+}
+
+} // namespace
+
+template<>
+void resolve_dependencies<gfx::shader>(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    std::unordered_set<fs::path> visited;
+    resolve_shader_dependencies(file_path, processed_files, visited);
+}
+
+template<>
+void resolve_dependencies<ui_tree>(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    std::unordered_set<fs::path> visited;
+    resolve_ui_tree_dependencies(file_path, processed_files, visited);
 }
 
 } // namespace asset_compiler
