@@ -1,7 +1,7 @@
 #include "material.hpp"
 
 #include <fstream>
-#include <filesystem/mapped_file_reader.h>
+#include <filesystem/file_istream.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -90,25 +90,23 @@ void save_to_file_bin(const std::string& absolute_path, const std::shared_ptr<ma
 
 void load_from_file(const std::string& absolute_path, std::shared_ptr<material>& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
         return;
     }
-    auto ar = input.is_mapped()
-    ? ser20::create_iarchive_associative(input.data(), input.size())
-    : ser20::create_iarchive_associative(input.stream());
+    auto ar = ser20::create_iarchive_associative(input);
     try_load(ar, ser20::make_nvp("material", obj));
 }
 
 void load_from_file_bin(const std::string& absolute_path, std::shared_ptr<material>& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path, std::ios::binary);
     if(!input.is_open())
     {
         return;
     }
-    ser20::iarchive_binary_t ar(input.stream());
+    ser20::iarchive_binary_t ar(input);
     try_load(ar, ser20::make_nvp("material", obj));
 }
 

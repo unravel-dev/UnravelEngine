@@ -1,6 +1,6 @@
 #include "ui_tree.hpp"
 #include <filesystem/filesystem.h>
-#include <filesystem/mapped_file_reader.h>
+#include <filesystem/file_istream.h>
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -63,27 +63,22 @@ void save_to_file_bin(const std::string& absolute_path, const ui_tree::sptr& obj
 
 void load_from_file(const std::string& absolute_path, ui_tree::sptr& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
         return;
     }
-    if(input.is_mapped())
-    {
-        obj->content.assign(input.data(), input.size());
-        return;
-    }
-    obj->content = fs::read_stream_str(input.stream());
+    obj->content = fs::read_stream_str(input);
 }
 
 void load_from_file_bin(const std::string& absolute_path, ui_tree::sptr& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path, std::ios::binary);
     if(!input.is_open())
     {
         return;
     }
-    ser20::iarchive_binary_t ar(input.stream());
+    ser20::iarchive_binary_t ar(input);
     try_load(ar, ser20::make_nvp("ui_tree", *obj));
 }
 

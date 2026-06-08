@@ -29,7 +29,7 @@ void unload(void* _ptr);
 
 ///
 bgfx::ShaderHandle loadShader(const bx::StringView& _name);
-
+bgfx::ShaderHandle loadShader(const bx::FilePath& _filePath);
 ///
 bgfx::ProgramHandle loadProgram(const bx::StringView& _vsName, const bx::StringView& _fsName);
 

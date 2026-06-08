@@ -1,5 +1,5 @@
 #include "file_fingerprint.h"
-#include "mapped_file_reader.h"
+#include "file_istream.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash.h"
@@ -200,16 +200,12 @@ auto hash_stream_fingerprint(std::istream& file, bool normalize_text_line_ending
 
 auto hash_file_fingerprint(const path& file_path, bool normalize_text_line_endings) -> std::string
 {
-    mapped_file_reader input(file_path);
+    file_istream input(file_path, normalize_text_line_endings ? std::ios::in : std::ios::binary);
     if(!input.is_open())
     {
         return {};
     }
-    if(input.is_mapped())
-    {
-        return hash_mapped_fingerprint(input.data(), input.size(), normalize_text_line_endings);
-    }
-    return hash_stream_fingerprint(input.stream(), normalize_text_line_endings);
+    return hash_stream_fingerprint(input, normalize_text_line_endings);
 }
 
 auto combine_file_fingerprints(const std::string& first_fingerprint,

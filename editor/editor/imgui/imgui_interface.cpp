@@ -5,13 +5,248 @@
 #include <editor/events.h>
 #include <engine/profiler/profiler.h>
 
+#include <base/platform/process_memory.hpp>
 #include <engine/events.h>
 #include <engine/rendering/renderer.h>
+#include <graphics/graphics.h>
 
 #include <logging/logging.h>
 
+#include <algorithm>
+#include <string>
+
 namespace unravel
 {
+
+namespace
+{
+
+constexpr ImVec4 memory_label_color{0.42f, 0.42f, 0.42f, 1.0f};
+constexpr ImVec4 memory_value_color{0.50f, 0.50f, 0.50f, 1.0f};
+constexpr ImU32 gpu_bar_color = IM_COL32(58, 121, 187, 165);
+constexpr ImU32 other_system_ram_bar_color = IM_COL32(145, 118, 72, 210);
+constexpr ImU32 process_ram_bar_color = IM_COL32(88, 168, 196, 220);
+constexpr ImU32 memory_bar_track_color = IM_COL32(32, 32, 32, 255);
+constexpr float memory_bar_height = 3.0f;
+constexpr float memory_section_alpha = 0.92f;
+
+auto format_bytes(int64_t bytes) -> std::string
+{
+    constexpr double kb = 1024.0;
+    constexpr double mb = 1024.0 * 1024.0;
+    constexpr double gb = 1024.0 * 1024.0 * 1024.0;
+    const auto val = static_cast<double>(bytes);
+    if(val >= gb)
+    {
+        return fmt::format("{:.2f} GiB", val / gb);
+    }
+    if(val >= mb)
+    {
+        return fmt::format("{:.1f} MiB", val / mb);
+    }
+    if(val >= kb)
+    {
+        return fmt::format("{:.1f} KiB", val / kb);
+    }
+    return fmt::format("{} B", bytes);
+}
+
+auto format_ram_bytes(int64_t bytes) -> std::string
+{
+    constexpr double gb = 1024.0 * 1024.0 * 1024.0;
+    const auto val = static_cast<double>(bytes);
+    if(val >= gb)
+    {
+        return fmt::format("{:.1f} GiB", val / gb);
+    }
+    return format_bytes(bytes);
+}
+
+void draw_memory_bar(float fraction, ImU32 fill_color)
+{
+    fraction = std::clamp(fraction, 0.0f, 1.0f);
+    const float bar_width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 bar_pos = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    draw_list->AddRectFilled(bar_pos,
+                             ImVec2(bar_pos.x + bar_width, bar_pos.y + memory_bar_height),
+                             memory_bar_track_color,
+                             memory_bar_height * 0.5f);
+
+    if(fraction > 0.0f)
+    {
+        draw_list->AddRectFilled(bar_pos,
+                                 ImVec2(bar_pos.x + bar_width * fraction, bar_pos.y + memory_bar_height),
+                                 fill_color,
+                                 memory_bar_height * 0.5f);
+    }
+
+    ImGui::Dummy(ImVec2(bar_width, memory_bar_height));
+}
+
+void draw_stacked_ram_bar(float process_fraction, float system_used_fraction)
+{
+    process_fraction = std::clamp(process_fraction, 0.0f, 1.0f);
+    system_used_fraction = std::clamp(system_used_fraction, process_fraction, 1.0f);
+    const float other_used_fraction = system_used_fraction - process_fraction;
+
+    const float bar_width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 bar_pos = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float bar_radius = memory_bar_height * 0.5f;
+    const float bar_bottom = bar_pos.y + memory_bar_height;
+    const ImVec2 bar_max(bar_pos.x + bar_width, bar_bottom);
+
+    // Full width = total system RAM. Dark track = free memory.
+    draw_list->AddRectFilled(bar_pos, bar_max, memory_bar_track_color, bar_radius);
+
+    float x = bar_pos.x;
+
+    auto draw_segment = [&](float fraction, ImU32 color) -> void
+    {
+        if(fraction <= 0.0f)
+        {
+            return;
+        }
+
+        float segment_width = bar_width * fraction;
+        if(segment_width > 0.0f && segment_width < 1.0f)
+        {
+            segment_width = 1.0f;
+        }
+
+        draw_list->AddRectFilled(ImVec2(x, bar_pos.y),
+                                 ImVec2(x + segment_width, bar_bottom),
+                                 color);
+        x += segment_width;
+    };
+
+    // Stacked from the left: [other used][process][free]
+    draw_segment(other_used_fraction, other_system_ram_bar_color);
+    draw_segment(process_fraction, process_ram_bar_color);
+
+    ImGui::Dummy(ImVec2(bar_width, memory_bar_height));
+}
+
+void draw_memory_stat_row(const char* label, const std::string& value_text, const char* tooltip = nullptr)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, memory_label_color);
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    if(tooltip != nullptr)
+    {
+        ImGui::SetItemTooltipEx("%s", tooltip);
+    }
+
+    const float value_width = ImGui::CalcTextSize(value_text.c_str()).x;
+    ImGui::PushStyleColor(ImGuiCol_Text, memory_value_color);
+    ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, value_width, [&]() -> void {
+        ImGui::TextUnformatted(value_text.c_str());
+    });
+    ImGui::PopStyleColor();
+}
+
+void draw_loading_memory_stats()
+{
+    const auto* stats = gfx::get_stats();
+    if(stats != nullptr && stats->gpuMemoryUsed > 0)
+    {
+        std::string gpu_text;
+        float gpu_fraction = 0.0f;
+
+        if(stats->gpuMemoryMax > 0)
+        {
+            const float pct = (static_cast<float>(stats->gpuMemoryUsed) /
+                               static_cast<float>(stats->gpuMemoryMax)) *
+                              100.0f;
+            gpu_text = fmt::format("{} / {} ({:.0f}%)",
+                                   format_bytes(stats->gpuMemoryUsed),
+                                   format_bytes(stats->gpuMemoryMax),
+                                   static_cast<double>(pct));
+            gpu_fraction = pct / 100.0f;
+        }
+        else
+        {
+            gpu_text = format_bytes(stats->gpuMemoryUsed);
+        }
+
+        draw_memory_stat_row("GPU",
+                             gpu_text,
+                             "GPU video memory allocated by the renderer vs the device budget.");
+        if(stats->gpuMemoryMax > 0)
+        {
+            draw_memory_bar(gpu_fraction, gpu_bar_color);
+        }
+    }
+
+    const int64_t rss_bytes = platform::get_process_resident_set_bytes();
+    const int64_t system_total_bytes = platform::get_system_physical_memory_bytes();
+    const int64_t system_used_bytes = platform::get_system_used_physical_memory_bytes();
+    if(rss_bytes > 0 || system_used_bytes > 0)
+    {
+        if(stats != nullptr && stats->gpuMemoryUsed > 0)
+        {
+            ImGui::Spacing();
+        }
+
+        if(system_total_bytes > 0 && system_used_bytes > 0)
+        {
+            const int64_t other_used_bytes = std::max<int64_t>(0, system_used_bytes - rss_bytes);
+            const float system_pct =
+                (static_cast<float>(system_used_bytes) / static_cast<float>(system_total_bytes)) * 100.0f;
+            const float process_pct =
+                (static_cast<float>(rss_bytes) / static_cast<float>(system_total_bytes)) * 100.0f;
+
+            std::string ram_text;
+            if(rss_bytes > 0)
+            {
+                ram_text = fmt::format("{} ({} Process) / {}",
+                                       format_ram_bytes(system_used_bytes),
+                                       format_ram_bytes(rss_bytes),
+                                       format_ram_bytes(system_total_bytes));
+            }
+            else
+            {
+                ram_text = fmt::format("{} / {}",
+                                       format_ram_bytes(system_used_bytes),
+                                       format_ram_bytes(system_total_bytes));
+            }
+
+            const std::string ram_tooltip = fmt::format(
+                "Bar = total system RAM.\n"
+                "Amber: other system usage. Cyan (at the used edge): this process.\n"
+                "Dark: free memory.\n"
+                "Used: {:.0f}% of system ({} other + {} process).",
+                static_cast<double>(system_pct),
+                format_bytes(other_used_bytes),
+                format_bytes(rss_bytes));
+
+            draw_memory_stat_row("RAM", ram_text, ram_tooltip.c_str());
+            draw_stacked_ram_bar(process_pct / 100.0f, system_pct / 100.0f);
+        }
+        else if(rss_bytes > 0)
+        {
+            draw_memory_stat_row("RAM", format_bytes(rss_bytes), "Process resident memory (RSS).");
+        }
+    }
+}
+
+auto has_loading_memory_stats() -> bool
+{
+    const auto* stats = gfx::get_stats();
+    if(stats != nullptr && stats->gpuMemoryUsed > 0)
+    {
+        return true;
+    }
+    if(platform::get_process_resident_set_bytes() > 0)
+    {
+        return true;
+    }
+    return platform::get_system_used_physical_memory_bytes() > 0;
+}
+
+} // namespace
 
 imgui_interface::imgui_interface(rtti::context& ctx)
 {
@@ -238,6 +473,25 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
                 ImGui::TextUnformatted(progress_text.c_str());
             });
             ImGui::PopStyleColor();
+        }
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        if(has_loading_memory_stats())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.22f, 0.22f, 0.22f, 1.0f));
+            ImGui::Separator();
+            ImGui::PopStyleColor();
+
+            ImGui::Spacing();
+
+            ImGui::PushFont(ImGui::Font::Regular);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, memory_section_alpha);
+            draw_loading_memory_stats();
+            ImGui::PopStyleVar();
+            ImGui::PopFont();
         }
 
     }

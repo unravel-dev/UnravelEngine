@@ -182,10 +182,18 @@ static bgfx::ShaderHandle loadShader(bx::FileReaderI* _reader, const bx::StringV
 	return handle;
 }
 
-bgfx::ShaderHandle loadShader(const char* _name)
+bgfx::ShaderHandle loadShader(const bx::StringView& _name)
 {
     entry::FileReader reader;
     return loadShader(&reader, _name);
+}
+
+bgfx::ShaderHandle loadShader(const bx::FilePath& _filePath)
+{
+    entry::FileReader reader;
+    bgfx::ShaderHandle handle = bgfx::createShader(loadMem(&reader, _filePath.getCPtr() ) );
+	bgfx::setName(handle, _filePath.getFileName().getPtr(), int32_t(_filePath.getFileName().getLength() ) );
+    return handle;
 }
 
 bgfx::ProgramHandle loadProgram(bx::FileReaderI* _reader, const bx::StringView& _vsName, const bx::StringView& _fsName)

@@ -4,7 +4,7 @@
 #include <serialization/archives/yaml.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
-#include <filesystem/mapped_file_reader.h>
+#include <filesystem/file_istream.h>
 #include <serialization/serialization.h>
 #include "components/all_components.h"
 #include <engine/engine.h>
@@ -986,12 +986,12 @@ void load_from_stream(std::istream& stream, entt::handle& obj)
 
 void load_from_file(const std::string& absolute_path, entt::handle& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
         return;
     }
-    load_from_stream(input.stream(), obj);
+    load_from_stream(input, obj);
 }
 
 void load_from_stream_bin(std::istream& stream, entt::handle& obj)
@@ -1013,12 +1013,12 @@ void load_from_stream_bin(std::istream& stream, entt::handle& obj)
 
 void load_from_file_bin(const std::string& absolute_path, entt::handle& obj)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path, std::ios::binary);
     if(!input.is_open())
     {
         return;
     }
-    load_from_stream_bin(input.stream(), obj);
+    load_from_stream_bin(input, obj);
 }
 
 auto load_from_prefab_out(const asset_handle<prefab>& pfb,
@@ -1301,12 +1301,12 @@ void load_from_stream(std::istream& stream, scene& scn)
 }
 void load_from_file(const std::string& absolute_path, scene& scn)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
         return;
     }
-    load_from_stream(input.stream(), scn);
+    load_from_stream(input, scn);
 }
 void load_from_stream_bin(std::istream& stream, scene& scn)
 {
@@ -1330,12 +1330,12 @@ void load_from_stream_bin(std::istream& stream, scene& scn)
 }
 void load_from_file_bin(const std::string& absolute_path, scene& scn)
 {
-    fs::mapped_file_reader input(absolute_path);
+    fs::file_istream input(absolute_path, std::ios::binary);
     if(!input.is_open())
     {
         return;
     }
-    load_from_stream_bin(input.stream(), scn);
+    load_from_stream_bin(input, scn);
 }
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool

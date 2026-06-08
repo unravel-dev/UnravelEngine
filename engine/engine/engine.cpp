@@ -34,7 +34,6 @@
 #include <simulation/simulation.h>
 
 #include <filesystem/filesystem.h>
-
 namespace unravel
 {
 namespace
@@ -115,6 +114,7 @@ auto engine::context() -> rtti::context&
 
 auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 {
+
     context_ptr() = &ctx;
 
     fs::path binary_path = fs::executable_path(parser.app_name().c_str()).parent_path();
