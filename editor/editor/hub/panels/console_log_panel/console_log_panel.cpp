@@ -2,6 +2,7 @@
 #include "../panels_defs.h"
 
 #include <editor/editing/editor_actions.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/system/project_manager.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -279,8 +280,14 @@ void console_log_panel::draw()
     ImGui::BeginChild("ScrollingRegion", avail * ImVec2(1.0f, 0.8f), ImGuiChildFlags_ResizeY);
     if(ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight))
     {
-        if(ImGui::Selectable("Clear"))
-            clear_log();
+        {
+            ImGui::ContextMenuStyleScope style_scope;
+
+            if(ImGui::MenuItemIcon(ICON_MDI_DELETE_SWEEP, "Clear"))
+            {
+                clear_log();
+            }
+        }
         ImGui::EndPopup();
     }
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1)); // Tighten spacing

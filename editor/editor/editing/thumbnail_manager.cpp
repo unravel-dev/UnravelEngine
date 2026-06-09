@@ -36,7 +36,7 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
     auto& thumbnail = gen.thumbnails[asset.uid()];
     auto current_fbo = thumbnail.get();
 
-    if(gen.remaining > 0 && thumbnail.needs_regeneration)
+    if(gen.remaining > 0 && thumbnail.needs_regeneration && asset.is_ready())
     {
         try
         {

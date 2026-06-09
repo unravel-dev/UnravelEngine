@@ -26,6 +26,7 @@
 #include <engine/rendering/mesh.h>
 
 
+#include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/thumbnail_manager.h>
 
@@ -33,7 +34,6 @@
 #include <engine/assets/impl/asset_writer.h>
 
 #include <filesystem/filesystem.h>
-#include <filesystem/watcher.h>
 #include <graphics/texture.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -44,17 +44,6 @@ namespace unravel
 {
 namespace
 {
-auto resolve_path(const std::string& key) -> fs::path
-{
-    return fs::absolute(fs::resolve_protocol(key).string());
-}
-
-template<typename T>
-auto reimport(const asset_handle<T>& asset)
-{
-    fs::watcher::touch(resolve_path(asset.id()), false);
-}
-
 template<typename T>
 auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
 {
@@ -970,7 +959,7 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
 
             if(ImGui::Button("Reimport"))
             {
-                reimport(data);
+                asset_actions::reimport(data);
             }
 
             ImGui::EndTabItem();
@@ -1025,7 +1014,7 @@ auto inspector_asset_handle_scene_prefab::inspect(rtti::context& ctx,
 
             if(ImGui::Button("Reimport"))
             {
-                reimport(data);
+                asset_actions::reimport(data);
             }
 
             ImGui::EndChild();

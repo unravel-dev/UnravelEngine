@@ -7,7 +7,9 @@
 #include "imgui_widgets/utils.h"
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/thumbnail_manager.h>
+#include <editor/assets/asset_actions.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/system/project_manager.h>
 #include <editor/shortcuts.h>
@@ -40,6 +42,7 @@
 #include <filesystem>
 #include <hpp/utility.hpp>
 #include <imgui/imgui.h>
+#include <imgui/imgui_internal.h>
 #include <imgui/imgui_internal.h>
 #include <imgui_widgets/imcoolbar.h>
 #include <logging/logging.h>
@@ -392,27 +395,41 @@ auto draw_item(const content_browser_item& item)
     if(ImGui::BeginPopupContextItem("ENTRY_CONTEXT_MENU"))
     {
         is_popup_opened = true;
-        
-        if(ImGui::Selectable("Open in Explorer"))
         {
-            fs::show_in_graphical_env(absolute_path);
-        }
-        if(ImGui::MenuItem("Rename", ImGui::GetKeyName(shortcuts::rename_item)))
-        {
-            open_rename_menu = true;
-            ImGui::CloseCurrentPopup();
-        }
+            ImGui::ContextMenuStyleScope style_scope;
 
-        if(ImGui::MenuItem("Duplicate", ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
-        {
-            action = entry_action::duplicate;
-            ImGui::CloseCurrentPopup();
-        }
+            if(ImGui::MenuItemIcon(ICON_MDI_FOLDER_OPEN, "Open in Explorer"))
+            {
+                fs::show_in_graphical_env(absolute_path);
+            }
 
-        if(ImGui::MenuItem("Delete", ImGui::GetKeyName(shortcuts::delete_item)))
-        {
-            action = entry_action::deleted;
-            ImGui::CloseCurrentPopup();
+            const bool can_reimport_file = asset_actions::can_reimport(absolute_path);
+            if(ImGui::MenuItemIcon(ICON_MDI_REFRESH, "Reimport", nullptr, can_reimport_file))
+            {
+                asset_actions::reimport_path(absolute_path);
+            }
+
+            ImGui::Separator();
+
+            if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
+            {
+                open_rename_menu = true;
+                ImGui::CloseCurrentPopup();
+            }
+
+            if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY,
+                                   "Duplicate",
+                                   ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
+            {
+                action = entry_action::duplicate;
+                ImGui::CloseCurrentPopup();
+            }
+
+            if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item)))
+            {
+                action = entry_action::deleted;
+                ImGui::CloseCurrentPopup();
+            }
         }
         ImGui::EndPopup();
     }
@@ -677,6 +694,189 @@ void content_browser_panel::draw(rtti::context& ctx)
     {
         refresh_--;
     }
+
+    draw_external_drop_overlay();
+}
+
+void content_browser_panel::draw_external_drop_overlay() const
+{
+    if(parent_ == nullptr || !parent_->get_external_drop_in_progress())
+    {
+        return;
+    }
+
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if(window == nullptr)
+    {
+        return;
+    }
+
+    const ImRect bounds(window->InnerRect.Min, window->InnerRect.Max);
+    const ImVec2 drop_pos = parent_->get_external_drop_position();
+    const bool drop_over_panel = bounds.Contains(drop_pos);
+    const bool mouse_over_panel = ImGui::IsMouseHoveringRect(bounds.Min, bounds.Max, true);
+    if(!drop_over_panel && !mouse_over_panel)
+    {
+        return;
+    }
+
+    if(bounds.GetWidth() < 1.0f || bounds.GetHeight() < 1.0f)
+    {
+        return;
+    }
+
+    // Foreground draw list renders above all panel children without affecting layout/scroll.
+    ImDrawList* draw_list = ImGui::GetForegroundDrawList(window->Viewport);
+    draw_list->PushClipRect(bounds.Min, bounds.Max, true);
+
+    draw_list->AddRectFilled(bounds.Min,
+                             bounds.Max,
+                             ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg, 0.72f));
+
+    const ImU32 border_color = ImGui::GetColorU32(ImGuiCol_ButtonActive, 0.95f);
+    draw_list->AddRect(bounds.Min, bounds.Max, border_color, 0.0f, 0, 2.0f);
+
+    const char* headline = ICON_MDI_IMPORT "  Drop to import";
+    const std::string folder_line = fmt::format("Import into: {}", cache_.get_path().generic_string());
+    const char* hint = "Release to add files to this folder";
+
+    constexpr size_t max_visible_drop_files = 4;
+    const auto& drop_files = parent_->get_external_drop_files();
+
+    std::vector<std::string> file_lines;
+    file_lines.reserve(std::min(drop_files.size(), max_visible_drop_files));
+    for(size_t i = 0; i < drop_files.size() && i < max_visible_drop_files; ++i)
+    {
+        file_lines.push_back(fmt::format(ICON_MDI_FILE "  {}", fs::path(drop_files[i]).filename().string()));
+    }
+
+    std::string more_files_line;
+    if(drop_files.size() > max_visible_drop_files)
+    {
+        more_files_line = fmt::format("... and {} more.", drop_files.size() - max_visible_drop_files);
+    }
+
+    ImFont* headline_font = ImGui::GetFont(ImGui::Font::Bold);
+    if(headline_font == nullptr)
+    {
+        headline_font = ImGui::GetFont();
+    }
+    ImFont* body_font = ImGui::GetFont();
+
+    constexpr float card_padding = 28.0f;
+    constexpr float line_spacing = 10.0f;
+
+    const float headline_font_size = headline_font->LegacySize * 1.65f;
+    const float body_font_size = body_font->LegacySize * 1.5f;
+
+    const ImVec2 headline_size = headline_font->CalcTextSizeA(headline_font_size, FLT_MAX, 0.0f, headline);
+    const ImVec2 folder_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, folder_line.c_str());
+    const ImVec2 hint_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, hint);
+
+    std::vector<ImVec2> file_line_sizes;
+    file_line_sizes.reserve(file_lines.size());
+    float files_block_height = 0.0f;
+    for(const auto& file_line : file_lines)
+    {
+        const ImVec2 line_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, file_line.c_str());
+        file_line_sizes.push_back(line_size);
+        files_block_height += line_size.y;
+    }
+
+    ImVec2 more_files_size{};
+    if(!more_files_line.empty())
+    {
+        more_files_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, more_files_line.c_str());
+        files_block_height += more_files_size.y;
+    }
+
+    if(file_lines.size() > 1)
+    {
+        files_block_height += line_spacing * static_cast<float>(file_lines.size() - 1);
+    }
+    if(!file_lines.empty() && !more_files_line.empty())
+    {
+        files_block_height += line_spacing;
+    }
+
+    const float files_section_spacing = file_lines.empty() ? 0.0f : line_spacing;
+
+    float card_width = std::max(headline_size.x, folder_size.x);
+    card_width = std::max(card_width, hint_size.x);
+    for(const ImVec2& line_size : file_line_sizes)
+    {
+        card_width = std::max(card_width, line_size.x);
+    }
+    if(!more_files_line.empty())
+    {
+        card_width = std::max(card_width, more_files_size.x);
+    }
+    card_width += card_padding * 2.0f;
+
+    const float card_height = headline_size.y + folder_size.y + hint_size.y + files_block_height +
+                              line_spacing * 2.0f + files_section_spacing + card_padding * 2.0f;
+
+    const ImVec2 center = bounds.GetCenter();
+    const ImVec2 card_min(center.x - card_width * 0.5f, center.y - card_height * 0.5f);
+    const ImVec2 card_max(center.x + card_width * 0.5f, center.y + card_height * 0.5f);
+
+    draw_list->AddRectFilled(card_min, card_max, ImGui::GetColorU32(ImGuiCol_PopupBg, 0.98f), 8.0f);
+    draw_list->AddRect(card_min, card_max, border_color, 8.0f, 0, 1.5f);
+
+    ImVec2 text_pos(card_min.x + card_padding, card_min.y + card_padding);
+    draw_list->AddText(headline_font,
+                       headline_font_size,
+                       text_pos,
+                       ImGui::GetColorU32(ImGuiCol_Text),
+                       headline);
+
+    text_pos.y += headline_size.y + line_spacing;
+    draw_list->AddText(body_font,
+                       body_font_size,
+                       text_pos,
+                       ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                       folder_line.c_str());
+
+    text_pos.y += folder_size.y + line_spacing;
+    for(size_t i = 0; i < file_lines.size(); ++i)
+    {
+        draw_list->AddText(body_font,
+                           body_font_size,
+                           text_pos,
+                           ImGui::GetColorU32(ImGuiCol_Text),
+                           file_lines[i].c_str());
+        text_pos.y += file_line_sizes[i].y;
+        if(i + 1 < file_lines.size())
+        {
+            text_pos.y += line_spacing;
+        }
+    }
+
+    if(!more_files_line.empty())
+    {
+        if(!file_lines.empty())
+        {
+            text_pos.y += line_spacing;
+        }
+        draw_list->AddText(body_font,
+                           body_font_size,
+                           text_pos,
+                           ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                           more_files_line.c_str());
+        text_pos.y += more_files_size.y + line_spacing;
+    }
+    else if(!file_lines.empty())
+    {
+        text_pos.y += line_spacing;
+    }
+
+    draw_list->AddText(body_font,
+                       body_font_size,
+                       text_pos,
+                       ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                       hint);
+
+    draw_list->PopClipRect();
 }
 
 void content_browser_panel::draw_details(rtti::context& ctx, const fs::path& path)
@@ -827,7 +1027,6 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
 
     if(ImGui::BeginChild("assets_content", ImGui::GetContentRegionAvail(), false, flags))
     {
-        ImGui::PushWindowFontSize(16);
 
         bool is_popup_opened = false;
         
@@ -960,7 +1159,6 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
         }
         set_cache_path(current_path);
 
-        ImGui::PopWindowFontSize();
 
         handle_window_empty_click(ctx);
     }
@@ -981,33 +1179,28 @@ void content_browser_panel::handle_window_empty_click(rtti::context& ctx) const
 
 void content_browser_panel::context_menu(rtti::context& ctx, bool use_context_item, const fs::path& target_path)
 {
-    bool popup_opened = false;
-    
-    if (use_context_item)
+    const bool opened = use_context_item ? ImGui::BeginPopupContextItem()
+                                         : ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight);
+    if(!opened)
     {
-        popup_opened = ImGui::BeginPopupContextItem();
+        return;
     }
-    else
+
     {
-        popup_opened = ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight);
-    }
-    
-    if (popup_opened)
-    {
+        ImGui::ContextMenuStyleScope style_scope;
+
         set_cache_path(target_path);
 
         context_create_menu(ctx, target_path);
 
-        ImGui::Separator();
 
-        if(ImGui::Selectable("Open in Explorer"))
+        if(ImGui::MenuItemIcon(ICON_MDI_FOLDER_OPEN, "Open in Explorer"))
         {
             fs::show_in_graphical_env(target_path);
         }
 
-        ImGui::Separator();
 
-        if(ImGui::Selectable("Import..."))
+        if(ImGui::MenuItemIcon(ICON_MDI_IMPORT, "Import..."))
         {
             import(ctx, target_path);
         }
@@ -1015,14 +1208,13 @@ void content_browser_panel::context_menu(rtti::context& ctx, bool use_context_it
                                 "just copy paste all the files the data folder.\n"
                                 "Preferably in a new folder. The importer will\n"
                                 "automatically pick them up as dependencies.");
-
-        ImGui::EndPopup();
     }
+    ImGui::EndPopup();
 }
 
 void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::path& target_path)
 {
-    if(ImGui::BeginMenu("Create"))
+    if(ImGui::BeginMenuIcon(ICON_MDI_PLUS, "Create"))
     {
         if(ImGui::MenuItem("Folder"))
         {

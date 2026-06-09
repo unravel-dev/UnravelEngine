@@ -941,21 +941,25 @@ auto get_texture_extension(const aiTexture* texture) -> std::string
  *
  * fs::path::generic_string() only changes how an already-parsed path is printed; on POSIX
  * backslash is not a separator, so "Textures\\file.dds" stays one filename unless we fix
- * the string before constructing fs::path.
+ * the string before constructing fs::path. Stored relative paths use generic_string() (/).
  */
-auto normalize_assimp_path(std::string path) -> fs::path
+auto normalize_assimp_path(const std::string& path) -> fs::path
 {
     if(path.empty())
     {
         return {};
     }
 
-    string_utils::replace(path, "\\", "/");
-    return fs::path(path).lexically_normal();
+    auto normalized_path = string_utils::replace(path, "\\", "/");
+    return fs::path(normalized_path).lexically_normal();
 }
 
 auto normalize_assimp_path(const fs::path& path) -> fs::path
 {
+    if(path.empty())
+    {
+        return {};
+    }
     return normalize_assimp_path(path.generic_string());
 }
 
@@ -2443,7 +2447,8 @@ auto base_color_texture_is_authoritative(const aiMaterial* material) -> bool
 
     if(has_base && has_diffuse)
     {
-        return material_texture_paths_equal(fs::path(base_path.C_Str()), fs::path(diffuse_path.C_Str()));
+        return material_texture_paths_equal(normalize_assimp_path(base_path.C_Str()),
+                                            normalize_assimp_path(diffuse_path.C_Str()));
     }
 
     return has_base;
@@ -2812,7 +2817,7 @@ auto make_texture_catalog_key(const imported_texture& tex) -> std::string
     {
         return fmt::format("e:{}:{}", tex.embedded_index, tex.semantic);
     }
-    return fmt::format("x:{}:{}", normalize_material_texture_path(fs::path(tex.name)), tex.semantic);
+    return fmt::format("x:{}:{}", normalize_material_texture_path(normalize_assimp_path(tex.name)), tex.semantic);
 }
 
 auto needs_external_texture_conversion(const imported_texture& tex) -> bool
@@ -3133,12 +3138,12 @@ auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> s
 
 auto texture_file_exists(const fs::path& output_dir, const std::string& relative) -> bool
 {
-    return resolve_texture_on_disk(output_dir, fs::path(relative)).has_value();
+    return resolve_texture_on_disk(output_dir, normalize_assimp_path(relative)).has_value();
 }
 
 auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> std::optional<std::string>
 {
-    const auto absolute = resolve_texture_on_disk(output_dir, fs::path(relative));
+    const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(relative));
     if(!absolute)
     {
         return std::nullopt;

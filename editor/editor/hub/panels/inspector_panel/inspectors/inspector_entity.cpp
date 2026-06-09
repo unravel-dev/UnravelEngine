@@ -4,6 +4,7 @@
 #include "inspectors.h"
 #include "reflection/reflection.h"
 
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/panels/entity_panel.h>
 #include <editor/imgui/imgui_interface.h>
@@ -237,26 +238,29 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
     }
 
     bool is_popup_open = ImGui::IsPopupOpen(popup_str);
-    if(is_popup_open && ImGui::BeginPopupContextWindow(popup_str, ImGuiPopupFlags_MouseButtonRight))
+    if(is_popup_open && ImGui::BeginPopup(popup_str))
     {
-        bool removal_allowed = callbacks.can_remove();
-        if(ImGui::MenuItem("Reset", nullptr, false, removal_allowed))
         {
-            callbacks.on_remove();
-            callbacks.on_add();
+            ImGui::ContextMenuStyleScope style_scope;
 
-            result.changed = true;
-            result.edit_finished = true;
+            bool removal_allowed = callbacks.can_remove();
+            if(ImGui::MenuItemIcon(ICON_MDI_RESTORE, "Reset", nullptr, removal_allowed))
+            {
+                callbacks.on_remove();
+                callbacks.on_add();
+
+                result.changed = true;
+                result.edit_finished = true;
+            }
+
+            ImGui::Separator();
+            if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Remove Component", nullptr, removal_allowed))
+            {
+                callbacks.on_remove();
+                result.changed = true;
+                result.edit_finished = true;
+            }
         }
-
-        ImGui::Separator();
-        if(ImGui::MenuItem("Remove Component", nullptr, false, removal_allowed))
-        {
-            callbacks.on_remove();
-            result.changed = true;
-            result.edit_finished = true;
-        }
-
         ImGui::EndPopup();
     }
 

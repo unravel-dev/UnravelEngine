@@ -122,11 +122,6 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
     return true;
 }
 
-auto load_texture_from_path(const std::string& path) -> gfx::texture::ptr
-{
-    return std::make_shared<gfx::texture>(path.c_str());
-}
-
 } // namespace detail
 
 template<>
@@ -136,7 +131,7 @@ auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::text
     return detail::schedule_load<gfx::texture>(pool, output, key, {},
         [](const std::string& path)
         {
-            return detail::load_texture_from_path(path);
+            return std::make_shared<gfx::texture>(path.c_str());
         }, mode);
 }
 

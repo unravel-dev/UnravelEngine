@@ -5,7 +5,10 @@
 #include "imgui_widgets/tooltips.h"
 #include <imgui/imgui_internal.h>
 
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/shortcuts.h>
 #include <editor/events.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 
@@ -417,7 +420,7 @@ void check_drag(rtti::context& ctx, entt::handle entity)
 
 void draw_3d_objects_menu(rtti::context& ctx, entt::handle parent_entity)
 {
-    if(!ImGui::BeginMenu("3D Objects"))
+    if(!ImGui::BeginMenuIcon(ICON_MDI_CUBE, "3D Objects"))
     {
         return;
     }
@@ -497,7 +500,7 @@ void draw_3d_objects_menu(rtti::context& ctx, entt::handle parent_entity)
 
 void draw_lighting_menu(rtti::context& ctx, entt::handle parent_entity)
 {
-    if(!ImGui::BeginMenu("Lighting"))
+    if(!ImGui::BeginMenuIcon(ICON_MDI_LIGHTBULB_ON, "Lighting"))
     {
         return;
     }
@@ -547,7 +550,7 @@ void draw_lighting_menu(rtti::context& ctx, entt::handle parent_entity)
 
 void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
 {
-    if(ImGui::MenuItem("Create Empty"))
+    if(ImGui::MenuItemIcon(ICON_MDI_PLUS_BOX_OUTLINE, "Create Empty"))
     {
         create_empty_entity(ctx, parent_entity);
     }
@@ -555,28 +558,27 @@ void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
     draw_3d_objects_menu(ctx, parent_entity);
     draw_lighting_menu(ctx, parent_entity);
 
-    if(ImGui::MenuItem("Camera"))
+    if(ImGui::MenuItemIcon(ICON_MDI_CAMERA, "Camera"))
     {
         create_camera_entity(ctx, parent_entity);
     }
 
-    if(ImGui::MenuItem("Volume"))
+    if(ImGui::MenuItemIcon(ICON_MDI_RESIZE, "Volume"))
     {
         create_volume_entity(ctx, parent_entity);
     }
 
-    if(ImGui::MenuItem("Audio Source"))
+    if(ImGui::MenuItemIcon(ICON_MDI_VOLUME_HIGH, "Audio Source"))
     {
         create_audio_source_entity(ctx, parent_entity);
     }
 
-    
-    if(ImGui::MenuItem("Particle Emitter"))
+    if(ImGui::MenuItemIcon(ICON_MDI_FLARE, "Particle Emitter"))
     {
         create_particle_emitter_entity(ctx, parent_entity);
     }
 
-    if(ImGui::MenuItem("UI Document"))
+    if(ImGui::MenuItemIcon(ICON_MDI_FILE_DOCUMENT, "UI Document"))
     {
         create_ui_document_entity(ctx, parent_entity);
     }
@@ -584,97 +586,100 @@ void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
 
 void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
 {
-    if(!ImGui::BeginPopupContextItem("Entity Context Menu"))
+    if(ImGui::BeginPopupContextItem("Entity Context Menu"))
     {
-        return;
-    }
-
-    if(ImGui::MenuItem("Create Empty Parent"))
-    {
-        create_empty_parent_entity(ctx, entity);
-    }
-
-    draw_common_menu_items(ctx, entity);
-
-    ImGui::Separator();
-
-    if(ImGui::MenuItem("Rename", ImGui::GetKeyName(shortcuts::rename_item)))
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        em.queue_action("Rename Entity",
-            [ctx, entity]() mutable
-            {
-                start_editing_label(ctx, entity);
-            });
-    }
-
-    if(ImGui::MenuItem("Duplicate", ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
-    {
-        panels->get_scene_panel().duplicate_entities({entity});
-    }
-
-    if(ImGui::MenuItem("Delete", ImGui::GetKeyName(shortcuts::delete_item)))
-    {
-        panels->get_scene_panel().delete_entities({entity});
-    }
-
-    if(ImGui::MenuItem("Focus", ImGui::GetKeyName(shortcuts::focus_selected)))
-    {
-        panels->get_scene_panel().focus_entities(panels->get_scene_panel().get_camera(), {entity});
-    }
-
-    ImGui::Separator();
-
-    if(entity.any_of<prefab_component, prefab_id_component>())
-    {
-        if(ImGui::MenuItem("Open Prefab"))
         {
-            auto& em = ctx.get_cached<editing_manager>();
-            em.queue_action("Open Prefab",
-            [&ctx, entity, panels]() mutable
+            ImGui::ContextMenuStyleScope style_scope;
+
+            if(ImGui::MenuItemIcon(ICON_MDI_ARRANGE_BRING_FORWARD, "Create Empty Parent"))
             {
-                auto prefab_root = prefab_override_context::find_prefab_root_entity(entity);
-                if(prefab_root)
-                {
-                    auto prefab = prefab_root.get<prefab_component>().source;
-                    if(prefab)
+                create_empty_parent_entity(ctx, entity);
+            }
+
+            draw_common_menu_items(ctx, entity);
+
+            ImGui::Separator();
+
+            if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
+            {
+                auto& em = ctx.get_cached<editing_manager>();
+                em.queue_action("Rename Entity",
+                    [ctx, entity]() mutable
                     {
-                        auto& em = ctx.get_cached<editing_manager>();
-                        em.enter_prefab_mode(ctx, prefab, true);
-                    }
-                }
-            });
-        }
+                        start_editing_label(ctx, entity);
+                    });
+            }
 
-        if(ImGui::MenuItem("Unlink from Prefab"))
-        {
-            auto& em = ctx.get_cached<editing_manager>();
-            em.queue_action("Unlink from Prefab",
-            [entity]() mutable
+            if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY,
+                                   "Duplicate",
+                                   ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
             {
-                entity.remove<prefab_component, prefab_id_component>();
-            });
-        }
-    }
+                panels->get_scene_panel().duplicate_entities({entity});
+            }
 
-    ImGui::EndPopup();
+            if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item)))
+            {
+                panels->get_scene_panel().delete_entities({entity});
+            }
+
+            if(ImGui::MenuItemIcon(ICON_MDI_CROSSHAIRS_GPS, "Focus", ImGui::GetKeyName(shortcuts::focus_selected)))
+            {
+                panels->get_scene_panel().focus_entities(panels->get_scene_panel().get_camera(), {entity});
+            }
+
+            ImGui::Separator();
+
+            if(entity.any_of<prefab_component, prefab_id_component>())
+            {
+                if(ImGui::MenuItemIcon(ICON_MDI_OPEN_IN_NEW, "Open Prefab"))
+                {
+                    auto& em = ctx.get_cached<editing_manager>();
+                    em.queue_action("Open Prefab",
+                    [&ctx, entity, panels]() mutable
+                    {
+                        auto prefab_root = prefab_override_context::find_prefab_root_entity(entity);
+                        if(prefab_root)
+                        {
+                            auto prefab = prefab_root.get<prefab_component>().source;
+                            if(prefab)
+                            {
+                                auto& em = ctx.get_cached<editing_manager>();
+                                em.enter_prefab_mode(ctx, prefab, true);
+                            }
+                        }
+                    });
+                }
+
+                if(ImGui::MenuItemIcon(ICON_MDI_LINK_OFF, "Unlink from Prefab"))
+                {
+                    auto& em = ctx.get_cached<editing_manager>();
+                    em.queue_action("Unlink from Prefab",
+                    [entity]() mutable
+                    {
+                        entity.remove<prefab_component, prefab_id_component>();
+                    });
+                }
+            }
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void draw_window_context_menu(rtti::context& ctx, imgui_panels* panels)
 {
-    if(!ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight))
+    if(ImGui::BeginPopupContextWindow(nullptr, ImGuiPopupFlags_MouseButtonRight))
     {
-        return;
-    }
+        {
+            ImGui::ContextMenuStyleScope style_scope;
 
-    draw_common_menu_items(ctx, {});
-    ImGui::EndPopup();
+            draw_common_menu_items(ctx, {});
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void check_context_menu(rtti::context& ctx, imgui_panels* panels, entt::handle entity)
 {
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_Text));
-
     if(entity)
     {
         draw_entity_context_menu(ctx, panels, entity);
@@ -683,8 +688,6 @@ void check_context_menu(rtti::context& ctx, imgui_panels* panels, entt::handle e
     {
         draw_window_context_menu(ctx, panels);
     }
-
-    ImGui::PopStyleColor();
 }
 
 // ============================================================================

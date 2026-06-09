@@ -63,6 +63,7 @@ private:
     void import(rtti::context& ctx, const fs::path& target_path);
     void on_import(rtti::context& ctx, const std::vector<std::string>& paths, const fs::path& target_path);
     void handle_window_empty_click(rtti::context& ctx) const;
+    void draw_external_drop_overlay() const;
     
     // Helper method to avoid MSVC ICE with complex template lambdas
     template<typename AssetType>
