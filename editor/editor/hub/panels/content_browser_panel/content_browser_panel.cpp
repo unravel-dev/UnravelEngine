@@ -740,22 +740,6 @@ void content_browser_panel::draw_external_drop_overlay() const
     const std::string folder_line = fmt::format("Import into: {}", cache_.get_path().generic_string());
     const char* hint = "Release to add files to this folder";
 
-    constexpr size_t max_visible_drop_files = 4;
-    const auto& drop_files = parent_->get_external_drop_files();
-
-    std::vector<std::string> file_lines;
-    file_lines.reserve(std::min(drop_files.size(), max_visible_drop_files));
-    for(size_t i = 0; i < drop_files.size() && i < max_visible_drop_files; ++i)
-    {
-        file_lines.push_back(fmt::format(ICON_MDI_FILE "  {}", fs::path(drop_files[i]).filename().string()));
-    }
-
-    std::string more_files_line;
-    if(drop_files.size() > max_visible_drop_files)
-    {
-        more_files_line = fmt::format("... and {} more.", drop_files.size() - max_visible_drop_files);
-    }
-
     ImFont* headline_font = ImGui::GetFont(ImGui::Font::Bold);
     if(headline_font == nullptr)
     {
@@ -773,48 +757,10 @@ void content_browser_panel::draw_external_drop_overlay() const
     const ImVec2 folder_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, folder_line.c_str());
     const ImVec2 hint_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, hint);
 
-    std::vector<ImVec2> file_line_sizes;
-    file_line_sizes.reserve(file_lines.size());
-    float files_block_height = 0.0f;
-    for(const auto& file_line : file_lines)
-    {
-        const ImVec2 line_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, file_line.c_str());
-        file_line_sizes.push_back(line_size);
-        files_block_height += line_size.y;
-    }
-
-    ImVec2 more_files_size{};
-    if(!more_files_line.empty())
-    {
-        more_files_size = body_font->CalcTextSizeA(body_font_size, FLT_MAX, 0.0f, more_files_line.c_str());
-        files_block_height += more_files_size.y;
-    }
-
-    if(file_lines.size() > 1)
-    {
-        files_block_height += line_spacing * static_cast<float>(file_lines.size() - 1);
-    }
-    if(!file_lines.empty() && !more_files_line.empty())
-    {
-        files_block_height += line_spacing;
-    }
-
-    const float files_section_spacing = file_lines.empty() ? 0.0f : line_spacing;
-
-    float card_width = std::max(headline_size.x, folder_size.x);
-    card_width = std::max(card_width, hint_size.x);
-    for(const ImVec2& line_size : file_line_sizes)
-    {
-        card_width = std::max(card_width, line_size.x);
-    }
-    if(!more_files_line.empty())
-    {
-        card_width = std::max(card_width, more_files_size.x);
-    }
-    card_width += card_padding * 2.0f;
-
-    const float card_height = headline_size.y + folder_size.y + hint_size.y + files_block_height +
-                              line_spacing * 2.0f + files_section_spacing + card_padding * 2.0f;
+    const float card_width =
+        std::max({headline_size.x, folder_size.x, hint_size.x}) + card_padding * 2.0f;
+    const float card_height =
+        headline_size.y + folder_size.y + hint_size.y + line_spacing * 2.0f + card_padding * 2.0f;
 
     const ImVec2 center = bounds.GetCenter();
     const ImVec2 card_min(center.x - card_width * 0.5f, center.y - card_height * 0.5f);
@@ -838,38 +784,6 @@ void content_browser_panel::draw_external_drop_overlay() const
                        folder_line.c_str());
 
     text_pos.y += folder_size.y + line_spacing;
-    for(size_t i = 0; i < file_lines.size(); ++i)
-    {
-        draw_list->AddText(body_font,
-                           body_font_size,
-                           text_pos,
-                           ImGui::GetColorU32(ImGuiCol_Text),
-                           file_lines[i].c_str());
-        text_pos.y += file_line_sizes[i].y;
-        if(i + 1 < file_lines.size())
-        {
-            text_pos.y += line_spacing;
-        }
-    }
-
-    if(!more_files_line.empty())
-    {
-        if(!file_lines.empty())
-        {
-            text_pos.y += line_spacing;
-        }
-        draw_list->AddText(body_font,
-                           body_font_size,
-                           text_pos,
-                           ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                           more_files_line.c_str());
-        text_pos.y += more_files_size.y + line_spacing;
-    }
-    else if(!file_lines.empty())
-    {
-        text_pos.y += line_spacing;
-    }
-
     draw_list->AddText(body_font,
                        body_font_size,
                        text_pos,
