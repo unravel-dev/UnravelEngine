@@ -4,7 +4,6 @@
 #include "vertex_decl.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/embedded_shader.h>
-#include <bgfx/platform.h>
 #include <bx/allocator.h>
 #include <bx/bounds.h>
 #include <bx/string.h>
@@ -354,7 +353,7 @@ void update_texture_cube(texture_handle _handle,
                          uint16_t _pitch = UINT16_MAX);
 
 /**/
-uint32_t read_texture(texture_handle _handle, void* _data, uint8_t _mip = 0);
+uint32_t read_texture(texture_handle _handle, void* _data, uint16_t _layer = 0, uint8_t _mip = 0);
 
 /**/
 void set_name(texture_handle _handle, const char* _name, int32_t _len = INT32_MAX);

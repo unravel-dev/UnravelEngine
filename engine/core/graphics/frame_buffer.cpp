@@ -45,6 +45,7 @@ void frame_buffer::populate(const std::vector<texture::ptr>& textures)
         attachments.emplace_back();
         auto& back = attachments.back();
         back.texture = tex;
+        back.generate_mips = tex->info.format < texture_format::UnknownDepth;
     }
 
     populate(attachments);

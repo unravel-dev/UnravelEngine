@@ -1,4 +1,5 @@
 #include "shadow.h"
+#include "bgfx/bgfx.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/pipeline/deferred/pipeline.h>
@@ -1252,7 +1253,11 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                                       bgfx::TextureFormat::D24S8,
                                       BGFX_TEXTURE_RT),
             };
-            rt_shadow_map_[0] = bgfx::createFrameBuffer(BX_COUNTOF(fbtextures), fbtextures, true);
+            bgfx::Attachment attachments[2];
+            attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_AUTO_GEN_MIPS);
+            attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_NONE);
+            
+            rt_shadow_map_[0] = bgfx::createFrameBuffer(BX_COUNTOF(attachments), attachments, true);
         }
 
         // if(LightType::DirectionalLight == settings_.m_lightType)
@@ -1281,7 +1286,12 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                                               bgfx::TextureFormat::D24S8,
                                               BGFX_TEXTURE_RT),
                     };
-                    rt_shadow_map_[ii] = bgfx::createFrameBuffer(BX_COUNTOF(fbtextures), fbtextures, true);
+
+                    bgfx::Attachment attachments[2];
+                    attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_AUTO_GEN_MIPS);
+                    attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_NONE);
+                    
+                    rt_shadow_map_[ii] = bgfx::createFrameBuffer(BX_COUNTOF(attachments), attachments, true);
                 }
             }
         }

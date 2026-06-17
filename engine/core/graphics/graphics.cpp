@@ -688,9 +688,9 @@ void update_texture_cube(texture_handle _handle,
     bgfx::updateTextureCube(_handle, _layer, _side, _mip, _x, _y, _width, _height, _mem, _pitch);
 }
 
-uint32_t read_texture(texture_handle _handle, void* _data, uint8_t _mip)
+uint32_t read_texture(texture_handle _handle, void* _data, uint16_t _layer, uint8_t _mip)
 {
-    return bgfx::readTexture(_handle, _data, _mip);
+    return bgfx::readTexture(_handle, _data, _layer, _mip);
 }
 
 void set_name(texture_handle _handle, const char* _name, int32_t _len)
