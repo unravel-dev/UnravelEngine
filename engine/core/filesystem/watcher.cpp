@@ -33,11 +33,13 @@ auto watcher::watch(const fs::path& path,
                     const std::string& watcher_name) -> std::uint64_t
 {
     auto& wd = get_watcher();
+    
+    auto id = wd.watch_impl(path, filter, recursive, initial_list, poll_interval, std::move(callback), watcher_name);
     if(!wd.watching_)
     {
         wd.start();
     }
-    return wd.watch_impl(path, filter, recursive, initial_list, poll_interval, std::move(callback), watcher_name);
+    return id;
 }
 
 void watcher::unwatch(std::uint64_t key)

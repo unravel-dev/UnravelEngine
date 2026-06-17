@@ -315,7 +315,12 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
+    std::stringstream ss;
+    for(const auto& pattern : filter.get_include_patterns())
+    {
+        ss << pattern.get_pattern() << " ";
+    }
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "Asset Watcher " + ss.str());
 }
 
 template<typename T>
@@ -367,7 +372,12 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
         }
     };
 
-    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback);
+    std::stringstream ss;
+    for(const auto& pattern : filter.get_include_patterns())
+    {
+        ss << pattern.get_pattern() << " ";
+    }
+    return fs::watcher::watch(watch_dir, filter, true, true, 500ms, callback, "Asset Dependencies Watcher " + ss.str());
 }
 
 template<typename T>

@@ -836,14 +836,17 @@ auto watcher_fallback::watch_impl(const fs::path& path,
     }
 
     std::shared_ptr<directory_listener> listener;
+    fs::error_code err;
+    fs::path abs_path = fs::absolute(path, err);
+    if(!err)
+    {
+        abs_path = abs_path.lexically_normal();
+    }
+    bool is_new_listener = false;
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        fs::error_code err;
-        fs::path abs_path = fs::absolute(path, err);
-        if(!err)
-        {
-            abs_path = abs_path.lexically_normal();
-        }
+       
         auto it = directory_listeners_.find(abs_path);
         if(it != directory_listeners_.end())
         {
@@ -863,7 +866,8 @@ auto watcher_fallback::watch_impl(const fs::path& path,
             if(!listener)
             {
                 listener = std::make_shared<directory_listener>(abs_path, recursive, poll_interval);
-                directory_listeners_[abs_path] = listener;
+                
+                is_new_listener = true;
             }
         }
     }
@@ -873,6 +877,10 @@ auto watcher_fallback::watch_impl(const fs::path& path,
     {
         std::lock_guard<std::mutex> lock(mutex_);
         watchers_[key] = impl;
+        if(is_new_listener)
+        {
+            directory_listeners_[abs_path] = listener;
+        }
     }
     if(globally_paused_)
     {

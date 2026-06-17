@@ -91,7 +91,7 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"pretty_name", "Edge Threshold"},
             entt::attribute{"min", 0.000f},
             entt::attribute{"max", 0.200f},
-            entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation; higher =\nsmoother but more ghosting. ~0.05 is a good balance."},
+            entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation; higher =\nsmoother but more ghosting."},
         })
         .data<&temporal_settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{

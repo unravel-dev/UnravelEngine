@@ -43,7 +43,7 @@ public:
         /// Relative view-space depth tolerance for temporal disocclusion (fraction of
         /// linear depth). The shader rejects history when |expected - stored| / stored
         /// exceeds this, so it is scale-invariant (same value works near and far).
-        float depth_threshold = 0.05f;
+        float depth_threshold = 0.2f;
         int max_accum_frames = 16;
     };
 
