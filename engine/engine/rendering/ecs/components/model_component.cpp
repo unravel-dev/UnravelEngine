@@ -450,18 +450,6 @@ void model_component::set_static(bool is_static)
     static_ = is_static;
 }
 
-void model_component::set_casts_reflection(bool casts_reflection)
-{
-    if(casts_reflection_ == casts_reflection)
-    {
-        return;
-    }
-
-    touch();
-
-    casts_reflection_ = casts_reflection;
-}
-
 auto model_component::is_enabled() const -> bool
 {
     return enabled_;
@@ -487,11 +475,6 @@ void model_component::set_model(const model& model)
     model_ = model;
 
     touch();
-}
-
-auto model_component::casts_reflection() const -> bool
-{
-    return casts_reflection_;
 }
 
 auto model_component::get_bone_transforms() const -> const pose_mat4&

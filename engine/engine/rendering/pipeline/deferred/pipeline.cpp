@@ -68,6 +68,19 @@ void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& param
     params.fill_hdr_params = {};
 }
 
+void clear_reflection_probe_face(const gfx::frame_buffer::ptr& fbo)
+{
+    if(!fbo)
+    {
+        return;
+    }
+
+    gfx::render_pass pass("Reflection Probe/Clear Face");
+    pass.bind(fbo.get());
+    pass.set_view_proj(nullptr, nullptr);
+    pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
+}
+
 // run_pipeline_impl takes const camera& for reads; jitter only touches projection jitter state.
 void apply_pipeline_taa_jitter_to_camera(const camera& view_camera,
                                          const usize32_t& viewport_size,
@@ -317,9 +330,10 @@ auto should_rebuild_shadows(const shadow::shadow_map_models_t& visibility_set,
     return false;
 }
 
-auto reflection_screen_stack_enabled(std::uint32_t stages) -> bool
+auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
 {
-    return (stages & deferred::pipeline_steps::reflection_probe) != 0u;
+    return params.run_type == pipeline::pipeline_run_type::camera &&
+           (params.pflags & deferred::pipeline_steps::reflection_probe) != 0u;
 }
 } // namespace
 
@@ -426,6 +440,15 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
             {
                 gfx::render_pass::push_scope("Build Reflections");
 
+                if(reflection_probe_comp.is_bake_cycle_unstarted())
+                {
+                    for(std::uint32_t face = 0; face < 6; ++face)
+                    {
+                        clear_reflection_probe_face(reflection_probe_comp.get_cubemap_fbo(face));
+                    }
+                }
+
+                bool any_face_dirty = false;
                 // iterate trough each cube face
                 for(std::uint32_t face = 0; face < 6; ++face)
                 {
@@ -445,26 +468,44 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
 
                     bool not_environment = probe.method != reflect_method::environment;
 
-                    pipeline_flags pflags = pipeline_steps::probe;
-                    visibility_flags vflags = visibility_query::is_reflection_caster;
+                    pipeline_flags pflags = 0;
+                    visibility_flags vflags = visibility_query::is_static;
 
                     if(not_environment)
                     {
                         pflags |= pipeline_steps::geometry_pass;
                     }
 
+                    if(reflection_probe_comp.get_capture_sky())
+                    {
+                        pflags |= pipeline_steps::atmospheric;
+                    }
+
+                    if(reflection_probe_comp.get_capture_shadows())
+                    {
+                        pflags |= pipeline_steps::shadow_pass;
+                        vflags |= visibility_query::is_shadow_caster;
+                    }
+
                     auto params = create_run_params(handle, &scn, &camera);
+                    params.run_type = pipeline_run_type::reflection_probe_capture;
                     params.vflags = vflags;
                     params.pflags = pflags;
                     strip_post_effects_for_reflection_probe_capture(params);
 
+                    //if(!reflection_probe_comp.get_capture_sky())
+                    {
+                        clear_reflection_probe_face(cubemap_fbo);
+                    }
+
                     run_pipeline_impl(cubemap_fbo, scn, camera, rview, dt, params);
+                    any_face_dirty = true;
                 }
 
-                auto env_cube = reflection_probe_comp.get_cubemap();
-                auto env_cube_prefiltered = reflection_probe_comp.get_cubemap_prefiltered();
-
+                if(any_face_dirty && reflection_probe_comp.is_bake_complete())
                 {
+                    auto env_cube = reflection_probe_comp.get_cubemap();
+                    auto env_cube_prefiltered = reflection_probe_comp.get_cubemap_prefiltered();
                     prefilter_pass::run_params prefilter_params;
 
                     prefilter_params.apply_prefilter = reflection_probe_comp.get_apply_prefilter();
@@ -609,8 +650,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     APP_SCOPE_PERF("Rendering/Run Pipeline");
 
     const pipeline_flags stages = params.pflags;
+    const bool is_camera_run = params.run_type == pipeline_run_type::camera;
+    const bool is_probe_capture = params.run_type == pipeline_run_type::reflection_probe_capture;
 
-    if(stages == pipeline_steps::full)
+    if(is_camera_run)
     {
         stats_ = {};
     }
@@ -618,12 +661,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     visibility_set_models_t visibility_set;
     gfx::frame_buffer::ptr target = nullptr;
 
-    const bool apply_reflection_pipeline = (stages & pipeline_steps::reflection_probe) != 0u;
     const bool apply_shadows = (stages & pipeline_steps::shadow_pass) != 0u;
-    const bool is_probe_capture = stages != pipeline_steps::full &&
-                                  (stages & pipeline_steps::probe) == pipeline_steps::probe;
 
-    if(apply_reflection_pipeline)
+    if(stages & pipeline_steps::reflection_probe)
     {
         build_reflections(scn, camera, dt);
     }
@@ -653,7 +693,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_assao_pass(visibility_set, camera, rview, dt, params);
 
-    run_reflection_probe_pass(scn, camera, rview, dt);
+    if(!is_probe_capture)
+    {
+        run_reflection_probe_pass(scn, camera, rview, dt);
+    }
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
@@ -670,7 +713,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Indirect lighting after SSIL so it can use the result.
     target = run_indirect_lighting_pass(scn, camera, rview);
 
-    target = run_atmospherics_pass(target, scn, camera, rview, dt);
+    if(stages & pipeline_steps::atmospheric)
+    {
+        target = run_atmospherics_pass(target, scn, camera, rview, dt);
+    }
 
     if(stages & pipeline_steps::particles_pass)
     {
@@ -697,7 +743,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_fxaa_pass(rview, target, output, params);
 
-    if(stages == pipeline_steps::full)
+    if(is_camera_run)
     {
         run_ui_pass(scn, camera, rview, output);
 
@@ -1011,8 +1057,7 @@ void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
                               delta_t dt,
                               const run_params& rparams)
 {
-    const std::uint32_t stages = rparams.pflags;
-    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_assao_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_assao_params)
     {
         assao_pass_.release_resources(rview);
         return;
@@ -1669,8 +1714,7 @@ void deferred::run_ssr_pass(const camera& camera,
                             const gfx::frame_buffer::ptr& previous_frame_source,
                             const run_params& rparams)
 {
-    const std::uint32_t stages = rparams.pflags;
-    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_ssr_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params)
     {
         ssr_pass_.release_resources(rview);
         return;
@@ -1703,8 +1747,7 @@ void deferred::run_ssil_pass(const camera& camera,
                              gfx::render_view& rview,
                              const run_params& rparams)
 {
-    const std::uint32_t stages = rparams.pflags;
-    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_ssil_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssil_params)
     {
         ssil_pass_.release_resources(rview);
         rview.tex_remove("SSIL");
@@ -1816,8 +1859,7 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
                                       const run_params& rparams,
                                       delta_t dt)
 {
-    const std::uint32_t stages = rparams.pflags;
-    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_auto_exposure_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_auto_exposure_params)
     {
         auto_exposure_pass_.release_resources(rview);
         return;
@@ -1833,8 +1875,7 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& input,
                               const run_params& rparams) -> gfx::frame_buffer::ptr
 {
-    const std::uint32_t stages = rparams.pflags;
-    if(!reflection_screen_stack_enabled(stages) || !rparams.fill_bloom_params || !rparams.fill_hdr_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_bloom_params || !rparams.fill_hdr_params)
     {
         bloom_pass_.release_resources(rview);
         return input;
@@ -1937,9 +1978,8 @@ auto deferred::run_hiz_pass(const camera& camera,
                               delta_t dt) -> bool
 {
     (void)dt;
-    const std::uint32_t stages = params.pflags;
     const bool want_hiz =
-        reflection_screen_stack_enabled(stages) && (params.fill_ssr_params || params.fill_ssil_params);
+        reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params);
 
     if(!want_hiz)
     {

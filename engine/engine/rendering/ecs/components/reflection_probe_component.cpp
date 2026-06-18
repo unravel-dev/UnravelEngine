@@ -1,4 +1,5 @@
 #include "reflection_probe_component.h"
+#include "graphics/render_pass.h"
 
 namespace unravel
 {
@@ -74,7 +75,7 @@ auto reflection_probe_component::get_render_view(size_t idx) -> gfx::render_view
 auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 {
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP");
-    constexpr uint16_t size = 256;
+    const uint16_t size = probe_resolution_to_size(resolution_);
     constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
     if(gfx::needs_recreate(tex, {size, size}, format))
     {
@@ -92,7 +93,7 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::texture::ptr&
 {
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP_PREFILTERED");
-    constexpr uint16_t size = 256;
+    const uint16_t size = probe_resolution_to_size(resolution_);
     constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
     if(gfx::needs_recreate(tex, {size, size}, format))
     {
@@ -111,7 +112,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
 {
     auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP");
     auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
-    constexpr uint16_t size = 256;
+    const uint16_t size = probe_resolution_to_size(resolution_);
     constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
     const bool recreate_texture = gfx::needs_recreate(tex, {size, size}, format);
     if(recreate_texture)
@@ -297,5 +298,90 @@ void reflection_probe_component::mark_dirty(bool force_full_first_frame)
 auto reflection_probe_component::is_dirty() const -> bool
 {
     return has_pending_bake_;
+}
+
+auto reflection_probe_component::is_bake_cycle_unstarted() const -> bool
+{
+    if(!has_pending_bake_)
+    {
+        return false;
+    }
+
+    for(const auto frame : generated_frame_)
+    {
+        if(frame != uint64_t(-1))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+auto reflection_probe_component::is_bake_complete() const -> bool
+{
+    if(!has_pending_bake_)
+    {
+        return true;
+    }
+
+    for(const auto frame : generated_frame_)
+    {
+        if(frame == uint64_t(-1))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void reflection_probe_component::set_resolution(probe_resolution resolution)
+{
+    if(resolution_ == resolution)
+    {
+        return;
+    }
+
+    touch();
+    resolution_ = resolution;
+    release_resources();
+
+    if(update_mode_ != probe_update_mode::on_demand)
+    {
+        mark_dirty();
+    }
+}
+
+void reflection_probe_component::set_capture_sky(bool capture)
+{
+    if(capture_sky_ == capture)
+    {
+        return;
+    }
+
+    touch();
+    capture_sky_ = capture;
+
+    if(update_mode_ != probe_update_mode::on_demand)
+    {
+        mark_dirty();
+    }
+}
+
+void reflection_probe_component::set_capture_shadows(bool capture)
+{
+    if(capture_shadows_ == capture)
+    {
+        return;
+    }
+
+    touch();
+    capture_shadows_ = capture;
+
+    if(update_mode_ != probe_update_mode::on_demand)
+    {
+        mark_dirty();
+    }
 }
 } // namespace unravel

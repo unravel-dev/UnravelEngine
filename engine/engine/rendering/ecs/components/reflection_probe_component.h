@@ -111,6 +111,16 @@ public:
     auto is_dirty() const -> bool;
 
     /**
+     * @brief Returns true when a bake has been requested but no cubemap face has been emitted yet.
+     */
+    auto is_bake_cycle_unstarted() const -> bool;
+
+    /**
+     * @brief Returns true when all six cubemap faces have been rendered in the current bake cycle.
+     */
+    auto is_bake_complete() const -> bool;
+
+    /**
      * @brief Gets the number of faces generated per frame.
      * @return The number of faces generated per frame.
      */
@@ -157,6 +167,37 @@ public:
      */
     void set_update_interval(float seconds) { update_interval_ = seconds; }
 
+    /**
+     * @brief Gets the cubemap face resolution.
+     */
+    auto get_resolution() const -> probe_resolution { return resolution_; }
+
+    /**
+     * @brief Sets the cubemap face resolution. Triggers a rebuild when changed.
+     */
+    void set_resolution(probe_resolution resolution);
+
+    /**
+     * @brief Returns true when the atmospheric sky pass is included during cubemap capture.
+     */
+    auto get_capture_sky() const -> bool { return capture_sky_; }
+
+    /**
+     * @brief Sets whether the atmospheric sky pass runs during cubemap capture.
+     * Disable for interior/local probes that should only reflect nearby geometry.
+     */
+    void set_capture_sky(bool capture);
+
+    /**
+     * @brief Returns true when shadow maps are rendered during cubemap capture.
+     */
+    auto get_capture_shadows() const -> bool { return capture_shadows_; }
+
+    /**
+     * @brief Sets whether shadow maps are built and sampled during cubemap capture.
+     */
+    void set_capture_shadows(bool capture);
+
 private:
     /**
      * @brief The reflection probe object this component represents.
@@ -176,7 +217,7 @@ private:
                                              uint64_t(-1),
                                              uint64_t(-1)};
 
-    bool apply_prefilter_{false};
+    bool apply_prefilter_{true};
     /// Number of faces to emit per frame while a bake is in progress (1-6).
     /// Higher = faster bake but more work per frame; lower = smoother amortization.
     size_t faces_per_frame_ = 1;
@@ -199,6 +240,12 @@ private:
     /// Seconds between refreshes when update_mode_ == realtime. 0 means "every available frame"
     /// (still time-sliced by faces_per_frame_).
     float update_interval_{0.0f};
+    /// Cubemap face resolution in pixels.
+    probe_resolution resolution_{probe_resolution::res_256};
+    /// When false, the atmospheric pass is skipped while baking cubemap faces.
+    bool capture_sky_{true};
+    /// When true, shadow maps are built and used in direct lighting during cubemap capture.
+    bool capture_shadows_{true};
 };
 
 } // namespace unravel

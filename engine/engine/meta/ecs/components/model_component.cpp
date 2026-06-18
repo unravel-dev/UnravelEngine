@@ -44,12 +44,6 @@ REFLECT(model_component)
             entt::attribute{"pretty_name", "Casts Shadow"},
             entt::attribute{"tooltip", "Is the model casting shadows?"},
         })
-        .data<&model_component::set_casts_reflection, &model_component::casts_reflection>("casts_reflection"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "casts_reflection"},
-            entt::attribute{"pretty_name", "Casts Reflection"},
-            entt::attribute{"tooltip", "Is the model participating in reflection generation?"},
-        })
         .data<nullptr, &model_component::get_world_bounds>("world_bounds"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_bounds"},
@@ -68,7 +62,6 @@ SAVE(model_component)
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("static", obj.is_static()));
     try_save(ar, ser20::make_nvp("casts_shadow", obj.casts_shadow()));
-    try_save(ar, ser20::make_nvp("casts_reflection", obj.casts_reflection()));
     try_save(ar, ser20::make_nvp("model", obj.get_model()));
 }
 SAVE_INSTANTIATE(model_component, ser20::oarchive_associative_t);
@@ -92,12 +85,6 @@ LOAD(model_component)
     if(try_load(ar, ser20::make_nvp("casts_shadow", casts_shadow)))
     {
         obj.set_casts_shadow(casts_shadow);
-    }
-
-    bool casts_reflection{};
-    if(try_load(ar, ser20::make_nvp("casts_reflection", casts_reflection)))
-    {
-        obj.set_casts_reflection(casts_reflection);
     }
 
     auto mod = obj.get_model();

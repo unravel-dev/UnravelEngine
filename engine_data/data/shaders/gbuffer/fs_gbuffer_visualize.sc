@@ -30,7 +30,7 @@ uniform vec4 u_params;
 #define DEPTH 11
 #define SSIL 12
 #define RADIANCE_ALPHA 13
-#define REFLECTION_OCCLUSION 14
+#define SPECULAR_OCCLUSION 14
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -94,7 +94,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         vec4 ssil = texture2D(s_tex7, texcoord0);
 		color = ssil.rgb * ssil.a;
     }
-    else if(u_mode == REFLECTION_OCCLUSION)
+    else if(u_mode == SPECULAR_OCCLUSION)
     {
         vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
         clip = clipTransform(clip);
@@ -103,7 +103,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         vec3 view_normal = normalize(mul(u_view, vec4(data.world_normal, 0.0)).xyz);
         float NoV = max(saturate(dot(view_normal, normalize(-view_position))), 1e-5);
         float lighting_visibility = saturate(sqrt(Luminance(eval_irradiance_sh(s_tex6, data.world_normal))));
-        float occlusion = ComputeReflectionOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
+        float occlusion = ComputeSpecularOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
         color = vec3_splat(occlusion);
     }
 

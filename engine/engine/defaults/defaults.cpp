@@ -496,7 +496,6 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::
 
     auto& model_comp = object.emplace<model_component>();
     model_comp.set_casts_shadow(true);
-    model_comp.set_casts_reflection(false);
     model_comp.set_model(mdl);
 
     auto& trans_comp = object.get<transform_component>();
@@ -682,13 +681,11 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         else if(preset == scene_preset::medium)
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
-            skylight.set_cloud_speed(10.0f);
             light.shadow_params.type = sm_impl::pcf;
         }
         else if(preset == scene_preset::high)
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
-            skylight.set_cloud_speed(10.0f);
             light.shadow_params.type = sm_impl::pcf;
             light.contact_shadow.enabled = true;
 
@@ -696,7 +693,6 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         else if(preset == scene_preset::showcase)
         {
             skylight.set_cloud_mode(skylight_component::cloud_mode::volumetric);
-            skylight.set_cloud_speed(10.0f);
             light.shadow_params.type = sm_impl::pcf;
             light.contact_shadow.enabled = true;
             light.shadow_params.resolution = sm_resolution::very_high;
@@ -893,7 +889,6 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
     model.set_material(asset, 0);
     model_comp.set_model(model);
     model_comp.set_casts_shadow(false);
-    model_comp.set_casts_reflection(false);
 
     if(focus_camera)
     {
@@ -921,7 +916,6 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
         if(auto model_comp = object.try_get<model_component>())
         {
             model_comp->set_casts_shadow(false);
-            model_comp->set_casts_reflection(false);
         }
 
         auto bounds = calc_bounds_sphere_global(object);
@@ -954,7 +948,6 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
     if(auto model_comp = object.try_get<model_component>())
     {
         model_comp->set_casts_shadow(false);
-        model_comp->set_casts_reflection(false);
     }
 
     auto bounds = calc_bounds_sphere_global(object);

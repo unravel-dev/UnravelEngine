@@ -1538,7 +1538,7 @@ vec3 SubsurfaceShadingTwoSided( vec3 SubsurfaceColor, vec3 L, vec3 V, vec3 N )
     return NoL * GGX * SubsurfaceColor;
 }
 
-float ComputeReflectionCaptureMipFromRoughness(float Roughness, float maxMipLevels)
+float ComputeReflectionCaptureMipFromRoughness(float Roughness, float MaxMipLevels)
 {
     const float REFLECTION_CAPTURE_ROUGHEST_MIP = 1.0f;
     const float REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE = 1.2f;
@@ -1548,23 +1548,23 @@ float ComputeReflectionCaptureMipFromRoughness(float Roughness, float maxMipLeve
     // Note: this must match the logic in FilterReflectionEnvironment that generates the mip filter samples!
     float LevelFrom1x1 = REFLECTION_CAPTURE_ROUGHEST_MIP - REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE * log2(max(Roughness, 0.001));
     //// Note: must match GReflectionCaptureSize
-    float HardcodedNumCaptureArrayMips = maxMipLevels;
+    float HardcodedNumCaptureArrayMips = MaxMipLevels;
     return HardcodedNumCaptureArrayMips - 1 - LevelFrom1x1;
 }
 
-float ComputeReflectionCaptureMipFromRoughnessEx(float Roughness, float maxMipLevels)
+float ComputeReflectionCaptureMipFromRoughnessEx(float Roughness, float MaxMipLevels)
 {
     float LodFactor = Roughness*(1.7f - 0.7f * Roughness);
-    return LodFactor * maxMipLevels;
+    return LodFactor * MaxMipLevels;
 }
 
-float ComputeReflectionCaptureRoughnessFromMip(float Mip, float CubemapMaxMip)
+float ComputeReflectionCaptureRoughnessFromMip(float Mip, float MaxMipLevels)
 {
     const float REFLECTION_CAPTURE_ROUGHEST_MIP = 1.0f;
     const float REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE = 1.2f;
 
 
-    float LevelFrom1x1 = CubemapMaxMip - 1 - Mip;
+    float LevelFrom1x1 = MaxMipLevels - 1 - Mip;
     return exp2( ( REFLECTION_CAPTURE_ROUGHEST_MIP - LevelFrom1x1 ) / REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE );
 }
 

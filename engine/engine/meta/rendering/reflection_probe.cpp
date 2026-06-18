@@ -77,6 +77,43 @@ REFLECT(reflection_probe)
             entt::attribute{"pretty_name", "Realtime"}
         });
 
+    entt::meta_factory<probe_resolution>{}
+        .type("probe_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_resolution"},
+            entt::attribute{"pretty_name", "Resolution"},
+        })
+        .data<probe_resolution::res_16>("res_16"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_16"},
+            entt::attribute{"pretty_name", "16"},
+        })
+        .data<probe_resolution::res_32>("res_32"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_32"},
+            entt::attribute{"pretty_name", "32"},
+        })
+        .data<probe_resolution::res_64>("res_64"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_64"},
+            entt::attribute{"pretty_name", "64"},
+        })
+        .data<probe_resolution::res_128>("res_128"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_128"},
+            entt::attribute{"pretty_name", "128"},
+        })
+        .data<probe_resolution::res_256>("res_256"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_256"},
+            entt::attribute{"pretty_name", "256"},
+        })
+        .data<probe_resolution::res_512>("res_512"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_512"},
+            entt::attribute{"pretty_name", "512"},
+        });
+
     entt::meta_factory<reflection_probe::box>{}
         .type("box"_hs)
         .custom<entt::attributes>(entt::attributes{

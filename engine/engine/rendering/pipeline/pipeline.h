@@ -8,6 +8,8 @@
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 
+#include <cstdint>
+
 
 #include "passes/assao_pass.h"
 #include "passes/atmospheric_pass_perez.h"
@@ -98,16 +100,30 @@ public:
         is_dirty = 1 << 1,             ///< Query for dirty entities.
         is_static = 1 << 2,            ///< Query for static entities.
         is_shadow_caster = 1 << 3,     ///< Query for shadow casting entities.
-        is_reflection_caster = 1 << 4, ///< Query for reflection casting entities.
     };
 
     using visibility_flags = uint32_t; ///< Type alias for visibility flags.
     using pipeline_flags = uint32_t;
+
+    /**
+     * @brief Describes which high-level pipeline path is executing.
+     * Pass enablement is controlled separately via @c run_params::pflags.
+     */
+    enum class pipeline_run_type : std::uint8_t
+    {
+        /// Main camera / viewport rendering (post-processing, UI, probe build, etc.).
+        camera = 0,
+        /// Single cubemap face capture for reflection probe baking.
+        reflection_probe_capture = 1,
+    };
+
     struct run_params
     {
         visibility_flags vflags = visibility_query::not_specified;
 
-        /// Deferred pipeline only: bitmask of @c deferred::pipeline_steps. Default equals @c deferred::pipeline_steps::full.
+        pipeline_run_type run_type = pipeline_run_type::camera;
+
+        /// Deferred pipeline only: bitmask of enabled passes (@c deferred::pipeline_steps).
         pipeline_flags pflags = 0xFFFFFFFFu;
 
         std::function<void(assao_pass::run_params& params)> fill_assao_params;

@@ -99,8 +99,7 @@ void main()
     if (any(greaterThanEqual(coord.xy, ivec2(mipSize, mipSize))) || face >= 6)
         return;
     
-    float lastMipLevel = numMips - 1.0;
-    float roughness = ComputeReflectionCaptureRoughnessFromMip(mipIdx, lastMipLevel);
+    float roughness = ComputeReflectionCaptureRoughnessFromMip(mipIdx, numMips);
     
     // Compute UV in [-1,+1] range
     vec2 uv = vec2(
@@ -128,7 +127,8 @@ void main()
     
     float a = roughness * roughness;
     float a2 = a * a;
-    
+    float lastMipLevel = numMips - 1.0;
+
     // Monte Carlo integration using importance sampling
     for (int i = 0; i < samples; ++i)
     {

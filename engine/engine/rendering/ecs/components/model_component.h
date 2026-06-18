@@ -41,12 +41,6 @@ public:
     void set_casts_shadow(bool cast_shadow);
 
     /**
-     * @brief Sets whether the model casts reflections.
-     * @param casts_reflection True if the model casts reflections, false otherwise.
-     */
-    void set_casts_reflection(bool casts_reflection);
-
-    /**
      * @brief Sets whether the model is static.
      * @param is_static True if the model is static, false otherwise.
      */
@@ -63,12 +57,6 @@ public:
      * @return True if the model casts shadows, false otherwise.
      */
     auto casts_shadow() const -> bool;
-
-    /**
-     * @brief Checks if the model casts reflections.
-     * @return True if the model casts reflections, false otherwise.
-     */
-    auto casts_reflection() const -> bool;
 
     /**
      * @brief Checks if the model is static.
@@ -197,11 +185,6 @@ private:
      * @brief Indicates if the model casts shadows.
      */
     bool casts_shadow_ = true;
-
-    /**
-     * @brief Indicates if the model casts reflections.
-     */
-    bool casts_reflection_ = true;
 
     /**
      * @brief The model object.

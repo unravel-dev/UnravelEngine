@@ -46,14 +46,9 @@ public:
         geometry_pass = 1u << 1,
         shadow_pass = 1u << 2,
         reflection_probe = 1u << 3,
-        lighting = 1u << 4,
         atmospheric = 1u << 5,
         particles_pass = 1u << 6,
 
-        /// Cubemap face / minimal deferred: lighting + atmospherics; no screen-reflection stack or probe build.
-        /// Default main-camera path: all bits set (matches @c run_params::pflags default). Individual stages
-        probe = lighting | atmospheric,
-        /// above are still tested with @c (pflags & pipeline_steps::geometry_pass), etc.
         full = 0xFFFFFFFFu,
     };
 

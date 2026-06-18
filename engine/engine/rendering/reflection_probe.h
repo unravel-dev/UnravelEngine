@@ -48,6 +48,48 @@ enum class probe_update_mode : std::uint8_t
 };
 
 /**
+ * @brief Fixed cubemap face resolutions supported by reflection probes.
+ */
+enum class probe_resolution : std::uint8_t
+{
+    res_16 = 0,
+    res_32,
+    res_64,
+    res_128,
+    res_256,
+    res_512,
+    res_1024,
+
+    count
+};
+
+/**
+ * @brief Converts a probe_resolution enum value to its pixel size.
+ */
+inline auto probe_resolution_to_size(probe_resolution resolution) -> std::uint16_t
+{
+    switch(resolution)
+    {
+    case probe_resolution::res_16:
+        return 16;
+    case probe_resolution::res_32:
+        return 32;
+    case probe_resolution::res_64:
+        return 64;
+    case probe_resolution::res_128:
+        return 128;
+    case probe_resolution::res_256:
+        return 256;
+    case probe_resolution::res_512:
+        return 512;
+    case probe_resolution::res_1024:
+        return 1024;
+    default:
+        return 256;
+    }
+}
+
+/**
  * @brief Structure representing a reflection probe.
  */
 struct reflection_probe

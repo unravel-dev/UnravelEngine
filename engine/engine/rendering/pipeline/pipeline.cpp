@@ -142,10 +142,6 @@ void pipeline::gather_visible_models(scene& scn,
             {
                 return;
             }
-            if((query & visibility_query::is_reflection_caster) && !model_comp.casts_reflection()) 
-            {
-                return;
-            }
             if((query & visibility_query::is_shadow_caster) && !model_comp.casts_shadow()) 
             {
                 return;

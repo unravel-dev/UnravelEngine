@@ -48,6 +48,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
                 bgfx::blit(pass.id, output_cube->native_handle(), mip, 0, 0, face, src, mip, 0, 0, 0, dim, dim, 1);
             }
         }
+        pass.touch();
 
         if(!params.apply_prefilter)
         {
@@ -94,6 +95,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
 
             // Dispatch compute shader for all faces at once
             bgfx::dispatch(pass.id, cs_.program->native_handle(), num_groups_x, num_groups_y, num_groups_z);
+            pass.touch();
 
             cs_.program->end();
 
