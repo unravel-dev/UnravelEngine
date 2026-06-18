@@ -27,8 +27,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
     const auto& ti = params.output_cube->info;
     uint8_t max_mips = ti.numMips;
 
-
-    // Simple copy if disabled
+    // Copy captured face textures into the cubemap (all mips; faces auto-generate box mips on resolve).
     {
         APP_SCOPE_PERF("Rendering/Env Blit Pass");
 

@@ -12,12 +12,14 @@ SAMPLERCUBE(s_tex_cube, 5);
 
 uniform vec4 u_data0;
 uniform vec4 u_data1;
+uniform vec4 u_capture;
 
 #define u_probe_position_and_radius u_data0
 #define u_cube_mips u_data1.x
 #define u_intensity u_data1.y
 #define u_is_global_fallback u_data1.z
 #define u_source_validity u_data1.w
+#define u_apply_prefilter u_capture.x
 
 vec3 GetLookupVectorForSphereCapture(vec3 ReflectionVector, vec3 WorldPosition, vec4 SphereCapturePositionAndRadius, float NormalizedDistanceToCapture, vec3 LocalCaptureOffset, out float DistanceAlpha)
 {
@@ -79,7 +81,7 @@ void main()
 	{
 		vec4 CaptureOffsetAndAverageBrightness = vec4(0.0f, 0.0, 0.0f, 0.0f);
 		vec3 ProjectedCaptureVector = GetLookupVectorForSphereCapture(R, world_position, u_probe_position_and_radius, NormalizedDistanceToCapture, CaptureOffsetAndAverageBrightness.xyz, DistanceAlpha);
-		float lod = ComputeReflectionCaptureMipFromRoughnessEx(data.roughness, u_cube_mips);
+		float lod = ComputeReflectionProbeSampleMip(data.roughness, u_cube_mips, u_apply_prefilter);
         color.xyz = textureCubeLod(s_tex_cube, ProjectedCaptureVector, lod).xyz * u_intensity;
 	}
 	

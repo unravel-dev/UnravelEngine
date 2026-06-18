@@ -14,6 +14,7 @@ uniform vec4 u_data0;
 uniform vec4 u_data1;
 
 uniform vec4 u_data2;
+uniform vec4 u_capture;
 uniform mat4 u_inv_world;
 
 #define u_probe_position_and_radius u_data0
@@ -22,6 +23,7 @@ uniform mat4 u_inv_world;
 #define u_is_global_fallback u_data1.z
 #define u_source_validity u_data1.w
 #define u_probe_extents u_data2
+#define u_apply_prefilter u_capture.x
 
 /** Computes distance from an AABB to a point in space. */
 float ComputeDistanceFromBoxToPoint(vec3 Mins, vec3 Maxs, vec3 InPoint)
@@ -121,7 +123,7 @@ void main()
 		vec3 ProjectedCaptureVector = GetLookupVectorForBoxCapture(R, world_position, u_probe_position_and_radius, u_inv_world, u_probe_extents, CaptureOffsetAndAverageBrightness.xyz, DistanceAlpha);
 		if(DistanceAlpha >= 0.0f)
 		{
-			float lod = ComputeReflectionCaptureMipFromRoughnessEx(data.roughness, u_cube_mips);
+			float lod = ComputeReflectionProbeSampleMip(data.roughness, u_cube_mips, u_apply_prefilter);
 
             color.xyz = textureCubeLod(s_tex_cube, ProjectedCaptureVector, lod).xyz * u_intensity;
 		}		

@@ -98,28 +98,28 @@ void main()
     // Check bounds for current mip level and face
     if (any(greaterThanEqual(coord.xy, ivec2(mipSize, mipSize))) || face >= 6)
         return;
-    
-    float roughness = ComputeReflectionCaptureRoughnessFromMip(mipIdx, numMips);
-    
+
     // Compute UV in [-1,+1] range
     vec2 uv = vec2(
         (float(coord.x) + 0.5) / float(mipSize) * 2.0 - 1.0,
         -((float(coord.y) + 0.5) / float(mipSize) * 2.0 - 1.0)
     );
-    
+
     vec3 N = normalize(GetCubemapVector(uv, face));
     vec3 V = N;
-    
-    // Base lookup for very low roughness
-    if (roughness < 0.01)
+
+    // Mip 0 is a straight copy of the captured environment (mirror sharpness).
+    if (mipIdx < 0.5)
     {
         vec3 c = textureCubeLod(s_env, N, 0.0).rgb;
         imageStore(i_output, ivec3(coord.xy, face), vec4(max(c, vec3_splat(0.0)), 1.0));
         return;
     }
+
+    float roughness = ComputeReflectionCaptureRoughnessFromMip(mipIdx);
     
-    // Sample count: more for mid/high roughness where GGX lobe is wide
-    int samples = (roughness < 0.1) ? 32 : (roughness < 0.5) ? 64 : 128;
+    // Sample count: more for mid/high roughness where the GGX lobe is wide.
+    int samples = (roughness < 0.1) ? 32 : (roughness < 0.5) ? 64 : 256;
     
     float SolidAngleTexel = 4.0 * PI / (6.0 * float(cubeSize * cubeSize));
     vec3 result = vec3_splat(0.0);
@@ -136,7 +136,9 @@ void main()
         vec3 H = ImportanceSampleGGX(E, N, a2);
         vec3 L = normalize(2.0 * dot(V, H) * H - V);
         float NoH = max(dot(N, H), 0.0);
-        float PDF = D_GGX(roughness, NoH) * NoH * 0.25;
+        float VoH = max(dot(V, H), 1e-4);
+        float PDF = D_GGX(roughness, NoH) * NoH / (4.0 * VoH);
+        PDF = max(PDF, 1e-4);
         float SolidAngleSample = 1.0 / (float(samples) * PDF);
         float mip = 0.5 * log2(SolidAngleSample / SolidAngleTexel);
         mip = clamp(mip, 0.0, lastMipLevel);

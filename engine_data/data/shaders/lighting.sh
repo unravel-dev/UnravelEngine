@@ -1538,34 +1538,41 @@ vec3 SubsurfaceShadingTwoSided( vec3 SubsurfaceColor, vec3 L, vec3 V, vec3 N )
     return NoL * GGX * SubsurfaceColor;
 }
 
-float ComputeReflectionCaptureMipFromRoughness(float Roughness, float MaxMipLevels)
+#define REFLECTION_CAPTURE_ROUGHEST_MIP 1.0
+#define REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE 1.2
+// UE calibration: roughness<->mip mapping uses a fixed reference mip count, not the
+// texture's actual mip count. Higher-resolution cubemaps only provide sharper mip 0.
+#define REFLECTION_CAPTURE_REFERENCE_MIPS 7.0
+
+float ComputeReflectionCaptureMipFromRoughness(float Roughness, float ActualMipLevels)
 {
-    const float REFLECTION_CAPTURE_ROUGHEST_MIP = 1.0f;
-    const float REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE = 1.2f;
-    // Heuristic that maps roughness to mip level
-    // This is done in a way such that a certain mip level will always have the same roughness, regardless of how many mips are in the texture
-    // Using more mips in the cubemap just allows sharper reflections to be supported
-    // Note: this must match the logic in FilterReflectionEnvironment that generates the mip filter samples!
     float LevelFrom1x1 = REFLECTION_CAPTURE_ROUGHEST_MIP - REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE * log2(max(Roughness, 0.001));
-    //// Note: must match GReflectionCaptureSize
-    float HardcodedNumCaptureArrayMips = MaxMipLevels;
-    return HardcodedNumCaptureArrayMips - 1 - LevelFrom1x1;
+    float mip = REFLECTION_CAPTURE_REFERENCE_MIPS - 1.0 - LevelFrom1x1;
+    return clamp(mip, 0.0, ActualMipLevels - 1.0);
 }
 
-float ComputeReflectionCaptureMipFromRoughnessEx(float Roughness, float MaxMipLevels)
+// Box-filter cubemap mips (prefilter disabled): linear remap of the GGX mip curve
+// so low roughness matches GGX (ggxMip 0 -> box 0) and ~0.85 hits the coarsest mip.
+float ComputeReflectionCaptureMipFromRoughnessBox(float Roughness, float ActualMipLevels)
 {
-    float LodFactor = Roughness*(1.7f - 0.7f * Roughness);
-    return LodFactor * MaxMipLevels;
+    float ggxMip = ComputeReflectionCaptureMipFromRoughness(Roughness, ActualMipLevels);
+    const float BOX_FULL_ROUGHNESS = 0.70;
+    float ggxMipAtFullRoughness = ComputeReflectionCaptureMipFromRoughness(BOX_FULL_ROUGHNESS, ActualMipLevels);
+    float maxMip = ActualMipLevels - 1.0;
+    return clamp(ggxMip / max(ggxMipAtFullRoughness, 1e-4) * maxMip, 0.0, maxMip);
 }
 
-float ComputeReflectionCaptureRoughnessFromMip(float Mip, float MaxMipLevels)
+float ComputeReflectionProbeSampleMip(float Roughness, float ActualMipLevels, float UsePrefilteredMips)
 {
-    const float REFLECTION_CAPTURE_ROUGHEST_MIP = 1.0f;
-    const float REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE = 1.2f;
+    float ggxMip = ComputeReflectionCaptureMipFromRoughness(Roughness, ActualMipLevels);
+    float boxMip = ComputeReflectionCaptureMipFromRoughnessBox(Roughness, ActualMipLevels);
+    return mix(boxMip, ggxMip, step(0.5, UsePrefilteredMips));
+}
 
-
-    float LevelFrom1x1 = MaxMipLevels - 1 - Mip;
-    return exp2( ( REFLECTION_CAPTURE_ROUGHEST_MIP - LevelFrom1x1 ) / REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE );
+float ComputeReflectionCaptureRoughnessFromMip(float Mip)
+{
+    float LevelFrom1x1 = REFLECTION_CAPTURE_REFERENCE_MIPS - 1.0 - Mip;
+    return exp2((REFLECTION_CAPTURE_ROUGHEST_MIP - LevelFrom1x1) / REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE);
 }
 
 #endif // __LIGHTING_SH__

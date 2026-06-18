@@ -1598,9 +1598,11 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
             const bool is_global_fallback = probe.method == reflect_method::environment;
             const float source_validity = 1.0f;
             float data1[4] = {mips, probe.intensity, is_global_fallback ? 1.0f : 0.0f, source_validity};
+            float capture[4] = {probe_comp_ref.get_apply_prefilter() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
 
             gfx::set_uniform(ref_probe_program->u_data0, data0);
             gfx::set_uniform(ref_probe_program->u_data1, data1);
+            gfx::set_uniform(ref_probe_program->u_capture, capture);
 
             for(size_t i = 0; i < gbuffer->get_attachment_count(); ++i)
             {

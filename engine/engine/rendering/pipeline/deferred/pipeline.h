@@ -134,6 +134,7 @@ private:
         {
             cache_uniform(program.get(), u_data0, "u_data0", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_data1, "u_data1", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_capture, "u_capture", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
@@ -144,6 +145,7 @@ private:
 
         gfx::program::uniform_ptr u_data0;
         gfx::program::uniform_ptr u_data1;
+        gfx::program::uniform_ptr u_capture;
 
         std::array<gfx::program::uniform_ptr, 5> s_tex;
         gfx::program::uniform_ptr s_tex_cube;
