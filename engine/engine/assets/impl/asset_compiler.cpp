@@ -2,6 +2,7 @@
 #include "asset_dependencies.h"
 #include "asset_writer.h"
 #include "asset_manifest.h"
+#include "bimg/bimg.h"
 #include "importers/mesh_importer.h"
 
 #include <bx/error.h>
@@ -175,7 +176,15 @@ bool copy_compiled_file(const fs::path& from, const fs::path& to)
 
 auto get_input_texture_format(const fs::path& input_path) -> gfx::texture_format
 {
-    bimg::ImageContainer* image = imageLoad(bx::FilePath(input_path.string().c_str()), bgfx::TextureFormat::Count);
+    const bx::FilePath file_path(input_path.string().c_str());
+
+    bimg::ImageContainer info;
+    if(imageParseInfo(file_path, info))
+    {
+        return static_cast<gfx::texture_format>(info.m_format);
+    }
+
+    bimg::ImageContainer* image = imageLoad(file_path, bgfx::TextureFormat::Count);
     if(image == nullptr)
     {
         return gfx::texture_format::RGBA8;
@@ -389,7 +398,7 @@ auto compile_texture_to_file(const fs::path& input_path,
     const auto input_format = get_input_texture_format(compile_input);
     auto format = select_compressed_format(input_format, compile_input.extension(), quality.compression);
     
-    if(input_format != format && compile_input.extension() != ".ktx2")
+    if(input_format != format)
     {
         std::vector<std::string> args_array = {
             "-f",

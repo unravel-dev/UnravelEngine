@@ -585,6 +585,31 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
     return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
 }
 
+bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _info, bx::Error* _err)
+{
+    if(_data == nullptr || _size == 0)
+    {
+        return false;
+    }
+
+    return bimg::imageParseInfo(entry::getAllocator(), _info, _data, _size, _err);
+}
+
+bool imageParseInfo(const bx::FilePath& _filePath, bimg::ImageContainer& _info, bx::Error* _err)
+{
+    uint32_t size = 0;
+    entry::FileReader reader;
+    void* data = load(&reader, entry::getAllocator(), _filePath, &size);
+    if(data == nullptr)
+    {
+        return false;
+    }
+
+    const bool parsed = bimg::imageParseInfo(entry::getAllocator(), _info, data, size, _err);
+    unload(data);
+    return parsed;
+}
+
 void calcTangents(void* _vertices,
                   uint16_t _numVertices,
                   bgfx::VertexLayout _layout,

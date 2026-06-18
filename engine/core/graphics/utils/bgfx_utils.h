@@ -54,6 +54,11 @@ bgfx::TextureHandle loadTexture(const void* _data,
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
 bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);
+
+/// Parse image metadata without decoding pixel data.
+bool imageParseInfo(const bx::FilePath& _filePath, bimg::ImageContainer& _info, bx::Error* _err = NULL);
+bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _info, bx::Error* _err = NULL);
+
 bool imageSave(const char* saveAs, bimg::ImageContainer* image);
 
 /// Flip tangent-space normal map Y (tangent-space +Y / green channel via bimg unpack/pack).
