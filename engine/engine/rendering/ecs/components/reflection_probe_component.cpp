@@ -74,14 +74,15 @@ auto reflection_probe_component::get_render_view(size_t idx) -> gfx::render_view
 auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 {
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP");
-    if(!tex)
+    constexpr uint16_t size = 256;
+    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    if(gfx::needs_recreate(tex, {size, size}, format))
     {
-        constexpr uint16_t size = 256;
         tex.reset();
         tex = std::make_shared<gfx::texture>(size,
                                              true,
                                              1,
-                                             gfx::texture_format::RGBA8,
+                                             format,
                                              BGFX_TEXTURE_COMPUTE_WRITE |BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT);
     }
 
@@ -91,14 +92,15 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
 auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::texture::ptr&
 {
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP_PREFILTERED");
-    if(!tex)
+    constexpr uint16_t size = 256;
+    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    if(gfx::needs_recreate(tex, {size, size}, format))
     {
-        constexpr uint16_t size = 256;
         tex.reset();
         tex = std::make_shared<gfx::texture>(size,
                                              true,
                                              1,
-                                             gfx::texture_format::RGBA8,
+                                             format,
                                              BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT);
     }
 
@@ -108,21 +110,20 @@ auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::textur
 auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::frame_buffer::ptr&
 {
     auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP");
-    if(!fbo)
+    auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
+    constexpr uint16_t size = 256;
+    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    const bool recreate_texture = gfx::needs_recreate(tex, {size, size}, format);
+    if(recreate_texture)
     {
-        auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
-        if(!tex)
-        {
-            constexpr uint16_t size = 256;
-            tex.reset();
-            tex = std::make_shared<gfx::texture>(size,
-                                                 size,
-                                                 true,
-                                                 1,
-                                                 gfx::texture_format::RGBA8,
-                                                 BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
-        }
-
+        tex.reset();
+        tex = std::make_shared<gfx::texture>(size,
+                                             size,
+                                             true,
+                                             1,
+                                             format,
+                                             BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
+   
         gfx::fbo_attachment att;
         att.layer = 0;
         att.texture = tex;

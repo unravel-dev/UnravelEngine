@@ -29,6 +29,8 @@ uniform vec4 u_params;
 #define SUBSURFACE_COLOR 10
 #define DEPTH 11
 #define SSIL 12
+#define RADIANCE_ALPHA 13
+#define REFLECTION_OCCLUSION 14
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -50,6 +52,10 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == RADIANCE)
     {
         color = texture2D(s_tex5, texcoord0).xyz;
+    }
+    else if(u_mode == RADIANCE_ALPHA)
+    {
+        color = vec3_splat(texture2D(s_tex5, texcoord0).a);
     }
     else if(u_mode == AMBIENT_OCCLUSION)
     {
@@ -87,6 +93,18 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         vec4 ssil = texture2D(s_tex7, texcoord0);
 		color = ssil.rgb * ssil.a;
+    }
+    else if(u_mode == REFLECTION_OCCLUSION)
+    {
+        vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
+        clip = clipTransform(clip);
+        vec3 world_position = clipToWorld(u_invViewProj, clip);
+        vec3 view_position = mul(u_view, vec4(world_position, 1.0)).xyz;
+        vec3 view_normal = normalize(mul(u_view, vec4(data.world_normal, 0.0)).xyz);
+        float NoV = max(saturate(dot(view_normal, normalize(-view_position))), 1e-5);
+        float lighting_visibility = saturate(sqrt(Luminance(eval_irradiance_sh(s_tex6, data.world_normal))));
+        float occlusion = ComputeReflectionOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
+        color = vec3_splat(occlusion);
     }
 
     return vec4(color, 1.0f);

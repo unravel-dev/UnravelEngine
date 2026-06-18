@@ -16,6 +16,8 @@ uniform vec4 u_data1;
 #define u_probe_position_and_radius u_data0
 #define u_cube_mips u_data1.x
 #define u_intensity u_data1.y
+#define u_is_global_fallback u_data1.z
+#define u_source_validity u_data1.w
 
 vec3 GetLookupVectorForSphereCapture(vec3 ReflectionVector, vec3 WorldPosition, vec4 SphereCapturePositionAndRadius, float NormalizedDistanceToCapture, vec3 LocalCaptureOffset, out float DistanceAlpha)
 {
@@ -78,12 +80,10 @@ void main()
 		vec4 CaptureOffsetAndAverageBrightness = vec4(0.0f, 0.0, 0.0f, 0.0f);
 		vec3 ProjectedCaptureVector = GetLookupVectorForSphereCapture(R, world_position, u_probe_position_and_radius, NormalizedDistanceToCapture, CaptureOffsetAndAverageBrightness.xyz, DistanceAlpha);
 		float lod = ComputeReflectionCaptureMipFromRoughnessEx(data.roughness, u_cube_mips);
-        vec3 cubeColor = toLinear(textureCubeLod(s_tex_cube, ProjectedCaptureVector, lod)).xyz * u_intensity;
-
-        color.xyz = cubeColor * DistanceAlpha;
+        color.xyz = textureCubeLod(s_tex_cube, ProjectedCaptureVector, lod).xyz * u_intensity;
 	}
 	
-	color.a = DistanceAlpha;
+	color.a = DistanceAlpha * u_source_validity;
 	
 	gl_FragColor = color;
 }

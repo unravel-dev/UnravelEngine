@@ -83,6 +83,13 @@ float GetRoughnessFade(float roughness)
     return MAX_ROUGHNESS - min(roughness, MAX_ROUGHNESS);
 }
 
+float GetRoughnessVisibility(float roughness)
+{
+    //return 1.0 - smoothstep(0.35, 0.8, roughness);
+    return GetRoughnessFade(roughness);
+}
+
+
 // Temporal reprojection functions
 vec2 WorldToScreenPrevious(vec3 ws_pos)
 {
@@ -315,7 +322,6 @@ float ValidateHit(vec3 ss_hit_pos, vec2 uv, vec3 vs_ray_origin, float roughness,
 
     float depth_tolerance = u_depth_tolerance + mix(0.0, u_roughness_depth_tolerance, roughness);
     float confidence = 1.0 - smoothstep(0.0, depth_tolerance, dist);
-    confidence *= 10.0;
 
     vec2 fade_in = vec2(u_fade_in_start, u_fade_in_end);
     vec2 border = smoothstep(vec2_splat(0.0), fade_in, ss_hit_pos.xy) *
@@ -325,7 +331,7 @@ float ValidateHit(vec3 ss_hit_pos, vec2 uv, vec3 vs_ray_origin, float roughness,
 
     float mirror_fade = clamp(max(dot(vs_ray_origin, vs_ray_dir), 0.0) + u_facing_reflections_fading, 0.0, 1.0);
 
-    float roughness_fade = GetRoughnessFade(roughness);
+    float roughness_fade = GetRoughnessVisibility(roughness);
 
     return clamp(confidence * mirror_fade * edge_fade * roughness_fade, 0.0, 1.0);
 }
@@ -476,8 +482,7 @@ void main()
 				sample_color = SampleScreenColor(ss_hit_pos.xy, ss_hit_pos.z, s_color, 0.0);
             }
 			
-            sample_color.rgb *= max(1.0, Luminance(sample_color.rgb)) * u_brightness;
-            sample_color.rgb /= 1 + Luminance(sample_color.rgb);
+            sample_color.rgb *= u_brightness;
 
             float sample_confidence = max(confidence, 0.0);
             sample_color.a *= sample_confidence;
@@ -487,10 +492,5 @@ void main()
     }
 
 	output_color /= float(num_rays);
-    // Inverse Reinhard to restore HDR range. Guard against luma -> 1 so we
-    // don't divide by ~0 (saturates RGBA8 to white and at half-res those
-    // saturated texels get bilinear-smeared across the upsampled edge rows).
-    output_color.rgb /= max(1.0 - Luminance(output_color.rgb), 1e-4);
-
     gl_FragColor = output_color;
 }

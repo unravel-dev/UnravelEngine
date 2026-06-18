@@ -71,7 +71,7 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
 
     // Otherwise, use the render_view to get or create the SSR output framebuffer
     auto ref_sz = reference->get_size();
-    auto ref_format = gfx::texture_format::RGBA8;
+    auto ref_format = gfx::texture_format::RGBA16F;
 
     auto& ssr_output_tex = rview.tex_get_or_emplace("SSR_OUTPUT");
     if(gfx::needs_recreate(ssr_output_tex, ref_sz, ref_format))
@@ -102,7 +102,7 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                             trace_resolution res) -> gfx::frame_buffer::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA8;
+    const auto ref_format = gfx::texture_format::RGBA16F;
 
     auto& ssr_curr_tex = rview.tex_get_or_emplace("SSR_CURR");
     if(gfx::needs_recreate(ssr_curr_tex, target_size, ref_format))
@@ -133,7 +133,7 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
                                                 trace_resolution res) -> gfx::texture::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA8;
+    const auto ref_format = gfx::texture_format::RGBA16F;
 
     auto& history_tex = rview.tex_get_or_emplace("SSR_HISTORY");
     if(gfx::needs_recreate(history_tex, target_size, ref_format))
@@ -156,7 +156,7 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
                                                     trace_resolution res) -> gfx::frame_buffer::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA8;
+    const auto ref_format = gfx::texture_format::RGBA16F;
 
     auto& temp_tex = rview.tex_get_or_emplace("SSR_HISTORY_TEMP");
     if(gfx::needs_recreate(temp_tex, target_size, ref_format))
@@ -229,7 +229,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
                                                      input_size.height,
                                                      true,                       // has mips
                                                      1,                          // num layers
-                                                     gfx::texture_format::RGBA8,
+                                                     gfx::texture_format::RGBA16F,
                                                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                          BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
     }
@@ -296,7 +296,7 @@ auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
                                                       target_size.height,
                                                       false,
                                                       1,
-                                                      gfx::texture_format::RGBA8,
+                                                      gfx::texture_format::RGBA16F,
                                                       BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
                                                           BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     }

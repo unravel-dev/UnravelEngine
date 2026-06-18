@@ -19,36 +19,33 @@ float GetRoughnessFade(float roughness)
     return MAX_ROUGHNESS - min(roughness, MAX_ROUGHNESS);
 }
 
+float GetRoughnessVisibility(float roughness)
+{
+    //return 1.0 - smoothstep(0.35, 0.8, roughness);
+    return GetRoughnessFade(roughness);
+}
+
+
 void main()
 {
     vec2 uv = v_texcoord0;
 
-    // Sample current frame confidence (this drives the blending)
+    // Current hit confidence drives replacement of the probe fallback.
     vec4 curr_ssr = texture2D(s_ssr_curr, uv);
     float ssr_confidence = curr_ssr.a;
 
-    // Sample temporally filtered SSR color
+    // History stabilizes color only; it should not keep overwriting the probe when
+    // the current frame has a weak/missing screen-space hit.
     vec4 ssr_history = texture2D(s_ssr_history, uv);
-    vec3 ssr_color = ssr_history.rgb;
+    float history_weight = saturate(ssr_history.a);
+    vec3 ssr_color = mix(curr_ssr.rgb, ssr_history.rgb, history_weight);
 
-    float stability = ssr_history.a;                  // already 0-1
-    float alpha = clamp(ssr_confidence + (1.0 - ssr_confidence) * stability, 0.0, 1.0);
-
-    // Sample G-buffer data for enhanced blending
     GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(uv, s_normal);
 
-    // Roughness-based blending: smoother surfaces prefer SSR
-    float roughness_factor = GetRoughnessFade(normal_data.roughness);
-    
-    // Metallic surfaces get more SSR contribution
-    float metallic_factor = normal_data.metalness;
-    
-    // Combine all factors for final blend weight
-    float enhanced_confidence = alpha * 
-                               mix(0.5, 1.0, roughness_factor) * // Roughness preference  
-                               mix(0.8, 1.0, metallic_factor);   // Metallic preference
-    
-    enhanced_confidence = clamp(enhanced_confidence, 0.0, 1.0);
+    // SSR is reliable for smooth reflections and intentionally fades out as the lobe
+    // gets too wide for screen-space tracing. Probe data remains the fallback there.
+    float roughness_visibility = GetRoughnessVisibility(normal_data.roughness);
+    float enhanced_confidence = saturate(ssr_confidence * roughness_visibility);
     
     // Output SSR color with confidence alpha for hardware blending with probe buffer
     gl_FragColor = vec4(ssr_color, enhanced_confidence);

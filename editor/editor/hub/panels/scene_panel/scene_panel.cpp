@@ -1748,6 +1748,8 @@ void scene_panel::draw_visualization_menu()
         ImGui::RadioButton("Subsurface Color", &visualize_passes_, 10);
         ImGui::RadioButton("Depth", &visualize_passes_, 11);
         ImGui::RadioButton("SSIL", &visualize_passes_, 12);
+        ImGui::RadioButton("Radiance Alpha", &visualize_passes_, 13);
+        ImGui::RadioButton("Reflection Occlusion", &visualize_passes_, 14);
 
         ImGui::EndMenu();
     }

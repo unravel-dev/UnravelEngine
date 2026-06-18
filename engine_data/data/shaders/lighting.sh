@@ -1462,11 +1462,18 @@ vec3 StandardShadingDirect(
     return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + specular;
 }
 
-// Indirect lighting only — environment BRDF + indirect diffuse, evaluated once per pixel.
+float ComputeSpecularOcclusion(float NoV, float Roughness, float AO, float LightingVisibility)
+{
+    float RoughnessSq = Roughness * Roughness;
+
+    float GeometricVisibility = saturate(AO);
+    float GeometricOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, GeometricVisibility);
+
+    return GeometricOcclusion;
+}
+
+// Indirect lighting only - environment BRDF + indirect diffuse, evaluated once per pixel.
 // EnergyPreservationFactor accounts for specular layer absorbing energy from the diffuse layer.
-// LightingVisibility: ambient light level at the surface [0,1], used together with geometric
-// AO to compute unified specular occlusion. Both represent hemisphere coverage fractions,
-// so the effective visibility is min(AO, LightingVisibility) fed through Lagarde's formula.
 vec3 StandardShadingIndirect(
  vec3 DiffuseColor,
  vec3 IndirectDiffuse,
@@ -1484,10 +1491,7 @@ vec3 StandardShadingIndirect(
     const float kNoVEpsilon = 1e-5f;
     float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
 
-    float RoughnessSq = Roughness * Roughness;
-    float EffectiveVisibility = mix(1.0, LightingVisibility, Roughness);
-    float SpecularAO = min(AO, EffectiveVisibility);
-    float SpecularOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, SpecularAO);
+    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, AO, LightingVisibility);
 
 #if USE_ENERGY_CONSERVATION > 0
     FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);

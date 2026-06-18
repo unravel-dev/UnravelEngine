@@ -51,8 +51,8 @@ public:
         particles_pass = 1u << 6,
 
         /// Cubemap face / minimal deferred: lighting + atmospherics; no screen-reflection stack or probe build.
-        probe = lighting | atmospheric,
         /// Default main-camera path: all bits set (matches @c run_params::pflags default). Individual stages
+        probe = lighting | atmospheric,
         /// above are still tested with @c (pflags & pipeline_steps::geometry_pass), etc.
         full = 0xFFFFFFFFu,
     };
@@ -90,7 +90,7 @@ public:
                                gfx::render_view& rview,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
-    void run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output,
+    void run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& previous_frame_source,
                        const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);

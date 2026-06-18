@@ -54,7 +54,8 @@ auto get_default_depth_format() -> gfx::texture_format
     return gfx::texture_format::D32F;
 }
 
-// Cubemap face captures: keep tonemapping + FXAA from create_run_params; drop screen-space / temporal stack.
+// Cubemap face captures keep HDR buffer setup from create_run_params, but write the
+// linear lighting result directly to the cubemap face before post-processing.
 void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& params)
 {
     params.fill_assao_params = {};
@@ -64,6 +65,7 @@ void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& param
     params.apply_taa_params = {};
     params.fill_ssr_params = {};
     params.fill_ssil_params = {};
+    params.fill_hdr_params = {};
 }
 
 // run_pipeline_impl takes const camera& for reads; jitter only touches projection jitter state.
@@ -618,6 +620,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     const bool apply_reflection_pipeline = (stages & pipeline_steps::reflection_probe) != 0u;
     const bool apply_shadows = (stages & pipeline_steps::shadow_pass) != 0u;
+    const bool is_probe_capture = stages != pipeline_steps::full &&
+                                  (stages & pipeline_steps::probe) == pipeline_steps::probe;
 
     if(apply_reflection_pipeline)
     {
@@ -653,11 +657,12 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
-    // Direct lighting first so SSIL/SSR can trace against the current frame.
-    target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
+    // SSR samples the previous visible output before this frame overwrites it, so traced
+    // reflections use the same resolved scene color that was presented last frame.
+    run_ssr_pass(camera, rview, output, params);
 
-    // SSR pass
-    run_ssr_pass(camera, rview, target, params);
+    // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
+    target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
 
     // SSIL pass
     run_ssil_pass(camera, rview, params);
@@ -670,6 +675,16 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     if(stages & pipeline_steps::particles_pass)
     {
         run_particle_pass(scn, camera, rview, target);
+    }
+
+    if(is_probe_capture)
+    {
+        blit_pass::run_params pass_params;
+        pass_params.input = target;
+        pass_params.output = output;
+        blit_pass_.run(rview, pass_params);
+        batch_collector_.clear();
+        return;
     }
 
     target = run_taa_pass(camera, rview, target, output, params);
@@ -1528,7 +1543,9 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
                 influence_radius,
             };
 
-            float data1[4] = {mips, probe.intensity, 0.0f, 0.0f};
+            const bool is_global_fallback = probe.method == reflect_method::environment;
+            const float source_validity = 1.0f;
+            float data1[4] = {mips, probe.intensity, is_global_fallback ? 1.0f : 0.0f, source_validity};
 
             gfx::set_uniform(ref_probe_program->u_data0, data0);
             gfx::set_uniform(ref_probe_program->u_data1, data1);
@@ -1649,7 +1666,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
 void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
-                            const gfx::frame_buffer::ptr& output,
+                            const gfx::frame_buffer::ptr& previous_frame_source,
                             const run_params& rparams)
 {
     const std::uint32_t stages = rparams.pflags;
@@ -1664,7 +1681,8 @@ void deferred::run_ssr_pass(const camera& camera,
     ssr_params.output = rview.fbo_get("RBUFFER");
     ssr_params.g_buffer = rview.fbo_get("GBUFFER");
 
-    ssr_params.previous_frame = rview.fbo_get("LBUFFER")->get_texture();
+    ssr_params.previous_frame =
+        previous_frame_source ? previous_frame_source->get_texture() : rview.fbo_get("LBUFFER")->get_texture();
 
     ssr_params.cam = &camera;
 

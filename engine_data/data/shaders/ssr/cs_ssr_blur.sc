@@ -3,8 +3,8 @@ $input v_texcoord0
 #include "../bgfx_compute.sh"
 #include "../common.sh"
 
-IMAGE2D_WO(i_output, rgba8, 0);
-IMAGE2D_RO(i_input, rgba8, 1);
+IMAGE2D_WO(i_output, rgba16f, 0);
+IMAGE2D_RO(i_input, rgba16f, 1);
 SAMPLER2D(s_normal, 2);
 
 // x: mip_level, y: sigma, z: unused, w: unused
