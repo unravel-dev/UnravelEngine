@@ -74,10 +74,10 @@ public:
     auto run_direct_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
         -> gfx::frame_buffer::ptr;
 
-    auto run_indirect_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview)
+    auto run_indirect_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_reflection, delta_t dt)
         -> gfx::frame_buffer::ptr;
 
-    void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt);
+    void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt);
 
     auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
                                scene& scn,

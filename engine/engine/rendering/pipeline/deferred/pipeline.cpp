@@ -661,14 +661,15 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     visibility_set_models_t visibility_set;
     gfx::frame_buffer::ptr target = nullptr;
 
-    const bool apply_shadows = (stages & pipeline_steps::shadow_pass) != 0u;
+    const bool build_shadowmaps = (stages & pipeline_steps::shadow_pass) != 0u;
+    const bool build_reflection_probes = (stages & pipeline_steps::reflection_probe) != 0u;
 
-    if(stages & pipeline_steps::reflection_probe)
+    if(build_reflection_probes)
     {
         build_reflections(scn, camera, dt);
     }
 
-    if(apply_shadows)
+    if(build_shadowmaps)
     {
         build_shadows(scn, camera, dt, visibility_query::not_specified, render_mask);
     }
@@ -693,10 +694,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_assao_pass(visibility_set, camera, rview, dt, params);
 
-    if(!is_probe_capture)
-    {
-        run_reflection_probe_pass(scn, camera, rview, dt);
-    }
+    run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
@@ -705,13 +703,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     run_ssr_pass(camera, rview, output, params);
 
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
-    target = run_direct_lighting_pass(scn, camera, rview, apply_shadows, dt);
+    target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
     // SSIL pass
     run_ssil_pass(camera, rview, params);
 
     // Indirect lighting after SSIL so it can use the result.
-    target = run_indirect_lighting_pass(scn, camera, rview);
+    target = run_indirect_lighting_pass(scn, camera, rview, build_reflection_probes, dt);
 
     if(stages & pipeline_steps::atmospheric)
     {
@@ -1429,7 +1427,9 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
 auto deferred::run_indirect_lighting_pass(scene& scn,
                                           const camera& camera,
-                                          gfx::render_view& rview) -> gfx::frame_buffer::ptr
+                                          gfx::render_view& rview,
+                                          bool apply_reflection,
+                                          delta_t dt) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Indirect Lighting Pass");
 
@@ -1459,11 +1459,11 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     {
         gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
     }
-    gfx::set_texture(iprogram.s_tex[i], i, rbuffer);
+    gfx::set_texture(iprogram.s_tex[i], i, apply_reflection ? rbuffer->get_texture(0) : default_textures::get().black_texture());
     i++;
     gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
     i++;
-    gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex);
+    gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex ? irradiance_result.irradiance_tex : default_textures::get().black_texture());
     
     const auto& ssil_tex = rview.tex_safe_get("SSIL");
     // Transparent (alpha 0) fallback when SSIL is disabled/absent so the shader's
@@ -1484,8 +1484,13 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     return lbuffer;
 }
 
-void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, delta_t dt)
+void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt)
 {
+    if(!apply_probes)
+    {
+        return;
+    }
+
     APP_SCOPE_PERF("Rendering/Reflection Probe Pass");
 
     const auto& view = camera.get_view();
@@ -1502,6 +1507,8 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
     pass.bind(rbuffer.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
+
+
     std::vector<entt::entity> sorted_probes;
 
     // Collect all entities with the relevant components
