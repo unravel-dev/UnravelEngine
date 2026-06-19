@@ -38,6 +38,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             output_cube = params.output_cube_prefiltered;
         }
         gfx::render_pass pass("Prefilter/Blit Faces to Cubemap Pass");
+        pass.touch();
         for(uint8_t face = 0; face < 6; ++face)
         {
             auto src = params.input_faces[face]->native_handle();
@@ -47,7 +48,6 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
                 bgfx::blit(pass.id, output_cube->native_handle(), mip, 0, 0, face, src, mip, 0, 0, 0, dim, dim, 1);
             }
         }
-        pass.touch();
 
         if(!params.apply_prefilter)
         {
@@ -72,6 +72,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             uint16_t dim = cube_size >> mip;
             
             gfx::render_pass pass("Prefilter Compute Pass");
+            pass.touch();
 
             // Begin compute program
             cs_.program->begin();
@@ -94,7 +95,6 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
 
             // Dispatch compute shader for all faces at once
             bgfx::dispatch(pass.id, cs_.program->native_handle(), num_groups_x, num_groups_y, num_groups_z);
-            pass.touch();
 
             cs_.program->end();
 

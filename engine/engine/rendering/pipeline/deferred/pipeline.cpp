@@ -292,15 +292,23 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
     auto& tex = rview.tex_get_or_emplace("IRRADIANCE_SH");
     if(gfx::needs_recreate(tex, {9, 3}))
     {
+        // Match auto-exposure: R32F + COMPUTE_WRITE uses glTexStorage2D on GL (immutable
+        // storage). Initial data must go through update_texture_2d (glTexSubImage2D), not
+        // the texture ctor _mem path. BGFX_TEXTURE_RT keeps the GL texture sampleable after
+        // compute image writes (same pattern as Hi-Z and other R32F compute targets).
         tex.reset();
         tex = std::make_shared<gfx::texture>(9,
                                              3,
                                              false,
                                              1,
                                              gfx::texture_format::R32F,
-                                             BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
-                                                 BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_U_CLAMP |
-                                                 BGFX_SAMPLER_V_CLAMP);
+                                             BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE |
+                                                 BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
+                                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+
+        float initial_coeffs[9 * 3] = {};
+        const gfx::memory_view* initial_pixels = gfx::copy(initial_coeffs, sizeof(initial_coeffs));
+        gfx::update_texture_2d(tex->native_handle(), 0, 0, 0, 0, 9, 3, initial_pixels);
     }
     return tex;
 }

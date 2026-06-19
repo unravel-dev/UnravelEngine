@@ -223,6 +223,8 @@ REFLECT(skylight_component)
             entt::attribute{"max", 80000.0f},
             entt::attribute{"step", 500.0f},
             entt::attribute{"tooltip", "Cloud layer top altitude in world units. Only used by volumetric clouds (slab top). Flat clouds ignore this."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+
         })
         .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
         .custom<entt::attributes>(entt::attributes{
