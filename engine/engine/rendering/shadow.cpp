@@ -2209,6 +2209,43 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             continue;
 
 
+        // Check if this model can be batched (static mesh, no skinning)
+        const bool can_batch = static_batching_enabled && !is_skinned;
+
+        // For CSM (directional lights), cascades are nested by distance, so anything
+        // fully inside a nearer cascade does not need to be rendered into the farther
+        // (larger) cascades. For point/spot lights, faces cover different directions, so
+        // an object must be rendered to ALL faces where it is visible.
+        const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
+
+        if(can_batch)
+        {
+            // Collect into all cascades in one pass so the nested-cascade trick can be
+            // applied at submesh granularity (a submesh fully inside a nearer cascade is
+            // not collected into farther cascades).
+            const bool collected = model.submit_for_batching_cascaded(cascade_batch_collectors_,
+                                                                      drawNum,
+                                                                      world_transform,
+                                                                      submesh_transforms,
+                                                                      lod_data.current_lod_index,
+                                                                      0.0f,
+                                                                      lightFrustums,
+                                                                      nested_cascades);
+            if(collected)
+            {
+                model_comp.set_last_render_frame(gfx::get_render_frame());
+                any_rendered = true;
+                if(stats != nullptr)
+                {
+                    stats->drawn_models_for_shadows++;
+                }
+            }
+
+            continue;
+        }
+
+        bool counted_static_model_for_shadows = false;
+        bool counted_skinned_model_for_shadows = false;
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
             // Standard frustum culling
@@ -2231,73 +2268,80 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
             // Always set the last render frame for tracking
             model_comp.set_last_render_frame(gfx::get_render_frame());
-            
-            // Check if this model can be batched (static mesh, no skinning)
-            const bool can_batch = static_batching_enabled && !is_skinned;
-            
-            if (can_batch)
+
+            // Render skinned models individually (original behavior)
+            model::submit_callbacks callbacks;
+            callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
             {
-                // Collect this model for batching in this specific cascade
-                model.submit_for_batching(cascade_batch_collectors_[ii], world_transform, submesh_transforms, lod_data.current_lod_index, 0.0f, &lightFrustums[ii]);
-            }
-            else
-            {
-                // Render skinned models individually (original behavior)
-                model::submit_callbacks callbacks;
-                callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+                if(stats != nullptr)
                 {
-                    if(stats != nullptr)
+                    if(submit_params.skinned)
+                    {
+                        if(!counted_skinned_model_for_shadows)
+                        {
+                            stats->drawn_skinned_models_for_shadows++;
+                            counted_skinned_model_for_shadows = true;
+                        }
+                    }
+                    else if(!counted_static_model_for_shadows)
                     {
                         stats->drawn_models_for_shadows++;
-                        stats->drawn_skinned_models_for_shadows += uint32_t(submit_params.skinned);
+                        counted_static_model_for_shadows = true;
                     }
-                    
-                    auto& prog =
-                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-                    prog->begin();
-                };
-                callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+                }
+
+                auto& prog =
+                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+                prog->begin();
+            };
+            callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+            {
+                // Set uniforms.
+                uniforms_.submitPerDrawUniforms();
+
+                // Apply render state.
+                gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
+                gfx::set_state(_renderState.m_state, _renderState.m_blendFactorRgba);
+            };
+            callbacks.setup_params_per_submesh =
+                [&](const model::submit_callbacks::params& submit_params, const material& mat)
+            {
+                if(stats != nullptr)
                 {
-                    // Set uniforms.
-                    uniforms_.submitPerDrawUniforms();
+                    if(submit_params.skinned)
+                    {
+                        stats->drawn_skinned_submeshes_for_shadows++;
+                    }
+                    else
+                    {
+                        stats->drawn_submeshes_for_shadows++;
+                    }
+                }
 
-                    // Apply render state.
-                    gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
-                    gfx::set_state(_renderState.m_state, _renderState.m_blendFactorRgba);
-                };
-                callbacks.setup_params_per_submesh =
-                    [&](const model::submit_callbacks::params& submit_params, const material& mat)
-                {
-                    auto& prog =
-                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+                auto& prog =
+                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
 
-                    gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
-                };
-                callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
-                {
-                    auto& prog =
-                        submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+                gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
+            };
+            callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
+            {
+                auto& prog =
+                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
 
-                    prog->end();
-                };
+                prog->end();
+            };
 
-                model.submit(world_transform,
-                             submesh_transforms,
-                             bone_transforms,
-                             skinning_matrices,
-                             lod_data.current_lod_index,
-                             callbacks,
-                             &lightFrustums[ii]);
-            }
+            model.submit(world_transform,
+                         submesh_transforms,
+                         bone_transforms,
+                         skinning_matrices,
+                         lod_data.current_lod_index,
+                         callbacks,
+                         &lightFrustums[ii]);
 
             any_rendered = true;
 
-            // For CSM (directional lights), if bounds are fully inside this cascade
-            // we don't need to render it to farther cascades (they are nested by distance).
-            // For point/spot lights, faces cover different directions, so an object
-            // must be rendered to ALL faces where it is visible.
-            if(LightType::DirectionalLight == settings_.m_lightType
-               && query == math::volume_query::inside)
+            if(nested_cascades && query == math::volume_query::inside)
             {
                 break;
             }
@@ -2358,9 +2402,10 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
             continue;
         }
 
+        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
         if(stats != nullptr)
         {
-            stats->drawn_models_for_shadows++;
+            stats->drawn_submeshes_for_shadows += instance_count;
         }
 
         // Get mesh from batch key
@@ -2380,7 +2425,6 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         }
 
         // Create instance buffer from batch instances
-        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
         const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
         
         // Allocate instance buffer

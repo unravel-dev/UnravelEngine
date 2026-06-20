@@ -277,20 +277,19 @@ void draw_pipeline_stats(const rendering::pipeline_stats& pstats)
 {
     ImGui::BeginGroup();
     draw_label("  Static Models");
-    ImGui::Text("%u", pstats.drawn_models);
+    ImGui::Text("%u (%u Meshes)", pstats.drawn_models, pstats.drawn_static_submeshes);
     ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of static (non-animated) mesh models\n"
-                            "submitted for rendering this frame. Includes\n"
-                            "all visible static geometry after culling.");
+    ImGui::SetItemTooltipEx("Visible static models and submeshes drawn this frame.\n"
+                            "The value in parentheses counts individual submeshes\n"
+                            "after per-submesh frustum culling.");
 
     ImGui::BeginGroup();
     draw_label("  Skinned Models");
-    ImGui::Text("%u", pstats.drawn_skinned_models);
+    ImGui::Text("%u (%u Meshes)", pstats.drawn_skinned_models, pstats.drawn_skinned_submeshes);
     ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of skinned (skeletal animation) models\n"
-                            "rendered this frame. Skinned meshes are more\n"
-                            "expensive due to bone matrix transforms on\n"
-                            "the GPU.");
+    ImGui::SetItemTooltipEx("Visible skinned models and submeshes drawn this frame.\n"
+                            "The value in parentheses counts individual submeshes\n"
+                            "submitted for GPU skinning.");
 
     ImGui::BeginGroup();
     draw_label("  Lights");
@@ -308,18 +307,19 @@ void draw_pipeline_stats(const rendering::pipeline_stats& pstats)
                             "Each shadow light requires one or more extra\n"
                             "render passes to generate shadow maps.");
 
+    const uint32_t shadow_models = pstats.drawn_models_for_shadows + pstats.drawn_skinned_models_for_shadows;
+    const uint32_t shadow_submeshes = pstats.drawn_submeshes_for_shadows + pstats.drawn_skinned_submeshes_for_shadows;
     ImGui::BeginGroup();
     draw_label("  Shadow Models");
-    ImGui::Text("%u", pstats.drawn_models_for_shadows);
+    ImGui::Text("%u (%u meshes)", shadow_models, shadow_submeshes);
     ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of models rendered into shadow maps.\n"
-                            "This count can be high with many shadow-casting\n"
-                            "lights or large scenes. Reduce with shadow\n"
-                            "distance culling or fewer shadow casters.");
+    ImGui::SetItemTooltipEx("Models and submeshes rendered into shadow maps.\n"
+                            "The mesh count includes cascade and face redraws,\n"
+                            "so it can exceed the main-pass submesh count.");
 
     ImGui::BeginGroup();
     draw_label("  Particles");
-    ImGui::Text("%u (%u batches)", pstats.drawn_particles, pstats.drawn_particles_batches);
+    ImGui::Text("%u (%u Batches)", pstats.drawn_particles, pstats.drawn_particles_batches);
     ImGui::EndGroup();
     ImGui::SetItemTooltipEx("Active particle emitters and their GPU draw\n"
                             "batches. Particles with different materials\n"
@@ -334,7 +334,7 @@ void draw_pipeline_stats(const rendering::pipeline_stats& pstats)
 
     ImGui::BeginGroup();
     draw_label("    Batches");
-    ImGui::Text("%u (%u inst)", batch.total_batches, batch.total_instances);
+    ImGui::Text("%u (%u Inst)", batch.total_batches, batch.total_instances);
     ImGui::EndGroup();
     ImGui::SetItemTooltipEx("Total batches created and total mesh instances\n"
                             "across all batches. A lower batch count relative\n"

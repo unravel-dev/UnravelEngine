@@ -854,13 +854,16 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         model::submit_callbacks callbacks;
         callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
         {
-            stats_.drawn_models++;
-            stats_.drawn_skinned_models += uint32_t(submit_params.skinned);
-            
+            if(submit_params.skinned)
+            {
+                stats_.drawn_skinned_models++;
+            }
+            else
+            {
+                stats_.drawn_models++;
+            }
             geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
-
             prog.program->begin();
-
             gfx::set_uniform(prog.u_camera_wpos, camera_pos);
             gfx::set_uniform(prog.u_camera_clip_planes, clip_planes);
         };
@@ -873,6 +876,14 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         callbacks.setup_params_per_submesh =
             [&](const model::submit_callbacks::params& submit_params, const material& mat)
         {
+            if(submit_params.skinned)
+            {
+                stats_.drawn_skinned_submeshes++;
+            }
+            else
+            {
+                stats_.drawn_static_submeshes++;
+            }
             geom_program& prog = submit_params.skinned ? geom_program_skinned_ : geom_program_;
 
             bool submitted = mat.submit(prog.program.get());
@@ -904,10 +915,12 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         {
             // Collect this model for batching with appropriate transforms            
             model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum);
+            stats_.drawn_models++;
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
                 model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum);
+                stats_.drawn_models++;
             }
         }
         else
@@ -984,7 +997,8 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
             continue;
         }
 
-        stats_.drawn_models++;
+        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
+        stats_.drawn_static_submeshes += instance_count;
 
         const auto mesh_ptr = batch->key.mesh_ptr;
         const auto material_ptr = batch->key.material_ptr;
@@ -1003,7 +1017,6 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
         }
 
         // Create instance buffer from batch instances
-        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
         const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
         
         // Allocate instance buffer

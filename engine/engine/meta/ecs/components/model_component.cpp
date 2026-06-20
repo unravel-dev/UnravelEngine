@@ -7,6 +7,7 @@
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/set.hpp>
 #include <serialization/types/vector.hpp>
 
 namespace unravel

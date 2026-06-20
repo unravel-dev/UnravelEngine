@@ -92,7 +92,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == SSIL)
     {
         vec4 ssil = texture2D(s_tex7, texcoord0);
-		color = ssil.rgb * ssil.a;
+		color = ssil.rgb * PI * ssil.a;
     }
     else if(u_mode == SPECULAR_OCCLUSION)
     {

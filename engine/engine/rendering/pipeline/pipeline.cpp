@@ -643,9 +643,13 @@ void pipeline_stats::add_batch_stats(const batch_stats& stats)
 void pipeline_stats::add_stats(const pipeline_stats& stats)
 {
     drawn_models += stats.drawn_models;
+    drawn_static_submeshes += stats.drawn_static_submeshes;
     drawn_skinned_models += stats.drawn_skinned_models;
+    drawn_skinned_submeshes += stats.drawn_skinned_submeshes;
     drawn_models_for_shadows += stats.drawn_models_for_shadows;
+    drawn_submeshes_for_shadows += stats.drawn_submeshes_for_shadows;
     drawn_skinned_models_for_shadows += stats.drawn_skinned_models_for_shadows;
+    drawn_skinned_submeshes_for_shadows += stats.drawn_skinned_submeshes_for_shadows;
     drawn_lights += stats.drawn_lights;
     drawn_lights_casting_shadows += stats.drawn_lights_casting_shadows;
     drawn_particles += stats.drawn_particles;

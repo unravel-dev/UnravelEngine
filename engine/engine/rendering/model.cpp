@@ -15,26 +15,36 @@ namespace unravel
 namespace
 {
 
+auto classify_submesh(const math::frustum& frustum,
+                      const mesh& m,
+                      uint32_t lod_index,
+                      uint32_t submesh_index,
+                      const math::mat4& world_matrix) -> math::volume_query
+{
+    const auto& submeshes = m.get_submeshes(lod_index);
+    if(submesh_index >= submeshes.size())
+    {
+        // Cannot classify - treat as intersecting so it is never culled.
+        return math::volume_query::intersect;
+    }
+
+    const auto* submesh = submeshes[submesh_index];
+    if(!submesh)
+    {
+        return math::volume_query::intersect;
+    }
+
+    const math::transform world_transform(world_matrix);
+    return frustum.classify_obb(submesh->bbox, world_transform);
+}
+
 auto is_submesh_visible(const math::frustum& frustum,
                         const mesh& m,
                         uint32_t lod_index,
                         uint32_t submesh_index,
                         const math::mat4& world_matrix) -> bool
 {
-    const auto& submeshes = m.get_submeshes(lod_index);
-    if(submesh_index >= submeshes.size())
-    {
-        return true;
-    }
-
-    const auto* submesh = submeshes[submesh_index];
-    if(!submesh)
-    {
-        return true;
-    }
-
-    const math::transform world_transform(world_matrix);
-    return frustum.test_obb(submesh->bbox, world_transform);
+    return classify_submesh(frustum, m, lod_index, submesh_index, world_matrix) != math::volume_query::outside;
 }
 
 auto compute_bounds_screen_radius_squared(const math::vec3& origin,
@@ -803,6 +813,99 @@ void model::submit_for_batching(batch_collector& collector,
             }
         }
     }
+}
+
+auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collectors,
+                                         uint8_t cascade_count,
+                                         const math::mat4& world_transform,
+                                         const submesh_pose_mat4& submesh_transforms,
+                                         uint32_t lod_index,
+                                         float lod_param,
+                                         const math::frustum* frustums,
+                                         bool nested_cascades) const -> bool
+{
+    auto mesh_asset = get_lod(lod_index);
+    if(!mesh_asset)
+    {
+        return false;
+    }
+    auto mesh = mesh_asset.get();
+    if(!mesh)
+    {
+        return false;
+    }
+
+    bool collected_any = false;
+    // Collect a single submesh instance into every cascade it is visible in.
+    // When cascades are nested by distance (CSM directional lights), a submesh
+    // that is fully inside a nearer cascade is not collected into the farther
+    // (larger) cascades, since those would only render redundant depth.
+    auto collect_into_cascades =
+        [&](const batch_key& key, uint32_t submesh_index, const math::mat4& transform) -> void
+    {
+        for(uint8_t ii = 0; ii < cascade_count; ++ii)
+        {
+            const auto query = classify_submesh(frustums[ii], *mesh, lod_index, submesh_index, transform);
+            if(query == math::volume_query::outside)
+            {
+                continue;
+            }
+
+            batch_instance instance(&transform);
+            instance.lod_params.x = lod_param;
+            collectors[ii].collect_renderable(key, instance);
+            collected_any = true;
+
+            if(nested_cascades && query == math::volume_query::inside)
+            {
+                break;
+            }
+        }
+    };
+
+    const auto data_group_count = mesh->get_data_groups_count();
+    for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
+    {
+        auto material_ptr = get_material_instance(data_group_id);
+        if(!material_ptr)
+        {
+            continue; // Skip data groups without valid materials
+        }
+
+        const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
+        for(size_t submesh_idx : submesh_indices)
+        {
+            const uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
+
+            batch_key key(mesh, material_ptr, lod_index, submesh_index);
+            if(!key.is_valid())
+            {
+                continue;
+            }
+
+            if(submesh_transforms.has_transforms(submesh_index))
+            {
+                // This submesh has one or more node transforms - create an instance for each.
+                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
+                for(size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
+                {
+                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_idx);
+                    if(!transform_ptr)
+                    {
+                        continue;
+                    }
+                    collect_into_cascades(key, submesh_index, *transform_ptr);
+                }
+            }
+            else
+            {
+                // No specific transform for this submesh - use the model world transform.
+                collect_into_cascades(key, submesh_index, world_transform);
+            }
+        }
+    }
+
+    return collected_any;
 }
 
 } // namespace unravel

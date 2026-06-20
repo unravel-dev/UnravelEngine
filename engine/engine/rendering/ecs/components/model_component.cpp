@@ -58,6 +58,8 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
         {
             auto& comp = entity_node.get_or_emplace<submesh_component>();
             std::copy(node->submeshes.begin(), node->submeshes.end(), std::back_inserter(comp.submeshes));
+            std::sort(comp.submeshes.begin(), comp.submeshes.end());
+            comp.submeshes.erase(std::unique(comp.submeshes.begin(), comp.submeshes.end()), comp.submeshes.end());
         }
 
         auto query = bind_data.find_bone_by_id(node->name);

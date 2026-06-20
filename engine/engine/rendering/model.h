@@ -93,11 +93,12 @@ struct submesh_pose_mat4
     /**
      * @brief Adds a transform and maps multiple submesh indices to it.
      * All submesh indices in the vector will reference the same transform.
-     * @param submesh_indices Vector of submesh indices that should use this transform.
+     * @param submesh_indices Submesh indices that should use this transform.
      * @param transform The transform to add.
      * @return The index of the transform in the transforms array.
      */
-    auto add_transform(const std::vector<uint32_t>& submesh_indices, const math::mat4& transform, bool active) -> uint32_t
+    template<typename SubmeshIndices>
+    auto add_transform(const SubmeshIndices& submesh_indices, const math::mat4& transform, bool active) -> uint32_t
     {
         // Add the transform to the pool
         uint32_t trans_index = static_cast<uint32_t>(transforms.size());
@@ -467,6 +468,33 @@ public:
                             uint32_t lod_index,
                             float lod_param = 0.0f,
                             const math::frustum* frustum = nullptr) const;
+
+    /**
+     * @brief Collects this model into per-cascade batch collectors with per-submesh culling.
+     *
+     * Each visible submesh is collected into every cascade whose frustum it overlaps.
+     * When @p nested_cascades is true (CSM directional lights, where cascades are nested
+     * by distance), a submesh that is classified as fully inside a nearer cascade is not
+     * collected into the farther (larger) cascades, mirroring the model-level optimization.
+     *
+     * @param collectors One batch collector per cascade/view (must contain at least @p cascade_count entries).
+     * @param cascade_count Number of cascades/views to consider.
+     * @param world_transform The world transform of the model.
+     * @param submesh_transforms The submesh transforms (many-to-many mapping).
+     * @param lod_index The level of detail to use.
+     * @param lod_param The LOD transition parameter (for smooth LOD transitions).
+     * @param frustums Array of per-cascade frustums (must contain at least @p cascade_count entries).
+     * @param nested_cascades Whether cascades are nested by distance (stop at first fully-inside cascade).
+     * @return True if at least one submesh instance was collected into any cascade.
+     */
+    auto submit_for_batching_cascaded(std::vector<batch_collector>& collectors,
+                                      uint8_t cascade_count,
+                                      const math::mat4& world_transform,
+                                      const submesh_pose_mat4& submesh_transforms,
+                                      uint32_t lod_index,
+                                      float lod_param,
+                                      const math::frustum* frustums,
+                                      bool nested_cascades) const -> bool;
 
     /**
      * @brief Gets the default material.
