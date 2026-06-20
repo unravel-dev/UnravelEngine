@@ -99,7 +99,6 @@ void create_mesh(const gfx::vertex_layout& format,
     submesh.face_start = 0;
     submesh.vertex_count = data.vertex_count;
     submesh.vertex_start = 0;
-    data.submeshes.emplace_back(submesh);
 
     uint8_t* current_vertex_ptr = data.vertex_data.data();
     size_t i = 0;
@@ -150,6 +149,9 @@ void create_mesh(const gfx::vertex_layout& format,
     // We need to generate binormals / tangents?
     data.compute_binormals = has_bitangents;
     data.compute_tangents = has_tangents;
+    submesh.bbox = bbox;
+    data.submeshes.emplace_back(submesh);
+
 }
 
 } // namespace
@@ -1608,6 +1610,39 @@ auto mesh::get_bone_palettes() const -> const mesh::bone_palette_array_t&
 auto mesh::get_armature() const -> const std::unique_ptr<mesh::armature_node>&
 {
     return root_;
+}
+
+namespace
+{
+void accumulate_submesh_node_transforms(const std::unique_ptr<mesh::armature_node>& node,
+                                        const math::transform& parent_global,
+                                        std::vector<math::transform>& out)
+{
+    if(!node)
+    {
+        return;
+    }
+    const math::transform global = parent_global * node->local_transform;
+    for(auto submesh_index : node->submeshes)
+    {
+        if(submesh_index < out.size())
+        {
+            out[submesh_index] = global;
+        }
+    }
+    for(const auto& child : node->children)
+    {
+        accumulate_submesh_node_transforms(child, global, out);
+    }
+}
+} // namespace
+
+auto mesh::get_submesh_node_transforms(uint32_t lod_index) const -> std::vector<math::transform>
+{
+    const size_t submesh_count = get_submeshes_count(lod_index);
+    std::vector<math::transform> transforms(submesh_count);
+    accumulate_submesh_node_transforms(root_, math::transform{}, transforms);
+    return transforms;
 }
 
 auto mesh::calculate_screen_rect_precise(const math::transform& world, const camera& cam) const -> irect32_t

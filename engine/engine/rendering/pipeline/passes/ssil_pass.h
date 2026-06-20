@@ -18,7 +18,13 @@ public:
     {
         float depth_sigma = 0.02f;
         float normal_power = 64.0f;
-        float luma_sigma = 16.0f;
+        /// Variance-guided luminance edge-stop multiplier (phi). Multiplies the measured
+        /// luminance std-dev: lower keeps more intra-surface indirect detail (colour-bleed
+        /// gradients, contact darkening) that the depth/normal stops cannot see; higher
+        /// blurs flatter. Kept low because the shader floors the sigma to a tiny constant
+        /// (LUMA_SIGMA_EPS) on converged pixels, so a large phi here would disable the
+        /// luminance stop entirely.
+        float luma_sigma = 4.0f;
 
         int passes = 4;
         /// Mixed-resolution split: the first `full_res_passes` a-trous passes run at the trace

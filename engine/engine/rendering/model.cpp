@@ -35,7 +35,12 @@ auto classify_submesh(const math::frustum& frustum,
     }
 
     const math::transform world_transform(world_matrix);
-    return frustum.classify_obb(submesh->bbox, world_transform);
+    // Simple meshes may not carry a valid per-submesh bounding box (e.g. a single
+    // submesh cube). Fall back to the mesh-wide bounds so the classification stays
+    // valid; otherwise an unpopulated (inverted) box never reports a true "inside"
+    // and the nested-cascade skip optimization can never trigger.
+    const math::bbox& bounds = submesh->bbox.is_populated() ? submesh->bbox : m.get_bounds();
+    return frustum.classify_obb(bounds, world_transform);
 }
 
 auto is_submesh_visible(const math::frustum& frustum,
@@ -338,7 +343,7 @@ auto model::calculate_lod_data(lod_data& data, const math::transform& world_tran
     data.percent = math::clamp(screen_radius * 200.0f, 0.0f, 100.0f);
     data.center = bsphere.position;
 
-    const float lod_screen_size_min = 0.01f;
+    const float lod_screen_size_min = 0.005f;
     const float cull_threshold_squared = math::square(lod_screen_size_min * 0.5f);
     const bool is_visible = cull_threshold_squared <= screen_radius_squared;
     if(!is_visible)

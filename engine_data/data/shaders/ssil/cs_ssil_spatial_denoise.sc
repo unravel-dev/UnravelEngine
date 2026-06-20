@@ -50,8 +50,11 @@ uniform vec4 u_denoise_params2;
 #define KW1 0.25
 #define KW2 0.0625
 
-// Luminance-sigma floor so the edge-stop never fully collapses on flat regions.
-#define LUMA_SIGMA_EPS 0.05
+// Luminance-sigma floor so the edge-stop never fully collapses on flat regions. Kept
+// small: the floor sets the luminance tolerance on fully-converged pixels (variance ~ 0),
+// so a large value (relative to indirect radiance, which is < 1) makes exp(-|dL|/sigma)
+// ~ 1 for real intra-surface detail and the luminance edge-stop stops preserving it.
+#define LUMA_SIGMA_EPS 0.01
 float ssil_kernel_weight(int dx, int dy)
 {
     int ax = abs(dx);
@@ -191,6 +194,9 @@ void main()
     int radius = int(u_kernel_radius);
     if(radius < 1)
         radius = 2;
+    // The full-res detail tier (radius 2) samples axis-aligned + point-sampled to keep fine
+    // detail; the wide half-res tier (radius 1) keeps the rotated bilinear tap.
+    bool detail_tier = (radius >= 2);
 
     for(int y = -2; y <= 2; ++y)
     {
@@ -203,14 +209,37 @@ void main()
             if(abs(x) > radius || abs(y) > radius)
                 continue;
 
-            // Rotated, dilated tap offset (in trace-buffer texels) sampled bilinearly.
-            vec2 lattice = vec2(x, y) * float(step_val);
-            vec2 offset = vec2(ca * lattice.x - sa * lattice.y, sa * lattice.x + ca * lattice.y);
-            vec2 tap_uv = base_uv + offset * texel_size;
-            if(any(lessThan(tap_uv, vec2_splat(0.0))) || any(greaterThan(tap_uv, vec2_splat(1.0))))
-                continue;
+            // Tap acquisition differs by tier:
+            //  - Detail tier: axis-aligned, point-sampled (texelFetch). A rotated tap is
+            //    fetched bilinearly, so each tap averages a 2x2 footprint and pulls
+            //    neighbours across edges -- that softens the fine intra-surface detail this
+            //    tier exists to preserve.
+            //  - Wide tier: rotated, dilated tap sampled bilinearly, which dithers away the
+            //    a-trous "plus" structure on the coarse, low-frequency signal.
+            vec2 tap_uv;
+            vec4 sample_value;
+            float sample_variance;
+            BRANCH
+            if(detail_tier)
+            {
+                ivec2 tap_coord = coord + ivec2(x, y) * step_val;
+                if(any(lessThan(tap_coord, ivec2(0, 0))) || any(greaterThanEqual(tap_coord, size)))
+                    continue;
+                sample_value = texelFetch(s_ssil_input, tap_coord, 0);
+                tap_uv = (vec2(tap_coord) + 0.5) * texel_size;
+                sample_variance = (u_first_pass > 0.5) ? variance : texelFetch(s_ssil_variance, tap_coord, 0).r;
+            }
+            else
+            {
+                vec2 lattice = vec2(x, y) * float(step_val);
+                vec2 offset = vec2(ca * lattice.x - sa * lattice.y, sa * lattice.x + ca * lattice.y);
+                tap_uv = base_uv + offset * texel_size;
+                if(any(lessThan(tap_uv, vec2_splat(0.0))) || any(greaterThan(tap_uv, vec2_splat(1.0))))
+                    continue;
+                sample_value = texture2DLod(s_ssil_input, tap_uv, 0.0);
+                sample_variance = (u_first_pass > 0.5) ? variance : texture2DLod(s_ssil_variance, tap_uv, 0.0).r;
+            }
 
-            vec4 sample_value = texture2DLod(s_ssil_input, tap_uv, 0.0);
             vec2 full_tap_uv = HizScreenPassToFullResUV(tap_uv, resolution_scale, depth_dim);
             float sample_depth = DecodeGBufferDepthLod(full_tap_uv, s_depth, 0.0).depth01;
 
@@ -234,7 +263,6 @@ void main()
             color_sum += sample_value.rgb * color_w;
             color_w_sum += color_w;
 
-            float sample_variance = (u_first_pass > 0.5) ? variance : texture2DLod(s_ssil_variance, tap_uv, 0.0).r;
             variance_num += sample_variance * color_w * color_w;
 
             geom_sum += geom_w;

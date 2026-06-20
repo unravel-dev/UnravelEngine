@@ -858,6 +858,20 @@ public:
     auto get_armature() const -> const std::unique_ptr<armature_node>&;
 
     /**
+     * @brief Computes the accumulated node transform for each submesh.
+     *
+     * The mesh vertex buffer stores positions in node-local space; the renderer applies
+     * each submesh's accumulated armature node transform (relative to the model root) on
+     * top. This helper walks the armature tree and returns, for every submesh index, the
+     * transform (relative to the model root) of the node that owns that submesh. Submeshes
+     * not referenced by any node receive identity.
+     *
+     * @param lod_index The LOD level whose submesh count is used to size the result.
+     * @return std::vector<math::transform> Per-submesh node transforms indexed by submesh index.
+     */
+    auto get_submesh_node_transforms(uint32_t lod_index = 0) const -> std::vector<math::transform>;
+
+    /**
      * @brief Calculates the screen rectangle of the mesh based on its world transform and the camera.
      * This version uses a conservative approach - if any corners are behind the camera, it returns
      * the full viewport as the screen rect. Fast but may overestimate coverage.

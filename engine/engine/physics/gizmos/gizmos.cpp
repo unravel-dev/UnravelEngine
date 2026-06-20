@@ -3,6 +3,7 @@
 #include <engine/rendering/mesh.h>
 #include <bx/math.h>
 #include <graphics/debugdraw.h>
+#include <algorithm>
 #include <vector>
 #include <array>
 namespace unravel
@@ -77,7 +78,8 @@ void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
         return; // No position data
     }
     
-    // Extract vertex positions and convert to DdVertex format
+    // Extract vertex positions (node-local space) into DdVertex format. Indices are global,
+    // so a single shared vertex array is reused by every submesh geometry.
     std::vector<DdVertex> vertices;
     vertices.reserve(vertex_count);
     
@@ -93,32 +95,56 @@ void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
         vertices.push_back(v);
     }
     
-    // Extract indices (faces are already triangles, 3 indices per face)
-    const uint32_t index_count = face_count * 3;
+    // Set color based on collision type. Green for convex, blue for concave.
+    dde.setColor(sh.collision_type == mesh_collision_type::convex ? 0xff00ff00 : 0xff0000ff);
     
-    // Create geometry handle
-    GeometryHandle geom_handle = ddCreateGeometry(static_cast<uint32_t>(vertices.size()),
-                                                   vertices.data(),
-                                                   index_count,
-                                                   index_data,
-                                                   true); // Use 32-bit indices
+    // Enable wireframe mode for better visibility
+    dde.setWireframe(true);
     
-    if(isValid(geom_handle))
+    // Build one geometry per submesh and draw it with its own node transform. The vertex
+    // buffer stores positions in node-local space; the renderer applies each submesh's
+    // accumulated armature node transform (relative to the model root) on top, so we mirror
+    // that here to keep the debug wireframe aligned with the rendered mesh and collision shape.
+    const auto& submeshes = mesh_ref->get_submeshes();
+    const auto node_transforms = mesh_ref->get_submesh_node_transforms();
+    
+    for(size_t s = 0; s < submeshes.size(); ++s)
     {
-        // Set color based on collision type
-        // Green for convex, blue for concave
-        dde.setColor(sh.collision_type == mesh_collision_type::convex ? 0xff00ff00 : 0xff0000ff);
+        const auto* submesh = submeshes[s];
+        if(!submesh || submesh->face_start < 0 || submesh->face_count == 0)
+        {
+            continue;
+        }
         
-        // Enable wireframe mode for better visibility
-        dde.setWireframe(true);
-
+        const uint32_t face_begin = static_cast<uint32_t>(submesh->face_start);
+        if(face_begin >= face_count)
+        {
+            continue;
+        }
+        const uint32_t face_render_count = std::min(submesh->face_count, face_count - face_begin);
+        const uint32_t submesh_index_count = face_render_count * 3;
+        const uint32_t* submesh_indices = index_data + static_cast<size_t>(face_begin) * 3;
+        
+        GeometryHandle geom_handle = ddCreateGeometry(static_cast<uint32_t>(vertices.size()),
+                                                       vertices.data(),
+                                                       submesh_index_count,
+                                                       submesh_indices,
+                                                       true); // Use 32-bit indices
+        if(!isValid(geom_handle))
+        {
+            continue;
+        }
+        
+        // Apply the shape center on top of the submesh node transform.
         math::transform local_transform;
-        local_transform.set_position(sh.center);
+        if(s < node_transforms.size())
+        {
+            local_transform = node_transforms[s];
+        }
+        local_transform.set_position(local_transform.get_position() + sh.center);
         dde.pushTransform((const float*)local_transform);
-        // Draw the geometry
         dde.draw(geom_handle);
         dde.popTransform();
-        // Clean up geometry handle
         ddDestroy(geom_handle);
     }
 }

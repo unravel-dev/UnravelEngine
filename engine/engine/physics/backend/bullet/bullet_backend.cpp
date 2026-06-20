@@ -31,6 +31,10 @@
 #include <hpp/flat_map.hpp>
 #include <logging/logging.h>
 
+#include <algorithm>
+#include <utility>
+#include <vector>
+
 #ifdef NDEBUG
 #define BULLET_MT 1
 #endif
@@ -1288,8 +1292,14 @@ void wake_up(bullet::rigidbody& body)
     }
 }
 
-auto create_bullet_mesh_shape(const physics_mesh_shape& shape) -> btCollisionShape*
+// Builds one Bullet collision shape per submesh, each paired with the submesh's node
+// transform (relative to the model root). The vertex buffer stores positions in node-local
+// space; keeping a separate shape per submesh lets us apply the matching node transform via
+// addChildShape so the collision geometry stays aligned with the rendered mesh.
+auto create_bullet_mesh_shapes(const physics_mesh_shape& shape)
+    -> std::vector<std::pair<btCollisionShape*, btTransform>>
 {
+    std::vector<std::pair<btCollisionShape*, btTransform>> result;
     const auto& mesh_ref = shape.mesh_asset.get();
     
     // Get vertex and index data from mesh
@@ -1301,53 +1311,84 @@ auto create_bullet_mesh_shape(const physics_mesh_shape& shape) -> btCollisionSha
     
     if(!vertex_data || !index_data || vertex_count == 0 || face_count == 0)
     {
-        return nullptr;
+        return result;
     }
     
     // Find position attribute offset in vertex format
     auto position_offset = vertex_format.getOffset(bgfx::Attrib::Position);
-    auto vertex_stride = vertex_format.getStride();
     
     if(position_offset == UINT16_MAX)
     {
-        return nullptr; // No position data
+        return result; // No position data
     }
     
-    // Create Bullet triangle mesh
-    auto* triangle_mesh = new btTriangleMesh(true, false); // 32-bit indices, 3-component vertices
+    const auto& submeshes = mesh_ref->get_submeshes();
+    const auto node_transforms = mesh_ref->get_submesh_node_transforms();
+    result.reserve(submeshes.size());
     
-    
-    // Extract triangles and add to Bullet mesh
-    for(uint32_t i = 0; i < face_count; ++i)
+    for(size_t s = 0; s < submeshes.size(); ++s)
     {
-        uint32_t i0 = index_data[i * 3 + 0];
-        uint32_t i1 = index_data[i * 3 + 1];
-        uint32_t i2 = index_data[i * 3 + 2];
+        const auto* submesh = submeshes[s];
+        if(!submesh || submesh->face_start < 0 || submesh->face_count == 0)
+        {
+            continue;
+        }
+        const auto face_begin = static_cast<uint32_t>(submesh->face_start);
+        if(face_begin >= face_count)
+        {
+            continue;
+        }
         
-        float v0[4];
-        float v1[4];
-        float v2[4];
-        gfx::vertex_unpack(v0, gfx::attribute::Position, vertex_format, vertex_data, i0);
-        gfx::vertex_unpack(v1, gfx::attribute::Position, vertex_format, vertex_data, i1);
-        gfx::vertex_unpack(v2, gfx::attribute::Position, vertex_format, vertex_data, i2);
+        // Build a triangle mesh from this submesh's faces only.
+        auto* triangle_mesh = new btTriangleMesh(true, false); // 32-bit indices, 3-component vertices
+        const auto face_end = std::min(face_begin + submesh->face_count, face_count);
+        for(uint32_t f = face_begin; f < face_end; ++f)
+        {
+            uint32_t i0 = index_data[f * 3 + 0];
+            uint32_t i1 = index_data[f * 3 + 1];
+            uint32_t i2 = index_data[f * 3 + 2];
+            
+            float v0[4];
+            float v1[4];
+            float v2[4];
+            gfx::vertex_unpack(v0, gfx::attribute::Position, vertex_format, vertex_data, i0);
+            gfx::vertex_unpack(v1, gfx::attribute::Position, vertex_format, vertex_data, i1);
+            gfx::vertex_unpack(v2, gfx::attribute::Position, vertex_format, vertex_data, i2);
 
-        btVector3 vertex0(v0[0], v0[1], v0[2]);
-        btVector3 vertex1(v1[0], v1[1], v1[2]);
-        btVector3 vertex2(v2[0], v2[1], v2[2]);
-        triangle_mesh->addTriangle(vertex0, vertex1, vertex2);
+            btVector3 vertex0(v0[0], v0[1], v0[2]);
+            btVector3 vertex1(v1[0], v1[1], v1[2]);
+            btVector3 vertex2(v2[0], v2[1], v2[2]);
+            triangle_mesh->addTriangle(vertex0, vertex1, vertex2);
+        }
+        
+        // Create appropriate collision shape based on type
+        btCollisionShape* collision_shape = nullptr;
+        if(shape.collision_type == mesh_collision_type::convex)
+        {
+            // Create convex hull shape (can be dynamic)
+            collision_shape = new btConvexTriangleMeshShape(triangle_mesh);
+        }
+        else
+        {
+            // Create concave BVH triangle mesh shape (static only, but accurate)
+            collision_shape = new btBvhTriangleMeshShape(triangle_mesh, true); // Use quantized AABB compression
+        }
+        
+        // Apply the submesh's node transform. btTransform only carries rotation/translation,
+        // so any node scale is applied via the shape's local scaling.
+        btTransform child_transform = btTransform::getIdentity();
+        if(s < node_transforms.size())
+        {
+            const auto& node_transform = node_transforms[s];
+            child_transform.setRotation(bullet::to_bullet(node_transform.get_rotation()));
+            child_transform.setOrigin(bullet::to_bullet(node_transform.get_position()));
+            collision_shape->setLocalScaling(bullet::to_bullet(node_transform.get_scale()));
+        }
+        
+        result.emplace_back(collision_shape, child_transform);
     }
     
-    // Create appropriate collision shape based on type
-    if(shape.collision_type == mesh_collision_type::convex)
-    {
-        // Create convex hull shape (can be dynamic)
-        return new btConvexTriangleMeshShape(triangle_mesh);
-    }
-    else
-    {
-        // Create concave BVH triangle mesh shape (static only, but accurate)
-        return new btBvhTriangleMeshShape(triangle_mesh, true); // Use quantized AABB compression
-    }
+    return result;
 }
 
 auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompoundShape>
@@ -1412,11 +1453,17 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
             // Only create mesh shape if we have a valid mesh asset
             if(shape.mesh_asset && shape.mesh_asset.is_ready())
             {
-                auto mesh_shape = create_bullet_mesh_shape(shape);
-                if(mesh_shape)
+                // One collision shape per submesh, each carrying its own node transform.
+                auto mesh_shapes = create_bullet_mesh_shapes(shape);
+                for(auto& [mesh_shape, node_transform] : mesh_shapes)
                 {
-                    btTransform local_transform = btTransform::getIdentity();
-                    local_transform.setOrigin(bullet::to_bullet(shape.center));
+                    if(!mesh_shape)
+                    {
+                        continue;
+                    }
+                    // Apply the shape center on top of the submesh node transform.
+                    btTransform local_transform = node_transform;
+                    local_transform.setOrigin(local_transform.getOrigin() + bullet::to_bullet(shape.center));
                     cp->addChildShape(local_transform, mesh_shape);
                 }
             }
