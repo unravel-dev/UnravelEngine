@@ -140,9 +140,19 @@ auto gpu_program::begin() -> bool
     if(repopulate)
     {
         populate();
+        repopulated_ = true;
+    }
+    else
+    {
+        repopulated_ = false;
     }
 
     return is_valid();
+}
+
+auto gpu_program::was_repopulated() const -> bool
+{
+    return repopulated_;
 }
 
 void gpu_program::end()

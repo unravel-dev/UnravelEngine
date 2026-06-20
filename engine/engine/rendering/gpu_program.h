@@ -147,6 +147,11 @@ public:
     auto is_valid() const -> bool;
 
     /**
+     * @brief True when begin() just rebuilt the program after a shader asset reload.
+     */
+    auto was_repopulated() const -> bool;
+
+    /**
      * @brief Populates the GPU program.
      */
     void populate();
@@ -162,6 +167,7 @@ private:
     std::vector<asset_handle<gfx::shader>> shaders_; ///< Shaders that created this program.
     std::array<gfx::shader::ptr, 2> shaders_cached_{nullptr, nullptr};      ///< Cached shaders.
     std::shared_ptr<gfx::program> program_;          ///< The GPU program.
+    bool repopulated_ = false;
 };
 
 /**
