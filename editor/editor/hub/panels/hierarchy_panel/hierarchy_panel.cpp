@@ -529,8 +529,8 @@ void draw_lighting_menu(rtti::context& ctx, entt::handle parent_entity)
     if(ImGui::BeginMenu("Reflection Probes"))
     {
         static const std::vector<std::pair<std::string, probe_type>> reflection_probes = {
-            {"Sphere", probe_type::sphere},
-            {"Box", probe_type::box}};
+            {"", probe_type::sphere},
+            {"", probe_type::box}};
         
         for(const auto& p : reflection_probes)
         {

@@ -111,17 +111,17 @@ REFLECT(skylight_component)
             entt::attribute{"name", "irradiance_quality"},
             entt::attribute{"pretty_name", "Irradiance Quality"},
         })
-        .data<skylight_component::irradiance_quality::uniform>("uniform"_hs)
+        .data<skylight_component::irradiance_quality::flat>("flat"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "uniform"},
-            entt::attribute{"pretty_name", "Uniform"},
-            entt::attribute{"tooltip", "Uniform ambient from Perez luminance (perez)."},
+            entt::attribute{"name", "flat"},
+            entt::attribute{"pretty_name", "Flat"},
+            entt::attribute{"tooltip", "Flat ambient (L0 only): same color for every surface normal."},
         })
-        .data<skylight_component::irradiance_quality::normal_dependent>("normal_dependent"_hs)
+        .data<skylight_component::irradiance_quality::directional>("directional"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "normal_dependent"},
-            entt::attribute{"pretty_name", "Normal-Dependent"},
-            entt::attribute{"tooltip", "Normal-dependent irradiance via spherical harmonics."},
+            entt::attribute{"name", "directional"},
+            entt::attribute{"pretty_name", "Directional"},
+            entt::attribute{"tooltip", "Directional ambient (L0-L2 spherical harmonics): varies with the surface normal."},
         });
 
     entt::meta_factory<skylight_component::cloud_mode>{}
@@ -274,88 +274,88 @@ REFLECT(skylight_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_uv_scale"},
             entt::attribute{"pretty_name", "Vol. Noise UV Scale"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.00001f},
             entt::attribute{"max", 0.001f},
             entt::attribute{"step", 0.00001f},
-            entt::attribute{"tooltip", "Volumetric only. World-to-noise scale; lower values produce larger cloud features."},
+            entt::attribute{"tooltip", "World-to-noise scale; lower values produce larger cloud features."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_edge_width, &skylight_component::get_cloud_vol_edge_width>("cloud_vol_edge_width"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_edge_width"},
             entt::attribute{"pretty_name", "Vol. Edge Width"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 0.8f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Volumetric only. Width of the density ramp; lower = sharper cloud silhouettes."},
+            entt::attribute{"tooltip", "Width of the density ramp; lower = sharper cloud silhouettes."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_shape_power, &skylight_component::get_cloud_vol_shape_power>("cloud_vol_shape_power"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_shape_power"},
             entt::attribute{"pretty_name", "Vol. Shape Power"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 4.0f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Volumetric only. Contrast on the density mask; higher thins wispy regions."},
+            entt::attribute{"tooltip", "Contrast on the density mask; higher thins wispy regions."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_detail_erode, &skylight_component::get_cloud_vol_detail_erode>("cloud_vol_detail_erode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_detail_erode"},
             entt::attribute{"pretty_name", "Vol. Detail Erode"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Volumetric only. Worley detail subtraction; higher adds more holes and wisps."},
+            entt::attribute{"tooltip", "Worley detail subtraction; higher adds more holes and wisps."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_macro_strength, &skylight_component::get_cloud_vol_macro_strength>("cloud_vol_macro_strength"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_macro_strength"},
             entt::attribute{"pretty_name", "Vol. Macro Variation"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.5f},
             entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Volumetric only. Strength of large-scale threshold jitter (clearings vs uniform sheet)."},
+            entt::attribute{"tooltip", "Strength of large-scale threshold jitter (clearings vs uniform sheet)."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_coarse_scale, &skylight_component::get_cloud_vol_coarse_scale>("cloud_vol_coarse_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_coarse_scale"},
             entt::attribute{"pretty_name", "Vol. Coarse Scale"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.05f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Volumetric only. Scale of the coarse noise sample (lower = larger masses)."},
+            entt::attribute{"tooltip", "Scale of the coarse noise sample (lower = larger masses)."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_base_mix, &skylight_component::get_cloud_vol_base_mix>("cloud_vol_base_mix"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_base_mix"},
             entt::attribute{"pretty_name", "Vol. Coarse/Fine Mix"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Volumetric only. Blend between coarse and fine base noise (0 = coarse, 1 = fine)."},
+            entt::attribute{"tooltip", "Blend between coarse and fine base noise (0 = coarse, 1 = fine)."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_cloud_vol_sun_intensity, &skylight_component::get_cloud_vol_sun_intensity>("cloud_vol_sun_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_vol_sun_intensity"},
             entt::attribute{"pretty_name", "Vol. Sun Intensity"},
-            entt::attribute{"group", "Clouds"},
+            entt::attribute{"group", "Volumetric"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 200.0f},
             entt::attribute{"step", 1.0f},
-            entt::attribute{"tooltip", "Volumetric only. Multiplier for direct sun scattering in the cloud integrator."},
+            entt::attribute{"tooltip", "Multiplier for direct sun scattering in the cloud integrator."},
             entt::attribute{"predicate", volumetric_clouds_predicate_entt},
         })
         .data<&skylight_component::set_irradiance_intensity, &skylight_component::get_irradiance_intensity>("irradiance_intensity"_hs)
@@ -380,7 +380,14 @@ REFLECT(skylight_component)
             entt::attribute{"name", "irradiance_quality"},
             entt::attribute{"pretty_name", "Irradiance Quality"},
             entt::attribute{"group", "Irradiance"},
-            entt::attribute{"tooltip", "Quality of irradiance for indirect diffuse lighting."},
+            entt::attribute{"tooltip", "Directional variation of the ambient: Flat (L0 only) or Directional (full spherical harmonics)."},
+        })
+        .data<&skylight_component::set_irradiance_use_sky, &skylight_component::get_irradiance_use_sky>("irradiance_use_sky"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "irradiance_use_sky"},
+            entt::attribute{"pretty_name", "Irradiance Sky Contribution"},
+            entt::attribute{"group", "Irradiance"},
+            entt::attribute{"tooltip", "When on, the ambient is tinted by the sky/environment color. When off, only the irradiance tint is used as a flat artist-defined ambient (sky ignored)."},
         })
         .data<&skylight_component::set_cubemap, &skylight_component::get_cubemap>("cubemap"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -414,6 +421,7 @@ SAVE(skylight_component)
     try_save(ar, ser20::make_nvp("irradiance_intensity", obj.get_irradiance_intensity()));
     try_save(ar, ser20::make_nvp("irradiance_tint", obj.get_irradiance_tint()));
     try_save(ar, ser20::make_nvp("irradiance_quality", obj.get_irradiance_quality()));
+    try_save(ar, ser20::make_nvp("irradiance_use_sky", obj.get_irradiance_use_sky()));
     try_save(ar, ser20::make_nvp("cubemap", obj.get_cubemap()));
 }
 SAVE_INSTANTIATE(skylight_component, ser20::oarchive_associative_t);
@@ -547,10 +555,16 @@ LOAD(skylight_component)
         obj.set_irradiance_tint(irradiance_tint);
     }
 
-    skylight_component::irradiance_quality irradiance_quality{skylight_component::irradiance_quality::uniform};
+    skylight_component::irradiance_quality irradiance_quality{skylight_component::irradiance_quality::flat};
     if(try_load(ar, ser20::make_nvp("irradiance_quality", irradiance_quality)))
     {
         obj.set_irradiance_quality(irradiance_quality);
+    }
+
+    bool irradiance_use_sky{true};
+    if(try_load(ar, ser20::make_nvp("irradiance_use_sky", irradiance_use_sky)))
+    {
+        obj.set_irradiance_use_sky(irradiance_use_sky);
     }
 
     asset_handle<gfx::texture> cubemap;

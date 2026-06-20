@@ -98,14 +98,16 @@ public:
 
     /**
      * @enum irradiance_quality
-     * @brief Quality of irradiance for indirect diffuse lighting.
+     * @brief Directional variation of the indirect diffuse ambient.
+     * @note Orthogonal to sky contribution (see get_irradiance_use_sky). This axis only
+     *       controls whether the ambient varies with the surface normal.
      */
     enum class irradiance_quality
     {
-        /// Uniform ambient (Perez luminance or directional light color)
-        uniform,
-        /// Normal-dependent via spherical harmonics
-        normal_dependent,
+        /// Flat ambient: only the constant SH band (L0) is written, same color for every normal.
+        flat,
+        /// Directional ambient: full L0-L2 spherical harmonics, varies with the surface normal.
+        directional,
     };
 
     enum class cloud_mode
@@ -323,6 +325,19 @@ public:
     void set_irradiance_quality(irradiance_quality quality);
 
     /**
+     * @brief Gets whether the sky color contributes to the ambient irradiance.
+     * @return true if the sky/environment color is used; false for a flat tint-only ambient.
+     */
+    auto get_irradiance_use_sky() const noexcept -> bool;
+
+    /**
+     * @brief Sets whether the sky color contributes to the ambient irradiance.
+     * @param[in] use_sky true to tint the ambient by the sky/environment color, false to use
+     *            only the irradiance tint as a flat artist-defined ambient (sky ignored).
+     */
+    void set_irradiance_use_sky(bool use_sky);
+
+    /**
      * @brief Gets the sky brightness multiplier (affects atmospheric pass and irradiance).
      * @return The sky brightness value (1.0 = neutral).
      */
@@ -420,9 +435,14 @@ private:
     math::color irradiance_tint_{1.0f, 1.0f, 1.0f, 1.0f};
 
     /**
-     * @brief Quality of irradiance for indirect diffuse.
+     * @brief Directional variation of the indirect diffuse ambient.
      */
-    irradiance_quality irradiance_quality_{irradiance_quality::normal_dependent};
+    irradiance_quality irradiance_quality_{irradiance_quality::directional};
+
+    /**
+     * @brief Whether the sky/environment color contributes to the ambient (false = flat tint only).
+     */
+    bool irradiance_use_sky_{true};
 
     /**
      * @brief Sky brightness multiplier (1.0 = neutral). Affects atmospheric pass and irradiance.

@@ -341,6 +341,16 @@ void skylight_component::set_irradiance_quality(irradiance_quality quality)
     irradiance_quality_ = quality;
 }
 
+auto skylight_component::get_irradiance_use_sky() const noexcept -> bool
+{
+    return irradiance_use_sky_;
+}
+
+void skylight_component::set_irradiance_use_sky(bool use_sky)
+{
+    irradiance_use_sky_ = use_sky;
+}
+
 auto skylight_component::get_sky_brightness() const noexcept -> float
 {
     return sky_brightness_;

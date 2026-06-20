@@ -290,25 +290,26 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
 auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::texture::ptr&
 {
     auto& tex = rview.tex_get_or_emplace("IRRADIANCE_SH");
-    if(gfx::needs_recreate(tex, {9, 3}))
+    if(gfx::needs_recreate(tex, {9, 1}))
     {
-        // Match auto-exposure: R32F + COMPUTE_WRITE uses glTexStorage2D on GL (immutable
+        // Match auto-exposure: RGBA32F + COMPUTE_WRITE uses glTexStorage2D on GL (immutable
         // storage). Initial data must go through update_texture_2d (glTexSubImage2D), not
         // the texture ctor _mem path. BGFX_TEXTURE_RT keeps the GL texture sampleable after
-        // compute image writes (same pattern as Hi-Z and other R32F compute targets).
+        // compute image writes (same pattern as Hi-Z and other compute targets).
+        // Layout: 9x1, one texel per SH coefficient, rgb = channels R,G,B (a unused).
         tex.reset();
         tex = std::make_shared<gfx::texture>(9,
-                                             3,
+                                             1,
                                              false,
                                              1,
-                                             gfx::texture_format::R32F,
+                                             gfx::texture_format::RGBA32F,
                                              BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE |
                                                  BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
                                                  BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
-        float initial_coeffs[9 * 3] = {};
+        float initial_coeffs[9 * 4] = {};
         const gfx::memory_view* initial_pixels = gfx::copy(initial_coeffs, sizeof(initial_coeffs));
-        gfx::update_texture_2d(tex->native_handle(), 0, 0, 0, 0, 9, 3, initial_pixels);
+        gfx::update_texture_2d(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
     }
     return tex;
 }
@@ -1108,6 +1109,8 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             irradiance_perez_params perez;
             bool use_perez = false;
             bool is_skybox = false;
+            bool use_sky = true;
+            bool directional = true;
             asset_handle<gfx::texture> cubemap;
         };
         skylight_params dominant;
@@ -1125,6 +1128,12 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                 math::vec3 irradiance_color = {1.0f, 1.0f, 1.0f};
                 bool use_perez = false;
                 bool is_skybox = (skylight.get_mode() == skylight_component::sky_mode::skybox);
+                // Two independent axes:
+                //  - wants_sky: does the sky/environment color contribute, or is the ambient a flat tint?
+                //  - directional: does the ambient vary with the surface normal (full SH), or is it flat (L0)?
+                const bool wants_sky = skylight.get_irradiance_use_sky();
+                const bool directional =
+                    (skylight.get_irradiance_quality() == skylight_component::irradiance_quality::directional);
                 float sun_weight = 1.0f;
 
                 if(!is_skybox)
@@ -1135,7 +1144,15 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     sun_weight = x * x * (3.0f - 2.0f * x);
                 }
                 float exposition = 0.1f;
-                if(!is_skybox && skylight.get_irradiance_quality() == skylight_component::irradiance_quality::normal_dependent)
+
+                if(!wants_sky)
+                {
+                    // Sky ignored: flat artist ambient straight from the tint color. Kept independent
+                    // of sun elevation (sun_weight=1) and at unit exposition so the tint reads literally.
+                    sun_weight = 1.0f;
+                    exposition = 1.0f;
+                }
+                else if(!is_skybox && directional)
                 {
                     use_perez = true;
                     compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), dominant.perez);
@@ -1143,23 +1160,20 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     irradiance_color = glm::mix(dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb, sun_weight);
                     exposition = dominant.perez.exposition;
                 }
-                else
+                else if(!is_skybox)
                 {
-                    if(!is_skybox)
-                    {
-                        math::vec3 sky_luminance_rgb;
-                        math::vec3 sun_luminance_rgb;
-                        compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
-                        // Uniform mode approximates integrated Perez irradiance with a single color.
-                        // Perez integral (sky + circumsolar + sun disc) yields ~4–5× zenith luminance.
-                        // mix(sky, sun, sun_weight * 0.25) empirically matches normal-dependent at same intensity.
-                        irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb,
-                                                    sun_weight * 0.25f);
-                        float sun_altitude = -light_dir.y;
-                        float altitude_factor = bx::lerp(0.6f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
-                        exposition = 0.1f * altitude_factor;
-                    }
+                    // Flat ambient but the sky still contributes: collapse the Perez sky to one color.
+                    // Perez integral (sky + circumsolar + sun disc) yields ~4-5x zenith luminance.
+                    // mix(sky, sun, sun_weight * 0.25) empirically matches the directional result at same intensity.
+                    math::vec3 sky_luminance_rgb;
+                    math::vec3 sun_luminance_rgb;
+                    compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
+                    irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight * 0.25f);
+                    float sun_altitude = -light_dir.y;
+                    float altitude_factor = bx::lerp(0.6f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
+                    exposition = 0.1f * altitude_factor;
                 }
+                // skybox + wants_sky: irradiance_color stays white; the cubemap supplies the color in-shader.
 
                 float sky_brightness = skylight.get_sky_brightness();
                 exposition *= sky_brightness;
@@ -1178,10 +1192,12 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     dominant.light_dir = light_dir;
                     dominant.use_perez = use_perez;
                     dominant.is_skybox = is_skybox;
+                    dominant.use_sky = wants_sky;
+                    dominant.directional = directional;
                     dominant.sun_weight = sun_weight;
                     dominant.exposition = exposition;
                     dominant.sky_brightness = sky_brightness;
-                    dominant.cubemap = is_skybox ? skylight.get_cubemap() : asset_handle<gfx::texture>{};
+                    dominant.cubemap = (is_skybox && wants_sky) ? skylight.get_cubemap() : asset_handle<gfx::texture>{};
                 }
             });
 
@@ -1206,16 +1222,17 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             ambient_vec[3] = dominant.intensity;
         }
         auto cubemap_tex = dominant.cubemap.get();
-        const bool use_cubemap = dominant.is_skybox && cubemap_tex && cubemap_tex->info.cubeMap;
+        const bool use_cubemap = dominant.is_skybox && dominant.use_sky && cubemap_tex && cubemap_tex->info.cubeMap;
 
-        // Perez/uniform use physical luminance (exposition-scaled); cubemaps are typically
-        // pre-baked in display range. Boost intensity for non-cubemap modes so shadow fill
-        // matches cubemap at the same user-facing intensity.
+        // Perez sky modes use physical luminance (exposition-scaled); cubemaps are typically
+        // pre-baked in display range. Boost intensity for sky-derived non-cubemap modes so shadow
+        // fill matches cubemap at the same user-facing intensity. The flat tint-only ambient is
+        // already in display range, so it gets no boost.
         constexpr float ambient_intensity_boost = 2.0f;
-        if(!use_cubemap)
-            ambient_vec[3] *= ambient_intensity_boost;
-        else
+        if(use_cubemap)
             ambient_vec[3] *= dominant.sky_brightness;
+        else if(dominant.use_sky)
+            ambient_vec[3] *= ambient_intensity_boost;
 
         gfx::set_uniform(irradiance_compute_program_.u_irradiance_tint_intensity, ambient_vec);
 
@@ -1228,15 +1245,21 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         {
             mode = 1;
             gfx::set_uniform(irradiance_compute_program_.u_sun_direction, dominant.perez.sun_direction);
-            gfx::set_uniform(irradiance_compute_program_.u_sky_luminance, dominant.perez.sky_luminance_rgb);
             gfx::set_uniform(irradiance_compute_program_.u_sun_luminance, dominant.perez.sun_luminance_rgb);
             gfx::set_uniform(irradiance_compute_program_.u_sky_luminance_xyz, dominant.perez.sky_luminance_xyz);
             gfx::set_uniform(irradiance_compute_program_.u_perez_coeff, &dominant.perez.perez_coeff[0][0], 5);
         }
         else if(use_cubemap)
         {
-            mode = 2;
+            // mode 2 = full directional SH, mode 3 = flat (cubemap averaged into L0 only).
+            mode = dominant.directional ? 2 : 3;
             gfx::set_texture(irradiance_compute_program_.s_env, 1, cubemap_tex);
+        }
+        else if(!dominant.use_sky && dominant.directional)
+        {
+            // No sky contribution but directional requested: hemisphere gradient from the tint
+            // (full tint up -> darkened tint down). Flat tint-only stays at mode 0.
+            mode = 4;
         }
 
         // x=mode, y=sun_weight (applied in shader for all modes)
@@ -1259,7 +1282,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
             {
                 const auto& skylight = skylight_comp_ref;
-                if(skylight.get_irradiance_quality() != skylight_component::irradiance_quality::uniform)
+                if(skylight.get_irradiance_quality() != skylight_component::irradiance_quality::flat)
                     return;
                 float irradiance_intensity = skylight.get_irradiance_intensity();
                 if(irradiance_intensity <= 0.0f)
@@ -1267,7 +1290,9 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                 const auto& world_transform = transform_comp_ref.get_transform_global();
                 math::vec3 light_dir = world_transform.z_unit_axis();
                 math::vec3 irradiance_color = {1.0f, 1.0f, 1.0f};
-                if(skylight.get_mode() != skylight_component::sky_mode::skybox)
+                // Only fold in the sky color when sky contribution is enabled; otherwise the
+                // flat tint (applied below) is the whole ambient.
+                if(skylight.get_irradiance_use_sky() && skylight.get_mode() != skylight_component::sky_mode::skybox)
                 {
                     math::vec3 sky_luminance_rgb;
                     math::vec3 sun_luminance_rgb;

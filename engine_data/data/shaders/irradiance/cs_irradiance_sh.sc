@@ -1,10 +1,12 @@
 /**
  * Irradiance SH Compute Shader
  * Projects sky/sun radiance to spherical harmonics (L0-L2, 9 coeffs per channel).
- * Output: 9x3 R32F texture (x=coeff index 0..8, y=channel R,G,B).
+ * Output: 9x1 RGBA32F texture (x=coeff index 0..8, rgb=channel R,G,B; a unused).
  * Mode 0: uniform - write L0 only from ambient color * intensity.
  * Mode 1: perez - sample Perez sky, project to SH.
- * Mode 2: environment cubemap - sample textureCube(s_env, L) instead of Perez.
+ * Mode 2: environment cubemap - sample textureCube(s_env, L), full L0-L2 SH.
+ * Mode 3: environment cubemap flat - average cubemap into L0 only (no normal variation).
+ * Mode 4: tint gradient - hemisphere gradient from tint color only (no sky), L0 + vertical L1.
  */
 
 #include "../bgfx_compute.sh"
@@ -19,7 +21,7 @@ vec3 irradiance_convertXYZ2RGB(vec3 _xyz)
     );
 }
 
-IMAGE2D_WO(i_output, r32f, 0);
+IMAGE2D_WO(i_output, rgba32f, 0);
 
 // Input environment cubemap (mode 2)
 SAMPLERCUBE(s_env, 1);
@@ -65,8 +67,6 @@ uniform vec4 u_mode;
 uniform vec4 u_irradiance_tint_intensity;
 // For Perez: sun direction (points toward sun)
 uniform vec4 u_sun_direction;
-// Perez: sky luminance RGB at zenith
-uniform vec4 u_sky_luminance;
 // Perez: sun luminance RGB
 uniform vec4 u_sun_luminance;
 // Perez: sky luminance XYZ (for Perez formula)
@@ -106,7 +106,9 @@ vec3 sample_perez_sky(vec3 dir, vec3 P0_inv, vec3 sky_color_xyY, vec3 light_dir)
     float sun_disc = exp(-2.0 * (1.0 - sun_cos) / 0.02);
     vec3 sun_color = u_sun_luminance.xyz * u_exposition.x * sun_disc;
     vec3 irradiance = (sky_color + sun_color) * u_exposition.x;
-    // Saturation boost to match visible sky (1.15 at horizon, 1.45 at zenith)
+    // NON-PHYSICAL art-directed saturation boost: pushes color away from luma to better
+    // match the perceived vividness of the visible sky (1.15 at horizon, 1.45 at zenith).
+    // This intentionally diverges from true radiometric irradiance.
     float luma = dot(irradiance, vec3(0.299, 0.587, 0.114));
     float zenith_factor = max(dir.y, 0.0);
     float saturation = mix(1.15, 1.45, zenith_factor);
@@ -135,14 +137,11 @@ void sh_basis(vec3 n, inout float c[9])
     c[8] = 0.546274 * diff * sum_xy;
 }
 
+// Output is 9x1 RGBA32F: one texel per coefficient holding all 3 channels in rgb.
 void store_sh_coeffs(vec3 sh_coeff[9])
 {
     for(int k = 0; k < 9; k++)
-    {
-        imageStore(i_output, ivec2(k, 0), vec4(sh_coeff[k].r, 0.0, 0.0, 0.0));
-        imageStore(i_output, ivec2(k, 1), vec4(sh_coeff[k].g, 0.0, 0.0, 0.0));
-        imageStore(i_output, ivec2(k, 2), vec4(sh_coeff[k].b, 0.0, 0.0, 0.0));
-    }
+        imageStore(i_output, ivec2(k, 0), vec4(sh_coeff[k], 0.0));
 }
 
 void accumulate_sh_sample(vec3 dir, vec3 L, float d_omega, inout vec3 sh_coeff[9])
@@ -162,14 +161,9 @@ void process_uniform_mode(float sun_weight)
     float intensity = u_irradiance_tint_intensity.w * sun_weight * u_exposition.x;
     const float PI = 3.14159265;
     float l0 = intensity / (PI * 0.282095);
-    imageStore(i_output, ivec2(0, 0), vec4(l0 * color.r, 0.0, 0.0, 0.0));
-    imageStore(i_output, ivec2(0, 1), vec4(l0 * color.g, 0.0, 0.0, 0.0));
-    imageStore(i_output, ivec2(0, 2), vec4(l0 * color.b, 0.0, 0.0, 0.0));
+    imageStore(i_output, ivec2(0, 0), vec4(l0 * color, 0.0));
     for(int i = 1; i < 9; i++)
-    {
-        for(int ch = 0; ch < 3; ch++)
-            imageStore(i_output, ivec2(i, ch), vec4(0.0, 0.0, 0.0, 0.0));
-    }
+        imageStore(i_output, ivec2(i, 0), vec4(0.0, 0.0, 0.0, 0.0));
 }
 
 // Mode 1: Perez sky - hemisphere sampling, zero radiance below horizon.
@@ -209,6 +203,10 @@ void process_environment_mode(float sun_weight)
     const int num_samples = 64;
     const float PI = 3.14159265;
     const float d_omega = (4.0 * PI) / float(num_samples);
+    // We only need the low-frequency (L0-L2) content, so sample a coarse prefiltered mip.
+    // This averages many texels per tap, drastically reducing the variance/noise that
+    // sampling mip 0 with just 64 taps would produce on a high-resolution cubemap.
+    const float ENV_LOD = 4.0;
     vec3 tint_scale = u_irradiance_tint_intensity.xyz * u_irradiance_tint_intensity.w * sun_weight;
 
     vec3 sh_coeff[9];
@@ -219,10 +217,57 @@ void process_environment_mode(float sun_weight)
     {
         vec2 E = Hammersley(i, num_samples);
         vec3 dir = HammersleyToSphere(E);
-        vec3 radiance = textureCubeLod(s_env, dir, 0.0).rgb;
+        vec3 radiance = textureCubeLod(s_env, dir, ENV_LOD).rgb;
         accumulate_sh_sample(dir, radiance * tint_scale, d_omega, sh_coeff);
     }
     store_sh_coeffs(sh_coeff);
+}
+
+// Mode 3: environment cubemap, flat - average the cubemap into L0 only (no normal variation).
+void process_environment_flat_mode(float sun_weight)
+{
+    const int num_samples = 64;
+    const float PI = 3.14159265;
+    const float d_omega = (4.0 * PI) / float(num_samples);
+    const float ENV_LOD = 4.0;
+    vec3 tint_scale = u_irradiance_tint_intensity.xyz * u_irradiance_tint_intensity.w * sun_weight;
+
+    // Only the constant band L0 = integral(L * Y0) over the sphere, Y0 = 0.282095.
+    // This is the same L0 the directional path produces, with L1-L2 discarded.
+    vec3 l0 = vec3_splat(0.0);
+    for(int i = 0; i < num_samples; i++)
+    {
+        vec2 E = Hammersley(i, num_samples);
+        vec3 dir = HammersleyToSphere(E);
+        vec3 radiance = textureCubeLod(s_env, dir, ENV_LOD).rgb;
+        l0 += radiance * tint_scale * 0.282095 * d_omega;
+    }
+    imageStore(i_output, ivec2(0, 0), vec4(l0, 0.0));
+    for(int i = 1; i < 9; i++)
+        imageStore(i_output, ivec2(i, 0), vec4(0.0, 0.0, 0.0, 0.0));
+}
+
+// Mode 4: flat-tint hemisphere gradient (no sky contribution). Full tint for up-facing
+// normals fading to a darkened tint for down-facing normals - gives directional shape from
+// a single artist color. Encodes L0 + the vertical L1 band directly (no sampling needed).
+void process_tint_gradient_mode(float sun_weight)
+{
+    const float PI = 3.14159265;
+    vec3 color = u_irradiance_tint_intensity.xyz;
+    float intensity = u_irradiance_tint_intensity.w * sun_weight * u_exposition.x;
+    vec3 top = color * intensity;       // target irradiance at zenith (N.y = +1)
+    const float ground_darken = 0.5;    // nadir is half as bright as zenith
+    vec3 bottom = top * ground_darken;  // target irradiance at nadir (N.y = -1)
+    // eval_irradiance_sh lobes: L0 = PI*0.282095, vertical L1 = (2*PI/3)*0.488603*N.y.
+    // Solve coeffs so E(+1)=top and E(-1)=bottom (only the constant + vertical bands are non-zero).
+    const float LOBE0 = PI * 0.282095;
+    const float LOBE1 = (2.0 * PI / 3.0) * 0.488603;
+    vec3 c0 = (top + bottom) / (2.0 * LOBE0);
+    vec3 c1 = (top - bottom) / (2.0 * LOBE1);
+    imageStore(i_output, ivec2(0, 0), vec4(c0, 0.0));
+    imageStore(i_output, ivec2(1, 0), vec4(c1, 0.0));
+    for(int i = 2; i < 9; i++)
+        imageStore(i_output, ivec2(i, 0), vec4(0.0, 0.0, 0.0, 0.0));
 }
 
 // Project L(omega) to SH (radiance coefficients). Store raw coeffs; Lambert convolution
@@ -237,6 +282,10 @@ void main()
         process_uniform_mode(sun_weight);
     else if(mode == 1)
         process_perez_mode(sun_weight);
-    else
+    else if(mode == 2)
         process_environment_mode(sun_weight);
+    else if(mode == 3)
+        process_environment_flat_mode(sun_weight);
+    else
+        process_tint_gradient_mode(sun_weight);
 }

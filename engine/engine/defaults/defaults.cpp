@@ -566,7 +566,7 @@ auto defaults::create_reflection_probe_entity(rtti::context& ctx, scene& scn, pr
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto object = scn.create_entity(name + " Probe");
+    auto object = scn.create_entity("Reflection Probe" + name);
 
     auto& transf_comp = object.get_or_emplace<transform_component>();
     transf_comp.set_position_local({0.0f, 0.1f, 0.0f});
@@ -702,7 +702,7 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
     }
 
     {
-        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, "Envinroment");
+        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, " Global");
         auto& reflection_comp = object.get_or_emplace<reflection_probe_component>();
         auto probe = reflection_comp.get_probe();
         probe.method = reflect_method::environment;
@@ -789,7 +789,7 @@ void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& sc
     }
 
     {
-        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, "Envinroment");
+        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, " Global");
         auto& reflection_comp = object.get_or_emplace<reflection_probe_component>();
         auto probe = reflection_comp.get_probe();
         probe.method = reflect_method::environment;
@@ -829,7 +829,7 @@ auto defaults::create_default_3d_scene_for_preview(rtti::context& ctx, scene& sc
     }
 
     {
-        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, "Envinroment");
+        auto object = create_reflection_probe_entity(ctx, scn, probe_type::sphere, " Global");
         auto& reflection_comp = object.get_or_emplace<reflection_probe_component>();
         auto probe = reflection_comp.get_probe();
         probe.method = reflect_method::environment;

@@ -258,7 +258,6 @@ private:
             cache_uniform(program.get(), u_mode, "u_mode", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sun_direction, "u_sun_direction", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sky_luminance, "u_sky_luminance", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sun_luminance, "u_sun_luminance", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_exposition, "u_exposition", gfx::uniform_type::Vec4);
@@ -268,7 +267,6 @@ private:
         gfx::program::uniform_ptr u_mode;
         gfx::program::uniform_ptr u_irradiance_tint_intensity;
         gfx::program::uniform_ptr u_sun_direction;
-        gfx::program::uniform_ptr u_sky_luminance;
         gfx::program::uniform_ptr u_sun_luminance;
         gfx::program::uniform_ptr u_sky_luminance_xyz;
         gfx::program::uniform_ptr u_exposition;
