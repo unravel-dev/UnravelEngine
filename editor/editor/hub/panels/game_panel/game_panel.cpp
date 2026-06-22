@@ -4,6 +4,7 @@
 #include "../viewport_resolution.h"
 #include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
+#include <engine/engine.h>
 
 #include <algorithm>
 #include <editor/system/project_manager.h>
@@ -196,6 +197,20 @@ void game_panel::draw_ui(rtti::context& ctx)
             parent_->get_profiler_timeline_panel().show(true);
         }
     }
+}
+
+
+auto game_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
+{
+    auto& ctx = engine::context();
+    auto& ev = ctx.get_cached<events>();
+    bool is_playing = ev.is_playing;
+    ImVec2 padding(is_playing ? 1.0f : 0.0f, is_playing ? 1.0f : 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    bool open = panel_base::begin_panel(name, flags);
+    ImGui::PopStyleVar();
+    
+    return open;
 }
 
 void game_panel::draw_menubar(rtti::context& ctx)

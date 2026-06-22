@@ -207,20 +207,24 @@ void queue_create_at_cursor(rtti::context& ctx,
 // Handle mesh drop at cursor position
 void handle_mesh_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& mesh_path)
 {
+    // Capture the modifier state at drop time; the producer may run on a later frame.
+    const bool align_to_surface = ImGui::IsKeyDown(shortcuts::modifier_drop_align_to_surface);
     queue_create_at_cursor(ctx, camera_comp, "Drop Mesh",
-        [mesh_path](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
+        [mesh_path, align_to_surface](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
         {
-            return defaults::create_mesh_entity_at(ctx, scn, mesh_path, cam, cursor);
+            return defaults::create_mesh_entity_at(ctx, scn, mesh_path, cam, cursor, align_to_surface);
         });
 }
 
 // Handle prefab drop at cursor position
 void handle_prefab_drop(rtti::context& ctx, const camera_component& camera_comp, const std::string& prefab_path)
 {
+    // Capture the modifier state at drop time; the producer may run on a later frame.
+    const bool align_to_surface = ImGui::IsKeyDown(shortcuts::modifier_drop_align_to_surface);
     queue_create_at_cursor(ctx, camera_comp, "Drop Prefab",
-        [prefab_path](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
+        [prefab_path, align_to_surface](rtti::context& ctx, scene& scn, const camera& cam, const math::vec2& cursor) -> entt::handle
         {
-            return defaults::create_prefab_at(ctx, scn, prefab_path, cam, cursor);
+            return defaults::create_prefab_at(ctx, scn, prefab_path, cam, cursor, align_to_surface);
         });
 }
 
@@ -1414,6 +1418,14 @@ void scene_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
     {
         path.on_frame_before_render(em.prefab_scene, dt);
     }
+}
+
+auto scene_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    bool open = panel_base::begin_panel(name, flags);
+    ImGui::PopStyleVar();
+    return open;
 }
 
 void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)

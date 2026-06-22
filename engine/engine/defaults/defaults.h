@@ -59,13 +59,15 @@ struct defaults
      * @param key The key of the prefab.
      * @param cam The camera to use for positioning.
      * @param pos The 2D position to place the prefab.
+     * @param align_to_surface When true, aligns the object to the hit surface normal (otherwise stays upright).
      * @return A handle to the created entity.
      */
     static auto create_prefab_at(rtti::context& ctx,
                                  scene& scn,
                                  const std::string& key,
                                  const camera& cam,
-                                 math::vec2 pos) -> entt::handle;
+                                 math::vec2 pos,
+                                 bool align_to_surface = false) -> entt::handle;
 
     /**
      * @brief Creates a prefab entity at a specified position.
@@ -97,13 +99,15 @@ struct defaults
      * @param key The key of the mesh.
      * @param cam The camera to use for positioning.
      * @param pos The 2D position to place the mesh.
+     * @param align_to_surface When true, aligns the object to the hit surface normal (otherwise stays upright).
      * @return A handle to the created entity.
      */
     static auto create_mesh_entity_at(rtti::context& ctx,
                                       scene& scn,
                                       const std::string& key,
                                       const camera& cam,
-                                      math::vec2 pos) -> entt::handle;
+                                      math::vec2 pos,
+                                      bool align_to_surface = false) -> entt::handle;
 
     /**
      * @brief Creates a mesh entity at a specified position.

@@ -29,6 +29,7 @@ public:
 
 private:
     void draw_menubar(rtti::context& ctx);
+    auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
     bool is_visible_force_{};
     int visualize_passes_{-1};

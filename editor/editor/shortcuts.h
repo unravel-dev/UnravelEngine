@@ -10,6 +10,8 @@ namespace shortcuts
 // Modifier keys
 inline constexpr ImGuiKey modifier_camera_speed_boost = ImGuiKey_LeftShift;
 inline constexpr ImGuiKey modifier_snapping = ImGuiKey_LeftCtrl;
+// Held while dropping an asset into the viewport to align it to the surface normal.
+inline constexpr ImGuiKey modifier_drop_align_to_surface = ImGuiKey_LeftAlt;
 
 // File operations
 inline const ImGuiKeyCombination new_scene = {ImGuiKey_LeftCtrl, ImGuiKey_N};

@@ -48,6 +48,7 @@ private:
     void draw_ui(rtti::context& ctx) override;
     void draw_menubar(rtti::context& ctx);
     void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size);
+    auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
     // Menu bar drawing functions
     void draw_prefab_mode_header(rtti::context& ctx);

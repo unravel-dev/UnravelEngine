@@ -37,8 +37,8 @@ protected:
     virtual void on_before_render(rtti::context& ctx);
     virtual void on_after_render(rtti::context& ctx);
 
-    bool begin_panel(const char* name, ImGuiWindowFlags flags);
-    void end_panel(const char* name);
+    virtual bool begin_panel(const char* name, ImGuiWindowFlags flags);
+    virtual void end_panel(const char* name);
 
     std::string name_;
     std::string name_fullscreen_;

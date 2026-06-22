@@ -31,7 +31,12 @@
 #include <string_utils/utils.h>
 #include <seq/seq.h>
 
+#include <graphics/graphics.h>
+
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace unravel
@@ -40,6 +45,375 @@ namespace unravel
 namespace
 {
 
+// Result of casting a ray against the renderable meshes in a scene.
+struct scene_ray_hit
+{
+    bool hit = false;
+    math::vec3 position{0.0f, 0.0f, 0.0f};
+    math::vec3 normal{0.0f, 1.0f, 0.0f};
+};
+
+// Moller-Trumbore ray/triangle intersection (two sided). origin/dir and the triangle vertices
+// must all live in the same coordinate space. On success out_t holds the ray parameter such that
+// the hit point is origin + dir * out_t.
+auto intersect_ray_triangle(const math::vec3& origin,
+                            const math::vec3& dir,
+                            const math::vec3& v0,
+                            const math::vec3& v1,
+                            const math::vec3& v2,
+                            float& out_t) -> bool
+{
+    constexpr float epsilon = 1e-7f;
+    const math::vec3 edge1 = v1 - v0;
+    const math::vec3 edge2 = v2 - v0;
+    const math::vec3 pvec = math::cross(dir, edge2);
+    const float det = math::dot(edge1, pvec);
+    if(det > -epsilon && det < epsilon)
+    {
+        return false; // Ray is parallel to the triangle plane.
+    }
+    const float inv_det = 1.0f / det;
+    const math::vec3 tvec = origin - v0;
+    const float u = math::dot(tvec, pvec) * inv_det;
+    if(u < 0.0f || u > 1.0f)
+    {
+        return false;
+    }
+    const math::vec3 qvec = math::cross(tvec, edge1);
+    const float v = math::dot(dir, qvec) * inv_det;
+    if(v < 0.0f || u + v > 1.0f)
+    {
+        return false;
+    }
+    const float t = math::dot(edge2, qvec) * inv_det;
+    if(t <= epsilon)
+    {
+        return false; // Intersection is behind the ray origin.
+    }
+    out_t = t;
+    return true;
+}
+
+// Tests a single mesh submesh for the closest triangle hit along the ray. The ray is expected in the
+// submesh-local space described by combined; closest_world_t and out_hit are updated in world space.
+void raycast_mesh_submesh(mesh& msh,
+                          const mesh::submesh& submesh,
+                          const math::transform& combined,
+                          const math::vec3& ray_origin,
+                          const math::vec3& ray_dir,
+                          float& closest_world_t,
+                          scene_ray_hit& out_hit)
+{
+    const auto* vertex_data = msh.get_system_vb();
+    const auto* index_data = msh.get_system_ib();
+    if(vertex_data == nullptr || index_data == nullptr)
+    {
+        return;
+    }
+    const auto& vertex_format = msh.get_vertex_format();
+    if(!vertex_format.has(gfx::attribute::Position))
+    {
+        return;
+    }
+    const auto face_count = msh.get_face_count();
+    if(submesh.face_start < 0 || submesh.face_count == 0)
+    {
+        return;
+    }
+    const auto face_begin = static_cast<uint32_t>(submesh.face_start);
+    if(face_begin >= face_count)
+    {
+        return;
+    }
+    const auto face_end = std::min(face_begin + submesh.face_count, face_count);
+
+    // Move the ray into submesh-local space so the stored vertex positions can be used directly.
+    const math::transform inv_combined = math::inverse(combined);
+    const math::vec3 local_origin = inv_combined.transform_coord(ray_origin);
+    const math::vec3 local_dir = inv_combined.transform_coord(ray_origin + ray_dir) - local_origin;
+
+    for(uint32_t f = face_begin; f < face_end; ++f)
+    {
+        const uint32_t i0 = index_data[f * 3 + 0];
+        const uint32_t i1 = index_data[f * 3 + 1];
+        const uint32_t i2 = index_data[f * 3 + 2];
+
+        std::array<float, 4> p0{};
+        std::array<float, 4> p1{};
+        std::array<float, 4> p2{};
+        gfx::vertex_unpack(p0.data(), gfx::attribute::Position, vertex_format, vertex_data, i0);
+        gfx::vertex_unpack(p1.data(), gfx::attribute::Position, vertex_format, vertex_data, i1);
+        gfx::vertex_unpack(p2.data(), gfx::attribute::Position, vertex_format, vertex_data, i2);
+
+        const math::vec3 v0{p0[0], p0[1], p0[2]};
+        const math::vec3 v1{p1[0], p1[1], p1[2]};
+        const math::vec3 v2{p2[0], p2[1], p2[2]};
+
+        float local_t = 0.0f;
+        if(!intersect_ray_triangle(local_origin, local_dir, v0, v1, v2, local_t))
+        {
+            continue;
+        }
+
+        // Compare hits in world space so submeshes with different scales remain consistent.
+        const math::vec3 world_hit = combined.transform_coord(local_origin + local_dir * local_t);
+        const float world_t = math::dot(world_hit - ray_origin, ray_dir);
+        if(world_t <= 0.0f || world_t >= closest_world_t)
+        {
+            continue;
+        }
+
+        closest_world_t = world_t;
+        out_hit.hit = true;
+        out_hit.position = world_hit;
+        const math::vec3 local_normal = math::normalize(math::cross(v1 - v0, v2 - v0));
+        out_hit.normal = math::normalize(combined.transform_normal(local_normal));
+    }
+}
+
+// Casts a ray from the camera through the supplied viewport position and returns the closest triangle
+// hit across every active model in the scene. Falls back to no-hit when the ray misses all geometry.
+auto raycast_scene_closest_surface(scene& scn, const camera& cam, const math::vec2& screen_pos) -> scene_ray_hit
+{
+    scene_ray_hit result;
+
+    math::vec3 ray_origin;
+    math::vec3 ray_dir;
+    if(!cam.viewport_to_ray(screen_pos, ray_origin, ray_dir))
+    {
+        return result;
+    }
+    ray_dir = math::normalize(ray_dir);
+
+    float closest_world_t = std::numeric_limits<float>::max();
+
+    scn.registry->view<transform_component, model_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& model_comp, auto&&) -> void
+        {
+            if(!model_comp.is_enabled())
+            {
+                return;
+            }
+            const auto& mdl = model_comp.get_model();
+            if(!mdl.is_valid())
+            {
+                return;
+            }
+            auto lod = mdl.get_lod(0);
+            if(!lod)
+            {
+                return;
+            }
+            const auto mesh_ptr = lod.get();
+            if(!mesh_ptr)
+            {
+                return;
+            }
+
+            const auto& world_transform = transform_comp.get_transform_global();
+
+            // Broadphase: reject meshes whose world-space bounds the ray never enters, or that lie
+            // entirely beyond the closest hit found so far.
+            math::bbox world_bounds = math::bbox::mul(mesh_ptr->get_bounds(), world_transform);
+            float box_t = 0.0f;
+            if(!world_bounds.intersect(ray_origin, ray_dir, box_t, false))
+            {
+                return;
+            }
+            if(box_t > closest_world_t)
+            {
+                return;
+            }
+
+            const auto& submeshes = mesh_ptr->get_submeshes();
+            const auto node_transforms = mesh_ptr->get_submesh_node_transforms();
+            for(size_t s = 0; s < submeshes.size(); ++s)
+            {
+                const auto* submesh = submeshes[s];
+                if(submesh == nullptr)
+                {
+                    continue;
+                }
+                math::transform combined = world_transform;
+                if(s < node_transforms.size())
+                {
+                    combined = world_transform * node_transforms[s];
+                }
+                raycast_mesh_submesh(*mesh_ptr, *submesh, combined, ray_origin, ray_dir, closest_world_t, result);
+            }
+        });
+
+    return result;
+}
+
+// Where a dropped object should be placed and how it relates to the surface it landed on.
+struct drop_placement
+{
+    math::vec3 contact{0.0f, 0.0f, 0.0f}; // World-space contact point (surface hit or ground plane).
+    math::vec3 normal{0.0f, 1.0f, 0.0f};  // Surface normal at the contact point (world up when no hit).
+    bool on_surface = false;              // True when the cursor was over existing geometry.
+};
+
+// Resolves the contact point for a viewport drop. Prefers the exact surface hit under the cursor and
+// falls back to projecting onto the world ground plane (XZ at the origin) when nothing is hit.
+auto compute_drop_placement(scene& scn, const camera& cam, const math::vec2& screen_pos) -> drop_placement
+{
+    const auto surface = raycast_scene_closest_surface(scn, cam, screen_pos);
+    if(surface.hit)
+    {
+        return {surface.position, surface.normal, true};
+    }
+
+    math::vec3 projected_pos{0.0f, 0.0f, 0.0f};
+    cam.viewport_to_world(screen_pos,
+                          math::plane::from_point_normal(math::vec3{0.0f, 0.0f, 0.0f}, math::vec3{0.0f, 1.0f, 0.0f}),
+                          projected_pos,
+                          false);
+    return {projected_pos, math::vec3{0.0f, 1.0f, 0.0f}, false};
+}
+
+// Builds the shortest-arc rotation that maps the 'from' direction onto the 'to' direction.
+auto shortest_arc_rotation(const math::vec3& from, const math::vec3& to) -> math::quat
+{
+    const math::vec3 f = math::normalize(from);
+    const math::vec3 t = math::normalize(to);
+    const float d = math::dot(f, t);
+    if(d >= 1.0f - 1e-6f)
+    {
+        return math::quat(1.0f, 0.0f, 0.0f, 0.0f); // Already aligned.
+    }
+    if(d <= -1.0f + 1e-6f)
+    {
+        // Opposite directions: rotate 180 degrees around any orthogonal axis.
+        math::vec3 axis = math::cross(math::vec3{1.0f, 0.0f, 0.0f}, f);
+        if(math::dot(axis, axis) < 1e-6f)
+        {
+            axis = math::cross(math::vec3{0.0f, 0.0f, 1.0f}, f);
+        }
+        return math::angleAxis(math::pi<float>(), math::normalize(axis));
+    }
+    const math::vec3 axis = math::normalize(math::cross(f, t));
+    return math::angleAxis(std::acos(d), axis);
+}
+
+// Accumulates the object's geometry bounds expressed in the root entity's local frame (inv_root). This
+// mirrors calc_bounds_global_impl but keeps the box in the object's own oriented frame instead of
+// re-aligning to the world axes, so a rotated object yields a tight oriented box rather than an inflated
+// world AABB whose base dips below the actual geometry.
+void accumulate_obb_local(math::bbox& local_bounds, entt::handle entity, const math::transform& inv_root, int depth)
+{
+    auto& tc = entity.get<transform_component>();
+    const auto world_xform = tc.get_transform_global();
+    const math::transform to_root = inv_root * world_xform;
+
+    if(auto* mc = entity.try_get<model_component>())
+    {
+        const auto& b = mc->get_local_bounds(0);
+        if(b.is_populated())
+        {
+            for(const auto& corner : b.get_corners())
+            {
+                local_bounds.add_point(to_root.transform_coord(corner));
+            }
+        }
+    }
+
+    if(auto* txt = entity.try_get<text_component>())
+    {
+        const auto b = txt->get_render_bounds();
+        for(const auto& corner : b.get_corners())
+        {
+            local_bounds.add_point(to_root.transform_coord(corner));
+        }
+    }
+
+    if(auto* pc = entity.try_get<particle_emitter_component>())
+    {
+        // Particle bounds come back in world space, so bring them straight into the root frame.
+        const auto b = pc->get_updated_world_bounds(world_xform);
+        for(const auto& corner : b.get_corners())
+        {
+            local_bounds.add_point(inv_root.transform_coord(corner));
+        }
+    }
+
+    if(depth != 0)
+    {
+        for(auto child : tc.get_children())
+        {
+            accumulate_obb_local(local_bounds, child, inv_root, depth > 0 ? depth - 1 : -1);
+        }
+    }
+}
+
+// Returns the eight world-space corners of the object's oriented bounding box. Returns false when the
+// object has no renderable bounds to rest on.
+auto calc_obb_world_corners(entt::handle entity, std::array<math::vec3, 8>& out_corners, int depth = -1) -> bool
+{
+    if(!entity || !entity.all_of<transform_component>())
+    {
+        return false;
+    }
+    auto& tc = entity.get<transform_component>();
+    const auto root_world = tc.get_transform_global();
+    const auto inv_root = math::inverse(root_world);
+
+    math::bbox local;
+    accumulate_obb_local(local, entity, inv_root, depth);
+    if(!local.is_populated())
+    {
+        return false;
+    }
+
+    const auto local_corners = local.get_corners();
+    for(size_t i = 0; i < local_corners.size(); ++i)
+    {
+        out_corners[i] = root_world.transform_coord(local_corners[i]);
+    }
+    return true;
+}
+
+// Shifts the entity along up_dir so the base of its oriented bounding box rests on the plane that passes
+// through contact with normal up_dir. Uses the object's oriented box (not the inflated world AABB) so a
+// rotated object sits flush on the surface instead of floating above it.
+void rest_entity_on_contact(entt::handle object, const math::vec3& contact, const math::vec3& up_dir)
+{
+    if(!object || !object.all_of<transform_component>())
+    {
+        return;
+    }
+    std::array<math::vec3, 8> corners{};
+    if(!calc_obb_world_corners(object, corners))
+    {
+        return;
+    }
+    float min_proj = std::numeric_limits<float>::max();
+    for(const auto& corner : corners)
+    {
+        min_proj = std::min(min_proj, math::dot(corner - contact, up_dir));
+    }
+    auto& tc = object.get<transform_component>();
+    tc.set_position_global(tc.get_position_global() - up_dir * min_proj);
+}
+
+// Applies surface-aware placement to a freshly created object: optionally aligns it to the surface
+// normal, then rests the base of its bounding box on the contact point.
+void finalize_surface_placement(entt::handle object, const drop_placement& placement, bool align_to_normal)
+{
+    if(!object || !object.all_of<transform_component>())
+    {
+        return;
+    }
+    math::vec3 up_dir{0.0f, 1.0f, 0.0f};
+    if(align_to_normal && placement.on_surface)
+    {
+        auto& tc = object.get<transform_component>();
+        const math::quat align = shortest_arc_rotation(up_dir, placement.normal);
+        tc.set_rotation_global(align * tc.get_rotation_global());
+        up_dir = placement.normal;
+    }
+    rest_entity_on_contact(object, placement.contact, up_dir);
+}
 
 // Add a shared helper to drive the timed camera focus transition
 void run_camera_focus_transition(entt::handle camera,
@@ -456,15 +830,13 @@ auto defaults::create_prefab_at(rtti::context& ctx,
                                 scene& scn,
                                 const std::string& key,
                                 const camera& cam,
-                                math::vec2 pos) -> entt::handle
+                                math::vec2 pos,
+                                bool align_to_surface) -> entt::handle
 {
-    math::vec3 projected_pos{0.0f, 0.0f, 0.0f};
-    cam.viewport_to_world(pos,
-                          math::plane::from_point_normal(math::vec3{0.0f, 0.0f, 0.0f}, math::vec3{0.0f, 1.0f, 0.0f}),
-                          projected_pos,
-                          false);
-
-    return create_prefab_at(ctx, scn, key, projected_pos);
+    const auto placement = compute_drop_placement(scn, cam, pos);
+    auto object = create_prefab_at(ctx, scn, key, placement.contact);
+    finalize_surface_placement(object, placement, align_to_surface);
+    return object;
 }
 
 auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::string& key, math::vec3 pos)
@@ -513,15 +885,13 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx,
                                      scene& scn,
                                      const std::string& key,
                                      const camera& cam,
-                                     math::vec2 pos) -> entt::handle
+                                     math::vec2 pos,
+                                     bool align_to_surface) -> entt::handle
 {
-    math::vec3 projected_pos{0.0f, 0.0f, 0.0f};
-    cam.viewport_to_world(pos,
-                          math::plane::from_point_normal(math::vec3{0.0f, 0.0f, 0.0f}, math::vec3{0.0f, 1.0f, 0.0f}),
-                          projected_pos,
-                          false);
-
-    return create_mesh_entity_at(ctx, scn, key, projected_pos);
+    const auto placement = compute_drop_placement(scn, cam, pos);
+    auto object = create_mesh_entity_at(ctx, scn, key, placement.contact);
+    finalize_surface_placement(object, placement, align_to_surface);
+    return object;
 }
 
 auto defaults::create_terrain(rtti::context& ctx, scene& scn, math::vec3 pos) -> entt::handle
