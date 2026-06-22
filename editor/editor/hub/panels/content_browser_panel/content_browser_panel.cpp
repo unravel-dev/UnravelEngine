@@ -207,6 +207,240 @@ void process_drag_drop_target(const fs::path& absolute_path)
     }
 }
 
+// Formats a raw byte count as a compact, human friendly string (e.g. "1.4 MB").
+auto format_file_size(std::uintmax_t bytes) -> std::string
+{
+    constexpr std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
+    auto value = static_cast<double>(bytes);
+    int unit = 0;
+    while(value >= 1024.0 && unit < 4)
+    {
+        value /= 1024.0;
+        ++unit;
+    }
+    if(unit == 0)
+    {
+        return fmt::format("{} {}", bytes, units[0]);
+    }
+    return fmt::format("{:.1f} {}", value, units[unit]);
+}
+
+// Near-white, theme-independent caption color shared by the card type label and the tooltip type label
+// so they stay consistent and never pick up an off-palette tint.
+constexpr ImU32 content_caption_color = IM_COL32(224, 226, 231, 255);
+
+// Returns a distinct accent color per asset type so cards read at a glance, similar to the colored
+// type bar Unreal shows beneath each asset thumbnail.
+auto asset_type_accent(const char* type) -> ImU32
+{
+    constexpr ImU32 fallback = IM_COL32(150, 150, 158, 255);
+    if(type == nullptr || type[0] == '\0')
+    {
+        return fallback;
+    }
+
+    struct type_color
+    {
+        const char* name;
+        ImU32 color;
+    };
+    static constexpr std::array<type_color, 13> table{{
+        {"Texture", IM_COL32(226, 96, 92, 255)},
+        {"Material", IM_COL32(86, 180, 168, 255)},
+        {"Physics Material", IM_COL32(214, 124, 72, 255)},
+        {"Mesh", IM_COL32(234, 138, 64, 255)},
+        {"Shader", IM_COL32(156, 116, 222, 255)},
+        {"Prefab", IM_COL32(82, 179, 222, 255)},
+        {"Scene", IM_COL32(232, 168, 70, 255)},
+        {"Animation Clip", IM_COL32(124, 200, 96, 255)},
+        {"Audio Clip", IM_COL32(220, 112, 178, 255)},
+        {"Script", IM_COL32(94, 172, 206, 255)},
+        {"Font", IM_COL32(186, 186, 196, 255)},
+        {"UI Tree", IM_COL32(126, 138, 224, 255)},
+        {"Style Sheet", IM_COL32(170, 134, 224, 255)},
+    }};
+
+    for(const auto& entry : table)
+    {
+        if(std::strcmp(type, entry.name) == 0)
+        {
+            return entry.color;
+        }
+    }
+    return fallback;
+}
+
+// Draws a clean, professional asset card: the thumbnail centered on top (aspect preserved), a colored
+// type-accent bar beneath it, then the asset name with a subtle type caption. The card has no hard
+// outline; it uses a faint tile that brightens on hover/active and the theme selection color when
+// selected, so the look stays consistent across editor themes. Registers a single ImGui item so all
+// surrounding interaction (selection, focus, drag-drop, context menu) keeps working unchanged.
+auto draw_content_card(const ImGui::ContentItem& item, bool selected) -> bool
+{
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if(window->SkipItems)
+    {
+        return false;
+    }
+
+    ImDrawList* draw_list = window->DrawList;
+    const ImGuiID id = window->GetID(item.name);
+
+    constexpr float rounding = 6.0f;
+    const ImVec2 inner_pad(6.0f, 6.0f);
+    const float card_w = item.image_size.x > 0.0f ? item.image_size.x : ImGui::GetFrameHeight() * 4.0f;
+    const float content_w = card_w - inner_pad.x * 2.0f;
+    const float thumb_h = content_w; // Square thumbnail region.
+
+    const bool has_name = (item.name != nullptr) && (item.name[0] != '\0') && (item.name[0] != '#');
+    const bool has_type = (item.type != nullptr) && (item.type[0] != '\0') && (item.type[0] != '#');
+    const bool is_folder = has_type && (std::strcmp(item.type, "Folder") == 0);
+    const bool show_accent = has_type && !is_folder;
+
+    // Keep the type caption clearly secondary to the name. The type uses a heavy font, so size it
+    // relative to the name (not its own native size) to guarantee it stays smaller and reads as a caption.
+    const float base_font_size = ImGui::GetFontSize();
+    const float name_font_size = item.name_font != nullptr ? item.name_font->LegacySize : base_font_size;
+    const float type_font_size = name_font_size * 0.8f;
+
+    const auto line_height = [](ImFont* font, float size) -> float
+    {
+        if(font == nullptr)
+        {
+            return ImGui::GetTextLineHeight();
+        }
+        ImGui::PushFont(font, size);
+        const float height = ImGui::GetTextLineHeight();
+        ImGui::PopFont();
+        return height;
+    };
+
+    // Reserve the name and caption rows (and the accent strip) unconditionally so every card is the same
+    // height and the grid rows stay aligned, even for folders and unknown file types.
+    const float name_h = line_height(item.name_font, name_font_size);
+    const float type_h = line_height(item.type_font, type_font_size);
+
+    const float accent_h = ImGui::GetStyle().SeparatorSize + 1;
+    constexpr float pad_thumb_to_accent = 4.0f;
+    constexpr float pad_accent_to_name = 4.0f;
+    constexpr float pad_name_to_type = 1.0f;
+
+    const float card_h = inner_pad.y + thumb_h + pad_thumb_to_accent + accent_h + pad_accent_to_name + name_h +
+                         pad_name_to_type + type_h + inner_pad.y;
+
+    const ImVec2 card_min = window->DC.CursorPos;
+    const ImVec2 card_max = card_min + ImVec2(card_w, card_h);
+    const ImRect bb(card_min, card_max);
+
+    ImGui::ItemSize(bb);
+    if(!ImGui::ItemAdd(bb, id))
+    {
+        return false;
+    }
+
+    bool hovered = false;
+    bool held = false;
+    const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+
+    // Faint tile background, no hard outline. Brighten on hover/active; use the theme selection color
+    // (plus a thin accent ring) when selected so it matches whatever editor theme is active.
+    if(selected)
+    {
+        draw_list->AddRectFilled(card_min, card_max, ImGui::GetColorU32(ImGuiCol_Header), rounding);
+        draw_list->AddRect(card_min, card_max, ImGui::GetColorU32(ImGuiCol_NavCursor), rounding, 0, 1.5f);
+    }
+    else if(!is_folder || hovered || held)
+    {
+        // Folders blend into the panel when idle (no tile, no border); everything else keeps a faint tile.
+        ImU32 tile = IM_COL32(255, 255, 255, 10);
+        if(held)
+        {
+            tile = IM_COL32(255, 255, 255, 32);
+        }
+        else if(hovered)
+        {
+            tile = IM_COL32(255, 255, 255, 20);
+        }
+        draw_list->AddRectFilled(card_min, card_max, tile, rounding);
+    }
+
+    // Thumbnail image, aspect preserved and centered.
+    const ImVec2 thumb_min = card_min + inner_pad;
+    const ImVec2 thumb_max = thumb_min + ImVec2(content_w, thumb_h);
+    if(item.texId)
+    {
+        ImVec2 img = item.texture_size;
+        if(img.x > 0.0f && img.y > 0.0f)
+        {
+            const float scale = ImMin(content_w / img.x, thumb_h / img.y);
+            img.x *= scale;
+            img.y *= scale;
+            const ImVec2 img_min(thumb_min.x + (content_w - img.x) * 0.5f, thumb_min.y + (thumb_h - img.y) * 0.5f);
+            const ImVec2 img_max = img_min + img;
+            draw_list->AddImageRounded(item.texId,
+                                       img_min,
+                                       img_max,
+                                       item.uv0,
+                                       item.uv1,
+                                       ImGui::GetColorU32(item.tint_col),
+                                       rounding * 0.5f);
+        }
+    }
+
+    // Colored type-accent bar beneath the thumbnail (skipped for folders / unknown types).
+    float cursor_y = thumb_max.y + pad_thumb_to_accent;
+    if(show_accent)
+    {
+        draw_list->AddRectFilled(ImVec2(thumb_min.x, cursor_y),
+                                 ImVec2(thumb_max.x, cursor_y + accent_h),
+                                 asset_type_accent(item.type),
+                                 accent_h * 0.5f);
+    }
+    cursor_y += accent_h + pad_accent_to_name;
+
+    // Draws a single line of text centered within the card content width, ellipsized when too wide.
+    const auto draw_centered_label = [&](const char* text, ImFont* font, float font_size, ImU32 color) -> void
+    {
+        if(font != nullptr)
+        {
+            ImGui::PushFont(font, font_size);
+        }
+        ImVec2 ts = ImGui::CalcTextSize(text, nullptr, true);
+        ImVec2 start(thumb_min.x, cursor_y);
+        const float region_w = thumb_max.x - thumb_min.x;
+        if(region_w > ts.x)
+        {
+            start.x += (region_w - ts.x) * 0.5f;
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::RenderTextEllipsis(draw_list,
+                                  start,
+                                  ImVec2(thumb_max.x, cursor_y + ts.y),
+                                  thumb_max.x,
+                                  text,
+                                  nullptr,
+                                  &ts);
+        ImGui::PopStyleColor();
+        if(font != nullptr)
+        {
+            ImGui::PopFont();
+        }
+    };
+
+    if(has_name)
+    {
+        draw_centered_label(item.name, item.name_font, name_font_size, ImGui::GetColorU32(ImGuiCol_Text));
+    }
+    cursor_y += name_h + pad_name_to_type;
+
+    if(has_type && show_accent)
+    {
+        draw_centered_label(item.type, item.type_font, type_font_size, content_caption_color);
+    }
+
+    return pressed;
+}
+
 auto draw_item(const content_browser_item& item)
 {
     bool is_directory = item.entry.entry.is_directory();
@@ -293,8 +527,11 @@ auto draw_item(const content_browser_item& item)
 
     if(!item.is_loading)
     {
-        button_clicked = ImGui::ContentButtonItem(citem);
-        ImGui::DrawItemActivityOutline(ImGui::OutlineFlags_All);
+        button_clicked = draw_content_card(citem, item.is_selected);
+        // The card renders its own hover/selection visuals, so keep only the active (click/keyboard)
+        // highlight and drop the inactive/hovered outlines that otherwise box every item (notably the
+        // now-transparent idle folders).
+        ImGui::DrawItemActivityOutline(ImGui::OutlineFlags_WhenActive | ImGui::OutlineFlags_HighlightActive);
 
     }
     else
@@ -377,17 +614,68 @@ auto draw_item(const content_browser_item& item)
             ImGui::EndTooltip();
         }
     }
-    else
+    else if(!item.is_loading && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip) && ImGui::BeginTooltip())
     {
-        ImGui::AddItemTooltipEx("%s", filename.c_str());
-        ImGui::AddItemTooltipEx("%s", description.c_str());
+        constexpr float thumb_side = 72.0f;
+        constexpr float wrap_width = 360.0f;
 
-        if(!file_type.empty())
+        // Header: thumbnail next to the name and type.
+        ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.0f));
+        ImGui::SameLine();
+        ImGui::BeginGroup();
         {
-            ImGui::PushFont(file_type_font, file_type_font->LegacySize);
-            ImGui::AddItemTooltipEx("%s", file_type.c_str());
-            ImGui::PopFont();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+            ImGui::TextUnformatted(name.c_str());
+            ImGui::PopTextWrapPos();
+            if(!file_type.empty())
+            {
+                ImGui::PushFont(file_type_font, file_type_font->LegacySize);
+                ImGui::PushStyleColor(ImGuiCol_Text, content_caption_color);
+                ImGui::TextUnformatted(file_type.c_str());
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+            }
         }
+        ImGui::EndGroup();
+
+        // Separator tinted with the asset's type-accent color so the tooltip echoes the card's accent bar.
+        ImGui::PushStyleColor(ImGuiCol_Separator, asset_type_accent(file_type.c_str()));
+        ImGui::Separator();
+        ImGui::PopStyleColor();
+
+        const float label_width = 70.0f;
+        auto detail_row = [&](const char* label, const std::string& value) -> void
+        {
+            if(value.empty())
+            {
+                return;
+            }
+            ImGui::TextDisabled("%s", label);
+            ImGui::SameLine(label_width);
+            ImGui::PushTextWrapPos(label_width + wrap_width);
+            ImGui::TextUnformatted(value.c_str());
+            ImGui::PopTextWrapPos();
+        };
+
+        detail_row("Name", filename);
+        detail_row("Path", item.entry.protocol_path);
+
+        if(!is_directory)
+        {
+            fs::error_code ec;
+            const auto bytes = fs::file_size(absolute_path, ec);
+            if(!ec)
+            {
+                detail_row("Size", format_file_size(bytes));
+            }
+        }
+
+        if(!is_directory)
+        {
+            detail_row("UID", description);
+        }
+
+        ImGui::EndTooltip();
     }
 
     auto input_buff = ImGui::CreateInputTextBuffer(name);
@@ -712,13 +1000,7 @@ void content_browser_panel::draw_external_drop_overlay() const
     }
 
     const ImRect bounds(window->InnerRect.Min, window->InnerRect.Max);
-    const ImVec2 drop_pos = parent_->get_external_drop_position();
-    const bool drop_over_panel = bounds.Contains(drop_pos);
-    const bool mouse_over_panel = ImGui::IsMouseHoveringRect(bounds.Min, bounds.Max, true);
-    if(!drop_over_panel && !mouse_over_panel)
-    {
-        return;
-    }
+
 
     if(bounds.GetWidth() < 1.0f || bounds.GetHeight() < 1.0f)
     {
