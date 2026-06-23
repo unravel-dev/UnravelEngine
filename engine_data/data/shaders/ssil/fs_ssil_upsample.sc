@@ -92,10 +92,10 @@ void main()
             if(bw <= 0.0)
                 continue;
 
-            vec2 tap_uv = (vec2(tc) + vec2_splat(0.5)) / lr_dim;
-            // Full-res block centre the low-res tap was traced from -- gives a
-            // representative full-res depth/normal for that tap to compare against.
-            vec2 guide_uv = HizScreenPassToFullResUV(tap_uv, resolution_scale, full_dim);
+            // The low-res tap centre UV already maps to the centre of its full-res block,
+            // so it is the correct geometry-guide UV. Snapping it through
+            // HizScreenPassToFullResUV would bias the lookup by +0.5px relative to the tap.
+            vec2 guide_uv = (vec2(tc) + vec2_splat(0.5)) / lr_dim;
 
             float gd = DecodeGBufferDepth(guide_uv, s_depth).depth01;
             float g_lin = abs(computeViewSpacePosition(guide_uv, gd).z);

@@ -103,14 +103,22 @@ texture::texture(std::uint16_t _width,
                  const memory_view* _mem /*= nullptr */)
     : flags(_flags)
 {
-    handle_ = create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
-
     calc_texture_size(info, _width, _height, 1, false, _hasMips, _numLayers, _format);
 
-    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    // GPU-produced textures (render targets / compute writes) have no CPU backing to evict, so make
+    // headroom before allocating. They are created on the graphics API thread, so the synchronous
+    // reclaim is safe and keeps large allocations from failing when near the GPU memory limit.
+    if(is_gpu_generated())
+    {
+        gfx::eviction::reclaim_for(estimate_texture_gpu_size(info, _flags));
+    }
+
+    handle_ = create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
+
+    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
     {
         backing_buffer backing = make_backing(_mem->data, _mem->size);
-        make_evictable(info.storageSize,
+        make_evictable(estimate_texture_gpu_size(info, _flags),
                        [backing,
                         width = _width,
                         height = _height,
@@ -137,14 +145,22 @@ texture::texture(std::uint16_t _width,
                  const memory_view* _mem /*= nullptr */)
     : flags(_flags)
 {
-    handle_ = create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem);
-
     calc_texture_size(info, _width, _height, _depth, false, _hasMips, 1, _format);
 
-    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    // GPU-produced textures (render targets / compute writes) have no CPU backing to evict, so make
+    // headroom before allocating. They are created on the graphics API thread, so the synchronous
+    // reclaim is safe and keeps large allocations from failing when near the GPU memory limit.
+    if(is_gpu_generated())
+    {
+        gfx::eviction::reclaim_for(estimate_texture_gpu_size(info, _flags));
+    }
+
+    handle_ = create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem);
+
+    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
     {
         backing_buffer backing = make_backing(_mem->data, _mem->size);
-        make_evictable(info.storageSize,
+        make_evictable(estimate_texture_gpu_size(info, _flags),
                        [backing,
                         width = _width,
                         height = _height,
@@ -170,14 +186,22 @@ texture::texture(std::uint16_t _size,
                  const memory_view* _mem /*= nullptr */)
     : flags(_flags)
 {
-    handle_ = create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem);
-
     calc_texture_size(info, _size, _size, _size, false, _hasMips, _numLayers, _format);
 
-    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    // GPU-produced textures (render targets / compute writes) have no CPU backing to evict, so make
+    // headroom before allocating. They are created on the graphics API thread, so the synchronous
+    // reclaim is safe and keeps large allocations from failing when near the GPU memory limit.
+    if(is_gpu_generated())
+    {
+        gfx::eviction::reclaim_for(estimate_texture_gpu_size(info, _flags));
+    }
+
+    handle_ = create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem);
+
+    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
     {
         backing_buffer backing = make_backing(_mem->data, _mem->size);
-        make_evictable(info.storageSize,
+        make_evictable(estimate_texture_gpu_size(info, _flags),
                        [backing,
                         size = _size,
                         has_mips = _hasMips,
@@ -201,5 +225,10 @@ auto texture::get_size() const -> usize32_t
 auto texture::is_render_target() const -> bool
 {
     return 0 != (flags & BGFX_TEXTURE_RT_MASK);
+}
+
+auto texture::is_gpu_generated() const -> bool
+{
+    return 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE));
 }
 } // namespace gfx

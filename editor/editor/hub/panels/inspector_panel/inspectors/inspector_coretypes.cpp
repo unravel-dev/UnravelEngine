@@ -1,4 +1,5 @@
 #include "inspector_coretypes.h"
+#include "editor/format/format_bytes.h"
 #include "imgui/imgui.h"
 // #include <engine/assets/asset_manager.h>
 // #include <engine/engine.h>
@@ -147,43 +148,16 @@ bool display_size_unit(const char* label,
                        const std::string& inUnitStr // e.g. "b"
 )
 {
-    // 1) Convert the input string to our enum.
-    SizeUnit inUnit = parseUnit(inUnitStr);
-
-    // 2) Define the scaling factors for each unit -> bytes.
+    const SizeUnit inUnit = parseUnit(inUnitStr);
     static const float factors[] = {
-        1.0,                     // B
-        1024.0,                  // KB
-        1024.0 * 1024.0,         // MB
-        1024.0 * 1024.0 * 1024.0 // GB
+        1.0f,                     // B
+        1024.0f,                  // KB
+        1024.0f * 1024.0f,        // MB
+        1024.0f * 1024.0f * 1024.0f // GB
     };
 
-    // 3) Convert from inUnit -> bytes.
-    float bytes = value * factors[static_cast<int>(inUnit)];
-
-    // 4) Determine which unit to use for "largest" display.
-    //    We'll go from GB down to B, picking the first that fits >=1.
-    //    Alternatively, check from small to large. Either approach works.
-    float outValue = bytes;
-    std::string suffix = "%.1f B";
-
-    if(bytes >= factors[3]) // >= 1 GB
-    {
-        outValue = bytes / factors[3];
-        suffix = "%.1f GB";
-    }
-    else if(bytes >= factors[2]) // >= 1 MB
-    {
-        outValue = bytes / factors[2];
-        suffix = "%.1f MB";
-    }
-    else if(bytes >= factors[1]) // >= 1 KB
-    {
-        outValue = bytes / factors[1];
-        suffix = "%.1f KB";
-    }
-
-    ImGui::LabelText(label, suffix.c_str(), outValue);
+    const float bytes = value * factors[static_cast<int>(inUnit)];
+    ImGui::LabelText(label, "%s", format_bytes(static_cast<std::uint64_t>(bytes)).c_str());
 
     return false; // so the caller knows if the value changed
 }

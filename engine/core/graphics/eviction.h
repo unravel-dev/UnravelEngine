@@ -105,6 +105,15 @@ auto evict_bytes(std::uint64_t free_bytes,
 /// Must run on the graphics API thread.
 auto evict_all() -> stats;
 
+/// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes. When the backend
+/// reports a budget and the projected occupancy (current GPU memory + @p bytes + a safety margin)
+/// would exceed it, this evicts the largest resident resources to cover the deficit and pumps the
+/// command buffer (without presenting) so the queued destroys are processed before the new
+/// allocation lands. This is the last-resort defense for large allocations made near the limit (e.g.
+/// render targets / frame buffers on resize). Must run on the graphics API thread. It is a no-op
+/// when eviction is unsupported or there is already enough headroom.
+void reclaim_for(std::uint64_t bytes);
+
 /// Restore every currently evicted resource immediately. Useful for testing and for turning paging
 /// off. Must run on the graphics API thread.
 auto restore_all() -> stats;
@@ -114,6 +123,11 @@ auto restore_all() -> stats;
 /// driver compares against the budget (e.g. GPU memory used, or resident bytes for a manual budget).
 void report_budget(std::uint64_t used_bytes, std::uint64_t budget_bytes, std::uint64_t target_bytes);
 
+/// Take and reset the GPU bytes registered since the last call. The per-frame driver adds this to
+/// the backend's gpuMemoryUsed (which lags a frame or more) to predict device occupancy during a
+/// burst of resource creations. Lock-free; intended to be called once per frame from the driver.
+auto take_pending_bytes() -> std::uint64_t;
+
 /// Snapshot the current statistics.
 auto get_stats() -> stats;
 
@@ -122,6 +136,32 @@ void set_frame(std::uint64_t frame);
 
 /// Advance the global frame counter by one.
 void advance_frame();
+
+// --- Test / diagnostics ---------------------------------------------------------------------
+
+/// Reserve raw GPU memory to artificially raise device occupancy so the eviction and near-the-limit
+/// allocation paths can be exercised on GPUs that have plenty of memory. The reserved memory is
+/// plain, non-evictable GPU storage held outside the registry (uninitialized RGBA8 textures), so it
+/// genuinely pins VRAM and forces the system to evict real resources. Calls are additive: @p bytes
+/// is added on top of whatever is already reserved (rounded up to whole chunks). Stops early if an
+/// allocation fails. Returns the total reserved bytes after the call. Must run on the graphics API
+/// thread.
+auto debug_consume_memory(std::uint64_t bytes) -> std::uint64_t;
+
+/// Reserve memory so that the device behaves as if it only had @p target_free_bytes of GPU memory
+/// available, i.e. it reserves (real budget - current usage - @p target_free_bytes) of VRAM in one
+/// call. This is an absolute target: any existing reservation is released first so repeated calls
+/// with different targets are stable. Genuinely allocates VRAM (so the engine hits real out-of-memory
+/// behavior at the simulated limit). No-op if the backend reports no budget or the target already
+/// fits. Returns the total reserved bytes after the call. Must run on the graphics API thread.
+auto debug_simulate_budget(std::uint64_t target_free_bytes) -> std::uint64_t;
+
+/// Release all memory reserved by @ref debug_consume_memory and reclaim its VRAM immediately. Must
+/// run on the graphics API thread.
+void debug_release_memory();
+
+/// Total bytes currently reserved by @ref debug_consume_memory.
+auto debug_consumed_bytes() -> std::uint64_t;
 
 // --- Internal surface used by gfx::handle_impl ----------------------------------------------
 

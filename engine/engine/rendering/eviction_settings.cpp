@@ -28,11 +28,12 @@ void update_eviction(const eviction_settings& settings)
     const std::uint64_t gpu_max = (bx != nullptr) ? clamp_u64(bx->gpuMemoryMax) : 0;
     const std::uint64_t gpu_used = (bx != nullptr) ? clamp_u64(bx->gpuMemoryUsed) : 0;
 
-    // The backend's gpuMemoryUsed lags by a frame or more, so a burst of resource creations is not
-    // reflected until later. The registry tracks evictable resident bytes synchronously (updated in
-    // register_resource, even from worker threads), so use it as a safety net: react to whichever
-    // metric is higher this frame.
-    const std::uint64_t resident = ev::get_stats().resident_bytes;
+    // The backend's gpuMemoryUsed is the source of truth for device occupancy but lags by a frame or
+    // more, so a burst of resource creations is not reflected until later. The registry accumulates
+    // the bytes of resources created since the previous tick (from worker threads too), so add that
+    // prediction on top of the lagging metric to react in the same frame. Always drained so the
+    // counter cannot grow unbounded, even when paging is off or a manual budget is in use.
+    const std::uint64_t pending = ev::take_pending_bytes();
 
     // Resolve the budget metrics once: GPU memory when an auto budget is available, otherwise the
     // evictable resident bytes against the manual budget.
@@ -41,13 +42,14 @@ void update_eviction(const eviction_settings& settings)
     std::uint64_t target = 0;
     if(settings.auto_budget && gpu_max > 0)
     {
-        used = std::max(gpu_used, resident);
+        used = gpu_used + pending;
         budget = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.budget_fraction);
         target = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.target_fraction);
     }
     else
     {
-        used = resident;
+        // Resident bytes are tracked synchronously, so they need no lag prediction.
+        used = ev::get_stats().resident_bytes;
         budget = static_cast<std::uint64_t>(std::max(0, settings.manual_budget_mb)) * 1024ull * 1024ull;
         target = budget;
     }

@@ -123,9 +123,11 @@ void main()
 
     vec2 texel_size = 1.0 / vec2(size);
     vec2 uv = (vec2(coord) + 0.5) * texel_size;
-    vec2 depth_dim = vec2(textureSize(s_depth, 0));
-    vec2 resolution_scale = depth_dim / max(vec2(size), vec2_splat(1.0));
-    vec2 full_uv_center = HizScreenPassToFullResUV(uv, resolution_scale, depth_dim);
+    // The pixel-centre UV already maps to the centre of the block this sample covers,
+    // so it is the correct geometry-guide UV at any trace resolution. Snapping it through
+    // HizScreenPassToFullResUV biases the lookup by +0.5px relative to the SSIL samples,
+    // which compounds across the widening denoise passes into a view-dependent shift.
+    vec2 full_uv_center = uv;
 
     vec4 center = texelFetch(s_ssil_input, coord, 0);
     float center_depth = DecodeGBufferDepthLod(full_uv_center, s_depth, 0.0).depth01;
@@ -240,7 +242,7 @@ void main()
                 sample_variance = (u_first_pass > 0.5) ? variance : texture2DLod(s_ssil_variance, tap_uv, 0.0).r;
             }
 
-            vec2 full_tap_uv = HizScreenPassToFullResUV(tap_uv, resolution_scale, depth_dim);
+            vec2 full_tap_uv = tap_uv;
             float sample_depth = DecodeGBufferDepthLod(full_tap_uv, s_depth, 0.0).depth01;
 
             // Plane-distance depth edge-stop: distance of the neighbour from the centre's

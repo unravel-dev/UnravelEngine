@@ -40,11 +40,12 @@ void main()
         return;
 
     ivec2 hr_size = textureSize(s_ssil_input, 0);
-    vec2 depth_dim = vec2(textureSize(s_depth, 0));
 
+    // The half-res block-centre UV already maps to the centre of the full-res region this
+    // block covers, so it is the correct geometry-guide UV. Snapping it through
+    // HizScreenPassToFullResUV would bias the lookup by +0.5px relative to the SSIL block.
     vec2 lr_uv = (vec2(coord) + 0.5) / vec2(lr_size);
-    vec2 lr_scale = depth_dim / max(vec2(lr_size), vec2_splat(1.0));
-    vec2 center_full_uv = HizScreenPassToFullResUV(lr_uv, lr_scale, depth_dim);
+    vec2 center_full_uv = lr_uv;
     float center_depth = DecodeGBufferDepthLod(center_full_uv, s_depth, 0.0).depth01;
 
     // Sky / background: emit nothing so the wide blur never drags geometry SSIL into it.
@@ -63,7 +64,6 @@ void main()
     vec3 center_normal = DecodeGBufferNormalMetalRoughnessLod(center_full_uv, s_normal, 0.0).world_normal;
     float center_lin = max(abs(computeViewSpacePosition(center_full_uv, center_depth).z), 1e-3);
 
-    vec2 hr_scale = depth_dim / max(vec2(hr_size), vec2_splat(1.0));
     ivec2 base = coord * 2;
 
     vec4 accum = vec4_splat(0.0);
@@ -75,8 +75,7 @@ void main()
         for(int dx = 0; dx <= 1; ++dx)
         {
             ivec2 tc = min(base + ivec2(dx, dy), hr_size - ivec2(1, 1));
-            vec2 tap_uv = (vec2(tc) + 0.5) / vec2(hr_size);
-            vec2 tap_full_uv = HizScreenPassToFullResUV(tap_uv, hr_scale, depth_dim);
+            vec2 tap_full_uv = (vec2(tc) + 0.5) / vec2(hr_size);
 
             float gd = DecodeGBufferDepthLod(tap_full_uv, s_depth, 0.0).depth01;
             float g_lin = abs(computeViewSpacePosition(tap_full_uv, gd).z);

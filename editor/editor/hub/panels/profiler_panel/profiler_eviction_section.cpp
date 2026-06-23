@@ -1,15 +1,18 @@
 #include "profiler_eviction_section.h"
 
+#include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <graphics/eviction.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui.h>
 #include <imgui_widgets/tooltips.h>
 
+#include <logging/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdio>
+#include <string>
 
 namespace unravel
 {
@@ -25,24 +28,6 @@ std::array<const char*, 4> strategy_names{"LRU (least recently used)",
                                                     "LFU (least frequently used)",
                                                     "Largest first",
                                                     "Age TTL"};
-
-void format_bytes_ex(std::uint64_t value, char* buffer, std::size_t buffer_size)
-{
-    static const std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
-    if(value < 1024)
-    {
-        std::snprintf(buffer, buffer_size, "%llu B", static_cast<unsigned long long>(value));
-        return;
-    }
-    double scaled = static_cast<double>(value);
-    std::size_t unit_index = 0;
-    while(scaled >= 1024.0 && unit_index + 1 < units.size())
-    {
-        scaled /= 1024.0;
-        ++unit_index;
-    }
-    std::snprintf(buffer, buffer_size, "%.2f %s", scaled, units[unit_index]);
-}
 
 auto clamp_u64(std::int64_t value) -> std::uint64_t
 {
@@ -75,29 +60,74 @@ void draw_count_bytes_row(const char* label,
                           std::uint64_t bytes,
                           const ImVec4* color = nullptr)
 {
-    std::array<char, 32> bytes_buf{};
-    format_bytes_ex(bytes, bytes_buf.data(), bytes_buf.size());
-    std::array<char, 64> value_buf{};
-    std::snprintf(value_buf.data(),
-                  value_buf.size(),
-                  "%llu (%s)",
-                  static_cast<unsigned long long>(count),
-                  bytes_buf.data());
-    draw_stat_row(label, value_buf.data(), color);
+    const auto value = fmt::format("{} ({})", count, format_bytes(bytes));
+    draw_stat_row(label, value.c_str(), color);
 }
 
 void draw_count_row(const char* label, std::uint64_t count, const ImVec4* color = nullptr)
 {
-    std::array<char, 32> value_buf{};
-    std::snprintf(value_buf.data(), value_buf.size(), "%llu", static_cast<unsigned long long>(count));
-    draw_stat_row(label, value_buf.data(), color);
+    const auto value = fmt::format("{}", count);
+    draw_stat_row(label, value.c_str(), color);
 }
 
 void draw_ms_row(const char* label, double ms)
 {
-    std::array<char, 32> value_buf{};
-    std::snprintf(value_buf.data(), value_buf.size(), "%.3f ms", ms);
-    draw_stat_row(label, value_buf.data());
+    const auto value = fmt::format("{:.3f} ms", ms);
+    draw_stat_row(label, value.c_str());
+}
+
+void draw_reserve_test_controls(std::uint64_t gpu_max)
+{
+    namespace ev = gfx::eviction;
+
+    ImGui::TextColored(category_text_color_ex, ICON_MDI_MEMORY " Test: GPU memory reserve");
+
+    static int reserve_mb = 1024;
+    ImGui::SliderInt("Reserve (MiB)", &reserve_mb, 64, 16384);
+    ImGui::SetItemTooltipEx("Test: reserve raw, non-evictable GPU memory to push device occupancy\n"
+                            "toward the limit, so eviction and near-the-limit allocations (e.g. a\n"
+                            "large frame buffer) can be exercised on GPUs with plenty of memory.");
+
+    if(ImGui::SmallButton(ICON_MDI_PLUS_BOX " Reserve"))
+    {
+        ev::debug_consume_memory(static_cast<std::uint64_t>(std::max(0, reserve_mb)) * 1024ull * 1024ull);
+    }
+    ImGui::SetItemTooltipEx("Reserve the above amount of non-evictable GPU memory (additive).");
+    ImGui::SameLine();
+    if(ImGui::SmallButton(ICON_MDI_DELETE " Release"))
+    {
+        ev::debug_release_memory();
+    }
+    ImGui::SetItemTooltipEx("Free all reserved memory and reclaim its VRAM immediately.");
+    ImGui::SameLine();
+    ImGui::TextUnformatted(fmt::format("held: {}", format_bytes(ev::debug_consumed_bytes())).c_str());
+
+    if(gpu_max == 0)
+    {
+        return;
+    }
+
+    constexpr std::uint64_t one_gib = 1024ull * 1024ull * 1024ull;
+    constexpr std::array<std::uint32_t, 7> presets{1, 2, 4, 6, 8, 12, 16};
+
+    ImGui::TextUnformatted("Simulate as if GPU had:");
+    ImGui::SetItemTooltipEx("Test: reserve real VRAM in one click so the device behaves like a\n"
+                            "smaller card. Each preset reserves (GPU max - target) of memory, so\n"
+                            "the engine hits genuine out-of-memory behavior at the chosen limit.\n"
+                            "Only presets smaller than this GPU are shown.");
+    for(const auto gb : presets)
+    {
+        if(static_cast<std::uint64_t>(gb) * one_gib >= gpu_max)
+        {
+            continue; // only simulate budgets smaller than the real one
+        }
+        const auto label = fmt::format("{} GB", gb);
+        ImGui::SameLine();
+        if(ImGui::SmallButton(label.c_str()))
+        {
+            ev::debug_simulate_budget(static_cast<std::uint64_t>(gb) * one_gib);
+        }
+    }
 }
 
 } // namespace
@@ -159,20 +189,12 @@ void profiler_draw_eviction_section(eviction_settings& state)
         const auto soft = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * state.budget_fraction);
         const auto target = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * state.target_fraction);
         const bool over = gpu_used > soft;
-        std::array<char, 32> used_buf{};
-        std::array<char, 32> max_buf{};
-        std::array<char, 32> soft_buf{};
-        std::array<char, 32> target_buf{};
-        format_bytes_ex(gpu_used, used_buf.data(), used_buf.size());
-        format_bytes_ex(gpu_max, max_buf.data(), max_buf.size());
-        format_bytes_ex(soft, soft_buf.data(), soft_buf.size());
-        format_bytes_ex(target, target_buf.data(), target_buf.size());
-        ImGui::TextColored(over ? bad_text_color_ex : muted_text_color_ex,
-                           "GPU: %s / %s   budget %s, target %s",
-                           used_buf.data(),
-                           max_buf.data(),
-                           soft_buf.data(),
-                           target_buf.data());
+        const auto gpu_line = fmt::format("GPU: {} / {}   budget {}, target {}",
+                                          format_bytes(gpu_used),
+                                          format_bytes(gpu_max),
+                                          format_bytes(soft),
+                                          format_bytes(target));
+        ImGui::TextColored(over ? bad_text_color_ex : muted_text_color_ex, "%s", gpu_line.c_str());
         if(over)
         {
             ImGui::SameLine();
@@ -193,6 +215,9 @@ void profiler_draw_eviction_section(eviction_settings& state)
     ImGui::SliderInt("Max evictions / frame", &state.max_evictions, 0, 1024);
     ImGui::SetItemTooltipEx("Caps how many resources may be evicted per frame to bound the cost.\n"
                             "0 means unlimited.");
+
+    ImGui::Separator();
+    draw_reserve_test_controls(gpu_max);
 
     ImGui::Separator();
 

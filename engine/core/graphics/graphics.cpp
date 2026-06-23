@@ -1146,8 +1146,11 @@ void request_screen_shot(frame_buffer_handle _handle, const char* _filePath)
 
 void flush()
 {
-    bgfx::frame();
-    bgfx::frame();
+    // Execute all queued commands (including resource destroys, which bgfx processes after creates)
+    // and reclaim their GPU memory without presenting the backbuffer or issuing any draws. Two pumps
+    // drain the command ring so the destroys are guaranteed to have been serviced on return.
+    bgfx::frame(BGFX_FRAME_FLUSH);
+    bgfx::frame(BGFX_FRAME_FLUSH);
 }
 
 auto screen_quad(float dest_width, float dest_height, float depth, float width, float height) -> uint64_t
@@ -1539,5 +1542,27 @@ void set_world_transform(const void* _mtx, uint16_t _num)
 {
     bgfx::setUniform(s_context.u_world, _mtx, _num);
 }
+
+
+uint64_t estimate_texture_gpu_size(const texture_info& _info, uint64_t _flags)
+{
+    // bimg's storageSize already accounts for format (incl. compressed block size), mip chain,
+    // array layers and cube faces, but not multisampling or driver allocation alignment.
+    uint64_t size = _info.storageSize;
+
+    // Render targets with MSAA allocate roughly sample_count x the single-sample surface. The field
+    // encodes: 2 -> x2, 3 -> x4, 4 -> x8, 5 -> x16 (1 == RT without MSAA, 0 == not a render target).
+    const uint64_t msaa_field = (_flags & BGFX_TEXTURE_RT_MSAA_MASK) >> BGFX_TEXTURE_RT_MSAA_SHIFT;
+    if(msaa_field >= 2)
+    {
+        size *= (uint64_t(1) << (msaa_field - 1));
+    }
+
+    // Drivers page-align allocations; round up to a conservative 64 KiB so estimates never undershoot.
+    constexpr uint64_t alignment = uint64_t(64) * 1024;
+    size = (size + alignment - 1) & ~(alignment - 1);
+    return size;
+}
+
 
 } // namespace gfx

@@ -1,4 +1,5 @@
 #include "imgui_interface.h"
+#include "editor/format/format_bytes.h"
 #include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
 #include "integration/imgui_style.h"
@@ -29,38 +30,6 @@ constexpr ImU32 process_ram_bar_color = IM_COL32(88, 168, 196, 220);
 constexpr ImU32 memory_bar_track_color = IM_COL32(32, 32, 32, 255);
 constexpr float memory_bar_height = 3.0f;
 constexpr float memory_section_alpha = 0.92f;
-
-auto format_bytes(int64_t bytes) -> std::string
-{
-    constexpr double kb = 1024.0;
-    constexpr double mb = 1024.0 * 1024.0;
-    constexpr double gb = 1024.0 * 1024.0 * 1024.0;
-    const auto val = static_cast<double>(bytes);
-    if(val >= gb)
-    {
-        return fmt::format("{:.2f} GiB", val / gb);
-    }
-    if(val >= mb)
-    {
-        return fmt::format("{:.1f} MiB", val / mb);
-    }
-    if(val >= kb)
-    {
-        return fmt::format("{:.1f} KiB", val / kb);
-    }
-    return fmt::format("{} B", bytes);
-}
-
-auto format_ram_bytes(int64_t bytes) -> std::string
-{
-    constexpr double gb = 1024.0 * 1024.0 * 1024.0;
-    const auto val = static_cast<double>(bytes);
-    if(val >= gb)
-    {
-        return fmt::format("{:.1f} GiB", val / gb);
-    }
-    return format_bytes(bytes);
-}
 
 void draw_memory_bar(float fraction, ImU32 fill_color)
 {
@@ -202,15 +171,15 @@ void draw_loading_memory_stats()
             if(rss_bytes > 0)
             {
                 ram_text = fmt::format("{} ({} Process) / {}",
-                                       format_ram_bytes(system_used_bytes),
-                                       format_ram_bytes(rss_bytes),
-                                       format_ram_bytes(system_total_bytes));
+                                       format_bytes(system_used_bytes),
+                                       format_bytes(rss_bytes),
+                                       format_bytes(system_total_bytes));
             }
             else
             {
                 ram_text = fmt::format("{} / {}",
-                                       format_ram_bytes(system_used_bytes),
-                                       format_ram_bytes(system_total_bytes));
+                                       format_bytes(system_used_bytes),
+                                       format_bytes(system_total_bytes));
             }
 
             const std::string ram_tooltip = fmt::format(

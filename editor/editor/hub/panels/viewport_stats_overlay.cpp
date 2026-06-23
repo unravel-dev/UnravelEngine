@@ -1,4 +1,5 @@
 #include "viewport_stats_overlay.h"
+#include "editor/format/format_bytes.h"
 #include "editor/imgui/integration/imgui.h"
 #include "imgui_widgets/utils.h"
 #include <imgui/imgui.h>
@@ -21,7 +22,7 @@ namespace unravel
 {
 namespace
 {
-constexpr float overlay_width = 400.0f;
+constexpr float overlay_width = 460.0f;
 constexpr float overlay_padding = 8.0f;
 constexpr float overlay_rounding = 4.0f;
 constexpr float overlay_bg_alpha = 0.75f;
@@ -31,6 +32,11 @@ constexpr ImVec4 color_good{0.2f, 0.8f, 0.2f, 1.0f};
 constexpr ImVec4 color_warning{1.0f, 0.7f, 0.0f, 1.0f};
 constexpr ImVec4 color_bad{1.0f, 0.3f, 0.3f, 1.0f};
 constexpr ImVec4 color_label{0.6f, 0.6f, 0.6f, 1.0f};
+
+// Muted fills for progress bars (the saturated status colors above are too harsh as a solid block).
+constexpr ImVec4 bar_good{0.30f, 0.49f, 0.32f, 1.0f};
+constexpr ImVec4 bar_warning{0.58f, 0.45f, 0.20f, 1.0f};
+constexpr ImVec4 bar_bad{0.55f, 0.28f, 0.28f, 1.0f};
 
 auto get_fps_color(float fps) -> ImVec4
 {
@@ -62,6 +68,130 @@ void draw_label(const char* label)
 {
     ImGui::TextColored(color_label, "%s", label);
     ImGui::SameLine(200.0f);
+}
+
+void draw_eviction_overlay_stats()
+{
+    const auto evict_stats = gfx::eviction::get_stats();
+    if(evict_stats.registered_count == 0)
+    {
+        return;
+    }
+
+    // Group the paging stats under their own labeled sub-header so they read distinctly from the
+    // raw memory counters above.
+    ImGui::Separator();
+    ImGui::TextColored(color_label, "  " ICON_MDI_SWAP_HORIZONTAL " Paging");
+    ImGui::SetItemTooltipEx("GPU resource eviction / paging. Idle CPU-backed resources are released\n"
+                            "from GPU memory under pressure and restored automatically on next use.");
+
+    // Budget that drives eviction (GPU memory used vs. the configured budget).
+    if(evict_stats.budget_bytes > 0)
+    {
+        const bool over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
+        const auto used_str = format_bytes(static_cast<int64_t>(evict_stats.budget_used_bytes));
+        const auto budget_str = format_bytes(static_cast<int64_t>(evict_stats.budget_bytes));
+
+        ImGui::BeginGroup();
+        draw_label("    Budget");
+        if(over_budget)
+        {
+            ImGui::TextColored(color_bad, "%s / %s " ICON_MDI_ALERT " OVER", used_str.c_str(), budget_str.c_str());
+        }
+        else
+        {
+            ImGui::TextColored(color_good, "%s / %s", used_str.c_str(), budget_str.c_str());
+        }
+        ImGui::EndGroup();
+        ImGui::SetItemTooltipEx("GPU memory used vs. the eviction budget. When usage exceeds the\n"
+                                "budget, resources are evicted down to the target watermark.\n"
+                                "Marked red when over budget.");
+
+        ImGui::BeginGroup();
+        draw_label("    Target");
+        ImGui::TextUnformatted(format_bytes(static_cast<int64_t>(evict_stats.target_bytes)).c_str());
+        ImGui::EndGroup();
+        ImGui::SetItemTooltipEx("Watermark the pager evicts down to once over budget\n"
+                                "(hysteresis below the budget to avoid thrashing).");
+    }
+
+    // Current residency: how much is resident (still available to evict) vs. already evicted.
+    const auto resident_str = fmt::format("{} ({})",
+                                          evict_stats.resident_count,
+                                          format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)));
+    ImGui::BeginGroup();
+    draw_label("    Resident");
+    ImGui::TextUnformatted(resident_str.c_str());
+    ImGui::EndGroup();
+    ImGui::SetItemTooltipEx("Resources currently resident on the GPU that can still be paged out,\n"
+                            "and their total GPU memory.");
+
+    const auto evicted_str = fmt::format("{} ({})",
+                                         evict_stats.evicted_count,
+                                         format_bytes(static_cast<int64_t>(evict_stats.evicted_bytes)));
+    ImGui::BeginGroup();
+    draw_label("    Evicted");
+    if(evict_stats.evicted_count > 0)
+    {
+        ImGui::TextColored(color_warning, "%s", evicted_str.c_str());
+    }
+    else
+    {
+        ImGui::TextUnformatted(evicted_str.c_str());
+    }
+    ImGui::EndGroup();
+    ImGui::SetItemTooltipEx("Resources currently evicted (their GPU memory reclaimed).\n"
+                            "They restore automatically the next time they are used.");
+
+    // Headroom bar: share of the managed pool still resident, i.e. how much can still be freed. The
+    // overlay text is kept short so it always fits the bar.
+    const double pool_bytes = static_cast<double>(evict_stats.resident_bytes + evict_stats.evicted_bytes);
+    const float resident_fraction =
+        pool_bytes > 0.0 ? static_cast<float>(static_cast<double>(evict_stats.resident_bytes) / pool_bytes) : 0.0f;
+    ImVec4 headroom_color = bar_good;
+    if(evict_stats.resident_bytes == 0)
+    {
+        headroom_color = bar_bad;
+    }
+    else if(resident_fraction < 0.2f)
+    {
+        headroom_color = bar_warning;
+    }
+    const auto headroom_overlay = fmt::format("{} free", format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)));
+    ImGui::BeginGroup();
+    draw_label("    Headroom");
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, headroom_color);
+    // Fill the remaining content width so the bar (and its overlay text) never runs under the scrollbar.
+    ImGui::ProgressBar(resident_fraction, ImVec2(ImGui::GetContentRegionAvail().x, 0.0f), headroom_overlay.c_str());
+    ImGui::PopStyleColor();
+    ImGui::EndGroup();
+    ImGui::SetItemTooltipEx("Share of the managed pool still resident on the GPU - how much can\n"
+                            "still be paged out under further memory pressure. Red when nothing\n"
+                            "is left to evict.");
+
+    // Lifetime activity: an eviction count that keeps climbing every frame means paging is constant.
+    ImGui::BeginGroup();
+    draw_label("    Lifetime");
+    ImGui::TextUnformatted(fmt::format("{} evicted", evict_stats.total_evictions).c_str());
+    if(evict_stats.total_restores > 0)
+    {
+        ImGui::SameLine();
+        ImGui::TextColored(color_label, "%s", fmt::format("/ {} restored", evict_stats.total_restores).c_str());
+    }
+    ImGui::EndGroup();
+    ImGui::SetItemTooltipEx("Lifetime evictions (and restores). If the eviction count keeps\n"
+                            "climbing every frame, paging is happening constantly - consider\n"
+                            "raising the budget or the min-age window.");
+
+    if(evict_stats.thrash_events > 0)
+    {
+        ImGui::BeginGroup();
+        draw_label("    Thrash");
+        ImGui::TextColored(color_warning, "%s", fmt::format("{}", evict_stats.thrash_events).c_str());
+        ImGui::EndGroup();
+        ImGui::SetItemTooltipEx("Resources restored shortly after being evicted. High values\n"
+                                "indicate the budget is too tight; raise it or the min-age window.");
+    }
 }
 
 void draw_performance_section()
@@ -205,27 +335,6 @@ void draw_memory_section()
 
     auto* stats = gfx::get_stats();
 
-    auto format_bytes = [](int64_t bytes) -> std::string
-    {
-        constexpr double kb = 1024.0;
-        constexpr double mb = 1024.0 * 1024.0;
-        constexpr double gb = 1024.0 * 1024.0 * 1024.0;
-        auto val = static_cast<double>(bytes);
-        if(val >= gb)
-        {
-            return fmt::format("{:.2f} GiB", val / gb);
-        }
-        if(val >= mb)
-        {
-            return fmt::format("{:.1f} MiB", val / mb);
-        }
-        if(val >= kb)
-        {
-            return fmt::format("{:.1f} KiB", val / kb);
-        }
-        return fmt::format("{} B", bytes);
-    };
-
     if(stats->gpuMemoryUsed > 0)
     {
         auto used_str = format_bytes(stats->gpuMemoryUsed);
@@ -273,71 +382,7 @@ void draw_memory_section()
                                 "(framebuffers). Scales with resolution.");
     }
 
-    const auto evict_stats = gfx::eviction::get_stats();
-    if(evict_stats.registered_count > 0)
-    {
-        ImGui::BeginGroup();
-        draw_label("  Evictable");
-        ImGui::Text("%llu (%s)",
-                    static_cast<unsigned long long>(evict_stats.resident_count),
-                    format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)).c_str());
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Resident CPU-backed GPU resources tracked by the eviction system,\n"
-                                "and their total GPU memory. These can be paged out under pressure.");
-
-        if(evict_stats.budget_bytes > 0)
-        {
-            const bool over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
-            const auto used_str = format_bytes(static_cast<int64_t>(evict_stats.budget_used_bytes));
-            const auto budget_str = format_bytes(static_cast<int64_t>(evict_stats.budget_bytes));
-
-            ImGui::BeginGroup();
-            ImGui::TextColored(color_label, "  Evict Budget");
-            ImGui::SameLine(200.0f);
-            if(over_budget)
-            {
-                ImGui::TextColored(color_bad, "%s / %s  " ICON_MDI_ALERT " OVER",
-                                   used_str.c_str(), budget_str.c_str());
-            }
-            else
-            {
-                ImGui::TextColored(color_good, "%s / %s", used_str.c_str(), budget_str.c_str());
-            }
-            ImGui::EndGroup();
-            ImGui::SetItemTooltipEx("Used vs. eviction budget. When usage exceeds the budget the\n"
-                                    "paging system evicts resources down to the target watermark.\n"
-                                    "Marked red when over budget.");
-
-            ImGui::BeginGroup();
-            draw_label("  Evict Target");
-            ImGui::TextUnformatted(format_bytes(static_cast<int64_t>(evict_stats.target_bytes)).c_str());
-            ImGui::EndGroup();
-            ImGui::SetItemTooltipEx("Watermark the paging system evicts down to once over budget\n"
-                                    "(hysteresis below the budget to avoid thrashing).");
-        }
-
-        if(evict_stats.evicted_count > 0)
-        {
-            ImGui::BeginGroup();
-            draw_label("  Evicted");
-            ImGui::Text("%llu (%s)",
-                        static_cast<unsigned long long>(evict_stats.evicted_count),
-                        format_bytes(static_cast<int64_t>(evict_stats.evicted_bytes)).c_str());
-            ImGui::EndGroup();
-            ImGui::SetItemTooltipEx("Resources currently evicted (GPU memory reclaimed).\n"
-                                    "They restore automatically the next time they are used.");
-        }
-
-        if(evict_stats.thrash_events > 0)
-        {
-            ImGui::BeginGroup();
-            draw_label("  Evict Thrash");
-            ImGui::TextColored(color_warning, "%llu", static_cast<unsigned long long>(evict_stats.thrash_events));
-            ImGui::EndGroup();
-            ImGui::SetItemTooltipEx("Resources restored shortly after being evicted. High values\n"
-                                    "indicate the budget is too tight; raise it or the min-age window.");
-        }
-    }
+    draw_eviction_overlay_stats();
 }
 
 void draw_pipeline_stats(const rendering::pipeline_stats& pstats)

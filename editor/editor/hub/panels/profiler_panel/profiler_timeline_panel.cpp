@@ -7,13 +7,12 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <base/platform/process_memory.hpp>
 #include <engine/settings/settings.h>
 #include <graphics/graphics.h>
 #include <monopp/mono_gc_handle.h>
-
-#include <bx/string.h>
 
 #include <algorithm>
 #include <array>
@@ -422,18 +421,16 @@ void render_memory_histogram_guides(ImDrawList* draw_list,
         constexpr float frac = 0.5f;
         const float y = bottom_y - inner_h * frac;
         draw_list->AddLine(ImVec2(row_top_left.x, y), ImVec2(row_top_left.x + bar_width, y), line_col);
-        std::array<char, 64> pretty{};
-        bx::prettify(pretty.data(), pretty.size(), bytes_for_mb_frac(scale_max_mb, frac));
-        draw_list->AddText(ImVec2(row_top_left.x + 2.0f, y - 13.0f), text_col, pretty.data());
+        const auto pretty = format_bytes(bytes_for_mb_frac(scale_max_mb, frac), 0);
+        draw_list->AddText(ImVec2(row_top_left.x + 2.0f, y - 13.0f), text_col, pretty.c_str());
     }
 
     // Top of plot = max of scale (bars map to this row height).
     {
         const float y = bottom_y - inner_h;
         draw_list->AddLine(ImVec2(row_top_left.x, y), ImVec2(row_top_left.x + bar_width, y), line_col);
-        std::array<char, 64> pretty{};
-        bx::prettify(pretty.data(), pretty.size(), bytes_for_mb_frac(scale_max_mb, 1.0f));
-        const std::string label = fmt::format("max {}", pretty.data());
+        const auto pretty = format_bytes(bytes_for_mb_frac(scale_max_mb, 1.0f), 0);
+        const std::string label = fmt::format("max {}", pretty);
         const ImVec2 ts = ImGui::CalcTextSize(label.c_str());
         draw_list->AddText(ImVec2(row_top_left.x + bar_width - ts.x - 4.0f, y - 13.0f), text_col,
                            label.c_str());
@@ -1169,29 +1166,23 @@ void profiler_timeline_panel::handle_histogram_input(performance_profiler* profi
                 {
                     ImGui::Text("Wait: %.2f ms (%.0f%%)", wait_ms, (1.0f - cpu_ratio) * 100.0f);
                 }
-                std::array<char, 64> heap_pretty{};
-                std::array<char, 64> gpu_pretty{};
-                std::array<char, 64> rss_pretty{};
-                bx::prettify(heap_pretty.data(),
-                             heap_pretty.size(),
-                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->cpu_heap_used_bytes)));
-                bx::prettify(gpu_pretty.data(),
-                             gpu_pretty.size(),
-                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->gpu_memory_used_bytes)));
-                bx::prettify(rss_pretty.data(),
-                             rss_pretty.size(),
-                             static_cast<uint64_t>(std::max<int64_t>(0, hsnap->process_resident_bytes)));
+                const auto heap_pretty = format_bytes(
+                    static_cast<std::uint64_t>(std::max<int64_t>(0, hsnap->cpu_heap_used_bytes)), 0);
+                const auto gpu_pretty = format_bytes(
+                    static_cast<std::uint64_t>(std::max<int64_t>(0, hsnap->gpu_memory_used_bytes)), 0);
+                const auto rss_pretty = format_bytes(
+                    static_cast<std::uint64_t>(std::max<int64_t>(0, hsnap->process_resident_bytes)), 0);
                 if(show_histogram_managed_heap_)
                 {
-                    ImGui::Text("Managed heap: %s", heap_pretty.data());
+                    ImGui::Text("Managed heap: %s", heap_pretty.c_str());
                 }
                 if(show_histogram_gpu_memory_)
                 {
-                    ImGui::Text("GPU memory: %s", gpu_pretty.data());
+                    ImGui::Text("GPU memory: %s", gpu_pretty.c_str());
                 }
                 if(show_histogram_process_rss_)
                 {
-                    ImGui::Text("Process RSS: %s", rss_pretty.data());
+                    ImGui::Text("Process RSS: %s", rss_pretty.c_str());
                 }
                 ImGui::EndTooltip();
             }

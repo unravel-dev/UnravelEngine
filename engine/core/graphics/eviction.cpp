@@ -3,7 +3,9 @@
 #include "graphics.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <mutex>
 #include <vector>
 
@@ -75,6 +77,7 @@ public:
         evicted_.clear();
         resident_bytes_ = 0;
         evicted_bytes_ = 0;
+        pending_bytes_.store(0, std::memory_order_relaxed);
         init_status_ = eviction::init_status::unsupported;
     }
 
@@ -90,7 +93,11 @@ public:
             return;
         }
         add_to(resident_, r);
-        resident_bytes_ += r->gpu_size();
+        const std::uint64_t sz = r->gpu_size();
+        resident_bytes_ += sz;
+        // Predict device occupancy: the backend's gpuMemoryUsed will not reflect this allocation for
+        // a frame or more, so record it for the next driver tick (see take_pending_bytes).
+        pending_bytes_.fetch_add(sz, std::memory_order_relaxed);
     }
 
     void unregister_resource(ievictable* r)
@@ -237,6 +244,11 @@ public:
     {
         std::lock_guard<std::mutex> lk(mutex_);
         return snapshot();
+    }
+
+    auto take_pending_bytes() -> std::uint64_t
+    {
+        return pending_bytes_.exchange(0, std::memory_order_relaxed);
     }
 
 private:
@@ -421,6 +433,9 @@ private:
 
     std::uint64_t resident_bytes_ = 0;
     std::uint64_t evicted_bytes_ = 0;
+    /// GPU bytes registered since the last driver tick; drained by take_pending_bytes. Atomic because
+    /// resources are registered from worker threads while the driver reads from the API thread.
+    std::atomic<std::uint64_t> pending_bytes_{0};
     std::uint64_t total_evictions_ = 0;
     std::uint64_t total_restores_ = 0;
     std::uint64_t total_bytes_evicted_ = 0;
@@ -451,6 +466,10 @@ auto is_supported() -> bool
 
 void shutdown()
 {
+    if(debug_consumed_bytes() > 0)
+    {
+        debug_release_memory();
+    }
     eviction_registry::instance().shutdown();
 }
 
@@ -473,6 +492,144 @@ auto evict_bytes(std::uint64_t free_bytes, strategy strat, std::uint32_t min_age
 auto evict_all() -> stats
 {
     return eviction_registry::instance().evict_all();
+}
+
+void reclaim_for(std::uint64_t bytes)
+{
+    if(bytes == 0 || !is_supported())
+    {
+        return;
+    }
+    const auto* gpu_stats = gfx::get_stats();
+    if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
+    {
+        return;
+    }
+    const auto budget = static_cast<std::uint64_t>(gpu_stats->gpuMemoryMax);
+    const auto used = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
+    // Keep a small safety margin (~1.5%) so we do not edge right up to the device limit.
+    const std::uint64_t margin = budget >> 6;
+    const std::uint64_t projected = used + bytes + margin;
+    if(projected <= budget)
+    {
+        return;
+    }
+    // Evict the largest resident victims to cover the deficit, then pump the command buffer so the
+    // destroys are processed (and their VRAM released) before the caller creates the new resource.
+    evict_bytes(projected - budget, strategy::largest_first, 0, 0);
+    gfx::flush();
+}
+
+auto take_pending_bytes() -> std::uint64_t
+{
+    return eviction_registry::instance().take_pending_bytes();
+}
+
+namespace
+{
+/// Test-only reserved memory: raw, non-evictable GPU textures used to inflate device occupancy. Held
+/// outside the registry so the eviction system treats them as immovable "real" usage. API-thread only.
+struct debug_reserve
+{
+    std::vector<gfx::texture_handle> chunks;
+    std::uint64_t bytes = 0;
+};
+
+auto reserved() -> debug_reserve&
+{
+    static debug_reserve s_reserved;
+    return s_reserved;
+}
+
+constexpr std::uint16_t k_reserve_dim = 4096;                                          // 4096x4096 RGBA8
+constexpr std::uint64_t k_reserve_chunk = std::uint64_t(k_reserve_dim) * k_reserve_dim * 4; // == 64 MiB
+
+/// Allocate one uninitialized square RGBA8 texture of @p dim and track it. Returns its nominal byte
+/// size, or 0 if the allocation failed (e.g. genuinely out of memory).
+auto alloc_reserve_chunk(std::uint16_t dim) -> std::uint64_t
+{
+    const gfx::texture_handle handle =
+        gfx::create_texture_2d(dim, dim, false, 1, gfx::texture_format::RGBA8, BGFX_TEXTURE_NONE, nullptr);
+    if(!bgfx::isValid(handle))
+    {
+        return 0;
+    }
+    reserved().chunks.push_back(handle);
+    const std::uint64_t sz = std::uint64_t(dim) * dim * 4;
+    reserved().bytes += sz;
+    return sz;
+}
+} // namespace
+
+auto debug_consume_memory(std::uint64_t bytes) -> std::uint64_t
+{
+    std::uint64_t remaining = bytes;
+    while(remaining >= k_reserve_chunk)
+    {
+        const std::uint64_t got = alloc_reserve_chunk(k_reserve_dim);
+        if(got == 0)
+        {
+            return reserved().bytes; // allocation failed - stop reserving
+        }
+        remaining -= got;
+    }
+    if(remaining > 0)
+    {
+        // Smallest square RGBA8 texture that covers the remainder.
+        const double texels = static_cast<double>(remaining) / 4.0;
+        auto side = static_cast<std::uint32_t>(std::ceil(std::sqrt(texels)));
+        side = std::clamp<std::uint32_t>(side, 1, k_reserve_dim);
+        alloc_reserve_chunk(static_cast<std::uint16_t>(side));
+    }
+    return reserved().bytes;
+}
+
+auto debug_simulate_budget(std::uint64_t target_free_bytes) -> std::uint64_t
+{
+    const auto* gpu_stats = gfx::get_stats();
+    if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
+    {
+        return debug_consumed_bytes();
+    }
+    // Absolute target: start from a clean slate, then let the released VRAM settle so the usage we
+    // read back reflects only the real (non-reserved) consumers.
+    if(debug_consumed_bytes() > 0)
+    {
+        debug_release_memory();
+    }
+    gpu_stats = gfx::get_stats();
+    const auto budget = static_cast<std::uint64_t>(gpu_stats->gpuMemoryMax);
+    const auto used = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
+    if(target_free_bytes >= budget)
+    {
+        return debug_consumed_bytes();
+    }
+    const std::uint64_t desired_used = budget - target_free_bytes;
+    if(desired_used <= used)
+    {
+        return debug_consumed_bytes(); // less is already free than the requested target
+    }
+    return debug_consume_memory(desired_used - used);
+}
+
+void debug_release_memory()
+{
+    for(const auto handle : reserved().chunks)
+    {
+        if(bgfx::isValid(handle))
+        {
+            gfx::destroy(handle);
+        }
+    }
+    reserved().chunks.clear();
+    reserved().bytes = 0;
+    // Pump the command buffer so the destroys are serviced and their VRAM is reclaimed before return.
+    gfx::flush();
+}
+
+auto debug_consumed_bytes() -> std::uint64_t
+{
+    return reserved().bytes;
 }
 
 auto restore_all() -> stats

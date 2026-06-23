@@ -696,4 +696,11 @@ uint32_t get_render_frame();
 
 void set_world_transform(const void* _mtx, uint16_t _num = 1);
 
+/// Conservative estimate of the GPU memory a texture occupies, derived from its computed
+/// @ref texture_info plus creation @p _flags (accounts for MSAA sample count and allocation
+/// alignment, which @ref texture_info::storageSize does not). Use for eviction accounting; true
+/// device occupancy still comes from the backend via @ref get_stats (gpuMemoryUsed/gpuMemoryMax).
+uint64_t estimate_texture_gpu_size(const texture_info& _info, uint64_t _flags);
+
+
 } // namespace gfx

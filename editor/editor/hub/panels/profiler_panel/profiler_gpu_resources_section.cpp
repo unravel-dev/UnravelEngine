@@ -1,5 +1,6 @@
 #include "profiler_gpu_resources_section.h"
 
+#include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui.h>
@@ -44,24 +45,6 @@ auto pick_usage_color(float fraction) -> ImVec4
     return usage_low_color;
 }
 
-void format_bytes(uint64_t value, char* buffer, size_t buffer_size)
-{
-    constexpr std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
-    if(value < 1024)
-    {
-        std::snprintf(buffer, buffer_size, "%llu B", static_cast<unsigned long long>(value));
-        return;
-    }
-    double scaled = static_cast<double>(value);
-    size_t unit_index = 0;
-    while(scaled >= 1024.0 && unit_index + 1 < units.size())
-    {
-        scaled /= 1024.0;
-        ++unit_index;
-    }
-    std::snprintf(buffer, buffer_size, "%.2f %s", scaled, units[unit_index]);
-}
-
 void format_count(uint64_t value, char* buffer, size_t buffer_size)
 {
     std::array<char, 32> digits{};
@@ -90,7 +73,7 @@ void format_value(uint64_t value, resource_unit unit, char* buffer, size_t buffe
 {
     if(unit == resource_unit::bytes)
     {
-        format_bytes(value, buffer, buffer_size);
+        unravel::format_bytes(value, buffer, buffer_size);
         return;
     }
     format_count(value, buffer, buffer_size);
