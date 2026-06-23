@@ -1,5 +1,6 @@
 #include "graphics.h"
 #include "bgfx/bgfx.h"
+#include "eviction.h"
 #include "uniform.h"
 #include <bimg/bimg.h>
 #include <bx/file.h>
@@ -263,6 +264,7 @@ void shutdown()
     clear_profiler_hooks();
     if(s_context.initted)
     {
+        eviction::shutdown();
         deinit_uniform_cache();
         bgfx::destroy(s_context.u_world);
         bgfx::shutdown();
@@ -282,6 +284,25 @@ bool init(init_type init_data)
     s_context.u_world = create_uniform("u_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
 
     bgfx::frame();
+    // Initialize after the first frame so the backend has reported its GPU memory budget.
+    switch(eviction::init())
+    {
+        case eviction::init_status::ok:
+            log("info", "GPU resource eviction enabled.", __FILE__, __LINE__);
+            break;
+        case eviction::init_status::unnecessary:
+            log("info", "GPU resource eviction disabled: backend does not need eviction.", __FILE__, __LINE__);
+            break;
+        case eviction::init_status::unsupported:
+            log("info",
+                "GPU resource eviction disabled: backend does not report a GPU memory budget.",
+                __FILE__,
+                __LINE__);
+            break;
+        case eviction::init_status::failed:
+            log("warning", "GPU resource eviction failed to initialize.", __FILE__, __LINE__);
+            break;
+    }
     return s_context.initted;
 }
 
@@ -366,6 +387,7 @@ void end(encoder* _encoder)
 uint32_t frame(bool _capture)
 {
     s_context.frame = bgfx::frame(_capture);
+    eviction::set_frame(s_context.frame);
     return s_context.frame;
 }
 

@@ -1,7 +1,20 @@
 #include "texture.h"
 #include "utils/bgfx_utils.h"
+#include <memory>
+#include <string>
+#include <vector>
 namespace gfx
 {
+namespace
+{
+using backing_buffer = std::shared_ptr<std::vector<std::uint8_t>>;
+
+auto make_backing(const void* data, std::uint32_t size) -> backing_buffer
+{
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    return std::make_shared<std::vector<std::uint8_t>>(bytes, bytes + size);
+}
+} // namespace
 
 texture::texture(const char* _path,
                  std::uint64_t _flags,
@@ -9,7 +22,31 @@ texture::texture(const char* _path,
                  texture_info* _info /*= nullptr*/)
 {
     bx::Error err;
-    handle_ = loadTexture(_path, _flags, _skip, &info, nullptr, &err);
+    std::uint32_t size = 0;
+    void* data = load(bx::FilePath(_path), &size);
+    if(data != nullptr)
+    {
+        handle_ = loadTexture(data, size, _flags, _skip, &info, nullptr, _path, &err);
+        if(is_valid() && gfx::eviction::is_supported())
+        {
+            backing_buffer backing = make_backing(data, size);
+            make_evictable(info.storageSize,
+                           [backing, flags = _flags, skip = _skip](texture& self) -> bool
+                           {
+                               bx::Error e;
+                               self.handle_ = loadTexture(backing->data(),
+                                                          static_cast<std::uint32_t>(backing->size()),
+                                                          flags,
+                                                          skip,
+                                                          &self.info,
+                                                          nullptr,
+                                                          nullptr,
+                                                          &e);
+                               return self.is_valid();
+                           });
+        }
+        unload(data);
+    }
 
     if(_info != nullptr)
     {
@@ -28,6 +65,26 @@ texture::texture(const void* _data,
 {
     bx::Error err;
     handle_ = loadTexture(_data, _size, _flags, _skip, &info, nullptr, _name, &err);
+
+    if(is_valid() && gfx::eviction::is_supported())
+    {
+        backing_buffer backing = make_backing(_data, _size);
+        std::string name = (_name != nullptr) ? _name : std::string{};
+        make_evictable(info.storageSize,
+                       [backing, flags = _flags, skip = _skip, name](texture& self) -> bool
+                       {
+                           bx::Error e;
+                           self.handle_ = loadTexture(backing->data(),
+                                                      static_cast<std::uint32_t>(backing->size()),
+                                                      flags,
+                                                      skip,
+                                                      &self.info,
+                                                      nullptr,
+                                                      name.empty() ? nullptr : name.c_str(),
+                                                      &e);
+                           return self.is_valid();
+                       });
+    }
 
     if(_info != nullptr)
     {
@@ -50,7 +107,25 @@ texture::texture(std::uint16_t _width,
 
     calc_texture_size(info, _width, _height, 1, false, _hasMips, _numLayers, _format);
 
-
+    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    {
+        backing_buffer backing = make_backing(_mem->data, _mem->size);
+        make_evictable(info.storageSize,
+                       [backing,
+                        width = _width,
+                        height = _height,
+                        has_mips = _hasMips,
+                        layers = _numLayers,
+                        format = _format,
+                        flags = _flags](texture& self) -> bool
+                       {
+                           const memory_view* mem =
+                               gfx::copy(backing->data(), static_cast<std::uint32_t>(backing->size()));
+                           self.handle_ =
+                               create_texture_2d(width, height, has_mips, layers, format, flags, mem);
+                           return self.is_valid();
+                       });
+    }
 }
 
 texture::texture(std::uint16_t _width,
@@ -66,7 +141,25 @@ texture::texture(std::uint16_t _width,
 
     calc_texture_size(info, _width, _height, _depth, false, _hasMips, 1, _format);
 
-
+    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    {
+        backing_buffer backing = make_backing(_mem->data, _mem->size);
+        make_evictable(info.storageSize,
+                       [backing,
+                        width = _width,
+                        height = _height,
+                        depth = _depth,
+                        has_mips = _hasMips,
+                        format = _format,
+                        flags = _flags](texture& self) -> bool
+                       {
+                           const memory_view* mem =
+                               gfx::copy(backing->data(), static_cast<std::uint32_t>(backing->size()));
+                           self.handle_ =
+                               create_texture_3d(width, height, depth, has_mips, format, flags, mem);
+                           return self.is_valid();
+                       });
+    }
 }
 
 texture::texture(std::uint16_t _size,
@@ -81,7 +174,23 @@ texture::texture(std::uint16_t _size,
 
     calc_texture_size(info, _size, _size, _size, false, _hasMips, _numLayers, _format);
 
-
+    if(_mem != nullptr && is_valid() && !is_render_target() && gfx::eviction::is_supported())
+    {
+        backing_buffer backing = make_backing(_mem->data, _mem->size);
+        make_evictable(info.storageSize,
+                       [backing,
+                        size = _size,
+                        has_mips = _hasMips,
+                        layers = _numLayers,
+                        format = _format,
+                        flags = _flags](texture& self) -> bool
+                       {
+                           const memory_view* mem =
+                               gfx::copy(backing->data(), static_cast<std::uint32_t>(backing->size()));
+                           self.handle_ = create_texture_cube(size, has_mips, layers, format, flags, mem);
+                           return self.is_valid();
+                       });
+    }
 }
 
 auto texture::get_size() const -> usize32_t

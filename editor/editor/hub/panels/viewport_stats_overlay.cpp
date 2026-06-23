@@ -7,6 +7,7 @@
 #include <engine/ecs/scene.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <graphics/eviction.h>
 #include <graphics/graphics.h>
 
 #include <bx/string.h>
@@ -270,6 +271,72 @@ void draw_memory_section()
         ImGui::EndGroup();
         ImGui::SetItemTooltipEx("GPU memory consumed by render targets\n"
                                 "(framebuffers). Scales with resolution.");
+    }
+
+    const auto evict_stats = gfx::eviction::get_stats();
+    if(evict_stats.registered_count > 0)
+    {
+        ImGui::BeginGroup();
+        draw_label("  Evictable");
+        ImGui::Text("%llu (%s)",
+                    static_cast<unsigned long long>(evict_stats.resident_count),
+                    format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)).c_str());
+        ImGui::EndGroup();
+        ImGui::SetItemTooltipEx("Resident CPU-backed GPU resources tracked by the eviction system,\n"
+                                "and their total GPU memory. These can be paged out under pressure.");
+
+        if(evict_stats.budget_bytes > 0)
+        {
+            const bool over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
+            const auto used_str = format_bytes(static_cast<int64_t>(evict_stats.budget_used_bytes));
+            const auto budget_str = format_bytes(static_cast<int64_t>(evict_stats.budget_bytes));
+
+            ImGui::BeginGroup();
+            ImGui::TextColored(color_label, "  Evict Budget");
+            ImGui::SameLine(200.0f);
+            if(over_budget)
+            {
+                ImGui::TextColored(color_bad, "%s / %s  " ICON_MDI_ALERT " OVER",
+                                   used_str.c_str(), budget_str.c_str());
+            }
+            else
+            {
+                ImGui::TextColored(color_good, "%s / %s", used_str.c_str(), budget_str.c_str());
+            }
+            ImGui::EndGroup();
+            ImGui::SetItemTooltipEx("Used vs. eviction budget. When usage exceeds the budget the\n"
+                                    "paging system evicts resources down to the target watermark.\n"
+                                    "Marked red when over budget.");
+
+            ImGui::BeginGroup();
+            draw_label("  Evict Target");
+            ImGui::TextUnformatted(format_bytes(static_cast<int64_t>(evict_stats.target_bytes)).c_str());
+            ImGui::EndGroup();
+            ImGui::SetItemTooltipEx("Watermark the paging system evicts down to once over budget\n"
+                                    "(hysteresis below the budget to avoid thrashing).");
+        }
+
+        if(evict_stats.evicted_count > 0)
+        {
+            ImGui::BeginGroup();
+            draw_label("  Evicted");
+            ImGui::Text("%llu (%s)",
+                        static_cast<unsigned long long>(evict_stats.evicted_count),
+                        format_bytes(static_cast<int64_t>(evict_stats.evicted_bytes)).c_str());
+            ImGui::EndGroup();
+            ImGui::SetItemTooltipEx("Resources currently evicted (GPU memory reclaimed).\n"
+                                    "They restore automatically the next time they are used.");
+        }
+
+        if(evict_stats.thrash_events > 0)
+        {
+            ImGui::BeginGroup();
+            draw_label("  Evict Thrash");
+            ImGui::TextColored(color_warning, "%llu", static_cast<unsigned long long>(evict_stats.thrash_events));
+            ImGui::EndGroup();
+            ImGui::SetItemTooltipEx("Resources restored shortly after being evicted. High values\n"
+                                    "indicate the budget is too tight; raise it or the min-age window.");
+        }
     }
 }
 

@@ -2,12 +2,14 @@
 
 #include "gpu_frame_stats_widgets.h"
 #include "profiler_gpu_resources_section.h"
+#include "profiler_eviction_section.h"
 #include "../panel.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <base/platform/process_memory.hpp>
+#include <engine/settings/settings.h>
 #include <graphics/graphics.h>
 #include <monopp/mono_gc_handle.h>
 
@@ -891,7 +893,6 @@ auto profiler_timeline_panel::histogram_stack_height() const -> float
 
 void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
 {
-    (void)ctx;
     if(parent_ == nullptr)
     {
         return;
@@ -904,6 +905,10 @@ void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
         ImGui::PopFont();
     }
     profiler_draw_gpu_resources_section();
+    if(ctx.has<settings>())
+    {
+        profiler_draw_eviction_section(ctx.get<settings>().graphics.eviction);
+    }
     ImGui::PopID();
 }
 

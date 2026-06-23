@@ -7,6 +7,7 @@
 #include <engine/layers/layer_mask.h>
 #include <engine/input/input.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/rendering/eviction_settings.h>
 
 #include <string>
 #include <vector>
@@ -56,6 +57,10 @@ struct settings
 
     struct graphics_settings
     {
+        /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
+        /// in standalone builds; the renderer drives it every frame from this configuration.
+        eviction_settings eviction;
+
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;
 

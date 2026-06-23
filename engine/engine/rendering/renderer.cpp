@@ -1,8 +1,10 @@
 #include "renderer.h"
+#include "eviction_settings.h"
 #include "../events.h"
 #include "spdlog/common.h"
 #include "gpu_program.h"
 #include <engine/profiler/profiler.h>
+#include <engine/settings/settings.h>
 
 #include <base/assert.hpp>
 #include <graphics/debugdraw.h>
@@ -342,8 +344,17 @@ void renderer::set_vsync(bool vsync)
     gfx::reset(sz.w, sz.h, reset_flags_);
 }
 
-void renderer::frame_begin(rtti::context& /*ctx*/, delta_t /*dt*/)
+void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
 {
+    // Drive GPU eviction at the start of the frame, before this frame's resource creates are
+    // submitted, so freed memory precedes new allocations in bgfx's command stream (lowers peak
+    // usage). Runs on the render thread, independently of the editor, using the policy persisted in
+    // the project's graphics settings (a no-op until a settings instance exists).
+    if(ctx.has<settings>())
+    {
+        update_eviction(ctx.get<settings>().graphics.eviction);
+    }
+
     auto window = get_main_window();
     if(window)
     {
@@ -355,6 +366,7 @@ void renderer::frame_begin(rtti::context& /*ctx*/, delta_t /*dt*/)
 void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
 {
     APP_SCOPE_PERF("Graphics Frame Submit");
+
     gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer/Update Pass");
     pass.bind();
 

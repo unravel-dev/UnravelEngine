@@ -100,6 +100,104 @@ LOAD_INLINE(settings::asset_settings)
 }
 
 
+REFLECT_INLINE(eviction_settings)
+{
+    entt::meta_factory<eviction_settings>{}
+        .type("eviction_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "eviction_settings"},
+            entt::attribute{"pretty_name", "GPU Eviction / Paging"},
+        })
+        .data<&eviction_settings::enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Enabled"},
+            entt::attribute{"tooltip", "Evict GPU resources each frame to keep memory under the budget. "
+                                       "Evicted resources are restored automatically on next use."},
+        })
+        .data<&eviction_settings::auto_budget>("auto_budget"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_budget"},
+            entt::attribute{"pretty_name", "Auto Budget (GPU Memory)"},
+            entt::attribute{"tooltip", "Derive the budget from the backend's reported GPU memory. "
+                                       "Falls back to the manual budget when no limit is reported."},
+        })
+        .data<&eviction_settings::budget_fraction>("budget_fraction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "budget_fraction"},
+            entt::attribute{"pretty_name", "Budget %"},
+            entt::attribute{"min", 0.1f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Start evicting once GPU usage exceeds this fraction of the maximum."},
+        })
+        .data<&eviction_settings::target_fraction>("target_fraction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "target_fraction"},
+            entt::attribute{"pretty_name", "Target %"},
+            entt::attribute{"min", 0.1f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Evict down to this fraction of the maximum (hysteresis; keep < budget)."},
+        })
+        .data<&eviction_settings::manual_budget_mb>("manual_budget_mb"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "manual_budget_mb"},
+            entt::attribute{"pretty_name", "Manual Budget (MiB)"},
+            entt::attribute{"min", 16},
+            entt::attribute{"max", 1024*32},
+            entt::attribute{"tooltip", "Budget compared against evictable resident bytes when not using auto budget."},
+        })
+        .data<&eviction_settings::strategy>("strategy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "strategy"},
+            entt::attribute{"pretty_name", "Strategy"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 3},
+            entt::attribute{"tooltip", "Victim selection policy: 0=LRU, 1=LFU, 2=Largest first, 3=Age TTL."},
+        })
+        .data<&eviction_settings::min_age_frames>("min_age_frames"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_age_frames"},
+            entt::attribute{"pretty_name", "Min Age (frames)"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 600},
+            entt::attribute{"tooltip", "Resources used within this many frames are never evicted (anti-thrash)."},
+        })
+        .data<&eviction_settings::max_evictions>("max_evictions"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_evictions"},
+            entt::attribute{"pretty_name", "Max Evictions / Frame"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 1024},
+            entt::attribute{"tooltip", "Caps how many resources may be evicted per frame (0 = unlimited)."},
+        });
+}
+
+SAVE_INLINE(eviction_settings)
+{
+    try_save(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_save(ar, ser20::make_nvp("auto_budget", obj.auto_budget));
+    try_save(ar, ser20::make_nvp("budget_fraction", obj.budget_fraction));
+    try_save(ar, ser20::make_nvp("target_fraction", obj.target_fraction));
+    try_save(ar, ser20::make_nvp("manual_budget_mb", obj.manual_budget_mb));
+    try_save(ar, ser20::make_nvp("strategy", obj.strategy));
+    try_save(ar, ser20::make_nvp("min_age_frames", obj.min_age_frames));
+    try_save(ar, ser20::make_nvp("max_evictions", obj.max_evictions));
+}
+
+LOAD_INLINE(eviction_settings)
+{
+    try_load(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_load(ar, ser20::make_nvp("auto_budget", obj.auto_budget));
+    try_load(ar, ser20::make_nvp("budget_fraction", obj.budget_fraction));
+    try_load(ar, ser20::make_nvp("target_fraction", obj.target_fraction));
+    try_load(ar, ser20::make_nvp("manual_budget_mb", obj.manual_budget_mb));
+    try_load(ar, ser20::make_nvp("strategy", obj.strategy));
+    try_load(ar, ser20::make_nvp("min_age_frames", obj.min_age_frames));
+    try_load(ar, ser20::make_nvp("max_evictions", obj.max_evictions));
+}
+
 REFLECT_INLINE(settings::graphics_settings)
 {
     entt::meta_factory<settings::graphics_settings>{}
@@ -107,21 +205,23 @@ REFLECT_INLINE(settings::graphics_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "graphics_settings"},
             entt::attribute{"pretty_name", "Graphics Settings"},
+        })
+        .data<&settings::graphics_settings::eviction>("eviction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "eviction"},
+            entt::attribute{"pretty_name", "GPU Eviction / Paging"},
+            entt::attribute{"tooltip", "Controls automatic eviction/paging of GPU resources to stay under budget."},
         });
 }
 
 SAVE_INLINE(settings::graphics_settings)
 {
-    // try_save(ar, ser20::make_nvp("company", obj.company));
-    // try_save(ar, ser20::make_nvp("product", obj.product));
-    // try_save(ar, ser20::make_nvp("version", obj.version));
+    try_save(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 
 LOAD_INLINE(settings::graphics_settings)
 {
-    // try_load(ar, ser20::make_nvp("company", obj.company));
-    // try_load(ar, ser20::make_nvp("product", obj.product));
-    // try_load(ar, ser20::make_nvp("version", obj.version));
+    try_load(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 
 REFLECT_INLINE(settings::standalone_settings)

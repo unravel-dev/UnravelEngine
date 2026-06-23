@@ -1008,7 +1008,7 @@ void set_unity_theme()
     style.PopupRounding = 6.0f;
     style.ScrollbarRounding = 0.0f;
     style.GrabRounding = 0.0f;
-    style.TabRounding = 0.0f;
+    style.TabRounding = 2.0f;
 
     style.WindowBorderSize = 1.0f;
     style.ChildBorderSize = 0.0f;
