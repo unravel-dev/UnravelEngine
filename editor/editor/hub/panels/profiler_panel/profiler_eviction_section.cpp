@@ -15,19 +15,19 @@ namespace unravel
 {
 namespace
 {
-constexpr ImVec4 category_text_color{0.62f, 0.80f, 1.0f, 1.0f};
-constexpr ImVec4 muted_text_color{0.55f, 0.55f, 0.55f, 1.0f};
-constexpr ImVec4 warn_text_color{0.93f, 0.74f, 0.20f, 1.0f};
-constexpr ImVec4 bad_text_color{1.0f, 0.3f, 0.3f, 1.0f};
+ImVec4 category_text_color{0.62f, 0.80f, 1.0f, 1.0f};
+ImVec4 muted_text_color{0.55f, 0.55f, 0.55f, 1.0f};
+ImVec4 warn_text_color{0.93f, 0.74f, 0.20f, 1.0f};
+ImVec4 bad_text_color{1.0f, 0.3f, 0.3f, 1.0f};
 
-constexpr std::array<const char*, 4> strategy_names{"LRU (least recently used)",
+std::array<const char*, 4> strategy_names{"LRU (least recently used)",
                                                     "LFU (least frequently used)",
                                                     "Largest first",
                                                     "Age TTL"};
 
 void format_bytes(std::uint64_t value, char* buffer, std::size_t buffer_size)
 {
-    constexpr std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
+    static const std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
     if(value < 1024)
     {
         std::snprintf(buffer, buffer_size, "%llu B", static_cast<unsigned long long>(value));
