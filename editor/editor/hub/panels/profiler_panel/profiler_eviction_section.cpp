@@ -15,17 +15,18 @@ namespace unravel
 {
 namespace
 {
-ImVec4 category_text_color{0.62f, 0.80f, 1.0f, 1.0f};
-ImVec4 muted_text_color{0.55f, 0.55f, 0.55f, 1.0f};
-ImVec4 warn_text_color{0.93f, 0.74f, 0.20f, 1.0f};
-ImVec4 bad_text_color{1.0f, 0.3f, 0.3f, 1.0f};
+
+ImVec4 category_text_color_ex{0.62f, 0.80f, 1.0f, 1.0f};
+ImVec4 muted_text_color_ex{0.55f, 0.55f, 0.55f, 1.0f};
+ImVec4 warn_text_color_ex{0.93f, 0.74f, 0.20f, 1.0f};
+ImVec4 bad_text_color_ex{1.0f, 0.3f, 0.3f, 1.0f};
 
 std::array<const char*, 4> strategy_names{"LRU (least recently used)",
                                                     "LFU (least frequently used)",
                                                     "Largest first",
                                                     "Age TTL"};
 
-void format_bytes(std::uint64_t value, char* buffer, std::size_t buffer_size)
+void format_bytes_ex(std::uint64_t value, char* buffer, std::size_t buffer_size)
 {
     static const std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
     if(value < 1024)
@@ -75,7 +76,7 @@ void draw_count_bytes_row(const char* label,
                           const ImVec4* color = nullptr)
 {
     std::array<char, 32> bytes_buf{};
-    format_bytes(bytes, bytes_buf.data(), bytes_buf.size());
+    format_bytes_ex(bytes, bytes_buf.data(), bytes_buf.size());
     std::array<char, 64> value_buf{};
     std::snprintf(value_buf.data(),
                   value_buf.size(),
@@ -112,7 +113,7 @@ void profiler_draw_eviction_section(eviction_settings& state)
 
     if(!ev::is_supported())
     {
-        ImGui::TextColored(muted_text_color,
+        ImGui::TextColored(muted_text_color_ex,
                            ICON_MDI_ALERT
                            " Eviction is not supported on this backend\n(it does not report a GPU "
                            "memory budget). Paging is disabled.");
@@ -162,11 +163,11 @@ void profiler_draw_eviction_section(eviction_settings& state)
         std::array<char, 32> max_buf{};
         std::array<char, 32> soft_buf{};
         std::array<char, 32> target_buf{};
-        format_bytes(gpu_used, used_buf.data(), used_buf.size());
-        format_bytes(gpu_max, max_buf.data(), max_buf.size());
-        format_bytes(soft, soft_buf.data(), soft_buf.size());
-        format_bytes(target, target_buf.data(), target_buf.size());
-        ImGui::TextColored(over ? bad_text_color : muted_text_color,
+        format_bytes_ex(gpu_used, used_buf.data(), used_buf.size());
+        format_bytes_ex(gpu_max, max_buf.data(), max_buf.size());
+        format_bytes_ex(soft, soft_buf.data(), soft_buf.size());
+        format_bytes_ex(target, target_buf.data(), target_buf.size());
+        ImGui::TextColored(over ? bad_text_color_ex : muted_text_color_ex,
                            "GPU: %s / %s   budget %s, target %s",
                            used_buf.data(),
                            max_buf.data(),
@@ -175,7 +176,7 @@ void profiler_draw_eviction_section(eviction_settings& state)
         if(over)
         {
             ImGui::SameLine();
-            ImGui::TextColored(bad_text_color, ICON_MDI_ALERT " OVER");
+            ImGui::TextColored(bad_text_color_ex, ICON_MDI_ALERT " OVER");
         }
     }
     else
@@ -183,7 +184,7 @@ void profiler_draw_eviction_section(eviction_settings& state)
         ImGui::SliderInt("Manual budget (MiB)", &state.manual_budget_mb, 16, 8192);
         if(state.auto_budget)
         {
-            ImGui::TextColored(warn_text_color, "Backend reports no GPU memory limit; using manual budget.");
+            ImGui::TextColored(warn_text_color_ex, "Backend reports no GPU memory limit; using manual budget.");
         }
     }
 
@@ -207,7 +208,7 @@ void profiler_draw_eviction_section(eviction_settings& state)
 
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::TextColored(category_text_color, "Residency");
+    ImGui::TextColored(category_text_color_ex, "Residency");
 
     draw_count_bytes_row("Resident", stats.resident_count, stats.resident_bytes);
     draw_count_bytes_row("Evicted", stats.evicted_count, stats.evicted_bytes);
@@ -215,18 +216,18 @@ void profiler_draw_eviction_section(eviction_settings& state)
 
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::TextColored(category_text_color, "Lifetime");
+    ImGui::TextColored(category_text_color_ex, "Lifetime");
 
     draw_count_bytes_row("Evictions", stats.total_evictions, stats.total_bytes_evicted);
     draw_count_bytes_row("Restores", stats.total_restores, stats.total_bytes_restored);
     draw_count_row("Failed restores",
                    stats.failed_restores,
-                   stats.failed_restores > 0 ? &warn_text_color : nullptr);
-    draw_count_row("Thrash events", stats.thrash_events, stats.thrash_events > 0 ? &warn_text_color : nullptr);
+                   stats.failed_restores > 0 ? &warn_text_color_ex : nullptr);
+    draw_count_row("Thrash events", stats.thrash_events, stats.thrash_events > 0 ? &warn_text_color_ex : nullptr);
 
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    ImGui::TextColored(category_text_color, "Last pass");
+    ImGui::TextColored(category_text_color_ex, "Last pass");
 
     draw_count_row("Scanned", stats.last_pass_scanned);
     draw_count_row("Evicted", stats.last_pass_evicted);
