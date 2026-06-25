@@ -1,8 +1,5 @@
 #include "index_buffer.h"
 
-#include <memory>
-#include <vector>
-
 namespace gfx
 {
 
@@ -17,16 +14,14 @@ index_buffer::index_buffer(const memory_view* _mem, std::uint16_t _flags /*= BGF
         handle_ = create_index_buffer(_mem, _flags);
         return;
     }
-    const auto* bytes = static_cast<const std::uint8_t*>(_mem->data);
-    auto backing = std::make_shared<std::vector<std::uint8_t>>(bytes, bytes + _mem->size);
+    eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
     handle_ = create_index_buffer(_mem, _flags);
     if(is_valid())
     {
         make_evictable(backing->size(),
                        [backing, flags = _flags](index_buffer& self) -> bool
                        {
-                           const memory_view* mem =
-                               gfx::copy(backing->data(), static_cast<std::uint32_t>(backing->size()));
+                           const memory_view* mem = eviction::make_backing_ref(backing);
                            self.handle_ = create_index_buffer(mem, flags);
                            return self.is_valid();
                        });

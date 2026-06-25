@@ -38,9 +38,11 @@ public:
         return s_instance;
     }
 
-    auto get_init_status() -> eviction::init_status
+    auto get_init_status() const -> eviction::init_status
     {
-        return init_status_;
+        // Atomic so the hot-path is_supported() check is lock-free; the registry mutex still
+        // guards the actual transitions in init/shutdown.
+        return init_status_.load(std::memory_order_acquire);
     }
 
     auto init(const eviction::config& cfg) -> eviction::init_status
@@ -50,17 +52,21 @@ public:
         const auto* gpu_stats = gfx::get_stats();
         if(gpu_stats == nullptr)
         {
-            init_status_ = eviction::init_status::failed;
+            set_init_status(eviction::init_status::failed);
             return eviction::init_status::failed;
         }
-        init_status_ = gpu_stats->gpuMemoryMax > 0 ? eviction::init_status::ok : eviction::init_status::unsupported;
+        auto status = gpu_stats->gpuMemoryMax > 0 ? eviction::init_status::ok : eviction::init_status::unsupported;
 
-        // Direct3D11 and OpenGL do need eviction
-        if(gfx::get_renderer_type() == gfx::renderer_type::Direct3D11 || gfx::get_renderer_type() == gfx::renderer_type::OpenGL)
+        // D3D11 and OpenGL drivers do their own resource paging behind the API, so a second
+        // layer of eviction on top would just thrash. Vulkan/Metal/D3D12 surface explicit memory
+        // budgets through bgfx and need the help.
+        if(gfx::get_renderer_type() == gfx::renderer_type::Direct3D11 ||
+           gfx::get_renderer_type() == gfx::renderer_type::OpenGL)
         {
-            init_status_ = eviction::init_status::unnecessary;
+            status = eviction::init_status::unnecessary;
         }
-        return init_status_;
+        set_init_status(status);
+        return status;
     }
     void shutdown()
     {
@@ -77,8 +83,10 @@ public:
         evicted_.clear();
         resident_bytes_ = 0;
         evicted_bytes_ = 0;
-        pending_bytes_.store(0, std::memory_order_relaxed);
-        init_status_ = eviction::init_status::unsupported;
+        queued_allocation_bytes_.store(0, std::memory_order_relaxed);
+        budget_ = {};
+        budget_used_bytes_ = 0;
+        set_init_status(eviction::init_status::unsupported);
     }
 
     void register_resource(ievictable* r)
@@ -88,16 +96,20 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return;
         }
+        // Stamp the lifetime markers so the very first sweep treats the resource as freshly used
+        // (rather than appearing infinitely idle because last_use_frame_ == 0). evict_frame_ gets
+        // the same treatment so the thrash-detection window is honest from frame zero.
+        const std::uint64_t frame = detail::g_eviction_frame;
+        r->last_use_frame_ = frame;
+        r->evict_frame_ = frame;
         add_to(resident_, r);
         const std::uint64_t sz = r->gpu_size();
         resident_bytes_ += sz;
-        // Predict device occupancy: the backend's gpuMemoryUsed will not reflect this allocation for
-        // a frame or more, so record it for the next driver tick (see take_pending_bytes).
-        pending_bytes_.fetch_add(sz, std::memory_order_relaxed);
+        queued_allocation_bytes_.fetch_add(sz, std::memory_order_relaxed);
     }
 
     void unregister_resource(ievictable* r)
@@ -127,7 +139,8 @@ public:
             return;
         }
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok || r->evict_slot_ == UINT32_MAX || r->get_evict_state() == evict_state::resident)
+        if(get_init_status() != eviction::init_status::ok || r->evict_slot_ == UINT32_MAX ||
+           r->get_evict_state() == evict_state::resident)
         {
             return;
         }
@@ -137,10 +150,13 @@ public:
     auto restore_all() -> eviction::stats
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return snapshot();
         }
+        // Copy the evicted set so a concurrent unregister (rare; the registry mutex serializes
+        // it) cannot invalidate our iterator. restore_locked rebalances evicted_/resident_ in
+        // place so iterating the original would be UB.
         const std::vector<ievictable*> pending = evicted_;
         for(auto* r : pending)
         {
@@ -152,7 +168,7 @@ public:
     auto evict(const eviction::config& cfg) -> eviction::stats
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return snapshot();
         }
@@ -187,7 +203,7 @@ public:
                      std::uint32_t max_evictions) -> eviction::stats
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return snapshot();
         }
@@ -204,7 +220,7 @@ public:
     auto evict_all() -> eviction::stats
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return snapshot();
         }
@@ -228,16 +244,21 @@ public:
         return evict(cfg);
     }
 
-    void report_budget(std::uint64_t used_bytes, std::uint64_t budget_bytes, std::uint64_t target_bytes)
+    void set_budget(const eviction::budget_state& budget, std::uint64_t used_bytes)
     {
         std::lock_guard<std::mutex> lk(mutex_);
-        if(init_status_ != eviction::init_status::ok)
+        if(get_init_status() != eviction::init_status::ok)
         {
             return;
         }
+        budget_ = budget;
         budget_used_bytes_ = used_bytes;
-        budget_bytes_ = budget_bytes;
-        target_bytes_ = target_bytes;
+    }
+
+    auto current_budget() const -> eviction::budget_state
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return budget_;
     }
 
     auto get_stats() -> eviction::stats
@@ -246,13 +267,48 @@ public:
         return snapshot();
     }
 
-    auto take_pending_bytes() -> std::uint64_t
+    void note_pending_allocation(std::uint64_t bytes)
     {
-        return pending_bytes_.exchange(0, std::memory_order_relaxed);
+        if(bytes == 0 || get_init_status() != eviction::init_status::ok)
+        {
+            return;
+        }
+        // The hot path: a worker thread is registering a render target / compute-write texture.
+        // Atomic and lock-free so we never block resource creation on the registry mutex.
+        queued_allocation_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+    }
+
+    auto peek_queued_bytes() const -> std::uint64_t
+    {
+        return queued_allocation_bytes_.load(std::memory_order_relaxed);
+    }
+
+    void clear_queued_allocations()
+    {
+        // Called whenever bgfx has processed the command queue (bgfx::frame OR a mid-frame
+        // flush). Both clear the in-flight counter; only frame() rolls over the peak diagnostics
+        // (see on_frame_advanced) so a coalescing flush mid-frame does not erase the worst-case
+        // reading the profiler is about to surface.
+        queued_allocation_bytes_.store(0, std::memory_order_relaxed);
+    }
+
+    void on_frame_advanced()
+    {
+        // Per-frame peak timers used by the profiler. Called from set_frame / advance_frame so
+        // diagnostics reflect the entire frame up to the profiler read.
+        last_pass_ms_ = 0.0;
+        last_restore_ms_ = 0.0;
+        last_pass_scanned_ = 0;
+        last_pass_evicted_ = 0;
     }
 
 private:
     eviction_registry() = default;
+
+    void set_init_status(eviction::init_status s)
+    {
+        init_status_.store(s, std::memory_order_release);
+    }
 
     static void add_to(std::vector<ievictable*>& bucket, ievictable* r)
     {
@@ -286,7 +342,9 @@ private:
         const auto t0 = clock::now();
         const std::uint64_t sz = r->gpu_size();
         const bool ok = r->on_restore();
-        last_restore_ms_ = to_ms(clock::now() - t0);
+        // Per-frame peak (reset on bgfx::frame via on_frame_advanced) so the profiler can see the
+        // worst case for the current frame, not just the most recent restore.
+        last_restore_ms_ = std::max(last_restore_ms_, to_ms(clock::now() - t0));
         if(!ok)
         {
             ++failed_restores_;
@@ -339,9 +397,12 @@ private:
             freed += sz;
         }
 
-        last_pass_scanned_ = candidates_.size();
-        last_pass_evicted_ = pass_evicted;
-        last_pass_ms_ = to_ms(clock::now() - t0);
+        // Per-frame peaks: max-of, not last-of, so a small fast sweep right before the profiler
+        // reads the stats cannot mask a slow expensive sweep that happened earlier in the same
+        // frame. Reset on bgfx::frame via on_frame_advanced.
+        last_pass_scanned_ = std::max<std::uint64_t>(last_pass_scanned_, candidates_.size());
+        last_pass_evicted_ = std::max<std::uint64_t>(last_pass_evicted_, pass_evicted);
+        last_pass_ms_ = std::max(last_pass_ms_, to_ms(clock::now() - t0));
         return snapshot();
     }
 
@@ -413,8 +474,11 @@ private:
         s.total_bytes_restored = total_bytes_restored_;
         s.failed_restores = failed_restores_;
         s.thrash_events = thrash_events_;
-        s.budget_bytes = budget_bytes_;
-        s.target_bytes = target_bytes_;
+        // Expose the soft budget as the "budget" for tooling — it is the line above which the
+        // driver starts working. Hard limit and safety margin are advisory and shown only via
+        // current_budget() if needed by callers.
+        s.budget_bytes = budget_.soft_budget_bytes;
+        s.target_bytes = budget_.target_bytes;
         s.budget_used_bytes = budget_used_bytes_;
         s.last_pass_scanned = last_pass_scanned_;
         s.last_pass_evicted = last_pass_evicted_;
@@ -423,8 +487,8 @@ private:
         return s;
     }
 
-    std::mutex mutex_;
-    eviction::init_status init_status_ = eviction::init_status::unsupported;
+    mutable std::mutex mutex_;
+    std::atomic<eviction::init_status> init_status_{eviction::init_status::unsupported};
     eviction::config default_config_{};
 
     std::vector<ievictable*> resident_;
@@ -433,17 +497,17 @@ private:
 
     std::uint64_t resident_bytes_ = 0;
     std::uint64_t evicted_bytes_ = 0;
-    /// GPU bytes registered since the last driver tick; drained by take_pending_bytes. Atomic because
-    /// resources are registered from worker threads while the driver reads from the API thread.
-    std::atomic<std::uint64_t> pending_bytes_{0};
+    /// GPU bytes queued since the last bgfx::frame/flush. Atomic because resources may be
+    /// registered (or noted) from worker threads while the driver and reclaim_for peek it from
+    /// the API thread. Cleared in @ref clear_queued_allocations after a pump.
+    std::atomic<std::uint64_t> queued_allocation_bytes_{0};
     std::uint64_t total_evictions_ = 0;
     std::uint64_t total_restores_ = 0;
     std::uint64_t total_bytes_evicted_ = 0;
     std::uint64_t total_bytes_restored_ = 0;
     std::uint64_t failed_restores_ = 0;
     std::uint64_t thrash_events_ = 0;
-    std::uint64_t budget_bytes_ = 0;
-    std::uint64_t target_bytes_ = 0;
+    eviction::budget_state budget_{};
     std::uint64_t budget_used_bytes_ = 0;
     std::uint64_t last_pass_scanned_ = 0;
     std::uint64_t last_pass_evicted_ = 0;
@@ -494,35 +558,80 @@ auto evict_all() -> stats
     return eviction_registry::instance().evict_all();
 }
 
-void reclaim_for(std::uint64_t bytes)
+namespace
+{
+auto live_gpu_used() -> std::uint64_t
+{
+    const auto* gpu_stats = gfx::get_stats();
+    if(gpu_stats == nullptr)
+    {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
+}
+} // namespace
+
+auto reclaim_for(std::uint64_t bytes) -> reclaim_result
 {
     if(bytes == 0 || !is_supported())
     {
-        return;
+        return reclaim_result::headroom;
     }
-    const auto* gpu_stats = gfx::get_stats();
-    if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
+    const budget_state budget = eviction_registry::instance().current_budget();
+    if(budget.hard_limit_bytes == 0)
     {
-        return;
+        // No budget published yet (start-up frame, or the driver chose not to enforce one).
+        // Treat as headroom; the system will catch up once update_eviction runs.
+        return reclaim_result::headroom;
     }
-    const auto budget = static_cast<std::uint64_t>(gpu_stats->gpuMemoryMax);
-    const auto used = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
-    // Keep a small safety margin (~1.5%) so we do not edge right up to the device limit.
-    const std::uint64_t margin = budget >> 6;
-    const std::uint64_t projected = used + bytes + margin;
-    if(projected <= budget)
+    const std::uint64_t used = live_gpu_used();
+    const std::uint64_t queued = eviction_registry::instance().peek_queued_bytes();
+    const std::uint64_t projected = used + queued + bytes + budget.safety_margin_bytes;
+    if(projected <= budget.soft_budget_bytes)
     {
-        return;
+        return reclaim_result::headroom;
     }
-    // Evict the largest resident victims to cover the deficit, then pump the command buffer so the
-    // destroys are processed (and their VRAM released) before the caller creates the new resource.
-    evict_bytes(projected - budget, strategy::largest_first, 0, 0);
+
+    // Evict the largest resident victims down to the target watermark. Even if the projection only
+    // breached the soft budget we evict eagerly so subsequent allocations in the same burst fit
+    // without further work — bgfx will reclaim the destroyed memory at the next bgfx::frame
+    // anyway. Pass min_age_frames = 0 and max_evictions = 0 because this is the emergency path:
+    // protecting recently-used resources here would just mean failing the imminent allocation.
+    const std::uint64_t deficit = projected - budget.target_bytes;
+    evict_bytes(deficit, strategy::largest_first, /*min_age_frames=*/0, /*max_evictions=*/0);
+
+    // Burst coalescing: only pump the command buffer when the projection also crosses the hard
+    // limit. Below it we trust bgfx to process the queued destroys at the next frame; above it we
+    // must pump so the destroys execute before the imminent allocation lands.
+    if(projected <= budget.hard_limit_bytes)
+    {
+        return reclaim_result::reclaimed;
+    }
     gfx::flush();
+    // After flush: queued is cleared, gpu_used reflects the destroys. Re-check; if we still cannot
+    // fit, return insufficient so the caller can log a warning (the allocation is still attempted).
+    const std::uint64_t recheck_used = live_gpu_used();
+    const std::uint64_t recheck_projected = recheck_used + bytes + budget.safety_margin_bytes;
+    if(recheck_projected > budget.hard_limit_bytes)
+    {
+        return reclaim_result::insufficient;
+    }
+    return reclaim_result::reclaimed;
 }
 
-auto take_pending_bytes() -> std::uint64_t
+auto peek_queued_bytes() -> std::uint64_t
 {
-    return eviction_registry::instance().take_pending_bytes();
+    return eviction_registry::instance().peek_queued_bytes();
+}
+
+void note_pending_allocation(std::uint64_t bytes)
+{
+    eviction_registry::instance().note_pending_allocation(bytes);
+}
+
+void clear_queued_allocations()
+{
+    eviction_registry::instance().clear_queued_allocations();
 }
 
 namespace
@@ -634,12 +743,32 @@ auto debug_consumed_bytes() -> std::uint64_t
 
 auto restore_all() -> stats
 {
-    return eviction_registry::instance().restore_all();
+    auto& reg = eviction_registry::instance();
+    if(!is_supported())
+    {
+        return reg.get_stats();
+    }
+    // Pre-flight reclaim: ensure there is room for the full evicted pool before we start
+    // recreating handles. Doing it once up-front (rather than once per restore) avoids holding
+    // the registry mutex across reclaim_for, which would deadlock since reclaim_for re-locks via
+    // evict_bytes. We accept the slight over-estimate (queued allocations are double-counted by
+    // gpu_used as bgfx catches up); reclaim_for treats that as headroom unless we are truly tight.
+    const auto pre = reg.get_stats();
+    if(pre.evicted_bytes != 0)
+    {
+        (void)reclaim_for(pre.evicted_bytes);
+    }
+    return reg.restore_all();
 }
 
-void report_budget(std::uint64_t used_bytes, std::uint64_t budget_bytes, std::uint64_t target_bytes)
+void set_budget(const budget_state& budget, std::uint64_t used_bytes)
 {
-    eviction_registry::instance().report_budget(used_bytes, budget_bytes, target_bytes);
+    eviction_registry::instance().set_budget(budget, used_bytes);
+}
+
+auto current_budget() -> budget_state
+{
+    return eviction_registry::instance().current_budget();
 }
 
 auto get_stats() -> stats
@@ -650,11 +779,15 @@ auto get_stats() -> stats
 void set_frame(std::uint64_t frame)
 {
     detail::g_eviction_frame = frame;
+    // New frame: reset the per-frame peak diagnostics so the profiler sees this frame's worst
+    // case, not a value carried over from previous frames.
+    eviction_registry::instance().on_frame_advanced();
 }
 
 void advance_frame()
 {
     ++detail::g_eviction_frame;
+    eviction_registry::instance().on_frame_advanced();
 }
 
 void register_resource(ievictable* resource)

@@ -388,6 +388,7 @@ uint32_t frame(bool _capture)
 {
     s_context.frame = bgfx::frame(_capture);
     eviction::set_frame(s_context.frame);
+    eviction::clear_queued_allocations();
     return s_context.frame;
 }
 
@@ -1151,6 +1152,7 @@ void flush()
     // drain the command ring so the destroys are guaranteed to have been serviced on return.
     bgfx::frame(BGFX_FRAME_FLUSH);
     bgfx::frame(BGFX_FRAME_FLUSH);
+    eviction::clear_queued_allocations();
 }
 
 auto screen_quad(float dest_width, float dest_height, float depth, float width, float height) -> uint64_t

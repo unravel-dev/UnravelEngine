@@ -17,7 +17,6 @@ enum class evict_class : std::uint8_t
 {
     non_evictable, ///< No CPU backing (render targets, uniforms, ...). Never registered.
     evictable,     ///< May be evicted by a sweep.
-    pinned,        ///< Tracked for stats but never chosen by a sweep.
 };
 
 namespace detail

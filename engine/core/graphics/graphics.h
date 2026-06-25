@@ -636,6 +636,15 @@ void set_warning_logger(const std::function<void(const std::string&, const char*
 void set_error_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 void set_debug_logger(const std::function<void(const std::string&, const char* _filePath, uint16_t _line)>& logger);
 
+/// Emit a message through the logger callback registered for @p category ("trace", "debug",
+/// "info", "warning", "error"). No-op when the host has not installed a callback for that
+/// category. Used by the graphics layer (e.g. the eviction system) to surface messages through
+/// the same channel bgfx uses, so the user only has to wire one logger up to the engine.
+void log(const std::string& category,
+         const std::string& log_msg,
+         const char* _filePath = nullptr,
+         uint16_t _line = 0);
+
 /// Hooks for bgfx::CallbackI::profilerBegin / profilerBeginLiteral / profilerEnd. The graphics layer
 /// only forwards events; pair nested begin/end and any token stack in the code that installs hooks.
 using gfx_profiler_begin_hook =

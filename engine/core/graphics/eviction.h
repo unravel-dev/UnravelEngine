@@ -1,6 +1,10 @@
 #pragma once
 
 #include "evictable.h"
+#include "graphics.h"
+
+#include <memory>
+#include <vector>
 
 /// GPU resource eviction / paging service.
 ///
@@ -11,11 +15,33 @@
 namespace gfx::eviction
 {
 
+using backing_buffer = std::shared_ptr<std::vector<std::uint8_t>>;
+
+inline auto make_backing(const void* data, std::uint32_t size) -> backing_buffer
+{
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    return std::make_shared<std::vector<std::uint8_t>>(bytes, bytes + size);
+}
+
+inline void release_backing_ref(void* /*data*/, void* user_data)
+{
+    delete static_cast<backing_buffer*>(user_data);
+}
+
+inline auto make_backing_ref(const backing_buffer& backing) -> const memory_view*
+{
+    auto* bgfx_ref = new backing_buffer(backing);
+    return gfx::make_ref((*bgfx_ref)->data(),
+                         static_cast<std::uint32_t>((*bgfx_ref)->size()),
+                         release_backing_ref,
+                         bgfx_ref);
+}
+
 /// Result of @ref init. Determines whether the system tracks resources at all.
 enum class init_status : std::uint8_t
 {
     ok,          ///< Initialized and active.
-    unnecessary, ///< Eviction is not needed for this backend.
+    unnecessary, ///< Eviction is not needed for this backend (driver manages residency).
     unsupported, ///< Backend does not report a GPU memory budget; eviction is disabled.
     failed,      ///< Initialization failed (graphics not ready).
 };
@@ -27,6 +53,49 @@ enum class strategy : std::uint8_t
     lfu,           ///< Least frequently used first (smallest use count).
     largest_first, ///< Largest resources first (fastest headroom recovery).
     age_ttl,       ///< Every resource idle for longer than @ref config::max_idle_frames.
+};
+
+/// Outcome of a @ref reclaim_for call. Callers may log @ref insufficient as a warning but should
+/// still proceed with the allocation: a bgfx-side OOM is non-fatal (the handle returns invalid and
+/// the resource is just absent) and we prefer the engine to surface its own message rather than
+/// fail silently inside the eviction layer.
+enum class reclaim_result : std::uint8_t
+{
+    headroom,     ///< Already enough headroom; nothing was done.
+    reclaimed,    ///< Eviction (and possibly a command-buffer pump) freed enough room.
+    insufficient, ///< Eviction could not free enough room; the allocation may exhaust device memory.
+};
+
+/// Human-readable name for @ref reclaim_result (for diagnostics / logging).
+constexpr auto to_string(reclaim_result r) -> const char*
+{
+    switch(r)
+    {
+        case reclaim_result::headroom:     return "headroom";
+        case reclaim_result::reclaimed:    return "reclaimed";
+        case reclaim_result::insufficient: return "insufficient";
+    }
+    return "unknown";
+}
+
+/// Snapshot of the active memory budget the eviction system enforces. The driver
+/// (@ref unravel::update_eviction) populates one of these every frame from the backend stats and
+/// the user-facing settings; @ref reclaim_for then reads it back via @ref current_budget.
+///
+/// Field semantics, expressed in absolute bytes (no fractions of anything):
+///   - @ref hard_limit_bytes      — never cross this; an allocation projected past it must flush.
+///   - @ref soft_budget_bytes     — begin evicting once usage exceeds this (defines the "begin work" line).
+///   - @ref target_bytes          — evict down to this watermark (hysteresis; should be < soft_budget).
+///   - @ref safety_margin_bytes   — added on top of pending allocations when deciding whether
+///                                  to evict; keeps reclaim_for from edging exactly to the limit.
+///
+/// All-zero state means "no budget reported" — every entry point treats this as "do nothing".
+struct budget_state
+{
+    std::uint64_t hard_limit_bytes = 0;
+    std::uint64_t soft_budget_bytes = 0;
+    std::uint64_t target_bytes = 0;
+    std::uint64_t safety_margin_bytes = 0;
 };
 
 /// Configuration for a single eviction pass.
@@ -105,28 +174,51 @@ auto evict_bytes(std::uint64_t free_bytes,
 /// Must run on the graphics API thread.
 auto evict_all() -> stats;
 
-/// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes. When the backend
-/// reports a budget and the projected occupancy (current GPU memory + @p bytes + a safety margin)
-/// would exceed it, this evicts the largest resident resources to cover the deficit and pumps the
-/// command buffer (without presenting) so the queued destroys are processed before the new
-/// allocation lands. This is the last-resort defense for large allocations made near the limit (e.g.
-/// render targets / frame buffers on resize). Must run on the graphics API thread. It is a no-op
-/// when eviction is unsupported or there is already enough headroom.
-void reclaim_for(std::uint64_t bytes);
+/// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes. Reads the active
+/// @ref budget_state (published by the driver via @ref set_budget) and the live backend stats and
+/// decides whether to evict and/or pump the command buffer:
+///   - If projected occupancy (gpu_used + queued + @p bytes + safety_margin) stays under the soft
+///     budget, returns @ref reclaim_result::headroom and does nothing.
+///   - Otherwise evicts the largest resident victims down to @ref budget_state::target_bytes.
+///   - Only flushes (bgfx::frame with @c BGFX_FRAME_FLUSH) when the projection crosses the hard
+///     limit, so we coalesce normal bursts and pay the GPU stall only when the next allocation
+///     would not fit alongside the queued destroys.
+///   - Returns @ref reclaim_result::insufficient when even after a flush the projection still
+///     exceeds the hard limit. Callers should log a warning and still proceed; bgfx will surface
+///     a backend OOM through its own error path if the allocation truly fails.
+/// Must run on the graphics API thread. A no-op when eviction is unsupported or no budget is set.
+auto reclaim_for(std::uint64_t bytes) -> reclaim_result;
 
-/// Restore every currently evicted resource immediately. Useful for testing and for turning paging
-/// off. Must run on the graphics API thread.
+/// Restore every currently evicted resource immediately. Calls @ref reclaim_for once up front
+/// for the full evicted byte count so a large pending pool cannot push the device past the hard
+/// limit. The actual restore loop runs under the registry mutex to keep the evicted set stable.
+/// Useful for tests and for turning paging off. Must run on the graphics API thread.
 auto restore_all() -> stats;
 
-/// Report the budget the external driver is currently enforcing, so tooling can display it through
-/// @ref get_stats. Pure bookkeeping; it does not trigger eviction. @p used_bytes is the metric the
-/// driver compares against the budget (e.g. GPU memory used, or resident bytes for a manual budget).
-void report_budget(std::uint64_t used_bytes, std::uint64_t budget_bytes, std::uint64_t target_bytes);
+/// Publish the active memory budget for this frame so @ref reclaim_for and tooling see the same
+/// numbers. Pure bookkeeping — it does not trigger eviction itself. @p used_bytes is the metric
+/// the driver compares against the budget (e.g. gpuMemoryUsed + queued for auto budget, or
+/// evictable resident bytes for a manual budget); it is recorded only for diagnostics.
+void set_budget(const budget_state& budget, std::uint64_t used_bytes);
 
-/// Take and reset the GPU bytes registered since the last call. The per-frame driver adds this to
-/// the backend's gpuMemoryUsed (which lags a frame or more) to predict device occupancy during a
-/// burst of resource creations. Lock-free; intended to be called once per frame from the driver.
-auto take_pending_bytes() -> std::uint64_t;
+/// Snapshot the most recently published @ref budget_state. Returns an all-zero struct when no
+/// budget has been set yet (start-up frame, or eviction is unsupported / unnecessary).
+auto current_budget() -> budget_state;
+
+/// Peek the GPU bytes queued since the last bgfx::frame/flush without consuming them. The driver
+/// adds this to the backend's gpuMemoryUsed (which lags a frame or more) to react in the same
+/// frame, and @ref reclaim_for uses it to project occupancy. Lock-free; cleared by
+/// @ref clear_queued_allocations.
+auto peek_queued_bytes() -> std::uint64_t;
+
+/// Record a newly queued GPU allocation. Used for allocations that are not registered as evictable
+/// resources (e.g. render targets / compute write textures). The same-frame pressure is cleared
+/// by @ref clear_queued_allocations after bgfx has been pumped.
+void note_pending_allocation(std::uint64_t bytes);
+
+/// Clear the queued-allocation counter after bgfx::frame or bgfx::flush has processed the command
+/// stream. Called from the graphics layer; user code should not need this.
+void clear_queued_allocations();
 
 /// Snapshot the current statistics.
 auto get_stats() -> stats;
