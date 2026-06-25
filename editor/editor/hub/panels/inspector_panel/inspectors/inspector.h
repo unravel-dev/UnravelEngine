@@ -106,7 +106,7 @@ public:
      * @param flags ImGui tree node flags for customization
      * @return true if tree node is open and children should be rendered
      */
-    auto push_tree_layout(ImGuiTreeNodeFlags flags = 0) -> bool;
+    auto push_tree_layout(ImGuiTreeNodeFlags flags = 0, bool default_open = true) -> bool;
     
     /**
      * @brief Cleans up ImGui state (IDs, tables, tree nodes)

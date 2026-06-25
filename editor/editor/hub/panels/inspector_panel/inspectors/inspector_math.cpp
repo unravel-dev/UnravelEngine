@@ -1179,7 +1179,9 @@ void inspector_transform::before_inspect(const entt::meta_data& prop, const entt
 {
     layout_ = std::make_unique<property_layout>();
     layout_->set_data(prop, object, false);
-    open_ = layout_->push_tree_layout(ImGuiTreeNodeFlags_SpanFullWidth);
+
+    bool default_open = !entt::get_attribute_as<bool>(prop, "collapsed");
+    open_ = layout_->push_tree_layout(ImGuiTreeNodeFlags_SpanFullWidth, default_open);
 }
 
 auto inspector_transform::inspect(rtti::context& ctx,

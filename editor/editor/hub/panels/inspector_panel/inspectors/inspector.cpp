@@ -237,7 +237,7 @@ void property_layout::prepare_for_item()
     ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 }
 
-auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
+auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags, bool default_open) -> bool
 {
     pushed_ = true;
 
@@ -260,7 +260,7 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags) -> bool
         }
     }
 
-    ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
+    ImGui::SetNextItemOpen(default_open, ImGuiCond_Appearing);
     ImGui::AlignTextToFramePadding();
     // ImGui::PushFont(ImGui::Font::Bold);
     open_ = ImGui::TreeNodeEx(name_.c_str(), flags | ImGuiTreeNodeFlags_AllowOverlap);

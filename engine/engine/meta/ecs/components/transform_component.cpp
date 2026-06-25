@@ -21,6 +21,15 @@ REFLECT(transform_component)
         {
             return false;
         });
+
+    // The global transform only differs from the local one when the entity is parented;
+    // for a root entity it is identical, so hide it to avoid a redundant editable block.
+    auto has_parent_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& i) -> bool
+        {
+            const auto* comp = i.try_cast<transform_component>();
+            return static_cast<bool>(comp && comp->get_parent());
+        });
     // Register math::transform class
     entt::meta_factory<math::transform>{}
         .type("transform"_hs)
@@ -79,6 +88,10 @@ REFLECT(transform_component)
             entt::attribute{"pretty_name", "Global"},
             entt::attribute{"tooltip", "This is the global transformation.\n"
                                                 "Affected by parent transformation."},
+            // Collapsed by default: it is a read-along view, secondary to the local transform.
+            entt::attribute{"collapsed", true},
+            // Only relevant for parented entities (root: global == local).
+            entt::attribute{"predicate", has_parent_predicate_entt},
         })
         .data<&transform_component::set_active, &transform_component::is_active>("active"_hs)
         .custom<entt::attributes>(entt::attributes{
