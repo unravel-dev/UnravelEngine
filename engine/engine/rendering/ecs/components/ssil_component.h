@@ -46,6 +46,7 @@ public:
         result.enable_temporal_accumulation = contribution >= 0.5f ? from.enable_temporal_accumulation : result.enable_temporal_accumulation;
         result.temporal.history_strength = std::lerp(result.temporal.history_strength, from.temporal.history_strength, contribution);
         result.temporal.depth_threshold = std::lerp(result.temporal.depth_threshold, from.temporal.depth_threshold, contribution);
+        result.temporal.normal_dot_threshold = std::lerp(result.temporal.normal_dot_threshold, from.temporal.normal_dot_threshold, contribution);
         result.temporal.max_accum_frames = contribution >= 0.5f ? from.temporal.max_accum_frames : result.temporal.max_accum_frames;
     }
 };

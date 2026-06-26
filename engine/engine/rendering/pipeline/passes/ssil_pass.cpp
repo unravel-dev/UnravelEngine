@@ -135,19 +135,27 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
     auto result_fb = ssil_curr_fb;
 
     bool moments_valid = false;
+    gfx::texture::ptr moments_tex_for_denoise;
     if(params.settings.enable_temporal_accumulation && temporal_program_.is_valid())
     {
-        moments_valid =
-            run_temporal_resolve(rview, result_fb, params.g_buffer, params.prev_depth, params.cam, params.settings);
-        result_fb = rview.fbo_get_or_emplace("SSIL_HISTORY_TEMP");
+        // Use a SEPARATE output variable -- aliasing `result_fb` as both the input
+        // (`ssil_input`) and the output (`out_result_fb`) caused the temporal pass to
+        // silently rebind `s_ssil_curr` to the empty history framebuffer when it wrote
+        // back to its out parameter, making the running mean converge to zero (black).
+        gfx::frame_buffer::ptr temporal_result_fb;
+        moments_valid = run_temporal_resolve(rview,
+                                             result_fb,
+                                             params.g_buffer,
+                                             params.prev_depth,
+                                             params.cam,
+                                             params.settings,
+                                             temporal_result_fb,
+                                             moments_tex_for_denoise);
+        result_fb = temporal_result_fb;
     }
     else
     {
-        rview.tex_remove("SSIL_HISTORY");
-        rview.fbo_remove("SSIL_HISTORY_TEMP");
-        rview.tex_remove("SSIL_HISTORY_TEMP");
-        rview.tex_remove("SSIL_MOMENTS_HISTORY");
-        rview.tex_remove("SSIL_MOMENTS_TEMP");
+        release_history_resources(rview);
     }
 
     if(params.settings.enable_spatial_denoise && denoise_program_.is_valid())
@@ -155,28 +163,20 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
         // The temporal pass produces per-pixel luminance moments (E[L], E[L^2]); the
         // denoiser uses them for true spatiotemporal variance. Only valid when the
         // resolve shader actually ran this frame.
-        auto moments_tex = moments_valid ? rview.tex_safe_get("SSIL_MOMENTS_TEMP") : gfx::texture::ptr{};
+        auto moments_tex = moments_valid ? moments_tex_for_denoise : gfx::texture::ptr{};
         result_fb = run_spatial_denoise(rview, result_fb, params.g_buffer, moments_tex, params.cam, params.settings);
     }
     else
     {
-        rview.fbo_remove("SSIL_DENOISED_A");
-        rview.tex_remove("SSIL_DENOISED_A");
-        rview.fbo_remove("SSIL_DENOISED_B");
-        rview.tex_remove("SSIL_DENOISED_B");
-        rview.tex_remove("SSIL_VARIANCE_A");
-        rview.tex_remove("SSIL_VARIANCE_B");
-        rview.fbo_remove("SSIL_DENOISED_HALF_A");
-        rview.tex_remove("SSIL_DENOISED_HALF_A");
-        rview.fbo_remove("SSIL_DENOISED_HALF_B");
-        rview.tex_remove("SSIL_DENOISED_HALF_B");
-        rview.tex_remove("SSIL_VARIANCE_HALF_A");
-        rview.tex_remove("SSIL_VARIANCE_HALF_B");
+        release_denoise_resources(rview);
     }
 
     // Joint-bilateral upsample to full res when the trace ran below full res so the
     // indirect-lighting consumer samples a 1:1 full-res buffer instead of bleeding a
-    // reduced-res buffer across depth/normal edges with hardware bilinear.
+    // reduced-res buffer across depth/normal edges with hardware bilinear. When the
+    // mixed-resolution denoiser also ran, run_spatial_denoise returned its half-of-trace
+    // result directly (skipping the intermediate trace-res upsample) and this single
+    // pass reconstructs all the way to full -- one less bilateral resample, sharper.
     const bool reduced_res = params.settings.resolution != trace_resolution::full;
     if(reduced_res && upsample_program_.is_valid())
     {
@@ -231,12 +231,13 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     gfx::set_uniform(trace_program_.u_ssil_params, ssil_params);
 
     float multi_bounce_val = multi_bounce_active ? params.settings.multi_bounce_intensity : 0.0f;
-    // The seed is fed straight into Rand3DPCG16 per pixel. Using the raw
-    // render frame (rather than render_frame % max_accum_frames) gives every
-    // frame a unique ray pattern, so the temporal accumulator averages over
-    // many distinct Monte Carlo samples instead of revisiting the same N
-    // patterns forever. Wrap to 16 bits to keep the float-precision domain
-    // ample.
+    // The seed is fed to InterleavedGradientNoise as the temporal axis (via
+    // Hammersley16_IGN) -- it drives per-pixel scramble decorrelation across
+    // frames so the temporal accumulator averages over many distinct Monte
+    // Carlo samples instead of revisiting the same pattern forever. Using the
+    // raw render frame (rather than render_frame % max_accum_frames) keeps
+    // every frame's scramble unique within the accumulator's window. Wrap to
+    // 16 bits to keep the float-precision domain ample.
     float ssil_params2[4] = {
         params.settings.max_distance,
         float(gfx::get_render_frame() & 0xFFFFu),
@@ -394,10 +395,18 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     gfx::texture::ptr var_src = var_b;
     gfx::texture::ptr var_dst = var_a;
 
+    // Trace-pixel doubling chain (1, 2, 4, 8, ...). Both tiers express their dilation in
+    // their own pixel space, so the half-res tier converts the same trace-pixel step into
+    // its half-res step. This keeps the wavelet pyramid contiguous across the tier change;
+    // computing the half-tier step from scratch as `1 << (j + 1)` introduced a one-octave
+    // gap when full_passes == 1 (full ended at step 1, half started at step 4 in trace
+    // pixels, skipping step 2) -- visible as an SVGF "missing band" artefact.
+    const int half_divisor = static_cast<int>(get_divisor(trace_resolution::half));
     for(int i = 0; i < full_passes; ++i)
     {
+        const int step = std::min(1 << i, max_step);
         // Full-res tier preserves local detail -> full 5x5 (radius 2) kernel.
-        run_atrous(src_tex, dst_fb, var_src, var_dst, gx, gy, std::min(1 << i, max_step), i == 0, has_moments, 2,
+        run_atrous(src_tex, dst_fb, var_src, var_dst, gx, gy, step, i == 0, has_moments, 2,
                    fmt::format("Spatial Denoise/Full Pass {}", i));
 
         src_tex = dst_fb->get_texture();
@@ -459,10 +468,17 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         // If the downsample carried full-res variance, propagate it; otherwise the first
         // half-res pass computes a fresh spatial estimate.
         const bool first_half_pass = !has_downsampled_variance && j == 0;
+        // Continue the trace-pixel power-of-two chain across the tier boundary, then
+        // express it in the half-res tier's own pixel space. With full_passes = 1 this
+        // gives trace_step (1, 2, 4, ...) -> half_step (1, 1, 2, 4, ...) -- no missing
+        // octave -- where the old `1 << (j + 1)` started at half_step 2 and skipped a
+        // band of the wavelet pyramid.
+        const int trace_step = 1 << (full_passes + j);
+        const int capped_trace_step = std::min(trace_step, max_step);
+        const int half_step = std::max(1, capped_trace_step / half_divisor);
         // The wide tier uses the narrow 3x3 (radius 1) kernel -- indirect diffuse is low-
-        // frequency, so the outer ring adds little -- with the dilation step doubled to keep
-        // its reach.
-        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, std::min(1 << (j + 1), max_step), first_half_pass, false, 1,
+        // frequency, so the outer ring adds little.
+        run_atrous(half_src, half_dst, hvar_src, hvar_dst, hgx, hgy, half_step, first_half_pass, false, 1,
                    fmt::format("Spatial Denoise/Half Pass {}", j));
 
         half_src = half_dst->get_texture();
@@ -472,9 +488,25 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     }
     auto half_result_fb = (half_dst == half_a) ? half_b : half_a;
 
-    // --- Bilateral upsample half-res wide result back to trace res ---
-    // Render into the free full-res framebuffer (`dst_fb`); silhouettes are reconstructed
-    // sharply because the upsample rejects cross-edge taps using the full-res G-buffer.
+    // --- Bilateral upsample half-res wide result ---
+    // Two cases:
+    //
+    // 1. trace == full: there is no outer upsample (run() skips it because reduced_res is
+    //    false), so we MUST do the half->trace(=full) reconstruction here. Render into
+    //    the free full-res framebuffer (`dst_fb`); silhouettes are reconstructed sharply
+    //    because the upsample rejects cross-edge taps using the full-res G-buffer.
+    //
+    // 2. trace != full: run()'s outer upsample WILL run unconditionally, and it can
+    //    reconstruct directly from half-of-trace to full in a single bilateral pass.
+    //    Skipping the intermediate trace-res reconstruction here saves a whole pass per
+    //    frame (no allocation, no bilateral resample, no full-bandwidth write) and the
+    //    fused output is sharper because we don't introduce an intermediate softening
+    //    bilateral resample.
+    if(settings.resolution != trace_resolution::full)
+    {
+        return half_result_fb;
+    }
+
     auto out_fb = dst_fb;
     {
         gfx::render_pass up_pass("Spatial Denoise/Upsample To Trace Resolution Pass");
@@ -486,7 +518,13 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::set_texture(upsample_program_.s_normal, 1, g_buffer->get_texture(1));
         gfx::set_texture(upsample_program_.s_depth, 2, g_buffer->get_texture(4));
 
-        float upsample_params[4] = {depth_sigma, normal_power, 0.0f, 0.0f};
+        // Target dim = the framebuffer we render INTO (trace res). The shader uses it to
+        // size its reconstruction footprint; without an explicit target the shader would
+        // infer from s_depth (full-res G-buffer) and over-widen the kernel at reduced
+        // trace resolutions.
+        const auto out_sz = out_fb->get_size();
+        float upsample_params[4] = {depth_sigma, normal_power, static_cast<float>(out_sz.width),
+                                    static_cast<float>(out_sz.height)};
         gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
 
         auto topology = gfx::clip_quad(1.0f);
@@ -502,23 +540,61 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 }
 
 auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
-                                     const gfx::frame_buffer::ptr& ssil_input,
+                                     // ssil_input is taken by VALUE (shared_ptr copy) on
+                                     // purpose: a previous version took it by const ref and
+                                     // aliased the same caller variable as out_result_fb,
+                                     // so writing to the out param mutated the input and
+                                     // bound s_ssil_curr to the empty history fb instead
+                                     // of the trace output -- the running mean converged
+                                     // to zero (black SSIL). Passing by value gives us a
+                                     // local copy immune to caller mutations.
+                                     gfx::frame_buffer::ptr ssil_input,
                                      const gfx::frame_buffer::ptr& g_buffer,
                                      const gfx::texture::ptr& prev_depth,
                                      const camera* cam,
-                                     const ssil_settings& settings) -> bool
+                                     const ssil_settings& settings,
+                                     gfx::frame_buffer::ptr& out_result_fb,
+                                     gfx::texture::ptr& out_moments_tex) -> bool
 {
     APP_SCOPE_PERF("Rendering/SSIL/Temporal Resolve Pass");
 
-    // ssil_input already carries the trace resolution; history buffers match it 1:1.
-    auto old_history = rview.tex_safe_get("SSIL_HISTORY");
-    auto history_tex = create_or_update_ssil_tex(rview, "SSIL_HISTORY", ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
-    auto moments_history = create_or_update_ssil_tex(rview, "SSIL_MOMENTS_HISTORY", ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
-    // Two-attachment target: attachment 0 = colour + normalized weight (consumed
-    // downstream as before), attachment 1 = luminance moments (E[L], E[L^2]).
-    auto temp_fb = create_or_update_ssil_fb_mrt(rview, "SSIL_HISTORY_TEMP", "SSIL_HISTORY_TEMP", "SSIL_MOMENTS_TEMP",
-                                                ssil_input, trace_resolution::full, BGFX_TEXTURE_BLIT_DST);
-    auto moments_temp = rview.tex_safe_get("SSIL_MOMENTS_TEMP");
+    // Ping-pong history. Two persistent MRT framebuffers (colour + moments) alternate
+    // read/write each frame, so the temporal shader writes DIRECTLY into next frame's
+    // history texture -- no blit. The previous "TEMP + 2 blits" pattern did two full-
+    // bandwidth copies per frame (colour + moments) for no semantic reason; this saves
+    // ~10 MB of bandwidth/frame at 1080p and ~40 MB at 4K. Parity comes from the bgfx
+    // render frame counter (monotonic across frames, stable within a frame).
+    const uint32_t frame = gfx::get_render_frame();
+    const bool read_is_a = (frame & 1u) == 0u;
+
+    const char* read_color_name = read_is_a ? "SSIL_HISTORY_A_COLOR" : "SSIL_HISTORY_B_COLOR";
+    const char* read_moments_name = read_is_a ? "SSIL_HISTORY_A_MOMENTS" : "SSIL_HISTORY_B_MOMENTS";
+    const char* write_fb_name = read_is_a ? "SSIL_HISTORY_B_FB" : "SSIL_HISTORY_A_FB";
+    const char* write_color_name = read_is_a ? "SSIL_HISTORY_B_COLOR" : "SSIL_HISTORY_A_COLOR";
+    const char* write_moments_name = read_is_a ? "SSIL_HISTORY_B_MOMENTS" : "SSIL_HISTORY_A_MOMENTS";
+
+    // Detect "history was just allocated" by capturing the READ texture pointers BEFORE
+    // create_or_update may replace them. If either differs after the call, we have no
+    // valid history this frame and must seed (init mode). Both textures are tracked so
+    // either-only recreation (e.g. resize that only hits one mip path) still triggers.
+    auto old_read_color = rview.tex_safe_get(read_color_name);
+    auto old_read_moments = rview.tex_safe_get(read_moments_name);
+    auto read_color = create_or_update_ssil_tex(rview, read_color_name, ssil_input, trace_resolution::full);
+    auto read_moments = create_or_update_ssil_tex(rview, read_moments_name, ssil_input, trace_resolution::full);
+    const bool history_just_allocated =
+        (read_color != old_read_color) || (read_moments != old_read_moments);
+
+    auto write_fb = create_or_update_ssil_fb_mrt(rview, write_fb_name, write_color_name, write_moments_name,
+                                                 ssil_input, trace_resolution::full);
+    auto write_moments = rview.tex_safe_get(write_moments_name);
+
+    // The temporal result is plumbed back to the caller via the out parameters: no longer
+    // aliased under "SSIL_HISTORY_TEMP" / "SSIL_MOMENTS_TEMP" because no external pass
+    // looks those up directly (the indirect-lighting consumer samples "SSIL" via the
+    // texture ptr returned from run()).
+    out_result_fb = write_fb;
+    out_moments_tex = write_moments;
+
     const auto gbuf_sz = g_buffer->get_size();
     const auto temporal_sz = ssil_input->get_size();
     const float temporal_resolution[4] = {
@@ -527,32 +603,43 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         static_cast<float>(gbuf_sz.width) / static_cast<float>(temporal_sz.width),
         static_cast<float>(gbuf_sz.height) / static_cast<float>(temporal_sz.height)};
 
-    // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
-    // Seed both outputs by running the temporal shader in "disabled" mode. That writes
-    // colour to attachment 0 and real luminance moments (L, L^2) to attachment 1; a raw
-    // blit from colour into the moments texture would make the next frame's variance
-    // start from invalid (R, G) data.
-    if(history_tex != old_history || !prev_depth)
+    const float temporal_params2[4] = {settings.temporal.normal_dot_threshold, 0.0f, 0.0f, 0.0f};
+
+    auto bind_common = [&](float enable_temporal,
+                           const gfx::texture::ptr& prev_depth_tex)
     {
-        gfx::render_pass init_pass("Temporal Init Pass");
-        init_pass.bind(temp_fb.get());
-        init_pass.set_view_proj(cam->get_view(), cam->get_projection());
-
-        temporal_program_.program->begin();
-
         gfx::set_texture(temporal_program_.s_ssil_curr, 0, ssil_input->get_texture());
-        gfx::set_texture(temporal_program_.s_ssil_history, 1, history_tex);
+        gfx::set_texture(temporal_program_.s_ssil_history, 1, read_color);
         gfx::set_texture(temporal_program_.s_depth, 2, g_buffer->get_texture(4));
-        gfx::set_texture(temporal_program_.s_prev_depth, 3, g_buffer->get_texture(4));
-        gfx::set_texture(temporal_program_.s_ssil_moments_history, 4, moments_history);
+        gfx::set_texture(temporal_program_.s_prev_depth, 3, prev_depth_tex);
+        gfx::set_texture(temporal_program_.s_ssil_moments_history, 4, read_moments);
+        gfx::set_texture(temporal_program_.s_normal, 5, g_buffer->get_texture(1));
 
-        float temporal_params[4] = {0.0f, settings.temporal.history_strength, settings.temporal.depth_threshold,
+        float temporal_params[4] = {enable_temporal,
+                                    settings.temporal.history_strength,
+                                    settings.temporal.depth_threshold,
                                     float(settings.temporal.max_accum_frames)};
         gfx::set_uniform(temporal_program_.u_temporal_params, temporal_params);
+        gfx::set_uniform(temporal_program_.u_temporal_params2, temporal_params2);
         gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
 
         auto prev_vp = cam->get_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
+    };
+
+    // Init mode: history was just allocated -- RGBA16F contains undefined data (possibly
+    // NaN). Run the temporal shader with `u_enable_temporal = 0`, which takes the early
+    // path that writes colour = curr and seeds the moments texture with valid (L, L^2)
+    // values. The shader writes DIRECTLY into the write fb -- no blit needed because the
+    // ping-pong picks this fb up as the READ next frame automatically.
+    if(history_just_allocated || !prev_depth)
+    {
+        gfx::render_pass init_pass("Temporal Init Pass");
+        init_pass.bind(write_fb.get());
+        init_pass.set_view_proj(cam->get_view(), cam->get_projection());
+
+        temporal_program_.program->begin();
+        bind_common(0.0f, g_buffer->get_texture(4));
 
         auto topology = gfx::clip_quad(1.0f);
         gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
@@ -561,37 +648,15 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         gfx::set_state(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
         gfx::discard();
-
-        gfx::render_pass hist_blit_pass("History Init Blit Pass");
-        gfx::blit(hist_blit_pass.id, history_tex->native_handle(), 0, 0, temp_fb->get_texture()->native_handle(), 0, 0);
-
-        gfx::render_pass moments_hist_blit_pass("Moments History Init Blit Pass");
-        gfx::blit(moments_hist_blit_pass.id, moments_history->native_handle(), 0, 0, moments_temp->native_handle(), 0, 0);
         return false;
     }
 
     gfx::render_pass pass("Temporal Resolve Pass");
-    pass.bind(temp_fb.get());
+    pass.bind(write_fb.get());
     pass.set_view_proj(cam->get_view(), cam->get_projection());
 
     temporal_program_.program->begin();
-
-    gfx::set_texture(temporal_program_.s_ssil_curr, 0, ssil_input->get_texture());
-    gfx::set_texture(temporal_program_.s_ssil_history, 1, history_tex);
-    gfx::set_texture(temporal_program_.s_depth, 2, g_buffer->get_texture(4));
-    gfx::set_texture(temporal_program_.s_prev_depth, 3, prev_depth);
-    gfx::set_texture(temporal_program_.s_ssil_moments_history, 4, moments_history);
-
-    float temporal_params[4] = {
-        settings.enable_temporal_accumulation ? 1.0f : 0.0f,
-        settings.temporal.history_strength,
-        settings.temporal.depth_threshold,
-        float(settings.temporal.max_accum_frames)};
-    gfx::set_uniform(temporal_program_.u_temporal_params, temporal_params);
-    gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
-
-    auto prev_vp = cam->get_prev_view_projection();
-    gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
+    bind_common(settings.enable_temporal_accumulation ? 1.0f : 0.0f, prev_depth);
 
     auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
@@ -600,13 +665,6 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::set_state(BGFX_STATE_DEFAULT);
     temporal_program_.program->end();
     gfx::discard();
-
-    // Blit temporal result into the persistent history textures (colour + moments).
-    gfx::render_pass blit_pass("History Blit Pass");
-    gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fb->get_texture()->native_handle(), 0, 0);
-
-    gfx::render_pass moments_blit_pass("Moments History Blit Pass");
-    gfx::blit(moments_blit_pass.id, moments_history->native_handle(), 0, 0, moments_temp->native_handle(), 0, 0);
 
     return true;
 }
@@ -634,12 +692,15 @@ auto ssil_pass::run_upsample(gfx::render_view& rview,
     gfx::set_texture(upsample_program_.s_normal, 1, g_buffer->get_texture(1));
     gfx::set_texture(upsample_program_.s_depth, 2, g_buffer->get_texture(4));
 
-    // Reuse the spatial-denoise edge-stopping sigmas for upsample tap rejection.
+    // Reuse the spatial-denoise edge-stopping sigmas for upsample tap rejection. Target
+    // dim = full G-buffer dim (the output framebuffer we render INTO); see the in-shader
+    // u_target_dim docs for why the shader cannot infer it from s_depth.
+    const auto out_sz = out_fb->get_size();
     float upsample_params[4] = {
         settings.spatial_denoise.depth_sigma,
         settings.spatial_denoise.normal_power,
-        0.0f,
-        0.0f};
+        static_cast<float>(out_sz.width),
+        static_cast<float>(out_sz.height)};
     gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
 
     auto topology = gfx::clip_quad(1.0f);
@@ -653,10 +714,18 @@ auto ssil_pass::run_upsample(gfx::render_view& rview,
     return out_fb;
 }
 
-void ssil_pass::release_resources(gfx::render_view& rview)
+void ssil_pass::release_history_resources(gfx::render_view& rview)
 {
-    rview.fbo_remove("SSIL_CURR");
-    rview.tex_remove("SSIL_CURR");
+    rview.fbo_remove("SSIL_HISTORY_A_FB");
+    rview.fbo_remove("SSIL_HISTORY_B_FB");
+    rview.tex_remove("SSIL_HISTORY_A_COLOR");
+    rview.tex_remove("SSIL_HISTORY_A_MOMENTS");
+    rview.tex_remove("SSIL_HISTORY_B_COLOR");
+    rview.tex_remove("SSIL_HISTORY_B_MOMENTS");
+}
+
+void ssil_pass::release_denoise_resources(gfx::render_view& rview)
+{
     rview.fbo_remove("SSIL_DENOISED_A");
     rview.tex_remove("SSIL_DENOISED_A");
     rview.fbo_remove("SSIL_DENOISED_B");
@@ -669,11 +738,14 @@ void ssil_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove("SSIL_DENOISED_HALF_B");
     rview.tex_remove("SSIL_VARIANCE_HALF_A");
     rview.tex_remove("SSIL_VARIANCE_HALF_B");
-    rview.tex_remove("SSIL_HISTORY");
-    rview.fbo_remove("SSIL_HISTORY_TEMP");
-    rview.tex_remove("SSIL_HISTORY_TEMP");
-    rview.tex_remove("SSIL_MOMENTS_HISTORY");
-    rview.tex_remove("SSIL_MOMENTS_TEMP");
+}
+
+void ssil_pass::release_resources(gfx::render_view& rview)
+{
+    rview.fbo_remove("SSIL_CURR");
+    rview.tex_remove("SSIL_CURR");
+    release_denoise_resources(rview);
+    release_history_resources(rview);
     rview.fbo_remove("SSIL_UPSAMPLED");
     rview.tex_remove("SSIL_UPSAMPLED");
 }

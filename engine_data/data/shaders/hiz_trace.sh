@@ -145,27 +145,36 @@ bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
 /// Validate a screen-space hit for indirect lighting.
 /// Returns confidence in [0,1].  Rejects background, self-intersection, and backfaces.
 /// vs_hit_pos must be pre-computed by the caller via HizComputeViewspacePosition.
+///
+/// The function always validates against the FULL-RESOLUTION (mip 0) Hi-Z depth (the
+/// conservative coarser mips give worst-case bounds that are not appropriate for the
+/// pixel-accurate self-intersection / surface re-fetch test). It computes the mip-0
+/// dimensions itself so that callers tracing from a non-zero base mip (e.g. SSIL starting
+/// the hierarchical march at mip 1 for performance) still get a correctly-scaled self-hit
+/// reject and a correctly-indexed depth refetch -- previously this used the caller's
+/// `screen_size` for both, which silently corrupted both gates when the caller's screen
+/// size was not the mip-0 resolution.
 float HizValidateHit(sampler2D hiz_sampler,
                      sampler2D normal_sampler,
                      vec3 ss_hit_pos,
                      vec2 uv,
                      vec3 vs_ray_origin,
                      vec3 vs_hit_pos,
-                     vec2 screen_size,
                      float depth_tolerance)
 {
     BRANCH
     if(any(lessThan(ss_hit_pos.xy, vec2_splat(0.0))) || any(greaterThan(ss_hit_pos.xy, vec2_splat(1.0))))
         return 0.0;
 
+    vec2 mip0_size = HizGetDepthMipResolution(hiz_sampler, 0);
     vec2 manhattan_dist = abs(ss_hit_pos.xy - uv);
-    vec2 inv_screen_size = rcp(screen_size);
+    vec2 inv_mip0_size = rcp(mip0_size);
 
     BRANCH
-    if(all(lessThan(manhattan_dist, inv_screen_size * 0.5)))
+    if(all(lessThan(manhattan_dist, inv_mip0_size * 0.5)))
         return 0.0;
 
-    float surface_z = HizFetchDepth(hiz_sampler, screen_size * ss_hit_pos.xy, 0);
+    float surface_z = HizFetchDepth(hiz_sampler, mip0_size * ss_hit_pos.xy, 0);
 
     BRANCH
 #ifdef INVERTED_DEPTH_RANGE

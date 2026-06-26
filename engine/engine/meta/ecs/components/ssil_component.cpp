@@ -93,6 +93,14 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"max", 0.200f},
             entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation; higher =\nsmoother but more ghosting."},
         })
+        .data<&temporal_settings::normal_dot_threshold>("normal_dot_threshold"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_dot_threshold"},
+            entt::attribute{"pretty_name", "Normal Threshold"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "Minimum dot(n_current, n_at_reprojected_uv) to accept history. Catches the common\ndisocclusion case where reprojection lands on a different surface (rotated geometry,\nanimated foliage) which the depth-only test misses. 0.85 ~ 32 deg tolerance; lower\nallows wider surface mismatch (more ghosting), higher rejects more aggressively."},
+        })
         .data<&temporal_settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_accum_frames"},
@@ -271,6 +279,7 @@ SAVE_INLINE(ssil_pass::temporal_settings)
 {
     try_save(ar, ser20::make_nvp("history_strength", obj.history_strength));
     try_save(ar, ser20::make_nvp("depth_threshold", obj.depth_threshold));
+    try_save(ar, ser20::make_nvp("normal_dot_threshold", obj.normal_dot_threshold));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
 }
 SAVE_INSTANTIATE(ssil_pass::temporal_settings, ser20::oarchive_associative_t);
@@ -280,6 +289,7 @@ LOAD_INLINE(ssil_pass::temporal_settings)
 {
     try_load(ar, ser20::make_nvp("history_strength", obj.history_strength));
     try_load(ar, ser20::make_nvp("depth_threshold", obj.depth_threshold));
+    try_load(ar, ser20::make_nvp("normal_dot_threshold", obj.normal_dot_threshold));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
 }
 LOAD_INSTANTIATE(ssil_pass::temporal_settings, ser20::iarchive_associative_t);

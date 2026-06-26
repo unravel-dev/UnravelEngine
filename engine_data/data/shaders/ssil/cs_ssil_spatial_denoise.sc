@@ -50,11 +50,14 @@ uniform vec4 u_denoise_params2;
 #define KW1 0.25
 #define KW2 0.0625
 
-// Luminance-sigma floor so the edge-stop never fully collapses on flat regions. Kept
-// small: the floor sets the luminance tolerance on fully-converged pixels (variance ~ 0),
-// so a large value (relative to indirect radiance, which is < 1) makes exp(-|dL|/sigma)
-// ~ 1 for real intra-surface detail and the luminance edge-stop stops preserving it.
-#define LUMA_SIGMA_EPS 0.01
+// Luminance-sigma floor so the edge-stop never fully collapses on flat regions. Combined
+// as max(LUMA_SIGMA_ABS, LUMA_SIGMA_REL * center_luma) so the floor scales with the local
+// indirect intensity: an absolute 0.01 is sane for SDR indirect but becomes effectively 0
+// for HDR scenes (luminance > 1), there disabling the luma stop on noisy pixels. The
+// relative term keeps the tolerance proportional to the signal, the absolute term keeps
+// it non-zero in fully-black regions so the kernel still smooths near-zero noise.
+#define LUMA_SIGMA_ABS 0.01
+#define LUMA_SIGMA_REL 0.02
 float ssil_kernel_weight(int dx, int dy)
 {
     int ax = abs(dx);
@@ -160,9 +163,35 @@ void main()
         BRANCH
         if(u_has_moments > 0.5)
         {
-            vec2 moments = texelFetch(s_ssil_moments, coord, 0).rg;
-            float temporal_variance = max(0.0, moments.y - moments.x * moments.x);
-            variance = temporal_variance;
+            // SVGF "short-history" hybrid. The temporal variance is mu2 - mu1^2 from the
+            // running luminance moments -- excellent on pixels with mature history, but
+            // ZERO by construction on freshly-disoccluded pixels (silhouette edges during
+            // motion, fresh pixels entering from the screen border): when validity dropped
+            // history, the temporal pass wrote mu1 = luma_curr and mu2 = luma_curr^2, so
+            // mu2 - mu1^2 = 0. A zero variance collapses the luminance edge-stop, only
+            // identical-luma neighbours contribute, and the raw single-frame Monte Carlo
+            // noise shows through directly -- the "edge speckle during motion" failure.
+            //
+            // Spatial variance over the 3x3 input neighbourhood reflects the actual noise
+            // level for THOSE pixels (their neighbours are also fresh and noisy, so the
+            // spatial spread is large). Driving luma_sigma off it for young pixels opens
+            // the edge-stop, admits more neighbours into the weighted mean, and produces
+            // the wider initial blur SVGF needs while the history hasn't accumulated.
+            //
+            // moments.a = W_new / max_accum_frames is the normalised per-pixel history
+            // strength: ~0 immediately after a rejection, climbing toward 1 over many
+            // valid-history frames. We use it as the blend factor between the two
+            // variance estimators -- spatial when young, temporal when mature.
+            vec4 m = texelFetch(s_ssil_moments, coord, 0);
+            float temporal_variance = max(0.0, m.y - m.x * m.x);
+            float spatial_variance = ssil_spatial_luma_variance(coord, size);
+            // hist_strength in [0,1]: <=0.05 -> ~1 frame of history -> all spatial;
+            // >=0.4 -> ~6 frames of valid history -> all temporal; smooth ramp between.
+            // 6 frames is roughly where the running luminance mean has converged enough
+            // that the temporal variance becomes the better estimator.
+            float hist_strength = m.a;
+            float age_blend = smoothstep(0.05, 0.4, hist_strength);
+            variance = mix(spatial_variance, temporal_variance, age_blend);
         }
         else
         {
@@ -174,25 +203,44 @@ void main()
         variance = ssil_prefiltered_variance(coord, size);
     }
 
-    float luma_sigma = u_luma_sigma * (sqrt(variance) + LUMA_SIGMA_EPS);
+    float luma_floor = max(LUMA_SIGMA_ABS, LUMA_SIGMA_REL * max(center_luma, 0.0));
+    float luma_sigma = u_luma_sigma * sqrt(variance) + luma_floor;
 
     // Two accumulators: radiance is always valid on surfaces (including environment
     // fallback); alpha is the separate final blend-weight signal.
-    float center_color_w = KW0;
+    // Centre weight matches the separable B3-spline kernel at (0,0): KW0*KW0 = 0.1406.
+    // Using bare KW0 here would give the noisy centre ~2.7x the weight the kernel actually
+    // prescribes, biasing the result toward the un-filtered sample and weakening the blur.
+    float center_kernel_w = KW0 * KW0;
+    float center_color_w = center_kernel_w;
     vec3 color_sum = center.rgb * center_color_w;
     float color_w_sum = center_color_w;
     float variance_num = variance * center_color_w * center_color_w;
 
-    float geom_sum = KW0;
-    float coverage_sum = KW0 * clamp(center.a, 0.0, 1.0);
+    float geom_sum = center_kernel_w;
+    float coverage_sum = center_kernel_w * clamp(center.a, 0.0, 1.0);
 
     // Keep the final spatial filter deterministic. This pass runs after temporal resolve,
     // so per-frame kernel jitter would show up directly as crawling speckles.
-    float angle = ssil_hash12(vec2(coord)) * 6.2831853;
+    // Vary the per-pixel rotation by step_size so successive a-trous passes use distinct
+    // dither orientations; without this every pass picks systematically correlated taps
+    // and the rotated lattice leaves a stable, frame-coherent pattern on flat indirect.
+    float angle = ssil_hash12(vec2(coord) + vec2(float(step_val), float(step_val) * 7.0)) * 6.2831853;
     float sa = sin(angle);
     float ca = cos(angle);
     vec2 base_uv = (vec2(coord) + 0.5) * texel_size;
 
+    // Variance-collapsed kernel was REMOVED here. The previous version shrunk `radius`
+    // to 0 when sqrt(variance) was small relative to centre luma and skipped the kernel
+    // entirely, on the theory that "low variance == converged == no blur needed". The
+    // failure mode that argument missed: variance is also ARTIFICIALLY low for any pixel
+    // whose history was just rejected (depth or normal mismatch). For those pixels the
+    // temporal pass writes mu1 = luma_curr and mu2 = luma_curr^2, so the moments give
+    // variance = 0 -- but the COLOUR is the raw single-frame trace, not a converged mean.
+    // Skipping the spatial blur on those pixels exposes the per-frame Monte Carlo noise
+    // directly as the "blotches" the user saw. Detail preservation is already handled by
+    // the variance-driven luma_sigma below: low variance -> tight luma stop -> only
+    // similar-luma neighbours contribute -> detail kept. We let the kernel always run.
     int radius = int(u_kernel_radius);
     if(radius < 1)
         radius = 2;

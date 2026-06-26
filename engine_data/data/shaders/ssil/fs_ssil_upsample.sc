@@ -30,8 +30,15 @@ uniform vec4 u_upsample_params;
 /// x: relative view-space depth tolerance (fraction of linear depth). Absolute
 ///    device-depth (depth01) tolerances over-reject on grazing/near surfaces where
 ///    depth01 changes fast across a low-res block, collapsing the wall to black.
+/// zw: explicit target (output) dimensions in pixels. Required because this shader is
+///     reused for both the trace->full output upsample AND the half-of-trace->trace
+///     intra-denoise upsample; using textureSize(s_depth, 0) for the target dim would
+///     compute the wrong scale (and over-wide kernel) for the latter, where the output
+///     is at trace res but the G-buffer is at full res. Falls back to s_depth dim when
+///     the uniform is unset (zero), preserving the old behaviour for the outer call.
 #define u_depth_sigma  u_upsample_params.x
 #define u_normal_power u_upsample_params.y
+#define u_target_dim   u_upsample_params.zw
 
 void main()
 {
@@ -55,9 +62,14 @@ void main()
     vec3 center_normal = DecodeGBufferNormalMetalRoughness(full_uv, s_normal).world_normal;
     float center_lin = abs(computeViewSpacePosition(full_uv, center_depth).z);
 
-    vec2 full_dim = vec2(textureSize(s_depth, 0));
+    vec2 gbuf_dim = vec2(textureSize(s_depth, 0));
     vec2 lr_dim = vec2(textureSize(s_ssil_input, 0));
-    vec2 resolution_scale = full_dim / max(lr_dim, vec2_splat(1.0));
+    // Target (output) dim drives the reconstruction footprint. The shader is reused for
+    // (a) trace->full output upsample (target = full G-buffer) and (b) the intra-denoise
+    // half-of-trace->trace upsample (target = trace res). Inferring target from s_depth
+    // would over-state the scale (and over-widen the kernel) in case (b).
+    vec2 target_dim = (u_target_dim.x > 0.5 && u_target_dim.y > 0.5) ? u_target_dim : gbuf_dim;
+    vec2 resolution_scale = target_dim / max(lr_dim, vec2_splat(1.0));
 
     // Low-res sample grid position for this full-res pixel (texel centres at integer + 0.5).
     vec2 lr_coordf = full_uv * lr_dim - vec2_splat(0.5);
@@ -72,6 +84,16 @@ void main()
 
     vec4 accum = vec4_splat(0.0);
     float total_w = 0.0;
+
+    // Single-tap fallback for the degenerate case where every weighted tap is rejected.
+    // Bilinear blends across the very depth/normal edges we are trying to preserve, so
+    // for grazing/near surfaces and silhouette pixels it leaks brighter neighbours across
+    // dark interiors (halos). Track the highest-weight tap as we go and use it as the
+    // fallback instead: it is the single low-res sample most likely to belong to the
+    // full-res surface, and it never leaks because it is a single texel value -- never a
+    // blend across an edge.
+    vec4 best_val = vec4_splat(0.0);
+    float best_geom_w = 0.0;
 
     // Static bounds cover the max radius (3); taps outside the active radius are skipped.
     for(int dy = -2; dy <= 3; ++dy)
@@ -107,19 +129,30 @@ void main()
             vec3 gn = DecodeGBufferNormalMetalRoughness(guide_uv, s_normal).world_normal;
             float nw = pow(max(0.0, dot(center_normal, gn)), u_normal_power);
 
+            vec4 sample_val = texelFetch(s_ssil_input, tc, 0);
+
+            // "Best geometry tap": rank by depth*normal alone (drop the bilinear footprint
+            // factor) so a perfectly-matched tap at the kernel edge can still win over a
+            // mediocre tap at the centre. This is the tap we pick if total_w collapses.
+            float geom_only = dw * nw;
+            if(geom_only > best_geom_w)
+            {
+                best_geom_w = geom_only;
+                best_val = sample_val;
+            }
+
             float w = bw * dw * nw;
-            accum += texelFetch(s_ssil_input, tc, 0) * w;
+            accum += sample_val * w;
             total_w += w;
         }
     }
 
-    // Plain bilinear is the safe baseline: it is always lit where the low-res buffer
-    // is lit. total_w in [0,1] measures how well the edge-aware taps matched the
-    // full-res surface; blend toward the bilateral result by that confidence so
-    // strongly-matched pixels stay edge-preserving while weakly-matched ones
-    // (grazing/near surfaces, screen edges) gracefully fall back to bilinear and
-    // never collapse to black.
-    vec4 bilinear = texture2D(s_ssil_input, full_uv);
-    vec4 bilateral = (total_w > 1e-4) ? (accum / total_w) : bilinear;
-    gl_FragColor = mix(bilinear, bilateral, clamp(total_w, 0.0, 1.0));
+    // total_w in [0,1] measures how well the edge-aware taps matched the full-res
+    // surface. Blend the bilateral mean (when reliable) toward the single best-matched
+    // tap as the matching degrades. We never fall back to hardware-bilinear: bilinear
+    // explicitly blends across the depth/normal edges this pass exists to preserve,
+    // producing visible bright leaks around silhouettes and dark halos around thin
+    // features. The best-tap fallback never leaks because it is a single texel value.
+    vec4 bilateral = (total_w > 1e-4) ? (accum / total_w) : best_val;
+    gl_FragColor = mix(best_val, bilateral, clamp(total_w, 0.0, 1.0));
 }

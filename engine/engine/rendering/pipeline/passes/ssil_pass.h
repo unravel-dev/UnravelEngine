@@ -50,6 +50,17 @@ public:
         /// linear depth). The shader rejects history when |expected - stored| / stored
         /// exceeds this, so it is scale-invariant (same value works near and far).
         float depth_threshold = 0.2f;
+        /// Minimum dot(n_current, n_at_reprojected_uv) to accept history. Catches the
+        /// common disocclusion case where reprojection lands on a different surface
+        /// (rotated geometry, animated foliage) which the depth-only test misses.
+        ///
+        /// MIDPOINT of the soft-fall-off band in the temporal shader, not a hard cutoff
+        /// (the shader applies a smoothstep with +/-0.1 width). 0.6 ~ 53 deg midpoint
+        /// gives full history weight at <=45 deg normal mismatch (covers curved-surface
+        /// reprojection drift) and zero weight at >60 deg (clearly-different surface).
+        /// Higher values are stricter (more rejections, more edge speckle on motion);
+        /// lower values are more lenient (occasional ghosting on rotated geometry).
+        float normal_dot_threshold = 0.6f;
         int max_accum_frames = 16;
     };
 
@@ -125,12 +136,19 @@ private:
     /// Returns true when the temporal pass produced valid luminance moments this frame
     /// (i.e. the resolve shader ran). False on the first / disoccluded frame where the
     /// history is merely seeded -- the denoiser then uses its spatial variance estimate.
+    /// Outputs:
+    ///   `out_result_fb` -- the framebuffer holding this frame's temporal colour result
+    ///                      (alias of the ping-pong WRITE target).
+    ///   `out_moments_tex` -- the moments texture to feed the denoiser. Only meaningful
+    ///                        when the return value is true.
     auto run_temporal_resolve(gfx::render_view& rview,
-                              const gfx::frame_buffer::ptr& ssil_input,
+                              gfx::frame_buffer::ptr ssil_input,
                               const gfx::frame_buffer::ptr& g_buffer,
                               const gfx::texture::ptr& prev_depth,
                               const camera* cam,
-                              const ssil_settings& settings) -> bool;
+                              const ssil_settings& settings,
+                              gfx::frame_buffer::ptr& out_result_fb,
+                              gfx::texture::ptr& out_moments_tex) -> bool;
 
     /// Joint-bilateral upsample of a reduced-resolution SSIL buffer to the full
     /// G-buffer resolution. Only invoked when the trace runs below full res.
@@ -161,6 +179,15 @@ private:
                                       const gfx::frame_buffer::ptr& reference,
                                       trace_resolution res,
                                       uint64_t extra_flags = 0) -> gfx::frame_buffer::ptr;
+
+    /// Releases the temporal-history ping-pong textures and framebuffers. Called when
+    /// temporal accumulation is toggled off so the next enable starts from a clean init.
+    void release_history_resources(gfx::render_view& rview);
+
+    /// Releases the spatial-denoise scratch textures and framebuffers (both full-res and
+    /// mixed half-res tiers, plus the variance ping-pong). Called when the denoiser is
+    /// toggled off so the textures don't keep occupying VRAM.
+    void release_denoise_resources(gfx::render_view& rview);
 
     // Trace program (fullscreen fragment shader)
     struct trace_program : uniforms_cache
@@ -252,6 +279,8 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;
+        /// x = normal-dot validity threshold (e.g. 0.85). yzw reserved.
+        gfx::program::uniform_ptr u_temporal_params2;
         gfx::program::uniform_ptr u_temporal_resolution;
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr s_ssil_curr;
@@ -259,10 +288,13 @@ private:
         gfx::program::uniform_ptr s_depth;
         gfx::program::uniform_ptr s_prev_depth;
         gfx::program::uniform_ptr s_ssil_moments_history;
+        /// Full-res G-buffer normal. Used for the normal-validity disocclusion gate.
+        gfx::program::uniform_ptr s_normal;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_temporal_params, "u_temporal_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_temporal_params2, "u_temporal_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_temporal_resolution, "u_temporal_resolution", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), s_ssil_curr, "s_ssil_curr", gfx::uniform_type::Sampler);
@@ -270,6 +302,7 @@ private:
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssil_moments_history, "s_ssil_moments_history", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }

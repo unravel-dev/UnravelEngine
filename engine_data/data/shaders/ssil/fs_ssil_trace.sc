@@ -67,6 +67,15 @@ uniform vec4 u_ssil_params3;
 /// X and Y ratios; see HizScreenPassToFullResUV docs in hiz_trace.sh.
 uniform vec4 u_ssil_resolution;
 
+// Hi-Z mip the hierarchical raymarch walks down to. Mip 0 (full-res) is the only safe
+// choice for an SSIL implementation feeding directly into the lighting consumer: the
+// coarser mips snap hit positions to a 2x2-or-larger full-res tile, which on shading
+// surfaces produces low-frequency variation that survives the spatial denoiser (the
+// 5x5 a-trous kernel smooths INSIDE each tile but the tile-boundary discontinuities
+// remain, visible as block-shaped indirect-colour blotches on otherwise smooth walls).
+// The perf cost of starting at mip 0 is real (~30% more depth fetches in the trace) but
+// the visual cost of any coarser start mip is much worse than the perf saving. Revisit
+// only with a stronger denoiser that can re-smooth the tile boundaries.
 #define BASE_LOD 0
 
 /// Cosine-weighted hemisphere sample around N (tangent space -> world).
@@ -97,6 +106,19 @@ vec3 SampleRadiance(vec2 hit_uv)
     GBufferDataColorAndAO cd = DecodeGBufferColorAndAOLod(hit_uv, s_albedo, 0.0);
     GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(hit_uv, s_normal, 0.0);
     vec3 hit_diffuse = cd.base_color * (1.0 - nd.metalness);
+
+    // Strip the metallic contribution from the direct-lighting bounce source.
+    // LBUFFER stores diffuse + specular per light. Metals have ZERO diffuse: their
+    // base_color is the specular tint and (1 - metalness) = 0 in the BRDF. Feeding the
+    // metallic specular term -- which is camera-direction-dependent -- into a DIFFUSE
+    // indirect estimator is both physically wrong (the specular bounce belongs to the
+    // SSR pipeline, not SSIL) and a steady shimmer source: any small camera motion
+    // shifts the hit pixel's specular highlight and the SSIL output dances with it.
+    // For dielectrics (metalness ~ 0) the strip is a no-op; the ~4% Fresnel specular
+    // surviving in LBUFFER is small enough that the temporal accumulator absorbs its
+    // shimmer. A proper diffuse-only LBUFFER MRT would remove it for dielectrics too --
+    // see the indirect-lighting pass for the eventual refactor target.
+    direct *= (1.0 - nd.metalness);
 
     vec3 radiance = direct + ed.emissive_color;
 
@@ -161,12 +183,50 @@ void main()
     int max_steps = int(u_max_steps);
     int frame_idx = int(u_frame_index);
 
+    // Per-pixel scramble for the Hammersley sequence. Driven by Interleaved Gradient
+    // Noise instead of a PCG hash so the residual per-frame noise has a SCREEN-SPACE
+    // BLUE-NOISE distribution: most of its energy sits in high spatial frequencies that
+    // the a-trous spatial denoiser eliminates, with very little leaking into low
+    // frequencies that would survive as blotches. The FrameId axis is independently
+    // jittered so the spatial pattern also decorrelates across frames, which the
+    // temporal accumulator integrates into a clean mean.
     vec2 scaled_uv = uv * u_ssil_resolution.xy;
-    uvec2 rnd = Rand3DPCG16(ivec3(scaled_uv, frame_idx)).xy;
 
     int ray_count = max(num_rays, 1);
     vec3 accumulated = vec3_splat(0.0);
     float total_hit_weight = 0.0;
+
+    // Per-ray luminance ceiling -- source-level firefly suppression.
+    //
+    // The temporal pass has a moments-driven clamp that catches outliers once history
+    // matures, but until then any single bright hit (sub-pixel emissive texel, an
+    // unshadowed sky-disk fragment caught by a one-pixel hole, a near-miss ray that
+    // grazes a glossy highlight in s_color) lands in the running mean AND pollutes the
+    // moments themselves -- the very statistics the temporal clamp will rely on later.
+    // Disocclusion, scene cuts, and freshly enabled SSIL all hit this same window where
+    // the moments-clamp is dormant. Newly visible pixels then spend several frames
+    // bleeding bright streaks until the polluted moments converge.
+    //
+    // Capping each ray to a multiple of the local SH irradiance kills the outlier at
+    // the source, before it ever reaches the moments. The cap reference is the SH
+    // probe -- a coarse but stable irradiance estimate of the local environment -- so
+    // bright scenes get a high cap and dark scenes get a low cap. The 8x multiplier
+    // preserves any legitimate diffuse bounce up to an order of magnitude above the
+    // average (a sun-lit wall hit, a bright albedo, etc.) and only trims hits that are
+    // by definition non-representative of the diffuse signal we are integrating.
+    // The absolute floor stops the cap collapsing toward zero in night/dark scenes,
+    // which would over-clamp legitimate small-scale bright detail.
+    #define SSIL_FIREFLY_RATIO 8.0
+    #define SSIL_FIREFLY_FLOOR 0.5
+    float firefly_cap_luma = SSIL_FIREFLY_FLOOR;
+    BRANCH
+    if(u_env_intensity > 0.0)
+    {
+        vec3 reference_irradiance = eval_irradiance_sh(s_irradiance, world_normal) *
+                                    RECIP_PI * u_env_intensity;
+        firefly_cap_luma = max(SSIL_FIREFLY_FLOOR,
+                               SSIL_FIREFLY_RATIO * Luminance(reference_irradiance));
+    }
 
     // Spatial stratum: which slice of the SSIL_STRATA_COUNT virtual sample budget this
     // pixel owns, picked by its position inside the SSIL_STRATA_TILE block. Neighbours own
@@ -174,14 +234,27 @@ void main()
     // TRACE-pixel coordinate (gl_FragCoord), not scaled_uv: at reduced trace resolution
     // scaled_uv is the full-res block centre, whose parity is constant across trace pixels
     // and would collapse every pixel onto the same stratum.
+    //
+    // No temporal stratum rotation: we considered cycling each pixel's stratum across
+    // frames so the temporal mean converges to the full hemispherical integral instead of
+    // its single stratum's mean. The convergence math holds, but the per-frame between-
+    // stratum jump (one stratum hits a bright wall, another hits sky) is much larger than
+    // the within-stratum jitter the temporal accumulator is sized for. With effective
+    // history weight ~16 the cycle is visible as 15 Hz "dancing" -- exactly the perceptual-
+    // flicker band. The 5x5 a-trous denoiser footprint already spans all
+    // SSIL_STRATA_COUNT neighbours, so cross-stratum averaging happens spatially even
+    // without temporal rotation. The static stratum bias that remains per-pixel is tiny
+    // because the spatial denoise mixes neighbour strata into every output pixel.
     ivec2 pix = ivec2(gl_FragCoord.xy);
-    int stratum = (pix.x & (SSIL_STRATA_TILE - 1)) + (pix.y & (SSIL_STRATA_TILE - 1)) * SSIL_STRATA_TILE;
+    int stratum = (pix.x & (SSIL_STRATA_TILE - 1)) +
+                  (pix.y & (SSIL_STRATA_TILE - 1)) * SSIL_STRATA_TILE;
     int strata_budget = ray_count * SSIL_STRATA_COUNT;
     int strata_base = stratum * ray_count;
 
     LOOP for(int i = 0; i < ray_count; ++i)
     {
-        vec2 E = Hammersley16(uint(strata_base + i), uint(strata_budget), rnd);
+        vec2 E = Hammersley16_IGN(uint(strata_base + i), uint(strata_budget),
+                                  scaled_uv, float(frame_idx));
         vec3 vs_sample_dir = ImportanceSampleCosine(E, vs_normal);
 
         vec3 hit_radiance = vec3_splat(0.0);
@@ -211,7 +284,7 @@ void main()
                     float effective_tol = u_depth_tolerance +
                                           u_thickness * (hit_dist / max(u_max_distance, 1e-3));
                     float confidence = HizValidateHit(s_hiz, s_normal, ss_hit_pos, uv,
-                                                       vs_ray_origin, vs_hit, screen_size, effective_tol);
+                                                       vs_ray_origin, vs_hit, effective_tol);
 
                     BRANCH
                     if(confidence > 0.0)
@@ -219,6 +292,19 @@ void main()
                         // brightness scales the on-screen bounce only; the environment
                         // fallback stays at probe intensity so unoccluded ambient matches SH.
                         vec3 hit_color = SampleRadiance(ss_hit_pos.xy) * u_brightness;
+
+                        // Source-level firefly cap. Only the on-screen bounce can produce
+                        // sub-pixel outliers (the environment fallback is the SH probe,
+                        // already a low-frequency irradiance estimate that cannot
+                        // firefly), so we cap only the bounce. See firefly_cap_luma
+                        // derivation comment above the ray loop.
+                        float hit_luma = Luminance(hit_color);
+                        BRANCH
+                        if(hit_luma > firefly_cap_luma)
+                        {
+                            hit_color *= firefly_cap_luma / max(hit_luma, 1e-4);
+                        }
+
                         float dist_atten = 1.0 - smoothstep(0.0, u_max_distance, hit_dist);
                         float w = clamp(confidence * dist_atten, 0.0, 1.0);
                         hit_radiance = hit_color;
@@ -248,7 +334,12 @@ void main()
     vec3 result = accumulated / float(ray_count);
     // result stays in radiance-mean units (NOT * PI). The PI factor that puts it in
     // irradiance units (matching eval_irradiance_sh) is applied by the consumer at blend time.
-    float confidence = clamp(total_hit_weight / float(ray_count), 0.0, 1.0);
-
-    gl_FragColor = vec4(result, confidence);
+    //
+    // Alpha = signal validity, not screen-hit coverage. Each ray's contribution to RGB is
+    // already valid -- a hit produces an on-screen bounce, a miss produces SH radiance --
+    // so the cosine-importance average IS the full hemispherical irradiance estimate.
+    // Returning anything < 1 would make the consumer's mix(SH, SSIL*PI, alpha) re-add SH
+    // on top of an SSIL.rgb that already contains an equivalent env contribution from the
+    // missed rays, biasing indirect bright. Sky pixels return 0 in the early-out above.
+    gl_FragColor = vec4(result, 1.0);
 }
