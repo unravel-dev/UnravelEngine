@@ -12,6 +12,12 @@
 #include <memory>
 #include <vector>
 
+namespace gfx
+{
+struct vertex_buffer;
+struct index_buffer;
+} // namespace gfx
+
 namespace unravel
 {
 class camera;
@@ -835,6 +841,27 @@ public:
      * @return const gfx::vertex_layout& The vertex format.
      */
     auto get_vertex_format() const -> const gfx::vertex_layout&;
+
+    /**
+     * @brief Retrieves the hardware vertex buffer for the mesh (shared across all LODs).
+     *
+     * The buffer is created with BGFX_BUFFER_COMPUTE_READ so it can be bound to
+     * compute-style read buffers in shaders (e.g. vertex pulling).
+     *
+     * @return std::shared_ptr<gfx::vertex_buffer> The hardware vertex buffer, or null if unavailable.
+     */
+    auto get_hardware_vb() const -> std::shared_ptr<gfx::vertex_buffer>;
+
+    /**
+     * @brief Retrieves the hardware index buffer for a given LOD.
+     *
+     * The buffer is created with BGFX_BUFFER_COMPUTE_READ so it can be bound to
+     * compute-style read buffers in shaders (e.g. vertex pulling).
+     *
+     * @param lod_index The LOD level (0 = base).
+     * @return std::shared_ptr<gfx::index_buffer> The hardware index buffer, or null if unavailable.
+     */
+    auto get_hardware_ib(uint32_t lod_index = 0) const -> std::shared_ptr<gfx::index_buffer>;
 
     /**
      * @brief Retrieves the skin bind data if this mesh has been bound as a skin.

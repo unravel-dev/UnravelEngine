@@ -454,6 +454,77 @@ public:
                 const math::frustum* frustum = nullptr) const;
 
     /**
+     * @struct submit_vertex_pulling_callbacks
+     * @brief Callbacks for submitting the model using vertex-pulling rendering.
+     *
+     * Vertex-pulling rendering procedurally generates vertices in the vertex shader
+     * from @c gl_VertexID and reads per-vertex data (positions, bone indices, bone
+     * weights, ...) directly from the vertex buffer bound as a read-only compute
+     * buffer. Before each per-submesh callback the model has already:
+     *   - Set @c u_world via @c gfx::set_world_transform() with either the per-
+     *     submesh non-skinned matrix or the per-submesh bone matrices.
+     *   - Bound the mesh's hardware vertex buffer on compute stage @c 0 and its
+     *     hardware index buffer on compute stage @c 1 (both read-only).
+     * The callback is expected to set the shader program, any additional uniforms,
+     * render state, call @c gfx::set_vertex_count(...) with the effect-specific
+     * vertex multiplier, and finally @c gfx::submit(...) on the desired view.
+     */
+    struct submit_vertex_pulling_callbacks
+    {
+        /**
+         * @struct params
+         * @brief Per-invocation information for a vertex-pulling submesh submit.
+         *
+         * Attribute offsets and vertex stride are expressed in @c sizeof(float)
+         * elements because the vertex buffer is exposed to shaders as a
+         * @c Buffer<float>. Bone indices/weights offsets are only meaningful when
+         * @c skinned is @c true; the caller should ignore them otherwise.
+         */
+        struct params
+        {
+            bool skinned{};                    ///< True during the skinned pass, false during non-skinned.
+            bool preserve_state{};             ///< Hint: mirror @c submit_callbacks::params::preserve_state.
+            uint32_t submesh_index{};          ///< Submesh index within the LOD mesh.
+            uint32_t index_start{};            ///< Starting index of the submesh in the index buffer (in indices).
+            uint32_t index_count{};            ///< Number of indices making up the submesh.
+            uint32_t vertex_stride_floats{};   ///< Vertex stride expressed in float-sized elements.
+            uint32_t position_offset_floats{}; ///< Byte offset of the position attribute converted to floats.
+            uint32_t weight_offset_floats{};   ///< Byte offset of the bone weight attribute converted to floats.
+            uint32_t indices_offset_floats{};  ///< Byte offset of the bone indices attribute converted to floats.
+        };
+
+        /// Called once per pass (once for non-skinned, once for skinned). Typically used to bind the program.
+        std::function<void(const params& info)> setup_begin;
+        /// Called once per pass after @c setup_begin. Typically used to set instance-level uniforms.
+        std::function<void(const params& info)> setup_params_per_instance;
+        /// Called once per submesh instance after u_world and the raw VB/IB have been bound.
+        std::function<void(const params& info)> setup_params_per_submesh;
+        /// Called once per pass at the end. Typically used to end the program.
+        std::function<void(const params& info)> setup_end;
+    };
+
+    /**
+     * @brief Submits the model using vertex-pulling rendering.
+     *
+     * Mirrors @ref submit but skips per-submesh material handling and bind_render_buffers
+     * calls, and instead exposes the raw vertex/index buffers as read-only compute
+     * buffers so the shader can procedurally generate vertices from @c gl_VertexID.
+     *
+     * @param world_transform The world transform of the model.
+     * @param submesh_transforms The submesh transforms (many-to-many mapping).
+     * @param skinning_transforms The per-submesh skinning matrices.
+     * @param lod The level of detail to render.
+     * @param callbacks The vertex-pulling submit callbacks.
+     * @param frustum Optional view frustum for per-submesh culling on large meshes.
+     */
+    void submit_for_vertex_pulling(const math::mat4& world_transform,
+                                   const submesh_pose_mat4& submesh_transforms,
+                                   const std::vector<pose_mat4>& skinning_transforms,
+                                   unsigned int lod,
+                                   const submit_vertex_pulling_callbacks& callbacks,
+                                   const math::frustum* frustum = nullptr) const;
+
+    /**
      * @brief Collects this model into a batch collector for instanced rendering.
      * @param collector The batch collector to add this model to.
      * @param world_transform The world transform of the model.

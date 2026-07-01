@@ -531,6 +531,9 @@ void set_vertex_buffer(uint8_t _stream,
                        uint32_t _numVertices);
 
 /**/
+void set_vertex_count(uint32_t _numVertices);
+
+/**/
 void set_instance_data_buffer(const instance_data_buffer* _idb, uint32_t _start, uint32_t _num);
 
 /**/

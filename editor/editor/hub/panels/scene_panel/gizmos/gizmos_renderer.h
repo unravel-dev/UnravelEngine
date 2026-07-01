@@ -25,8 +25,20 @@ private:
     void draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd);
     auto draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool;
     void draw_outline_pass(const gfx::frame_buffer::ptr& selection_mask, const gfx::frame_buffer::ptr& obuffer, gfx::dd_raii& dd);
+    void draw_selection_wireframe_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& obuffer);
     ///
-    std::unique_ptr<gpu_program> wireframe_program_;
+    struct wireframe_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_wf_params, "u_wf_params", gfx::uniform_type::Vec4, 3);
+        }
+
+        gfx::program::uniform_ptr u_wf_params;
+        std::unique_ptr<gpu_program> program;
+
+    } wireframe_program_, wireframe_program_skinned_;
+
     std::unique_ptr<gpu_program> grid_program_;
 
     struct flat_to_r_program : uniforms_cache

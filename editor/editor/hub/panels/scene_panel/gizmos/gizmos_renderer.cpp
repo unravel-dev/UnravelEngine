@@ -1,6 +1,8 @@
 #include "gizmos_renderer.h"
 #include <editor/events.h>
 
+#include <array>
+
 #include <graphics/render_pass.h>
 
 #include <engine/events.h>
@@ -97,6 +99,13 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
             draw_grid(pass.id, camera, em.grid_data);
         }
     }
+
+    if(em.gizmos.show_selection_wireframe)
+    {
+        // Pass 3: Vertex-pulling wireframe overlay for selected entities.
+        // Runs after gizmos so it renders on top of them.
+        draw_selection_wireframe_pass(ctx, camera, obuffer);
+    }
     
 }
 
@@ -107,7 +116,15 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
-        wireframe_program_ = std::make_unique<gpu_program>(vs, fs);
+        wireframe_program_.program = std::make_unique<gpu_program>(vs, fs);
+        wireframe_program_.cache_uniforms();
+    }
+
+    {
+        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe_skinned.sc");
+        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
+        wireframe_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
+        wireframe_program_skinned_.cache_uniforms();
     }
 
     {
@@ -249,6 +266,148 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
     return any_drawn;
 }
 
+void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
+                                                    const camera& camera,
+                                                    const gfx::frame_buffer::ptr& obuffer)
+{
+    const bool non_skinned_ready = wireframe_program_.program && wireframe_program_.program->is_valid();
+    const bool skinned_ready = wireframe_program_skinned_.program && wireframe_program_skinned_.program->is_valid();
+    if(!non_skinned_ready && !skinned_ready)
+    {
+        return;
+    }
+
+    auto& em = ctx.get_cached<editing_manager>();
+    const auto& view = camera.get_view();
+    const auto& proj = camera.get_projection();
+
+    gfx::render_pass pass("Gizmos/Selection Wireframe Pass");
+    pass.bind(obuffer.get());
+    pass.set_view_proj(view, proj);
+
+    // Overlay renders on top of the color buffer using alpha blending. Depth
+    // test is enabled so parts of the mesh occluded by the scene are hidden.
+    const uint64_t state = 0
+        | BGFX_STATE_WRITE_RGB
+        | BGFX_STATE_WRITE_A
+        | BGFX_STATE_DEPTH_TEST_LEQUAL
+        | BGFX_STATE_CULL_CCW
+        | BGFX_STATE_MSAA
+        | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+
+    for(const auto& obj : em.get_selections())
+    {
+        if(obj.type() != entt::resolve<entt::handle>())
+        {
+            continue;
+        }
+
+        auto e = obj.cast<entt::handle>();
+        if(!e.valid())
+        {
+            continue;
+        }
+
+        auto* transform_comp = e.try_get<transform_component>();
+        auto* model_comp = e.try_get<model_component>();
+        if(!transform_comp || !model_comp)
+        {
+            continue;
+        }
+
+        auto& mdl = model_comp->get_model();
+        if(!mdl.is_valid())
+        {
+            continue;
+        }
+
+        auto& lod_data = model_comp->get_lod_data_for_camera(&camera, gfx::get_render_frame());
+        auto lod = mdl.get_lod(lod_data.current_lod_index);
+        if(!lod)
+        {
+            continue;
+        }
+
+        const auto& mesh_ptr = lod.get();
+        if(!mesh_ptr)
+        {
+            continue;
+        }
+
+        const auto& world_transform = transform_comp->get_transform_global();
+        if(!camera.test_obb(mesh_ptr->get_bounds(), world_transform))
+        {
+            continue;
+        }
+
+        const auto& submesh_transforms = model_comp->get_submesh_transforms();
+        const auto& skinning_transforms = model_comp->get_skinning_transforms();
+
+        // Pack shader parameters. Layout:
+        //   u_wf_params[0].xyz  = color rgb
+        //   u_wf_params[0].w    = opacity
+        //   u_wf_params[1].x    = thickness (pixels)
+        //   u_wf_params[1].y    = vertex stride in floats
+        //   u_wf_params[1].z    = position offset in floats
+        //   u_wf_params[1].w    = index buffer starting offset (in indices) - per submesh
+        //   u_wf_params[2].x    = bone weight offset in floats  (skinned only)
+        //   u_wf_params[2].y    = bone indices offset in floats (skinned only)
+        std::array<math::vec4, 3> params;
+        params[0] = em.gizmos.selection_wireframe_color;
+        params[1] = math::vec4(em.gizmos.selection_wireframe_thickness, 0.0f, 0.0f, 0.0f);
+        params[2] = math::vec4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        model::submit_vertex_pulling_callbacks callbacks;
+
+        callbacks.setup_begin = [&](const model::submit_vertex_pulling_callbacks::params& info)
+        {
+            auto& prog = info.skinned ? wireframe_program_skinned_.program : wireframe_program_.program;
+            if(prog)
+            {
+                prog->begin();
+            }
+        };
+
+        callbacks.setup_params_per_instance = [&](const model::submit_vertex_pulling_callbacks::params& info)
+        {
+            params[1].y = static_cast<float>(info.vertex_stride_floats);
+            params[1].z = static_cast<float>(info.position_offset_floats);
+            if(info.skinned)
+            {
+                params[2].x = static_cast<float>(info.weight_offset_floats);
+                params[2].y = static_cast<float>(info.indices_offset_floats);
+            }
+        };
+
+        callbacks.setup_params_per_submesh = [&](const model::submit_vertex_pulling_callbacks::params& info)
+        {
+            auto& wf_prog = info.skinned ? wireframe_program_skinned_ : wireframe_program_;
+            params[1].w = static_cast<float>(info.index_start);
+            gfx::set_uniform(wf_prog.u_wf_params, params.data(), 3);
+
+            // Six vertices per triangle edge; three edges per triangle.
+            gfx::set_vertex_count(info.index_count * 6u);
+            gfx::set_state(state);
+            gfx::submit(pass.id, wf_prog.program->native_handle());
+        };
+
+        callbacks.setup_end = [&](const model::submit_vertex_pulling_callbacks::params& info)
+        {
+            auto& prog = info.skinned ? wireframe_program_skinned_.program : wireframe_program_.program;
+            if(prog)
+            {
+                prog->end();
+            }
+        };
+
+        mdl.submit_for_vertex_pulling(world_transform.get_matrix(),
+                                      submesh_transforms,
+                                      skinning_transforms,
+                                      lod_data.current_lod_index,
+                                      callbacks);
+    }
+}
+
 void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_mask,
                                         const gfx::frame_buffer::ptr& obuffer,
                                         gfx::dd_raii& dd)
@@ -307,7 +466,8 @@ auto gizmos_renderer::deinit(rtti::context& ctx) -> bool
     outline_mask_program_ = {};
     outline_mask_program_skinned_ = {};
     outline_program_ = {};
-    wireframe_program_.reset();
+    wireframe_program_ = {};
+    wireframe_program_skinned_ = {};
     grid_program_.reset();
     return true;
 }

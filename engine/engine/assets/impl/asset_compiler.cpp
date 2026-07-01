@@ -596,6 +596,25 @@ auto compile_shader_to_file(const fs::path& input_path,
     bool fs = hpp::string_view(file).starts_with("fs_");
     bool cs = hpp::string_view(file).starts_with("cs_");
 
+    // Vertex/fragment shaders that reference compute-style read/write buffers
+    // (BUFFER_RO / BUFFER_RW / BUFFER_WO) need SSBO support, which requires a
+    // higher GLSL profile. Detect that up-front by scanning the shader source
+    // so the correct OpenGL profile is selected below.
+    bool needs_compute_buffers = false;
+    if(vs || fs)
+    {
+        std::ifstream shader_file(str_input);
+        if(shader_file.is_open())
+        {
+            std::stringstream buffer;
+            buffer << shader_file.rdbuf();
+            const std::string source = buffer.str();
+            needs_compute_buffers = source.find("BUFFER_RO(") != std::string::npos
+                                 || source.find("BUFFER_RW(") != std::string::npos
+                                 || source.find("BUFFER_WO(") != std::string::npos;
+        }
+    }
+
     if(renderer == gfx::renderer_type::Vulkan)
     {
         str_platform = "windows";
@@ -634,9 +653,15 @@ auto compile_shader_to_file(const fs::path& input_path,
         str_platform = "linux";
 
         if(vs || fs)
-            str_profile = "140";
+        {
+            // GLSL 4.30 is needed to expose SSBOs (compute-style buffers) in
+            // vertex/fragment stages. Otherwise stick with the more portable 1.40.
+            str_profile = needs_compute_buffers ? "430" : "140";
+        }
         else if(cs)
+        {
             str_profile = "430";
+        }
     }
     else if(renderer == gfx::renderer_type::Metal)
     {

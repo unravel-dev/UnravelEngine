@@ -1296,8 +1296,13 @@ void mesh::build_vb(bool hardware_copy)
         // Calculate the required size of the vertex buffer
         auto buffer_size = vertex_count_ * vertex_format_.getStride();
 
+        // Compute-read flags so the vertex buffer can be bound as a raw read-only
+        // Buffer<float> inside shaders (e.g. vertex pulling for wireframe overlay).
+        const uint16_t vb_flags =
+            BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+
         const gfx::memory_view* mem = gfx::make_ref(system_vb_, buffer_size);
-        hardware_vb_ = std::make_shared<gfx::vertex_buffer>(mem, vertex_format_);
+        hardware_vb_ = std::make_shared<gfx::vertex_buffer>(mem, vertex_format_, vb_flags);
 
     } // End if video memory vertex buffer required
 }
@@ -1310,11 +1315,18 @@ void mesh::build_ib(bool hardware_copy)
         // Calculate the required size of the index buffer
         auto buffer_size = static_cast<uint32_t>(size_t(face_count_ * 3) * sizeof(uint32_t));
 
+        // Compute-read flags so the (32-bit) index buffer can be bound as a raw
+        // read-only Buffer<uint> inside shaders (e.g. vertex pulling for wireframe overlay).
+        const uint16_t ib_flags = BGFX_BUFFER_INDEX32
+            | BGFX_BUFFER_COMPUTE_READ
+            | BGFX_BUFFER_COMPUTE_FORMAT_32X1
+            | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+
         // Allocate hardware buffer if required (i.e. it does not already exist).
         if(!hardware_ib_)
         {
             const gfx::memory_view* mem = gfx::make_ref(system_ib_, buffer_size);
-            hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, BGFX_BUFFER_INDEX32);
+            hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
         } // End if not allocated
         else
         {
@@ -1322,7 +1334,7 @@ void mesh::build_ib(bool hardware_copy)
             if(!ib->is_valid())
             {
                 const gfx::memory_view* mem = gfx::make_ref(system_ib_, buffer_size);
-                hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, BGFX_BUFFER_INDEX32);
+                hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
             }
         }
 
@@ -1595,6 +1607,26 @@ auto mesh::get_system_ib() -> uint32_t*
 auto mesh::get_vertex_format() const -> const gfx::vertex_layout&
 {
     return vertex_format_;
+}
+
+auto mesh::get_hardware_vb() const -> std::shared_ptr<gfx::vertex_buffer>
+{
+    return std::static_pointer_cast<gfx::vertex_buffer>(hardware_vb_);
+}
+
+auto mesh::get_hardware_ib(uint32_t lod_index) const -> std::shared_ptr<gfx::index_buffer>
+{
+    if(lod_index == 0 || lods_.empty())
+    {
+        return std::static_pointer_cast<gfx::index_buffer>(hardware_ib_);
+    }
+
+    if(lod_index <= lods_.size())
+    {
+        return std::static_pointer_cast<gfx::index_buffer>(lods_[lod_index - 1].hardware_ib_);
+    }
+
+    return std::static_pointer_cast<gfx::index_buffer>(hardware_ib_);
 }
 
 auto mesh::get_skin_bind_data() const -> const skin_bind_data&
@@ -2555,7 +2587,13 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         {
             auto buffer_size = static_cast<uint32_t>(lod.face_count_ * 3 * sizeof(uint32_t));
             const gfx::memory_view* mem = gfx::make_ref(lod.system_ib_, buffer_size);
-            lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, BGFX_BUFFER_INDEX32);
+            // Same compute-read flags as base LOD so any LOD can be used as a
+            // read-only buffer inside shaders (e.g. vertex pulling for wireframe overlay).
+            const uint16_t ib_flags = BGFX_BUFFER_INDEX32
+                | BGFX_BUFFER_COMPUTE_READ
+                | BGFX_BUFFER_COMPUTE_FORMAT_32X1
+                | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+            lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
         }
 
         lods_.push_back(std::move(lod));

@@ -701,7 +701,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
-    run_assao_pass(visibility_set, camera, rview, dt, params);
+    run_assao_pass(camera, rview, dt, params);
 
     run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
 
@@ -1071,8 +1071,7 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     batch_collector_.clear();
 }
 
-void deferred::run_assao_pass(const visibility_set_models_t& visibility_set,
-                              const camera& camera,
+void deferred::run_assao_pass(const camera& camera,
                               gfx::render_view& rview,
                               delta_t dt,
                               const run_params& rparams)

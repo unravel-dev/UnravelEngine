@@ -1710,6 +1710,19 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
         ImGui::Separator();
         ImGui::TextUnformatted("Selection Gizmos");
         ImGui::Checkbox("Selection Outline", &em.gizmos.show_selection_outline);
+        ImGui::Checkbox("Selection Wireframe", &em.gizmos.show_selection_wireframe);
+        ImGui::SetItemTooltipEx("%s", "Draw a vertex-pulling wireframe overlay on top of the selected entity's mesh.");
+        if(em.gizmos.show_selection_wireframe)
+        {
+            ImGui::ColorEdit4("Wireframe Color",
+                              math::value_ptr(em.gizmos.selection_wireframe_color),
+                              ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs);
+            ImGui::KnobSliderScalarT("Wireframe Thickness",
+                               &em.gizmos.selection_wireframe_thickness,
+                               0.5f,
+                               5.0f,
+                               "%.2f px");
+        }
         ImGui::Checkbox("Camera Gizmos", &em.gizmos.show_camera);
         ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
         ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);

@@ -1,6 +1,8 @@
 #include "model.h"
 #include "gpu_program.h"
 #include "graphics/graphics.h"
+#include "graphics/index_buffer.h"
+#include "graphics/vertex_buffer.h"
 #include "material.h"
 #include "mesh.h"
 #include "camera.h"
@@ -686,6 +688,184 @@ void model::submit(const math::mat4& world_transform,
         for(uint32_t i = 0; i < mesh->get_data_groups_count(); ++i)
         {
             render_submesh_skinned(mesh, lod, i, skinning_transforms, params, callbacks);
+        }
+
+        if(callbacks.setup_end)
+        {
+            callbacks.setup_end(params);
+        }
+    }
+}
+
+void model::submit_for_vertex_pulling(const math::mat4& world_transform,
+                                      const submesh_pose_mat4& submesh_transforms,
+                                      const std::vector<pose_mat4>& skinning_transforms,
+                                      unsigned int lod,
+                                      const submit_vertex_pulling_callbacks& callbacks,
+                                      const math::frustum* frustum) const
+{
+    const auto lod_mesh = get_lod(lod);
+    if(!lod_mesh)
+    {
+        return;
+    }
+
+    auto mesh = lod_mesh.get();
+
+    auto vb = mesh->get_hardware_vb();
+    auto ib = mesh->get_hardware_ib(lod);
+    if(!vb || !ib || !vb->is_valid() || !ib->is_valid())
+    {
+        return;
+    }
+
+    // Vertex/index buffers are exposed to shaders as Buffer<float> / Buffer<uint>
+    // so all byte offsets are converted to float-sized elements. Layouts used by
+    // this engine always keep attributes float-aligned, so integer division is safe.
+    constexpr uint32_t float_size = static_cast<uint32_t>(sizeof(float));
+    const auto& vertex_format = mesh->get_vertex_format();
+    const uint32_t stride_bytes = vertex_format.getStride();
+    const uint32_t pos_offset_bytes = vertex_format.getOffset(gfx::attribute::Position);
+
+    submit_vertex_pulling_callbacks::params params;
+    params.vertex_stride_floats = stride_bytes / float_size;
+    params.position_offset_floats = pos_offset_bytes / float_size;
+
+    const auto skinned_count = mesh->get_skinned_submeshes_count(lod);
+    const auto non_skinned_count = mesh->get_non_skinned_submeshes_count(lod);
+    const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod);
+    const auto& submeshes = mesh->get_submeshes(lod);
+    const uint32_t group_count = static_cast<uint32_t>(mesh->get_data_groups_count());
+
+    // Binds the raw geometry buffers before calling the per-submesh callback. The
+    // callback is responsible for uniforms, state, vertex count and the actual
+    // submit call - the model only guarantees that u_world and the raw buffers on
+    // stages 0/1 are set.
+    auto bind_and_submit = [&](uint32_t submesh_index) -> void
+    {
+        const auto* sub = submeshes[submesh_index];
+        params.submesh_index = submesh_index;
+        params.index_start = static_cast<uint32_t>(sub->face_start) * 3u;
+        params.index_count = sub->face_count * 3u;
+
+        gfx::set_buffer(0, vb->native_handle(), gfx::access::Read);
+        gfx::set_buffer(1, ib->native_handle(), gfx::access::Read);
+
+        if(callbacks.setup_params_per_submesh)
+        {
+            callbacks.setup_params_per_submesh(params);
+        }
+    };
+
+    // ----------------- NON-SKINNED PASS -----------------
+    if(non_skinned_count > 0)
+    {
+        params.skinned = false;
+        params.weight_offset_floats = 0;
+        params.indices_offset_floats = 0;
+
+        if(callbacks.setup_begin)
+        {
+            callbacks.setup_begin(params);
+        }
+        if(callbacks.setup_params_per_instance)
+        {
+            callbacks.setup_params_per_instance(params);
+        }
+
+        for(uint32_t group_id = 0; group_id < group_count; ++group_id)
+        {
+            const auto& indices = mesh->get_non_skinned_submeshes_indices(group_id, lod);
+            for(const auto& index : indices)
+            {
+                const auto* sub = submeshes[index];
+                if(!sub || sub->face_count == 0)
+                {
+                    continue;
+                }
+
+                params.preserve_state = &index != &indices.back();
+
+                if(submesh_transforms.has_transforms(index))
+                {
+                    const size_t transform_count = submesh_transforms.get_transform_count(index);
+                    for(size_t j = 0; j < transform_count; ++j)
+                    {
+                        const auto* transform = submesh_transforms.get_transform(index, j);
+                        if(!transform)
+                        {
+                            continue;
+                        }
+                        if(cull_submeshes && !is_submesh_visible(*frustum, *mesh, lod, index, *transform))
+                        {
+                            continue;
+                        }
+                        gfx::set_world_transform(*transform);
+                        bind_and_submit(static_cast<uint32_t>(index));
+                    }
+                }
+                else
+                {
+                    if(cull_submeshes && !is_submesh_visible(*frustum, *mesh, lod, index, world_transform))
+                    {
+                        continue;
+                    }
+                    gfx::set_world_transform(world_transform);
+                    bind_and_submit(static_cast<uint32_t>(index));
+                }
+            }
+        }
+
+        if(callbacks.setup_end)
+        {
+            callbacks.setup_end(params);
+        }
+    }
+
+    // ------------------- SKINNED PASS -------------------
+    // Skinned rendering additionally needs the bone weight/indices attribute
+    // offsets so the shader can blend u_world[bone_i] per vertex.
+    if(skinned_count > 0 && !skinning_transforms.empty()
+       && vertex_format.has(gfx::attribute::Weight) && vertex_format.has(gfx::attribute::Indices))
+    {
+        params.skinned = true;
+        params.weight_offset_floats = vertex_format.getOffset(gfx::attribute::Weight) / float_size;
+        params.indices_offset_floats = vertex_format.getOffset(gfx::attribute::Indices) / float_size;
+
+        if(callbacks.setup_begin)
+        {
+            callbacks.setup_begin(params);
+        }
+        if(callbacks.setup_params_per_instance)
+        {
+            callbacks.setup_params_per_instance(params);
+        }
+
+        for(uint32_t group_id = 0; group_id < group_count; ++group_id)
+        {
+            const auto& indices = mesh->get_skinned_submeshes_indices(group_id, lod);
+            for(const auto& index : indices)
+            {
+                if(index >= skinning_transforms.size())
+                {
+                    continue;
+                }
+                const auto& bones = skinning_transforms[index];
+                if(bones.transforms.empty())
+                {
+                    continue;
+                }
+                const auto* sub = submeshes[index];
+                if(!sub || sub->face_count == 0)
+                {
+                    continue;
+                }
+
+                params.preserve_state = &index != &indices.back();
+
+                gfx::set_world_transform(bones.transforms);
+                bind_and_submit(static_cast<uint32_t>(index));
+            }
         }
 
         if(callbacks.setup_end)

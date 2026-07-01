@@ -10,12 +10,12 @@ uniform vec4 u_wf_params[3];
 #define u_wfStride        u_wf_params[1].y
 #define u_wfPosOffset     u_wf_params[1].z
 #define u_wfIndexOffset   u_wf_params[1].w
+#define u_wfWeightOffset  u_wf_params[2].x
+#define u_wfIndicesOffset u_wf_params[2].y
 
-// Raw read-only views of the mesh vertex/index buffers.
-// The vertex buffer is exposed as an array of floats; per-vertex data is
-// reconstructed manually using u_wfStride and u_wfPosOffset (both expressed
-// in float-sized elements) since arbitrary vertex layouts are supported.
-// The index buffer is 32-bit, so each element is exactly one vertex index.
+// Raw read-only views of the mesh vertex/index buffers, exposed identically
+// to the non-skinned variant. u_wfIndicesOffset / u_wfWeightOffset locate the
+// bone index/weight attributes within each vertex (both stored as Float4).
 BUFFER_RO(u_positions, float, 0);
 BUFFER_RO(u_indices,   uint,  1);
 
@@ -30,17 +30,45 @@ vec3 get_position(uint index)
     return vec3(u_positions[base + 0u], u_positions[base + 1u], u_positions[base + 2u]);
 }
 
-// Non-skinned world transform. u_world[0] is filled by gfx::set_world_transform().
+vec4 get_weight(uint index)
+{
+    uint stride = uint(u_wfStride);
+    uint offset = uint(u_wfWeightOffset);
+    uint base   = index * stride + offset;
+    return vec4(u_positions[base + 0u],
+                u_positions[base + 1u],
+                u_positions[base + 2u],
+                u_positions[base + 3u]);
+}
+
+vec4 get_bone_indices(uint index)
+{
+    uint stride = uint(u_wfStride);
+    uint offset = uint(u_wfIndicesOffset);
+    uint base   = index * stride + offset;
+    return vec4(u_positions[base + 0u],
+                u_positions[base + 1u],
+                u_positions[base + 2u],
+                u_positions[base + 3u]);
+}
+
+// Skinned world transform. u_world[i] is filled by gfx::set_world_transform(bones)
+// with per-bone skinning matrices before submitting each submesh.
 mat4 get_world_matrix(uint index)
 {
-    return u_world[0];
+    vec4 weights = get_weight(index);
+    vec4 bones   = get_bone_indices(index);
+    return weights.x * u_world[int(bones.x)]
+         + weights.y * u_world[int(bones.y)]
+         + weights.z * u_world[int(bones.z)]
+         + weights.w * u_world[int(bones.w)];
 }
 
 void main()
 {
     uint vertex_id   = uint(gl_VertexID);
-    uint line_index  = vertex_id / 6u;      // Each triangle edge is expanded to a 6-vertex quad.
-    uint local_index = vertex_id % 6u;      // Which corner of the quad we are.
+    uint line_index  = vertex_id / 6u;
+    uint local_index = vertex_id % 6u;
 
     uint edge_index      = line_index % 3u;
     uint tri_first_index = line_index - edge_index;
@@ -53,8 +81,6 @@ void main()
     vec3 p0 = get_position(i0);
     vec3 p1 = get_position(i1);
 
-    // The engine feeds transforms through u_world (via gfx::set_world_transform),
-    // so compose world and view/projection manually.
     vec4 p0_world = mul(get_world_matrix(i0), vec4(p0, 1.0));
     vec4 p1_world = mul(get_world_matrix(i1), vec4(p1, 1.0));
 
@@ -65,7 +91,6 @@ void main()
     vec4 c0 = base_color;
     vec4 c1 = base_color;
 
-    // Manual near-plane clipping so lines that cross the camera stay coherent.
     vec4 clipped_p0     = p0_clip;
     vec4 clipped_p1     = p1_clip;
     vec4 clipped_color0 = c0;
@@ -84,7 +109,6 @@ void main()
         clipped_color1 = mix(c1, c0, t);
     }
 
-    // Six-vertex quad expansion for a line segment (two triangles).
     vec2 offsets[6];
     offsets[0] = vec2(-1.0, -1.0);
     offsets[1] = vec2(-1.0,  1.0);

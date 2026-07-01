@@ -68,6 +68,9 @@ struct editing_manager
     struct gizmos_data
     {
         bool show_selection_outline {true};
+        bool show_selection_wireframe {false};
+        math::vec4 selection_wireframe_color {0.15f, 0.85f, 0.75f, 1.0f};
+        float selection_wireframe_thickness {1.5f};
         bool show_camera {true};
         bool show_light {true};
         bool show_reflection_probe {true};

@@ -65,8 +65,7 @@ public:
                            gfx::render_view& rview,
                            delta_t dt);
 
-    void run_assao_pass(const visibility_set_models_t& visibility_set,
-                        const camera& camera,
+    void run_assao_pass(const camera& camera,
                         gfx::render_view& rview,
                         delta_t dt,
                         const run_params& rparams);
