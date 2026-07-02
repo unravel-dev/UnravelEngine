@@ -1919,6 +1919,25 @@ auto mesh::get_submesh_index(const submesh* s, uint32_t lod_index) const -> int
     return -1;
 }
 
+auto mesh::find_submesh_index_by_stable_id(uint32_t stable_id, uint32_t lod_index) const -> int
+{
+    if(stable_id == 0)
+    {
+        return -1;
+    }
+
+    const auto& submeshes = get_submeshes(lod_index);
+    for(size_t i = 0; i < submeshes.size(); ++i)
+    {
+        if(submeshes[i] != nullptr && submeshes[i]->stable_id == stable_id)
+        {
+            return static_cast<int>(i);
+        }
+    }
+
+    return -1;
+}
+
 
 auto mesh::get_lod_count() const -> uint32_t
 {
@@ -2354,6 +2373,20 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
     }
     
 
+    // Computes a tight bounding box for a simplified index set so per-LOD submeshes carry
+    // accurate bounds instead of inheriting the (potentially much larger) base LOD box.
+    auto compute_bbox_from_indices = [&](const uint32_t* indices, size_t index_count) -> math::bbox
+    {
+        math::bbox box{};
+        for(size_t i = 0; i < index_count; ++i)
+        {
+            const auto* pos =
+                reinterpret_cast<const float*>(vertex_data_ptr + indices[i] * vertex_stride + position_offset);
+            box.add_point(math::vec3(pos[0], pos[1], pos[2]));
+        }
+        return box;
+    };
+
     // Generate each LOD level
     for(const auto& config : lod_configs)
     {
@@ -2480,6 +2513,11 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             submesh lod_submesh = base_submesh;
             lod_submesh.face_count = static_cast<uint32_t>(submesh_lod_tri_count);
             lod_submesh.face_start = static_cast<int32_t>(current_face_start);
+            const math::bbox lod_bbox = compute_bbox_from_indices(submesh_lod_indices.data(), submesh_lod_index_count);
+            if(lod_bbox.is_populated())
+            {
+                lod_submesh.bbox = lod_bbox;
+            }
             lod_data.submeshes.push_back(lod_submesh);
             
             // Append simplified indices to LOD index buffer

@@ -128,7 +128,7 @@ SAVE(mesh::submesh)
     try_save(ar, ser20::make_nvp("face_count", obj.face_count));
     try_save(ar, ser20::make_nvp("bbox", obj.bbox));
     try_save(ar, ser20::make_nvp("skinned", obj.skinned));
-
+    try_save(ar, ser20::make_nvp("stable_id", obj.stable_id));
 }
 SAVE_INSTANTIATE(mesh::submesh, ser20::oarchive_binary_t);
 SAVE_INSTANTIATE(mesh::submesh, ser20::oarchive_associative_t);
@@ -142,8 +142,7 @@ LOAD(mesh::submesh)
     try_load(ar, ser20::make_nvp("face_count", obj.face_count));
     try_load(ar, ser20::make_nvp("bbox", obj.bbox));
     try_load(ar, ser20::make_nvp("skinned", obj.skinned));
-
-
+    try_load(ar, ser20::make_nvp("stable_id", obj.stable_id));
 }
 LOAD_INSTANTIATE(mesh::submesh, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(mesh::submesh, ser20::iarchive_associative_t);
@@ -187,6 +186,7 @@ SAVE(skin_bind_data::bone_influence)
     try_save(ar, ser20::make_nvp("bone_id", obj.bone_id));
     try_save(ar, ser20::make_nvp("bind_pose_transform", obj.bind_pose_transform));
     try_save(ar, ser20::make_nvp("influences", obj.influences));
+    try_save(ar, ser20::make_nvp("bounds", obj.bounds));
 }
 SAVE_INSTANTIATE(skin_bind_data::bone_influence, ser20::oarchive_binary_t);
 SAVE_INSTANTIATE(skin_bind_data::bone_influence, ser20::oarchive_associative_t);
@@ -196,6 +196,7 @@ LOAD(skin_bind_data::bone_influence)
     try_load(ar, ser20::make_nvp("bone_id", obj.bone_id));
     try_load(ar, ser20::make_nvp("bind_pose_transform", obj.bind_pose_transform));
     try_load(ar, ser20::make_nvp("influences", obj.influences));
+    try_load(ar, ser20::make_nvp("bounds", obj.bounds));
 }
 LOAD_INSTANTIATE(skin_bind_data::bone_influence, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(skin_bind_data::bone_influence, ser20::iarchive_associative_t);

@@ -528,18 +528,12 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
 
                 auto& current_lod_data = model_comp.get_lod_data_for_camera(&original_camera, gfx::get_render_frame());
 
-                auto lod = model.get_lod(current_lod_data.current_lod_index);
-                if(!lod)
+                // Test against the pose-aware world AABB (tracks node/bone animation),
+                // never the bind-pose mesh bounds.
+                if(!pick_camera.get_frustum().test_aabb(model_comp.get_world_bounds()))
                 {
                     return;
                 }
-
-                const auto& mesh = lod.get();
-                const auto& bounds = mesh->get_bounds();
-
-                // Test the bounding box of the mesh
-                if(!pick_camera.test_obb(bounds, world_transform))
-                    return;
 
                 auto id = ENTT_ID_TYPE(e);
                 std::uint32_t rr = (id) & 0xff;

@@ -1020,6 +1020,14 @@ auto inspector_entity::inspect(rtti::context& ctx,
             {
                 prefab->changed = true;
             }
+
+            // Component data was edited in place - wake the indexed transform-dirty
+            // consumers so derived render data is re-consumed (e.g. the model pose
+            // refresh picks up submesh_component entry edits on armature nodes).
+            if(auto transform_comp = data.try_get<transform_component>())
+            {
+                transform_comp->mark_consumers_dirty();
+            }
         }
         
         var = data;

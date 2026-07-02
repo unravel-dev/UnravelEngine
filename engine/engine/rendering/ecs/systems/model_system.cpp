@@ -86,28 +86,26 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
 
                       auto& model_comp = view.get<model_component>(entity);
 
-                      // Only get transform after we know we need it
-                      auto& transform_comp = view.get<transform_component>(entity);
-                      model_comp.update_world_bounds(transform_comp.get_transform_global());
-                    
                       // Cleanup stale per-view LOD data (views not accessed for 2 seconds at 60fps)
                       model_comp.cleanup_stale_lod_data(frame, 120);
-
-                      // Early exit if model wasn't used
-                      if(!model_comp.was_used_last_frame())
-                      {
-                          return;
-                      }
 
                       if(model_comp.is_newly_created())
                       {
                           model_comp.set_last_render_frame(frame);
                       }
 
-               
+                      // Refresh pose-derived render data (submesh/bone poses, cached proxy
+                      // bounds, skinning palettes) before world bounds are computed. This is
+                      // change-driven, not visibility-driven: update_armature early-outs when
+                      // no armature transform changed, so idle models cost a bit-scan, while
+                      // culled-but-still-animating models keep their bounds fresh so they can
+                      // re-enter the frustum correctly. (Skipping animation work for culled
+                      // models is the animation system's job via its renderer-based culling
+                      // mode, which freezes the transforms and thus also skips this refresh.)
                       model_comp.update_armature();
 
-
+                      auto& transform_comp = view.get<transform_component>(entity);
+                      model_comp.update_world_bounds(transform_comp.get_transform_global());
                   });
 
 }

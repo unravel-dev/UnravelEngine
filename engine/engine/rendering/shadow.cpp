@@ -2194,9 +2194,6 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             continue;
         }
 
-        const auto& world_bounds_transform = model_comp.get_world_bounds_transform();
-        const auto& local_bounds = model_comp.get_local_bounds(lod_data.current_lod_index);
-
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
         const auto& bone_transforms = model_comp.get_bone_transforms();
         const auto& skinning_matrices = model_comp.get_skinning_transforms();
@@ -2211,6 +2208,8 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
         // Check if this model can be batched (static mesh, no skinning)
         const bool can_batch = static_batching_enabled && !is_skinned;
+
+        const auto extras = model_comp.get_submit_extras(true);
 
         // For CSM (directional lights), cascades are nested by distance, so anything
         // fully inside a nearer cascade does not need to be rendered into the farther
@@ -2230,7 +2229,8 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                                                                       lod_data.current_lod_index,
                                                                       0.0f,
                                                                       lightFrustums,
-                                                                      nested_cascades);
+                                                                      nested_cascades,
+                                                                      extras);
             if(collected)
             {
                 model_comp.set_last_render_frame(gfx::get_render_frame());
@@ -2248,8 +2248,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         bool counted_skinned_model_for_shadows = false;
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
-            // Standard frustum culling
-            auto query = lightFrustums[ii].classify_obb(local_bounds, world_bounds_transform);
+            // Standard frustum culling against the pose-aware world AABB. Bind-pose local
+            // bounds are never used for culling - they don't track node/bone animation.
+            auto query = lightFrustums[ii].classify_aabb(world_bounds);
             if(query == math::volume_query::outside)
             {
                 continue;
@@ -2337,7 +2338,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                          skinning_matrices,
                          lod_data.current_lod_index,
                          callbacks,
-                         &lightFrustums[ii]);
+                         &lightFrustums[ii],
+                         nullptr,
+                         extras);
 
             any_rendered = true;
 

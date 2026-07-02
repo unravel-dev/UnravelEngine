@@ -776,6 +776,11 @@ void transform_component::set_dirty(uint8_t id, bool dirty) noexcept
     transform_dirty_.set(id, dirty);
 }
 
+void transform_component::mark_consumers_dirty() noexcept
+{
+    transform_dirty_.set();
+}
+
 auto transform_component::get_children() const noexcept -> const std::vector<entt::handle>&
 {
     return children_;
@@ -823,6 +828,13 @@ auto transform_component::resolve_global_value_transform() const noexcept -> mat
 
 void transform_component::on_dirty_flags(bool dirty) noexcept
 {
+    if(dirty)
+    {
+        // Flags changes (e.g. active toggles) affect consumers of derived transform data
+        // (model poses read node activity), so wake the indexed consumers too.
+        transform_dirty_.set();
+    }
+
     auto flags = flags_.get_global_value(this, false);
     on_flags_changed(flags);
 

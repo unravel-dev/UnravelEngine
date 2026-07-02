@@ -56,6 +56,25 @@ class transform_component : public component_crtp<transform_component, owned_com
 {
 public:
     using flags_t = std::bitset<8>;
+
+    /**
+     * @brief Reserved consumer slots for the indexed dirty flags (see is_dirty(id)/set_dirty(id, ...)).
+     *
+     * Every transform (or hierarchy flags) change sets all consumer bits; each consumer
+     * clears only its own bit after consuming the new value. Register new consumers here
+     * to avoid slot collisions.
+     */
+    struct dirty_ids
+    {
+        enum : uint8_t
+        {
+            /// Physics backend transform sync (see bullet_backend.cpp).
+            physics = 1,
+            /// Model pose refresh: submesh/bone poses and cached render-proxy bounds
+            /// (see model_component::update_armature).
+            model_pose = 2,
+        };
+    };
     /**
      * @brief Called when the component is created.
      * @param r The registry containing the component.
@@ -492,6 +511,13 @@ public:
      * @return True if the component is dirty for the specified index, otherwise false.
      */
     auto is_dirty(uint8_t id) const noexcept -> bool;
+
+    /**
+     * @brief Sets every consumer dirty bit, forcing all indexed consumers (physics sync,
+     * model pose refresh, ...) to re-consume this transform even if it did not change.
+     * Used by tooling (e.g. inspector edits) to wake consumers of derived data.
+     */
+    void mark_consumers_dirty() noexcept;
 
     /**
      * @brief Clears the relationships of the component.

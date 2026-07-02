@@ -34,6 +34,7 @@
 #include <concurrency/concurrentqueue.h>
 
 #include <algorithm>
+#include <atomic>
 
 namespace unravel
 {
@@ -90,12 +91,29 @@ auto pipeline::init(rtti::context& ctx) -> bool
     return true;
 }
 
+namespace
+{
+// LOD levels added on top of the main-view selection when rendering shadow maps.
+std::atomic<float> shadow_lod_bias{1.0f};
+} // namespace
+
+auto pipeline::get_shadow_lod_bias() -> float
+{
+    return shadow_lod_bias.load(std::memory_order_relaxed);
+}
+
+void pipeline::set_shadow_lod_bias(float bias)
+{
+    shadow_lod_bias.store(bias, std::memory_order_relaxed);
+}
+
 void pipeline::gather_visible_models(scene& scn,
     const camera* cam, 
     visibility_flags query, 
     const layer_mask& render_mask, 
     delta_t dt,
-    const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback)
+    const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback,
+    const camera* lod_reference_cam)
 {
     
     APP_SCOPE_PERF(cam ? "Rendering/Cull   Models" : "Rendering/Gather Models");
@@ -159,18 +177,39 @@ void pipeline::gather_visible_models(scene& scn,
                 {
                     return;
                 }
-                const auto& world_transform = transform_comp.get_transform_global();
 
-                if(!model.calculate_lod_data(current_lod_data, world_transform, *cam, dt.count()))
+                // LOD and culling both measure the pose-aware world AABB (static bounds
+                // unioned with the cached per-submesh/skinned pose bounds) - one source of
+                // truth for "where the rendered geometry actually is". Refreshed by
+                // model_system::on_frame_before_render, which runs before any render path.
+                const auto& world_bounds = model_comp.get_world_bounds();
+
+                if(!model.calculate_lod_data(current_lod_data, world_bounds, *cam, dt.count()))
                 {
                     return;
                 }
 
-                const auto& local_bounds = model_comp.get_local_bounds(current_lod_data.current_lod_index);
+                // Bind-pose local bounds are never used for culling or LOD - they don't
+                // track node/bone animation.
+                is_visible = cam->get_frustum().test_aabb(world_bounds);
+            }
+            else if(lod_reference_cam)
+            {
+                // No frustum culling (e.g. shadow gathering renders casters outside the view),
+                // but select a distance-appropriate LOD from the reference camera plus the
+                // shadow bias instead of always rendering LOD 0.
+                const auto& model = model_comp.get_model();
 
-                // Test the bounding box of the mesh
-                is_visible = cam->test_obb(local_bounds, world_transform);
-                 // Alternative: is_visible = frustum->test_aabb(model_comp.get_world_bounds());
+                if(model.is_valid())
+                {
+                    const auto lod = model.compute_lod_index(model_comp.get_world_bounds(),
+                                                             *lod_reference_cam,
+                                                             get_shadow_lod_bias());
+                    current_lod_data.current_lod_index = lod;
+                    current_lod_data.target_lod_index = lod;
+                    current_lod_data.current_time = 0.0f;
+                    current_lod_data.transition_time = 0.0f;
+                }
             }
 
             if(is_visible)

@@ -404,380 +404,6 @@ auto find_root_motion_node_bfs(const aiScene* scene, const aiAnimation* animatio
     return find_first_animated_node_bfs(scene, animation, req);
 }
 
-// Helper function to interpolate between two keyframes for position
-auto interpolate_position(float animation_time, const aiNodeAnim* node_anim) -> aiVector3D
-{
-    if(node_anim->mNumPositionKeys == 1)
-    {
-        return node_anim->mPositionKeys[0].mValue;
-    }
-
-    for(unsigned int i = 0; i < node_anim->mNumPositionKeys - 1; ++i)
-    {
-        if(animation_time < (float)node_anim->mPositionKeys[i + 1].mTime)
-        {
-            float time1 = (float)node_anim->mPositionKeys[i].mTime;
-            float time2 = (float)node_anim->mPositionKeys[i + 1].mTime;
-            float factor = (animation_time - time1) / (time2 - time1);
-            const aiVector3D& start = node_anim->mPositionKeys[i].mValue;
-            const aiVector3D& end = node_anim->mPositionKeys[i + 1].mValue;
-            aiVector3D delta = end - start;
-            return start + factor * delta;
-        }
-    }
-    return node_anim->mPositionKeys[0].mValue; // Default to first position
-}
-
-// Helper function to interpolate between two keyframes for rotation
-auto interpolate_rotation(float animation_time, const aiNodeAnim* node_anim) -> aiQuaternion
-{
-    if(node_anim->mNumRotationKeys == 1)
-    {
-        return node_anim->mRotationKeys[0].mValue;
-    }
-
-    for(unsigned int i = 0; i < node_anim->mNumRotationKeys - 1; ++i)
-    {
-        if(animation_time < (float)node_anim->mRotationKeys[i + 1].mTime)
-        {
-            float time1 = (float)node_anim->mRotationKeys[i].mTime;
-            float time2 = (float)node_anim->mRotationKeys[i + 1].mTime;
-            float factor = (animation_time - time1) / (time2 - time1);
-            const aiQuaternion& start = node_anim->mRotationKeys[i].mValue;
-            const aiQuaternion& end = node_anim->mRotationKeys[i + 1].mValue;
-            aiQuaternion result;
-            aiQuaternion::Interpolate(result, start, end, factor);
-            return result.Normalize();
-        }
-    }
-    return node_anim->mRotationKeys[0].mValue; // Default to first rotation
-}
-
-// Helper function to interpolate between two keyframes for scaling
-auto interpolate_scaling(float animation_time, const aiNodeAnim* node_anim) -> aiVector3D
-{
-    if(node_anim->mNumScalingKeys == 1)
-    {
-        return node_anim->mScalingKeys[0].mValue;
-    }
-
-    for(unsigned int i = 0; i < node_anim->mNumScalingKeys - 1; ++i)
-    {
-        if(animation_time < (float)node_anim->mScalingKeys[i + 1].mTime)
-        {
-            float time1 = (float)node_anim->mScalingKeys[i].mTime;
-            float time2 = (float)node_anim->mScalingKeys[i + 1].mTime;
-            float factor = (animation_time - time1) / (time2 - time1);
-            const aiVector3D& start = node_anim->mScalingKeys[i].mValue;
-            const aiVector3D& end = node_anim->mScalingKeys[i + 1].mValue;
-            aiVector3D delta = end - start;
-            return start + factor * delta;
-        }
-    }
-    return node_anim->mScalingKeys[0].mValue; // Default to first scaling
-}
-
-// Find the animation channel that matches the node name (bone)
-auto find_node_anim(const aiAnimation* animation, const aiString& node_name) -> const aiNodeAnim*
-{
-    for(unsigned int i = 0; i < animation->mNumChannels; ++i)
-    {
-        const aiNodeAnim* node_anim = animation->mChannels[i];
-        if(std::string(node_anim->mNodeName.C_Str()) == node_name.C_Str())
-        {
-            return node_anim;
-        }
-    }
-    return nullptr;
-}
-
-// Recursively calculate the bone transform for the current node (bone)
-auto calculate_bone_transform(const aiNode* node,
-                              const aiString& bone_name,
-                              const aiAnimation* animation,
-                              float animation_time,
-                              const aiMatrix4x4& parent_transform) -> aiMatrix4x4
-{
-    std::string node_name(node->mName.C_Str());
-
-    // Find the corresponding animation channel for this bone/node
-    const aiNodeAnim* node_anim = find_node_anim(animation, node->mName);
-
-    // Local transformation matrix
-    aiMatrix4x4 local_transform = node->mTransformation;
-
-    // If we have animation data for this node, interpolate the transformation
-    if(node_anim)
-    {
-        // Interpolate translation, rotation, and scaling
-        aiVector3D interpolated_position = interpolate_position(animation_time, node_anim);
-        aiQuaternion interpolated_rotation = interpolate_rotation(animation_time, node_anim);
-        aiVector3D interpolated_scaling = interpolate_scaling(animation_time, node_anim);
-
-        // Build the transformation matrix from interpolated values
-        aiMatrix4x4 position_matrix;
-        aiMatrix4x4::Translation(interpolated_position, position_matrix);
-
-        aiMatrix4x4 rotation_matrix = aiMatrix4x4(interpolated_rotation.GetMatrix());
-
-        aiMatrix4x4 scaling_matrix;
-        aiMatrix4x4::Scaling(interpolated_scaling, scaling_matrix);
-
-        // Combine them into a single local transformation matrix
-        local_transform = position_matrix * rotation_matrix * scaling_matrix;
-    }
-
-    // Combine with parent transformation
-    aiMatrix4x4 global_transform = parent_transform * local_transform;
-
-    // If this node is the bone we're looking for, return the global transformation
-    if(node_name == bone_name.C_Str())
-    {
-        return global_transform;
-    }
-
-    // Recursively calculate the bone transform for all child nodes
-    for(unsigned int i = 0; i < node->mNumChildren; ++i)
-    {
-        auto child_transform =
-            calculate_bone_transform(node->mChildren[i], bone_name, animation, animation_time, global_transform);
-        if(child_transform != aiMatrix4x4())
-        {
-            return child_transform;
-        }
-    }
-
-    // If not found, return identity matrix
-    return aiMatrix4x4();
-}
-
-using animation_bounding_box_map = std::unordered_map<const aiAnimation*, std::vector<math::bbox>>;
-using mesh_attaching_nodes_map = std::unordered_map<unsigned int, std::vector<const aiNode*>>;
-
-struct affected_mesh_entry
-{
-    const aiMesh* mesh{};
-    std::vector<const aiNode*> attaching_nodes;
-};
-
-auto build_mesh_attaching_nodes_map(const aiScene* scene) -> mesh_attaching_nodes_map
-{
-    mesh_attaching_nodes_map map;
-    if(!scene || !scene->mRootNode)
-    {
-        return map;
-    }
-
-    const std::function<void(const aiNode*)> visit = [&](const aiNode* node)
-    {
-        for(unsigned int i = 0; i < node->mNumMeshes; ++i)
-        {
-            map[node->mMeshes[i]].push_back(node);
-        }
-
-        for(unsigned int i = 0; i < node->mNumChildren; ++i)
-        {
-            visit(node->mChildren[i]);
-        }
-    };
-
-    visit(scene->mRootNode);
-    return map;
-}
-
-auto transform_point(const aiMatrix4x4& transform, const aiVector3D& point) -> math::vec3
-{
-    aiVector3D transformed_point = transform * point;
-    return math::vec3(transformed_point.x, transformed_point.y, transformed_point.z);
-}
-
-auto get_transformed_vertices(const aiMesh* mesh,
-                              const aiScene* scene,
-                              float time_in_seconds,
-                              const aiAnimation* animation,
-                              const std::vector<const aiNode*>& attaching_nodes) -> std::vector<math::vec3>
-{
-    if(mesh->mNumBones > 0)
-    {
-        std::vector<math::vec3> transformed_vertices(mesh->mNumVertices, math::vec3(0.0f));
-
-        std::for_each(mesh->mBones,
-                      mesh->mBones + mesh->mNumBones,
-                      [&](const aiBone* bone)
-                      {
-                          const aiMatrix4x4 bone_offset = bone->mOffsetMatrix;
-                          const aiMatrix4x4 bone_transform = calculate_bone_transform(scene->mRootNode,
-                                                                                      bone->mName,
-                                                                                      animation,
-                                                                                      time_in_seconds,
-                                                                                      aiMatrix4x4());
-
-                          std::for_each(bone->mWeights,
-                                        bone->mWeights + bone->mNumWeights,
-                                        [&](const aiVertexWeight& weight)
-                                        {
-                                            const unsigned int vertex_id = weight.mVertexId;
-                                            const float weight_value = weight.mWeight;
-                                            const aiVector3D position = mesh->mVertices[vertex_id];
-                                            const math::vec3 transformed_pos =
-                                                transform_point(bone_transform * bone_offset, position);
-                                            transformed_vertices[vertex_id] += transformed_pos * weight_value;
-                                        });
-                      });
-
-        return transformed_vertices;
-    }
-
-    std::vector<math::vec3> transformed_vertices;
-    transformed_vertices.reserve(mesh->mNumVertices * std::max<size_t>(1, attaching_nodes.size()));
-
-    for(const aiNode* node : attaching_nodes)
-    {
-        const aiMatrix4x4 node_transform =
-            calculate_bone_transform(scene->mRootNode, node->mName, animation, time_in_seconds, aiMatrix4x4());
-
-        for(unsigned int i = 0; i < mesh->mNumVertices; ++i)
-        {
-            transformed_vertices.push_back(transform_point(node_transform, mesh->mVertices[i]));
-        }
-    }
-
-    return transformed_vertices;
-}
-
-// Calculate the bounding box in parallel
-auto calculate_bounding_box(const std::vector<math::vec3>& vertices) -> math::bbox
-{
-    math::bbox box;
-
-    // Use parallel execution to find the min/max extents of the bounding box
-    std::for_each(vertices.begin(),
-                  vertices.end(),
-                  [&](const math::vec3& vertex)
-                  {
-                      box.add_point(vertex);
-                  });
-
-    return box;
-}
-
-// Recursive function to propagate bone influence to child nodes
-void propagate_bone_influence(const aiNode* node, std::unordered_set<std::string>& affected_bones)
-{
-    // Mark this node as affected
-    affected_bones.insert(node->mName.C_Str());
-
-    // Recursively propagate to all child nodes
-    for(unsigned int i = 0; i < node->mNumChildren; ++i)
-    {
-        propagate_bone_influence(node->mChildren[i], affected_bones);
-    }
-}
-
-// Helper function to collect directly and indirectly affected bones (nodes) by the animation
-auto get_affected_bones_and_children(const aiScene* scene, const aiAnimation* animation)
-    -> std::unordered_set<std::string>
-{
-    std::unordered_set<std::string> affected_bones;
-
-    // Step 1: Collect directly affected bones (from animation channels)
-    for(unsigned int i = 0; i < animation->mNumChannels; ++i)
-    {
-        const aiNodeAnim* node_anim = animation->mChannels[i];
-        affected_bones.insert(node_anim->mNodeName.C_Str());
-
-        // Step 2: Find the corresponding node in the scene and propagate influence to its children
-        const aiNode* affected_node = scene->mRootNode->FindNode(node_anim->mNodeName);
-        if(affected_node)
-        {
-            propagate_bone_influence(affected_node, affected_bones); // Recursively mark all children
-        }
-    }
-
-    return affected_bones;
-}
-
-// Function to check if a mesh is affected by the animation (skinned bones or node-attached rigid meshes).
-auto is_mesh_affected_by_animation(unsigned int mesh_index,
-                                   const aiMesh* mesh,
-                                   const std::unordered_set<std::string>& affected_nodes,
-                                   const mesh_attaching_nodes_map& attaching_nodes) -> bool
-{
-    for(unsigned int i = 0; i < mesh->mNumBones; ++i)
-    {
-        if(affected_nodes.find(mesh->mBones[i]->mName.C_Str()) != affected_nodes.end())
-        {
-            return true;
-        }
-    }
-
-    const auto it = attaching_nodes.find(mesh_index);
-    if(it != attaching_nodes.end())
-    {
-        for(const aiNode* node : it->second)
-        {
-            if(affected_nodes.find(node->mName.C_Str()) != affected_nodes.end())
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
-auto get_affected_meshes(const aiScene* scene,
-                         const std::unordered_set<std::string>& affected_nodes,
-                         const mesh_attaching_nodes_map& attaching_nodes) -> std::vector<affected_mesh_entry>
-{
-    std::vector<affected_mesh_entry> affected_meshes;
-    for(unsigned int mesh_index = 0; mesh_index < scene->mNumMeshes; ++mesh_index)
-    {
-        const aiMesh* mesh = scene->mMeshes[mesh_index];
-        if(!is_mesh_affected_by_animation(mesh_index, mesh, affected_nodes, attaching_nodes))
-        {
-            continue;
-        }
-
-        affected_mesh_entry entry;
-        entry.mesh = mesh;
-        const auto it = attaching_nodes.find(mesh_index);
-        if(it != attaching_nodes.end())
-        {
-            entry.attaching_nodes = it->second;
-        }
-        affected_meshes.emplace_back(std::move(entry));
-    }
-
-    return affected_meshes;
-}
-
-auto try_accumulate_animation_bounding_boxes(const animation_bounding_box_map& boxes, math::bbox& out) -> bool
-{
-    bool found = false;
-    for(const auto& kvp : boxes)
-    {
-        for(const auto& box : kvp.second)
-        {
-            if(!box.is_populated())
-            {
-                continue;
-            }
-
-            if(!found)
-            {
-                out = {};
-                found = true;
-            }
-
-            out.add_point(box.min);
-            out.add_point(box.max);
-        }
-    }
-
-    return found;
-}
-
 void apply_import_facing_correction_to_load_data(mesh::load_data& load_data)
 {
     if(!load_data.root_node)
@@ -832,84 +458,6 @@ void accumulate_bounds_from_armature(const mesh::load_data& load_data, math::bbo
     };
 
     visit(*load_data.root_node, math::transform::identity());
-}
-
-/// Evenly spaced animation samples used to expand import-time bounds (ticks, not seconds).
-constexpr unsigned int animation_bounds_sample_count = 5;
-
-auto build_animation_sample_times(float animation_duration_ticks) -> std::vector<float>
-{
-    std::vector<float> times;
-    times.reserve(animation_bounds_sample_count);
-
-    if(animation_duration_ticks <= 0.0f || animation_bounds_sample_count <= 1)
-    {
-        times.push_back(0.0f);
-        return times;
-    }
-
-    for(unsigned int i = 0; i < animation_bounds_sample_count; ++i)
-    {
-        times.push_back(animation_duration_ticks * float(i) / float(animation_bounds_sample_count - 1));
-    }
-
-    return times;
-}
-
-// Main function to compute bounding boxes for animations, skipping unaffected meshes
-auto compute_bounding_boxes_for_animations(const aiScene* scene) -> animation_bounding_box_map
-{
-    APPLOG_TRACE_PERF(std::chrono::seconds);
-
-    animation_bounding_box_map animation_bounding_boxes;
-
-    if(!scene->HasAnimations())
-    {
-        return animation_bounding_boxes;
-    }
-
-    const auto attaching_nodes = build_mesh_attaching_nodes_map(scene);
-
-    for(unsigned int anim_index = 0; anim_index < scene->mNumAnimations; ++anim_index)
-    {
-        const aiAnimation* animation = scene->mAnimations[anim_index];
-        auto& boxes = animation_bounding_boxes[animation];
-
-        const float animation_duration = float(animation->mDuration);
-        const auto sample_times = build_animation_sample_times(animation_duration);
-        boxes.reserve(sample_times.size());
-
-        const auto affected_nodes = get_affected_bones_and_children(scene, animation);
-        const auto affected_meshes = get_affected_meshes(scene, affected_nodes, attaching_nodes);
-
-        for(const float time : sample_times)
-        {
-            math::bbox sample_bounds;
-
-            for(const auto& entry : affected_meshes)
-            {
-                const auto transformed_vertices =
-                    get_transformed_vertices(entry.mesh, scene, time, animation, entry.attaching_nodes);
-
-                auto frame_bounding_box = calculate_bounding_box(transformed_vertices);
-                if(!frame_bounding_box.is_populated())
-                {
-                    continue;
-                }
-
-                frame_bounding_box.inflate(frame_bounding_box.get_extents() * 0.05f);
-                sample_bounds.add_point(frame_bounding_box.min);
-                sample_bounds.add_point(frame_bounding_box.max);
-            }
-
-            if(sample_bounds.is_populated())
-            {
-                boxes.push_back(sample_bounds);
-            }
-        }
-    }
-
-    return animation_bounding_boxes;
 }
 
 // Helper function to get the file extension from the compressed texture format
@@ -1231,9 +779,65 @@ void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
                 influence.weight = assimp_influence.mWeight;
 
                 bone_ptr->influences.emplace_back(influence);
+
+                // Accumulate the bone-space bounds of every influenced vertex (mesh-space
+                // position pre-multiplied by the offset/bind-pose matrix). At runtime,
+                // bone_world_transform * bounds yields a conservative world-space bound of
+                // the skinned geometry for frustum culling of animated meshes.
+                if(assimp_influence.mVertexId < mesh->mNumVertices && assimp_influence.mWeight > 0.0f)
+                {
+                    const auto& vertex = mesh->mVertices[assimp_influence.mVertexId];
+                    const math::vec3 mesh_space_position(vertex.x, vertex.y, vertex.z);
+                    const math::vec3 bone_space_position =
+                        bone_ptr->bind_pose_transform.transform_coord(mesh_space_position);
+                    bone_ptr->bounds.add_point(bone_space_position);
+                }
             }
         }
     }
+}
+
+auto make_stable_submesh_id(const char* name, const mesh::load_data& load_data) -> uint32_t
+{
+    // FNV-1a hash of the source mesh name. The id must be deterministic across reimports so
+    // scene/prefab references (submesh_component entries) survive submesh reordering.
+    uint32_t hash = 2166136261u;
+    bool empty = true;
+    for(const char* c = name; *c != '\0'; ++c)
+    {
+        hash ^= static_cast<uint8_t>(*c);
+        hash *= 16777619u;
+        empty = false;
+    }
+    if(empty)
+    {
+        // Unnamed meshes fall back to an ordinal-derived id (still deterministic as long as
+        // the exporter emits meshes in a stable order).
+        hash = 2166136261u ^ static_cast<uint32_t>(load_data.submeshes.size() + 1);
+    }
+    if(hash == 0)
+    {
+        hash = 1;
+    }
+    // Disambiguate duplicate names with deterministic probing.
+    auto collides = [&](uint32_t candidate)
+    {
+        return std::any_of(load_data.submeshes.begin(),
+                           load_data.submeshes.end(),
+                           [candidate](const mesh::submesh& sm)
+                           {
+                               return sm.stable_id == candidate;
+                           });
+    };
+    while(collides(hash))
+    {
+        hash = hash * 16777619u + 1u;
+        if(hash == 0)
+        {
+            hash = 1;
+        }
+    }
+    return hash;
 }
 
 void process_mesh(aiMesh* mesh, mesh::load_data& load_data)
@@ -1246,6 +850,7 @@ void process_mesh(aiMesh* mesh, mesh::load_data& load_data)
     submesh.face_count = mesh->mNumFaces;
     submesh.data_group_id = mesh->mMaterialIndex;
     submesh.skinned = mesh->HasBones();
+    submesh.stable_id = make_stable_submesh_id(mesh->mName.C_Str(), load_data);
     load_data.material_count = std::max(load_data.material_count, submesh.data_group_id + 1);
 
     process_faces(mesh, submesh.vertex_start, load_data);
@@ -4780,24 +4385,10 @@ void process_imported_scene(asset_manager& am,
     APPLOG_TRACE("Mesh Importer: Processing animations ...");
     process_animations(scene, filename, load_data, name_to_index_lut, animations);
 
-    APPLOG_TRACE("Mesh Importer: Processing animations bounding boxes ...");
-    const auto boxes = compute_bounding_boxes_for_animations(scene);
-
-    math::bbox animation_bounds;
-    if(try_accumulate_animation_bounding_boxes(boxes, animation_bounds))
-    {
-        // Animation bounds only cover affected meshes — expand the static scene bounds, never replace.
-        if(load_data.bbox.is_populated())
-        {
-            load_data.bbox.add_point(animation_bounds.min);
-            load_data.bbox.add_point(animation_bounds.max);
-        }
-        else
-        {
-            load_data.bbox = animation_bounds;
-        }
-    }
-    else if(!load_data.bbox.is_populated())
+    // Note: bounds are intentionally bind-pose only. Animation-driven expansion happens at
+    // runtime from per-bone bind-space bounds (skinned) and per-node submesh proxy bounds
+    // (rigid attachments), which track the actual pose instead of pre-sampled clips.
+    if(!load_data.bbox.is_populated())
     {
         load_data.bbox = {};
         accumulate_bounds_from_armature(load_data, load_data.bbox);

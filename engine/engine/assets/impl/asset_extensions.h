@@ -193,7 +193,10 @@ inline auto get_format_version() -> uint64_t
 template<>
 inline auto get_format_version<unravel::mesh>() -> uint64_t
 {
-    return 7;
+    // 8: per-submesh stable_id, per-bone bind-space bounds, per-LOD submesh bbox recompute.
+    // 9: mesh bounds are bind-pose only (import-time animation sampling removed; runtime
+    //    pose bounds handle animation-driven expansion).
+    return 9;
 }
 
 template<>

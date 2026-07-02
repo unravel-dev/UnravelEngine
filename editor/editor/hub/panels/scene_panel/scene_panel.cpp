@@ -1734,10 +1734,8 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
 
         ImGui::Separator();
         ImGui::TextUnformatted("Model Details");
-        ImGui::Checkbox("World Bounds", &em.gizmos.show_model_bounds);
-        ImGui::Checkbox("Local Bounds", &em.gizmos.show_model_local_bounds);
-        ImGui::Checkbox("Submesh Local Bounds", &em.gizmos.show_model_submesh_local_bounds);
-        ImGui::Checkbox("LOD", &em.gizmos.show_model_lod);
+        ImGui::Checkbox("World Bounds & LOD", &em.gizmos.show_model_bounds);
+        ImGui::Checkbox("World Submesh Bounds & LOD", &em.gizmos.show_model_submesh_bounds);
 
         ImGui::Separator();
         ImGui::TextUnformatted("Particle Emitter Details");

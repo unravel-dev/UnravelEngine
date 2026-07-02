@@ -75,6 +75,11 @@ public:
         math::transform bind_pose_transform;
         ///< List of vertices influenced by the bone.
         vertex_influence_array_t influences;
+        ///< Bone-space bounds of all vertices influenced by this bone (vertex positions
+        ///< pre-multiplied by the bind pose transform). Transforming this box by the bone's
+        ///< world transform yields a conservative world-space bound of the skinned vertices,
+        ///< enabling frustum culling of animated meshes. May be unpopulated for legacy assets.
+        math::bbox bounds{};
     };
     using bone_influence_array_t = std::vector<bone_influence>;
 
@@ -337,6 +342,11 @@ public:
         math::bbox bbox{};
 
         bool skinned{};
+
+        ///< Import-stable identifier (hash of the source mesh name + disambiguation).
+        ///< Survives reimports that reorder submeshes; 0 means "not assigned" and callers
+        ///< should fall back to the submesh array index.
+        uint32_t stable_id{0};
     };
 
     struct info
@@ -967,17 +977,13 @@ public:
      */
     auto get_submeshes_count(uint32_t lod_index = 0) const -> size_t;
 
-    /// Submesh count at or above which per-submesh frustum culling is worthwhile.
-    static constexpr size_t many_submeshes_threshold = 8;
-
     /**
-     * @brief Returns true when this LOD has enough submeshes to benefit from per-submesh culling.
+     * @brief Finds the submesh array index matching an import-stable submesh identifier.
+     * @param stable_id The stable identifier assigned at import time (see submesh::stable_id).
      * @param lod_index LOD index (0 = base, 1+ = simplified)
+     * @return Index of the submesh, or -1 if no submesh carries that id.
      */
-    auto has_many_submeshes(uint32_t lod_index = 0) const -> bool
-    {
-        return get_submeshes_count(lod_index) >= many_submeshes_threshold;
-    }
+    auto find_submesh_index_by_stable_id(uint32_t stable_id, uint32_t lod_index = 0) const -> int;
 
     /**
      * @brief Gets the number of skinned submeshes for this mesh.

@@ -219,12 +219,12 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                     continue;
                 }
 
-                const auto& mesh = lod.get();
-                const auto& bounds = mesh->get_bounds();
-
-                // Test the bounding box of the mesh
-                if(!camera.test_obb(bounds, world_transform))
+                // Test against the pose-aware world AABB (tracks node/bone animation),
+                // never the bind-pose mesh bounds.
+                if(!camera.get_frustum().test_aabb(model_comp->get_world_bounds()))
+                {
                     continue;
+                }
 
                 const auto& submesh_transforms = model_comp->get_submesh_transforms();
                 const auto& bone_transforms = model_comp->get_bone_transforms();
@@ -335,7 +335,8 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
         }
 
         const auto& world_transform = transform_comp->get_transform_global();
-        if(!camera.test_obb(mesh_ptr->get_bounds(), world_transform))
+        // Pose-aware world AABB - bind-pose mesh bounds don't track node/bone animation.
+        if(!camera.get_frustum().test_aabb(model_comp->get_world_bounds()))
         {
             continue;
         }

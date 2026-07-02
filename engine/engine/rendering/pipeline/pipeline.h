@@ -158,6 +158,9 @@ public:
      * @param render_mask Render mask to filter entities by layers.
      * @param dt The delta time.
      * @param lod_data_callback The callback to call for each visible model.
+     * @param lod_reference_cam Optional camera used only for LOD selection when @p cam is null
+     *        (e.g. shadow gathering, which must not frustum-cull but benefits from
+     *        distance-appropriate LODs). The shadow LOD bias is applied on top.
      * @return A vector of handles to the visible models.
      */
     virtual void gather_visible_models(scene& scn,
@@ -165,7 +168,16 @@ public:
                                        visibility_flags query,
                                        const layer_mask& render_mask,
                                        delta_t dt,
-                                       const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback);
+                                       const std::function<void(entt::handle entity, const lod_data& lod_data)>& lod_data_callback,
+                                       const camera* lod_reference_cam = nullptr);
+
+    /**
+     * @brief LOD bias applied on top of the main selection when rendering shadows.
+     * 0 = shadows use the same LOD the main view would pick; positive values push shadow
+     * rendering toward coarser LODs. Replaces the old behavior of always using LOD 0.
+     */
+    static auto get_shadow_lod_bias() -> float;
+    static void set_shadow_lod_bias(float bias);
 
     /**
      * @brief Renders the entire scene from the camera's perspective.

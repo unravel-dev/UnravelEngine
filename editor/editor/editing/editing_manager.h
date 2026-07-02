@@ -77,9 +77,7 @@ struct editing_manager
         bool show_volume {true};
         bool show_model {true};
         bool show_model_bounds {false};
-        bool show_model_local_bounds {false};
-        bool show_model_submesh_local_bounds {false};
-        bool show_model_lod {false};
+        bool show_model_submesh_bounds {false};
         bool show_text {true};
         bool show_particle_emitter {true};
         bool show_component_gizmos {true};

@@ -1282,7 +1282,7 @@ namespace unravel
 
 namespace
 {
-const uint8_t system_id = 1;
+const uint8_t system_id = transform_component::dirty_ids::physics;
 
 void wake_up(bullet::rigidbody& body)
 {
