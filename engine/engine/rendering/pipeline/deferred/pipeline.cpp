@@ -1887,10 +1887,6 @@ auto deferred::run_taa_pass(const camera& camera,
     p.output = nullptr;
     p.cam = &camera;
     p.g_buffer = gbuffer;
-    // PREV_DEPTH is snapshotted at the end of the frame (see snapshot_prev_depth).
-    // If unavailable this frame (first frame after enable, or SSIL/Hi-Z not driving
-    // it), TAA falls back to the spatial-proxy disocclusion test cleanly.
-    p.prev_depth = rview.tex_safe_get("PREV_DEPTH");
     rparams.fill_taa_params(p);
     return taa_pass_.run(rview, p);
 }
