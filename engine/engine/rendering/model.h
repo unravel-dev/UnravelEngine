@@ -364,7 +364,41 @@ public:
      */
     auto calculate_lod_data(lod_data& data, const math::transform& world_transform, const camera& cam, float dt) const -> bool;
 
- 
+    /**
+     * @brief Selects a LOD for a specific submesh based on its own screen size.
+     *
+     * Used at submit time when per-submesh culling is active (see @ref mesh::has_many_submeshes)
+     * and a view camera is available. Each submesh independently picks its LOD from its world-
+     * space bounding sphere so tiny/distant submeshes on a large model can drop to a cheaper
+     * LOD than the model-wide selection would.
+     *
+     * The returned LOD is CLAMPED to be at least @p base_lod: per-submesh selection is only
+     * allowed to drop quality relative to the model-wide LOD, never raise it. This preserves
+     * the guarantee made by @ref calculate_lod_data (with its hysteresis and dithered
+     * transitions) that the model-wide LOD is a quality floor.
+     *
+     * Returns @p base_lod (i.e. "no change") when per-submesh LOD is not viable:
+     *   - The model uses manual multi-mesh LODs (submesh identity is not comparable across
+     *     different mesh assets).
+     *   - No screen-size table is populated, or the model has only one LOD.
+     *   - LOD override is enabled.
+     *   - The submesh has no populated per-submesh bbox (indistinguishable from the whole model).
+     *
+     * Must run on the graphics API thread.
+     *
+     * @param m The mesh asset (must be the same one returned by @ref get_lod for @p base_lod).
+     * @param submesh_index Index into @p m's submesh array at @p base_lod.
+     * @param base_lod Model-wide LOD (floor for the returned value).
+     * @param world_matrix World transform for this submesh instance.
+     * @param cam Camera whose position/projection drives the screen-size computation.
+     */
+    auto calculate_submesh_lod(const mesh& m,
+                               uint32_t submesh_index,
+                               uint32_t base_lod,
+                               const math::mat4& world_matrix,
+                               const camera& cam) const -> uint32_t;
+
+
     /**
      * @brief Gets the minimum screen size used by the screen-radius-squared LOD and culling method.
      * @return Minimum screen size.
@@ -444,6 +478,10 @@ public:
      * @param lod The level of detail to render.
      * @param callbacks The submit callbacks.
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
+     * @param view Optional camera enabling per-submesh LOD selection. When supplied together
+     *             with @p frustum and the mesh has enough submeshes to warrant per-submesh
+     *             work, distant submeshes may pick a cheaper LOD than @p lod via
+     *             @ref calculate_submesh_lod. Only affects non-skinned submeshes.
      */
     void submit(const math::mat4& world_transform,
                 const submesh_pose_mat4& submesh_transforms,
@@ -451,7 +489,8 @@ public:
                 const std::vector<pose_mat4>& skinning_transforms,
                 unsigned int lod,
                 const submit_callbacks& callbacks,
-                const math::frustum* frustum = nullptr) const;
+                const math::frustum* frustum = nullptr,
+                const camera* view = nullptr) const;
 
     /**
      * @struct submit_vertex_pulling_callbacks
@@ -516,13 +555,16 @@ public:
      * @param lod The level of detail to render.
      * @param callbacks The vertex-pulling submit callbacks.
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
+     * @param view Optional camera enabling per-submesh LOD selection. Same semantics as
+     *             @ref submit.
      */
     void submit_for_vertex_pulling(const math::mat4& world_transform,
                                    const submesh_pose_mat4& submesh_transforms,
                                    const std::vector<pose_mat4>& skinning_transforms,
                                    unsigned int lod,
                                    const submit_vertex_pulling_callbacks& callbacks,
-                                   const math::frustum* frustum = nullptr) const;
+                                   const math::frustum* frustum = nullptr,
+                                   const camera* view = nullptr) const;
 
     /**
      * @brief Collects this model into a batch collector for instanced rendering.
@@ -532,13 +574,19 @@ public:
      * @param lod_index The level of detail to use.
      * @param lod_param The LOD transition parameter (for smooth LOD transitions).
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
+     * @param view Optional camera enabling per-submesh LOD selection. When supplied and the
+     *             mesh has many submeshes, each submesh may be collected under a batch key
+     *             with a per-submesh LOD >= @p lod_index. The batching layer already keys on
+     *             LOD, so mixed-LOD submeshes for the same model land in the correct batches
+     *             automatically.
      */
     void submit_for_batching(batch_collector& collector,
                             const math::mat4& world_transform,
                             const submesh_pose_mat4& submesh_transforms,
                             uint32_t lod_index,
                             float lod_param = 0.0f,
-                            const math::frustum* frustum = nullptr) const;
+                            const math::frustum* frustum = nullptr,
+                            const camera* view = nullptr) const;
 
     /**
      * @brief Collects this model into per-cascade batch collectors with per-submesh culling.

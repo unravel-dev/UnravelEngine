@@ -760,8 +760,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
     }
 
-    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
-    if(hiz_active)
+    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path). TAA also
+    // consumes PREV_DEPTH for its real temporal disocclusion test -- keep the snapshot
+    // alive whenever TAA is enabled even if Hi-Z isn't driving it this frame.
+    const bool taa_active = static_cast<bool>(params.fill_taa_params);
+    if(hiz_active || taa_active)
     {
         snapshot_prev_depth(rview, viewport_size);
     }
@@ -913,13 +916,13 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
         if (can_batch)
         {
-            // Collect this model for batching with appropriate transforms            
-            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum);
+            // Collect this model for batching with appropriate transforms
+            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum, &camera);
             stats_.drawn_models++;
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum);
+                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum, &camera);
                 stats_.drawn_models++;
             }
         }
@@ -932,7 +935,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                          skinning_matrices,
                          current_lod_index,
                          callbacks,
-                         &view_frustum);
+                         &view_frustum,
+                         &camera);
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
                 callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
@@ -948,7 +952,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                              skinning_matrices,
                              target_lod_index,
                              callbacks,
-                             &view_frustum);
+                             &view_frustum,
+                             &camera);
             }
         }
     }
@@ -1882,6 +1887,10 @@ auto deferred::run_taa_pass(const camera& camera,
     p.output = nullptr;
     p.cam = &camera;
     p.g_buffer = gbuffer;
+    // PREV_DEPTH is snapshotted at the end of the frame (see snapshot_prev_depth).
+    // If unavailable this frame (first frame after enable, or SSIL/Hi-Z not driving
+    // it), TAA falls back to the spatial-proxy disocclusion test cleanly.
+    p.prev_depth = rview.tex_safe_get("PREV_DEPTH");
     rparams.fill_taa_params(p);
     return taa_pass_.run(rview, p);
 }

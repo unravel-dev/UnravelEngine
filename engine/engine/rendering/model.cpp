@@ -86,6 +86,18 @@ auto compute_conservative_world_bounds_sphere(const mesh& m, const math::transfo
     return math::bsphere{world_center, local_radius * max_scale};
 }
 
+auto compute_submesh_world_bounds_sphere(const mesh::submesh& sm, const math::mat4& world_matrix) -> math::bsphere
+{
+    const math::transform world_transform(world_matrix);
+    const math::vec3 local_center = sm.bbox.get_center();
+    const math::vec3 local_extents = sm.bbox.get_extents();
+    const float local_radius = glm::length(local_extents);
+    const math::vec3 world_center = world_transform.transform_coord(local_center);
+    const auto scale = world_transform.get_scale();
+    const float max_scale = std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)});
+    return math::bsphere{world_center, local_radius * max_scale};
+}
+
 auto compute_screen_rect_from_sphere(const camera& cam, const math::vec3& world_center, float screen_radius) -> irect32_t
 {
     const auto& viewport_pos = cam.get_viewport_pos();
@@ -423,6 +435,81 @@ auto model::calculate_lod_data(lod_data& data, const math::transform& world_tran
     return true;
 }
 
+auto model::calculate_submesh_lod(const mesh& m,
+                                  uint32_t submesh_index,
+                                  uint32_t base_lod,
+                                  const math::mat4& world_matrix,
+                                  const camera& cam) const -> uint32_t
+{
+    if(lod_override_enabled_)
+    {
+        return base_lod;
+    }
+
+    const auto lod_count = get_lods_count();
+    if(lod_count <= base_lod + 1)
+    {
+        return base_lod;
+    }
+
+    // Per-submesh LOD needs the underlying mesh asset to stay the same across LOD switches so
+    // submesh_index keeps its meaning. That is only true with a single mesh + internal LODs;
+    // multi-mesh manual LODs are a different asset per level with potentially unrelated
+    // submesh layouts.
+    if(mesh_lods_.size() != 1)
+    {
+        return base_lod;
+    }
+
+    if(lod_screen_sizes_.size() < lod_count)
+    {
+        return base_lod;
+    }
+
+    const auto& base_submeshes = m.get_submeshes(base_lod);
+    if(submesh_index >= base_submeshes.size())
+    {
+        return base_lod;
+    }
+    const auto* sm = base_submeshes[submesh_index];
+    if(sm == nullptr || !sm->bbox.is_populated())
+    {
+        // No per-submesh bbox means the submesh cannot be distinguished from the whole model,
+        // so per-submesh LOD would just mirror the model-wide selection.
+        return base_lod;
+    }
+
+    const auto sphere = compute_submesh_world_bounds_sphere(*sm, world_matrix);
+    const float screen_radius_squared =
+        compute_bounds_screen_radius_squared(sphere.position, sphere.radius, cam);
+
+    // Walk from the lowest-quality LOD toward base_lod + 1 and pick the coarsest LOD whose
+    // screen-size threshold still fits the submesh's projected size. This mirrors the model-
+    // wide selection but without hysteresis / transitions (submesh-level ping-pong is bounded
+    // by the model LOD floor and is generally imperceptible for small distant submeshes).
+    for(std::int32_t lod_index = static_cast<std::int32_t>(lod_count) - 1;
+        lod_index > static_cast<std::int32_t>(base_lod);
+        --lod_index)
+    {
+        const float screen_size = lod_screen_sizes_[static_cast<std::size_t>(lod_index)];
+        const float threshold_squared = math::square(screen_size * 0.5f);
+        if(threshold_squared < screen_radius_squared)
+        {
+            continue;
+        }
+
+        // If the LOD does not carry this submesh index at all (topology diverges), fall back.
+        if(submesh_index >= m.get_submeshes(static_cast<uint32_t>(lod_index)).size())
+        {
+            continue;
+        }
+
+        return static_cast<uint32_t>(lod_index);
+    }
+
+    return base_lod;
+}
+
 
 void model::recalulate_lod_screen_size_limits(uint32_t lod_count)
 {
@@ -536,7 +623,8 @@ void model::submit(const math::mat4& world_transform,
                    const std::vector<pose_mat4>& skinning_transforms,
                    unsigned int lod,
                    const submit_callbacks& callbacks,
-                   const math::frustum* frustum) const
+                   const math::frustum* frustum,
+                   const camera* view) const
 {
     const auto lod_mesh = get_lod(lod);
     if(!lod_mesh)
@@ -549,6 +637,10 @@ void model::submit(const math::mat4& world_transform,
     auto skinned_submeshes_count = mesh->get_skinned_submeshes_count(lod);
     auto non_skinned_submeshes_count = mesh->get_non_skinned_submeshes_count(lod);
     const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod);
+    // Per-submesh LOD rides on the same "large mesh" trigger as per-submesh culling so it
+    // stays free when disabled. Only non-skinned submeshes participate (skinning matrices
+    // and per-submesh LOD across simplified skinned buffers do not mix cleanly).
+    const bool per_submesh_lod = cull_submeshes && view != nullptr;
 
     submit_callbacks::params params;
 
@@ -567,13 +659,14 @@ void model::submit(const math::mat4& world_transform,
             callbacks.setup_params_per_instance(params);
         }
 
-        auto render_submesh = [this, frustum, cull_submeshes](const std::shared_ptr<unravel::mesh>& mesh,
-                                     uint32_t lod,
-                                     uint32_t group_id,
-                                     const math::mat4& matrix,
-                                     const submesh_pose_mat4& pose,
-                                     submit_callbacks::params& params,
-                                     const submit_callbacks& callbacks)
+        auto render_submesh = [this, frustum, cull_submeshes, per_submesh_lod, view]
+                              (const std::shared_ptr<unravel::mesh>& mesh,
+                               uint32_t lod,
+                               uint32_t group_id,
+                               const math::mat4& matrix,
+                               const submesh_pose_mat4& pose,
+                               submit_callbacks::params& params,
+                               const submit_callbacks& callbacks)
         {
             auto mat = get_material_instance(group_id);
             if(!mat)
@@ -584,10 +677,33 @@ void model::submit(const math::mat4& world_transform,
             const auto& submeshes = mesh->get_submeshes(lod);
             const auto& indices = mesh->get_non_skinned_submeshes_indices(group_id, lod);
 
+            // Picks the LOD-adjusted submesh pointer/lod pair used for binding. Culling still
+            // uses the base-LOD bbox (higher LODs are simplified within the same envelope, so
+            // the base bbox is a valid upper bound and this keeps culling stable).
+            const auto resolve = [&](uint32_t submesh_index, const math::mat4& world) -> std::pair<const unravel::mesh::submesh*, uint32_t>
+            {
+                const auto* base_sm = submeshes[submesh_index];
+                if(!per_submesh_lod)
+                {
+                    return {base_sm, lod};
+                }
+                const uint32_t effective_lod = calculate_submesh_lod(*mesh, submesh_index, lod, world, *view);
+                if(effective_lod == lod)
+                {
+                    return {base_sm, lod};
+                }
+                const auto& lod_submeshes = mesh->get_submeshes(effective_lod);
+                if(submesh_index >= lod_submeshes.size())
+                {
+                    return {base_sm, lod};
+                }
+                const auto* lod_sm = lod_submeshes[submesh_index];
+                return lod_sm != nullptr ? std::make_pair(lod_sm, effective_lod)
+                                         : std::make_pair(base_sm, lod);
+            };
+
             for(const auto& index : indices)
             {
-                const auto& submesh = submeshes[index];
-
                 if(pose.has_transforms(index))
                 {
                     const size_t transform_count = pose.get_transform_count(index);
@@ -603,8 +719,9 @@ void model::submit(const math::mat4& world_transform,
                                 continue;
                             }
 
+                            const auto [sm, sm_lod] = resolve(static_cast<uint32_t>(index), *transform);
                             gfx::set_world_transform(*transform);
-                            mesh->bind_render_buffers_for_submesh(submesh, lod);
+                            mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                             params.preserve_state = (&index != &indices.back());
                             callbacks.setup_params_per_submesh(params, *mat);
                         }
@@ -618,8 +735,9 @@ void model::submit(const math::mat4& world_transform,
                         continue;
                     }
 
+                    const auto [sm, sm_lod] = resolve(static_cast<uint32_t>(index), matrix);
                     gfx::set_world_transform(matrix);
-                    mesh->bind_render_buffers_for_submesh(submesh, lod);
+                    mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                     params.preserve_state = &index != &indices.back();
                     callbacks.setup_params_per_submesh(params, *mat);
                 }
@@ -702,7 +820,8 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                                       const std::vector<pose_mat4>& skinning_transforms,
                                       unsigned int lod,
                                       const submit_vertex_pulling_callbacks& callbacks,
-                                      const math::frustum* frustum) const
+                                      const math::frustum* frustum,
+                                      const camera* view) const
 {
     const auto lod_mesh = get_lod(lod);
     if(!lod_mesh)
@@ -734,22 +853,41 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
     const auto skinned_count = mesh->get_skinned_submeshes_count(lod);
     const auto non_skinned_count = mesh->get_non_skinned_submeshes_count(lod);
     const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod);
+    const bool per_submesh_lod = cull_submeshes && view != nullptr;
     const auto& submeshes = mesh->get_submeshes(lod);
     const uint32_t group_count = static_cast<uint32_t>(mesh->get_data_groups_count());
 
-    // Binds the raw geometry buffers before calling the per-submesh callback. The
-    // callback is responsible for uniforms, state, vertex count and the actual
-    // submit call - the model only guarantees that u_world and the raw buffers on
-    // stages 0/1 are set.
-    auto bind_and_submit = [&](uint32_t submesh_index) -> void
+    // Binds the raw geometry buffers for @p effective_lod's index buffer and reads face
+    // range from that LOD's submesh entry. When @p effective_lod matches the model-wide
+    // @p lod, the pre-fetched @c ib is reused; otherwise the LOD-specific IB is looked up.
+    // The callback is responsible for uniforms, state, vertex count and the actual submit
+    // call - the model only guarantees that u_world and the raw buffers on stages 0/1
+    // are set.
+    auto bind_and_submit = [&](uint32_t submesh_index, uint32_t effective_lod) -> void
     {
-        const auto* sub = submeshes[submesh_index];
+        const auto& lod_submeshes = (effective_lod == lod) ? submeshes : mesh->get_submeshes(effective_lod);
+        if(submesh_index >= lod_submeshes.size())
+        {
+            return;
+        }
+        const auto* sub = lod_submeshes[submesh_index];
+        if(!sub || sub->face_count == 0)
+        {
+            return;
+        }
+
+        const auto effective_ib = (effective_lod == lod) ? ib : mesh->get_hardware_ib(effective_lod);
+        if(!effective_ib || !effective_ib->is_valid())
+        {
+            return;
+        }
+
         params.submesh_index = submesh_index;
         params.index_start = static_cast<uint32_t>(sub->face_start) * 3u;
         params.index_count = sub->face_count * 3u;
 
         gfx::set_buffer(0, vb->native_handle(), gfx::access::Read);
-        gfx::set_buffer(1, ib->native_handle(), gfx::access::Read);
+        gfx::set_buffer(1, effective_ib->native_handle(), gfx::access::Read);
 
         if(callbacks.setup_params_per_submesh)
         {
@@ -800,8 +938,11 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                         {
                             continue;
                         }
+                        const uint32_t effective_lod = per_submesh_lod
+                            ? calculate_submesh_lod(*mesh, static_cast<uint32_t>(index), lod, *transform, *view)
+                            : lod;
                         gfx::set_world_transform(*transform);
-                        bind_and_submit(static_cast<uint32_t>(index));
+                        bind_and_submit(static_cast<uint32_t>(index), effective_lod);
                     }
                 }
                 else
@@ -810,8 +951,11 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                     {
                         continue;
                     }
+                    const uint32_t effective_lod = per_submesh_lod
+                        ? calculate_submesh_lod(*mesh, static_cast<uint32_t>(index), lod, world_transform, *view)
+                        : lod;
                     gfx::set_world_transform(world_transform);
-                    bind_and_submit(static_cast<uint32_t>(index));
+                    bind_and_submit(static_cast<uint32_t>(index), effective_lod);
                 }
             }
         }
@@ -864,7 +1008,7 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                 params.preserve_state = &index != &indices.back();
 
                 gfx::set_world_transform(bones.transforms);
-                bind_and_submit(static_cast<uint32_t>(index));
+                bind_and_submit(static_cast<uint32_t>(index), lod);
             }
         }
 
@@ -903,7 +1047,8 @@ void model::submit_for_batching(batch_collector& collector,
                                 const submesh_pose_mat4& submesh_transforms,
                                 uint32_t lod_index,
                                 float lod_param,
-                                const math::frustum* frustum) const
+                                const math::frustum* frustum,
+                                const camera* view) const
 {
     auto mesh_asset = get_lod(lod_index);
     if(!mesh_asset)
@@ -918,6 +1063,9 @@ void model::submit_for_batching(batch_collector& collector,
     }
 
     const bool cull_submeshes = frustum != nullptr && mesh->has_many_submeshes(lod_index);
+    // The batch key already includes lod_index, so mixed per-submesh LODs land in distinct
+    // batches automatically - the renderer already looks up (mesh, lod, submesh) per batch.
+    const bool per_submesh_lod = cull_submeshes && view != nullptr;
 
     // Iterate over data groups (material groups)
     const auto data_group_count = mesh->get_data_groups_count();
@@ -958,9 +1106,12 @@ void model::submit_for_batching(batch_collector& collector,
                     {
                         continue;
                     }
-                    
-                    // Create batch key
-                    batch_key key(mesh, material_ptr, lod_index, submesh_index);
+
+                    const uint32_t effective_lod = per_submesh_lod
+                        ? calculate_submesh_lod(*mesh, submesh_index, lod_index, *transform_ptr, *view)
+                        : lod_index;
+
+                    batch_key key(mesh, material_ptr, effective_lod, submesh_index);
                     if (!key.is_valid())
                     {
                         continue;
@@ -982,8 +1133,11 @@ void model::submit_for_batching(batch_collector& collector,
                     continue;
                 }
 
-                // No specific transform for this submesh - use world transform
-                batch_key key(mesh, material_ptr, lod_index, submesh_index);
+                const uint32_t effective_lod = per_submesh_lod
+                    ? calculate_submesh_lod(*mesh, submesh_index, lod_index, world_transform, *view)
+                    : lod_index;
+
+                batch_key key(mesh, material_ptr, effective_lod, submesh_index);
                 if (!key.is_valid())
                 {
                     continue;
