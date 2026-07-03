@@ -135,6 +135,8 @@ struct stats
     std::uint64_t budget_used_bytes = 0;     ///< Metric compared against the budget (e.g. GPU mem used).
     std::uint64_t last_pass_scanned = 0;     ///< Candidates considered by the most recent sweep.
     std::uint64_t last_pass_evicted = 0;     ///< Resources evicted by the most recent sweep.
+    std::uint64_t last_pass_freed_bytes = 0; ///< GPU bytes reclaimed by the most recent sweep.
+    std::uint64_t pending_release_bytes = 0; ///< Destroys queued in bgfx but not yet reflected in gpuMemoryUsed.
     double last_pass_ms = 0.0;               ///< Duration of the most recent sweep in milliseconds.
     double last_restore_ms = 0.0;            ///< Duration of the most recent restore in milliseconds.
 };
@@ -180,9 +182,9 @@ auto evict_all() -> stats;
 ///   - If projected occupancy (gpu_used + queued + @p bytes + safety_margin) stays under the soft
 ///     budget, returns @ref reclaim_result::headroom and does nothing.
 ///   - Otherwise evicts the largest resident victims down to @ref budget_state::target_bytes.
-///   - Only flushes (bgfx::frame with @c BGFX_FRAME_FLUSH) when the projection crosses the hard
-///     limit, so we coalesce normal bursts and pay the GPU stall only when the next allocation
-///     would not fit alongside the queued destroys.
+///   - Flushes (bgfx::flush) when evictions occurred and an allocation is imminent (@p bytes > 0),
+///     so destroyed handles release VRAM before the create lands. Also flushes when the projection
+///     still crosses the hard limit after eviction.
 ///   - Returns @ref reclaim_result::insufficient when even after a flush the projection still
 ///     exceeds the hard limit. Callers should log a warning and still proceed; bgfx will surface
 ///     a backend OOM through its own error path if the allocation truly fails.
@@ -210,6 +212,14 @@ auto current_budget() -> budget_state;
 /// frame, and @ref reclaim_for uses it to project occupancy. Lock-free; cleared by
 /// @ref clear_queued_allocations.
 auto peek_queued_bytes() -> std::uint64_t;
+
+/// GPU bytes from destroys/evictions queued in bgfx but not yet reflected in gpuMemoryUsed. Credited
+/// against occupancy projections until @ref clear_queued_allocations runs after a pump.
+auto peek_pending_release_bytes() -> std::uint64_t;
+
+/// In-flight bytes from non-evictable creates (render targets, etc.) recorded via
+/// @ref note_pending_allocation. Used by the manual-budget driver path.
+auto peek_external_queued_bytes() -> std::uint64_t;
 
 /// Record a newly queued GPU allocation. Used for allocations that are not registered as evictable
 /// resources (e.g. render targets / compute write textures). The same-frame pressure is cleared

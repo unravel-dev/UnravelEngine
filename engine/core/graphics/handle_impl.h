@@ -57,6 +57,11 @@ public:
             eviction::restore_resource(const_cast<handle_impl*>(this));
         }
         touch();
+
+        if(!is_valid())
+        {
+            return get_fallback_handle();
+        }
         return handle_;
     }
 
@@ -104,6 +109,15 @@ public:
     }
 
 protected:
+    auto fallback_handle() const -> T
+    {
+        return handle_;
+    }
+
+    auto get_fallback_handle() const -> T
+    {
+        return static_cast<const Base&>(*this).fallback_handle();
+    }
     /// Opt the resource into the eviction system. Call once, after the GPU handle is created and a
     /// CPU-side backing exists. @p restore_fn recreates the handle from that backing and returns
     /// true on success. Resources that never call this stay @ref evict_class::non_evictable and

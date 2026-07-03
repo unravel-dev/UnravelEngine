@@ -223,7 +223,8 @@ static void imageReleaseCb(void* _ptr, void* _userData)
 
 static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageContainer,
                                                     uint64_t _flags,
-                                                    bgfx::TextureInfo* _info)
+                                                    bgfx::TextureInfo* _info,
+                                                    const TexturePreCreateFn& _preCreate = nullptr)
 {
     if(NULL == imageContainer)
     {
@@ -236,17 +237,27 @@ static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageC
         imageReleaseCb,
         imageContainer);
 
+    bgfx::TextureInfo info;
+    bgfx::calcTextureSize(
+        info,
+        uint16_t(imageContainer->m_width),
+        uint16_t(imageContainer->m_height),
+        uint16_t(imageContainer->m_depth),
+        imageContainer->m_cubeMap,
+        1 < imageContainer->m_numMips,
+        imageContainer->m_numLayers,
+        bgfx::TextureFormat::Enum(imageContainer->m_format));
+
     if(NULL != _info)
     {
-        bgfx::calcTextureSize(
-            *_info,
-            uint16_t(imageContainer->m_width),
-            uint16_t(imageContainer->m_height),
-            uint16_t(imageContainer->m_depth),
-            imageContainer->m_cubeMap,
-            1 < imageContainer->m_numMips,
-            imageContainer->m_numLayers,
-            bgfx::TextureFormat::Enum(imageContainer->m_format));
+        *_info = info;
+    }
+
+    // The image is parsed and its exact GPU footprint is known; give the caller a chance to
+    // reserve the memory (eviction gate) before the create lands.
+    if(_preCreate)
+    {
+        _preCreate(info);
     }
 
     if(imageContainer->m_cubeMap)
@@ -483,7 +494,8 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 bgfx::TextureInfo* _info,
                                 bimg::Orientation::Enum* _orientation,
                                 const char* _name,
-                                bx::Error* _err)
+                                bx::Error* _err,
+                                const TexturePreCreateFn& _preCreate)
 {
     BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
@@ -509,7 +521,7 @@ bgfx::TextureHandle loadTexture(const void* _data,
             *_orientation = imageContainer->m_orientation;
         }
 
-        handle = loadTextureFromContainer(imageContainer, _flags, _info);
+        handle = loadTextureFromContainer(imageContainer, _flags, _info, _preCreate);
 
         if(bgfx::isValid(handle) && NULL != _name)
         {
@@ -526,7 +538,8 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
                                 bimg::Orientation::Enum* _orientation,
-                                bx::Error* _err)
+                                bx::Error* _err,
+                                const TexturePreCreateFn& _preCreate = nullptr)
 {
     BX_UNUSED(_skip);
     bgfx::TextureHandle handle = BGFX_INVALID_HANDLE;
@@ -547,7 +560,7 @@ bgfx::TextureHandle loadTexture(bx::FileReaderI* _reader,
     if(NULL != data)
     {
         const bx::StringView name(_filePath);
-        handle = loadTexture(data, size, _flags, _skip, _info, _orientation, name.getPtr());
+        handle = loadTexture(data, size, _flags, _skip, _info, _orientation, name.getPtr(), _err, _preCreate);
         unload(data);
     }
 
@@ -559,10 +572,11 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint8_t _skip,
                                 bgfx::TextureInfo* _info,
                                 bimg::Orientation::Enum* _orientation,
-                                bx::Error* _err)
+                                bx::Error* _err,
+                                const TexturePreCreateFn& _preCreate)
 {
     entry::FileReader reader;
-    return loadTexture(&reader, _filePath, _flags, _skip, _info, _orientation, _err);
+    return loadTexture(&reader, _filePath, _flags, _skip, _info, _orientation, _err, _preCreate);
 }
 
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat)

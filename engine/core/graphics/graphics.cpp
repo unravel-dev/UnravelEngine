@@ -5,6 +5,7 @@
 #include <bimg/bimg.h>
 #include <bx/file.h>
 #include <algorithm>
+#include <array>
 #include <map>
 namespace gfx
 {
@@ -22,9 +23,25 @@ struct context_data
     uint32_t frame{};
 
     uniform_handle u_world{gfx::invalid_handle};
+    texture_handle fallback_texture{gfx::invalid_handle};
+    allocation_failure_policy allocation_policy = allocation_failure_policy::skip_with_fallback;
 
 } s_context;
 
+auto create_fallback_texture() -> texture_handle
+{
+    constexpr std::uint16_t dim = 4;
+    std::array<std::uint8_t, dim * dim * 4> pixels{};
+    for(std::size_t i = 0; i < dim * dim; ++i)
+    {
+        pixels[i * 4 + 0] = 255;
+        pixels[i * 4 + 1] = 0;
+        pixels[i * 4 + 2] = 255;
+        pixels[i * 4 + 3] = 255;
+    }
+    const memory_view* mem = copy(pixels.data(), static_cast<std::uint32_t>(pixels.size()));
+    return create_texture_2d(dim, dim, false, 1, texture_format::RGBA8, BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE, mem);
+}
 
 } // namespace
 
@@ -265,11 +282,31 @@ void shutdown()
     if(s_context.initted)
     {
         eviction::shutdown();
+        if(bgfx::isValid(s_context.fallback_texture))
+        {
+            gfx::destroy(s_context.fallback_texture);
+            s_context.fallback_texture = {bgfx::kInvalidHandle};
+        }
         deinit_uniform_cache();
         bgfx::destroy(s_context.u_world);
         bgfx::shutdown();
     }
     s_context = {};
+}
+
+void set_allocation_failure_policy(allocation_failure_policy policy)
+{
+    s_context.allocation_policy = policy;
+}
+
+auto get_allocation_failure_policy() -> allocation_failure_policy
+{
+    return s_context.allocation_policy;
+}
+
+auto fallback_texture() -> texture_handle
+{
+    return s_context.fallback_texture;
 }
 
 bool init(init_type init_data)
@@ -302,6 +339,14 @@ bool init(init_type init_data)
         case eviction::init_status::failed:
             log("warning", "GPU resource eviction failed to initialize.", __FILE__, __LINE__);
             break;
+    }
+    if(s_context.initted)
+    {
+        s_context.fallback_texture = create_fallback_texture();
+        if(bgfx::isValid(s_context.fallback_texture))
+        {
+            set_name(s_context.fallback_texture, "gfx-fallback");
+        }
     }
     return s_context.initted;
 }
@@ -384,9 +429,9 @@ void end(encoder* _encoder)
     bgfx::end(_encoder);
 }
 
-uint32_t frame(bool _capture)
+uint32_t frame(uint8_t _flags)
 {
-    s_context.frame = bgfx::frame(_capture);
+    s_context.frame = bgfx::frame(_flags);
     eviction::set_frame(s_context.frame);
     eviction::clear_queued_allocations();
     return s_context.frame;
@@ -1150,14 +1195,12 @@ void request_screen_shot(frame_buffer_handle _handle, const char* _filePath)
     bgfx::requestScreenShot(_handle, _filePath);
 }
 
-void flush()
+void frames(int _count, int32_t _flags)
 {
-    // Execute all queued commands (including resource destroys, which bgfx processes after creates)
-    // and reclaim their GPU memory without presenting the backbuffer or issuing any draws. Two pumps
-    // drain the command ring so the destroys are guaranteed to have been serviced on return.
-    bgfx::frame(BGFX_FRAME_FLUSH);
-    bgfx::frame(BGFX_FRAME_FLUSH);
-    eviction::clear_queued_allocations();
+    for(int i = 0; i < _count; ++i)
+    {
+        frame(_flags);
+    }
 }
 
 auto screen_quad(float dest_width, float dest_height, float depth, float width, float height) -> uint64_t

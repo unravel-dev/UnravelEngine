@@ -3,6 +3,7 @@
 
 namespace unravel
 {
+    
 render_window::render_window(os::window&& win) : window_(std::move(win))
 {
     prepare_surface();
@@ -10,17 +11,31 @@ render_window::render_window(os::window&& win) : window_(std::move(win))
 
 render_window::~render_window()
 {
-    destroy_surface();
+    // Flush destruction of swap chain before destroying window!
+    destroy_surface(2);
 }
 
-void render_window::destroy_surface()
+void render_window::destroy_surface(int frames)
 {
     // force internal handle destruction
     if(surface_)
     {
         surface_.reset();
 
-        gfx::flush();
+
+        // Before we reattach a SwapChain to the window
+        // we must actually free up the previous one.
+        // The DestroyFrameBuffer command goes in the
+        // cmdPost CommandBuffer, which happens after
+        // the frame. The CreateFrameBuffer command goes
+        // int the cmdPre CommandBuffer, which happens
+        // at the beginning of the frame. Without this
+        // bgfx::frame() call, the creation would happen
+        // before it's destroyed, which would cause
+        // the platform window to have two SwapChains
+        // associated with it.
+        // Ideally, we have an operation of ResizeFrameBuffer.
+        gfx::frames(frames);
     }
 }
 
@@ -43,7 +58,7 @@ void render_window::prepare_surface()
 
     if(needs_recreate)
     {
-        surface_.reset();
+        destroy_surface(0);
         surface_ = std::make_shared<gfx::frame_buffer>(window_.get_native_handle(),
                                                        static_cast<std::uint16_t>(size.w),
                                                        static_cast<std::uint16_t>(size.h));

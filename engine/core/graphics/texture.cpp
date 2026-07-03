@@ -45,23 +45,27 @@ void format_bytes(std::uint64_t bytes, char* out, std::size_t out_size, std::uin
     write_formatted(bytes, out, out_size, num_frac);
 }
 /// Centralized helper for "I am about to allocate a GPU resource that has no CPU backing": the
-/// eviction system gets a chance to free space and we surface its decision to the user. When
-/// reclaim cannot find enough headroom we log a warning through the gfx logger (which the engine
-/// routes to the same sink bgfx uses) and let the allocation proceed anyway: a bgfx-side OOM is
-/// non-fatal (it returns an invalid handle and the engine continues) and we prefer that path over
-/// swallowing the allocation here.
-void make_room_for(std::uint64_t bytes, const char* what)
+/// eviction system gets a chance to free space. Returns false when the active
+/// @ref allocation_failure_policy is @ref allocation_failure_policy::skip_with_fallback and
+/// headroom could not be reclaimed — the caller should skip the GPU allocation.
+auto try_make_room_for(std::uint64_t bytes, const char* what) -> bool
 {
     const auto result = gfx::eviction::reclaim_for(bytes);
-    if(result == gfx::eviction::reclaim_result::insufficient)
+    if(result != gfx::eviction::reclaim_result::insufficient)
     {
-        // Once per failure: do not spam, but tell the user clearly so they can correlate the
-        // upcoming Vulkan / bgfx error with the eviction system's decision.
-        const std::string msg = std::string("Eviction: Insufficient headroom for ") + what + " (" +
-                                format_bytes(bytes) +
-                                "); Allocation may fail.";
-        gfx::log("warning", msg, __FILE__, __LINE__);
+        return true;
     }
+    if(gfx::get_allocation_failure_policy() == gfx::allocation_failure_policy::skip_with_fallback)
+    {
+        const std::string msg = std::string("Eviction: Insufficient headroom for ") + what + " (" +
+                                format_bytes(bytes) + "); Skipping allocation (fallback texture).";
+        gfx::log("warning", msg, __FILE__, __LINE__);
+        return false;
+    }
+    const std::string msg = std::string("Eviction: Insufficient headroom for ") + what + " (" +
+                            format_bytes(bytes) + "); Allocation may fail.";
+    gfx::log("warning", msg, __FILE__, __LINE__);
+    return true;
 }
 } // namespace
 
@@ -76,6 +80,7 @@ texture::texture(const char* _path,
     if(data != nullptr)
     {
         handle_ = loadTexture(data, size, _flags, _skip, &info, nullptr, _path, &err);
+        
         if(is_valid() && gfx::eviction::is_supported())
         {
             const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
@@ -160,18 +165,20 @@ texture::texture(std::uint16_t _width,
     // GPU-produced textures (render targets / compute writes) have no CPU backing to evict, so make
     // headroom before allocating. They are created on the graphics API thread, so the synchronous
     // reclaim is safe and keeps large allocations from failing when near the GPU memory limit.
-    if(is_gpu_generated())
-    {
-        make_room_for(estimated_size, "render-target 2D texture");
-    }
+    const bool gpu_generated = is_gpu_generated();
+    const bool can_allocate = !gpu_generated || try_make_room_for(estimated_size, "render-target 2D texture");
 
-    handle_ = create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
-    if(is_valid() && is_gpu_generated())
+    if(can_allocate)
+    {
+        handle_ = create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
+    }
+    const bool valid = is_valid();
+    if(valid && gpu_generated)
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
 
-    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
+    if(_mem != nullptr && valid && !gpu_generated && gfx::eviction::is_supported())
     {
         eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
         make_evictable(estimated_size,
@@ -203,18 +210,21 @@ texture::texture(std::uint16_t _width,
     calc_texture_size(info, _width, _height, _depth, false, _hasMips, 1, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
 
-    if(is_gpu_generated())
+    const bool gpu_generated = is_gpu_generated();
+    const bool can_allocate = !gpu_generated || try_make_room_for(estimated_size, "render-target 3D texture");
+
+    if(can_allocate)
     {
-        make_room_for(estimated_size, "render-target 3D texture");
+        handle_ = create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem);
     }
 
-    handle_ = create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem);
-    if(is_valid() && is_gpu_generated())
+    const bool valid = is_valid();
+    if(valid && gpu_generated)
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
 
-    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
+    if(_mem != nullptr && valid && !gpu_generated && gfx::eviction::is_supported())
     {
         eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
         make_evictable(estimated_size,
@@ -245,18 +255,20 @@ texture::texture(std::uint16_t _size,
     calc_texture_size(info, _size, _size, _size, false, _hasMips, _numLayers, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
 
-    if(is_gpu_generated())
-    {
-        make_room_for(estimated_size, "render-target cube texture");
-    }
+    const bool gpu_generated = is_gpu_generated();
+    const bool can_allocate = !gpu_generated || try_make_room_for(estimated_size, "render-target cube texture");
 
-    handle_ = create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem);
-    if(is_valid() && is_gpu_generated())
+    if(can_allocate)
+    {
+        handle_ = create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem);
+    }
+    const bool valid = is_valid();
+    if(valid && gpu_generated)
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
 
-    if(_mem != nullptr && is_valid() && !is_gpu_generated() && gfx::eviction::is_supported())
+    if(_mem != nullptr && valid && !gpu_generated && gfx::eviction::is_supported())
     {
         eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
         make_evictable(estimated_size,
@@ -287,5 +299,10 @@ auto texture::is_render_target() const -> bool
 auto texture::is_gpu_generated() const -> bool
 {
     return 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE));
+}
+
+auto texture::fallback_handle() const -> texture_handle
+{
+    return gfx::fallback_texture();
 }
 } // namespace gfx

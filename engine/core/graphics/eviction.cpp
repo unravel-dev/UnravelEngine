@@ -66,6 +66,10 @@ public:
             status = eviction::init_status::unnecessary;
         }
         set_init_status(status);
+        if(status == eviction::init_status::ok)
+        {
+            seed_startup_budget_locked(gpu_stats);
+        }
         return status;
     }
     void shutdown()
@@ -84,6 +88,8 @@ public:
         resident_bytes_ = 0;
         evicted_bytes_ = 0;
         queued_allocation_bytes_.store(0, std::memory_order_relaxed);
+        external_queued_bytes_.store(0, std::memory_order_relaxed);
+        pending_release_bytes_.store(0, std::memory_order_relaxed);
         budget_ = {};
         budget_used_bytes_ = 0;
         set_init_status(eviction::init_status::unsupported);
@@ -121,7 +127,9 @@ public:
         std::lock_guard<std::mutex> lk(mutex_);
         if(r->get_evict_state() == evict_state::resident)
         {
-            resident_bytes_ -= r->gpu_size();
+            const std::uint64_t sz = r->gpu_size();
+            resident_bytes_ -= sz;
+            note_pending_release_locked(sz);
             remove_from(resident_, r);
         }
         else
@@ -276,6 +284,17 @@ public:
         // The hot path: a worker thread is registering a render target / compute-write texture.
         // Atomic and lock-free so we never block resource creation on the registry mutex.
         queued_allocation_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+        external_queued_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+    }
+
+    auto peek_external_queued_bytes() const -> std::uint64_t
+    {
+        return external_queued_bytes_.load(std::memory_order_relaxed);
+    }
+
+    auto peek_pending_release_bytes() const -> std::uint64_t
+    {
+        return pending_release_bytes_.load(std::memory_order_relaxed);
     }
 
     auto peek_queued_bytes() const -> std::uint64_t
@@ -290,6 +309,8 @@ public:
         // (see on_frame_advanced) so a coalescing flush mid-frame does not erase the worst-case
         // reading the profiler is about to surface.
         queued_allocation_bytes_.store(0, std::memory_order_relaxed);
+        external_queued_bytes_.store(0, std::memory_order_relaxed);
+        pending_release_bytes_.store(0, std::memory_order_relaxed);
     }
 
     void on_frame_advanced()
@@ -300,6 +321,7 @@ public:
         last_restore_ms_ = 0.0;
         last_pass_scanned_ = 0;
         last_pass_evicted_ = 0;
+        last_pass_freed_bytes_ = 0;
     }
 
 private:
@@ -308,6 +330,38 @@ private:
     void set_init_status(eviction::init_status s)
     {
         init_status_.store(s, std::memory_order_release);
+    }
+
+    static auto startup_safety_margin(std::uint64_t hard_limit_bytes) -> std::uint64_t
+    {
+        constexpr std::uint64_t k_floor = std::uint64_t(64) * 1024 * 1024;
+        return std::max(k_floor, hard_limit_bytes / 50);
+    }
+
+    void seed_startup_budget_locked(const gfx::stats* gpu_stats)
+    {
+        if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
+        {
+            return;
+        }
+        const std::uint64_t gpu_max = static_cast<std::uint64_t>(gpu_stats->gpuMemoryMax);
+        eviction::budget_state b;
+        b.hard_limit_bytes = gpu_max;
+        // Match default @ref unravel::eviction_settings fractions so reclaim_for works before the
+        // first frame_begin publish.
+        b.soft_budget_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * 0.85);
+        b.target_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * 0.75);
+        b.safety_margin_bytes = startup_safety_margin(gpu_max);
+        budget_ = b;
+        budget_used_bytes_ = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
+    }
+
+    void note_pending_release_locked(std::uint64_t bytes)
+    {
+        if(bytes != 0)
+        {
+            pending_release_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+        }
     }
 
     static void add_to(std::vector<ievictable*>& bucket, ievictable* r)
@@ -354,6 +408,7 @@ private:
         add_to(resident_, r);
         evicted_bytes_ -= sz;
         resident_bytes_ += sz;
+        queued_allocation_bytes_.fetch_add(sz, std::memory_order_relaxed);
         ++total_restores_;
         total_bytes_restored_ += sz;
         const std::uint64_t frame = detail::g_eviction_frame;
@@ -386,6 +441,7 @@ private:
             }
             const std::uint64_t sz = r->gpu_size();
             r->on_evict();
+            note_pending_release_locked(sz);
             remove_from(resident_, r);
             add_to(evicted_, r);
             resident_bytes_ -= sz;
@@ -402,6 +458,7 @@ private:
         // frame. Reset on bgfx::frame via on_frame_advanced.
         last_pass_scanned_ = std::max<std::uint64_t>(last_pass_scanned_, candidates_.size());
         last_pass_evicted_ = std::max<std::uint64_t>(last_pass_evicted_, pass_evicted);
+        last_pass_freed_bytes_ = std::max<std::uint64_t>(last_pass_freed_bytes_, freed);
         last_pass_ms_ = std::max(last_pass_ms_, to_ms(clock::now() - t0));
         return snapshot();
     }
@@ -482,6 +539,8 @@ private:
         s.budget_used_bytes = budget_used_bytes_;
         s.last_pass_scanned = last_pass_scanned_;
         s.last_pass_evicted = last_pass_evicted_;
+        s.last_pass_freed_bytes = last_pass_freed_bytes_;
+        s.pending_release_bytes = pending_release_bytes_.load(std::memory_order_relaxed);
         s.last_pass_ms = last_pass_ms_;
         s.last_restore_ms = last_restore_ms_;
         return s;
@@ -501,6 +560,8 @@ private:
     /// registered (or noted) from worker threads while the driver and reclaim_for peek it from
     /// the API thread. Cleared in @ref clear_queued_allocations after a pump.
     std::atomic<std::uint64_t> queued_allocation_bytes_{0};
+    std::atomic<std::uint64_t> external_queued_bytes_{0};
+    std::atomic<std::uint64_t> pending_release_bytes_{0};
     std::uint64_t total_evictions_ = 0;
     std::uint64_t total_restores_ = 0;
     std::uint64_t total_bytes_evicted_ = 0;
@@ -511,6 +572,7 @@ private:
     std::uint64_t budget_used_bytes_ = 0;
     std::uint64_t last_pass_scanned_ = 0;
     std::uint64_t last_pass_evicted_ = 0;
+    std::uint64_t last_pass_freed_bytes_ = 0;
     double last_pass_ms_ = 0.0;
     double last_restore_ms_ = 0.0;
 };
@@ -569,6 +631,18 @@ auto live_gpu_used() -> std::uint64_t
     }
     return static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
 }
+
+auto credit_pending_release(std::uint64_t gross) -> std::uint64_t
+{
+    const std::uint64_t pending = eviction_registry::instance().peek_pending_release_bytes();
+    return gross > pending ? gross - pending : 0;
+}
+
+auto project_occupancy(std::uint64_t used, std::uint64_t queued, std::uint64_t request, std::uint64_t margin)
+    -> std::uint64_t
+{
+    return credit_pending_release(used + queued + request + margin);
+}
 } // namespace
 
 auto reclaim_for(std::uint64_t bytes) -> reclaim_result
@@ -580,39 +654,37 @@ auto reclaim_for(std::uint64_t bytes) -> reclaim_result
     const budget_state budget = eviction_registry::instance().current_budget();
     if(budget.hard_limit_bytes == 0)
     {
-        // No budget published yet (start-up frame, or the driver chose not to enforce one).
-        // Treat as headroom; the system will catch up once update_eviction runs.
         return reclaim_result::headroom;
     }
     const std::uint64_t used = live_gpu_used();
     const std::uint64_t queued = eviction_registry::instance().peek_queued_bytes();
-    const std::uint64_t projected = used + queued + bytes + budget.safety_margin_bytes;
+    const std::uint64_t projected = project_occupancy(used, queued, bytes, budget.safety_margin_bytes);
     if(projected <= budget.soft_budget_bytes)
     {
         return reclaim_result::headroom;
     }
 
-    // Evict the largest resident victims down to the target watermark. Even if the projection only
-    // breached the soft budget we evict eagerly so subsequent allocations in the same burst fit
-    // without further work — bgfx will reclaim the destroyed memory at the next bgfx::frame
-    // anyway. Pass min_age_frames = 0 and max_evictions = 0 because this is the emergency path:
-    // protecting recently-used resources here would just mean failing the imminent allocation.
-    const std::uint64_t deficit = projected - budget.target_bytes;
-    evict_bytes(deficit, strategy::largest_first, /*min_age_frames=*/0, /*max_evictions=*/0);
+    const std::uint64_t deficit = projected > budget.target_bytes ? projected - budget.target_bytes : 0;
+    const stats sweep =
+        evict_bytes(deficit, strategy::largest_first, /*min_age_frames=*/0, /*max_evictions=*/0);
+    const std::uint64_t freed = sweep.last_pass_freed_bytes;
 
-    // Burst coalescing: only pump the command buffer when the projection also crosses the hard
-    // limit. Below it we trust bgfx to process the queued destroys at the next frame; above it we
-    // must pump so the destroys execute before the imminent allocation lands.
+    if(bytes > 0 && freed > 0)
+    {
+        gfx::frames(1, BGFX_FRAME_FLUSH);
+        const std::uint64_t recheck =
+            project_occupancy(live_gpu_used(), peek_queued_bytes(), bytes, budget.safety_margin_bytes);
+        return recheck > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
+    }
+
     if(projected <= budget.hard_limit_bytes)
     {
         return reclaim_result::reclaimed;
     }
-    gfx::flush();
-    // After flush: queued is cleared, gpu_used reflects the destroys. Re-check; if we still cannot
-    // fit, return insufficient so the caller can log a warning (the allocation is still attempted).
-    const std::uint64_t recheck_used = live_gpu_used();
-    const std::uint64_t recheck_projected = recheck_used + bytes + budget.safety_margin_bytes;
-    if(recheck_projected > budget.hard_limit_bytes)
+    gfx::frames(1, BGFX_FRAME_FLUSH);
+    const std::uint64_t recheck =
+        project_occupancy(live_gpu_used(), peek_queued_bytes(), bytes, budget.safety_margin_bytes);
+    if(recheck > budget.hard_limit_bytes)
     {
         return reclaim_result::insufficient;
     }
@@ -622,6 +694,16 @@ auto reclaim_for(std::uint64_t bytes) -> reclaim_result
 auto peek_queued_bytes() -> std::uint64_t
 {
     return eviction_registry::instance().peek_queued_bytes();
+}
+
+auto peek_pending_release_bytes() -> std::uint64_t
+{
+    return eviction_registry::instance().peek_pending_release_bytes();
+}
+
+auto peek_external_queued_bytes() -> std::uint64_t
+{
+    return eviction_registry::instance().peek_external_queued_bytes();
 }
 
 void note_pending_allocation(std::uint64_t bytes)
@@ -733,7 +815,7 @@ void debug_release_memory()
     reserved().chunks.clear();
     reserved().bytes = 0;
     // Pump the command buffer so the destroys are serviced and their VRAM is reclaimed before return.
-    gfx::flush();
+    gfx::frames(1, BGFX_FRAME_FLUSH);
 }
 
 auto debug_consumed_bytes() -> std::uint64_t

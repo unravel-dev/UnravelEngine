@@ -65,6 +65,21 @@ bool init(init_type init_data);
 /**/
 void shutdown();
 
+/// Policy when @ref eviction::reclaim_for reports insufficient headroom before a GPU texture
+/// allocation (render targets / compute-write surfaces).
+enum class allocation_failure_policy : std::uint8_t
+{
+    warn_and_try,      ///< Log a warning and attempt the allocation anyway (default).
+    skip_with_fallback ///< Skip the allocation; @ref texture::native_handle binds the fallback texture.
+};
+
+void set_allocation_failure_policy(allocation_failure_policy policy);
+auto get_allocation_failure_policy() -> allocation_failure_policy;
+
+/// Valid magenta 4x4 RGBA8 texture created during @ref init and destroyed in @ref shutdown. Returned
+/// from @ref texture::native_handle when the resource has no live GPU handle.
+auto fallback_texture() -> texture_handle;
+
 /**/
 void reset(uint32_t _width, uint32_t _height, uint32_t _flags = BGFX_RESET_NONE);
 
@@ -125,7 +140,7 @@ encoder* begin();
 void end(encoder* _encoder);
 
 /**/
-uint32_t frame(bool _capture = true);
+uint32_t frame(uint8_t _flags = BGFX_FRAME_NONE);
 
 /**/
 renderer_type get_renderer_type();
@@ -660,7 +675,7 @@ void set_profiler_hooks(gfx_profiler_begin_hook on_begin,
                         gfx_profiler_end_hook on_end);
 void clear_profiler_hooks();
 
-void flush();
+void frames(int _count, int32_t _flags = BGFX_FRAME_NONE);
 
 bool is_origin_bottom_left();
 bool is_homogeneous_depth();

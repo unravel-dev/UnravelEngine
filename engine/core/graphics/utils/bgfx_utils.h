@@ -18,7 +18,16 @@
 
 #include <tinystl/allocator.h>
 #include <tinystl/vector.h>
+
+#include <functional>
+
 namespace stl = tinystl;
+
+/// Invoked after the image container has been parsed (with the texture info computed from its
+/// header) and right before the GPU texture is created. Lets the caller reserve GPU memory (e.g.
+/// the eviction allocation gate) using the exact footprint, without parsing the image a second
+/// time.
+using TexturePreCreateFn = std::function<void(const bgfx::TextureInfo& _info)>;
 
 bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
 ///
@@ -39,9 +48,12 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
                                 uint8_t _skip = 0,
                                 bgfx::TextureInfo* _info = NULL,
                                 bimg::Orientation::Enum* _orientation = NULL,
-                                bx::Error* _err = NULL);
+                                bx::Error* _err = NULL,
+                                const TexturePreCreateFn& _preCreate = nullptr);
 
 /// Load a texture from memory (DDS, KTX, PNG, etc.). @a _name is optional debug label.
+/// @a _preCreate is invoked after the image header has been parsed, right before the GPU texture
+/// is created.
 bgfx::TextureHandle loadTexture(const void* _data,
                                 uint32_t _size,
                                 uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
@@ -49,7 +61,8 @@ bgfx::TextureHandle loadTexture(const void* _data,
                                 bgfx::TextureInfo* _info = NULL,
                                 bimg::Orientation::Enum* _orientation = NULL,
                                 const char* _name = NULL,
-                                bx::Error* _err = NULL);
+                                bx::Error* _err = NULL,
+                                const TexturePreCreateFn& _preCreate = nullptr);
 
 ///
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat = bgfx::TextureFormat::Count);

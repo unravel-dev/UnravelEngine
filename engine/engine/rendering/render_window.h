@@ -39,7 +39,7 @@ public:
     /**
      * @brief Destroys the rendering surface.
      */
-    void destroy_surface();
+    void destroy_surface(int frames);
 
     /**
      * @brief Resizes the render window to the specified width and height.

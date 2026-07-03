@@ -187,6 +187,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         init_data.platformData.type = bgfx::NativeWindowHandleType::Wayland;
     }
     reset_flags_ = init_data.resolution.reset;
+
+    init_data.limits.numDrawCalls = 65355;
+
     if(!gfx::init(init_data))
     {
         APPLOG_ERROR("Could not initialize rendering backend!");

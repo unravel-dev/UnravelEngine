@@ -87,19 +87,22 @@ void update_eviction(const eviction_settings& settings)
     // Peek (do not consume) the bytes queued since the last bgfx::frame/flush. The backend's
     // gpuMemoryUsed lags by a frame or more, so a burst of creates is invisible until later; the
     // queued counter adds the in-flight bytes back into the prediction. It is cleared centrally by
-    // gfx::frame()/gfx::flush(), so this read must NOT drain it (reclaim_for and any other
+    // gfx::frames(), so this read must NOT drain it (reclaim_for and any other
     // observers in the same frame all need to see the same number).
     const std::uint64_t queued = ev::peek_queued_bytes();
 
     const ev::budget_state budget = build_budget(settings, gpu_max);
 
     // The metric we compare against the budget for the proactive sweep. In auto mode we treat
-    // gpu memory as ground truth. In manual mode the user is asking us to cap our OWN footprint,
-    // so we use evictable resident bytes — touching the device-wide gpu_used would have us
-    // evicting engine resources to make room for external programs.
-    const std::uint64_t used = (settings.auto_budget && gpu_max > 0)
-                                   ? gpu_used + queued
-                                   : ev::get_stats().resident_bytes;
+    // gpu memory as ground truth, credit in-flight destroys, and include queued creates. In manual
+    // mode the user caps our own footprint: evictable resident bytes plus non-evictable in-flight
+    // creates (render targets) that are not tracked in the registry.
+    const std::uint64_t gross_auto = gpu_used + queued;
+    const std::uint64_t pending = ev::peek_pending_release_bytes();
+    const std::uint64_t used =
+        (settings.auto_budget && gpu_max > 0)
+            ? (gross_auto > pending ? gross_auto - pending : 0)
+            : (ev::get_stats().resident_bytes + ev::peek_external_queued_bytes());
 
     // Publish the budget so reclaim_for and tooling see the same numbers.
     ev::set_budget(budget, used);
@@ -111,7 +114,9 @@ void update_eviction(const eviction_settings& settings)
 
     const auto strat = static_cast<ev::strategy>(settings.strategy);
     const auto min_age = static_cast<std::uint32_t>(std::max(0, settings.min_age_frames));
-    const auto max_evictions = static_cast<std::uint32_t>(std::max(0, settings.max_evictions));
+    const auto max_evictions = (used > budget.hard_limit_bytes)
+                                   ? static_cast<std::uint32_t>(0)
+                                   : static_cast<std::uint32_t>(std::max(0, settings.max_evictions));
     ev::evict_bytes(used - budget.target_bytes, strat, min_age, max_evictions);
 }
 
