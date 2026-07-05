@@ -1250,6 +1250,8 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                          const usize32_t& size, bool focus_camera)
     -> asset_preview_result
 {
+    asset.get(true);
+
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
     
@@ -1276,6 +1278,8 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                          const usize32_t& size, bool focus_camera)
     -> asset_preview_result
 {
+    asset.get(true);
+
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
     
@@ -1311,6 +1315,8 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
                                                          const usize32_t& size, bool focus_camera)
     -> asset_preview_result
 {
+    asset.get(true);
+
     auto camera = create_default_3d_scene_for_preview(ctx, scn, size);
 
     auto object = create_mesh_entity_at(ctx, scn, asset.id());

@@ -1383,15 +1383,15 @@ void model::submit_for_batching(batch_collector& collector,
     }
 }
 
-auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collectors,
-                                         uint8_t cascade_count,
-                                         const math::mat4& world_transform,
-                                         const submesh_pose_mat4& submesh_transforms,
-                                         uint32_t lod_index,
-                                         float lod_param,
-                                         const math::frustum* frustums,
-                                         bool nested_cascades,
-                                         const model_submit_extras& extras) const -> bool
+auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
+                                                uint8_t cascade_count,
+                                                const math::mat4& world_transform,
+                                                const submesh_pose_mat4& submesh_transforms,
+                                                uint32_t lod_index,
+                                                float lod_param,
+                                                const math::frustum* frustums,
+                                                bool nested_cascades,
+                                                const model_submit_extras& extras) const -> bool
 {
     auto mesh_asset = get_lod(lod_index);
     if(!mesh_asset)
@@ -1405,15 +1405,8 @@ auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collector
     }
 
     bool collected_any = false;
-    // Collect a single submesh instance into every cascade it is visible in.
-    // When cascades are nested by distance (CSM directional lights), a submesh
-    // that is fully inside a nearer cascade is not collected into the farther
-    // (larger) cascades, since those would only render redundant depth.
-    // Classification uses the retained world-space AABBs (cheap plane tests). When no
-    // cached data exists the submesh classifies as intersecting, i.e. it is collected
-    // into every cascade - conservative but never wrong.
     auto collect_into_cascades =
-        [&](const batch_key& key, uint32_t submesh_index, const math::mat4& transform, size_t instance_idx) -> void
+        [&](const shadow_batch_key& key, uint32_t submesh_index, const math::mat4& transform, size_t instance_idx) -> void
     {
         for(uint8_t ii = 0; ii < cascade_count; ++ii)
         {
@@ -1448,10 +1441,10 @@ auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collector
             const auto& material_ptr = resolve_submesh_material(extras, submesh_index, group_material);
             if(!material_ptr)
             {
-                continue; // Skip submeshes without valid materials
+                continue;
             }
 
-            batch_key key(mesh, material_ptr, lod_index, submesh_index);
+            shadow_batch_key key = make_shadow_batch_key(mesh, lod_index, submesh_index, material_ptr);
             if(!key.is_valid())
             {
                 continue;
@@ -1459,7 +1452,6 @@ auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collector
 
             if(submesh_transforms.has_transforms(submesh_index))
             {
-                // This submesh has one or more node transforms - create an instance for each.
                 const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
                 for(size_t instance_idx = 0; instance_idx < transform_count; ++instance_idx)
                 {
@@ -1468,7 +1460,6 @@ auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collector
                     {
                         continue;
                     }
-                    // This path renders shadow depth only - honor the per-instance flag.
                     if(!submesh_transforms.get_transform_casts_shadow(submesh_index, instance_idx))
                     {
                         continue;
@@ -1478,7 +1469,6 @@ auto model::submit_for_batching_cascaded(std::vector<batch_collector>& collector
             }
             else
             {
-                // No specific transform for this submesh - use the model world transform.
                 collect_into_cascades(key, submesh_index, world_transform, 0);
             }
         }

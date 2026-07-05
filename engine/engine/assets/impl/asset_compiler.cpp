@@ -96,6 +96,94 @@ auto run_process(const std::string& process,
 
     return result.retcode == 0;
 }
+
+struct input_texture_info
+{
+    gfx::texture_format format{gfx::texture_format::RGBA8};
+    uint32_t width{};
+    uint32_t height{};
+    bool fits_max_size{true};
+};
+
+auto texture_size_to_pixel_limit(texture_importer_meta::texture_size size) -> uint32_t
+{
+    switch(size)
+    {
+        case texture_importer_meta::texture_size::size_32:
+            return 32;
+        case texture_importer_meta::texture_size::size_64:
+            return 64;
+        case texture_importer_meta::texture_size::size_128:
+            return 128;
+        case texture_importer_meta::texture_size::size_256:
+            return 256;
+        case texture_importer_meta::texture_size::size_512:
+            return 512;
+        case texture_importer_meta::texture_size::size_1024:
+            return 1024;
+        case texture_importer_meta::texture_size::size_2048:
+            return 2048;
+        case texture_importer_meta::texture_size::size_4096:
+            return 4096;
+        case texture_importer_meta::texture_size::size_8192:
+            return 8192;
+        case texture_importer_meta::texture_size::size_16384:
+            return 16384;
+        case texture_importer_meta::texture_size::project_default:
+        default:
+            return 0;
+    }
+}
+
+auto append_texture_max_size_args(std::vector<std::string>& args, texture_importer_meta::texture_size max_size) -> void
+{
+    const uint32_t limit = texture_size_to_pixel_limit(max_size);
+    if(limit > 0)
+    {
+        args.emplace_back("--max");
+        args.emplace_back(std::to_string(limit));
+    }
+}
+
+auto fill_input_texture_info_from_container(const bimg::ImageContainer& info, input_texture_info& out) -> void
+{
+    out.format = static_cast<gfx::texture_format>(info.m_format);
+    out.width = info.m_width;
+    out.height = info.m_height;
+}
+
+auto get_input_texture_info(const fs::path& input_path, texture_importer_meta::texture_size max_size) -> input_texture_info
+{
+    input_texture_info result{};
+    const bx::FilePath file_path(input_path.string().c_str());
+
+    bimg::ImageContainer header{};
+    if(imageParseInfo(file_path, header))
+    {
+        fill_input_texture_info_from_container(header, result);
+    }
+    else
+    {
+        bimg::ImageContainer* image = imageLoad(file_path, bgfx::TextureFormat::Count);
+        if(image == nullptr)
+        {
+            return result;
+        }
+
+        fill_input_texture_info_from_container(*image, result);
+        bimg::imageFree(image);
+    }
+
+    const uint32_t limit = texture_size_to_pixel_limit(max_size);
+    if(limit > 0)
+    {
+        const uint32_t largest_dimension = std::max(result.width, result.height);
+        result.fits_max_size = largest_dimension <= limit;
+    }
+
+    return result;
+}
+
 // auto run_process(const std::string& process, const std::vector<std::string>& args_array, bool check_retcode, std::string& err) -> bool
 // {
 //     auto now = std::chrono::high_resolution_clock::now();
@@ -172,27 +260,6 @@ bool copy_compiled_file(const fs::path& from, const fs::path& to)
     }
 
     return !err;
-}
-
-auto get_input_texture_format(const fs::path& input_path) -> gfx::texture_format
-{
-    const bx::FilePath file_path(input_path.string().c_str());
-
-    bimg::ImageContainer info;
-    if(imageParseInfo(file_path, info))
-    {
-        return static_cast<gfx::texture_format>(info.m_format);
-    }
-
-    bimg::ImageContainer* image = imageLoad(file_path, bgfx::TextureFormat::Count);
-    if(image == nullptr)
-    {
-        return gfx::texture_format::RGBA8;
-    }
-
-    const auto format = static_cast<gfx::texture_format>(image->m_format);
-    bimg::imageFree(image);
-    return format;
 }
 
 auto select_compressed_format(gfx::texture_format input_format,
@@ -395,11 +462,23 @@ auto compile_texture_to_file(const fs::path& input_path,
         quality.max_size = texture_importer_meta::texture_size::size_2048;
     }
 
-    const auto input_format = get_input_texture_format(compile_input);
-    auto format = select_compressed_format(input_format, compile_input.extension(), quality.compression);
-    
-    if(input_format != format)
+    const auto input_info = get_input_texture_info(compile_input, quality.max_size);
+    auto format = select_compressed_format(input_info.format, compile_input.extension(), quality.compression);
+
+    const bool needs_format_conversion = input_info.format != format;
+    const bool needs_downscale = !input_info.fits_max_size;
+
+    if(needs_format_conversion || needs_downscale)
     {
+        if(needs_downscale && !needs_format_conversion)
+        {
+            APPLOG_INFO("Downscaling {0} ({1}x{2}) to fit max size {3}",
+                        compile_input.filename().string(),
+                        input_info.width,
+                        input_info.height,
+                        texture_size_to_pixel_limit(quality.max_size));
+        }
+
         std::vector<std::string> args_array = {
             "-f",
             str_input,
@@ -409,7 +488,7 @@ auto compile_texture_to_file(const fs::path& input_path,
             "dds",
         };
         
-        if(try_compress && format != input_format)
+        if(try_compress)
         {
             args_array.emplace_back("-t");
             args_array.emplace_back(gfx::to_string(format));
@@ -421,7 +500,8 @@ auto compile_texture_to_file(const fs::path& input_path,
                 args_array.emplace_back("-q");
                 args_array.emplace_back("fastest");
             }
-            else if(quality.compression == texture_importer_meta::compression_quality::high_quality)
+            else if(needs_format_conversion
+                    && quality.compression == texture_importer_meta::compression_quality::high_quality)
             {
                 args_array.emplace_back("-q");
                 args_array.emplace_back("highest");
@@ -433,73 +513,7 @@ auto compile_texture_to_file(const fs::path& input_path,
             args_array.emplace_back("-m");
         }
 
-        switch(quality.max_size)
-        {
-            case texture_importer_meta::texture_size::project_default:
-            {
-                break;
-            }
-            case texture_importer_meta::texture_size::size_32:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("32");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_64:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("64");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_128:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("128");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_256:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("256");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_512:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("512");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_1024:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("1024");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_2048:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("2048");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_4096:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("4096");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_8192:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("8192");
-                break;
-            }
-            case texture_importer_meta::texture_size::size_16384:
-            {
-                args_array.emplace_back("--max");
-                args_array.emplace_back("16384");
-                break;
-            }
-        }
+        append_texture_max_size_args(args_array, quality.max_size);
 
         switch(importer.type)
         {

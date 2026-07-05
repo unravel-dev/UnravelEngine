@@ -582,6 +582,14 @@ REFLECT(texture_info)
             entt::attribute{"name", "info"},
             entt::attribute{"pretty_name", "Info"},
             entt::attribute{"flattable", true}
+        })
+        .data<nullptr, &texture::get_estimated_gpu_size>("estimated_gpu_size"_hs)
+        .custom<entt::attributes>(entt::attributes{ 
+            entt::attribute{"name", "estimated_gpu_size"},
+            entt::attribute{"pretty_name", "Estimated GPU Size"},
+            entt::attribute{"format", "size"},
+            entt::attribute{"data_format", "B"},
+            entt::attribute{"flattable", true}
         });
 }
 } // namespace gfx

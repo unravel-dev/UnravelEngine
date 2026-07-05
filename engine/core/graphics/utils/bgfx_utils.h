@@ -24,10 +24,8 @@
 namespace stl = tinystl;
 
 /// Invoked after the image container has been parsed (with the texture info computed from its
-/// header) and right before the GPU texture is created. Lets the caller reserve GPU memory (e.g.
-/// the eviction allocation gate) using the exact footprint, without parsing the image a second
-/// time.
-using TexturePreCreateFn = std::function<void(const bgfx::TextureInfo& _info)>;
+/// header) and right before the GPU texture is created. Return false to skip the GPU allocation.
+using TexturePreCreateFn = std::function<bool(const bgfx::TextureInfo& _info)>;
 
 bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
 ///

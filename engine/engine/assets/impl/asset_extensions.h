@@ -202,7 +202,7 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
 template<>
 inline auto get_format_version<unravel::material>() -> uint64_t
 {
-    return 2;
+    return 4;
 }
 
 template<>

@@ -254,10 +254,11 @@ static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageC
     }
 
     // The image is parsed and its exact GPU footprint is known; give the caller a chance to
-    // reserve the memory (eviction gate) before the create lands.
-    if(_preCreate)
+    // reject the allocation before the create lands.
+    if(_preCreate && !_preCreate(info))
     {
-        _preCreate(info);
+        bimg::imageFree(imageContainer);
+        return BGFX_INVALID_HANDLE;
     }
 
     if(imageContainer->m_cubeMap)

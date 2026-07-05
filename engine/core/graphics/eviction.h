@@ -78,6 +78,17 @@ constexpr auto to_string(reclaim_result r) -> const char*
     return "unknown";
 }
 
+/// Controls whether @ref reclaim_for pumps the GPU command buffer after evicting.
+enum class reclaim_kind : std::uint8_t
+{
+    /// CPU-backed resources (file/memory textures). Check-only via @ref would_allocation_fit;
+    /// never runs an eviction sweep from the load path.
+    evictable,
+    /// Non-evictable, synchronously allocated GPU resources (render targets). Evict and flush so
+    /// destroyed handles release VRAM before the imminent create on the API thread.
+    immediate,
+};
+
 /// Snapshot of the active memory budget the eviction system enforces. The driver
 /// (@ref unravel::update_eviction) populates one of these every frame from the backend stats and
 /// the user-facing settings; @ref reclaim_for then reads it back via @ref current_budget.
@@ -176,20 +187,19 @@ auto evict_bytes(std::uint64_t free_bytes,
 /// Must run on the graphics API thread.
 auto evict_all() -> stats;
 
-/// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes. Reads the active
-/// @ref budget_state (published by the driver via @ref set_budget) and the live backend stats and
-/// decides whether to evict and/or pump the command buffer:
-///   - If projected occupancy (gpu_used + queued + @p bytes + safety_margin) stays under the soft
-///     budget, returns @ref reclaim_result::headroom and does nothing.
-///   - Otherwise evicts the largest resident victims down to @ref budget_state::target_bytes.
-///   - Flushes (bgfx::flush) when evictions occurred and an allocation is imminent (@p bytes > 0),
-///     so destroyed handles release VRAM before the create lands. Also flushes when the projection
-///     still crosses the hard limit after eviction.
-///   - Returns @ref reclaim_result::insufficient when even after a flush the projection still
-///     exceeds the hard limit. Callers should log a warning and still proceed; bgfx will surface
-///     a backend OOM through its own error path if the allocation truly fails.
+/// Synchronously guarantee headroom for an imminent GPU allocation of @p bytes (@ref reclaim_kind::immediate).
+/// Reads the active @ref budget_state and live backend stats:
+///   - If projected occupancy stays under the soft budget, returns @ref reclaim_result::headroom.
+///   - Otherwise evicts resident victims (using @ref config::strat and @ref config::min_age_frames from
+///     @ref init) down toward @ref budget_state::target_bytes, then flushes so VRAM is free before create.
+/// @ref reclaim_kind::evictable is projection-only; prefer @ref would_allocation_fit at load sites.
+/// Restore-on-bind must not call this; frame_begin eviction already shaped the pool.
 /// Must run on the graphics API thread. A no-op when eviction is unsupported or no budget is set.
-auto reclaim_for(std::uint64_t bytes) -> reclaim_result;
+auto reclaim_for(std::uint64_t bytes, reclaim_kind kind = reclaim_kind::immediate) -> reclaim_result;
+
+/// Project whether @p bytes fit under the hard limit without running an eviction sweep. Used by
+/// speculative CPU-backed texture loads; defers the create when false (CPU backing retained).
+auto would_allocation_fit(std::uint64_t bytes) -> bool;
 
 /// Restore every currently evicted resource immediately. Calls @ref reclaim_for once up front
 /// for the full evicted byte count so a large pending pool cannot push the device past the hard
@@ -222,8 +232,9 @@ auto peek_pending_release_bytes() -> std::uint64_t;
 auto peek_external_queued_bytes() -> std::uint64_t;
 
 /// Record a newly queued GPU allocation. Used for allocations that are not registered as evictable
-/// resources (e.g. render targets / compute write textures). The same-frame pressure is cleared
-/// by @ref clear_queued_allocations after bgfx has been pumped.
+/// resources (e.g. render targets / compute write textures). Complements the @p bytes argument passed
+/// to @ref reclaim_for for the same create: reclaim counts the imminent allocation once; this keeps
+/// it visible in @ref peek_queued_bytes for later same-frame creates until @ref clear_queued_allocations.
 void note_pending_allocation(std::uint64_t bytes);
 
 /// Clear the queued-allocation counter after bgfx::frame or bgfx::flush has processed the command
@@ -269,6 +280,10 @@ auto debug_consumed_bytes() -> std::uint64_t;
 
 /// Begin tracking a resource (assumed resident). Called from handle_impl::make_evictable.
 void register_resource(ievictable* resource);
+
+/// Begin tracking a resource with no live GPU handle (deferred create / allocation skipped).
+/// Counts toward @ref stats::evicted_bytes; @ref restore_resource recreates it on access.
+void register_evicted_resource(ievictable* resource);
 
 /// Stop tracking a resource. Called from handle_impl's destructor.
 void unregister_resource(ievictable* resource);

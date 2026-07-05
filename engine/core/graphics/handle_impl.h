@@ -134,6 +134,24 @@ protected:
         restore_fn_ = std::move(restore_fn);
         evict_class_ = cls;
         eviction::register_resource(this);
+        touch();
+    }
+
+    /// Opt in with CPU backing but no GPU handle yet (create skipped or deferred). Restored on the
+    /// next @ref native_handle access via the same path as post-eviction restore.
+    void make_evictable_deferred(std::uint64_t gpu_bytes,
+                                 std::function<bool(Base&)> restore_fn,
+                                 evict_class cls = evict_class::evictable)
+    {
+        if(!eviction::is_supported())
+        {
+            return;
+        }
+        gpu_size_ = gpu_bytes;
+        restore_fn_ = std::move(restore_fn);
+        evict_class_ = cls;
+        evict_state_ = evict_state::evicted;
+        eviction::register_evicted_resource(this);
     }
 
     T handle_ = invalid_handle();

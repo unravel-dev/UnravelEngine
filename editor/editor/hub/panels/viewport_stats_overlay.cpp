@@ -305,7 +305,6 @@ void draw_scene_section()
                             "Includes geometry, lighting, shadow, and\n"
                             "post-processing passes.");
 
-    if(stats->numCompute > 0)
     {
         ImGui::BeginGroup();
         draw_label("  Compute Calls");
@@ -314,7 +313,6 @@ void draw_scene_section()
         ImGui::SetItemTooltipEx("Number of GPU compute shader dispatches.\n"
                                 "Used for GPGPU tasks.");
     }
-    if(stats->numBlit > 0)
     {
         ImGui::BeginGroup();
         draw_label("  Blit Calls");

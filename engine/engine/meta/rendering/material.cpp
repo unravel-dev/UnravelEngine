@@ -10,6 +10,28 @@ namespace unravel
 
 REFLECT(material)
 {
+    entt::meta_factory<alpha_mode>{}
+        .type("alpha_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "alpha_mode"},
+            entt::attribute{"pretty_name", "Alpha Mode"},
+        })
+        .data<alpha_mode::opaque>("opaque"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "opaque"},
+            entt::attribute{"pretty_name", "Opaque"},
+        })
+        .data<alpha_mode::mask>("mask"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mask"},
+            entt::attribute{"pretty_name", "Mask (Alpha Clip)"},
+        })
+        .data<alpha_mode::blend>("blend"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend"},
+            entt::attribute{"pretty_name", "Blend (Transparent)"},
+        });
+
     entt::meta_factory<cull_type>{}
         .type("cull_type"_hs)
         .custom<entt::attributes>(entt::attributes{

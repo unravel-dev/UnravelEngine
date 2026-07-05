@@ -9,6 +9,7 @@
 #include "material.h"
 #include "mesh.h"
 #include "render_proxy.h"
+#include "batch_collector.h"
 
 #include <hpp/small_vector.hpp>
 
@@ -22,8 +23,6 @@
 
 namespace unravel
 {
-
-class batch_collector;
 
 /**
  * @struct lod_data
@@ -687,33 +686,20 @@ public:
                             const camera* view = nullptr,
                             const model_submit_extras& extras = {}) const;
 
+
     /**
-     * @brief Collects this model into per-cascade batch collectors with per-submesh culling.
-     *
-     * Each visible submesh is collected into every cascade whose frustum it overlaps.
-     * When @p nested_cascades is true (CSM directional lights, where cascades are nested
-     * by distance), a submesh that is classified as fully inside a nearer cascade is not
-     * collected into the farther (larger) cascades, mirroring the model-level optimization.
-     *
-     * @param collectors One batch collector per cascade/view (must contain at least @p cascade_count entries).
-     * @param cascade_count Number of cascades/views to consider.
-     * @param world_transform The world transform of the model.
-     * @param submesh_transforms The submesh transforms (many-to-many mapping).
-     * @param lod_index The level of detail to use.
-     * @param lod_param The LOD transition parameter (for smooth LOD transitions).
-     * @param frustums Array of per-cascade frustums (must contain at least @p cascade_count entries).
-     * @param nested_cascades Whether cascades are nested by distance (stop at first fully-inside cascade).
-     * @return True if at least one submesh instance was collected into any cascade.
+     * @brief Collects shadow-map geometry into per-cascade shadow batch collectors.
+     * Batches by mesh/lod/submesh/cull and alpha-cutout state instead of material pointer.
      */
-    auto submit_for_batching_cascaded(std::vector<batch_collector>& collectors,
-                                      uint8_t cascade_count,
-                                      const math::mat4& world_transform,
-                                      const submesh_pose_mat4& submesh_transforms,
-                                      uint32_t lod_index,
-                                      float lod_param,
-                                      const math::frustum* frustums,
-                                      bool nested_cascades,
-                                      const model_submit_extras& extras = {}) const -> bool;
+    auto submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
+                                             uint8_t cascade_count,
+                                             const math::mat4& world_transform,
+                                             const submesh_pose_mat4& submesh_transforms,
+                                             uint32_t lod_index,
+                                             float lod_param,
+                                             const math::frustum* frustums,
+                                             bool nested_cascades,
+                                             const model_submit_extras& extras = {}) const -> bool;
 
     /**
      * @brief Gets the default material.

@@ -113,6 +113,49 @@ RenderState render_states[RenderState::Count] =
         };
 // clang-format on
 
+auto apply_shadow_cull(uint64_t base_state, cull_type cull) -> uint64_t
+{
+    uint64_t state = base_state & ~(BGFX_STATE_CULL_CCW | BGFX_STATE_CULL_CW);
+    if(cull == cull_type::counter_clockwise)
+    {
+        state |= BGFX_STATE_CULL_CCW;
+    }
+    else if(cull == cull_type::clockwise)
+    {
+        state |= BGFX_STATE_CULL_CW;
+    }
+    return state;
+}
+
+auto resolve_cutout_pack_program(const Programs& programs, gpu_program* opaque_prog) -> gpu_program*
+{
+    if(!opaque_prog)
+    {
+        return opaque_prog;
+    }
+
+    for(uint32_t depth = 0; depth < DepthImpl::Count; ++depth)
+    {
+        for(uint32_t pack = 0; pack < PackDepth::Count; ++pack)
+        {
+            if(programs.m_packDepth[depth][pack].get() == opaque_prog)
+            {
+                return programs.m_packDepthCutout[depth][pack].get();
+            }
+            if(programs.m_packDepthInstanced[depth][pack].get() == opaque_prog)
+            {
+                return programs.m_packDepthInstancedCutout[depth][pack].get();
+            }
+            if(programs.m_packDepthSkinned[depth][pack].get() == opaque_prog)
+            {
+                return programs.m_packDepthSkinnedCutout[depth][pack].get();
+            }
+        }
+    }
+
+    return opaque_prog;
+}
+
 auto convert(light_type t) -> LightType::Enum
 {
     static_assert(std::uint8_t(light_type::count) == std::uint8_t(LightType::Count), "Missing impl");
@@ -2222,7 +2265,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             // Collect into all cascades in one pass so the nested-cascade trick can be
             // applied at submesh granularity (a submesh fully inside a nearer cascade is
             // not collected into farther cascades).
-            const bool collected = model.submit_for_batching_cascaded(cascade_batch_collectors_,
+            const bool collected = model.submit_for_shadow_batching_cascaded(cascade_batch_collectors_,
                                                                       drawNum,
                                                                       world_transform,
                                                                       submesh_transforms,
@@ -2290,23 +2333,19 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                         counted_static_model_for_shadows = true;
                     }
                 }
-
-                auto& prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-                prog->begin();
             };
             callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
             {
-                // Set uniforms.
                 uniforms_.submitPerDrawUniforms();
-
-                // Apply render state.
-                gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
-                gfx::set_state(_renderState.m_state, _renderState.m_blendFactorRgba);
             };
             callbacks.setup_params_per_submesh =
                 [&](const model::submit_callbacks::params& submit_params, const material& mat)
             {
+                if(mat.is<pbr_material>() && !static_cast<const pbr_material&>(mat).casts_shadow())
+                {
+                    return;
+                }
+
                 if(stats != nullptr)
                 {
                     if(submit_params.skinned)
@@ -2319,17 +2358,33 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                     }
                 }
 
-                auto& prog =
+                const bool uses_cutout =
+                    mat.is<pbr_material>() && static_cast<const pbr_material&>(mat).uses_alpha_cutout();
+                gpu_program* opaque_prog =
                     submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+                gpu_program* prog =
+                    uses_cutout ? resolve_cutout_pack_program(programs_, opaque_prog) : opaque_prog;
+                if(!prog)
+                {
+                    return;
+                }
+
+                prog->begin();
+
+                if(uses_cutout)
+                {
+                    uniforms_.submitShadowCutoutState(static_cast<const pbr_material&>(mat).make_shadow_cutout_state());
+                }
+
+                const uint64_t draw_state = apply_shadow_cull(_renderState.m_state, mat.get_cull_type());
+                gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
+                gfx::set_state(draw_state, _renderState.m_blendFactorRgba);
 
                 gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
+                prog->end();
             };
             callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
             {
-                auto& prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-
-                prog->end();
             };
 
             model.submit(world_transform,
@@ -2373,7 +2428,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     return any_rendered;
 }
 
-void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector& collector,
+void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
                                                                 uint8_t viewId, 
                                                                 ShadowMapSettings* currentSmSettings,
                                                                 const RenderState& renderState,
@@ -2394,10 +2449,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         return;
     }
     
-    // Begin instanced program
-    currentSmSettings->m_progPackInstanced->begin();
-    
-    // Submit each batch
+    // Submit each batch (opaque and cutout may use different programs)
     for (const auto* batch : prepared_batches)
     {
         if (!batch->is_valid() || batch->instances.empty())
@@ -2411,7 +2463,6 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
             stats->drawn_submeshes_for_shadows += instance_count;
         }
 
-        // Get mesh from batch key
         const auto mesh_ptr = batch->key.mesh_ptr;
         const auto lod_index = batch->key.lod_index;
         const auto submesh_index = batch->key.submesh_index;
@@ -2427,40 +2478,48 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
             continue;
         }
 
-        // Create instance buffer from batch instances
+        const bool uses_cutout = batch->key.uses_alpha_cutout();
+        gpu_program* opaque_prog = currentSmSettings->m_progPackInstanced;
+        gpu_program* prog = uses_cutout ? resolve_cutout_pack_program(programs_, opaque_prog) : opaque_prog;
+        if(!prog)
+        {
+            continue;
+        }
+
+        prog->begin();
+
         const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
         
-        // Allocate instance buffer
         bgfx::InstanceDataBuffer instance_buffer;
         bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
         if (!instance_buffer.data)
         {
-            continue; // Skip this batch if allocation failed
+            prog->end();
+            continue;
         }
 
-        // Pack instance data into buffer
         auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);
         for (size_t i = 0; i < batch->instances.size(); ++i)
         {
             buffer_data[i] = instance_vertex_data(batch->instances[i]);
         }
 
-        // Set instance data buffer
         bgfx::setInstanceDataBuffer(&instance_buffer);
-        
-        // Bind vertex and index buffers for the specific submesh
         mesh_ptr->bind_render_buffers_for_submesh(submesh, lod_index);
-        
-        // Set uniforms and render state
+
         uniforms_.submitPerDrawUniforms();
+        if(uses_cutout && batch->key.cutout.has_value())
+        {
+            uniforms_.submitShadowCutoutState(*batch->key.cutout);
+        }
+
+        const uint64_t draw_state = apply_shadow_cull(renderState.m_state, batch->key.cull);
         gfx::set_stencil(renderState.m_fstencil, renderState.m_bstencil);
-        gfx::set_state(renderState.m_state, renderState.m_blendFactorRgba);
+        gfx::set_state(draw_state, renderState.m_blendFactorRgba);
 
-        // Submit the instanced draw call
-        gfx::submit(viewId, currentSmSettings->m_progPackInstanced->native_handle(), 0, false);
+        gfx::submit(viewId, prog->native_handle(), 0, false);
+        prog->end();
     }
-
-    currentSmSettings->m_progPackInstanced->end();
 
     // Update statistics
     if(stats != nullptr)
@@ -2469,7 +2528,6 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(batch_collector
         stats->add_batch_stats(batch_stats);
     }
     
-    // Clear batches to invalidate all transform pointers and free memory
     collector.clear();
 }
 
@@ -2520,6 +2578,25 @@ void Programs::init(rtti::context& ctx)
 
     m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
     m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+
+    // Pack depth cutout (alpha test — matches lit material clip semantics).
+    m_packDepthCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
+    m_packDepthCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+
+    m_packDepthCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
+    m_packDepthCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+
+    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
+    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+
+    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
+    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+
+    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
+    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+
+    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
+    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
 
 }
 

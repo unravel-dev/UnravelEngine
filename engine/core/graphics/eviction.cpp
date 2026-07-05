@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 namespace gfx
@@ -118,6 +119,24 @@ public:
         queued_allocation_bytes_.fetch_add(sz, std::memory_order_relaxed);
     }
 
+    void register_evicted_resource(ievictable* r)
+    {
+        if(r == nullptr)
+        {
+            return;
+        }
+        std::lock_guard<std::mutex> lk(mutex_);
+        if(get_init_status() != eviction::init_status::ok)
+        {
+            return;
+        }
+        const std::uint64_t frame = detail::g_eviction_frame;
+        r->last_use_frame_ = frame;
+        r->evict_frame_ = frame;
+        add_to(evicted_, r);
+        evicted_bytes_ += r->gpu_size();
+    }
+
     void unregister_resource(ievictable* r)
     {
         if(r == nullptr || r->evict_slot_ == UINT32_MAX)
@@ -146,18 +165,18 @@ public:
         {
             return;
         }
-        std::lock_guard<std::mutex> lk(mutex_);
+        std::unique_lock<std::mutex> lk(mutex_);
         if(get_init_status() != eviction::init_status::ok || r->evict_slot_ == UINT32_MAX ||
            r->get_evict_state() == evict_state::resident)
         {
             return;
         }
-        restore_locked(r);
+        restore_locked(lk, r);
     }
 
     auto restore_all() -> eviction::stats
     {
-        std::lock_guard<std::mutex> lk(mutex_);
+        std::unique_lock<std::mutex> lk(mutex_);
         if(get_init_status() != eviction::init_status::ok)
         {
             return snapshot();
@@ -168,7 +187,10 @@ public:
         const std::vector<ievictable*> pending = evicted_;
         for(auto* r : pending)
         {
-            restore_locked(r);
+            if(r->evict_slot_ != UINT32_MAX && r->get_evict_state() == evict_state::evicted)
+            {
+                restore_locked(lk, r);
+            }
         }
         return snapshot();
     }
@@ -261,12 +283,21 @@ public:
         }
         budget_ = budget;
         budget_used_bytes_ = used_bytes;
+        publish_budget_locked();
     }
 
     auto current_budget() const -> eviction::budget_state
     {
+        // Published each time @ref set_budget runs; safe to read without the registry mutex so
+        // @ref reclaim_for can run from inside @ref restore_resource callbacks.
+        static_assert(std::is_trivially_copyable_v<eviction::budget_state>);
+        return published_budget_.load(std::memory_order_acquire);
+    }
+
+    auto snapshot_default_config() const -> eviction::config
+    {
         std::lock_guard<std::mutex> lk(mutex_);
-        return budget_;
+        return default_config_;
     }
 
     auto get_stats() -> eviction::stats
@@ -354,6 +385,12 @@ private:
         b.safety_margin_bytes = startup_safety_margin(gpu_max);
         budget_ = b;
         budget_used_bytes_ = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
+        publish_budget_locked();
+    }
+
+    void publish_budget_locked()
+    {
+        published_budget_.store(budget_, std::memory_order_release);
     }
 
     void note_pending_release_locked(std::uint64_t bytes)
@@ -391,17 +428,28 @@ private:
         std::uint64_t free_limit = UINT64_MAX; ///< Stop once this many bytes have been reclaimed.
     };
 
-    void restore_locked(ievictable* r)
+    void restore_locked(std::unique_lock<std::mutex>& lk, ievictable* r)
     {
         const auto t0 = clock::now();
         const std::uint64_t sz = r->gpu_size();
+        // on_restore may load GPU resources and call @ref reclaim_for — never hold the registry
+        // mutex across that callback (reclaim re-locks for sweeps).
+        lk.unlock();
         const bool ok = r->on_restore();
-        // Per-frame peak (reset on bgfx::frame via on_frame_advanced) so the profiler can see the
-        // worst case for the current frame, not just the most recent restore.
+        lk.lock();
         last_restore_ms_ = std::max(last_restore_ms_, to_ms(clock::now() - t0));
         if(!ok)
         {
             ++failed_restores_;
+            return;
+        }
+        if(r->evict_slot_ == UINT32_MAX || r->get_evict_state() != evict_state::resident)
+        {
+            return;
+        }
+        const std::uint32_t slot = r->evict_slot_;
+        if(slot >= evicted_.size() || evicted_[slot] != r)
+        {
             return;
         }
         remove_from(evicted_, r);
@@ -569,6 +617,7 @@ private:
     std::uint64_t failed_restores_ = 0;
     std::uint64_t thrash_events_ = 0;
     eviction::budget_state budget_{};
+    std::atomic<eviction::budget_state> published_budget_{};
     std::uint64_t budget_used_bytes_ = 0;
     std::uint64_t last_pass_scanned_ = 0;
     std::uint64_t last_pass_evicted_ = 0;
@@ -643,9 +692,36 @@ auto project_occupancy(std::uint64_t used, std::uint64_t queued, std::uint64_t r
 {
     return credit_pending_release(used + queued + request + margin);
 }
+
+auto projected_allocation_bytes(std::uint64_t bytes) -> std::uint64_t
+{
+    const budget_state budget = eviction_registry::instance().current_budget();
+    if(budget.hard_limit_bytes == 0)
+    {
+        return 0;
+    }
+    return project_occupancy(live_gpu_used(),
+                             eviction_registry::instance().peek_queued_bytes(),
+                             bytes,
+                             budget.safety_margin_bytes);
+}
 } // namespace
 
-auto reclaim_for(std::uint64_t bytes) -> reclaim_result
+auto would_allocation_fit(std::uint64_t bytes) -> bool
+{
+    if(bytes == 0 || !is_supported())
+    {
+        return true;
+    }
+    const budget_state budget = eviction_registry::instance().current_budget();
+    if(budget.hard_limit_bytes == 0)
+    {
+        return true;
+    }
+    return projected_allocation_bytes(bytes) <= budget.hard_limit_bytes;
+}
+
+auto reclaim_for(std::uint64_t bytes, reclaim_kind kind) -> reclaim_result
 {
     if(bytes == 0 || !is_supported())
     {
@@ -656,39 +732,47 @@ auto reclaim_for(std::uint64_t bytes) -> reclaim_result
     {
         return reclaim_result::headroom;
     }
-    const std::uint64_t used = live_gpu_used();
-    const std::uint64_t queued = eviction_registry::instance().peek_queued_bytes();
-    const std::uint64_t projected = project_occupancy(used, queued, bytes, budget.safety_margin_bytes);
+
+    if(kind == reclaim_kind::evictable)
+    {
+        return would_allocation_fit(bytes) ? reclaim_result::headroom : reclaim_result::insufficient;
+    }
+
+    const std::uint64_t projected = projected_allocation_bytes(bytes);
     if(projected <= budget.soft_budget_bytes)
     {
         return reclaim_result::headroom;
     }
 
+    const eviction::config cfg = eviction_registry::instance().snapshot_default_config();
     const std::uint64_t deficit = projected > budget.target_bytes ? projected - budget.target_bytes : 0;
     const stats sweep =
-        evict_bytes(deficit, strategy::largest_first, /*min_age_frames=*/0, /*max_evictions=*/0);
+        evict_bytes(deficit, cfg.strat, cfg.min_age_frames, cfg.max_evictions);
     const std::uint64_t freed = sweep.last_pass_freed_bytes;
 
+    auto after_evict = [&]() -> std::uint64_t
+    {
+        return projected_allocation_bytes(bytes);
+    };
+
+    std::uint64_t occupancy = after_evict();
+
+    // immediate: evicted destroys must land on the GPU before the imminent allocation.
     if(bytes > 0 && freed > 0)
     {
         gfx::frames(1, BGFX_FRAME_FLUSH);
-        const std::uint64_t recheck =
-            project_occupancy(live_gpu_used(), peek_queued_bytes(), bytes, budget.safety_margin_bytes);
-        return recheck > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
+        occupancy = after_evict();
+        return occupancy > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
     }
 
-    if(projected <= budget.hard_limit_bytes)
+    if(occupancy <= budget.hard_limit_bytes)
     {
         return reclaim_result::reclaimed;
     }
+
     gfx::frames(1, BGFX_FRAME_FLUSH);
-    const std::uint64_t recheck =
-        project_occupancy(live_gpu_used(), peek_queued_bytes(), bytes, budget.safety_margin_bytes);
-    if(recheck > budget.hard_limit_bytes)
-    {
-        return reclaim_result::insufficient;
-    }
-    return reclaim_result::reclaimed;
+    occupancy = after_evict();
+    return occupancy > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
 }
 
 auto peek_queued_bytes() -> std::uint64_t
@@ -838,7 +922,7 @@ auto restore_all() -> stats
     const auto pre = reg.get_stats();
     if(pre.evicted_bytes != 0)
     {
-        (void)reclaim_for(pre.evicted_bytes);
+        (void)reclaim_for(pre.evicted_bytes, reclaim_kind::immediate);
     }
     return reg.restore_all();
 }
@@ -875,6 +959,11 @@ void advance_frame()
 void register_resource(ievictable* resource)
 {
     eviction_registry::instance().register_resource(resource);
+}
+
+void register_evicted_resource(ievictable* resource)
+{
+    eviction_registry::instance().register_evicted_resource(resource);
 }
 
 void unregister_resource(ievictable* resource)

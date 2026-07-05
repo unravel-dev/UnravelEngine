@@ -40,6 +40,7 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
     {
         try
         {
+
             auto& scn = gen.get_scene();
             scn.unload();
             auto& ctx = engine::context();

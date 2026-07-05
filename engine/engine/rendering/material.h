@@ -15,6 +15,8 @@
 namespace unravel
 {
 
+struct shadow_cutout_state;
+
 /**
  * @enum cull_type
  * @brief Enum representing the type of culling to be used.
@@ -24,6 +26,14 @@ enum class cull_type : std::uint32_t
     none,              ///< No culling.
     clockwise,         ///< Cull clockwise faces.
     counter_clockwise, ///< Cull counter-clockwise faces.
+};
+
+/// glTF-aligned surface alpha behavior (default: opaque).
+enum class alpha_mode : std::uint32_t
+{
+    opaque, ///< No alpha clip; casts solid shadows.
+    mask,   ///< Hard alpha cutoff; casts cutout shadows.
+    blend,  ///< Transparent (lit pass); does not cast shadows.
 };
 
 /**
@@ -224,22 +234,42 @@ public:
     }
 
     /**
-     * @brief Gets the alpha test value of the material.
-     * @return The alpha test value.
+     * @brief Gets the alpha mode (opaque / mask / blend).
      */
-    auto get_alpha_test_value() const -> float
+    auto get_alpha_mode() const -> alpha_mode
     {
-        return surface_data_.w;
+        return alpha_mode_;
     }
 
     /**
-     * @brief Sets the alpha test value of the material.
-     * @param alpha_test_value The alpha test value to set.
+     * @brief Sets the alpha mode.
      */
-    void set_alpha_test_value(float alpha_test_value)
+    void set_alpha_mode(alpha_mode mode);
+
+    /**
+     * @brief Gets the alpha cutoff used when @ref alpha_mode is @ref alpha_mode::mask.
+     */
+    auto get_alpha_cutoff() const -> float
     {
-        surface_data_.w = alpha_test_value;
+        return alpha_cutoff_;
     }
+
+    /**
+     * @brief Sets the alpha cutoff for @ref alpha_mode::mask materials.
+     */
+    void set_alpha_cutoff(float cutoff);
+
+    /// True when @ref alpha_mode is @ref alpha_mode::mask (hard alpha clip + cutout shadows).
+    [[nodiscard]] auto uses_alpha_cutout() const -> bool;
+
+    /// True when this material should contribute to shadow maps.
+    [[nodiscard]] auto casts_shadow() const -> bool;
+
+    /// Snapshot of shader state needed by the shadow cutout pass.
+    [[nodiscard]] auto make_shadow_cutout_state() const -> shadow_cutout_state;
+
+    /// Infer @ref alpha_mode when loading legacy assets that only stored a cutoff value.
+    void infer_alpha_mode_from_legacy_cutoff();
 
     /**
      * @brief Gets the surface data of the material.
@@ -417,6 +447,8 @@ public:
     }
 
 private:
+    void sync_surface_alpha_channel();
+
     /// Base color
     math::color base_color_{
         1.0f,
@@ -440,12 +472,14 @@ private:
     };
     /// Emissive intensity multiplier (premultiplied into color before G-buffer write)
     float emissive_intensity_{1.0f};
+    alpha_mode alpha_mode_{alpha_mode::opaque};
+    float alpha_cutoff_{0.5f};
     /// Surface data
     math::vec4 surface_data_{
         0.3f, /// Roughness
         0.0f, /// Metalness
         1.0f, /// Bumpiness
-        0.25f /// AlphaTestValue
+        0.25f /// Deferred dither alpha (opaque/blend) or cutoff (mask) via sync_surface_alpha_channel
     };
     /// Tiling data
     math::vec2 tiling_{

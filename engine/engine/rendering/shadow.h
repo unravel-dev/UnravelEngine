@@ -1,4 +1,5 @@
 #pragma once
+#include "glm/gtc/type_ptr.hpp"
 #include <engine/engine_export.h>
 
 #include <engine/ecs/ecs.h>
@@ -217,6 +218,11 @@ struct Uniforms
         u_shadowMapMtx1 = bgfx::createUniform("u_shadowMapMtx1", bgfx::UniformType::Mat4);
         u_shadowMapMtx2 = bgfx::createUniform("u_shadowMapMtx2", bgfx::UniformType::Mat4);
         u_shadowMapMtx3 = bgfx::createUniform("u_shadowMapMtx3", bgfx::UniformType::Mat4);
+
+        u_shadowCutoutBaseColor = bgfx::createUniform("u_base_color", bgfx::UniformType::Vec4);
+        u_shadowCutoutSurfaceData = bgfx::createUniform("u_surface_data", bgfx::UniformType::Vec4);
+        u_shadowCutoutTiling = bgfx::createUniform("u_tiling", bgfx::UniformType::Vec4);
+        s_shadowCutoutColor = bgfx::createUniform("s_tex_color", bgfx::UniformType::Sampler);
     }
 
     void setPtrs(Light* _lightPtr,
@@ -270,6 +276,19 @@ struct Uniforms
         bgfx::setUniform(u_color, m_colorPtr);
     }
 
+    void submitShadowCutoutState(const shadow_cutout_state& cutout) const
+    {
+        if(cutout.color_map)
+        {
+            bgfx::setTexture(0, s_shadowCutoutColor, cutout.color_map->native_handle());
+        }
+        bgfx::setUniform(u_shadowCutoutBaseColor, math::value_ptr(cutout.base_color.value));
+        const math::vec4 surface_data{0.0f, 0.0f, 0.0f, cutout.alpha_test_value};
+        bgfx::setUniform(u_shadowCutoutSurfaceData, math::value_ptr(surface_data));
+        const math::vec4 tiling{cutout.tiling.x, cutout.tiling.y, 0.0f, 0.0f};
+        bgfx::setUniform(u_shadowCutoutTiling, math::value_ptr(tiling));
+    }
+
     void destroy()
     {
         auto safe_destroy = [](bgfx::UniformHandle& handle)
@@ -296,6 +315,11 @@ struct Uniforms
         safe_destroy(u_shadowMapMtx1);
         safe_destroy(u_shadowMapMtx2);
         safe_destroy(u_shadowMapMtx3);
+
+        safe_destroy(u_shadowCutoutBaseColor);
+        safe_destroy(u_shadowCutoutSurfaceData);
+        safe_destroy(u_shadowCutoutTiling);
+        safe_destroy(s_shadowCutoutColor);
 
         safe_destroy(u_lightMtx);
     }
@@ -384,6 +408,11 @@ private:
     bgfx::UniformHandle u_shadowMapMtx2;
     bgfx::UniformHandle u_shadowMapMtx3;
 
+    bgfx::UniformHandle u_shadowCutoutBaseColor;
+    bgfx::UniformHandle u_shadowCutoutSurfaceData;
+    bgfx::UniformHandle u_shadowCutoutTiling;
+    bgfx::UniformHandle s_shadowCutoutColor;
+
     bgfx::UniformHandle u_lightMtx;
 };
 
@@ -453,6 +482,9 @@ struct Programs
                 m_packDepth[ii][jj].reset();
                 m_packDepthInstanced[ii][jj].reset();
                 m_packDepthSkinned[ii][jj].reset();
+                m_packDepthCutout[ii][jj].reset();
+                m_packDepthInstancedCutout[ii][jj].reset();
+                m_packDepthSkinnedCutout[ii][jj].reset();
             }
         }
 
@@ -485,6 +517,9 @@ struct Programs
     gpu_program::ptr m_packDepth[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinned[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthInstanced[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthCutout[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthSkinnedCutout[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthInstancedCutout[DepthImpl::Count][PackDepth::Count];
 };
 
 struct ShadowMapSettings
@@ -676,7 +711,7 @@ private:
                                      const camera* cam,
                                      ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
     
-    void submit_batched_shadow_geometry_cascade(batch_collector& collector,
+    void submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
                                                uint8_t viewId, 
                                                ShadowMapSettings* currentSmSettings,
                                                const RenderState& renderState,
@@ -715,7 +750,7 @@ private:
     uint64_t last_update_ = -1;
     
     // Static mesh batching system for shadow maps - one collector per cascade/view
-    std::vector<batch_collector> cascade_batch_collectors_;
+    std::vector<shadow_batch_collector> cascade_batch_collectors_;
     
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 

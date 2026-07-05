@@ -1,5 +1,6 @@
 #include "mesh_importer.h"
 #include "bimg/bimg.h"
+#include "bimg/decode.h"
 #include "bimg/encode.h"
 
 #include "../asset_extensions.h"
@@ -3404,6 +3405,231 @@ auto is_material_two_sided(const aiMaterial* material) -> bool
     return false;
 }
 
+constexpr float k_import_opaque_opacity_threshold = 0.999f;
+
+auto material_opacity_factor_suggests_cutout(const aiMaterial* material, ai_real& out_opacity) -> bool
+{
+    out_opacity = 1.0f;
+    return material
+           && material->Get(AI_MATKEY_OPACITY, out_opacity) == AI_SUCCESS
+           && out_opacity < k_import_opaque_opacity_threshold;
+}
+
+auto resolve_import_alpha_cutoff(const aiMaterial* material, ai_real fallback = 0.5f) -> ai_real
+{
+    ai_real cutoff = fallback;
+    if(material && material->Get(AI_MATKEY_GLTF_ALPHACUTOFF, cutoff) == AI_SUCCESS && cutoff > 0.0f)
+    {
+        return math::clamp(cutoff, 0.0f, 1.0f);
+    }
+    return fallback;
+}
+
+constexpr float k_import_border_alpha_opaque_threshold = 0.95f;
+
+auto compressed_texture_format_has_alpha(bimg::TextureFormat::Enum format) -> bool
+{
+    switch(format)
+    {
+    case bimg::TextureFormat::BC2:     // DXT3 — explicit alpha
+    case bimg::TextureFormat::BC3:     // DXT5 — interpolated alpha
+    case bimg::TextureFormat::BC7:
+    case bimg::TextureFormat::ETC2A:
+    case bimg::TextureFormat::ETC2A1:
+    case bimg::TextureFormat::PTC12A:
+    case bimg::TextureFormat::PTC14A:
+    case bimg::TextureFormat::ATCE:
+    case bimg::TextureFormat::ATCI:
+        return true;
+    default:
+        break;
+    }
+
+    if(format >= bimg::TextureFormat::ASTC4x4 && format <= bimg::TextureFormat::ASTC12x12)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+auto texture_format_has_alpha(bimg::TextureFormat::Enum format, bool parser_reported_alpha) -> bool
+{
+    if(parser_reported_alpha)
+    {
+        return true;
+    }
+
+    if(!bimg::isValid(format))
+    {
+        return false;
+    }
+
+    if(bimg::getBlockInfo(format).aBits > 0)
+    {
+        return true;
+    }
+
+    // bimg block info has aBits=0 for block-compressed formats; DDS DXT5/BC3 also omits
+    // DDPF_ALPHAPIXELS so m_hasAlpha stays false even though the block encoding has alpha.
+    if(bimg::isCompressed(format) && compressed_texture_format_has_alpha(format))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+auto image_mip_border_has_transparency(const bimg::ImageMip& mip,
+                                       bimg::TextureFormat::Enum format,
+                                       float opaque_threshold) -> bool
+{
+    if(mip.m_width == 0 || mip.m_height == 0 || !mip.m_data)
+    {
+        return false;
+    }
+
+    const bimg::UnpackFn unpack = bimg::getUnpack(format);
+    if(!unpack)
+    {
+        return false;
+    }
+
+    const uint32_t bpp = bimg::getBitsPerPixel(format);
+    if(bpp == 0 || (bpp % 8) != 0)
+    {
+        return false;
+    }
+
+    const uint32_t bytes_per_pixel = bpp / 8;
+    const uint32_t width = mip.m_width;
+    const uint32_t height = mip.m_height;
+    const uint32_t row_stride = width * bytes_per_pixel;
+
+    auto alpha_below_threshold = [&](uint32_t x, uint32_t y) -> bool
+    {
+        const uint8_t* pixel = mip.m_data + (static_cast<size_t>(y) * row_stride + x * bytes_per_pixel);
+        float rgba[4];
+        unpack(rgba, pixel);
+        return rgba[3] < opaque_threshold;
+    };
+
+    for(uint32_t x = 0; x < width; ++x)
+    {
+        if(alpha_below_threshold(x, 0) || alpha_below_threshold(x, height - 1))
+        {
+            return true;
+        }
+    }
+
+    for(uint32_t y = 1; y + 1 < height; ++y)
+    {
+        if(alpha_below_threshold(0, y) || alpha_below_threshold(width - 1, y))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+auto image_border_has_transparency(const bimg::ImageContainer& image, float opaque_threshold) -> bool
+{
+    if(image.m_width == 0 || image.m_height == 0 || !image.m_data)
+    {
+        return false;
+    }
+
+    if(!texture_format_has_alpha(image.m_format, image.m_hasAlpha))
+    {
+        return false;
+    }
+
+    bimg::ImageMip mip{};
+    if(!bimg::imageGetRawData(image, 0, 0, image.m_data, image.m_size, mip))
+    {
+        return false;
+    }
+
+    if(!bimg::isCompressed(image.m_format) && bimg::getUnpack(image.m_format) != nullptr)
+    {
+        return image_mip_border_has_transparency(mip, image.m_format, opaque_threshold);
+    }
+
+    if(bimg::isCompressed(image.m_format))
+    {
+        const uint32_t width = mip.m_width;
+        const uint32_t height = mip.m_height;
+        if(width == 0 || height == 0)
+        {
+            return false;
+        }
+
+        std::vector<uint8_t> decoded(static_cast<size_t>(width) * height * 4);
+        bimg::imageDecodeToRgba8(get_bimg_allocator(),
+                                 decoded.data(),
+                                 mip.m_data,
+                                 width,
+                                 height,
+                                 width * 4,
+                                 image.m_format);
+
+        bimg::ImageMip decoded_mip{};
+        decoded_mip.m_format = bimg::TextureFormat::RGBA8;
+        decoded_mip.m_width = width;
+        decoded_mip.m_height = height;
+        decoded_mip.m_depth = 1;
+        decoded_mip.m_bpp = 32;
+        decoded_mip.m_hasAlpha = true;
+        decoded_mip.m_data = decoded.data();
+
+        return image_mip_border_has_transparency(decoded_mip, bimg::TextureFormat::RGBA8, opaque_threshold);
+    }
+
+    bimg::ImageContainer* converted =
+        bimg::imageConvert(get_bimg_allocator(), bimg::TextureFormat::RGBA8, image, false);
+    if(!converted)
+    {
+        return false;
+    }
+
+    const bool suggests_cutout = image_border_has_transparency(*converted, opaque_threshold);
+    bimg::imageFree(converted);
+    return suggests_cutout;
+}
+
+auto color_map_border_suggests_alpha_cutout(const fs::path& output_dir, const std::string& relative) -> bool
+{
+    if(relative.empty() || !texture_file_exists(output_dir, relative))
+    {
+        return false;
+    }
+
+    const fs::path filepath =
+        output_dir / resolve_external_texture_path(output_dir, normalize_assimp_path(relative));
+    const bx::FilePath bimg_path(filepath.string().c_str());
+
+    bimg::ImageContainer header{};
+    if(imageParseInfo(bimg_path, header)
+       && !texture_format_has_alpha(header.m_format, header.m_hasAlpha))
+    {
+        APPLOG_TRACE("Mesh Importer: Texture format does not have alpha: {}", relative);
+        return false;
+    }
+
+    bimg::ImageContainer* loaded = imageLoad(bimg_path);
+    if(!loaded)
+    {
+        APPLOG_TRACE("Mesh Importer: Failed to load image: {}", relative);
+        return false;
+    }
+
+    const bool suggests_cutout = image_border_has_transparency(*loaded, k_import_border_alpha_opaque_threshold);
+    APPLOG_TRACE("Mesh Importer: Probing base color map border for transparency: {}", suggests_cutout);
+    bimg::imageFree(loaded);
+    return suggests_cutout;
+}
+
 void process_material(asset_manager& am,
                       const fs::path& filename,
                       const fs::path& output_dir,
@@ -3708,6 +3934,7 @@ void process_material(asset_manager& am,
 
     // KHR spec-gloss: diffuse + specular pair -> Khronos bake (base color + MR).
     std::string combined_mr_relative;
+    std::string base_color_map_relative;
 
     bool khr_textures_baked = false;
     bool spec_gloss_mr_baked = false;
@@ -3866,6 +4093,8 @@ void process_material(asset_manager& am,
             {
                 process_texture(texture, textures);
             }
+
+            base_color_map_relative = texture.name;
 
             if(binding)
             {
@@ -4234,20 +4463,61 @@ void process_material(asset_manager& am,
             mat.set_emissive_intensity(math::clamp(mat.get_emissive_intensity() * texture_strength, 0.0f, 100.0f));
         }
     }
-    // ALPHA CUTOUT / OPACITY (feeds deferred_geom alpha-test discard)
+    // ALPHA MODE / CUTOFF (glTF alphaMode + alphaCutoff, legacy opacity, border alpha probe)
     {
-        ai_real alpha_cutoff{};
-        if(material->Get(AI_MATKEY_GLTF_ALPHACUTOFF, alpha_cutoff) == AI_SUCCESS)
+        alpha_mode resolved = alpha_mode::opaque;
+        ai_real resolved_cutoff = 0.5f;
+
+        aiString alpha_mode_str;
+        const bool has_alpha_mode = material->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode_str) == AI_SUCCESS;
+
+        if(has_alpha_mode)
         {
-            mat.set_alpha_test_value(math::clamp(alpha_cutoff, 0.0f, 1.0f));
+            APPLOG_TRACE("Mesh Importer: glTF alphaMode: {}", alpha_mode_str.C_Str());
+
+            if(alpha_mode_str == aiString("MASK"))
+            {
+                resolved = alpha_mode::mask;
+                material->Get(AI_MATKEY_GLTF_ALPHACUTOFF, resolved_cutoff);
+                if(resolved_cutoff <= 0.0f)
+                {
+                    resolved_cutoff = 0.5f;
+                }
+            }
+            else if(alpha_mode_str == aiString("BLEND"))
+            {
+                resolved = alpha_mode::blend;
+            }
         }
         else
         {
             ai_real opacity = 1.0f;
-            if(material->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS)
+            if(material_opacity_factor_suggests_cutout(material, opacity))
             {
-                mat.set_alpha_test_value(math::clamp(1.0f - opacity, 0.0f, 1.0f));
+                resolved = alpha_mode::mask;
+                resolved_cutoff = 1.0f - opacity;
             }
+        }
+
+        // When mode is still opaque, probe the base color map border for transparency (common on
+        // foliage/fences exported without alphaMode). Skipped when glTF declares BLEND/MASK.
+        if(binding && resolved == alpha_mode::opaque && !base_color_map_relative.empty())
+        {
+            APPLOG_TRACE("Mesh Importer: Probing base color map border for transparency: {}", base_color_map_relative);
+            if(color_map_border_suggests_alpha_cutout(output_dir, base_color_map_relative))
+            {
+                APPLOG_TRACE(
+                    "Mesh Importer: Promoting to alpha cutout — base color map '{}' has transparent border pixels",
+                    base_color_map_relative);
+                resolved = alpha_mode::mask;
+                resolved_cutoff = resolve_import_alpha_cutoff(material);
+            }
+        }
+
+        mat.set_alpha_mode(resolved);
+        if(resolved == alpha_mode::mask)
+        {
+            mat.set_alpha_cutoff(math::clamp(resolved_cutoff, 0.0f, 1.0f));
         }
     }
 }

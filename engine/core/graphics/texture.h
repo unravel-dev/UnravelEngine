@@ -118,10 +118,20 @@ struct texture : public handle_impl<texture, texture_handle>
     //-----------------------------------------------------------------------------
     auto fallback_handle() const -> texture_handle;
 
+
+    auto get_estimated_gpu_size() const -> std::uint64_t;
+
     /// Texture detail info.
     texture_info info{};
     /// Creation flags.
     std::uint64_t flags = BGFX_TEXTURE_NONE;
+
+private:
+    void adopt_loaded_eviction(eviction::backing_buffer backing,
+                               std::uint64_t estimated_size,
+                               std::uint64_t load_flags,
+                               std::uint8_t skip,
+                               const char* label);
 };
 
 

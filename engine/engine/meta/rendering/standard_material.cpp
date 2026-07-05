@@ -1,5 +1,6 @@
 #include "standard_material.hpp"
 #include "material.hpp"
+#include "serialization/serialization.h"
 
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/core/math/vector.hpp>
@@ -67,10 +68,15 @@ REFLECT(pbr_material)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
         })
-        .data<&pbr_material::set_alpha_test_value, &pbr_material::get_alpha_test_value>("alpha_test_value"_hs)
+        .data<&pbr_material::set_alpha_mode, &pbr_material::get_alpha_mode>("alpha_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "alpha_test_value"},
-            entt::attribute{"pretty_name", "Alpha Test Value"},
+            entt::attribute{"name", "alpha_mode"},
+            entt::attribute{"pretty_name", "Alpha Mode"},
+        })
+        .data<&pbr_material::set_alpha_cutoff, &pbr_material::get_alpha_cutoff>("alpha_cutoff"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "alpha_cutoff"},
+            entt::attribute{"pretty_name", "Alpha Cutoff"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
@@ -131,11 +137,12 @@ SAVE(pbr_material)
     float roughness = obj.get_roughness();
     float metalness = obj.get_metalness();
     float bumpiness = obj.get_bumpiness();
-    float alpha_test_value = obj.get_alpha_test_value();
     try_save(ar, ser20::make_nvp("roughness", roughness));
     try_save(ar, ser20::make_nvp("metalness", metalness));
     try_save(ar, ser20::make_nvp("bumpiness", bumpiness));
-    try_save(ar, ser20::make_nvp("alpha_test_value", alpha_test_value));
+
+    try_save(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
+    try_save(ar, ser20::make_nvp("alpha_cutoff", obj.alpha_cutoff_));
 
     try_save(ar, ser20::make_nvp("tiling", obj.tiling_));
     try_save(ar, ser20::make_nvp("dither_threshold", obj.dither_threshold_));
@@ -161,35 +168,79 @@ LOAD(pbr_material)
     try_load(ar, ser20::make_nvp("emissive_color", obj.emissive_color_));
     try_load(ar, ser20::make_nvp("emissive_intensity", obj.emissive_intensity_));
 
-    math::vec4 surface_data{};
-    if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
+    if constexpr(is_binary_archive<Archive>())
     {
-        obj.surface_data_ = surface_data;
+        float roughness = obj.get_roughness();
+        float metalness = obj.get_metalness();
+        float bumpiness = obj.get_bumpiness();
+        try_load(ar, ser20::make_nvp("roughness", roughness));
+        try_load(ar, ser20::make_nvp("metalness", metalness));
+        try_load(ar, ser20::make_nvp("bumpiness", bumpiness));
+        obj.set_roughness(roughness);
+        obj.set_metalness(metalness);
+        obj.set_bumpiness(bumpiness);
+
+        try_load(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
+
+        float alpha_cutoff = obj.alpha_cutoff_;
+        try_load(ar, ser20::make_nvp("alpha_cutoff", alpha_cutoff));
+        obj.set_alpha_cutoff(alpha_cutoff);
     }
     else
     {
-        float roughness = obj.get_roughness();
-        if(try_load(ar, ser20::make_nvp("roughness", roughness)))
+        const bool has_alpha_mode = try_load(ar, ser20::make_nvp("alpha_mode", obj.alpha_mode_));
+
+        float alpha_cutoff = obj.alpha_cutoff_;
+        const bool has_alpha_cutoff = try_load(ar, ser20::make_nvp("alpha_cutoff", alpha_cutoff));
+
+        math::vec4 surface_data{};
+        if(try_load(ar, ser20::make_nvp("surface_data", surface_data)))
         {
-            obj.set_roughness(roughness);    
+            obj.surface_data_ = surface_data;
+            if(!has_alpha_cutoff)
+            {
+                alpha_cutoff = surface_data.w;
+            }
+        }
+        else
+        {
+            float roughness = obj.get_roughness();
+            if(try_load(ar, ser20::make_nvp("roughness", roughness)))
+            {
+                obj.set_roughness(roughness);
+            }
+
+            float metalness = obj.get_metalness();
+            if(try_load(ar, ser20::make_nvp("metalness", metalness)))
+            {
+                obj.set_metalness(metalness);
+            }
+
+            float bumpiness = obj.get_bumpiness();
+            if(try_load(ar, ser20::make_nvp("bumpiness", bumpiness)))
+            {
+                obj.set_bumpiness(bumpiness);
+            }
         }
 
-        float metalness = obj.get_metalness();
-        if(try_load(ar, ser20::make_nvp("metalness", metalness)))
+        if(!has_alpha_cutoff)
         {
-            obj.set_metalness(metalness);
-        }
-    
-        float bumpiness = obj.get_bumpiness();
-        if(try_load(ar, ser20::make_nvp("bumpiness", bumpiness)))
-        {
-            obj.set_bumpiness(bumpiness);
+            float legacy_alpha_test = alpha_cutoff;
+            if(try_load(ar, ser20::make_nvp("alpha_test_value", legacy_alpha_test)))
+            {
+                alpha_cutoff = legacy_alpha_test;
+            }
         }
 
-        float alpha_test_value = obj.get_alpha_test_value();
-        if(try_load(ar, ser20::make_nvp("alpha_test_value", alpha_test_value)))
+        obj.alpha_cutoff_ = alpha_cutoff;
+
+        if(!has_alpha_mode)
         {
-            obj.set_alpha_test_value(alpha_test_value);
+            obj.infer_alpha_mode_from_legacy_cutoff();
+        }
+        else
+        {
+            obj.set_alpha_cutoff(alpha_cutoff);
         }
     }
 

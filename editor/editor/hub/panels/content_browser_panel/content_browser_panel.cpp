@@ -1331,12 +1331,32 @@ void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path&
                 const auto& name = cache_entry.stem;
                 const auto& filename = cache_entry.filename;
                 const auto& extension = cache_entry.extension;
+                bool passed = false;
 
-                if(filter_.PassFilter(name.c_str()) || 
-                   filter_.PassFilter(ex::get_type(extension, cache_entry.entry.is_directory()).c_str()))
+                if(filter_.PassFilter(name.c_str()))
                 {
+                    passed = true;
                     filtered_entries.emplace_back(cache_entry);
                 }
+
+                if(!passed)
+                {
+                    if(filter_.PassFilter(ex::get_type(extension, cache_entry.entry.is_directory()).c_str()))
+                    {
+                        passed = true;
+                        filtered_entries.emplace_back(cache_entry);
+                    }
+                }
+                
+                if(!passed)
+                {
+                    const auto& metadata = am.get_metadata_for_path(cache_entry.entry.path()).meta;
+                    if(filter_.PassFilter(metadata.uid.to_string().c_str()))
+                    {
+                        filtered_entries.emplace_back(cache_entry);
+                    }
+                }
+                
                 
             }
 

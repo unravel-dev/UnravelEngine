@@ -2,9 +2,15 @@
 
 #include <engine/assets/asset_handle.h>
 
+#include <graphics/texture.h>
+#include <math/math.h>
+
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+
+#include "material.h"
 
 namespace unravel
 {
@@ -94,6 +100,52 @@ struct batch_key
     auto to_string() const -> std::string;
 };
 
+/// Per-draw state for alpha-cutout shadow batches (texture + clip threshold).
+struct shadow_cutout_state
+{
+    std::shared_ptr<gfx::texture> color_map;
+    float alpha_test_value = 1.0f;
+    math::color base_color{};
+    math::vec2 tiling{1.0f, 1.0f};
+};
+
+/**
+ * @brief Batch key for shadow depth passes — geometry-first, optional cutout bucket.
+ *
+ * Opaque shadows batch on (mesh, lod, submesh, cull). Alpha-cutout shadows additionally
+ * split on @ref shadow_cutout_state so instances sharing the same clip texture/threshold batch.
+ */
+struct shadow_batch_key
+{
+    std::shared_ptr<mesh> mesh_ptr;
+    uint32_t lod_index = 0;
+    uint32_t submesh_index = 0;
+    cull_type cull = cull_type::counter_clockwise;
+    std::optional<shadow_cutout_state> cutout;
+
+    shadow_batch_key() = default;
+
+    shadow_batch_key(std::shared_ptr<mesh> mesh,
+                     uint32_t lod,
+                     uint32_t submesh,
+                     cull_type cull_type,
+                     std::optional<shadow_cutout_state> cutout_state = std::nullopt);
+
+    auto operator<=>(const shadow_batch_key& other) const -> std::strong_ordering;
+    auto operator==(const shadow_batch_key& other) const -> bool;
+
+    [[nodiscard]] auto hash() const noexcept -> size_t;
+    [[nodiscard]] auto is_valid() const -> bool;
+    [[nodiscard]] auto uses_alpha_cutout() const -> bool;
+    [[nodiscard]] auto to_string() const -> std::string;
+};
+
+/// Build a shadow batch key from mesh geometry and optional material cutout metadata.
+auto make_shadow_batch_key(const std::shared_ptr<mesh>& mesh_ptr,
+                           uint32_t lod_index,
+                           uint32_t submesh_index,
+                           const std::shared_ptr<material>& material_ptr) -> shadow_batch_key;
+
 } // namespace unravel
 
 /**
@@ -105,6 +157,15 @@ template<>
 struct hash<unravel::batch_key>
 {
     auto operator()(const unravel::batch_key& key) const noexcept -> size_t
+    {
+        return key.hash();
+    }
+};
+
+template<>
+struct hash<unravel::shadow_batch_key>
+{
+    auto operator()(const unravel::shadow_batch_key& key) const noexcept -> size_t
     {
         return key.hash();
     }
