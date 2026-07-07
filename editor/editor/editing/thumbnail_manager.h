@@ -2,7 +2,6 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
-#include <graphics/frame_buffer.h>
 #include <graphics/shader.h>
 #include <graphics/texture.h>
 
@@ -31,6 +30,7 @@ struct script;
 struct font;
 struct ui_tree;
 struct style_sheet;
+class rendering_system;
 } // namespace unravel
 
 
@@ -45,10 +45,13 @@ struct thumbnail_manager
     struct generated_thumbnail
     {
         auto get() -> gfx::texture::ptr;
-        void set(gfx::frame_buffer::ptr fbo);
+        void set(gfx::texture::ptr tex);
 
         bool needs_regeneration{true};
-        gfx::frame_buffer::ptr thumbnail;
+        /// Owned snapshot copied from the preview OBUFFER (not a live render target).
+        gfx::texture::ptr snapshot;
+        /// Queued during capture; committed after gfx::frame() so the GPU blit has finished.
+        gfx::texture::ptr pending_snapshot;
 
         bool is_cached_on_disk{false};
         fs::path cache_path{};
@@ -62,7 +65,7 @@ struct thumbnail_manager
 
         auto get_scene() -> scene&;
 
-        void reset();
+        void reset(rendering_system& rpath);
 
         void reset_wait();
 
@@ -76,6 +79,7 @@ struct thumbnail_manager
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
     void on_frame_update(rtti::context& ctx, delta_t);
+    void on_frame_end(rtti::context& ctx, delta_t);
 
     template<typename T>
     auto get_thumbnail(const asset_handle<T>& asset) -> gfx::texture::ptr
@@ -151,6 +155,9 @@ private:
 
     std::map<std::string, asset_handle<gfx::texture>> icons_;
     std::map<std::string, asset_handle<gfx::texture>> gizmo_icons_;
+
+    /// Commits snapshots whose GPU blit completed in the frame that just ended.
+    void commit_pending_snapshots();
 
     /// Releases thumbnails not accessed within the idle timeout.
     void evict_unused_thumbnails(std::chrono::seconds scan_interval, std::chrono::seconds idle_timeout);

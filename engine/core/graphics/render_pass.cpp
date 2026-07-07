@@ -25,6 +25,7 @@ auto generate_id() -> gfx::view_id
     auto& counter = get_counter();
     if(counter >= limits.maxViews - 1)
     {
+        gfx::log("warning", "Render pass ID overflow", __FILE__, __LINE__);
         frame();
         counter = 0;
     }

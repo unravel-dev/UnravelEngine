@@ -18,17 +18,89 @@
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/scripting/script.h>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <seq/seq.h>
 
 #include <filesystem/filesystem.h>
 #include <filesystem/watcher.h>
+
+#include <algorithm>
 
 namespace unravel
 {
 
 namespace
 {
+
+const usize32_t k_thumbnail_size{256, 256};
+
+auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::texture::ptr
+{
+    if(!source)
+    {
+        return nullptr;
+    }
+
+    const auto& src_tex = source->get_texture(0);
+    if(!src_tex || !src_tex->is_valid())
+    {
+        return nullptr;
+    }
+
+    const auto src_size = source->get_size();
+    const auto blit_width = static_cast<uint16_t>(std::min(src_size.width, k_thumbnail_size.width));
+    const auto blit_height = static_cast<uint16_t>(std::min(src_size.height, k_thumbnail_size.height));
+    if(blit_width == 0 || blit_height == 0)
+    {
+        return nullptr;
+    }
+
+    auto snapshot = std::make_shared<gfx::texture>(k_thumbnail_size.width,
+                                                 k_thumbnail_size.height,
+                                                 false,
+                                                 1,
+                                                 gfx::texture_format::RGBA8,
+                                                 BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+
+    if(!snapshot->is_valid())
+    {
+        return nullptr;
+    }
+
+    gfx::render_pass pass("Thumbnail/Capture Blit");
+    gfx::blit(pass.id,
+              snapshot->native_handle(),
+              0,
+              0,
+              src_tex->native_handle(),
+              0,
+              0,
+              blit_width,
+              blit_height);
+    return snapshot;
+}
+
+auto render_thumbnail_preview_scene(rendering_system& rpath, scene& scn, delta_t dt, int frames) -> gfx::frame_buffer::ptr
+{
+    gfx::frame_buffer::ptr captured;
+    scn.registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            auto handle = scn.create_handle(e);
+            for(int i = 0; i < frames; ++i)
+            {
+                rpath.on_frame_before_render(scn, dt);
+                auto new_fbo = rpath.render_scene(handle, camera_comp, scn, dt, false);
+                if(new_fbo)
+                {
+                    captured = std::move(new_fbo);
+                }
+            }
+        });
+    return captured;
+}
 
 template<typename T>
 auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 2, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
@@ -40,32 +112,29 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
     {
         try
         {
+            auto& ctx = engine::context();
+            auto& rpath = ctx.get_cached<rendering_system>();
 
             auto& scn = gen.get_scene();
+            rpath.release_pipeline_resources(scn);
             scn.unload();
-            auto& ctx = engine::context();
-            auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, {256, 256}, false);
+            auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, k_thumbnail_size, false);
 
-            auto& rpath = ctx.get_cached<rendering_system>();
             for(int i = 0; i < frames; i++)
             {
-                bool focus_camera = i == frames - 1;
-
                 rpath.on_frame_update(scn, dt);
                 rpath.on_frame_before_render(scn, dt);
-
-
             }
 
-         
             defaults::focus_camera_on_3d_scene_for_asset_preview<T>(ctx, result);
 
-            
-            for(int i = 0; i < frames; i++)
+            if(auto captured = render_thumbnail_preview_scene(rpath, scn, dt, frames))
             {
-                auto new_fbo = rpath.render_scene(scn, dt);
-                thumbnail.set(new_fbo);
-
+                if(auto snapshot = capture_thumbnail_snapshot(captured))
+                {
+                    thumbnail.pending_snapshot = std::move(snapshot);
+                    gen.remaining--;
+                }
             }
 
         }
@@ -289,7 +358,10 @@ auto thumbnail_manager::get_thumbnail(const fs::path& path) -> gfx::texture::ptr
 
 void thumbnail_manager::regenerate_thumbnail(const hpp::uuid& uid)
 {
-    gen_.thumbnails[uid].needs_regeneration = true;
+    auto& entry = gen_.thumbnails[uid];
+    entry.needs_regeneration = true;
+    entry.snapshot = nullptr;
+    entry.pending_snapshot = nullptr;
 }
 void thumbnail_manager::remove_thumbnail(const hpp::uuid& uid)
 {
@@ -298,7 +370,21 @@ void thumbnail_manager::remove_thumbnail(const hpp::uuid& uid)
 
 void thumbnail_manager::clear_thumbnails()
 {
+    auto& ctx = engine::context();
+    auto& rpath = ctx.get_cached<rendering_system>();
+
+    seq::scope::stop_all("camera_focus");
+
+    for(auto& scn : gen_.scenes)
+    {
+        rpath.release_pipeline_resources(scn);
+        scn.unload();
+    }
+
     gen_.thumbnails.clear();
+    gen_.remaining = static_cast<int>(gen_.scenes.size());
+    gen_.wait_frames = 0;
+    last_eviction_scan_ = clock::now();
 }
 
 void thumbnail_manager::set_cache_directory(const fs::path& cache_dir)
@@ -403,6 +489,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
 
     auto& ev = ctx.get_cached<events>();
     ev.on_frame_update.connect(sentinel_, this, &thumbnail_manager::on_frame_update);
+    ev.on_frame_end.connect(sentinel_, -10000, this, &thumbnail_manager::on_frame_end);
 
     auto& am = ctx.get_cached<asset_manager>();
     thumbnails_.transparent = am.get_asset<gfx::texture>("engine:/data/textures/transparent.png");
@@ -432,6 +519,9 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     gimzmo_icons_.audio_source = am.get_asset<gfx::texture>("editor:/data/icons/audio_source.png");
     gimzmo_icons_.reflection_probe = am.get_asset<gfx::texture>("editor:/data/icons/reflection_probe.png");
     gimzmo_icons_.particle_emitter = am.get_asset<gfx::texture>("editor:/data/icons/particle_emitter.png");
+
+    gen_.remaining = static_cast<int>(gen_.scenes.size());
+    gen_.reset_wait();
     return true;
 }
 
@@ -444,8 +534,28 @@ auto thumbnail_manager::deinit(rtti::context& ctx) -> bool
 
 void thumbnail_manager::on_frame_update(rtti::context& ctx, delta_t)
 {
-    gen_.reset();
+    auto& rpath = ctx.get_cached<rendering_system>();
+    gen_.reset(rpath);
     evict_unused_thumbnails(std::chrono::seconds(30), std::chrono::seconds(60));
+}
+
+void thumbnail_manager::on_frame_end(rtti::context& /*ctx*/, delta_t)
+{
+    commit_pending_snapshots();
+}
+
+void thumbnail_manager::commit_pending_snapshots()
+{
+    for(auto& [uid, entry] : gen_.thumbnails)
+    {
+        (void)uid;
+        if(!entry.pending_snapshot)
+        {
+            continue;
+        }
+
+        entry.set(std::move(entry.pending_snapshot));
+    }
 }
 
 void thumbnail_manager::evict_unused_thumbnails(std::chrono::seconds scan_interval, std::chrono::seconds idle_timeout)
@@ -476,18 +586,28 @@ void thumbnail_manager::evict_unused_thumbnails(std::chrono::seconds scan_interv
 
 auto thumbnail_manager::generated_thumbnail::get() -> gfx::texture::ptr
 {
-    if(!thumbnail)
+    if(!snapshot || !snapshot->is_valid())
     {
+        if(snapshot)
+        {
+            snapshot = nullptr;
+            needs_regeneration = true;
+        }
         return nullptr;
     }
 
     last_access_time = clock::now();
-    return thumbnail->get_texture();
+    return snapshot;
 }
 
-void thumbnail_manager::generated_thumbnail::set(gfx::frame_buffer::ptr fbo)
+void thumbnail_manager::generated_thumbnail::set(gfx::texture::ptr tex)
 {
-    thumbnail = fbo;
+    if(!tex || !tex->is_valid())
+    {
+        return;
+    }
+
+    snapshot = std::move(tex);
     needs_regeneration = false;
     last_access_time = clock::now();
 }
@@ -495,19 +615,19 @@ void thumbnail_manager::generated_thumbnail::set(gfx::frame_buffer::ptr fbo)
 auto thumbnail_manager::generator::get_scene() -> scene&
 {
     reset_wait();
-    remaining--;
-    return scenes[remaining];
+    return scenes[0];
 }
 
-void thumbnail_manager::generator::reset()
+void thumbnail_manager::generator::reset(rendering_system& rpath)
 {
     if(wait_frames-- <= 0)
     {
         for(auto& scn : scenes)
         {
+            rpath.release_pipeline_resources(scn);
             scn.unload();
         }
-        remaining = scenes.size();
+        remaining = static_cast<int>(scenes.size());
 
         reset_wait();
     }
@@ -515,7 +635,7 @@ void thumbnail_manager::generator::reset()
 
 void thumbnail_manager::generator::reset_wait()
 {
-    wait_frames = 1;
+    wait_frames = 2;
 }
 
 } // namespace unravel

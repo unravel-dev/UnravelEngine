@@ -496,6 +496,19 @@ void run_camera_focus_transition(entt::handle camera,
         target_position = target_center - adjusted_target_distance * dir;
     }
 
+    if(duration <= 0.0f)
+    {
+        trans_comp.set_position_global(target_position);
+        if(!keep_rotation)
+        {
+            trans_comp.look_at(target_center);
+        }
+        camera_comp.set_ortho_size(radius);
+        camera_comp.update(trans_comp.get_transform_global());
+        seq::scope::stop_all("camera_focus");
+        return;
+    }
+
     auto ease = seq::ease::smooth_stop;
     auto seq_duration = std::chrono::duration_cast<seq::duration_t>(std::chrono::duration<float>(duration));
 
