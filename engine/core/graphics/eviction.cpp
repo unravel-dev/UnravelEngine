@@ -288,10 +288,20 @@ public:
 
     auto current_budget() const -> eviction::budget_state
     {
-        // Published each time @ref set_budget runs; safe to read without the registry mutex so
-        // @ref reclaim_for can run from inside @ref restore_resource callbacks.
-        static_assert(std::is_trivially_copyable_v<eviction::budget_state>);
-        return published_budget_.load(std::memory_order_acquire);
+        // Seqlock publish: lock-free readers without a 32-byte std::atomic (needs libatomic on some Linux builds).
+        for(;;)
+        {
+            const auto seq = published_budget_seq_.load(std::memory_order_acquire);
+            if(seq & 1u)
+            {
+                continue;
+            }
+            const auto snapshot = published_budget_;
+            if(published_budget_seq_.load(std::memory_order_acquire) == seq)
+            {
+                return snapshot;
+            }
+        }
     }
 
     auto snapshot_default_config() const -> eviction::config
@@ -390,7 +400,9 @@ private:
 
     void publish_budget_locked()
     {
-        published_budget_.store(budget_, std::memory_order_release);
+        published_budget_seq_.fetch_add(1, std::memory_order_release);
+        published_budget_ = budget_;
+        published_budget_seq_.fetch_add(1, std::memory_order_release);
     }
 
     void note_pending_release_locked(std::uint64_t bytes)
@@ -617,7 +629,8 @@ private:
     std::uint64_t failed_restores_ = 0;
     std::uint64_t thrash_events_ = 0;
     eviction::budget_state budget_{};
-    std::atomic<eviction::budget_state> published_budget_{};
+    std::atomic<std::uint32_t> published_budget_seq_{0};
+    eviction::budget_state published_budget_{};
     std::uint64_t budget_used_bytes_ = 0;
     std::uint64_t last_pass_scanned_ = 0;
     std::uint64_t last_pass_evicted_ = 0;
