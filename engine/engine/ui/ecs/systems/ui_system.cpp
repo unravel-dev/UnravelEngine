@@ -11,6 +11,7 @@
 #include "hpp/small_vector.hpp"
 
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/input/input.h>
 #include <engine/rendering/renderer.h>
 #include <engine/rendering/camera.h>
@@ -269,8 +270,8 @@ void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entit
     // world space ui does not depend on the viewport size, so we can use a fixed dp_ratio
     float dp_ratio = 1.0f;
    
-    auto& ev = ctx.get_cached<events>();
-    bool is_playing = ev.is_playing;
+    auto& play = ctx.get_cached<play_mode>();
+    bool is_playing = play.is_active();
 
     
     /// State between update_world_space and render_world_space
@@ -383,8 +384,8 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
     APP_SCOPE_PERF("UI/Update Screen Space");
     auto& camera_comp = camera_entity.get<camera_component>();
     auto& input = ctx.get_cached<input_system>();
-    auto& ev = ctx.get_cached<events>();
-    bool is_playing = ev.is_playing;
+    auto& play = ctx.get_cached<play_mode>();
+    bool is_playing = play.is_active();
     float screen_space_dp_ratio = 1.0f;
     auto viewport = camera_comp.get_viewport_size();
     float screen_space_viewport_width = static_cast<int>(viewport.width);
@@ -400,8 +401,8 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
         }
     }
     bool hit_found = false;
-    scn.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
+    scn.registry->view<ui_document_component>().each(
+        [&](entt::entity entity, ui_document_component& ui_comp)
         {
             if(ui_comp.render_mode != ui_render_mode::screen_space_overlay)
             {
@@ -409,6 +410,10 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
             }
             auto handle = scn.create_handle(entity);
             update_ui_document_common(handle, ui_comp, is_playing);
+            if(!handle.all_of<active_component>())
+            {
+                return;
+            }
             if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
             {
                 return;
@@ -576,7 +581,6 @@ void ui_system::set_debugger_enabled(bool enabled)
 
 void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
 {
-    auto& ev = ctx.get_cached<events>();
     APP_SCOPE_PERF("UI/Update UI Documents");
 
     scn.registry->view<ui_document_component>().each(
@@ -584,7 +588,8 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
         {
             auto handle = scn.create_handle(entity);
             bool active = handle.all_of<active_component>();
-            if(!ev.is_playing && ui_comp.version != ui_comp.asset.version())
+            auto& play = ctx.get_cached<play_mode>();
+            if(!play.is_simulation_running() && ui_comp.version != ui_comp.asset.version())
             {
                 if(ui_comp.document)
                 {

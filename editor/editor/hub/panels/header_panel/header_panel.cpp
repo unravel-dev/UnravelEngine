@@ -13,6 +13,7 @@
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -459,7 +460,7 @@ void header_panel::draw_project_badge(rtti::context& ctx,
                                       const ImVec2& item_spacing)
 {
     auto& pm = ctx.get_cached<project_manager>();
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
     auto logo = fmt::format("{}", pm.get_name());
     auto logo_size = ImGui::CalcTextSize(logo.c_str());
     const float badge_h_pad = 30.0f;
@@ -474,11 +475,11 @@ void header_panel::draw_project_badge(rtti::context& ctx,
         ImVec2(badge_pos.x + badge_width, badge_pos.y),
         ImVec2(badge_pos.x, badge_pos.y)};
     ImU32 badge_color = ImGui::GetColorU32(ImGuiCol_MenuBarBg);
-    if(ev.is_playing)
+    if(play.is_active())
     {
         badge_color = ImGui::GetColorU32(ImVec4(0.0f, 0.5f, 0.0f, 0.5f));
     }
-    if(ev.is_paused)
+    if(play.is_paused())
     {
         badge_color = ImGui::GetColorU32(ImVec4(0.6f, 0.3f, 0.0f, 0.5f));
     }
@@ -522,46 +523,49 @@ auto header_panel::calc_center_zone_width(const ImVec2& frame_padding, const ImV
 {
     float play_btns = ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x +
                       frame_padding.x * 6 + item_spacing.x * 2;
+    float splash_checkbox = ImGui::CalcTextSize("Splash").x + frame_padding.x * 2 + ImGui::GetFrameHeight();
     float separator = item_spacing.x * 2 + 2.0f;
     float debug_mode = get_debug_mode_size();
-    return play_btns + separator + debug_mode + item_spacing.x;
+    return play_btns + splash_checkbox + item_spacing.x + separator + debug_mode + item_spacing.x;
 }
 
 void header_panel::draw_center_zone(rtti::context& ctx)
 {
     auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
     ImGuiKeyChord key_chord = shortcuts::play_toggle;
     bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
     auto& scripting = ctx.get_cached<script_system>();
     bool has_errors = scripting.has_compilation_errors();
-    if(ev.is_playing)
+    if(play.is_active())
     {
         has_errors = false;
     }
     ImGui::BeginDisabled(has_errors);
     ImGui::BeginGroup();
-    if(ev.is_playing)
+    if(play.is_active())
     {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.47f, 0.18f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.58f, 0.25f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.12f, 1.0f));
     }
-    play_pressed |= ImGui::Button(ev.is_playing ? ICON_MDI_STOP : ICON_MDI_PLAY);
-    if(ev.is_playing)
+    play_pressed |= ImGui::Button(play.is_active() ? ICON_MDI_STOP : ICON_MDI_PLAY);
+    if(play.is_active())
     {
         ImGui::PopStyleColor(3);
     }
-    if(has_errors && !ev.is_playing)
+    if(has_errors && !play.is_active())
     {
         play_pressed = false;
     }
     ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
     if(play_pressed)
     {
-        ev.toggle_play_mode(ctx);
+        play.toggle(ctx, play_splash_in_editor_);
     }
     ImGui::SameLine();
-    if(ev.is_paused)
+
+    if(play.is_paused())
     {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.38f, 0.08f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.48f, 0.14f, 1.0f));
@@ -569,9 +573,9 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     }
     if(ImGui::Button(ICON_MDI_PAUSE))
     {
-        ev.toggle_pause(ctx);
+        play.toggle_pause(ctx);
     }
-    if(ev.is_paused)
+    if(play.is_paused())
     {
         ImGui::PopStyleColor(3);
     }
@@ -579,13 +583,13 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
     if(ImGui::Button(ICON_MDI_SKIP_NEXT))
     {
-        ev.skip_next_frame(ctx);
+        play.skip_next_frame(ctx);
     }
     ImGui::PopItemFlag();
     ImGui::SameLine();
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine();
-    ImGui::BeginDisabled(ev.is_playing);
+    ImGui::BeginDisabled(play.is_active());
     draw_debug_mode();
     ImGui::EndDisabled();
     ImGui::EndGroup();
@@ -594,6 +598,11 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     {
         ImGui::SetItemTooltipEx("%s", "All compiler errors must be fixed before you can enter Play Mode!");
     }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(play.is_active());
+    ImGui::Checkbox("Splash", &play_splash_in_editor_);
+    ImGui::SetItemTooltipEx("%s", "Allow splash on play; still requires splash enabled in project settings");
+    ImGui::EndDisabled();
 }
 
 void header_panel::draw_right_zone(rtti::context& ctx)

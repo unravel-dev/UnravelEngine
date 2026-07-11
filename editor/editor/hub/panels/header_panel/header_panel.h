@@ -36,5 +36,6 @@ private:
 
     imgui_panels* parent_{};
     bool show_about_window_ = false;
+    bool play_splash_in_editor_ = true;
 };
 } // namespace unravel

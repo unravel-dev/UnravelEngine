@@ -3,6 +3,7 @@
 #include "script_system.h"
 #include <engine/ecs/ecs.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 
 #include <engine/engine.h>
 #include <monopp/mono_exception.h>
@@ -1177,7 +1178,7 @@ void internal_m2n_application_quit()
         {
             auto& ctx = engine::context();
             auto& ev = ctx.get_cached<events>();
-            ev.set_play_mode(ctx, false);
+            ctx.get_cached<play_mode>().set_active(ctx, false);
         });
 
     seq::queue(delay, "script");

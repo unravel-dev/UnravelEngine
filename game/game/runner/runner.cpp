@@ -1,8 +1,11 @@
 #include "runner.h"
+
 #include "../game.h"
+
 #include <engine/assets/asset_manager.h>
 #include <engine/events.h>
 #include <engine/meta/settings/settings.hpp>
+#include <engine/play_mode.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
@@ -39,7 +42,7 @@ auto runner::init(rtti::context& ctx) -> bool
 auto runner::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_INFO("{}::{}", hpp::type_name_str(*this), __func__);
-
+    (void)ctx;
     return true;
 }
 
@@ -72,10 +75,10 @@ void runner::on_frame_before_render(rtti::context& ctx, delta_t dt)
 void runner::on_frame_render(rtti::context& ctx, delta_t dt)
 {
     auto& rend = ctx.get_cached<renderer>();
+    auto window = rend.get_main_window();
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
-    auto window = rend.get_main_window();
 
     path.render_scene(window->get_surface(), scene, dt);
 }
@@ -85,7 +88,6 @@ void runner::on_play_begin(rtti::context& ctx)
     APPLOG_INFO("{}::{}", hpp::type_name_str(*this), __func__);
 
     auto& s = ctx.get<settings>();
-
     auto scn = s.standalone.startup_scene;
     if(!scn)
     {
@@ -102,7 +104,8 @@ void runner::on_play_begin(rtti::context& ctx)
 void runner::on_play_end(rtti::context& ctx)
 {
     APPLOG_INFO("{}::{}", hpp::type_name_str(*this), __func__);
-
+    (void)ctx;
     game::interrupt();
 }
+
 } // namespace unravel

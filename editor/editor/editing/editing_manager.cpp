@@ -15,6 +15,8 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
+#include <engine/settings/settings.h>
 #include <engine/defaults/defaults.h>
 #include <engine/meta/ecs/entity.hpp>
 
@@ -85,6 +87,7 @@ auto editing_manager::init(rtti::context& ctx) -> bool
     auto& ev = ctx.get_cached<events>();
 
     ev.on_play_before_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_before_begin);
+    ev.on_play_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_begin);
     ev.on_play_after_end.connect(sentinel_, -1000, this, &editing_manager::on_play_after_end);
     ev.on_frame_update.connect(sentinel_, 1000, this, &editing_manager::on_frame_update);
     ev.on_script_recompile.connect(sentinel_, 1000, this, &editing_manager::on_script_recompile);
@@ -157,11 +160,17 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
         scripting.load_app_domain(ctx, true);
     }
 
+    const bool defer_game_scene = ctx.has<settings>() && ctx.get<settings>().splash.enabled;
+
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_checkpoints");
 
         for(auto scn : scenes)
         {
+            if(defer_game_scene && scn->tag == "game")
+            {
+                continue;
+            }
             auto& cache = caches_[scn->tag];
             cache.scn = scn;
             load_checkpoint(ctx, cache, true);
@@ -173,6 +182,35 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     waiting_for_compilation_before_play_ = false;
 
+}
+
+void editing_manager::on_play_begin(rtti::context& ctx)
+{
+    APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
+
+    if(!ctx.has<settings>() || !ctx.get<settings>().splash.enabled)
+    {
+        return;
+    }
+
+    auto cache_it = caches_.find("game");
+    if(cache_it == caches_.end())
+    {
+        return;
+    }
+
+    for(auto scn : scene::get_all_scenes())
+    {
+        if(scn->tag != "game")
+        {
+            continue;
+        }
+        auto& cache = cache_it->second;
+        cache.scn = scn;
+        load_checkpoint(ctx, cache, true);
+        cache.scn = nullptr;
+        break;
+    }
 }
 
 void editing_manager::on_play_after_end(rtti::context& ctx)
@@ -388,7 +426,8 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
     auto& ec = ctx.get_cached<ecs>();
     auto& ev = ctx.get_cached<events>();
 
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return;
     }
@@ -423,7 +462,8 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
     {
         auto& ev = ctx.get_cached<events>();
     
-        if(ev.is_playing)
+        auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
         {
             return;
         }
@@ -517,10 +557,10 @@ void editing_manager::on_frame_update(rtti::context& ctx, delta_t dt)
         unfocus();
     }
 
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
 
     // Only evict assets if not playing
-    if(!ev.is_playing)
+    if(!play.is_active())
     {
         using namespace std::chrono;
         static auto last_eviction = steady_clock::now();
@@ -591,9 +631,8 @@ void editing_manager::unfocus()
 
 void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<prefab>& prefab, bool auto_save)
 {
-    auto& ev = ctx.get_cached<events>();
-
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return;
     }
@@ -964,8 +1003,8 @@ void editing_manager::on_action_executed(std::shared_ptr<editing_action_t> actio
         if(auto_rebuild_reflection_probes)
         {
             auto& ctx = engine::context();
-            auto& ev = ctx.get_cached<events>();
-            if(!ev.is_playing)
+            auto& play = ctx.get_cached<play_mode>();
+            if(!play.is_active())
             {
                 // Time-sliced rebuild so repeated gizmo drags don't stall the editor.
                 editor_actions::rebuild_reflection_probes(ctx, false);

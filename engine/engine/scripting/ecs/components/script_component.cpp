@@ -5,6 +5,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 namespace unravel
 {
@@ -363,10 +364,10 @@ void script_component::on_collision_exit(const mono::mono_object& obj,
 void script_component::process_pending_deletions()
 {
     auto& ctx = engine::context();
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
 
     // Call destroy on marked script components before erasing
-    if(ev.is_playing)
+    if(play.is_simulation_running())
     {
         for(auto& script : script_components_)
         {
@@ -434,9 +435,9 @@ void script_component::process_pending_actions_create(script_object script_obj)
 {
     auto& ctx = engine::context();
     auto& sys = ctx.get_cached<script_system>();
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
 
-    if(ev.is_playing && sys.is_create_called())
+    if(play.is_simulation_running() && sys.is_create_called())
     {
         process_pending_creates();
 

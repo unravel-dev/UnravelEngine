@@ -224,6 +224,104 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 
+REFLECT_INLINE(settings::splash_logo_entry)
+{
+    entt::meta_factory<settings::splash_logo_entry>{}
+        .type("splash_logo_entry"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "splash_logo_entry"},
+            entt::attribute{"pretty_name", "Logo"},
+        })
+        .data<&settings::splash_logo_entry::logo>("logo"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "logo"},
+            entt::attribute{"pretty_name", "Logo"},
+            entt::attribute{"tooltip", "Texture asset displayed during the splash sequence."},
+        })
+        .data<&settings::splash_logo_entry::duration_sec>("duration_sec"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "duration_sec"},
+            entt::attribute{"pretty_name", "Duration (s)"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 30.0f},
+            entt::attribute{"step", 0.1f},
+        });
+}
+
+SAVE_INLINE(settings::splash_logo_entry)
+{
+    try_save(ar, ser20::make_nvp("logo", obj.logo));
+    try_save(ar, ser20::make_nvp("duration_sec", obj.duration_sec));
+}
+
+LOAD_INLINE(settings::splash_logo_entry)
+{
+    try_load(ar, ser20::make_nvp("logo", obj.logo));
+    try_load(ar, ser20::make_nvp("duration_sec", obj.duration_sec));
+}
+
+REFLECT_INLINE(settings::splash_settings)
+{
+    entt::meta_factory<settings::splash_settings>{}
+        .type("splash_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "splash_settings"},
+            entt::attribute{"pretty_name", "Splash Screen"},
+        })
+        .data<&settings::splash_settings::enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Show Splash Screen"},
+            entt::attribute{"tooltip", "Display a splash screen when entering play mode before the game starts."},
+        })
+        .data<&settings::splash_settings::show_made_with>("show_made_with"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "show_made_with"},
+            entt::attribute{"pretty_name", "Show Made With Unravel"},
+            entt::attribute{"tooltip", "Append the engine branding logo to the splash sequence."},
+        })
+        .data<&settings::splash_settings::fade_in_sec>("fade_in_sec"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_in_sec"},
+            entt::attribute{"pretty_name", "Fade In (s)"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 5.0f},
+            entt::attribute{"step", 0.05f},
+        })
+        .data<&settings::splash_settings::fade_out_sec>("fade_out_sec"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fade_out_sec"},
+            entt::attribute{"pretty_name", "Fade Out (s)"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 5.0f},
+            entt::attribute{"step", 0.05f},
+        })
+        .data<&settings::splash_settings::logos>("logos"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "logos"},
+            entt::attribute{"pretty_name", "Logos"},
+            entt::attribute{"tooltip", "Project logos shown sequentially before play begins."},
+        });
+}
+
+SAVE_INLINE(settings::splash_settings)
+{
+    try_save(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_save(ar, ser20::make_nvp("show_made_with", obj.show_made_with));
+    try_save(ar, ser20::make_nvp("fade_in_sec", obj.fade_in_sec));
+    try_save(ar, ser20::make_nvp("fade_out_sec", obj.fade_out_sec));
+    try_save(ar, ser20::make_nvp("logos", obj.logos));
+}
+
+LOAD_INLINE(settings::splash_settings)
+{
+    try_load(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_load(ar, ser20::make_nvp("show_made_with", obj.show_made_with));
+    try_load(ar, ser20::make_nvp("fade_in_sec", obj.fade_in_sec));
+    try_load(ar, ser20::make_nvp("fade_out_sec", obj.fade_out_sec));
+    try_load(ar, ser20::make_nvp("logos", obj.logos));
+}
+
 REFLECT_INLINE(settings::standalone_settings)
 {
 
@@ -432,6 +530,12 @@ REFLECT(settings)
             entt::attribute{"pretty_name", "Graphics"},
             entt::attribute{"tooltip", "Missing..."},
         })
+        .data<&settings::splash>("splash"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "splash"},
+            entt::attribute{"pretty_name", "Splash Screen"},
+            entt::attribute{"tooltip", "Play mode splash screen shown before the game starts."},
+        })
         .data<&settings::standalone>("standalone"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "standalone"},
@@ -451,6 +555,7 @@ SAVE(settings)
     try_save(ar, ser20::make_nvp("app", obj.app));
     try_save(ar, ser20::make_nvp("assets", obj.assets));
     try_save(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_save(ar, ser20::make_nvp("splash", obj.splash));
     try_save(ar, ser20::make_nvp("standalone", obj.standalone));
     try_save(ar, ser20::make_nvp("layer", obj.layer));
     try_save(ar, ser20::make_nvp("input", obj.input));
@@ -465,6 +570,7 @@ LOAD(settings)
     try_load(ar, ser20::make_nvp("app", obj.app));
     try_load(ar, ser20::make_nvp("assets", obj.assets));
     try_load(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_load(ar, ser20::make_nvp("splash", obj.splash));
     try_load(ar, ser20::make_nvp("standalone", obj.standalone));
     try_load(ar, ser20::make_nvp("layer", obj.layer));
     try_load(ar, ser20::make_nvp("input", obj.input));

@@ -8,6 +8,7 @@
 #include <engine/input/input.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/eviction_settings.h>
+#include <graphics/texture.h>
 
 #include <string>
 #include <vector>
@@ -37,6 +38,25 @@ struct settings
             return *this;
         }
     } app;
+
+    struct splash_logo_entry
+    {
+        asset_handle<gfx::texture> logo;
+        float duration_sec = 2.0f;
+
+        friend auto operator==(const splash_logo_entry& lhs, const splash_logo_entry& rhs) -> bool = default;
+    };
+
+    struct splash_settings
+    {
+        bool enabled = true;
+        bool show_made_with = true;
+        float fade_in_sec = 0.5f;
+        float fade_out_sec = 0.5f;
+        std::vector<splash_logo_entry> logos;
+
+        friend auto operator==(const splash_settings& lhs, const splash_settings& rhs) -> bool = default;
+    } splash;
 
     struct asset_settings
     {

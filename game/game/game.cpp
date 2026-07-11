@@ -1,7 +1,7 @@
 #include "game.h"
 
 #include <engine/engine.h>
-#include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/rendering/renderer.h>
 #include <engine/meta/settings/settings.hpp>
 #include <engine/assets/asset_manager.h>
@@ -90,8 +90,8 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    auto& ev = ctx.get_cached<events>();
-    ev.set_play_mode(ctx, true);
+    auto& play = ctx.get_cached<play_mode>();
+    play.set_active(ctx, true);
 
     return true;
 }

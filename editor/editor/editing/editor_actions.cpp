@@ -15,6 +15,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -759,7 +760,8 @@ auto get_dependencies(const fs::path& file) -> std::vector<std::string>
 auto save_scene_impl(rtti::context& ctx, const fs::path& path) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return false;
     }
@@ -790,7 +792,8 @@ auto add_extension_if_missing(const std::string& p) -> fs::path
 auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& default_name = {}) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return false;
     }
@@ -929,7 +932,8 @@ void remove_unreferenced_files(const fs::path& root)
 auto editor_actions::new_scene(rtti::context& ctx) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return false;
     }
@@ -950,9 +954,10 @@ auto editor_actions::new_scene(rtti::context& ctx) -> bool
 auto editor_actions::open_scene(rtti::context& ctx) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
-        ev.set_play_mode(ctx, false);
+        play.set_active(ctx, false);
     }
 
     std::string picked;
@@ -1044,7 +1049,8 @@ auto editor_actions::save_scene_as(rtti::context& ctx) -> bool
 auto editor_actions::prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         on_continue();
         return false;
@@ -1078,7 +1084,8 @@ auto editor_actions::prompt_save_scene(rtti::context& ctx, const std::function<v
 auto editor_actions::close_project(rtti::context& ctx) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return false;
     }
@@ -1094,7 +1101,8 @@ auto editor_actions::close_project(rtti::context& ctx) -> bool
 auto editor_actions::reload_project(rtti::context& ctx) -> bool
 {
     auto& ev = ctx.get_cached<events>();
-    if(ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
     {
         return false;
     }

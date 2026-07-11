@@ -2,6 +2,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
 #include <engine/loading_screen.h>
+#include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/renderer.h>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -147,6 +148,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
     ctx.add<simulation>();
     ctx.add<events>();
+    ctx.add<play_mode>();
     ctx.add<threader>();
     ctx.add<renderer>(ctx, parser);
     ctx.add<audio_system>();
@@ -282,6 +284,12 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    ls.begin_module("Play Mode");
+    if(!ls.check(ctx.get_cached<play_mode>().init(ctx)))
+    {
+        return false;
+    }
+
     ls.begin_module("Defaults");
     if(!ls.check(defaults::init(ctx)))
     {
@@ -299,7 +307,12 @@ auto engine::deinit() -> bool
     {
         return false;
     }
-    
+
+    if(!ctx.get_cached<play_mode>().deinit(ctx))
+    {
+        return false;
+    }
+
     if(!ctx.get_cached<ui_system>().deinit(ctx))
     {
         return false;
@@ -412,6 +425,7 @@ auto engine::destroy() -> bool
     ctx.remove<asset_manager>();
     ctx.remove<audio_system>();
     ctx.remove<renderer>();
+    ctx.remove<play_mode>();
     ctx.remove<events>();
     ctx.remove<simulation>();
     ctx.remove<threader>();
@@ -450,17 +464,18 @@ auto engine::process() -> int
         sim.run_one_frame(true);
 
         auto dt = sim.get_delta_time();
+        auto& play = ctx.get_cached<play_mode>();
 
-        if(ev.is_playing)
+        if(play.is_simulation_running())
         {
-            if(ev.frames_playing == 0)
+            if(play.frames_running() == 0)
             {
                 dt = delta_t(0.0166);
             }
-            ev.frames_playing++;
+            play.on_simulation_frame();
         }
 
-        if(ev.is_paused)
+        if(play.is_paused())
         {
             dt = {};
         }
@@ -495,7 +510,7 @@ auto engine::process() -> int
 
         if(should_quit)
         {
-            ev.set_play_mode(ctx, false);
+            ctx.get_cached<play_mode>().set_active(ctx, false);
             is_shutting_down = false;
             return 0;
         }

@@ -22,6 +22,7 @@
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/profiler/profiler.h>
 
@@ -123,9 +124,9 @@ auto on_load_callback(hpp::span<const entt::handle> entities) -> void
     {   
         APP_SCOPE_PERF("On Load Callback");
         auto& ctx = engine::context();
-        auto& ev = ctx.get_cached<events>();
+        auto& play = ctx.get_cached<play_mode>();
 
-        if(ev.is_playing)
+        if(play.is_simulation_running())
         {
             auto& rsys = ctx.get_cached<rendering_system>(); 
             auto& ssys = ctx.get_cached<script_system>();

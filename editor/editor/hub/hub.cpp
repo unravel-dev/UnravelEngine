@@ -377,6 +377,7 @@ hub::hub(rtti::context& ctx)
     ev.on_frame_update.connect(sentinel_, this, &hub::on_frame_update);
     ev.on_frame_before_render.connect(sentinel_, this, &hub::on_frame_before_render);
     ev.on_frame_render.connect(sentinel_, this, &hub::on_frame_render);
+    ev.on_play_before_begin.connect(sentinel_, -998, this, &hub::on_play_before_begin);
     ev.on_play_begin.connect(sentinel_, -999, this, &hub::on_play_begin);
     ev.on_play_after_end.connect(sentinel_, -999, this, &hub::on_play_after_end);
 
@@ -491,6 +492,15 @@ void hub::on_frame_ui_render(rtti::context& ctx, delta_t dt)
 void hub::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
 {
     panels_.get_console_log_panel().on_recompile();
+}
+
+void hub::on_play_before_begin(rtti::context& ctx)
+{
+    (void)ctx;
+    if(auto* game_window = ImGui::FindWindowByName(GAME_VIEW))
+    {
+        ImGui::FocusWindow(game_window);
+    }
 }
 
 void hub::on_play_begin(rtti::context& ctx)

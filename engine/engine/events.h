@@ -41,10 +41,6 @@ struct events
     void toggle_pause(rtti::context& ctx);
     void set_paused(rtti::context& ctx, bool paused);
     void skip_next_frame(rtti::context& ctx);
-
-    bool is_playing{};
-    bool is_paused{};
-    uint64_t frames_playing{};
 };
 
 struct deploy

@@ -302,6 +302,18 @@ void draw_graphics_settings(rtti::context& ctx)
     ImGui::PopItemWidth();
 }
 
+void draw_splash_settings(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& settings = pm.get_settings();
+    ImGui::PushItemWidth(150.0f);
+    if(inspect(ctx, settings.splash).edit_finished)
+    {
+        pm.save_project_settings(ctx);
+    }
+    ImGui::PopItemWidth();
+}
+
 void draw_standalone_settings(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
@@ -1027,6 +1039,7 @@ void project_settings_panel::draw_ui(rtti::context& ctx)
                                                  {"Resolution", &draw_resolution_settings},
                                                  {"Assets", &draw_asset_settings},
                                                  {"Graphics", &draw_graphics_settings},
+                                                 {"Splash Screen", &draw_splash_settings},
                                                  {"Standalone", &draw_standalone_settings},
                                                  {"Layers", &draw_layers_settings},
                                                  {"Input", &draw_input_settings},

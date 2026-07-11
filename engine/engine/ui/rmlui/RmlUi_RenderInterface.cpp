@@ -527,6 +527,13 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
             {
                 const auto& tex = texture_manager_.get(internal_handle.idx);
                 auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
+                auto requires_premultiplication_uniform = get_uniform_handle(RmlUi_UniformId::TexRequiresPremultiplication);
+                if(bgfx::isValid(requires_premultiplication_uniform))
+                {
+                    const std::array<float, 4> requires_premultiplication_data = {
+                        tex.requires_premultiplication ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+                    gfx::set_uniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
+                }
 
                 if(tex.asset.is_valid())
                 {
@@ -629,6 +636,7 @@ auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
     // Set up compiled texture
     CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
     compiled_texture.asset = texture;
+    compiled_texture.requires_premultiplication = true;
 
     // Convert internal handle to RmlUi handle
     compiled_texture_handle internal_handle;
@@ -1459,7 +1467,7 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
 
                 submit_transform_uniform(translation);
 
-                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);BGFX_STATE_BLEND_ALPHA;
+                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
                 gfx::set_state(state);
 
                 gfx::submit(pass_id, render_program.native_handle());
@@ -1670,6 +1678,8 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
 
     // Creation shader uniforms
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Value)] = gfx::create_uniform("u_value", gfx::uniform_type::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::TexRequiresPremultiplication)] =
+        gfx::create_uniform("u_tex_requires_premultiplication", gfx::uniform_type::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Dimensions)] =
         gfx::create_uniform("u_dimensions", gfx::uniform_type::Vec4);
 

@@ -5,6 +5,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/loading_screen.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/profiler/profiler.h>
@@ -616,8 +617,8 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Script/System Update");
 
-    auto& ev = ctx.get_cached<events>();
-    if(!ev.is_playing)
+    auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_active())
     {
         check_for_recompile(ctx, dt, true);
     }
@@ -640,7 +641,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             {
                 comp.process_pending_deletions();
 
-                if(ev.is_playing && registry.all_of<active_component>(e))
+                if(play.is_simulation_running() && registry.all_of<active_component>(e))
                 {
                     comp.start();
                 }
@@ -654,7 +655,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             uint64_t frame_count{};
         };
 
-        if(ev.is_playing && !ev.is_paused)
+        if(play.is_simulation_running() && !play.is_paused())
         {
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();
@@ -686,7 +687,7 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Script/System Fixed Update");
 
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
 
     try
     {
@@ -710,7 +711,7 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
             float fixed_delta_time{};
         };
 
-        if(ev.is_playing && dt > delta_t::zero())
+        if(play.is_simulation_running() && dt > delta_t::zero())
         {
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();
@@ -737,7 +738,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
     {
         APP_SCOPE_PERF("Script/System Late Update");
 
-        auto& ev = ctx.get_cached<events>();
+        auto& play = ctx.get_cached<play_mode>();
     
         try
         {
@@ -750,7 +751,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(ev.is_playing && dt > delta_t::zero())
+            if(play.is_simulation_running() && dt > delta_t::zero())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");
                 // Use cached method to avoid repeated allocations
@@ -868,9 +869,9 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
                                          {
                                              return;
                                          }
+                                         auto& play = ctx.get_cached<play_mode>();
                                          auto& ev = ctx.get_cached<events>();
-
-                                         if(ev.is_playing)
+                                         if(play.is_simulation_running())
                                          {
                                              return;
                                          }

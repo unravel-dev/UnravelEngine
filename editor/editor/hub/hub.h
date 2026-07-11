@@ -24,6 +24,7 @@ private:
     void on_frame_before_render(rtti::context& ctx, delta_t dt);
     void on_frame_render(rtti::context& ctx, delta_t dt);
     void on_frame_ui_render(rtti::context& ctx, delta_t dt);
+    void on_play_before_begin(rtti::context& ctx);
     void on_play_begin(rtti::context& ctx);
     void on_play_after_end(rtti::context& ctx);
     void on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version);

@@ -1,6 +1,7 @@
 #include "physics_system.h"
 #include <engine/defaults/defaults.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -95,9 +96,9 @@ void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Physics/System Update");
 
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
 
-    if(ev.is_playing && !ev.is_paused)
+    if(play.is_simulation_running() && !play.is_paused())
     {
         backend_.on_frame_update(ctx, dt);
     }

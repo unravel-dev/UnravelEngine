@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <editor/system/project_manager.h>
 #include <engine/ecs/ecs.h>
-#include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/input/input.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -127,7 +127,7 @@ void game_panel::draw_ui(rtti::context& ctx)
     }
 
     auto& ec = ctx.get_cached<ecs>();
-    auto& ev = ctx.get_cached<events>();
+    auto& play = ctx.get_cached<play_mode>();
     auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
@@ -162,7 +162,7 @@ void game_panel::draw_ui(rtti::context& ctx)
                     ctx.get_cached<input_system>().manager.set_work_zone(work_zone);
                     ctx.get_cached<input_system>().manager.set_reference_size({tex_size_v.x, tex_size_v.y});
 
-                    if(ev.is_playing)
+                    if(play.is_active())
                     {
                         ImVec2 padding(2.0f, 2.0f);
                         ImGui::RenderFocusFrame(ImGui::GetItemRectMin() - padding, ImGui::GetItemRectMax() + padding);
@@ -203,8 +203,8 @@ void game_panel::draw_ui(rtti::context& ctx)
 auto game_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
 {
     auto& ctx = engine::context();
-    auto& ev = ctx.get_cached<events>();
-    bool is_playing = ev.is_playing;
+    auto& play = ctx.get_cached<play_mode>();
+    bool is_playing = play.is_active();
     ImVec2 padding(is_playing ? 1.0f : 0.0f, is_playing ? 1.0f : 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
     bool open = panel_base::begin_panel(name, flags);
