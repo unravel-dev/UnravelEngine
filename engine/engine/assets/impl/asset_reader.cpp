@@ -37,6 +37,46 @@ auto resolve_compiled_path(const std::string& key) -> fs::path
     return fs::absolute(fs::resolve_protocol(cache_key));
 }
 
+auto resolve_compiled_asset_path(const std::string& key, const std::string& source_extension) -> fs::path
+{
+    if(!fs::has_known_protocol(key))
+    {
+        return {};
+    }
+
+    std::string compiled_ext;
+    if(ex::is_format<gfx::shader>(source_extension))
+    {
+        compiled_ext = gfx::get_current_renderer_filename_extension();
+    }
+    else
+    {
+        bool known_source = false;
+        for(const auto& formats : ex::get_all_formats())
+        {
+            for(const auto& format : formats)
+            {
+                if(format == source_extension)
+                {
+                    known_source = true;
+                    break;
+                }
+            }
+            if(known_source)
+            {
+                break;
+            }
+        }
+
+        if(!known_source)
+        {
+            return {};
+        }
+    }
+
+    return fs::path(resolve_compiled_path(key).string() + compiled_ext);
+}
+
 auto resolve_path(const std::string& key) -> fs::path
 {
     return fs::absolute(fs::resolve_protocol(key));

@@ -35,6 +35,7 @@
 
 #include <engine/audio/audio_clip.h>
 #include <engine/engine.h>
+#include <engine/assets/impl/asset_reader.h>
 #include <engine/assets/impl/asset_writer.h>
 
 #include <filedialog/filedialog.h>
@@ -224,6 +225,82 @@ auto format_file_size(std::uintmax_t bytes) -> std::string
     }
     return fmt::format("{:.1f} {}", value, units[unit]);
 }
+
+namespace
+{
+
+struct asset_tooltip_style_scope
+{
+    static constexpr int k_style_var_count = 4;
+    static constexpr int k_style_color_count = 2;
+
+    asset_tooltip_style_scope()
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 5.0f));
+
+        ImVec4 window_bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+        window_bg.x = std::min(window_bg.x + 0.035f, 1.0f);
+        window_bg.y = std::min(window_bg.y + 0.035f, 1.0f);
+        window_bg.z = std::min(window_bg.z + 0.035f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, window_bg);
+
+        ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+        border.w = std::min(border.w * 1.35f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Border, border);
+    }
+
+    ~asset_tooltip_style_scope()
+    {
+        ImGui::PopStyleColor(k_style_color_count);
+        ImGui::PopStyleVar(k_style_var_count);
+    }
+
+    asset_tooltip_style_scope(const asset_tooltip_style_scope&) = delete;
+    asset_tooltip_style_scope& operator=(const asset_tooltip_style_scope&) = delete;
+};
+
+auto draw_asset_tooltip_thumbnail(const ImGui::ContentItem& citem, ImVec2 texture_size, float thumb_side) -> void
+{
+    constexpr float thumb_rounding = 8.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, thumb_rounding);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 52));
+    if(ImGui::BeginChild("asset_tooltip_thumb",
+                         ImVec2(thumb_side, thumb_side),
+                         ImGuiChildFlags_None,
+                         ImGuiWindowFlags_NoScrollbar))
+    {
+        ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.5f));
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+}
+
+auto draw_asset_tooltip_detail_row(const char* label,
+                                   float label_width,
+                                   float wrap_width,
+                                   const std::string& value) -> void
+{
+    if(value.empty())
+    {
+        return;
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::SameLine(label_width);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+    ImGui::TextUnformatted(value.c_str());
+    ImGui::PopTextWrapPos();
+}
+
+} // namespace
 
 // Near-white, theme-independent caption color shared by the card type label and the tooltip type label
 // so they stay consistent and never pick up an off-palette tint.
@@ -601,6 +678,8 @@ auto draw_item(const content_browser_item& item)
     {
         ImGui::SetNextWindowViewportToCurrent();
         ImGui::SetNextWindowPos(ImGui::GetIO().MousePos, ImGuiCond_None, ImVec2(0.5f, 1.0f));
+        asset_tooltip_style_scope tooltip_style;
+
         if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
         {
             constexpr float preview_scale = 2.75f;
@@ -619,19 +698,24 @@ auto draw_item(const content_browser_item& item)
         constexpr float thumb_side = 72.0f;
         constexpr float wrap_width = 360.0f;
         ImGui::SetNextWindowViewportToCurrent();
+        asset_tooltip_style_scope tooltip_style;
         if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
         {
-            // Header: thumbnail next to the name and type.
-            ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.0f));
+            // Header: rounded thumbnail well next to the name and type.
+            draw_asset_tooltip_thumbnail(citem, texture_size, thumb_side);
             ImGui::SameLine();
             ImGui::BeginGroup();
             {
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+                auto name_font = ImGui::GetFont(ImGui::Font::Bold);
+                ImGui::PushFont(name_font, name_font->LegacySize);
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width - thumb_side - ImGui::GetStyle().ItemSpacing.x);
                 ImGui::TextUnformatted(name.c_str());
                 ImGui::PopTextWrapPos();
+                ImGui::PopFont();
+
                 if(!file_type.empty())
                 {
-                    ImGui::PushFont(file_type_font, file_type_font->LegacySize);
+                    ImGui::PushFont(file_type_font, file_type_font->LegacySize * 0.9f);
                     ImGui::PushStyleColor(ImGuiCol_Text, content_caption_color);
                     ImGui::TextUnformatted(file_type.c_str());
                     ImGui::PopStyleColor();
@@ -640,27 +724,16 @@ auto draw_item(const content_browser_item& item)
             }
             ImGui::EndGroup();
 
-            // Separator tinted with the asset's type-accent color so the tooltip echoes the card's accent bar.
+            ImGui::Spacing();
             ImGui::PushStyleColor(ImGuiCol_Separator, asset_type_accent(file_type.c_str()));
             ImGui::Separator();
             ImGui::PopStyleColor();
+            ImGui::Spacing();
 
-            const float label_width = 70.0f;
-            auto detail_row = [&](const char* label, const std::string& value) -> void
-            {
-                if(value.empty())
-                {
-                    return;
-                }
-                ImGui::TextDisabled("%s", label);
-                ImGui::SameLine(label_width);
-                ImGui::PushTextWrapPos(label_width + wrap_width);
-                ImGui::TextUnformatted(value.c_str());
-                ImGui::PopTextWrapPos();
-            };
+            const float label_width = 130.0f;
 
-            detail_row("Name", filename);
-            detail_row("Path", item.entry.protocol_path);
+            draw_asset_tooltip_detail_row("Name", label_width, wrap_width, filename);
+            draw_asset_tooltip_detail_row("Path", label_width, wrap_width, item.entry.protocol_path);
 
             if(!is_directory)
             {
@@ -668,13 +741,31 @@ auto draw_item(const content_browser_item& item)
                 const auto bytes = fs::file_size(absolute_path, ec);
                 if(!ec)
                 {
-                    detail_row("Size", format_file_size(bytes));
+                    draw_asset_tooltip_detail_row("Disk Size", label_width, wrap_width, format_file_size(bytes));
+                }
+
+                const auto compiled_path =
+                    asset_reader::resolve_compiled_asset_path(item.entry.protocol_path, file_ext);
+                if(!compiled_path.empty())
+                {
+                    ec.clear();
+                    if(fs::exists(compiled_path, ec))
+                    {
+                        const auto compiled_bytes = fs::file_size(compiled_path, ec);
+                        if(!ec)
+                        {
+                            draw_asset_tooltip_detail_row("Compiled Disk Size",
+                                                          label_width,
+                                                          wrap_width,
+                                                          format_file_size(compiled_bytes));
+                        }
+                    }
                 }
             }
 
             if(!is_directory)
             {
-                detail_row("UID", description);
+                draw_asset_tooltip_detail_row("UID", label_width, wrap_width, description);
             }
             ImGui::EndTooltip();
         }

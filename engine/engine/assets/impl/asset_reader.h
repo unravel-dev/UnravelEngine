@@ -32,6 +32,34 @@ namespace unravel::asset_reader
 auto resolve_compiled_key(const std::string& key) -> std::string;
 auto resolve_compiled_path(const std::string& key) -> fs::path;
 
+namespace detail
+{
+template<typename T>
+inline auto compiled_extension() -> std::string
+{
+    return {};
+}
+
+template<>
+inline auto compiled_extension<gfx::shader>() -> std::string
+{
+    return gfx::get_current_renderer_filename_extension();
+}
+} // namespace detail
+
+/// Resolves the on-disk path of the cooked artifact for `key`, appending any
+/// type-specific compiled suffix (e.g. the active renderer extension for shaders).
+template<typename T>
+inline auto resolve_compiled_path(const std::string& key) -> fs::path
+{
+    return fs::path(resolve_compiled_path(key).string() + detail::compiled_extension<T>());
+}
+
+/// Resolves the cooked artifact path for a source asset identified by `key`
+/// and `source_extension`. Returns an empty path when the extension is not a
+/// known importable source format.
+auto resolve_compiled_asset_path(const std::string& key, const std::string& source_extension) -> fs::path;
+
 template<typename T>
 auto load_from_file(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key,
                     load_mode mode = load_mode::immediate) -> bool;
