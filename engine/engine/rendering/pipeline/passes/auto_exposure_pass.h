@@ -22,6 +22,11 @@ enum class exposure_metering_mode : std::uint8_t
 class auto_exposure_pass
 {
 public:
+    auto_exposure_pass() = default;
+    ~auto_exposure_pass()
+    {
+        shutdown();
+    }
     struct settings
     {
         /// Lower clamp for metered scene brightness in EV100. A LOWER value lets the
@@ -61,7 +66,7 @@ public:
     };
 
     auto init(rtti::context& ctx) -> bool;
-
+    auto shutdown() -> int32_t;
     /// Runs histogram + temporal average to produce a 1x1 adapted exposure texture.
     void run(gfx::render_view& rview, const run_params& params);
 

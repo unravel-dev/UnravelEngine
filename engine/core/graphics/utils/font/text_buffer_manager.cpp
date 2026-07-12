@@ -1155,7 +1155,8 @@ void text_buffer_manager::submit_text_buffer(text_buffer_handle handle,
                 ibh = bgfx::createIndexBuffer(bgfx::copy(bc.buffer->get_index_buffer(), index_size));
 
                 vbh = bgfx::createVertexBuffer(bgfx::copy(bc.buffer->get_vertex_buffer(), vertex_size), vertex_layout_);
-
+                bgfx::setName(vbh, "Text Buffer Vertex Buffer");
+                bgfx::setName(ibh, "Text Buffer Index Buffer");
                 bc.vertex_buffer_handle_idx = vbh.idx;
                 bc.index_buffer_handle_idx = ibh.idx;
             }

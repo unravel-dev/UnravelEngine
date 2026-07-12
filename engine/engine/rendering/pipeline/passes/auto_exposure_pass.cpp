@@ -34,6 +34,18 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
            bgfx::isValid(histogram_buffer_);
 }
 
+auto auto_exposure_pass::shutdown() -> int32_t
+{
+    if(bgfx::isValid(histogram_buffer_))
+    {
+        bgfx::destroy(histogram_buffer_);
+        histogram_buffer_ = BGFX_INVALID_HANDLE;
+    }
+
+
+    return 0;
+}
+
 void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
 {
     auto& exposure_tex = rview.tex_get_or_emplace("AUTO_EXPOSURE");

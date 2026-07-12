@@ -339,8 +339,8 @@ void imgui_interface::draw_loading_overlay(const std::string& stage,
 
     // Centered card
     constexpr float card_width = 480.0f;
-    float card_x = (viewport->WorkSize.x - card_width) * 0.5f;
-    float card_y = viewport->WorkSize.y * 0.38f;
+    float card_x = viewport->WorkPos.x + (viewport->WorkSize.x - card_width) * 0.5f;
+    float card_y = viewport->WorkPos.y + viewport->WorkSize.y * 0.38f;
     ImGui::SetNextWindowPos(ImVec2(card_x, card_y));
 
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);

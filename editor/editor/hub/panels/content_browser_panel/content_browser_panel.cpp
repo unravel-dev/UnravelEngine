@@ -614,68 +614,70 @@ auto draw_item(const content_browser_item& item)
             ImGui::EndTooltip();
         }
     }
-    else if(!item.is_loading && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip) && ImGui::BeginTooltip())
+    else if(!item.is_loading && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
     {
         constexpr float thumb_side = 72.0f;
         constexpr float wrap_width = 360.0f;
-
-        // Header: thumbnail next to the name and type.
-        ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.0f));
-        ImGui::SameLine();
-        ImGui::BeginGroup();
+        ImGui::SetNextWindowViewportToCurrent();
+        if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
         {
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
-            ImGui::TextUnformatted(name.c_str());
-            ImGui::PopTextWrapPos();
-            if(!file_type.empty())
+            // Header: thumbnail next to the name and type.
+            ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.0f));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
             {
-                ImGui::PushFont(file_type_font, file_type_font->LegacySize);
-                ImGui::PushStyleColor(ImGuiCol_Text, content_caption_color);
-                ImGui::TextUnformatted(file_type.c_str());
-                ImGui::PopStyleColor();
-                ImGui::PopFont();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
+                ImGui::TextUnformatted(name.c_str());
+                ImGui::PopTextWrapPos();
+                if(!file_type.empty())
+                {
+                    ImGui::PushFont(file_type_font, file_type_font->LegacySize);
+                    ImGui::PushStyleColor(ImGuiCol_Text, content_caption_color);
+                    ImGui::TextUnformatted(file_type.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+                }
             }
-        }
-        ImGui::EndGroup();
+            ImGui::EndGroup();
 
-        // Separator tinted with the asset's type-accent color so the tooltip echoes the card's accent bar.
-        ImGui::PushStyleColor(ImGuiCol_Separator, asset_type_accent(file_type.c_str()));
-        ImGui::Separator();
-        ImGui::PopStyleColor();
+            // Separator tinted with the asset's type-accent color so the tooltip echoes the card's accent bar.
+            ImGui::PushStyleColor(ImGuiCol_Separator, asset_type_accent(file_type.c_str()));
+            ImGui::Separator();
+            ImGui::PopStyleColor();
 
-        const float label_width = 70.0f;
-        auto detail_row = [&](const char* label, const std::string& value) -> void
-        {
-            if(value.empty())
+            const float label_width = 70.0f;
+            auto detail_row = [&](const char* label, const std::string& value) -> void
             {
-                return;
-            }
-            ImGui::TextDisabled("%s", label);
-            ImGui::SameLine(label_width);
-            ImGui::PushTextWrapPos(label_width + wrap_width);
-            ImGui::TextUnformatted(value.c_str());
-            ImGui::PopTextWrapPos();
-        };
+                if(value.empty())
+                {
+                    return;
+                }
+                ImGui::TextDisabled("%s", label);
+                ImGui::SameLine(label_width);
+                ImGui::PushTextWrapPos(label_width + wrap_width);
+                ImGui::TextUnformatted(value.c_str());
+                ImGui::PopTextWrapPos();
+            };
 
-        detail_row("Name", filename);
-        detail_row("Path", item.entry.protocol_path);
+            detail_row("Name", filename);
+            detail_row("Path", item.entry.protocol_path);
 
-        if(!is_directory)
-        {
-            fs::error_code ec;
-            const auto bytes = fs::file_size(absolute_path, ec);
-            if(!ec)
+            if(!is_directory)
             {
-                detail_row("Size", format_file_size(bytes));
+                fs::error_code ec;
+                const auto bytes = fs::file_size(absolute_path, ec);
+                if(!ec)
+                {
+                    detail_row("Size", format_file_size(bytes));
+                }
             }
-        }
 
-        if(!is_directory)
-        {
-            detail_row("UID", description);
+            if(!is_directory)
+            {
+                detail_row("UID", description);
+            }
+            ImGui::EndTooltip();
         }
-
-        ImGui::EndTooltip();
     }
 
     auto input_buff = ImGui::CreateInputTextBuffer(name);
