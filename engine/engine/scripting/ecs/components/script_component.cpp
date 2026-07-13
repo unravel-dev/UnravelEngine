@@ -1,6 +1,5 @@
 #include "script_component.h"
-#include <monopp/mono_property.h>
-#include <monopp/mono_property_invoker.h>
+#include <dotnetpp/dotnetpp.h>
 
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
@@ -14,9 +13,9 @@ namespace
 {
 
 
-auto to_managed_contact_point(const manifold_point& manifold, bool use_b = false) -> mono::managed_interface::manifold_point
+auto to_managed_contact_point(const manifold_point& manifold, bool use_b = false) -> dotnetpp_backend::managed_interface::manifold_point
 {
-    mono::managed_interface::manifold_point result;
+    dotnetpp_backend::managed_interface::manifold_point result;
     if(use_b)
     {
         result.point = {manifold.b.x, manifold.b.y, manifold.b.z};
@@ -34,9 +33,9 @@ auto to_managed_contact_point(const manifold_point& manifold, bool use_b = false
     return result;
 }
 
-auto to_managed_contact_points(const std::vector<manifold_point>& manifolds, bool use_b = false) -> std::vector<mono::managed_interface::manifold_point>
+auto to_managed_contact_points(const std::vector<manifold_point>& manifolds, bool use_b = false) -> std::vector<dotnetpp_backend::managed_interface::manifold_point>
 {
-    std::vector<mono::managed_interface::manifold_point> result;
+    std::vector<dotnetpp_backend::managed_interface::manifold_point> result;
     result.reserve(manifolds.size());
     for(const auto& manifold : manifolds)
     {
@@ -174,10 +173,10 @@ void script_component::enable(script_object& script_obj, bool check_order)
 
     try
     {
-        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_enable");
+        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_enable");
         method(obj);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
@@ -207,10 +206,10 @@ void script_component::disable(script_object& script_obj, bool check_order)
     }
     try
     {
-        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_disable");
+        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_disable");
         method(obj);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
@@ -233,10 +232,10 @@ void script_component::create(script_object& script_obj)
 
     try
     {
-        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_create");
+        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_create");
         method(obj);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
@@ -256,10 +255,10 @@ void script_component::start(script_object& script_obj)
     }
     try
     {
-        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_start");
+        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_start");
         method(obj);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
@@ -275,16 +274,16 @@ void script_component::destroy(script_object& script_obj)
     }
     try
     {
-        auto method = mono::make_method_invoker<void()>(obj, "internal_n2m_on_destroy");
+        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_destroy");
         method(obj);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
 }
 
-void script_component::set_entity(const mono::mono_object& obj, entt::handle e)
+void script_component::set_entity(const dotnet::object& obj, entt::handle e)
 {
     if(!obj.valid())
     {
@@ -292,70 +291,70 @@ void script_component::set_entity(const mono::mono_object& obj, entt::handle e)
     }
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_set_entity");
+        auto method = dotnet::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_set_entity");
         method(obj, e.entity());
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
 }
 
-void script_component::on_sensor_enter(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds)
+void script_component::on_sensor_enter(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_enter");
+        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_enter");
         method(obj, other.entity(), manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
 }
 
-void script_component::on_sensor_exit(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds)
+void script_component::on_sensor_exit(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_exit");
+        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_exit");
         method(obj, other.entity(), manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
 }
 
-void script_component::on_collision_enter(const mono::mono_object& obj,
+void script_component::on_collision_enter(const dotnet::object& obj,
                                           entt::handle other,
-                                          const std::vector<mono::managed_interface::manifold_point>& manifolds)
+                                          const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(
+        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
             obj,
             "internal_n2m_on_collision_enter");
         method(obj, other.entity(), manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
 }
 
-void script_component::on_collision_exit(const mono::mono_object& obj,
+void script_component::on_collision_exit(const dotnet::object& obj,
                                          entt::handle other,
-                                         const std::vector<mono::managed_interface::manifold_point>& manifolds)
+                                         const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
 {
     try
     {
-        auto method = mono::make_method_invoker<void(entt::entity, const std::vector<mono::managed_interface::manifold_point>&)>(
+        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
             obj,
             "internal_n2m_on_collision_exit");
         method(obj, other.entity(), manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         script_system::log_exception(e);
     }
@@ -453,13 +452,13 @@ void script_component::process_pending_actions_create(script_object script_obj)
 }
 
 
-auto script_component::add_script_component(const mono::mono_type& type) -> script_object
+auto script_component::add_script_component(const dotnet::type& type) -> script_object
 {
     auto obj = type.new_instance();
     return add_script_component(obj);
 }
 
-auto script_component::add_script_component(const mono::mono_object& obj) -> script_object
+auto script_component::add_script_component(const dotnet::object& obj) -> script_object
 {
     script_object script_obj(obj);
     return add_script_component(script_obj);
@@ -512,7 +511,7 @@ void script_component::add_missing_script_components(const script_components_t& 
     }
 }
 
-auto script_component::add_native_component(const mono::mono_type& type) -> script_object
+auto script_component::add_native_component(const dotnet::type& type) -> script_object
 {
     auto obj = type.new_instance();
     auto& script_obj = native_components_.emplace_back(obj);
@@ -522,9 +521,9 @@ auto script_component::add_native_component(const mono::mono_type& type) -> scri
     return script_obj;
 }
 
-auto script_component::get_script_components(const mono::mono_type& type) -> std::vector<mono::mono_object>
+auto script_component::get_script_components(const dotnet::type& type) -> std::vector<dotnet::object>
 {
-    std::vector<mono::mono_object> result;
+    std::vector<dotnet::object> result;
     for(const auto& component : script_components_)
     {
         auto obj = component.pinned->get_object();
@@ -544,7 +543,7 @@ auto script_component::get_script_components(const mono::mono_type& type) -> std
     return result;
 }
 
-auto script_component::get_script_component(const mono::mono_type& type) -> script_object
+auto script_component::get_script_component(const dotnet::type& type) -> script_object
 {
     auto it = std::find_if(std::begin(script_components_),
                            std::end(script_components_),
@@ -564,7 +563,7 @@ auto script_component::get_script_component(const mono::mono_type& type) -> scri
     return {};
 }
 
-auto script_component::get_native_component(const mono::mono_type& type) -> script_object
+auto script_component::get_native_component(const dotnet::type& type) -> script_object
 {
     auto it = std::find_if(std::begin(native_components_),
                            std::end(native_components_),
@@ -584,7 +583,7 @@ auto script_component::get_native_component(const mono::mono_type& type) -> scri
     return {};
 }
 
-auto script_component::remove_script_component(const mono::mono_object& obj) -> bool
+auto script_component::remove_script_component(const dotnet::object& obj) -> bool
 {
     auto checker = [&](const auto& rhs)
     {
@@ -620,7 +619,7 @@ auto script_component::remove_script_component(const mono::mono_object& obj) -> 
     return false;
 }
 
-auto script_component::remove_script_component(const mono::mono_type& type) -> bool
+auto script_component::remove_script_component(const dotnet::type& type) -> bool
 {
     auto checker = [&](const auto& rhs)
     {
@@ -658,7 +657,7 @@ auto script_component::remove_script_component(const mono::mono_type& type) -> b
     return false;
 }
 
-auto script_component::remove_native_component(const mono::mono_object& obj) -> bool
+auto script_component::remove_native_component(const dotnet::object& obj) -> bool
 {
     auto it = std::find_if(std::begin(native_components_),
                            std::end(native_components_),
@@ -680,7 +679,7 @@ auto script_component::remove_native_component(const mono::mono_object& obj) -> 
     return false;
 }
 
-auto script_component::remove_native_component(const mono::mono_type& type) -> bool
+auto script_component::remove_native_component(const dotnet::type& type) -> bool
 {
     auto it = std::find_if(std::begin(native_components_),
                            std::end(native_components_),
@@ -737,15 +736,15 @@ auto script_component::get_script_source_location(const script_object& obj) cons
         {
             if(attr.get_type().get_fullname() == "Unravel.Core.ScriptSourceFileAttribute")
             {
-                auto invoker = mono::make_property_invoker<std::string>(attr.get_type(), "Path");
+                auto invoker = dotnet::make_property_invoker<std::string>(attr.get_type(), "Path");
                 return invoker.get_value(attr);
             }
         }
         auto prop = type.get_property("SourceFilePath");
-        auto invoker = mono::make_property_invoker<std::string>(prop);
+        auto invoker = dotnet::make_property_invoker<std::string>(prop);
         return invoker.get_value(object);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         return {};
     }

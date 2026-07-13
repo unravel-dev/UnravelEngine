@@ -1308,8 +1308,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                     {
                         APPLOG_INFO("Deploying Mono...");
 
-                        auto paths = script_system::find_mono(ctx);
-                        fs::path assembly_path = mono::get_core_assembly_path();
+                        auto paths = script_system::find_dotnet_paths(ctx);
+                        fs::path assembly_path = dotnet::get_core_assembly_path();
                         fs::path assembly_dir = assembly_path.parent_path();
                         fs::path lib_version = assembly_dir.filename();
 
@@ -1326,7 +1326,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Creating directories {}", cached_data.generic_string());
                             fs::create_directories(cached_data, ec);
 
-                            auto mono_libraries = mono::get_common_library_names_for_deploy();
+                            auto mono_libraries = dotnet::get_common_library_names_for_deploy();
 
                             fs::path lib_dir = assembly_dir.parent_path().parent_path();
                             for(const auto& path : mono_libraries)

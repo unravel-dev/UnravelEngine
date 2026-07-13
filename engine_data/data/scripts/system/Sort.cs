@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
 
+// Pooled arrays are keyed by (and contain) script types, which would pin an
+// unloading script domain. Fields are non-readonly, so the default cleanup
+// (reset to null) applies; pools repopulate lazily on next use.
+[Unravel.Core.AutoStaticsCleanup]
 public static class StableSortExtensions
 {
     // Thread-local pools to avoid allocations across frames

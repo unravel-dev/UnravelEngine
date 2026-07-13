@@ -7,7 +7,7 @@
 
 #include <engine/scripting/script.h>
 #include <engine/scripting/ecs/systems/script_interop.h>
-#include <monort/monort.h>
+#include <dotnetpp/dotnetpp.h>
 #include <math/math.h>
 
 namespace unravel
@@ -33,9 +33,9 @@ public:
     struct script_object
     {
         script_object() = default;
-        script_object(const mono::mono_object& obj)
+        script_object(const dotnet::object& obj)
         {
-            pinned = mono::make_object_pinned(obj);
+            pinned = dotnet::make_object_pinned(obj);
             state = std::make_shared<script_component::script_object_state>();
         }
         
@@ -94,7 +94,7 @@ public:
             return state->active == 0;
         }
 
-        mono::mono_object_pinned_ptr pinned;
+        dotnet::object_pinned_ptr pinned;
         std::shared_ptr<script_object_state> state;
     };
 
@@ -120,23 +120,23 @@ public:
     void process_pending_actions(script_object script_obj);
     void process_pending_actions_create(script_object script_obj);
 
-    auto add_script_component(const mono::mono_type& type) -> script_object;
-    auto add_script_component(const mono::mono_object& obj) -> script_object;
+    auto add_script_component(const dotnet::type& type) -> script_object;
+    auto add_script_component(const dotnet::object& obj) -> script_object;
     auto add_script_component(const script_object& obj, bool process_callbacks = true) -> script_object;
     void add_script_components(const script_components_t& comps);
     void add_missing_script_components(const script_components_t& comps);
 
-    auto add_native_component(const mono::mono_type& type) -> script_object;
+    auto add_native_component(const dotnet::type& type) -> script_object;
 
-    auto remove_script_component(const mono::mono_object& obj) -> bool;
-    auto remove_script_component(const mono::mono_type& type) -> bool;
+    auto remove_script_component(const dotnet::object& obj) -> bool;
+    auto remove_script_component(const dotnet::type& type) -> bool;
 
-    auto remove_native_component(const mono::mono_object& obj) -> bool;
-    auto remove_native_component(const mono::mono_type& type) -> bool;
+    auto remove_native_component(const dotnet::object& obj) -> bool;
+    auto remove_native_component(const dotnet::type& type) -> bool;
 
-    auto get_script_components(const mono::mono_type& type) -> std::vector<mono::mono_object>;
-    auto get_script_component(const mono::mono_type& type) -> script_object;
-    auto get_native_component(const mono::mono_type& type) -> script_object;
+    auto get_script_components(const dotnet::type& type) -> std::vector<dotnet::object>;
+    auto get_script_component(const dotnet::type& type) -> script_object;
+    auto get_native_component(const dotnet::type& type) -> script_object;
 
     auto get_script_components() const -> const script_components_t&;
     auto has_script_components() const -> bool;
@@ -162,16 +162,16 @@ private:
     void create(script_object& script_obj);
     void start(script_object& script_obj);
     void destroy(script_object& script_obj);
-    void set_entity(const mono::mono_object& obj, entt::handle e);
-    void on_sensor_enter(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds);
-    void on_sensor_exit(const mono::mono_object& obj, entt::handle other, const std::vector<mono::managed_interface::manifold_point>& manifolds);
+    void set_entity(const dotnet::object& obj, entt::handle e);
+    void on_sensor_enter(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
+    void on_sensor_exit(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
 
-    void on_collision_enter(const mono::mono_object& obj,
+    void on_collision_enter(const dotnet::object& obj,
                             entt::handle other, 
-                            const std::vector<mono::managed_interface::manifold_point>& manifolds);
-    void on_collision_exit(const mono::mono_object& obj,
+                            const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
+    void on_collision_exit(const dotnet::object& obj,
                            entt::handle other,
-                           const std::vector<mono::managed_interface::manifold_point>& manifolds);
+                           const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
 
     template<typename F>
     auto safe_foreach(script_components_t& components, F&& f)
