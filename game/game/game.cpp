@@ -148,7 +148,7 @@ auto game::init_window(rtti::context& ctx) -> bool
 {
     auto& s = ctx.get<settings>();
 
-    auto title = fmt::format("Ace Game <{}>", gfx::get_renderer_name(gfx::get_renderer_type()));
+    auto title = fmt::format("Unravel Game <{}>", gfx::get_renderer_name(gfx::get_renderer_type()));
 
     if(!s.app.product.empty())
     {

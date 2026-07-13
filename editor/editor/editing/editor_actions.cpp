@@ -323,7 +323,9 @@ void generate_workspace_file(const std::string& file_path,
     json_stream << ",\n";
     json_stream << "    \"extensions\": {\n";
     json_stream << "        \"recommendations\": [\n";
+#if DOTNETPP_BACKEND_MONO
     json_stream << "             \"ms-vscode.mono-debug\",\n";
+#endif
     json_stream << "             \"ms-dotnettools.csharp\"\n";
     json_stream << "        ]\n";
     json_stream << "    }\n";
@@ -333,6 +335,7 @@ void generate_workspace_file(const std::string& file_path,
     json_stream << "    \"launch\": {\n";
     json_stream << "        \"version\": \"0.2.0\",\n";
     json_stream << "        \"configurations\": [\n";
+#if DOTNETPP_BACKEND_MONO
     json_stream << "            {\n";
     json_stream << "                \"name\": \"Attach to Mono\",\n";
     json_stream << "                \"request\": \"attach\",\n";
@@ -340,6 +343,14 @@ void generate_workspace_file(const std::string& file_path,
     json_stream << "                \"address\": \"" << settings.debugger.ip << "\",\n";
     json_stream << "                \"port\": " << settings.debugger.port << "\n";
     json_stream << "            }\n";
+#else
+    (void)settings;
+    json_stream << "            {\n";
+    json_stream << "                \"name\": \".NET Core Attach\",\n";
+    json_stream << "                \"type\": \"coreclr\",\n";
+    json_stream << "                \"request\": \"attach\"\n";
+    json_stream << "            }\n";
+#endif
     json_stream << "        ]\n";
     json_stream << "    }\n";
 
@@ -363,16 +374,22 @@ void generate_workspace_file(const std::string& file_path,
  * @param external_dll_path Path to the external DLL to reference.
  * @param output_directory Directory where the .csproj file will be generated.
  * @param project_name Name of the project and the .csproj file (default: "MyLibrary").
- * @param dotnet_sdk_version Target .NET SDK version (default: "7.0").
+ * @param dotnet_sdk_version Target .NET version as major.minor. Empty picks
+ *        the runtime-configured version (dotnet::get_dotnet_version).
  *
  * @throws std::runtime_error if the .csproj file cannot be created.
  */
+#if !DOTNETPP_BACKEND_MONO
 void generate_csproj(const fs::path& source_directory,
                      const std::vector<fs::path>& external_dll_paths,
                      const fs::path& output_directory,
                      const std::string& project_name = "MyLibrary",
-                     const std::string& dotnet_sdk_version = "7.0")
+                     std::string dotnet_sdk_version = {})
 {
+    if(dotnet_sdk_version.empty())
+    {
+        dotnet_sdk_version = dotnet::get_dotnet_version();
+    }
     // Ensure the output directory exists
     try
     {
@@ -442,15 +459,26 @@ void generate_csproj(const fs::path& source_directory,
 
         external_dll_references += "    <Reference Include=\"" + dll_name + "\">\n";
         external_dll_references += "      <HintPath>" + dll_absolute_path_str + "</HintPath>\n";
+        external_dll_references += "      <Private>False</Private>\n";
         external_dll_references += "    </Reference>\n";
     }
 
-    // Build the .csproj content
+    // Build the .csproj content. This project exists for IDE tooling
+    // (intellisense/analyzers); the engine compiles scripts itself with csc.
+    // Keep build outputs in temp/ so restores don't pollute the project dir.
     std::string csproj_content;
     csproj_content += "<Project Sdk=\"Microsoft.NET.Sdk\">\n";
     csproj_content += "  <PropertyGroup>\n";
     csproj_content += "    <TargetFramework>net" + dotnet_sdk_version + "</TargetFramework>\n";
     csproj_content += "    <OutputType>Library</OutputType>\n";
+    csproj_content += "    <AssemblyName>" + project_name + "</AssemblyName>\n";
+    csproj_content += "    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n";
+    csproj_content += "    <ImplicitUsings>disable</ImplicitUsings>\n";
+    csproj_content += "    <Nullable>disable</Nullable>\n";
+    csproj_content += "    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>\n";
+    csproj_content += "    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>\n";
+    csproj_content += "    <BaseOutputPath>temp/bin</BaseOutputPath>\n";
+    csproj_content += "    <BaseIntermediateOutputPath>temp/obj</BaseIntermediateOutputPath>\n";
     csproj_content +=
         "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n"; // Disable default .cs file inclusion
     csproj_content += "  </PropertyGroup>\n";
@@ -477,7 +505,7 @@ void generate_csproj(const fs::path& source_directory,
 
     APPLOG_TRACE("Generated {}", csproj_path.string());
 }
-
+#else
 void generate_csproj_legacy(const fs::path& source_directory,
                             const std::vector<fs::path>& external_dll_paths,
                             const fs::path& output_directory,
@@ -631,6 +659,7 @@ void generate_csproj_legacy(const fs::path& source_directory,
 
     APPLOG_TRACE("Generated {}", csproj_path.string());
 }
+#endif
 
 auto trim_line = [](std::string& line)
 {
@@ -756,6 +785,90 @@ auto get_dependencies(const fs::path& file) -> std::vector<std::string>
     APPLOG_TRACE("Dependencies: \n{}", result.out_output);
     return parse_dependencies(result.out_output, parent_path);
 }
+
+#if !DOTNETPP_BACKEND_MONO
+/// Parse a leading dotted version from a directory name (e.g. "8.0.4").
+auto parse_version_name(const std::string& name) -> std::vector<int>
+{
+    std::vector<int> parts;
+    std::string current;
+    for(char c : name)
+    {
+        if(c >= '0' && c <= '9')
+        {
+            current += c;
+        }
+        else if(c == '.')
+        {
+            parts.push_back(current.empty() ? 0 : std::atoi(current.c_str()));
+            current.clear();
+        }
+        else
+        {
+            break;
+        }
+    }
+    if(!current.empty())
+    {
+        parts.push_back(std::atoi(current.c_str()));
+    }
+    return parts;
+}
+
+/// Pick the subdirectory of base with the highest dotted version name
+/// (e.g. host/fxr/8.0.4 vs host/fxr/9.0.0). When preferred_major >= 0,
+/// versions with that major are preferred; other versions are only a
+/// fallback. Returns empty on no match.
+auto pick_highest_version_dir(const fs::path& base, int preferred_major = -1) -> fs::path
+{
+    fs::path best;
+    std::vector<int> best_version;
+    bool best_matches_major = false;
+
+    fs::error_code ec;
+    for(const auto& entry : fs::directory_iterator(base, ec))
+    {
+        if(!entry.is_directory(ec))
+        {
+            continue;
+        }
+        auto version = parse_version_name(entry.path().filename().string());
+        if(version.empty())
+        {
+            continue;
+        }
+        bool matches_major = preferred_major >= 0 && version[0] == preferred_major;
+        // A major-matching candidate always beats a non-matching one;
+        // within the same tier, the higher version wins.
+        bool better = best.empty();
+        if(!better && matches_major != best_matches_major)
+        {
+            better = matches_major;
+        }
+        else if(!better)
+        {
+            better = std::lexicographical_compare(best_version.begin(),
+                                                  best_version.end(),
+                                                  version.begin(),
+                                                  version.end());
+        }
+        if(better)
+        {
+            best = entry.path();
+            best_version = version;
+            best_matches_major = matches_major;
+        }
+    }
+    return best;
+}
+
+/// Major component of a "major.minor" version string, or -1 on parse failure.
+auto version_major(const std::string& version) -> int
+{
+    int major = std::atoi(version.c_str());
+    return major > 0 ? major : -1;
+}
+#endif
 
 auto save_scene_impl(rtti::context& ctx, const fs::path& path) -> bool
 {
@@ -1299,6 +1412,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         jobs_seq.emplace_back(job);
     }
 
+#if DOTNETPP_BACKEND_MONO
     {
         auto job =
             th.pool
@@ -1380,6 +1494,92 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         jobs["Deploying Mono..."] = job;
         jobs_seq.emplace_back(job);
     }
+#else
+    {
+        auto job =
+            th.pool
+                ->schedule(
+                    "Deploying .NET",
+                    [params]()
+                    {
+                        APPLOG_INFO("Deploying .NET...");
+
+                        fs::error_code ec;
+
+                        // The managed bridge payload (Clrpp.Managed.dll + runtimeconfig +
+                        // optional NuGet deps) is self-contained in one folder. Ship it
+                        // next to the bundled dotnet root; the game passes this location
+                        // to the runtime at init (compiler_paths::assembly_dir).
+                        {
+                            const std::string runtime_dir = dotnet::managed_runtime_dir();
+                            fs::path src = fs::resolve_protocol("binary:/" + runtime_dir);
+                            fs::path dst = params.deploy_location / "data" / "engine" / runtime_dir;
+
+                            APPLOG_TRACE("Clearing {}", dst.generic_string());
+                            fs::remove_all(dst, ec);
+                            fs::create_directories(dst, ec);
+
+                            APPLOG_TRACE("Copying {} -> {}", src.generic_string(), dst.generic_string());
+                            fs::copy(src, dst, fs::copy_options::recursive, ec);
+                        }
+
+                        // Bundle a pruned dotnet root (hostfxr + shared framework) so the
+                        // deployed game runs without a machine-wide .NET install. The game
+                        // passes this folder to the runtime as the dotnet root override.
+                        {
+                            fs::path dotnet_root = dotnet::get_core_assembly_path();
+
+                            // Prefer the runtime major we target (see
+                            // dotnet::get_dotnet_version); fall back to the
+                            // newest installed one.
+                            int preferred_major = version_major(dotnet::get_dotnet_version());
+
+                            fs::path fxr_src =
+                                pick_highest_version_dir(dotnet_root / "host" / "fxr", preferred_major);
+                            fs::path shared_src =
+                                pick_highest_version_dir(dotnet_root / "shared" / "Microsoft.NETCore.App",
+                                                         preferred_major);
+
+                            if(fxr_src.empty() || shared_src.empty())
+                            {
+                                APPLOG_WARNING("Deploying .NET - could not locate hostfxr/shared framework "
+                                               "under {}; the deployed game will require an installed .NET "
+                                               "runtime",
+                                               dotnet_root.generic_string());
+                            }
+                            else
+                            {
+                                fs::path runtime_dst = params.deploy_location / "data" / "engine" / "dotnet";
+
+                                APPLOG_TRACE("Clearing {}", runtime_dst.generic_string());
+                                fs::remove_all(runtime_dst, ec);
+
+                                fs::path fxr_dst = runtime_dst / "host" / "fxr" / fxr_src.filename();
+                                fs::path shared_dst =
+                                    runtime_dst / "shared" / "Microsoft.NETCore.App" / shared_src.filename();
+
+                                fs::create_directories(fxr_dst, ec);
+                                fs::create_directories(shared_dst, ec);
+
+                                APPLOG_TRACE("Copying {} -> {}",
+                                             fxr_src.generic_string(),
+                                             fxr_dst.generic_string());
+                                fs::copy(fxr_src, fxr_dst, fs::copy_options::recursive, ec);
+
+                                APPLOG_TRACE("Copying {} -> {}",
+                                             shared_src.generic_string(),
+                                             shared_dst.generic_string());
+                                fs::copy(shared_src, shared_dst, fs::copy_options::recursive, ec);
+                            }
+                        }
+
+                        APPLOG_INFO("Deploying .NET - Done");
+                    })
+                .share();
+        jobs["Deploying .NET..."] = job;
+        jobs_seq.emplace_back(job);
+    }
+#endif
 
     tpp::when_all(std::begin(jobs_seq), std::end(jobs_seq))
         .then(tpp::this_thread::get_id(),
@@ -1430,7 +1630,11 @@ void editor_actions::generate_script_workspace()
 
     auto output_path = fs::resolve_protocol("app:/");
 
+#if DOTNETPP_BACKEND_MONO
     generate_csproj_legacy(source_path, {engine_dep}, output_path, project_name);
+#else
+    generate_csproj(source_path, {engine_dep}, output_path, project_name);
+#endif
 }
 
 void editor_actions::open_workspace_on_file(const fs::path& file, int line)

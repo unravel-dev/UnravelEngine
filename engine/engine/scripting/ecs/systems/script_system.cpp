@@ -149,9 +149,31 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
 
     if(is_deploy_mode)
     {
+#if DOTNETPP_BACKEND_MONO
         auto mono_dir = fs::resolve_protocol("engine:/mono");
         result.assembly_dir = fs::absolute(mono_dir / "lib").string();
         result.config_dir = fs::absolute(mono_dir / "etc").string();
+#else
+        fs::error_code ec;
+
+        // The managed bridge is shipped next to the bundled dotnet root; pass
+        // its location explicitly. If missing, the loader falls back to
+        // probing <exe_dir>/<bridge dir> and the working directory.
+        auto bridge_dir = fs::resolve_protocol("engine:/" + std::string(dotnet::managed_runtime_dir()));
+        if(fs::exists(bridge_dir, ec))
+        {
+            result.assembly_dir = fs::absolute(bridge_dir).string();
+        }
+
+        // Self-contained deploys bundle a pruned dotnet root (hostfxr + shared
+        // framework); pass it as the dotnet root override when present,
+        // otherwise fall back to a machine-wide install.
+        auto dotnet_dir = fs::resolve_protocol("engine:/dotnet");
+        if(fs::exists(dotnet_dir, ec))
+        {
+            result.config_dir = fs::absolute(dotnet_dir).string();
+        }
+#endif
     }
     else
     {
@@ -190,11 +212,19 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
     return result;
 }
 
-auto validate_paths(const dotnet::compiler_paths& paths) -> bool
+auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) -> bool
 {
 #if DOTNETPP_BACKEND_MONO
+    (void)is_deploy_mode;
     return !paths.assembly_dir.empty() && !paths.config_dir.empty() && !paths.msc_executable.empty();
 #else
+    if(is_deploy_mode)
+    {
+        // Deployed games load precompiled assemblies, so no compiler is
+        // required. The runtime comes from the bundled dotnet root
+        // (config_dir) or, if absent, from the machine install.
+        return true;
+    }
     return !paths.msc_executable.empty();
 #endif
 }
@@ -215,10 +245,15 @@ auto script_system::init(rtti::context& ctx) -> bool
 
     auto mono_paths = find_dotnet_paths(ctx);
 
-    if(!validate_paths(mono_paths))
+    if(!validate_paths(mono_paths, ctx.has<deploy>()))
     {
+#if DOTNETPP_BACKEND_MONO
         ctx.get_cached<loading_screen>().fail(
             "Failed to locate Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
+#else
+        ctx.get_cached<loading_screen>().fail(
+            "Failed to locate the .NET runtime. Please install it from - https://dotnet.microsoft.com/download");
+#endif
         return false;
     }
 
@@ -267,10 +302,15 @@ auto script_system::init(rtti::context& ctx) -> bool
         initted = true;
         return true;
     }
-
+#if DOTNETPP_BACKEND_MONO
     ctx.get_cached<loading_screen>().fail(
         "Failed to initialize Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
     return false;
+#else
+    ctx.get_cached<loading_screen>().fail(
+        "Failed to initialize the .NET runtime. Please install it from - https://dotnet.microsoft.com/download");
+    return false;
+#endif
 }
 
 auto script_system::deinit(rtti::context& ctx) -> bool
