@@ -434,6 +434,21 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
             if(!has_compilation_errors_)
             {
                 app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+
+                // Same-named types in the engine and app assemblies are two
+                // distinct .NET types - name-based lookups resolve app-first,
+                // so make the shadowing visible instead of silent.
+                auto engine_assembly = get_engine_assembly();
+                for(const auto& type : app_cache_.scriptable_component_types)
+                {
+                    auto fullname = type.get_fullname();
+                    if(engine_assembly.get_type(fullname).valid())
+                    {
+                        APPLOG_WARNING("Script type '{}' is defined in both the engine and the app scripts. "
+                                       "The app version will be used; rename it to avoid ambiguity.",
+                                       fullname);
+                    }
+                }
             }
         }
         catch(const dotnet::exception& e)
@@ -841,21 +856,31 @@ auto script_system::get_app_assembly() const -> dotnet::assembly
 
 auto script_system::get_type_by_fullname(const std::string& fullname) const -> dotnet::type
 {
-    auto type = domain_->get_type(fullname);
-    if(!type.valid())
+    // App types take precedence so user code shadows engine-provided types
+    // (samples, templates) instead of silently binding to the engine copy.
+    dotnet::type type;
+    if(app_domain_)
     {
         type = app_domain_->get_type(fullname);
     }
-    
+    if(!type.valid() && domain_)
+    {
+        type = domain_->get_type(fullname);
+    }
+
     return type;
 }
 
 auto script_system::get_type(const std::string& name_space, const std::string& name) const -> dotnet::type
 {
-    auto type = domain_->get_type(name_space, name);
-    if(!type.valid())
+    dotnet::type type;
+    if(app_domain_)
     {
         type = app_domain_->get_type(name_space, name);
+    }
+    if(!type.valid() && domain_)
+    {
+        type = domain_->get_type(name_space, name);
     }
     return type;
 }

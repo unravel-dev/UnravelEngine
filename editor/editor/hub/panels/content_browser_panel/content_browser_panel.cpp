@@ -41,6 +41,10 @@
 #include <filedialog/filedialog.h>
 #include <filesystem/watcher.h>
 #include <filesystem>
+#include <fstream>
+#include <regex>
+#include <sstream>
+#include <string_utils/utils.h>
 #include <hpp/utility.hpp>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -79,6 +83,86 @@ auto get_new_file_simple(const fs::path& path, const std::string& name, const st
     }
 
     return path / (fmt::format("{}{}", name.c_str(), i) + ext);
+}
+
+/// Instantiate a script template, substituting #SCRIPTNAME# with the
+/// destination file stem (which doubles as the class name).
+auto create_script_from_template(const fs::path& template_path, const fs::path& dst) -> bool
+{
+    std::ifstream input(template_path);
+    if(!input.is_open())
+    {
+        APPLOG_ERROR("Script template not found: {}", template_path.string());
+        return false;
+    }
+
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    auto content = buffer.str();
+
+    string_utils::alterable::replace(content, "#SCRIPTNAME#", dst.stem().string());
+
+    std::ofstream output(dst);
+    if(!output.is_open())
+    {
+        APPLOG_ERROR("Failed to create script file: {}", dst.string());
+        return false;
+    }
+    output << content;
+    return true;
+}
+
+auto is_valid_csharp_identifier(const std::string& name) -> bool
+{
+    if(name.empty() || (std::isdigit(static_cast<unsigned char>(name.front())) != 0))
+    {
+        return false;
+    }
+    return std::all_of(name.begin(),
+                       name.end(),
+                       [](unsigned char c)
+                       {
+                           return std::isalnum(c) != 0 || c == '_';
+                       });
+}
+
+/// If the renamed file is a C# script whose class name still matches the old
+/// file stem (i.e. the user never touched the file), keep them in sync by
+/// renaming the class too. Uses word-boundary matching to avoid corrupting
+/// identifiers that merely contain the stem.
+void sync_script_class_name(const fs::path& script_path, const std::string& old_stem, const std::string& new_stem)
+{
+    // Only touch the file when both names are plain identifiers - anything
+    // else can't be a class name (and could break the regex below).
+    if(!is_valid_csharp_identifier(old_stem) || !is_valid_csharp_identifier(new_stem))
+    {
+        return;
+    }
+
+    std::ifstream input(script_path);
+    if(!input.is_open())
+    {
+        return;
+    }
+
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    auto content = buffer.str();
+    input.close();
+
+    const std::regex identifier(fmt::format("\\b{}\\b", old_stem));
+    if(!std::regex_search(content, identifier))
+    {
+        return;
+    }
+
+    content = std::regex_replace(content, identifier, new_stem);
+
+    std::ofstream output(script_path);
+    if(output.is_open())
+    {
+        output << content;
+    }
 }
 
 auto process_drag_drop_source(const gfx::texture::ptr& preview, const fs::path& absolute_path) -> bool
@@ -1541,17 +1625,18 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem("C# Script"))
         {
-            auto& am = ctx.get_cached<asset_manager>();
-
             const auto available =
                 get_new_file_simple(target_path, "NewScriptComponent", ex::get_format<script>());
 
-            fs::error_code ec;
-            auto new_script_template =
-                fs::resolve_protocol("engine:/data/scripts/template/TemplateComponent" + ex::get_format<script>());
-            fs::copy(new_script_template, available, ec);
+            // The template lives outside the compiled scripts tree (.cs.in)
+            // so it never ends up in the engine assembly. Instantiate it with
+            // the unique file stem as the class name: the file must be valid,
+            // collision-free C# from the moment it exists, because a
+            // recompile can trigger before the user finishes renaming.
+            auto new_script_template = fs::resolve_protocol("engine:/data/templates/TemplateComponent" +
+                                                            ex::get_format<script>() + ".in");
 
-            if(!ec)
+            if(create_script_from_template(new_script_template, available))
             {
                 pending_rename = available;
             }
@@ -1762,7 +1847,7 @@ void content_browser_panel::setup_delete_handler(content_browser_item& item, con
     };
 }
 
-void content_browser_panel::setup_rename_handler(content_browser_item& item, const fs::path& absolute_path, 
+void content_browser_panel::setup_rename_handler(content_browser_item& item, const fs::path& absolute_path,
                                                 const std::string& file_ext)
 {
     item.on_rename = [absolute_path, file_ext](const std::string& new_name)
@@ -1772,6 +1857,11 @@ void content_browser_panel::setup_rename_handler(content_browser_item& item, con
         new_absolute_path /= new_name + file_ext;
         fs::error_code err;
         fs::rename(absolute_path, new_absolute_path, err);
+
+        if(!err && file_ext == ex::get_format<script>())
+        {
+            sync_script_class_name(new_absolute_path, absolute_path.stem().string(), new_name);
+        }
     };
 }
 

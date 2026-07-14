@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using Unravel.Core;
 
 [ScriptSourceFile]
-class NewComponentTemplate : ScriptComponent
+class #SCRIPTNAME# : ScriptComponent
 {
 	/// <summary>
 	/// OnCreate is called when the script is first loaded, or when an object it is attached to is instantiated
