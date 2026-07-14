@@ -1640,6 +1640,14 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
         //APPLOG_INFO("Successful compilation of {0}", fs::replace(output, "temp-", "").string());
 
+        // Part of script compilation: rewrite mono-style [InternalCall]
+        // externs with real bodies (coreclr backend; no-op on mono).
+        if(!dotnet::weave_assembly(str_output))
+        {
+            APPLOG_ERROR("Failed internal call weaving of {0}", output.string());
+            return false;
+        }
+
         script_system::copy_compiled_lib(temp, output);
     }
 
