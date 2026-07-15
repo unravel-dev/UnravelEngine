@@ -82,8 +82,12 @@ void editor_settings_panel::draw_ui(rtti::context& ctx)
         return;
     }
 
-    static std::vector<setting_entry> categories{{"External Tools", &draw_external_tools_settings},
-                                                 {"Debugger", &draw_debugger_settings}};
+    static std::vector<setting_entry> categories{
+        {"External Tools", &draw_external_tools_settings},
+#if DOTNETPP_BACKEND_MONO
+        {"Debugger", &draw_debugger_settings},
+#endif
+    };
     // Child A: the categories list
     // We fix the width of this child, so the right child uses the remaining space.
     ImGui::BeginChild("##LeftSidebar", avail * ImVec2(0.15f, 1.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);

@@ -212,6 +212,26 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
     return result;
 }
 
+/*
+ * Interpreter selection for the CoreCLR backend. On JIT-restricted platforms
+ * (iOS forbids runtime code generation) the runtime must execute IL through
+ * the "interpreter + R2R" model: R2R-precompiled assemblies run native code,
+ * everything else is interpreted. Desktop platforms keep the JIT.
+ *
+ * Current release runtimes do not ship the interpreter yet, so the switches
+ * are inert there; this pre-wires the engine for the runtimes that do.
+ * Define UNRAVEL_FORCE_CORECLR_INTERPRETER to exercise the interpreter on
+ * desktop against a runtime built with it (point DOTNET_ROOT at the drop).
+ */
+auto select_interpreter_config() -> dotnet::interpreter_config
+{
+    dotnet::interpreter_config config;
+#if UNRAVEL_PLATFORM_IOS || defined(UNRAVEL_FORCE_CORECLR_INTERPRETER)
+    config.interp_mode = dotnet::interpreter_config::mode::prefer_compiled;
+#endif
+    return config;
+}
+
 auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) -> bool
 {
 #if DOTNETPP_BACKEND_MONO
@@ -280,7 +300,7 @@ auto script_system::init(rtti::context& ctx) -> bool
                               APPLOG_ERROR("{}", msg);
                           });
 
-    if(dotnet::init(mono_paths, debug_config_))
+    if(dotnet::init(mono_paths, debug_config_, select_interpreter_config()))
     {
         bind_internal_calls(ctx);
 
