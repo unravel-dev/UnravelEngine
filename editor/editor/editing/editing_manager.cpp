@@ -147,7 +147,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "unload_app_domain");
         scripting.unload_app_domain();
-        scripting.unload_engine_domain();
+        // scripting.unload_engine_domain();
     }
     {
         scripting.wait_for_jobs_to_finish(ctx);
@@ -156,7 +156,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     }
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_app_domain");
-        scripting.load_engine_domain(ctx, true);
+        // scripting.load_engine_domain(ctx, true);
         scripting.load_app_domain(ctx, true);
     }
 
@@ -254,13 +254,13 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
     
     scripting.unload_app_domain();
-    scripting.unload_engine_domain();
+    // scripting.unload_engine_domain();
     {
         scripting.wait_for_jobs_to_finish(ctx);
         on_frame_update(ctx, delta_t(0.016667f));
 
     }
-    scripting.load_engine_domain(ctx, false);
+    // scripting.load_engine_domain(ctx, false);
     scripting.load_app_domain(ctx, false);
         
     for(auto scn : scenes)
@@ -313,8 +313,8 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
 
         auto& scripting = ctx.get_cached<script_system>();
         scripting.unload_app_domain();
-        scripting.unload_engine_domain();
-        scripting.load_engine_domain(ctx, false);
+        // scripting.unload_engine_domain();
+        // scripting.load_engine_domain(ctx, false);
         scripting.load_app_domain(ctx, false);
 
         for(auto scn : scenes)

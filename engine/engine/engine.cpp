@@ -313,11 +313,6 @@ auto engine::deinit() -> bool
         return false;
     }
 
-    
-    if(!ctx.get_cached<ecs>().deinit(ctx))
-    {
-        return false;
-    }
 
     if(!ctx.get_cached<ui_system>().deinit(ctx))
     {
@@ -371,6 +366,11 @@ auto engine::deinit() -> bool
     }
 
     if(!ctx.get_cached<rendering_system>().deinit(ctx))
+    {
+        return false;
+    }
+    
+    if(!ctx.get_cached<ecs>().deinit(ctx))
     {
         return false;
     }

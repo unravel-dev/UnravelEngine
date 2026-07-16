@@ -672,7 +672,7 @@ struct mono_inspector
                     return false;
                 }
                 const auto& mono_obj = pinned_ptr->get_object();
-                T value = dotnet_converter<T>::from_mono(dotnet::get_managed_ptr(mono_obj));
+                T value = dotnet_converter<T>::from_managed(dotnet::get_managed_ptr(mono_obj));
                 result = entt::meta_any{std::in_place_type<T>, value};
                 return true;
             }
@@ -702,7 +702,7 @@ struct mono_inspector
                         if(std::is_same<T, std::string>::value)
                         {
                             auto str = value.cast<std::string>();
-                            auto new_mono_obj = dotnet::object(dotnet_converter<std::string>::to_mono(str));
+                            auto new_mono_obj = dotnet::object(dotnet_converter<std::string>::to_managed(str));
                             auto new_pinned = dotnet::make_object_pinned(new_mono_obj);
                             obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, new_pinned};
 
@@ -712,7 +712,7 @@ struct mono_inspector
                     }
                     else
                     {
-                        auto mono_value = dotnet_converter<T>::to_mono(value.cast<T>());
+                        auto mono_value = dotnet_converter<T>::to_managed(value.cast<T>());
                         mono_obj.box_value(mono_value, type);
                         obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
@@ -1313,7 +1313,7 @@ struct mono_inspector<entt::handle>
                 {
                     return false;
                 }
-                auto entity = dotnet_converter<entt::entity>::from_mono(dotnet::get_managed_ptr(mono_obj));                
+                auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(mono_obj));                
                 // Convert entity to handle using the scene
                 auto& inspector_ctx = ctx.get_cached<inspector_context>();
                 auto& registry = *inspector_ctx.inspected_registry;
@@ -1345,7 +1345,7 @@ struct mono_inspector<entt::handle>
                     auto obj_type = mono_obj.get_type();
                     if(obj_type.is_valuetype())
                     {
-                        auto mono_entity = dotnet_converter<entt::entity>::to_mono(entity);
+                        auto mono_entity = dotnet_converter<entt::entity>::to_managed(entity);
                         mono_obj.box_value(mono_entity, obj_type);
                         obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);

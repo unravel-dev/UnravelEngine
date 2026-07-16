@@ -217,12 +217,12 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
  * no-JIT packs (iOS) enable the interpreter themselves.
  * forced: set DOTNET_InterpMode=1 for desktop testing against an
  * interpreter-capable runtime (--interpreter forced, or
- * UNRAVEL_FORCE_CORECLR_INTERPRETER).
+ * UNRAVEL_FORCE_DOTNET_INTERPRETER).
  */
 auto select_interpreter_config(const cmd_line::parser& parser) -> dotnet::interpreter_config
 {
     dotnet::interpreter_config config;
-#if defined(UNRAVEL_FORCE_CORECLR_INTERPRETER)
+#if defined(UNRAVEL_FORCE_DOTNET_INTERPRETER)
     config.interp_mode = dotnet::interpreter_config::mode::forced;
 #endif
     std::string mode;
@@ -364,6 +364,8 @@ void script_system::set_debug_config(const std::string& address, uint32_t port, 
 
 auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bool
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load Engine Domain");
+
     bool is_deploy_mode = ctx.has<deploy>();
 
     if(!is_deploy_mode && recompile)
@@ -405,6 +407,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
 }
 void script_system::unload_engine_domain()
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload Engine Domain");
     cache_ = {};
     if(domain_)
     {
@@ -419,6 +422,8 @@ void script_system::unload_engine_domain()
 
 auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load App Domain");
+
     bool is_deploy_mode = ctx.has<deploy>();
 
     bool result = true;
@@ -493,6 +498,8 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 }
 void script_system::unload_app_domain()
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload App Domain");
+
     app_cache_ = {};
 
     if(app_domain_)

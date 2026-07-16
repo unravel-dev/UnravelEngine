@@ -183,19 +183,19 @@ struct dotnet_converter<hpp::small_vector<T, StaticCapacity>>
 	using native_type = hpp::small_vector<T, StaticCapacity>;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		std::vector<T> vec(obj.begin(), obj.end());
-		return dotnet_converter<std::vector<T>>::to_mono(vec);
+		return dotnet_converter<std::vector<T>>::to_managed(vec);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		if(!obj)
 		{
 			return {};
 		}
-		auto vec = dotnet_converter<std::vector<T>>::from_mono(obj);
+		auto vec = dotnet_converter<std::vector<T>>::from_managed(obj);
 		return native_type(vec.begin(), vec.end());
 	}
 };
@@ -214,7 +214,7 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_event_base>
 
 	static auto create_instance(const std::string& namespace_name, const std::string& type_name) -> dotnet::object;
 
-	static void to_mono_base(const native_type& obj, dotnet::object& instance)
+	static void to_managed_base(const native_type& obj, dotnet::object& instance)
 	{
 		dotnet::set_field_value(instance, "nativePtr", obj.native_ptr);
 		dotnet::set_field_value(instance, "targetElementId", obj.target_element_id);
@@ -225,7 +225,7 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_event_base>
 		dotnet::set_field_value(instance, "eventType", obj.event_type);
 	}
 
-	static void from_mono_base(const dotnet::object& object, native_type& data)
+	static void from_managed_base(const dotnet::object& object, native_type& data)
 	{
 		dotnet::get_field_value(object, "nativePtr", data.native_ptr);
 		dotnet::get_field_value(object, "targetElementId", data.target_element_id);
@@ -236,18 +236,18 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_event_base>
 		dotnet::get_field_value(object, "eventType", data.event_type);
 	}
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UIEventBase");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		return data;
 	}
 };
@@ -259,10 +259,10 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_pointer_event>
 	using native_type = dotnetpp_backend::managed_interface::ui_pointer_event;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UIPointerEvent");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		dotnet::set_field_value(instance, "x", obj.x);
 		dotnet::set_field_value(instance, "y", obj.y);
 		dotnet::set_field_value(instance, "button", obj.button);
@@ -275,11 +275,11 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_pointer_event>
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		dotnet::get_field_value(object, "x", data.x);
 		dotnet::get_field_value(object, "y", data.y);
 		dotnet::get_field_value(object, "button", data.button);
@@ -300,10 +300,10 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_key_event>
 	using native_type = dotnetpp_backend::managed_interface::ui_key_event;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UIKeyEvent");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		dotnet::set_field_value(instance, "keyCode", obj.key_code);
 		dotnet::set_field_value(instance, "ctrlKey", obj.ctrl_key);
 		dotnet::set_field_value(instance, "shiftKey", obj.shift_key);
@@ -312,11 +312,11 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_key_event>
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		dotnet::get_field_value(object, "keyCode", data.key_code);
 		dotnet::get_field_value(object, "ctrlKey", data.ctrl_key);
 		dotnet::get_field_value(object, "shiftKey", data.shift_key);
@@ -333,10 +333,10 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_textinput_event>
 	using native_type = dotnetpp_backend::managed_interface::ui_textinput_event;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UITextInputEvent");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		dotnet::set_field_value(instance, "text", obj.text);
 		dotnet::set_field_value(instance, "ctrlKey", obj.ctrl_key);
 		dotnet::set_field_value(instance, "shiftKey", obj.shift_key);
@@ -345,11 +345,11 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_textinput_event>
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		dotnet::get_field_value(object, "text", data.text);
 		dotnet::get_field_value(object, "ctrlKey", data.ctrl_key);
 		dotnet::get_field_value(object, "shiftKey", data.shift_key);
@@ -366,10 +366,10 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_slider_event>
 	using native_type = dotnetpp_backend::managed_interface::ui_slider_event;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UISliderEvent");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		dotnet::set_field_value(instance, "value", obj.value);
 		dotnet::set_field_value(instance, "minValue", obj.min_value);
 		dotnet::set_field_value(instance, "maxValue", obj.max_value);
@@ -377,11 +377,11 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_slider_event>
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		dotnet::get_field_value(object, "value", data.value);
 		dotnet::get_field_value(object, "minValue", data.min_value);
 		dotnet::get_field_value(object, "maxValue", data.max_value);
@@ -397,19 +397,19 @@ struct dotnet_converter<dotnetpp_backend::managed_interface::ui_change_event>
 	using native_type = dotnetpp_backend::managed_interface::ui_change_event;
 	using managed_type = dotnet::managed_ptr;
 
-	static auto to_mono(const native_type& obj) -> managed_type
+	static auto to_managed(const native_type& obj) -> managed_type
 	{
 		auto instance = create_instance("Unravel.Core", "UIChangeEvent");
-		to_mono_base(obj, instance);
+		to_managed_base(obj, instance);
 		dotnet::set_field_value(instance, "value", obj.value);
 		return dotnet::get_managed_ptr(instance);
 	}
 
-	static auto from_mono(const managed_type& obj) -> native_type
+	static auto from_managed(const managed_type& obj) -> native_type
 	{
 		dotnet::object object(obj);
 		native_type data;
-		from_mono_base(object, data);
+		from_managed_base(object, data);
 		dotnet::get_field_value(object, "value", data.value);
 		return data;
 	}

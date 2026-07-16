@@ -101,7 +101,7 @@ struct mono_saver
     {
         auto& ar = static_cast<Archive&>(arbase);
         // Extract value directly from mono_object using mono_converter
-        T value = dotnet_converter<T>::from_mono(dotnet::get_managed_ptr(obj));
+        T value = dotnet_converter<T>::from_managed(dotnet::get_managed_ptr(obj));
         return try_save(ar, ser20::make_nvp("value", value));
     }
 
@@ -148,7 +148,7 @@ struct mono_saver<Archive, entt::entity>
     {
         auto& ar = static_cast<Archive&>(arbase);
 
-        auto entity = dotnet_converter<entt::entity>::from_mono(dotnet::get_managed_ptr(obj));
+        auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(obj));
         
         auto& save_ctx = get_save_context();
         auto& registry = *save_ctx.save_source.registry();
@@ -284,7 +284,7 @@ struct mono_loader
             auto obj_type = obj.get_type();
             if(obj_type.is_valuetype())
             {
-                auto mono_value = dotnet_converter<T>::to_mono(value);
+                auto mono_value = dotnet_converter<T>::to_managed(value);
                 obj.box_value(mono_value, obj_type);
                 return true;
             }
@@ -348,7 +348,7 @@ struct mono_loader<Archive, std::string>
             std::string value{};
             if(try_load(ar, ser20::make_nvp("value", value)))
             {
-                obj = dotnet::object(dotnet_converter<std::string>::to_mono(value));
+                obj = dotnet::object(dotnet_converter<std::string>::to_managed(value));
                 return true;      
             }
         }
@@ -420,7 +420,7 @@ struct mono_loader<Archive, entt::entity>
             auto obj_type = obj.get_type();
             if(obj_type.is_valuetype())
             {
-                auto mono_entity = dotnet_converter<entt::entity>::to_mono(entity);
+                auto mono_entity = dotnet_converter<entt::entity>::to_managed(entity);
                 obj.box_value(mono_entity, obj_type);
                 return true;
             }
