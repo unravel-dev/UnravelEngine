@@ -1470,7 +1470,7 @@ struct mono_inspector<asset_handle<T>>
                 {
                     auto obj_type = mono_obj.get_type();
                     auto prop = obj_type.get_property("uid");
-                    if(prop.get_internal_ptr())
+                    if(prop.is_valid())
                     {
                         auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                         auto uid = uid_prop.get_value(mono_obj);
@@ -1512,7 +1512,7 @@ struct mono_inspector<asset_handle<T>>
                     if(mono_obj.valid())
                     {
                         auto prop = obj_type.get_property("uid");
-                        if(prop.get_internal_ptr())
+                        if(prop.is_valid())
                         {
                             auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                             uid_prop.set_value(mono_obj, asset ? asset.uid() : hpp::uuid{});

@@ -529,7 +529,7 @@ auto script_component::get_script_components(const dotnet::type& type) -> std::v
         auto obj = component.pinned->get_object();
         const auto& comp_type = obj.get_type();
 
-        if(comp_type.get_internal_ptr() == type.get_internal_ptr() || comp_type.is_derived_from(type))
+        if(comp_type.equals(type) || comp_type.is_derived_from(type))
         {
             // Validate the object is still valid before adding
             if(!component.is_marked_for_destroy())
@@ -551,8 +551,7 @@ auto script_component::get_script_component(const dotnet::type& type) -> script_
                            {
                                 auto obj = component.pinned->get_object();
                                 const auto& comp_type = obj.get_type();
-                                return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
-                                        comp_type.is_derived_from(type);
+                                return comp_type.equals(type) || comp_type.is_derived_from(type);
                            });
 
     if(it != std::end(script_components_))
@@ -571,8 +570,7 @@ auto script_component::get_native_component(const dotnet::type& type) -> script_
                            {
                                 auto obj = component.pinned->get_object();
                                 const auto& comp_type = obj.get_type();
-                                return comp_type.get_internal_ptr() == type.get_internal_ptr() ||
-                                        comp_type.is_derived_from(type);
+                                return comp_type.equals(type) || comp_type.is_derived_from(type);
                            });
 
     if(it != std::end(native_components_))
@@ -587,7 +585,7 @@ auto script_component::remove_script_component(const dotnet::object& obj) -> boo
 {
     auto checker = [&](const auto& rhs)
     {
-        return rhs.pinned->get_object().get_internal_ptr() == obj.get_internal_ptr();
+        return rhs.pinned->get_object().equals(obj);
     };
     std::erase_if(script_components_to_create_, checker);
 
@@ -623,7 +621,7 @@ auto script_component::remove_script_component(const dotnet::type& type) -> bool
 {
     auto checker = [&](const auto& rhs)
     {
-        return rhs.pinned->get_object().get_type().get_internal_ptr() == type.get_internal_ptr();
+        return rhs.pinned->get_object().get_type().equals(type);
     };
     std::erase_if(script_components_to_create_, checker);
 
@@ -663,7 +661,7 @@ auto script_component::remove_native_component(const dotnet::object& obj) -> boo
                            std::end(native_components_),
                            [&](const auto& rhs)
                            {
-                               return rhs.pinned->get_object().get_internal_ptr() == obj.get_internal_ptr();
+                               return rhs.pinned->get_object().equals(obj);
                            });
 
     if(it != std::end(native_components_))
@@ -685,7 +683,7 @@ auto script_component::remove_native_component(const dotnet::type& type) -> bool
                            std::end(native_components_),
                            [&](const auto& rhs)
                            {
-                               return rhs.pinned->get_object().get_type().get_internal_ptr() == type.get_internal_ptr();
+                               return rhs.pinned->get_object().get_type().equals(type);
                            });
 
     if(it != std::end(native_components_))

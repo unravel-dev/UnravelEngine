@@ -100,6 +100,12 @@ void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
     if(play.is_simulation_running() && !play.is_paused())
     {
+        // First sim frame (incl. mid-frame enter_running): do not accumulate
+        // a hitch into fixed steps.
+        if(play.frames_running() == 0)
+        {
+            dt = {};
+        }
         backend_.on_frame_update(ctx, dt);
     }
 }

@@ -214,7 +214,7 @@ struct mono_saver<Archive, asset_handle<T>>
         {
             auto obj_type = obj.get_type();
             auto prop = obj_type.get_property("uid");
-            if(prop.get_internal_ptr())
+            if(prop.is_valid())
             {
                 auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                 auto uid = uid_prop.get_value(obj);
@@ -540,7 +540,7 @@ struct mono_loader<Archive, asset_handle<T>>
                 if(obj.valid())
                 {
                     auto prop = obj_type.get_property("uid");
-                    if(prop.get_internal_ptr())
+                    if(prop.is_valid())
                     {
                         auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                         uid_prop.set_value(obj, asset ? asset.uid() : hpp::uuid{});

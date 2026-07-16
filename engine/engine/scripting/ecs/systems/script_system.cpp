@@ -392,9 +392,9 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     auto assembly = domain_->get_assembly(engine_script_lib.string());
     // print_assembly_info(assembly);
 
-    APPLOG_TRACE("------------------------------------------------");
-    APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), reinterpret_cast<intptr_t>(domain_->get_internal_ptr()));
-    APPLOG_TRACE("------------------------------------------------");
+    APPLOG_TRACE("-------------------------------------------------------------");
+    APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), domain_->get_version());
+    APPLOG_TRACE("-------------------------------------------------------------");
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
 
@@ -411,10 +411,9 @@ void script_system::unload_engine_domain()
     cache_ = {};
     if(domain_)
     {
-        auto domain_version = reinterpret_cast<intptr_t>(domain_->get_internal_ptr());
-        APPLOG_TRACE("-------------------------------------------------------");
-        APPLOG_TRACE("Unloading domain {} with version: {}", domain_->get_name(), domain_version);
-        APPLOG_TRACE("-------------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", domain_->get_name(), domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
     }
     domain_.reset();
     dotnet::domain::set_current_domain(nullptr);
@@ -457,9 +456,9 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
     fs::error_code ec;
     if(fs::exists(app_script_lib, ec))
     {
-        APPLOG_TRACE("------------------------------------------------");
-        APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));
-        APPLOG_TRACE("------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), app_domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
         try
         {
             auto assembly = app_domain_->get_assembly(app_script_lib.string());
@@ -504,10 +503,9 @@ void script_system::unload_app_domain()
 
     if(app_domain_)
     {
-        auto domain_version = reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr());
-        APPLOG_TRACE("------------------------------------------------");
-        APPLOG_TRACE("Unloading domain {} with version: {}", app_domain_->get_name(), domain_version);
-        APPLOG_TRACE("------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", app_domain_->get_name(), app_domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
     }
     app_domain_.reset();
     dotnet::domain::set_current_domain(domain_.get());
@@ -748,6 +746,13 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
         if(play.is_simulation_running() && !play.is_paused())
         {
+            // Mid-frame enter_running: process() could not zero dt. Start()
+            // above still runs; skip integrating motion on this first frame.
+            if(play.frames_running() == 0)
+            {
+                dt = {};
+            }
+
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();
 
@@ -802,11 +807,8 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
             float fixed_delta_time{};
         };
 
-        if(play.is_simulation_running() && dt > delta_t::zero())
+        if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
         {
-            auto& sim = ctx.get_cached<simulation>();
-            auto time_scale = sim.get_time_scale();
-
             update_data data;
             data.fixed_delta_time = dt.count();
 
@@ -842,7 +844,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(play.is_simulation_running() && dt > delta_t::zero())
+            if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");
                 // Use cached method to avoid repeated allocations

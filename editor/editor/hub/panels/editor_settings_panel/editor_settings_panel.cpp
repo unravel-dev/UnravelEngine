@@ -44,6 +44,22 @@ void draw_debugger_settings(rtti::context& ctx)
 
     ImGui::PopItemWidth();
 }
+
+void draw_scripting_settings(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& settings = pm.get_editor_settings();
+
+    ImGui::PushItemWidth(150.0f);
+
+    if(inspect(ctx, settings.scripting).edit_finished)
+    {
+        settings.scripting.reload_app_domain = true;
+        pm.save_editor_settings();
+    }
+
+    ImGui::PopItemWidth();
+}
 } // namespace
 editor_settings_panel::editor_settings_panel(imgui_panels* parent) : parent_(parent)
 {
@@ -84,6 +100,7 @@ void editor_settings_panel::draw_ui(rtti::context& ctx)
 
     static std::vector<setting_entry> categories{
         {"External Tools", &draw_external_tools_settings},
+        {"Scripting", &draw_scripting_settings},
 #if DOTNETPP_BACKEND_MONO
         {"Debugger", &draw_debugger_settings},
 #endif

@@ -466,13 +466,12 @@ auto engine::process() -> int
         auto dt = sim.get_delta_time();
         auto& play = ctx.get_cached<play_mode>();
 
-        if(play.is_simulation_running())
+        // First simulation frame: zero dt so Start/init work cannot integrate
+        // a hitch. Increment frames_running at frame end so consumers can also
+        // detect this via frames_running() == 0 (e.g. mid-frame enter_running).
+        if(play.is_simulation_running() && play.frames_running() == 0)
         {
-            if(play.frames_running() == 0)
-            {
-                dt = delta_t(0.0166);
-            }
-            play.on_simulation_frame();
+            dt = {};
         }
 
         if(play.is_paused())
@@ -549,6 +548,11 @@ auto engine::process() -> int
         {
             APP_SCOPE_PERF("Frame End");
             ev.on_frame_end(ctx, dt);
+        }
+
+        if(play.is_simulation_running())
+        {
+            play.on_simulation_frame();
         }
     }
 

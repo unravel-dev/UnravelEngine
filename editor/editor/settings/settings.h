@@ -21,6 +21,15 @@ struct editor_settings
         fs::path vscode_executable;
     } external_tools;
 
+    struct scripting_settings
+    {
+        /// Always enabled. Shown in the UI as a readonly checkbox.
+        bool reload_app_domain = true;
+        /// When true, also unload/load the engine domain on play-mode changes
+        /// and script recompile (alongside the app domain).
+        bool reload_engine_domain = false;
+    } scripting;
+
     struct projects_settings
     {
         std::vector<fs::path> recent_projects;
