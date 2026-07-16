@@ -397,11 +397,30 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     APPLOG_TRACE("-------------------------------------------------------------");
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
+    cache_.component_type = assembly.get_type("Unravel.Core", "Component");
+    cache_.script_component_type = assembly.get_type("Unravel.Core", "ScriptComponent");
+    cache_.ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
 
-    // Cache methods to avoid repeated allocations every frame
+    // Cache methods once per engine domain (avoid per-call name lookup).
     cache_.update_method = cache_.update_manager_type.get_method("internal_n2m_update", 1);
     cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
     cache_.late_update_method = cache_.update_manager_type.get_method("internal_n2m_late_update", 0);
+
+    cache_.set_entity_method = cache_.component_type.get_method("internal_n2m_set_entity", 1);
+    cache_.on_create_method = cache_.script_component_type.get_method("internal_n2m_on_create", 0);
+    cache_.on_enable_method = cache_.script_component_type.get_method("internal_n2m_on_enable", 0);
+    cache_.on_disable_method = cache_.script_component_type.get_method("internal_n2m_on_disable", 0);
+    cache_.on_start_method = cache_.script_component_type.get_method("internal_n2m_on_start", 0);
+    cache_.on_destroy_method = cache_.script_component_type.get_method("internal_n2m_on_destroy", 0);
+    cache_.on_sensor_enter_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_enter", 2);
+    cache_.on_sensor_exit_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_exit", 2);
+    cache_.on_collision_enter_method =
+        cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
+    cache_.on_collision_exit_method =
+        cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 2);
+
+    cache_.ui_dispatch_event_method =
+        cache_.ui_event_manager_type.get_method("InternalDispatchEvent", 1);
 
     return true;
 }
@@ -877,8 +896,7 @@ auto script_system::get_all_scriptable_components() const -> const std::vector<d
 
 auto script_system::get_scriptable_component_base_type() const -> dotnet::type
 {
-    auto comp_type = get_engine_assembly().get_type("Unravel.Core", "ScriptComponent");
-    return comp_type;
+    return cache_.script_component_type;
 }
 
 auto script_system::get_engine_assembly() const -> dotnet::assembly

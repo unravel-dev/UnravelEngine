@@ -43,6 +43,12 @@ auto to_managed_contact_points(const std::vector<manifold_point>& manifolds, boo
     }
     return result;
 }
+
+auto engine_script_cache() -> const script_system::engine_script_cache&
+{
+    const auto& ctx = engine::context();
+    return ctx.get_cached<script_system>().get_cache();
+}
 } // namespace
 
 void script_component::on_create_component(entt::registry& r, entt::entity e)
@@ -173,7 +179,7 @@ void script_component::enable(script_object& script_obj, bool check_order)
 
     try
     {
-        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_enable");
+        auto method = dotnet::make_method_invoker<void()>(engine_script_cache().on_enable_method, false);
         method(obj);
     }
     catch(const dotnet::exception& e)
@@ -206,7 +212,7 @@ void script_component::disable(script_object& script_obj, bool check_order)
     }
     try
     {
-        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_disable");
+        auto method = dotnet::make_method_invoker<void()>(engine_script_cache().on_disable_method, false);
         method(obj);
     }
     catch(const dotnet::exception& e)
@@ -232,7 +238,7 @@ void script_component::create(script_object& script_obj)
 
     try
     {
-        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_create");
+        auto method = dotnet::make_method_invoker<void()>(engine_script_cache().on_create_method, false);
         method(obj);
     }
     catch(const dotnet::exception& e)
@@ -255,7 +261,7 @@ void script_component::start(script_object& script_obj)
     }
     try
     {
-        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_start");
+        auto method = dotnet::make_method_invoker<void()>(engine_script_cache().on_start_method, false);
         method(obj);
     }
     catch(const dotnet::exception& e)
@@ -274,7 +280,7 @@ void script_component::destroy(script_object& script_obj)
     }
     try
     {
-        auto method = dotnet::make_method_invoker<void()>(obj, "internal_n2m_on_destroy");
+        auto method = dotnet::make_method_invoker<void()>(engine_script_cache().on_destroy_method, false);
         method(obj);
     }
     catch(const dotnet::exception& e)
@@ -291,7 +297,8 @@ void script_component::set_entity(const dotnet::object& obj, entt::handle e)
     }
     try
     {
-        auto method = dotnet::make_method_invoker<void(entt::entity)>(obj, "internal_n2m_set_entity");
+        auto method =
+            dotnet::make_method_invoker<void(entt::entity)>(engine_script_cache().set_entity_method, false);
         method(obj, e.entity());
     }
     catch(const dotnet::exception& e)
@@ -304,7 +311,9 @@ void script_component::on_sensor_enter(const dotnet::object& obj, entt::handle o
 {
     try
     {
-        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_enter");
+        auto method = dotnet::make_method_invoker<void(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            engine_script_cache().on_sensor_enter_method, false);
         method(obj, other.entity(), manifolds);
     }
     catch(const dotnet::exception& e)
@@ -317,7 +326,9 @@ void script_component::on_sensor_exit(const dotnet::object& obj, entt::handle ot
 {
     try
     {
-        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(obj, "internal_n2m_on_sensor_exit");
+        auto method = dotnet::make_method_invoker<void(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            engine_script_cache().on_sensor_exit_method, false);
         method(obj, other.entity(), manifolds);
     }
     catch(const dotnet::exception& e)
@@ -332,9 +343,9 @@ void script_component::on_collision_enter(const dotnet::object& obj,
 {
     try
     {
-        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
-            obj,
-            "internal_n2m_on_collision_enter");
+        auto method = dotnet::make_method_invoker<void(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            engine_script_cache().on_collision_enter_method, false);
         method(obj, other.entity(), manifolds);
     }
     catch(const dotnet::exception& e)
@@ -349,9 +360,9 @@ void script_component::on_collision_exit(const dotnet::object& obj,
 {
     try
     {
-        auto method = dotnet::make_method_invoker<void(entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
-            obj,
-            "internal_n2m_on_collision_exit");
+        auto method = dotnet::make_method_invoker<void(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            engine_script_cache().on_collision_exit_method, false);
         method(obj, other.entity(), manifolds);
     }
     catch(const dotnet::exception& e)

@@ -3993,36 +3993,18 @@ void dispatch_ui_event_to_manager(const T& event_data)
 {
     try
     {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
+        const auto& ctx = engine::context();
+        const auto& script_cache = ctx.get_cached<script_system>().get_cache();
+
+        if(!script_cache.ui_dispatch_event_method.valid())
         {
             APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
             return;
         }
-        
-        // Create method invoker and call it
-        auto method_invoker = dotnet::make_method_invoker<void(const T&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent");
-        }
+
+        auto method_invoker =
+            dotnet::make_method_invoker<void(const T&)>(script_cache.ui_dispatch_event_method, false);
+        method_invoker(event_data);
     }
     catch (const dotnet::exception& e)
     {

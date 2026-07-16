@@ -49,6 +49,42 @@ struct script_system
     auto get_engine_assembly() const -> dotnet::assembly;
     auto get_app_assembly() const -> dotnet::assembly;
 
+    /// Cached engine-assembly types/methods. Valid between load_engine_domain
+    /// and unload_engine_domain.
+    struct engine_script_cache
+    {
+        dotnet::type update_manager_type;
+        dotnet::type script_system_type;
+        dotnet::type component_type;
+        dotnet::type script_component_type;
+        dotnet::type ui_event_manager_type;
+
+        // SystemManager frame hooks
+        dotnet::method update_method;
+        dotnet::method fixed_update_method;
+        dotnet::method late_update_method;
+
+        // Component / ScriptComponent lifecycle (resolved once per engine domain)
+        dotnet::method set_entity_method;
+        dotnet::method on_create_method;
+        dotnet::method on_enable_method;
+        dotnet::method on_disable_method;
+        dotnet::method on_start_method;
+        dotnet::method on_destroy_method;
+        dotnet::method on_sensor_enter_method;
+        dotnet::method on_sensor_exit_method;
+        dotnet::method on_collision_enter_method;
+        dotnet::method on_collision_exit_method;
+
+        // UIEventManager
+        dotnet::method ui_dispatch_event_method;
+    };
+
+    auto get_cache() const -> const engine_script_cache&
+    {
+        return cache_;
+    }
+
     auto get_type_by_fullname(const std::string& fullname) const -> dotnet::type;
     auto get_type(const std::string& name_space, const std::string& name) const -> dotnet::type;
 
@@ -143,22 +179,11 @@ private:
     dotnet::debugging_config debug_config_;
     std::unique_ptr<dotnet::domain> domain_;
 
-    struct dotnet_cache
-    {
-        dotnet::type update_manager_type;
-        dotnet::type script_system_type;
-        dotnet::type native_component_type;
-        dotnet::type script_component_type;
-        
-        // Cached methods to avoid repeated allocations every frame
-        dotnet::method update_method;
-        dotnet::method fixed_update_method;
-        dotnet::method late_update_method;
-    } cache_;
+    engine_script_cache cache_;
 
     std::unique_ptr<dotnet::domain> app_domain_;
 
-    struct dotnet_app_cache
+    struct app_script_cache
     {
         std::vector<dotnet::type> scriptable_component_types;
 
