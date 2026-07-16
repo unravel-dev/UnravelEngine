@@ -6,6 +6,7 @@
 #include <engine/threading/threader.h>
 
 #include <base/basetypes.hpp>
+#include <cmd_line/parser.h>
 #include <context/context.hpp>
 #include <filesystem/filesystem.h>
 #include <hpp/span.hpp>
@@ -30,7 +31,9 @@ struct script_system
                               const hpp::source_location& loc = hpp::source_location::current());
     static auto find_dotnet_paths(const rtti::context& ctx) -> dotnet::compiler_paths;
 
-    auto init(rtti::context& ctx) -> bool;
+    script_system(rtti::context& ctx, cmd_line::parser& parser);
+
+    auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
     void set_debug_config(const std::string& address, uint32_t port, uint32_t loglevel);

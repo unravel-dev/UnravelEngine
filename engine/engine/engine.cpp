@@ -164,7 +164,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<particle_system>();
     ctx.add<physics_system>();
     ctx.add<input_system>();
-    ctx.add<script_system>();
+    ctx.add<script_system>(ctx, parser);
     ctx.add<ui_system>();
     return true;
 }
@@ -273,7 +273,7 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
     }
 
     ls.begin_module("Scripting");
-    if(!ls.check(ctx.get_cached<script_system>().init(ctx)))
+    if(!ls.check(ctx.get_cached<script_system>().init(ctx, parser)))
     {
         return false;
     }
@@ -309,6 +309,12 @@ auto engine::deinit() -> bool
     }
 
     if(!ctx.get_cached<play_mode>().deinit(ctx))
+    {
+        return false;
+    }
+
+    
+    if(!ctx.get_cached<ecs>().deinit(ctx))
     {
         return false;
     }
@@ -369,12 +375,6 @@ auto engine::deinit() -> bool
         return false;
     }
 
-    if(!ctx.get_cached<ecs>().deinit(ctx))
-    {
-        return false;
-    }
-
-    
     if(!ctx.get_cached<particle_system>().deinit(ctx))
     {
         return false;

@@ -205,7 +205,7 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
         result.msc_executable = fs::find_program(names, paths).make_preferred().string();
     }
 
-    APPLOG_TRACE("MONO_PATHS:");
+    APPLOG_TRACE("DOTNET_PATHS:");
     APPLOG_TRACE("Assembly path - {}", result.assembly_dir);
     APPLOG_TRACE("Config path - {}", result.config_dir);
 
@@ -213,23 +213,33 @@ auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compi
 }
 
 /*
- * Interpreter selection for the CoreCLR backend. On JIT-restricted platforms
- * (iOS forbids runtime code generation) the runtime must execute IL through
- * the "interpreter + R2R" model: R2R-precompiled assemblies run native code,
- * everything else is interpreted. Desktop platforms keep the JIT.
- *
- * Current release runtimes do not ship the interpreter yet, so the switches
- * are inert there; this pre-wires the engine for the runtimes that do.
- * Define UNRAVEL_FORCE_CORECLR_INTERPRETER to exercise the interpreter on
- * desktop against a runtime built with it (point DOTNET_ROOT at the drop).
+ * automatic: leave CoreCLR alone (default). JIT platforms use the JIT;
+ * no-JIT packs (iOS) enable the interpreter themselves.
+ * forced: set DOTNET_InterpMode=1 for desktop testing against an
+ * interpreter-capable runtime (--interpreter forced, or
+ * UNRAVEL_FORCE_CORECLR_INTERPRETER).
  */
-auto select_interpreter_config() -> dotnet::interpreter_config
+auto select_interpreter_config(const cmd_line::parser& parser) -> dotnet::interpreter_config
 {
     dotnet::interpreter_config config;
-#if UNRAVEL_PLATFORM_IOS || defined(UNRAVEL_FORCE_CORECLR_INTERPRETER)
-    config.interp_mode = dotnet::interpreter_config::mode::prefer_compiled;
+#if defined(UNRAVEL_FORCE_CORECLR_INTERPRETER)
+    config.interp_mode = dotnet::interpreter_config::mode::forced;
 #endif
+    std::string mode;
+    if(parser.try_get("interpreter", mode) && mode == "forced")
+    {
+        config.interp_mode = dotnet::interpreter_config::mode::forced;
+    }
     return config;
+}
+
+script_system::script_system(rtti::context& ctx, cmd_line::parser& parser)
+{
+    (void)ctx;
+    parser.set_optional<std::string>("",
+                                     "interpreter",
+                                     "auto",
+                                     "CoreCLR interpreter mode (auto|forced).");
 }
 
 auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) -> bool
@@ -249,7 +259,7 @@ auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) ->
 #endif
 }
 
-auto script_system::init(rtti::context& ctx) -> bool
+auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -300,7 +310,7 @@ auto script_system::init(rtti::context& ctx) -> bool
                               APPLOG_ERROR("{}", msg);
                           });
 
-    if(dotnet::init(mono_paths, debug_config_, select_interpreter_config()))
+    if(dotnet::init(mono_paths, debug_config_, select_interpreter_config(parser)))
     {
         bind_internal_calls(ctx);
 
