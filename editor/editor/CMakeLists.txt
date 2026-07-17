@@ -17,9 +17,15 @@ target_link_libraries(${target_name} PUBLIC
     engine
     imgui 
     filedialog 
-    # httplib
+    httplib
 )
-
+if(WIN32)
+  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "UnravelEditor")
+  add_definitions(-DEDITOR_NAME="UnravelEditor")
+else()
+  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-editor")
+  add_definitions(-DEDITOR_NAME="unravel-editor")
+endif()
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20
