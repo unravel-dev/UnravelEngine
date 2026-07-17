@@ -20,44 +20,51 @@
 
 ### Try it
 1. Download the latest release from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
-2. Extract and run `еditor.exe` (Windows) or `еditor` (Linux)
-   
+2. Install the [.NET 9 SDK](https://dotnet.microsoft.com/download) (required for C# scripting)
+3. Extract and run `editor.exe` (Windows) or `editor` (Linux)
+
 ### System Requirements
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| **OS** | Windows 10, Ubuntu 20.04, macOS 14 | Windows 11, Ubuntu 24.04, macOS 15+ |
+| **OS** | Windows 10, Ubuntu 22.04, macOS 14 | Windows 11, Ubuntu 24.04, macOS 15+ |
 | **CPU** | Intel i5-4590 / AMD FX 8350 | Intel i7-8700K / AMD Ryzen 5 3600 |
 | **Memory** | 8 GB RAM | 16 GB RAM |
 | **Graphics** | DirectX 11 compatible | GTX 1060 / RX 580 or better |
-| **Storage** | | |
+| **.NET** | [.NET 9 SDK](https://dotnet.microsoft.com/download) | Latest .NET 9+ SDK |
 
 ## ✨ Key Features
 
 ### 🎨 **Visual Development**
 - **WYSIWYG Editor** - Real-time scene editing and visualization
-- **Material Editor** - Advanced PBR material authoring
-- **Asset Browser** - Intuitive asset management and preview
+- **Material Editor** - Advanced PBR material authoring with alpha cutoff and shadow support
+- **Asset Browser** - Intuitive asset management, thumbnails, and preview
+- **Wireframe Selection** - Clear mesh selection overlays in the viewport
+- **Surface Placement** - Drop meshes and prefabs into the scene with raycast placement and surface snap
 
 ### 🔧 **Development Experience**
-- **C# Scripting** - Full-featured scripting with hot-reload
+- **C# Scripting on CoreCLR** - Modern .NET scripting with hot-reload, powered by CoreCLR (`hostfxr`) via [dotnetpp](https://github.com/unravel-dev/monopp)
+- **IL Weaving** - Mono-style internal calls compiled and woven at build time for CoreCLR (no Mono runtime required)
 - **Cross-Platform** - Windows, Linux, macOS support
 - **Modern C++20** - Latest standards for performance and maintainability
 - **Action-Based Input** - Flexible input mapping for various devices
 - **Undo/Redo System** - Complete editor history management
 - **Asset Compilation** - Automatic compilation of source assets with import metadata
 - **Deploy Pipeline** - One-click project deployment
+- **Play Mode Lifecycle** - Splash → running phases with optional logo splash screen
 
 ### 🎮 **Engine Capabilities**
 - **PBR Deferred Rendering** - Physically-based rendering pipeline
 - **Dynamic Shadows** - Realistic shadow casting with multiple techniques
-- **Reflection Probes** - Environment reflections and lighting
-- **Post-Processing Volumes** - Spatial volumes with Bloom, Tonemapping, FXAA, SSAO, and SSR; local/global modes with priority and blend transitions
+- **Reflection Probes** - Environment reflections with configurable capture / bake settings
+- **Post-Processing Volumes** - Spatial volumes with Bloom, Tonemapping, FXAA, ASSAO, SSR, and SSIL; local/global modes with priority and blend transitions
 - **Skylight** - Atmospheric lighting with Perez sky model
+- **Per-Submesh LODs** - Animation-aware world bounds, culling, and LOD selection per submesh
+- **GPU Resource Eviction** - Automatic GPU memory pressure handling on supported backends
 - **Physics Integration** - Powered by Bullet Physics
 - **3D Audio** - Spatial audio with OpenAL Soft
 - **Animation System** - Skeletal and keyframe animations
-- **Robust Particle System** - Advanced particle effects and simulations
-- **Game UI** - HTML+CSS based UI system powered by RmlUi with full World space support.
+- **Particle System** - GPU-friendly particle effects and simulations
+- **Game UI** - HTML+CSS based UI system powered by RmlUi with full world-space support
 - **Prefab System** - Reusable entity templates with overrides and updates
 - **ECS Architecture** - Entity-Component-System powered by EnTT
 - **Async Asset Loading** - Non-blocking resource management
@@ -88,13 +95,11 @@ Unravel Engine is in **active development** and not yet production-ready. We wel
 - 💡 **Feature requests** from the community  
 - 📝 **Feedback** to guide development priorities
 
-
-
 ## 🏁 Getting Started
 
-**Prerequisites**: Download and install [Mono](https://www.mono-project.com/) before using the engine.
+**Prerequisites**: Install the [.NET 9 SDK](https://dotnet.microsoft.com/download) before using the engine. Script compilation and hot-reload use the `dotnet` CLI and CoreCLR.
 
-> **Note for Linux users**: Install the `mono-complete` package after follwing the install instructions from the url for the full IDE experience.
+> **Note**: A .NET runtime alone is not enough for editing — you need the **SDK** so scripts can compile. Newer major SDKs are accepted via roll-forward when available.
 
 ## 🎯 Editor
 
@@ -107,14 +112,13 @@ The Editor integrates seamlessly with **Visual Studio Code** and its variants (C
 - Install the recommended extensions when prompted for the best development experience
 - Enjoy features like syntax highlighting, IntelliSense, and debugging support
 
-
 ## 🛠 Building from Source
 
 ### Prerequisites
 - **CMake** 3.20 or higher
 - **C++20** compatible compiler (MSVC 2022, GCC 12+, Clang 12+)
 - **Git** with LFS support
-- **Mono** 6.12 ([Download](https://www.mono-project.com/))
+- **.NET 9 SDK** ([Download](https://dotnet.microsoft.com/download)) — `dotnet` must be on `PATH`
 
 ### Build Steps
 ```bash
@@ -134,11 +138,12 @@ cmake --build build --config Release --parallel
 
 ### Platform-Specific Notes
 - **Windows**: MSVC or Clang recommended
-- **Linux**: Install mono-complete package for full IDE experience ([workflow dependencies](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml))
-- **macOS**: Xcode command line tools required
+- **Linux**: Install a recent .NET 9 SDK package from [Microsoft’s install docs](https://learn.microsoft.com/dotnet/core/install/linux); see also [workflow dependencies](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml)
+- **macOS**: Xcode command line tools required, plus the .NET 9 SDK
 
 ### Troubleshooting
-- **Issue**: Mono not found → Ensure mono is in PATH
+- **Issue**: `dotnet` not found → Install the .NET 9 SDK and ensure it is on `PATH`
+- **Issue**: Script compile fails → Confirm `dotnet --info` reports an SDK (not only a runtime)
 - **Issue**: Submodule errors → Run `git submodule update --init --recursive`
 - **Issue**: CMake configuration fails → Check CMake version and compiler support
 
@@ -146,7 +151,7 @@ cmake --build build --config Release --parallel
 
 - 🐛 **Issues**: [Report bugs](https://github.com/unravel-dev/UnravelEngine/issues)
 - 💡 **Discussions**: [Feature requests & questions](https://github.com/unravel-dev/UnravelEngine/discussions)
-- 📚 **Documentation**: [Engine API](https://unravel-dev.github.io/unravel-engine-api/) • [Script API](https://unravel-dev.github.io/unravel-script-api/)
+- 📚 **Documentation**: [Engine API](https://unravel-dev.github.io/UnravelEngine/engine-api/html/) • [Script API](https://unravel-dev.github.io/UnravelEngine/script-api/html/)
 
 ## 🤝 Contributing
 
