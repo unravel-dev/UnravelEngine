@@ -346,6 +346,12 @@ void generate_workspace_file(const std::string& file_path,
 #else
     (void)settings;
     json_stream << "            {\n";
+    json_stream << "                \"name\": \"Attach to Unravel Editor\",\n";
+    json_stream << "                \"type\": \"coreclr\",\n";
+    json_stream << "                \"request\": \"attach\"\n";
+    json_stream << "                \"processName\": \"editor\"\n";
+    json_stream << "            },\n";
+    json_stream << "            {\n";
     json_stream << "                \"name\": \".NET Core Attach\",\n";
     json_stream << "                \"type\": \"coreclr\",\n";
     json_stream << "                \"request\": \"attach\"\n";
