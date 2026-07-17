@@ -117,7 +117,7 @@ auto get_component_icon() -> std::string
     // Scripting
     else if constexpr(std::is_same<T, script_component>::value)
     {
-        return ICON_MDI_SCRIPT;
+        return ICON_MDI_LANGUAGE_CSHARP;
     }
     // Post-processing effects (using similar icons for consistency)
     else if constexpr(std::is_same<T, auto_exposure_component>::value)
@@ -574,6 +574,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
         ImGui::Separator();
         ImGui::Spacing();
 
+        // Keep "Add Component" pinned below the scrollable component list.
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float add_component_footer_height =
+            style.ItemSpacing.y * 4.0f + style.WindowPadding.y + ImGui::GetFrameHeightWithSpacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, style.WindowRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.WindowPadding);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+        ImGui::BeginChild("ENTITY_COMPONENTS",
+                          ImVec2(0.0f, -add_component_footer_height),
+                          ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+
         if(is_debug_view())
         {
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
@@ -753,7 +766,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                         field_info.read_only = true;
                         ImGui::PushReadonly(field_info.read_only);
 
-                        std::string var = ICON_MDI_SCRIPT " " + source_loc.stem().string();
+                        std::string var = ICON_MDI_LANGUAGE_CSHARP " " + source_loc.stem().string();
                         {
                             property_layout layout("Script");
 
@@ -843,7 +856,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return false;
                 };
 
-                callbacks.icon = ICON_MDI_SCRIPT;
+                callbacks.icon = ICON_MDI_LANGUAGE_CSHARP;
 
 
                 auto script_type = entt::resolve<script_component>();
@@ -890,8 +903,10 @@ auto inspector_entity::inspect(rtti::context& ctx,
             }
         }
 
-        ImGui::Separator();
-        ImGui::NextLine();
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+        ImGui::Spacing();
         static const auto label = "Add Component";
         auto avail = ImGui::GetContentRegionAvail();
         ImVec2 size = ImGui::CalcItemSize(label);
@@ -952,7 +967,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return false;
                 };
 
-                callbacks.icon = ICON_MDI_SCRIPT;
+                callbacks.icon = ICON_MDI_LANGUAGE_CSHARP;
 
                 result |= list_component(filter_, name, callbacks);
             }
