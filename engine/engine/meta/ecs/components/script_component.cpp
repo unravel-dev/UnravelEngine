@@ -10,11 +10,7 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/scripting/ecs/systems/script_system.h>
-#include <monopp/mono_field_invoker.h>
-#include <monopp/mono_property_invoker.h>
-#include <monopp/mono_list.h>
-#include <monopp/mono_array.h>
-#include <monopp/mono_gc_handle.h>
+#include <dotnetpp/dotnetpp.h>
 
 #include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/core/math/quaternion.hpp>
@@ -92,7 +88,7 @@ struct mono_saver
 {
     template<typename Invoker>
     static auto try_save_mono_invoker(ser20::detail::OutputArchiveBase& arbase,
-                                      const mono::mono_object& obj,
+                                      const dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -101,27 +97,27 @@ struct mono_saver
     }
 
     static auto try_save_mono_object(ser20::detail::OutputArchiveBase& arbase,
-                                     const mono::mono_object& obj) -> bool
+                                     const dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         // Extract value directly from mono_object using mono_converter
-        T value = mono::mono_converter<T>::from_mono(obj.get_internal_ptr());
+        T value = dotnet_converter<T>::from_managed(dotnet::get_managed_ptr(obj));
         return try_save(ar, ser20::make_nvp("value", value));
     }
 
     static auto try_save_mono_field(ser20::detail::OutputArchiveBase& arbase,
-                                    const mono::mono_object& obj,
-                                    const mono::mono_field& field) -> bool
+                                    const dotnet::object& obj,
+                                    const dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = dotnet::make_field_invoker<T>(field);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_save_mono_property(ser20::detail::OutputArchiveBase& arbase,
-                                       const mono::mono_object& obj,
-                                       const mono::mono_property& prop) -> bool
+                                       const dotnet::object& obj,
+                                       const dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<T>(prop);
+        auto invoker = dotnet::make_property_invoker<T>(prop);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -131,7 +127,7 @@ struct mono_saver<Archive, entt::entity>
 {
     template<typename Invoker>
     static auto try_save_mono_invoker(ser20::detail::OutputArchiveBase& arbase,
-                                      const mono::mono_object& obj,
+                                      const dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -148,11 +144,11 @@ struct mono_saver<Archive, entt::entity>
     }
 
     static auto try_save_mono_object(ser20::detail::OutputArchiveBase& arbase,
-                                     const mono::mono_object& obj) -> bool
+                                     const dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
 
-        auto entity = mono::mono_converter<entt::entity>::from_mono(obj.get_internal_ptr());
+        auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(obj));
         
         auto& save_ctx = get_save_context();
         auto& registry = *save_ctx.save_source.registry();
@@ -164,18 +160,18 @@ struct mono_saver<Archive, entt::entity>
     }
 
     static auto try_save_mono_field(ser20::detail::OutputArchiveBase& arbase,
-                                    const mono::mono_object& obj,
-                                    const mono::mono_field& field) -> bool
+                                    const dotnet::object& obj,
+                                    const dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<entt::entity>(field);
+        auto invoker = dotnet::make_field_invoker<entt::entity>(field);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_save_mono_property(ser20::detail::OutputArchiveBase& arbase,
-                                       const mono::mono_object& obj,
-                                       const mono::mono_property& prop) -> bool
+                                       const dotnet::object& obj,
+                                       const dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<entt::entity>(prop);
+        auto invoker = dotnet::make_property_invoker<entt::entity>(prop);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -185,7 +181,7 @@ struct mono_saver<Archive, asset_handle<T>>
 {
     template<typename Invoker>
     static auto try_save_mono_invoker(ser20::detail::OutputArchiveBase& arbase,
-                                      const mono::mono_object& obj,
+                                      const dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -197,7 +193,7 @@ struct mono_saver<Archive, asset_handle<T>>
         {
             const auto& invoker_type = invoker.get_type();
             auto guid_property = invoker_type.get_property("uid");
-            auto mutable_uid_property = mono::make_property_invoker<hpp::uuid>(guid_property);
+            auto mutable_uid_property = dotnet::make_property_invoker<hpp::uuid>(guid_property);
             auto uid = mutable_uid_property.get_value(val);
 
             auto& ctx = engine::context();
@@ -209,7 +205,7 @@ struct mono_saver<Archive, asset_handle<T>>
     }
 
     static auto try_save_mono_object(ser20::detail::OutputArchiveBase& arbase,
-                                     const mono::mono_object& obj) -> bool
+                                     const dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         
@@ -218,9 +214,9 @@ struct mono_saver<Archive, asset_handle<T>>
         {
             auto obj_type = obj.get_type();
             auto prop = obj_type.get_property("uid");
-            if(prop.get_internal_ptr())
+            if(prop.is_valid())
             {
-                auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                 auto uid = uid_prop.get_value(obj);
                 
                 auto& ctx = engine::context();
@@ -233,18 +229,18 @@ struct mono_saver<Archive, asset_handle<T>>
     }
 
     static auto try_save_mono_field(ser20::detail::OutputArchiveBase& arbase,
-                                    const mono::mono_object& obj,
-                                    const mono::mono_field& field) -> bool
+                                    const dotnet::object& obj,
+                                    const dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+        auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_save_mono_property(ser20::detail::OutputArchiveBase& arbase,
-                                       const mono::mono_object& obj,
-                                       const mono::mono_property& prop) -> bool
+                                       const dotnet::object& obj,
+                                       const dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+        auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
         return try_save_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -253,14 +249,14 @@ template<typename Archive, typename T>
 struct mono_loader
 {
     template<typename U>
-    static auto is_supported_type(const mono::mono_type& type) -> bool
+    static auto is_supported_type(const dotnet::type& type) -> bool
     {
-        return mono::is_compatible_type<U>(type);
+        return dotnet::is_compatible_type<U>(type);
     }
 
     template<typename Invoker>
     static auto try_load_mono_invoker(ser20::detail::InputArchiveBase& arbase,
-                                      mono::mono_object& obj,
+                                      dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -278,7 +274,7 @@ struct mono_loader
     }
 
     static auto try_load_mono_object(ser20::detail::InputArchiveBase& arbase,
-                                     mono::mono_object& obj) -> bool
+                                     dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         T value{};
@@ -288,7 +284,7 @@ struct mono_loader
             auto obj_type = obj.get_type();
             if(obj_type.is_valuetype())
             {
-                auto mono_value = mono::mono_converter<T>::to_mono(value);
+                auto mono_value = dotnet_converter<T>::to_managed(value);
                 obj.box_value(mono_value, obj_type);
                 return true;
             }
@@ -297,18 +293,18 @@ struct mono_loader
     }
 
     static auto try_load_mono_field(ser20::detail::InputArchiveBase& arbase,
-                                    mono::mono_object& obj,
-                                    mono::mono_field& field) -> bool
+                                    dotnet::object& obj,
+                                    dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = dotnet::make_field_invoker<T>(field);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_load_mono_property(ser20::detail::InputArchiveBase& arbase,
-                                       mono::mono_object& obj,
-                                       mono::mono_property& prop) -> bool
+                                       dotnet::object& obj,
+                                       dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<T>(prop);
+        auto invoker = dotnet::make_property_invoker<T>(prop);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -318,14 +314,14 @@ template<typename Archive>
 struct mono_loader<Archive, std::string>
 {
     template<typename U>
-    static auto is_supported_type(const mono::mono_type& type) -> bool
+    static auto is_supported_type(const dotnet::type& type) -> bool
     {
         return type.is_string();
     }
 
     template<typename Invoker>
     static auto try_load_mono_invoker(ser20::detail::InputArchiveBase& arbase,
-                                      mono::mono_object& obj,
+                                      dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -343,7 +339,7 @@ struct mono_loader<Archive, std::string>
     }
 
     static auto try_load_mono_object(ser20::detail::InputArchiveBase& arbase,
-                                     mono::mono_object& obj) -> bool
+                                     dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         auto obj_type = obj.get_type();
@@ -352,7 +348,7 @@ struct mono_loader<Archive, std::string>
             std::string value{};
             if(try_load(ar, ser20::make_nvp("value", value)))
             {
-                obj = mono::mono_object(mono::mono_converter<std::string>::to_mono(value));
+                obj = dotnet::object(dotnet_converter<std::string>::to_managed(value));
                 return true;      
             }
         }
@@ -362,18 +358,18 @@ struct mono_loader<Archive, std::string>
     }
 
     static auto try_load_mono_field(ser20::detail::InputArchiveBase& arbase,
-                                    mono::mono_object& obj,
-                                    mono::mono_field& field) -> bool
+                                    dotnet::object& obj,
+                                    dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<std::string>(field);
+        auto invoker = dotnet::make_field_invoker<std::string>(field);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_load_mono_property(ser20::detail::InputArchiveBase& arbase,
-                                       mono::mono_object& obj,
-                                       mono::mono_property& prop) -> bool
+                                       dotnet::object& obj,
+                                       dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<std::string>(prop);
+        auto invoker = dotnet::make_property_invoker<std::string>(prop);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -382,7 +378,7 @@ template<typename Archive>
 struct mono_loader<Archive, entt::entity>
 {
     template<typename U>
-    static auto is_supported_type(const mono::mono_type& type) -> bool
+    static auto is_supported_type(const dotnet::type& type) -> bool
     {
         const auto& expected_name = type.get_name();
         bool is_supported = std::is_same_v<entt::entity, U> && expected_name == "Entity";
@@ -391,7 +387,7 @@ struct mono_loader<Archive, entt::entity>
 
     template<typename Invoker>
     static auto try_load_mono_invoker(ser20::detail::InputArchiveBase& arbase,
-                                      mono::mono_object& obj,
+                                      dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -413,7 +409,7 @@ struct mono_loader<Archive, entt::entity>
     }
 
     static auto try_load_mono_object(ser20::detail::InputArchiveBase& arbase,
-                                     mono::mono_object& obj) -> bool
+                                     dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         ser20::entity_handle_link val{};
@@ -424,7 +420,7 @@ struct mono_loader<Archive, entt::entity>
             auto obj_type = obj.get_type();
             if(obj_type.is_valuetype())
             {
-                auto mono_entity = mono::mono_converter<entt::entity>::to_mono(entity);
+                auto mono_entity = dotnet_converter<entt::entity>::to_managed(entity);
                 obj.box_value(mono_entity, obj_type);
                 return true;
             }
@@ -433,18 +429,18 @@ struct mono_loader<Archive, entt::entity>
     }
 
     static auto try_load_mono_field(ser20::detail::InputArchiveBase& arbase,
-                                    mono::mono_object& obj,
-                                    mono::mono_field& field) -> bool
+                                    dotnet::object& obj,
+                                    dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<entt::entity>(field);
+        auto invoker = dotnet::make_field_invoker<entt::entity>(field);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_load_mono_property(ser20::detail::InputArchiveBase& arbase,
-                                       mono::mono_object& obj,
-                                       mono::mono_property& prop) -> bool
+                                       dotnet::object& obj,
+                                       dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<entt::entity>(prop);
+        auto invoker = dotnet::make_property_invoker<entt::entity>(prop);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 };
@@ -453,7 +449,7 @@ template<typename Archive, typename T>
 struct mono_loader<Archive, asset_handle<T>>
 {
     template<typename U>
-    static auto is_supported_type(const mono::mono_type& type) -> bool
+    static auto is_supported_type(const dotnet::type& type) -> bool
     {
         const auto& expected_name = type.get_name();
         bool is_supported = false;
@@ -499,7 +495,7 @@ struct mono_loader<Archive, asset_handle<T>>
 
     template<typename Invoker>
     static auto try_load_mono_invoker(ser20::detail::InputArchiveBase& arbase,
-                                      mono::mono_object& obj,
+                                      dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
@@ -511,7 +507,7 @@ struct mono_loader<Archive, asset_handle<T>>
             {
                 const auto& field_type = invoker.get_type();
                 auto guid_property = field_type.get_property("uid");
-                auto mutable_uid_property = mono::make_property_invoker<hpp::uuid>(guid_property);
+                auto mutable_uid_property = dotnet::make_property_invoker<hpp::uuid>(guid_property);
 
                 auto var = invoker.get_value(obj);
                 if(!var && val)
@@ -531,7 +527,7 @@ struct mono_loader<Archive, asset_handle<T>>
     }
 
     static auto try_load_mono_object(ser20::detail::InputArchiveBase& arbase,
-                                     mono::mono_object& obj) -> bool
+                                     dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
         const auto& obj_type = obj.get_type();
@@ -544,9 +540,9 @@ struct mono_loader<Archive, asset_handle<T>>
                 if(obj.valid())
                 {
                     auto prop = obj_type.get_property("uid");
-                    if(prop.get_internal_ptr())
+                    if(prop.is_valid())
                     {
-                        auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                        auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                         uid_prop.set_value(obj, asset ? asset.uid() : hpp::uuid{});
                         return true;
                     }
@@ -559,25 +555,25 @@ struct mono_loader<Archive, asset_handle<T>>
     }
 
     static auto try_load_mono_field(ser20::detail::InputArchiveBase& arbase,
-                                    mono::mono_object& obj,
-                                    mono::mono_field& field) -> bool
+                                    dotnet::object& obj,
+                                    dotnet::field& field) -> bool
     {
-        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+        auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 
     static auto try_load_mono_property(ser20::detail::InputArchiveBase& arbase,
-                                       mono::mono_object& obj,
-                                       mono::mono_property& prop) -> bool
+                                       dotnet::object& obj,
+                                       dotnet::property& prop) -> bool
     {
-        auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+        auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
         return try_load_mono_invoker(arbase, obj, invoker);
     }
 };
 } // namespace unravel
 
 
-auto get_type_by_fullname(const std::string& fullname) -> mono::mono_type
+auto get_type_by_fullname(const std::string& fullname) -> dotnet::type
 {
     auto& ctx = unravel::engine::context();
     auto& script_sys = ctx.get_cached<unravel::script_system>();
@@ -587,13 +583,13 @@ auto get_type_by_fullname(const std::string& fullname) -> mono::mono_type
 namespace ser20
 {
 template<typename Archive>
-inline auto try_save_mono_type(Archive& ar, const char* name, const mono::mono_type& t) -> bool
+inline auto try_save_mono_type(Archive& ar, const char* name, const dotnet::type& t) -> bool
 {
     return try_save(ar, ser20::make_nvp(name, t.get_fullname()));
 }
 
 template<typename Archive>
-inline auto try_load_mono_type(Archive& ar, const char* name, mono::mono_type& t) -> bool
+inline auto try_load_mono_type(Archive& ar, const char* name, dotnet::type& t) -> bool
 {
     std::string fullname;
     if(try_load(ar, ser20::make_nvp(name, fullname)))
@@ -605,7 +601,7 @@ inline auto try_load_mono_type(Archive& ar, const char* name, mono::mono_type& t
 }
 
 template<typename Archive, typename T>
-inline void SAVE_FUNCTION_NAME(Archive& ar, const mono::vector_like_wrapper<T>& obj)
+inline void SAVE_FUNCTION_NAME(Archive& ar, const dotnet::vector_like_wrapper<T>& obj)
 {
     try_save_mono_type(ar, "type", obj.type);
 
@@ -614,7 +610,7 @@ inline void SAVE_FUNCTION_NAME(Archive& ar, const mono::vector_like_wrapper<T>& 
 }
 
 template<typename Archive, typename T>
-inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
+inline void LOAD_FUNCTION_NAME(Archive& ar, dotnet::vector_like_wrapper<T>& obj)
 {
     try_load_mono_type(ar, "type", obj.type);
 
@@ -626,12 +622,12 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
     ser20::size_type size{};
     try_load(ar, ser20::make_nvp("size", size));
     obj.container.resize(static_cast<std::size_t>(size));
-    std::vector<mono::mono_object_pinned_ptr> element_pins;
+    std::vector<dotnet::object_pinned_ptr> element_pins;
     element_pins.reserve(obj.container.size());
     for(auto& v : obj.container)
     {
         v = obj.type.new_instance();
-        element_pins.push_back(mono::make_object_pinned(v));
+        element_pins.push_back(dotnet::make_object_pinned(v));
     }
     {
         serialization::path_skip_segment_guard guard(true);
@@ -639,12 +635,12 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, mono::vector_like_wrapper<T>& obj)
     }
 }
 
-SAVE(mono::mono_object)
+SAVE(dotnet::object)
 {
     using namespace unravel;
-    auto pinned_obj = mono::make_object_pinned(obj);
+    auto pinned_obj = dotnet::make_object_pinned(obj);
     // First, try object-level serializer (like inspector's get_object_inspector)
-    using mono_object_serializer = std::function<bool(ser20::detail::OutputArchiveBase&, const mono::mono_object&)>;
+    using mono_object_serializer = std::function<bool(ser20::detail::OutputArchiveBase&, const dotnet::object&)>;
     
     auto get_object_serializer = [](const std::string& type_name) -> const mono_object_serializer&
     {
@@ -720,7 +716,7 @@ SAVE(mono::mono_object)
 
     // If no object serializer found, iterate through fields/properties (like inspector)
     using mono_field_serializer =
-        std::function<bool(ser20::detail::OutputArchiveBase&, const mono::mono_object&, const mono::mono_field&)>;
+        std::function<bool(ser20::detail::OutputArchiveBase&, const dotnet::object&, const dotnet::field&)>;
 
     auto get_field_serilizer = [](const std::string& type_name) -> const mono_field_serializer&
     {
@@ -768,7 +764,7 @@ SAVE(mono::mono_object)
     };
 
     using mono_property_serializer =
-        std::function<bool(ser20::detail::OutputArchiveBase&, const mono::mono_object&, const mono::mono_property&)>;
+        std::function<bool(ser20::detail::OutputArchiveBase&, const dotnet::object&, const dotnet::property&)>;
 
     auto get_property_serilizer = [](const std::string& type_name) -> const mono_property_serializer&
     {
@@ -821,7 +817,7 @@ SAVE(mono::mono_object)
     
     for(auto& field : fields)
     {
-        if(field.get_visibility() == mono::visibility::vis_public)
+        if(field.get_visibility() == dotnet::visibility::vis_public)
         {
             if(field.is_static() || field.has_attribute("HideAttribute"))
             {
@@ -846,25 +842,25 @@ SAVE(mono::mono_object)
             else if(field_type.is_array() || field_type.is_list())
             {
                 // Handle arrays and lists - convert to vector and serialize
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 auto collection_obj = invoker.get_value(obj);
                 if(collection_obj.valid())
                 {
                     serialization::path_segment_guard guard(field.get_name());
                     if(field_type.is_array())
                     {
-                        mono::mono_array<mono::mono_object> array(collection_obj);
-                        auto pinned_array = mono::make_array_pinned(array);
-                        auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
-                        auto element_pins = mono::pin_vector_elements(vec.container);
+                        dotnet::array<dotnet::object> array(collection_obj);
+                        auto pinned_array = dotnet::make_array_pinned(array);
+                        auto vec = array.to_vector_wrapper<std::vector<dotnet::object>>();
+                        auto element_pins = dotnet::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
                     else if(field_type.is_list())
                     {
-                        mono::mono_list<mono::mono_object> list(collection_obj);
-                        auto pinned_list = mono::make_list_pinned(list);
-                        auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();
-                        auto element_pins = mono::pin_vector_elements(vec.container);
+                        dotnet::list<dotnet::object> list(collection_obj);
+                        auto pinned_list = dotnet::make_list_pinned(list);
+                        auto vec = list.to_vector_wrapper<std::vector<dotnet::object>>();
+                        auto element_pins = dotnet::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(field.get_name(), vec));
                     }
                 }
@@ -872,11 +868,11 @@ SAVE(mono::mono_object)
             else if(field_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    auto pinned_nested = mono::make_object_pinned(nested_obj);
+                    auto pinned_nested = dotnet::make_object_pinned(nested_obj);
                     serialization::path_segment_guard guard(field.get_name());
                     try_save(ar, ser20::make_nvp(field.get_name(), nested_obj));
                 }
@@ -886,7 +882,7 @@ SAVE(mono::mono_object)
 
     for(auto& prop : properties)
     {
-        if(prop.get_visibility() == mono::visibility::vis_public)
+        if(prop.get_visibility() == dotnet::visibility::vis_public)
         {
             if(prop.is_static() || prop.has_attribute("HideAttribute"))
             {
@@ -911,25 +907,25 @@ SAVE(mono::mono_object)
             else if(prop_type.is_array() || prop_type.is_list())
             {
                 // Handle arrays and lists - convert to vector and serialize
-                auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
                 auto collection_obj = invoker.get_value(obj);
                 if(collection_obj.valid())
                 {
                     serialization::path_segment_guard guard(prop.get_name());
                     if(prop_type.is_array())
                     {
-                        mono::mono_array<mono::mono_object> array(collection_obj);
-                        auto pinned_array = mono::make_array_pinned(array);
-                        auto vec = array.to_vector_wrapper<std::vector<mono::mono_object>>();
-                        auto element_pins = mono::pin_vector_elements(vec.container);
+                        dotnet::array<dotnet::object> array(collection_obj);
+                        auto pinned_array = dotnet::make_array_pinned(array);
+                        auto vec = array.to_vector_wrapper<std::vector<dotnet::object>>();
+                        auto element_pins = dotnet::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                     else if(prop_type.is_list())
                     {
-                        mono::mono_list<mono::mono_object> list(collection_obj);
-                        auto pinned_list = mono::make_list_pinned(list);
-                        auto vec = list.to_vector_wrapper<std::vector<mono::mono_object>>();
-                        auto element_pins = mono::pin_vector_elements(vec.container);
+                        dotnet::list<dotnet::object> list(collection_obj);
+                        auto pinned_list = dotnet::make_list_pinned(list);
+                        auto vec = list.to_vector_wrapper<std::vector<dotnet::object>>();
+                        auto element_pins = dotnet::pin_vector_elements(vec.container);
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                 }
@@ -937,11 +933,11 @@ SAVE(mono::mono_object)
             else if(prop_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
-                auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    auto pinned_nested = mono::make_object_pinned(nested_obj);
+                    auto pinned_nested = dotnet::make_object_pinned(nested_obj);
                     serialization::path_segment_guard guard(prop.get_name());
                     try_save(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                 }
@@ -951,13 +947,13 @@ SAVE(mono::mono_object)
     
 }
 
-LOAD(mono::mono_object)
+LOAD(dotnet::object)
 {
     using namespace unravel;
     
-    auto pinned_obj = mono::make_object_pinned(obj);
+    auto pinned_obj = dotnet::make_object_pinned(obj);
     // First, try object-level serializer (like inspector's get_object_inspector)
-    using mono_object_serializer = std::function<bool(ser20::detail::InputArchiveBase&, mono::mono_object&)>;
+    using mono_object_serializer = std::function<bool(ser20::detail::InputArchiveBase&, dotnet::object&)>;
     
     auto get_object_serializer = [](const std::string& type_name) -> const mono_object_serializer&
     {
@@ -1030,7 +1026,7 @@ LOAD(mono::mono_object)
     
     // If no object serializer found, iterate through fields/properties (like inspector)
     using mono_field_serializer =
-        std::function<bool(ser20::detail::InputArchiveBase&, mono::mono_object&, mono::mono_field&)>;
+        std::function<bool(ser20::detail::InputArchiveBase&, dotnet::object&, dotnet::field&)>;
 
     auto get_field_serilizer = [](const std::string& type_name) -> const mono_field_serializer&
     {
@@ -1078,7 +1074,7 @@ LOAD(mono::mono_object)
     };
 
     using mono_property_serializer =
-        std::function<bool(ser20::detail::InputArchiveBase&, mono::mono_object&, mono::mono_property&)>;
+        std::function<bool(ser20::detail::InputArchiveBase&, dotnet::object&, dotnet::property&)>;
 
     auto get_property_serilizer = [](const std::string& type_name) -> const mono_property_serializer&
     {
@@ -1131,7 +1127,7 @@ LOAD(mono::mono_object)
     
     for(auto& field : fields)
     {
-        if(field.get_visibility() == mono::visibility::vis_public)
+        if(field.get_visibility() == dotnet::visibility::vis_public)
         {
             const auto& field_type = field.get_type();
             auto field_serilizer = get_field_serilizer(field_type.get_name());
@@ -1151,19 +1147,19 @@ LOAD(mono::mono_object)
             else if(field_type.is_array() || field_type.is_list())
             {
                 // Handle arrays and lists - load vector and convert back
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
-                mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
+                dotnet::vector_like_wrapper<std::vector<dotnet::object>> vec;
                 if(try_load(ar, ser20::make_nvp(field.get_name(), vec)))
                 {
-                    auto element_pins = mono::pin_vector_elements(vec.container);
+                    auto element_pins = dotnet::pin_vector_elements(vec.container);
                     if(field_type.is_array())
                     {
-                        mono::mono_array<mono::mono_object> array(vec.container, vec.type);
+                        dotnet::array<dotnet::object> array(vec.container, vec.type);
                         invoker.set_value(obj, array);
                     }
                     else if(field_type.is_list())
                     {
-                        mono::mono_list<mono::mono_object> list(vec.container, vec.type);
+                        dotnet::list<dotnet::object> list(vec.container, vec.type);
                         invoker.set_value(obj, list);
                     }
                 }
@@ -1171,11 +1167,11 @@ LOAD(mono::mono_object)
             else if(field_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    auto pinned_nested = mono::make_object_pinned(nested_obj);
+                    auto pinned_nested = dotnet::make_object_pinned(nested_obj);
                     try_load(ar, ser20::make_nvp(field.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }
@@ -1185,7 +1181,7 @@ LOAD(mono::mono_object)
     
     for(auto& prop : properties)
     {
-        if(prop.get_visibility() == mono::visibility::vis_public)
+        if(prop.get_visibility() == dotnet::visibility::vis_public)
         {
             const auto& prop_type = prop.get_type();
             auto prop_serilizer = get_property_serilizer(prop_type.get_name());
@@ -1205,19 +1201,19 @@ LOAD(mono::mono_object)
             else if(prop_type.is_array() || prop_type.is_list())
             {
                 // Handle arrays and lists - load vector and convert back
-                auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
-                mono::vector_like_wrapper<std::vector<mono::mono_object>> vec;
+                auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
+                dotnet::vector_like_wrapper<std::vector<dotnet::object>> vec;
                 if(try_load(ar, ser20::make_nvp(prop.get_name(), vec)))
                 {
-                    auto element_pins = mono::pin_vector_elements(vec.container);
+                    auto element_pins = dotnet::pin_vector_elements(vec.container);
                     if(prop_type.is_array())
                     {
-                        mono::mono_array<mono::mono_object> array(vec.container, vec.type);
+                        dotnet::array<dotnet::object> array(vec.container, vec.type);
                         invoker.set_value(obj, array);
                     }
                     else if(prop_type.is_list())
                     {
-                        mono::mono_list<mono::mono_object> list(vec.container, vec.type);
+                        dotnet::list<dotnet::object> list(vec.container, vec.type);
                         invoker.set_value(obj, list);
                     }
                 }
@@ -1225,11 +1221,11 @@ LOAD(mono::mono_object)
             else if(prop_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
-                auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
                 auto nested_obj = invoker.get_value(obj);
                 if(nested_obj.valid())
                 {
-                    auto pinned_nested = mono::make_object_pinned(nested_obj);
+                    auto pinned_nested = dotnet::make_object_pinned(nested_obj);
                     try_load(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                     invoker.set_value(obj, nested_obj);
                 }
@@ -1238,8 +1234,8 @@ LOAD(mono::mono_object)
     }
     
 }
-LOAD_INSTANTIATE(mono::mono_object, ser20::iarchive_associative_t);
-LOAD_INSTANTIATE(mono::mono_object, ser20::iarchive_binary_t);
+LOAD_INSTANTIATE(dotnet::object, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(dotnet::object, ser20::iarchive_binary_t);
 }
 
 
@@ -1262,7 +1258,7 @@ SAVE_INSTANTIATE(script_component::script_object, ser20::oarchive_binary_t);
 
 LOAD(script_component::script_object)
 {
-    mono::mono_type script_type;
+    dotnet::type script_type;
     try_load_mono_type(ar, "type", script_type);
 
 

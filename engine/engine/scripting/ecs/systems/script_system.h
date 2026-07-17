@@ -6,14 +6,12 @@
 #include <engine/threading/threader.h>
 
 #include <base/basetypes.hpp>
+#include <cmd_line/parser.h>
 #include <context/context.hpp>
 #include <filesystem/filesystem.h>
 #include <hpp/span.hpp>
 
-#include <monopp/mono_exception.h>
-#include <monopp/mono_jit.h>
-#include <monort/monort.h>
-#include <monopp/mono_method.h>
+#include <dotnetpp/dotnetpp.h>
 
 namespace unravel
 {
@@ -29,11 +27,13 @@ struct script_system
     static auto get_lib_compiled_key(const std::string& protocol) -> std::string;
     static void copy_compiled_lib(const fs::path& from, const fs::path& to);
     static auto is_debugger_attached() -> bool;
-    static void log_exception(const mono::mono_exception& e,
+    static void log_exception(const dotnet::exception& e,
                               const hpp::source_location& loc = hpp::source_location::current());
-    static auto find_mono(const rtti::context& ctx) -> mono::compiler_paths;
+    static auto find_dotnet_paths(const rtti::context& ctx) -> dotnet::compiler_paths;
 
-    auto init(rtti::context& ctx) -> bool;
+    script_system(rtti::context& ctx, cmd_line::parser& parser);
+
+    auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
     void set_debug_config(const std::string& address, uint32_t port, uint32_t loglevel);
@@ -44,13 +44,49 @@ struct script_system
     auto load_app_domain(rtti::context& ctx, bool recompile) -> bool;
     void unload_app_domain();
 
-    auto get_all_scriptable_components() const -> const std::vector<mono::mono_type>&;
-    auto get_scriptable_component_base_type() const -> mono::mono_type;
-    auto get_engine_assembly() const -> mono::mono_assembly;
-    auto get_app_assembly() const -> mono::mono_assembly;
+    auto get_all_scriptable_components() const -> const std::vector<dotnet::type>&;
+    auto get_scriptable_component_base_type() const -> dotnet::type;
+    auto get_engine_assembly() const -> dotnet::assembly;
+    auto get_app_assembly() const -> dotnet::assembly;
 
-    auto get_type_by_fullname(const std::string& fullname) const -> mono::mono_type;
-    auto get_type(const std::string& name_space, const std::string& name) const -> mono::mono_type;
+    /// Cached engine-assembly types/methods. Valid between load_engine_domain
+    /// and unload_engine_domain.
+    struct engine_script_cache
+    {
+        dotnet::type update_manager_type;
+        dotnet::type script_system_type;
+        dotnet::type component_type;
+        dotnet::type script_component_type;
+        dotnet::type ui_event_manager_type;
+
+        // SystemManager frame hooks
+        dotnet::method update_method;
+        dotnet::method fixed_update_method;
+        dotnet::method late_update_method;
+
+        // Component / ScriptComponent lifecycle (resolved once per engine domain)
+        dotnet::method set_entity_method;
+        dotnet::method on_create_method;
+        dotnet::method on_enable_method;
+        dotnet::method on_disable_method;
+        dotnet::method on_start_method;
+        dotnet::method on_destroy_method;
+        dotnet::method on_sensor_enter_method;
+        dotnet::method on_sensor_exit_method;
+        dotnet::method on_collision_enter_method;
+        dotnet::method on_collision_exit_method;
+
+        // UIEventManager
+        dotnet::method ui_dispatch_event_method;
+    };
+
+    auto get_cache() const -> const engine_script_cache&
+    {
+        return cache_;
+    }
+
+    auto get_type_by_fullname(const std::string& fullname) const -> dotnet::type;
+    auto get_type(const std::string& name_space, const std::string& name) const -> dotnet::type;
 
     auto is_create_called() const -> bool;
     auto is_update_called() const -> bool;
@@ -140,27 +176,16 @@ private:
 
     delta_t time_since_last_check_{};
 
-    mono::debugging_config debug_config_;
-    std::unique_ptr<mono::mono_domain> domain_;
+    dotnet::debugging_config debug_config_;
+    std::unique_ptr<dotnet::domain> domain_;
 
-    struct mono_cache
+    engine_script_cache cache_;
+
+    std::unique_ptr<dotnet::domain> app_domain_;
+
+    struct app_script_cache
     {
-        mono::mono_type update_manager_type;
-        mono::mono_type script_system_type;
-        mono::mono_type native_component_type;
-        mono::mono_type script_component_type;
-        
-        // Cached methods to avoid repeated allocations every frame
-        mono::mono_method update_method;
-        mono::mono_method fixed_update_method;
-        mono::mono_method late_update_method;
-    } cache_;
-
-    std::unique_ptr<mono::mono_domain> app_domain_;
-
-    struct mono_app_cache
-    {
-        std::vector<mono::mono_type> scriptable_component_types;
+        std::vector<dotnet::type> scriptable_component_types;
 
     } app_cache_;
 

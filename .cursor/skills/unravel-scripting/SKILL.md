@@ -1,9 +1,10 @@
 ---
 name: unravel-scripting
 description: >-
-  Works on UnravelEngine Mono scripting: C# API, script glue, hot-reload,
-  ScriptComponent lifecycle, and C++/C# interop. Use for game scripts, scripting
-  backend, OnCreate/OnUpdate hooks, or physics/UI events forwarded to C#.
+  Works on UnravelEngine managed scripting: C# API, script glue, hot-reload,
+  ScriptComponent lifecycle, and C++/C# interop via dotnetpp. Use for game
+  scripts, scripting backend, OnCreate/OnUpdate hooks, or physics/UI events
+  forwarded to C#.
 disable-model-invocation: true
 ---
 
@@ -15,18 +16,19 @@ disable-model-invocation: true
 |---------|------|
 | Script system | `engine/engine/scripting/ecs/systems/script_system.h` |
 | Script glue | `engine/engine/scripting/ecs/systems/script_glue.cpp` |
-| Interop | `engine/engine/scripting/ecs/systems/script_interop.cpp` |
+| Interop | `engine/engine/scripting/ecs/systems/script_interop.h` |
 | Script component | `engine/engine/scripting/ecs/components/script_component.h` |
 | Meta | `engine/engine/meta/ecs/components/script_component.hpp` |
 | C# API scripts | `engine_data/data/scripts/` |
-| Mono wrapper | `deps/monopp/`, `deps/monort/` |
+| Embedding API | `deps/monopp/monopp/dotnetpp/` |
 
 ## Architecture
 
-- **Mono embedded** via `monopp` / `monort`
+- **dotnetpp** unified embedding API (`dotnet::`) over Mono or CoreCLR, selected at CMake configure time via `DOTNETPP_BACKEND`
 - **Dual script domains** — engine scripts + per-project scripts
 - **Hot-reload** — `events::on_script_recompile` triggers recompile and reload
 - **ScriptComponent** — attaches C# class to entity
+- **POD interop** — layout-compatible value types in `mono::managed_interface`, converter specializations in `dotnetpp_backend::managed_interface`, registered with `dotnet_register_converter_for_pod`
 
 ## C# API layout (`engine_data/data/scripts/`)
 
@@ -61,18 +63,21 @@ When exposing new engine features to scripts:
 
 1. Add C++ callable from glue (`script_glue.cpp`, `script_interop.cpp`)
 2. Add C# wrapper in `engine_data/data/scripts/`
-3. Register type/method with Mono if needed
-4. Maintain API parity — breaking C# API breaks user projects
+3. Register internal call with `dotnet::add_internal_call` / `dotnet::internal_call_registry` and `dotnet_internal_call()`
+4. For POD types, add layout-compatible managed struct + `dotnet_register_converter_for_pod` in `script_interop.h`
+5. Maintain API parity — breaking C# API breaks user projects
 
 ## Hot-reload
 
 Triggered by `on_script_recompile` event. Script system:
 
-- Recompiles changed assemblies
-- Reloads AppDomain (project scripts)
+- Recompiles changed assemblies via `dotnet::compile`
+- Reloads domain (project scripts)
 - Re-attaches ScriptComponents
 
 Test: edit C# script → recompile menu → scripts reload without full restart.
+
+On CoreCLR, domain unload runs `[AutoStaticsCleanup]` and verifies collection with a leak report (see reference.md "Domain unload, statics cleanup, leak detection"). Mark any class whose statics hold script instances, script `Type`s, or delegates with `[AutoStaticsCleanup]`.
 
 ## Verification checklist
 
@@ -81,8 +86,8 @@ Test: edit C# script → recompile menu → scripts reload without full restart.
 - [ ] Lifecycle hooks fire in correct order (create → start → update)
 - [ ] Hot-reload preserves or correctly resets state
 - [ ] Physics events reach C# (`on_collision_enter`, etc.)
-- [ ] No Mono handle leaks after reload
-- [ ] Project scripts compile (Mono 6.12+ installed)
+- [ ] No managed handle leaks after reload
+- [ ] Project scripts compile (Mono 6.12+ or .NET SDK for CoreCLR, depending on backend)
 
 ## Common mistakes
 
@@ -91,6 +96,8 @@ Test: edit C# script → recompile menu → scripts reload without full restart.
 - C# API change without migration note
 - Script logic in C++ that belongs in `script_system` dispatch
 - Forgetting play-mode-only guards on runtime script state
+- Using `mono::` or `clr::` directly for embedding API — use `dotnet::` and `<dotnetpp/dotnetpp.h>` instead
+- Putting converter specializations in the wrong namespace — use `dotnetpp_backend::managed_interface` (not `mono::` / `clr::` ifdefs in user code)
 
 ## Deep reference
 

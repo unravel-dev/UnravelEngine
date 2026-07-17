@@ -4,13 +4,9 @@
 #include "imgui/imgui.h"
 #include "inspectors.h"
 #include <engine/assets/asset_manager.h>
-#include <monopp/mono_field_invoker.h>
+#include <dotnetpp/dotnetpp.h>
 #include <engine/scripting/ecs/systems/script_interop.h>
 #include <engine/scripting/ecs/systems/script_system.h>
-#include <monopp/mono_property_invoker.h>
-#include <monopp/mono_type_conversion.h>
-#include <monopp/mono_list.h>
-#include <monopp/mono_gc_handle.h>
 #include <type_traits>
 #include <functional>
 
@@ -33,13 +29,13 @@
 namespace unravel
 {
 
-auto get_mono_type_stack() -> std::stack<mono::mono_type>&
+auto get_mono_type_stack() -> std::stack<dotnet::type>&
 {
-    static std::stack<mono::mono_type> stack;
+    static std::stack<dotnet::type> stack;
     return stack;
 }
 
-void push_mono_type(const mono::mono_type& type)
+void push_mono_type(const dotnet::type& type)
 {
     get_mono_type_stack().push(type);
 }
@@ -49,7 +45,7 @@ void pop_mono_type()
     get_mono_type_stack().pop();
 }
 
-auto get_current_mono_type() -> mono::mono_type
+auto get_current_mono_type() -> dotnet::type
 {
     if(get_mono_type_stack().empty())
     {
@@ -58,11 +54,11 @@ auto get_current_mono_type() -> mono::mono_type
     return get_mono_type_stack().top();
 }
 
-auto find_attribute(const std::string& name, const std::vector<mono::mono_object>& attribs) -> mono::mono_object
+auto find_attribute(const std::string& name, const std::vector<dotnet::object>& attribs) -> dotnet::object
 {
     auto it = std::find_if(std::begin(attribs),
                            std::end(attribs),
-                           [&](const mono::mono_object& obj)
+                           [&](const dotnet::object& obj)
                            {
                                return obj.get_type().get_name() == name;
                            });
@@ -76,24 +72,24 @@ auto find_attribute(const std::string& name, const std::vector<mono::mono_object
 }
 
 
-auto get_header(const mono::mono_field& field) -> std::string
+auto get_header(const dotnet::field& field) -> std::string
 {
     auto attribs = field.get_attributes();
     auto header_attrib = find_attribute("HeaderAttribute", attribs);
     if(header_attrib.valid())
     {
-        auto invoker = mono::make_field_invoker<std::string>(header_attrib.get_type(), "header");
+        auto invoker = dotnet::make_field_invoker<std::string>(header_attrib.get_type(), "header");
         return invoker.get_value(header_attrib);
     }
     return "";
 }
-auto get_header(const mono::mono_property& property) -> std::string
+auto get_header(const dotnet::property& property) -> std::string
 {
     auto attribs = property.get_attributes();
     auto header_attrib = find_attribute("HeaderAttribute", attribs);
     if(header_attrib.valid())
     {
-        auto invoker = mono::make_property_invoker<std::string>(header_attrib.get_type(), "header");
+        auto invoker = dotnet::make_property_invoker<std::string>(header_attrib.get_type(), "header");
         return invoker.get_value(header_attrib);
     }
     return "";
@@ -128,7 +124,7 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -138,14 +134,14 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
             // Recreate the invoker from the field name
             auto obj_type = mono_obj.get_type();
             auto field = obj_type.get_field(field_name);
-            auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
             
             auto nested_obj = invoker.get_value(mono_obj);
             if(nested_obj.valid())
             {
                 // Create a pinned pointer to avoid dangling references
-                auto nested_pinned = mono::make_object_pinned(nested_obj);
-                result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, nested_pinned};
+                auto nested_pinned = dotnet::make_object_pinned(nested_obj);
+                result = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, nested_pinned};
                 return true;
             }
         }
@@ -157,18 +153,18 @@ auto make_nested_object_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
             }
-            if(auto nested_pinned_ptr = value.try_cast<mono::mono_object_pinned_ptr>())
+            if(auto nested_pinned_ptr = value.try_cast<dotnet::object_pinned_ptr>())
             {
                 // Recreate the invoker from the field name
                 auto mono_obj = pinned_ptr->get_object();
                 auto obj_type = mono_obj.get_type();
                 auto field = obj_type.get_field(field_name);
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 
                 auto nested_obj = (*nested_pinned_ptr)->get_object();
                 invoker.set_value(mono_obj, nested_obj);
@@ -209,7 +205,7 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -219,14 +215,14 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
             // Recreate the invoker from the property name
             auto obj_type = mono_obj.get_type();
             auto property = obj_type.get_property(prop_name);
-            auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+            auto invoker = dotnet::make_property_invoker<dotnet::object>(property);
             
             auto nested_obj = invoker.get_value(mono_obj);
             if(nested_obj.valid())
             {
                 // Create a pinned pointer to avoid dangling references
-                auto nested_pinned = mono::make_object_pinned(nested_obj);
-                result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, nested_pinned};
+                auto nested_pinned = dotnet::make_object_pinned(nested_obj);
+                result = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, nested_pinned};
                 return true;
             }
         }
@@ -238,18 +234,18 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
             }
-            if(auto nested_pinned_ptr = value.try_cast<mono::mono_object_pinned_ptr>())
+            if(auto nested_pinned_ptr = value.try_cast<dotnet::object_pinned_ptr>())
             {
                 // Recreate the invoker from the property name
                 auto mono_obj = pinned_ptr->get_object();
                 auto obj_type = mono_obj.get_type();
                 auto property = obj_type.get_property(prop_name);
-                auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+                auto invoker = dotnet::make_property_invoker<dotnet::object>(property);
                 
                 const auto& nested_obj = (*nested_pinned_ptr)->get_object();
                 invoker.set_value(mono_obj, nested_obj);
@@ -264,7 +260,7 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
 
 // Forward declaration for recursive serializable object inspection
 auto inspect_serializable_object(rtti::context& ctx,
-                                 mono::mono_object_pinned_ptr pinned_ptr,
+                                 dotnet::object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
                                  const std::string& name,
                                  const var_info& info) -> inspect_result;
@@ -278,22 +274,22 @@ auto inspect_serializable_object(rtti::context& ctx,
 template<typename T>
 struct mono_field_proxy
 {
-    mono::mono_field field;
+    dotnet::field field;
     std::string field_name;
     
-    mono_field_proxy(mono::mono_field f) : field(f), field_name(f.get_name()) {}
+    mono_field_proxy(dotnet::field f) : field(f), field_name(f.get_name()) {}
     
     auto get_name() const -> std::string { return field_name; }
     
-    auto get_value(mono::mono_object& obj) const -> T
+    auto get_value(dotnet::object& obj) const -> T
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = dotnet::make_field_invoker<T>(field);
         return invoker.get_value(obj);
     }
     
-    void set_value(mono::mono_object& obj, const T& value) const
+    void set_value(dotnet::object& obj, const T& value) const
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = dotnet::make_field_invoker<T>(field);
         invoker.set_value(obj, value);
     }
     
@@ -320,22 +316,22 @@ struct mono_field_proxy
 template<typename T>
 struct mono_property_proxy
 {
-    mono::mono_property property;
+    dotnet::property property;
     std::string property_name;
     
-    mono_property_proxy(mono::mono_property p) : property(p), property_name(p.get_name()) {}
+    mono_property_proxy(dotnet::property p) : property(p), property_name(p.get_name()) {}
     
     auto get_name() const -> std::string { return property_name; }
     
-    auto get_value(mono::mono_object& obj) const -> T
+    auto get_value(dotnet::object& obj) const -> T
     {
-        auto invoker = mono::make_property_invoker<T>(property);
+        auto invoker = dotnet::make_property_invoker<T>(property);
         return invoker.get_value(obj);
     }
     
-    void set_value(mono::mono_object& obj, const T& value) const
+    void set_value(dotnet::object& obj, const T& value) const
     {
-        auto invoker = mono::make_property_invoker<T>(property);
+        auto invoker = dotnet::make_property_invoker<T>(property);
         invoker.set_value(obj, value);
     }
     
@@ -380,7 +376,7 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -391,7 +387,7 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
                 return false;
             }
             // get_value requires non-const reference, but it only reads
-            auto& mono_obj = const_cast<mono::mono_object&>(mono_obj_const);
+            auto& mono_obj = const_cast<dotnet::object&>(mono_obj_const);
             auto field_value = script_proxy.get_value(mono_obj);
             // Create an owned copy to avoid dangling references
             result = entt::meta_any{std::in_place_type<T>, field_value};
@@ -405,7 +401,7 @@ auto make_script_proxy(const meta_any_proxy& obj_proxy, const ProxyType& script_
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -435,7 +431,7 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
     meta_any_proxy handle_proxy;
     handle_proxy.impl->parent = obj_proxy.impl;
     auto field_name = mutable_field.get_name();
-    constexpr bool is_property = std::is_base_of<mono::mono_property, Invoker>::value;
+    constexpr bool is_property = std::is_base_of<dotnet::property, Invoker>::value;
     
     handle_proxy.impl->type_name = mutable_field.get_type().get_fullname();
     handle_proxy.impl->name = [&]()
@@ -453,7 +449,7 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -466,13 +462,13 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
             if constexpr(is_property)
             {
                 auto property = obj_type.get_property(field_name);
-                auto invoker = mono::make_property_invoker<entt::entity>(property);
+                auto invoker = dotnet::make_property_invoker<entt::entity>(property);
                 entity = invoker.get_value(mono_obj);
             }
             else
             {
                 auto field = obj_type.get_field(field_name);
-                auto invoker = mono::make_field_invoker<entt::entity>(field);
+                auto invoker = dotnet::make_field_invoker<entt::entity>(field);
                 entity = invoker.get_value(mono_obj);
             }
             
@@ -491,7 +487,7 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -504,14 +500,14 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
                 if constexpr(is_property)
                 {
                     auto property = obj_type.get_property(field_name);
-                    auto invoker = mono::make_property_invoker<entt::entity>(property);
+                    auto invoker = dotnet::make_property_invoker<entt::entity>(property);
                     auto handle = value.cast<entt::handle>();
                     invoker.set_value(mono_obj, handle.entity());
                 }
                 else
                 {
                     auto field = obj_type.get_field(field_name);
-                    auto invoker = mono::make_field_invoker<entt::entity>(field);
+                    auto invoker = dotnet::make_field_invoker<entt::entity>(field);
                     auto handle = value.cast<entt::handle>();
                     invoker.set_value(mono_obj, handle.entity());
                 }
@@ -552,7 +548,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -562,7 +558,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
             // Recreate the invoker from the field name
             auto obj_type = mono_obj.get_type();
             auto field = obj_type.get_field(field_name);
-            auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+            auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
             
             auto val = invoker.get_value(mono_obj);
             
@@ -572,7 +568,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
             {
                 const auto& field_type = invoker.get_type();
                 auto prop = field_type.get_property("uid");
-                auto mutable_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                auto mutable_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                 auto uid = mutable_prop.get_value(val);
 
                 auto& am = ctx.get_cached<asset_manager>();
@@ -591,7 +587,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
         entt::meta_any obj_var;
         if(obj_proxy.impl->getter(obj_var) && obj_var)
         {
-            auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
@@ -602,7 +598,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
                 auto mono_obj = pinned_ptr->get_object();
                 const auto& obj_type = mono_obj.get_type();
                 auto field = obj_type.get_field(field_name);
-                auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 
                 auto asset = value.cast<asset_handle<T>>();
                 const auto& field_type = invoker.get_type();
@@ -617,7 +613,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
                 if(val)
                 {
                     auto prop = field_type.get_property("uid");
-                    auto mutable_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                    auto mutable_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                     mutable_prop.set_value(val, asset.uid());
                 }
                 
@@ -646,7 +642,7 @@ struct mono_inspector
      * @return inspect_result The inspection result
      */
     static auto inspect_object(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
                                 const var_info& info) -> inspect_result
     {
@@ -670,13 +666,13 @@ struct mono_inspector
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
                 }
                 const auto& mono_obj = pinned_ptr->get_object();
-                T value = mono::mono_converter<T>::from_mono(mono_obj.get_internal_ptr());
+                T value = dotnet_converter<T>::from_managed(dotnet::get_managed_ptr(mono_obj));
                 result = entt::meta_any{std::in_place_type<T>, value};
                 return true;
             }
@@ -688,7 +684,7 @@ struct mono_inspector
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -706,9 +702,9 @@ struct mono_inspector
                         if(std::is_same<T, std::string>::value)
                         {
                             auto str = value.cast<std::string>();
-                            auto new_mono_obj = mono::mono_object(mono::mono_converter<std::string>::to_mono(str));
-                            auto new_pinned = mono::make_object_pinned(new_mono_obj);
-                            obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, new_pinned};
+                            auto new_mono_obj = dotnet::object(dotnet_converter<std::string>::to_managed(str));
+                            auto new_pinned = dotnet::make_object_pinned(new_mono_obj);
+                            obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, new_pinned};
 
                             return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
 
@@ -716,9 +712,9 @@ struct mono_inspector
                     }
                     else
                     {
-                        auto mono_value = mono::mono_converter<T>::to_mono(value.cast<T>());
+                        auto mono_value = dotnet_converter<T>::to_managed(value.cast<T>());
                         mono_obj.box_value(mono_value, type);
-                        obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+                        obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
 
                     }
@@ -741,12 +737,12 @@ struct mono_inspector
     }
 
     static auto inspect_field(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
-                                mono::mono_field& field,
+                                dotnet::field& field,
                                 const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_field_invoker<T>(field);
+        auto invoker = dotnet::make_field_invoker<T>(field);
 
         var_info field_info;
         field_info.is_property = true;
@@ -758,9 +754,9 @@ struct mono_inspector
     
     // New method that uses the proxy system for proper undo/redo support
     static auto inspect_invoker_with_proxy(rtti::context& ctx,
-                                          mono::mono_object& obj,
+                                          dotnet::object& obj,
                                           const meta_any_proxy& obj_proxy,
-                                          mono::mono_field& field,
+                                          dotnet::field& field,
                                           const var_info& info) -> inspect_result
     {
         // Create script proxy wrapper
@@ -789,7 +785,7 @@ struct mono_inspector
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -797,32 +793,32 @@ struct mono_inspector
 
         if(min_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(min_attrib.get_type(), "min");
+            auto invoker = dotnet::make_field_invoker<float>(min_attrib.get_type(), "min");
             float min_value = invoker.get_value(min_attrib);
             meta_attribs["min"] = min_value;
         }
 
         if(range_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
+            auto invoker = dotnet::make_field_invoker<float>(range_attrib.get_type(), "min");
             float min_value = invoker.get_value(range_attrib);
             meta_attribs["min"] = min_value;
             
-            auto max_invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
+            auto max_invoker = dotnet::make_field_invoker<float>(range_attrib.get_type(), "max");
             float max_value = max_invoker.get_value(range_attrib);
             meta_attribs["max"] = max_value;
         }
 
         if(max_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
+            auto invoker = dotnet::make_field_invoker<float>(max_attrib.get_type(), "max");
             float max_value = invoker.get_value(max_attrib);
             meta_attribs["max"] = max_value;
         }
 
         if(step_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(step_attrib.get_type(), "step");
+            auto invoker = dotnet::make_field_invoker<float>(step_attrib.get_type(), "step");
             float step_value = invoker.get_value(step_attrib);
             meta_attribs["step"] = step_value;
         }
@@ -838,12 +834,12 @@ struct mono_inspector
     }
 
     static auto inspect_property(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
-                                mono::mono_property& property,
+                                dotnet::property& property,
                                 const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_property_invoker<T>(property);
+        auto invoker = dotnet::make_property_invoker<T>(property);
 
         var_info field_info;
         field_info.is_property = true;
@@ -855,9 +851,9 @@ struct mono_inspector
 
     // New method that uses the proxy system for proper undo/redo support
     static auto inspect_property_with_proxy(rtti::context& ctx,
-                                            mono::mono_object& obj,
+                                            dotnet::object& obj,
                                             const meta_any_proxy& obj_proxy,
-                                            mono::mono_property& property,
+                                            dotnet::property& property,
                                             const var_info& info) -> inspect_result
     {
         // Create script proxy wrapper
@@ -886,7 +882,7 @@ struct mono_inspector
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -894,32 +890,32 @@ struct mono_inspector
 
         if(min_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(min_attrib.get_type(), "min");
+            auto invoker = dotnet::make_field_invoker<float>(min_attrib.get_type(), "min");
             float min_value = invoker.get_value(min_attrib);
             meta_attribs["min"] = min_value;
         }
 
         if(range_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "min");
+            auto invoker = dotnet::make_field_invoker<float>(range_attrib.get_type(), "min");
             float min_value = invoker.get_value(range_attrib);
             meta_attribs["min"] = min_value;
             
-            auto max_invoker = mono::make_field_invoker<float>(range_attrib.get_type(), "max");
+            auto max_invoker = dotnet::make_field_invoker<float>(range_attrib.get_type(), "max");
             float max_value = max_invoker.get_value(range_attrib);
             meta_attribs["max"] = max_value;
         }
 
         if(max_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(max_attrib.get_type(), "max");
+            auto invoker = dotnet::make_field_invoker<float>(max_attrib.get_type(), "max");
             float max_value = invoker.get_value(max_attrib);
             meta_attribs["max"] = max_value;
         }
 
         if(step_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<float>(step_attrib.get_type(), "step");
+            auto invoker = dotnet::make_field_invoker<float>(step_attrib.get_type(), "step");
             float step_value = invoker.get_value(step_attrib);
             meta_attribs["step"] = step_value;
         }
@@ -967,7 +963,7 @@ struct mono_inspector_enum
 
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
                                 const Invoker& mutable_field,
                                 const std::vector<std::pair<T, std::string>>& mapping,
@@ -983,7 +979,7 @@ struct mono_inspector_enum
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -1053,9 +1049,9 @@ struct mono_inspector_enum
     }
 
     static auto inspect_field(rtti::context& ctx,
-                              mono::mono_object& obj,
+                              dotnet::object& obj,
                               const meta_any_proxy& obj_proxy,
-                              mono::mono_field& field,
+                              dotnet::field& field,
                               const var_info& info) -> inspect_result
     {
         var_info field_info;
@@ -1072,9 +1068,9 @@ struct mono_inspector_enum
     
     // New method that uses the proxy system for proper undo/redo support for enum fields
     static auto inspect_enum_field_with_proxy(rtti::context& ctx,
-                                              mono::mono_object& obj,
+                                              dotnet::object& obj,
                                               const meta_any_proxy& obj_proxy,
-                                              mono::mono_field& field,
+                                              dotnet::field& field,
                                               const std::vector<std::pair<T, std::string>>& mapping,
                                               const var_info& info) -> inspect_result
     {
@@ -1095,7 +1091,7 @@ struct mono_inspector_enum
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -1168,9 +1164,9 @@ struct mono_inspector_enum
     }
 
     static auto inspect_property(rtti::context& ctx,
-                                 mono::mono_object& obj,
+                                 dotnet::object& obj,
                                  const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& property,
+                                 dotnet::property& property,
                                  const var_info& info) -> inspect_result
     {
         var_info field_info;
@@ -1187,9 +1183,9 @@ struct mono_inspector_enum
     
     // New method that uses the proxy system for proper undo/redo support for enum properties
     static auto inspect_enum_property_with_proxy(rtti::context& ctx,
-                                                 mono::mono_object& obj,
+                                                 dotnet::object& obj,
                                                  const meta_any_proxy& obj_proxy,
-                                                 mono::mono_property& property,
+                                                 dotnet::property& property,
                                                  const std::vector<std::pair<T, std::string>>& mapping,
                                                  const var_info& info) -> inspect_result
     {
@@ -1210,7 +1206,7 @@ struct mono_inspector_enum
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -1287,7 +1283,7 @@ template<>
 struct mono_inspector<entt::handle>
 {
     static auto inspect_object(rtti::context& ctx,
-                               mono::mono_object& obj,
+                               dotnet::object& obj,
                                const meta_any_proxy& obj_proxy,
                                const var_info& info) -> inspect_result
     {
@@ -1303,7 +1299,7 @@ struct mono_inspector<entt::handle>
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -1317,7 +1313,7 @@ struct mono_inspector<entt::handle>
                 {
                     return false;
                 }
-                auto entity = mono::mono_converter<entt::entity>::from_mono(mono_obj.get_internal_ptr());                
+                auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(mono_obj));                
                 // Convert entity to handle using the scene
                 auto& inspector_ctx = ctx.get_cached<inspector_context>();
                 auto& registry = *inspector_ctx.inspected_registry;
@@ -1334,7 +1330,7 @@ struct mono_inspector<entt::handle>
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -1349,9 +1345,9 @@ struct mono_inspector<entt::handle>
                     auto obj_type = mono_obj.get_type();
                     if(obj_type.is_valuetype())
                     {
-                        auto mono_entity = mono::mono_converter<entt::entity>::to_mono(entity);
+                        auto mono_entity = dotnet_converter<entt::entity>::to_managed(entity);
                         mono_obj.box_value(mono_entity, obj_type);
-                        obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+                        obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
                     }
                 }
@@ -1374,7 +1370,7 @@ struct mono_inspector<entt::handle>
 
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
@@ -1387,7 +1383,7 @@ struct mono_inspector<entt::handle>
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -1410,12 +1406,12 @@ struct mono_inspector<entt::handle>
     }
 
     static auto inspect_field(rtti::context& ctx,
-                              mono::mono_object& obj,
+                              dotnet::object& obj,
                               const meta_any_proxy& obj_proxy,
-                              mono::mono_field& field,
+                              dotnet::field& field,
                               const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_field_invoker<entt::entity>(field);
+        auto invoker = dotnet::make_field_invoker<entt::entity>(field);
 
         var_info field_info;
         field_info.is_property = true;
@@ -1425,12 +1421,12 @@ struct mono_inspector<entt::handle>
     }
 
     static auto inspect_property(rtti::context& ctx,
-                                 mono::mono_object& obj,
+                                 dotnet::object& obj,
                                  const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& field,
+                                 dotnet::property& field,
                                  const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_property_invoker<entt::entity>(field);
+        auto invoker = dotnet::make_property_invoker<entt::entity>(field);
 
         var_info field_info;
         field_info.is_property = true;
@@ -1444,7 +1440,7 @@ template<typename T>
 struct mono_inspector<asset_handle<T>>
 {
     static auto inspect_object(rtti::context& ctx,
-                               mono::mono_object& obj,
+                               dotnet::object& obj,
                                const meta_any_proxy& obj_proxy,
                                const var_info& info) -> inspect_result
     {
@@ -1460,7 +1456,7 @@ struct mono_inspector<asset_handle<T>>
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -1474,9 +1470,9 @@ struct mono_inspector<asset_handle<T>>
                 {
                     auto obj_type = mono_obj.get_type();
                     auto prop = obj_type.get_property("uid");
-                    if(prop.get_internal_ptr())
+                    if(prop.is_valid())
                     {
-                        auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                        auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                         auto uid = uid_prop.get_value(mono_obj);
                         
                         auto& am = ctx.get_cached<asset_manager>();
@@ -1495,7 +1491,7 @@ struct mono_inspector<asset_handle<T>>
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -1516,11 +1512,11 @@ struct mono_inspector<asset_handle<T>>
                     if(mono_obj.valid())
                     {
                         auto prop = obj_type.get_property("uid");
-                        if(prop.get_internal_ptr())
+                        if(prop.is_valid())
                         {
-                            auto uid_prop = mono::make_property_invoker<hpp::uuid>(prop);
+                            auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
                             uid_prop.set_value(mono_obj, asset ? asset.uid() : hpp::uuid{});
-                            obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+                            obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
                             return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
                         }
                     }
@@ -1544,7 +1540,7 @@ struct mono_inspector<asset_handle<T>>
 
     template<typename Invoker>
     static auto inspect_invoker(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
                                 const Invoker& mutable_field,
                                 const var_info& info) -> inspect_result
@@ -1557,7 +1553,7 @@ struct mono_inspector<asset_handle<T>>
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
         }
 
@@ -1580,12 +1576,12 @@ struct mono_inspector<asset_handle<T>>
     }
 
     static auto inspect_field(rtti::context& ctx,
-                              mono::mono_object& obj,
+                              dotnet::object& obj,
                               const meta_any_proxy& obj_proxy,
-                              mono::mono_field& field,
+                              dotnet::field& field,
                               const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+        auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
 
         var_info field_info;
         field_info.is_property = true;
@@ -1595,12 +1591,12 @@ struct mono_inspector<asset_handle<T>>
     }
 
     static auto inspect_property(rtti::context& ctx,
-                                 mono::mono_object& obj,
+                                 dotnet::object& obj,
                                  const meta_any_proxy& obj_proxy,
-                                 mono::mono_property& field,
+                                 dotnet::property& field,
                                  const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_property_invoker<mono::mono_object>(field);
+        auto invoker = dotnet::make_property_invoker<dotnet::object>(field);
 
         var_info field_info;
         field_info.is_property = true;
@@ -1617,10 +1613,10 @@ struct mono_inspector_collection
 {
     template<typename Invoker>
     static auto inspect_collection(rtti::context& ctx,
-                                   mono::mono_object& obj,
+                                   dotnet::object& obj,
                                    const meta_any_proxy& obj_proxy,
                                    const Invoker& mutable_field,
-                                   const mono::mono_type& collection_type,
+                                   const dotnet::type& collection_type,
                                    const var_info& info) -> inspect_result
     {
         inspect_result result;
@@ -1658,7 +1654,7 @@ struct mono_inspector_collection
             entt::meta_any obj_var;
             if(obj_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
@@ -1669,17 +1665,17 @@ struct mono_inspector_collection
 
                 if(is_array)
                 {
-                    auto array = mono::mono_array<mono::mono_object>(collection_obj);
+                    auto array = dotnet::array<dotnet::object>(collection_obj);
                     auto array_vec = array.to_vector();
-                    auto pinned_vec = mono::pin_vector_elements(array_vec);
+                    auto pinned_vec = dotnet::pin_vector_elements(array_vec);
                     result = pinned_vec;
                     return true;
                 }
                 if(is_list)
                 {
-                    auto list = mono::mono_list<mono::mono_object>(collection_obj);
+                    auto list = dotnet::list<dotnet::object>(collection_obj);
                     auto list_vec = list.to_vector();
-                    auto pinned_vec = mono::pin_vector_elements(list_vec);
+                    auto pinned_vec = dotnet::pin_vector_elements(list_vec);
                     result = pinned_vec;
                     return true;
                 }
@@ -1692,15 +1688,15 @@ struct mono_inspector_collection
             entt::meta_any obj_var;
             if(parent_proxy.impl->getter(obj_var) && obj_var)
             {
-                auto pinned_ptr = obj_var.cast<mono::mono_object_pinned_ptr>();
+                auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
                 if(!pinned_ptr)
                 {
                     return false;
                 }
-                if(auto pinned_vec = value.try_cast<std::vector<mono::mono_object_pinned_ptr>>())
+                if(auto pinned_vec = value.try_cast<std::vector<dotnet::object_pinned_ptr>>())
                 {
                     // Convert pinned pointers to mono_objects for setting
-                    std::vector<mono::mono_object> vec;
+                    std::vector<dotnet::object> vec;
                     vec.reserve(pinned_vec->size());
                     for(const auto& pinned_elem : *pinned_vec)
                     {
@@ -1710,7 +1706,7 @@ struct mono_inspector_collection
                         }
                         else
                         {
-                            vec.emplace_back(mono::mono_object());
+                            vec.emplace_back(dotnet::object());
                         }
                     }
                     
@@ -1722,11 +1718,11 @@ struct mono_inspector_collection
 
                         auto collection_obj = mutable_field.get_value(mono_obj);
                         
-                        auto collection = mono::mono_array<mono::mono_object>(collection_obj);
+                        auto collection = dotnet::array<dotnet::object>(collection_obj);
 
                         if(!collection_obj.valid())
                         {
-                            collection = mono::mono_array<mono::mono_object>(vec, element_type);
+                            collection = dotnet::array<dotnet::object>(vec, element_type);
                         }
                         else
                         {
@@ -1740,11 +1736,11 @@ struct mono_inspector_collection
                         auto element_type = mutable_field.get_type().get_element_type();
 
                         auto collection_obj = mutable_field.get_value(mono_obj);
-                        auto collection = mono::mono_list<mono::mono_object>(collection_obj);
+                        auto collection = dotnet::list<dotnet::object>(collection_obj);
                         
                         if(!collection_obj.valid())
                         {
-                            collection = mono::mono_list<mono::mono_object>(vec, element_type);
+                            collection = dotnet::list<dotnet::object>(vec, element_type);
                         }
                         else
                         {
@@ -1770,7 +1766,7 @@ struct mono_inspector_collection
         std::string tooltip;
         if(tooltip_attrib.valid())
         {
-            auto invoker = mono::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
             tooltip = invoker.get_value(tooltip_attrib);
             meta_attribs["tooltip"] = tooltip;
         }
@@ -1780,20 +1776,20 @@ struct mono_inspector_collection
             
             if (is_array)
             {
-                mono::mono_array<mono::mono_object> array(val);
+                dotnet::array<dotnet::object> array(val);
                 push_mono_type(array.get_element_type());
                 auto array_vec = array.to_vector();
-                auto pinned_vec = mono::pin_vector_elements(array_vec);
+                auto pinned_vec = dotnet::pin_vector_elements(array_vec);
                 entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
                 pop_mono_type();
             }
             else if (is_list)
             {
-                mono::mono_list<mono::mono_object> list(val);
+                dotnet::list<dotnet::object> list(val);
                 push_mono_type(list.get_element_type());
                 auto list_vec = list.to_vector();
-                auto pinned_vec = mono::pin_vector_elements(list_vec);
+                auto pinned_vec = dotnet::pin_vector_elements(list_vec);
                 entt::meta_any vec_var = entt::forward_as_meta(pinned_vec);
                 result |= unravel::inspect_var(ctx, vec_var, collection_proxy, info, custom);
                 pop_mono_type();
@@ -1807,12 +1803,12 @@ struct mono_inspector_collection
     }
     
     static auto inspect_field(rtti::context& ctx,
-                             mono::mono_object& obj,
+                             dotnet::object& obj,
                              const meta_any_proxy& obj_proxy,
-                             mono::mono_field& field,
+                             dotnet::field& field,
                              const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+        auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
         auto field_type = field.get_type();
         
         var_info field_info;
@@ -1823,12 +1819,12 @@ struct mono_inspector_collection
     }
     
     static auto inspect_property(rtti::context& ctx,
-                                mono::mono_object& obj,
+                                dotnet::object& obj,
                                 const meta_any_proxy& obj_proxy,
-                                mono::mono_property& property,
+                                dotnet::property& property,
                                 const var_info& info) -> inspect_result
     {
-        auto invoker = mono::make_property_invoker<mono::mono_object>(property);
+        auto invoker = dotnet::make_property_invoker<dotnet::object>(property);
         auto prop_type = property.get_type();
         
         var_info field_info;
@@ -1856,12 +1852,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
         {
-            auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
             }
-            result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+            result = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
             return true;
         }
         return false;
@@ -1878,7 +1874,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     };
 
  
-    auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+    auto pinned_ptr = var.cast<dotnet::object_pinned_ptr>();
     if(!pinned_ptr)
     {
         return {};
@@ -1912,7 +1908,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     }
 
     using mono_object_inspector = std::function<inspect_result(rtti::context& ctx,
-                                                                    mono::mono_object& obj,
+                                                                    dotnet::object& obj,
                                                                     const meta_any_proxy& obj_proxy,
                                                                     const var_info& info)>;
     
@@ -1964,9 +1960,9 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
 
     using mono_field_inspector = std::function<inspect_result(rtti::context&,
-                                                              mono::mono_object&,
+                                                              dotnet::object&,
                                                               const meta_any_proxy& obj_proxy,
-                                                              mono::mono_field&,
+                                                              dotnet::field&,
                                                               const var_info&)>;
 
     auto get_field_inspector = [](const std::string& type_name) -> const mono_field_inspector&
@@ -2046,7 +2042,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
     auto object_inspector = get_object_inspector(type.get_name());
     if(object_inspector)
     {
-        // object_inspector expects mono::mono_object&, so we need to use mutate_pinned
+        // object_inspector expects dotnet::object&, so we need to use mutate_pinned
         // However, since inspect_object typically only reads, we can use get_object()
         // But to be safe and allow mutations, we'll create a temporary mutable reference
         auto mono_obj = pinned_ptr->get_object();
@@ -2085,7 +2081,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         // if(ImGui::Button("Null"))
         // {
         //     pinned_ptr->unlock();
-        //     pinned_ptr->lock(mono::mono_object());
+        //     pinned_ptr->lock(dotnet::object());
 
         //     result.changed = true;
         //     result.edit_finished = result.changed;
@@ -2099,7 +2095,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         int i = 0;
         for(auto& field : fields)
         {
-            bool inspect_predicate = field.get_visibility() == mono::visibility::vis_public;
+            bool inspect_predicate = field.get_visibility() == dotnet::visibility::vis_public;
 
             ImGui::PushReadonly(!inspect_predicate);
 
@@ -2164,12 +2160,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 {
                     // Recursively inspect serializable nested objects
                     auto mono_obj = pinned_ptr->get_object();
-                    auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                    auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                     auto nested_obj = invoker.get_value(mono_obj);
                     
                     if(nested_obj.valid())
                     {
-                        auto nested_pinned = mono::make_object_pinned(nested_obj);
+                        auto nested_pinned = dotnet::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_object_proxy(obj_proxy, invoker);
                         result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, field.get_name(), info);
                     }
@@ -2201,7 +2197,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 //     try
                 //     {
-                //         auto invoker = mono::make_field_invoker<mono::mono_object>(field);
+                //         auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
                 //         auto nested_obj = invoker.get_value(data);
                 //         if(nested_obj.valid())
                 //         {
@@ -2235,9 +2231,9 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         }
 
         using mono_property_inspector = std::function<inspect_result(rtti::context&,
-                                                                    mono::mono_object&,
+                                                                    dotnet::object&,
                                                                     const meta_any_proxy& obj_proxy,
-                                                                    mono::mono_property&,
+                                                                    dotnet::property&,
                                                                     const var_info&)>;
 
         auto get_property_inspector = [](const std::string& type_name) -> const mono_property_inspector&
@@ -2313,7 +2309,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
         auto properties = type.get_properties(include_base);
         for(auto& prop : properties)
         {
-            bool inspect_predicate = prop.get_visibility() == mono::visibility::vis_public;
+            bool inspect_predicate = prop.get_visibility() == dotnet::visibility::vis_public;
             ImGui::PushReadonly(!inspect_predicate);
 
             if(is_debug_view())
@@ -2374,12 +2370,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 {
                     // Recursively inspect serializable nested objects
                     auto mono_obj = pinned_ptr->get_object();
-                    auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                    auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
                     auto nested_obj = invoker.get_value(mono_obj);
                     
                     if(nested_obj.valid())
                     {
-                        auto nested_pinned = mono::make_object_pinned(nested_obj);
+                        auto nested_pinned = dotnet::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_property_proxy(obj_proxy, invoker);
                         result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, prop.get_name(), info);
                     }
@@ -2411,7 +2407,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
 
                 //     try
                 //     {
-                //         auto invoker = mono::make_property_invoker<mono::mono_object>(prop);
+                //         auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
                 //         auto nested_obj = invoker.get_value(data);
                 //         if(nested_obj.valid())
                 //         {
@@ -2477,12 +2473,12 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
         entt::meta_any var;
         if(parent_proxy.impl->getter(var) && var)
         {
-            auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+            auto pinned_ptr = var.cast<dotnet::object_pinned_ptr>();
             if(!pinned_ptr)
             {
                 return false;
             }
-            result = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+            result = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
             return true;
         }
         return false;
@@ -2499,12 +2495,12 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
     };
 
 
-    auto pinned_ptr = var.cast<mono::mono_object_pinned_ptr>();
+    auto pinned_ptr = var.cast<dotnet::object_pinned_ptr>();
     if(!pinned_ptr)
     {
         return {};
     }
-    auto obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+    auto obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
 
     return inspector_mono_object::inspect(ctx, obj_var, obj_proxy, info, custom);
 }
@@ -2516,7 +2512,7 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
  * to handle all fields and properties of a serializable object.
  */
 auto inspect_serializable_object(rtti::context& ctx,
-                                 mono::mono_object_pinned_ptr pinned_ptr,
+                                 dotnet::object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
                                  const std::string& name,
                                  const var_info& info) -> inspect_result
@@ -2531,7 +2527,7 @@ auto inspect_serializable_object(rtti::context& ctx,
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
         
         // Create a meta_any wrapper for the nested pinned object and call the main inspector
-        auto obj_var = entt::meta_any{std::in_place_type<mono::mono_object_pinned_ptr>, pinned_ptr};
+        auto obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
         inspector_mono_object inspector;
         result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
         

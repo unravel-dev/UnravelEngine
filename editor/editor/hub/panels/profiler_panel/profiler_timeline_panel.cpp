@@ -12,7 +12,7 @@
 #include <base/platform/process_memory.hpp>
 #include <engine/settings/settings.h>
 #include <graphics/graphics.h>
-#include <monopp/mono_gc_handle.h>
+#include <dotnetpp/dotnetpp.h>
 
 #include <algorithm>
 #include <array>
@@ -973,7 +973,7 @@ void profiler_timeline_panel::draw_frame_selector_bar()
     uint32_t frame_count = profiler->get_frame_count();
     if(frame_count == 0)
     {
-        const float cpu_mb = static_cast<float>(mono::gc_get_used_size()) / megabyte_divisor;
+        const float cpu_mb = static_cast<float>(dotnet::gc_get_used_size()) / megabyte_divisor;
         cpu_heap_mb_history_.push_sample(cpu_mb);
         float gpu_mb = 0.0f;
         auto* stats = gfx::get_stats();

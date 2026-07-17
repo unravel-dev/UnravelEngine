@@ -113,6 +113,14 @@ void simulation::run_one_frame(bool is_active)
     ++frame_;
 }
 
+void simulation::reset_delta_clock()
+{
+    previous_timesteps_.clear();
+    timestep_ = duration_t::zero();
+    last_sleep_duration_ = duration_t::zero();
+    last_frame_timepoint_ = clock_t::now();
+}
+
 auto simulation::get_frame() const -> uint64_t
 {
     return frame_;

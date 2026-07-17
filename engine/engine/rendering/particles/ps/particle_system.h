@@ -204,9 +204,12 @@ void psDestroyEmitter(EmitterHandle _handle);
 
 ///
 /// Submit one homogeneous particle batch: same texture, @ref TextureMode (mask vs multi-channel), and
-/// @ref BlendMode. @ref RenderMode is per-instance. The pipeline groups emitters; this function sorts
-/// all instances back-to-front and may issue multiple submits if the transient instance buffer is smaller
-/// than the particle count.
+/// @ref BlendMode. @ref RenderMode is per-instance. The pipeline groups emitters by material.
+/// When @p _sort_by_depth is true, instances are sorted back-to-front (sequential for small counts,
+/// parallel above a threshold) then gathered into the instance buffer. When false, particles are
+/// streamed directly from each emitter's array in emission order (additive / order-independent
+/// blends) with no sort-key scratch. May issue multiple submits if the transient instance buffer
+/// is smaller than the particle count.
 uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
                               uint32_t _count,
                               uint8_t _view,
@@ -214,6 +217,7 @@ uint32_t psRenderEmitterBatch(const EmitterHandle* _handles,
                               const float* _mtxView,
                               const math::vec3& _eye,
                               bgfx::TextureHandle _texture,
-                              uint64_t _blend_state);
+                              uint64_t _blend_state,
+                              bool _sort_by_depth = true);
 
 #endif // PARTICLE_SYSTEM_H_HEADER_GUARD

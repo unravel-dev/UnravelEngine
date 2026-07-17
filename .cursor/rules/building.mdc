@@ -1,0 +1,9 @@
+---
+description: 
+globs: **/*.c,**/*.cpp,**/*.h,**/*.hpp,**/*.cxx,CMakeLists.txt,*.cmake,conanfile.txt,Makefil,**/*.cc
+alwaysApply: false
+---
+
+## Building
+
+- Prefer build using cmake commands usually under build directory. First check if there are already builds setup.

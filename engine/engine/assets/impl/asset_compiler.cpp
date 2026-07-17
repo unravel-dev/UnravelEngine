@@ -38,7 +38,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
 #include <fstream>
-#include <monopp/mono_jit.h>
+#include <dotnetpp/dotnetpp.h>
 #include <regex>
 #include <subprocess/subprocess.hpp>
 
@@ -1531,7 +1531,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     fs::error_code err;
     fs::path temp = fs::temp_directory_path(err);
 
-    mono::compiler_params params;
+    dotnet::compiler_params params;
 
     auto protocol = fs::extract_protocol(fs::convert_to_protocol(key)).generic_string();
 
@@ -1586,8 +1586,8 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     params.debug = flags & script_library::compilation_flags::debug;
 
     std::string error;
-    // auto cmd = mono::create_compile_command_detailed(params);
-    auto cmd = mono::create_compile_command_detailed_rsp(params, temp.string() + ".rsp");
+    // auto cmd = dotnet::create_compile_command_detailed(params);
+    auto cmd = dotnet::create_compile_command_detailed_rsp(params, temp.string() + ".rsp");
 
     // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 
@@ -1631,7 +1631,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
             }
         }
 
-        // mono::compile_cmd aot_cmd;
+        // dotnet::compile_cmd aot_cmd;
         // aot_cmd.cmd = "mono";
         // aot_cmd.args.emplace_back("--aot=full");
         // aot_cmd.args.emplace_back(temp.string());
@@ -1639,6 +1639,14 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
         // bool ok = run_process(aot_cmd.cmd, aot_cmd.args, true, error);
 
         //APPLOG_INFO("Successful compilation of {0}", fs::replace(output, "temp-", "").string());
+
+        // Part of script compilation: rewrite mono-style [InternalCall]
+        // externs with real bodies (coreclr backend; no-op on mono).
+        if(!dotnet::weave_assembly(str_output))
+        {
+            APPLOG_ERROR("Failed internal call weaving of {0}", output.string());
+            return false;
+        }
 
         script_system::copy_compiled_lib(temp, output);
     }

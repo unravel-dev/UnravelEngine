@@ -65,11 +65,25 @@ namespace Unravel.Core
     /// Global UI event manager that handles all UI event dispatching.
     /// Similar to ScriptComponentManager but for UI events.
     /// </summary>
+    [AutoStaticsCleanup]
     public static class UIEventManager
     {
          // Base event subscription storage for backward compatibility
          private static readonly Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>> baseSubscriptions
              = new Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>>();
+
+         /// <summary>
+         /// Invoked by the runtime before a script domain unloads. Subscribed
+         /// callbacks usually target script instances, which would otherwise
+         /// keep the unloading domain alive.
+         /// </summary>
+         private static void OnStaticsCleanup()
+         {
+             baseSubscriptions.Clear();
+             typedSubscriptions.Clear();
+             pendingOperations.Clear();
+             isDispatching = false;
+         }
 
          // Type-specific callback storage: Element -> EventType -> Type -> List<Delegates>
          private static readonly Dictionary<UIElement, Dictionary<string, Dictionary<Type, List<Delegate>>>> typedSubscriptions

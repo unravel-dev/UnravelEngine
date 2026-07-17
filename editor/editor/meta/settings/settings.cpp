@@ -109,6 +109,51 @@ LOAD_INLINE(editor_settings::debugger_settings)
     try_load(ar, ser20::make_nvp("loglevel", obj.loglevel));
 }
 
+REFLECT_INLINE(editor_settings::scripting_settings)
+{
+    auto always_readonly = entt::property_predicate<bool>(
+        [](const entt::meta_any&)
+        {
+            return true;
+        });
+
+    entt::meta_factory<editor_settings::scripting_settings>{}
+        .type("scripting_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scripting_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Scripting"},
+        })
+        .data<&editor_settings::scripting_settings::reload_app_domain>("reload_app_domain"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reload_app_domain"},
+            entt::attribute{"pretty_name", "Reload App Domain"},
+            entt::attribute{"tooltip", "Always reloads the app domain on play-mode changes and script recompile."},
+            entt::attribute{"readonly_predicate", always_readonly},
+        })
+        .data<&editor_settings::scripting_settings::reload_engine_domain>("reload_engine_domain"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reload_engine_domain"},
+            entt::attribute{"pretty_name", "Reload Engine Domain"},
+            entt::attribute{"tooltip",
+                            "Also reload the engine domain on play-mode changes and script recompile. "
+                            "Useful when iterating on engine C# scripts."},
+        });
+}
+
+SAVE_INLINE(editor_settings::scripting_settings)
+{
+    try_save(ar, ser20::make_nvp("reload_app_domain", obj.reload_app_domain));
+    try_save(ar, ser20::make_nvp("reload_engine_domain", obj.reload_engine_domain));
+}
+
+LOAD_INLINE(editor_settings::scripting_settings)
+{
+    try_load(ar, ser20::make_nvp("reload_app_domain", obj.reload_app_domain));
+    try_load(ar, ser20::make_nvp("reload_engine_domain", obj.reload_engine_domain));
+    obj.reload_app_domain = true;
+}
+
 REFLECT(editor_settings)
 {
     entt::meta_factory<editor_settings>{}
@@ -129,6 +174,12 @@ REFLECT(editor_settings)
             entt::attribute{"name", "external_tools"},
             entt::attribute{"pretty_name", "External Tools"},
             entt::attribute{"tooltip", "Missing..."},
+        })
+        .data<&editor_settings::scripting>("scripting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scripting"},
+            entt::attribute{"pretty_name", "Scripting"},
+            entt::attribute{"tooltip", "Script domain reload behaviour."},
         });
 }
 
@@ -136,6 +187,7 @@ SAVE(editor_settings)
 {
     try_save(ar, ser20::make_nvp("debugger", obj.debugger));
     try_save(ar, ser20::make_nvp("external_tools", obj.external_tools));
+    try_save(ar, ser20::make_nvp("scripting", obj.scripting));
     try_save(ar, ser20::make_nvp("projects", obj.projects));
 }
 SAVE_INSTANTIATE(editor_settings, ser20::oarchive_associative_t);
@@ -145,6 +197,7 @@ LOAD(editor_settings)
 {
     try_load(ar, ser20::make_nvp("debugger", obj.debugger));
     try_load(ar, ser20::make_nvp("external_tools", obj.external_tools));
+    try_load(ar, ser20::make_nvp("scripting", obj.scripting));
     try_load(ar, ser20::make_nvp("projects", obj.projects));
 }
 LOAD_INSTANTIATE(editor_settings, ser20::iarchive_associative_t);

@@ -32,6 +32,11 @@ struct simulation
     //-----------------------------------------------------------------------------
     void run_one_frame(bool is_active);
 
+    /// Drop smoothed history and restart the frame clock from now.
+    /// Call when entering play simulation so a preceding hitch (domain reload,
+    /// scene load) does not inflate subsequent deltas.
+    void reset_delta_clock();
+
     //-----------------------------------------------------------------------------
     //  Name : get_frame ()
     /// <summary>

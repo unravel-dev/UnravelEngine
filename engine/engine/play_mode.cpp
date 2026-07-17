@@ -7,6 +7,7 @@
 #include <engine/settings/settings.h>
 #include <logging/logging.h>
 #include <seq/seq.h>
+#include <simulation/simulation.h>
 
 namespace unravel
 {
@@ -133,6 +134,9 @@ void play_mode::enter_running(rtti::context& ctx)
 {
     current_phase_ = phase::running;
     frames_running_ = 0;
+    // Domain reload / scene restore often ran just before this; discard that
+    // hitch from the sim clock so the next measured frame is clean.
+    ctx.get_cached<simulation>().reset_delta_clock();
     splash_scene::teardown(splash_state_);
     ctx.get_cached<events>().on_play_begin(ctx);
 }

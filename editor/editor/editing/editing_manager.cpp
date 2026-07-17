@@ -24,6 +24,7 @@
 #include <engine/assets/impl/asset_writer.h>
 #include <editor/events.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include <editor/system/project_manager.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <imgui_widgets/gizmo.h>
 #include <editor/imgui/integration/imgui_notify.h>
@@ -36,6 +37,23 @@ namespace unravel
 
 namespace
 {
+    /// Reload script domains after scenes have been unloaded via unload_scenes_scripting.
+    /// App domain always reloads; engine domain follows editor scripting settings.
+    void reload_script_domains(rtti::context& ctx, script_system& scripting, bool recompile)
+    {
+        const bool reload_engine =
+            ctx.has<project_manager>() &&
+            ctx.get_cached<project_manager>().get_editor_settings().scripting.reload_engine_domain;
+
+        scripting.unload_app_domain();
+        if(reload_engine)
+        {
+            scripting.unload_engine_domain();
+            scripting.load_engine_domain(ctx, recompile);
+        }
+        scripting.load_app_domain(ctx, recompile);
+    }
+
     struct merge_session
     {
         uint64_t epoch = 1;       // increments on boundaries (press/release/focus loss)
@@ -143,22 +161,13 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     // Unload scenes BEFORE unloading domains to prevent script_component destructors
     // from trying to free GC handles from the old domain
     unload_scenes_scripting(scenes);
-    
-    {
-        // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "unload_app_domain");
-        scripting.unload_app_domain();
-        scripting.unload_engine_domain();
-    }
+
     {
         scripting.wait_for_jobs_to_finish(ctx);
         on_frame_update(ctx, delta_t(0.016667f));
+    }
 
-    }
-    {
-        // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_app_domain");
-        scripting.load_engine_domain(ctx, true);
-        scripting.load_app_domain(ctx, true);
-    }
+    reload_script_domains(ctx, scripting, true);
 
     const bool defer_game_scene = ctx.has<settings>() && ctx.get<settings>().splash.enabled;
 
@@ -252,17 +261,13 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     // from trying to free GC handles from the old domain
     unload_scenes_scripting(scenes);
 
-    
-    scripting.unload_app_domain();
-    scripting.unload_engine_domain();
     {
         scripting.wait_for_jobs_to_finish(ctx);
         on_frame_update(ctx, delta_t(0.016667f));
-
     }
-    scripting.load_engine_domain(ctx, false);
-    scripting.load_app_domain(ctx, false);
-        
+
+    reload_script_domains(ctx, scripting, false);
+
     for(auto scn : scenes)
     {
         auto& cache = caches_[scn->tag];
@@ -312,10 +317,7 @@ void editing_manager::on_script_recompile(rtti::context& ctx, const std::string&
         unload_scenes_scripting(scenes);
 
         auto& scripting = ctx.get_cached<script_system>();
-        scripting.unload_app_domain();
-        scripting.unload_engine_domain();
-        scripting.load_engine_domain(ctx, false);
-        scripting.load_app_domain(ctx, false);
+        reload_script_domains(ctx, scripting, false);
 
         for(auto scn : scenes)
         {

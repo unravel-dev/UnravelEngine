@@ -71,9 +71,6 @@ void project_manager::close_project(rtti::context& ctx)
 
     ctx.remove<settings>();
 
-    auto& scr = ctx.get_cached<script_system>();
-    scr.unload_app_domain();
-
     auto& em = ctx.get_cached<editing_manager>();
     em.clear();
 
@@ -82,6 +79,9 @@ void project_manager::close_project(rtti::context& ctx)
 
     auto& ec = ctx.get_cached<ecs>();
     ec.unload_scene();
+
+    auto& scr = ctx.get_cached<script_system>();
+    scr.unload_app_domain();
 
     auto& ui = ctx.get_cached<ui_system>();
     ui.release_resources();

@@ -5,8 +5,8 @@
 
 namespace ser20
 {
-    SAVE_EXTERN(mono::mono_object);
-    LOAD_EXTERN(mono::mono_object);
+    SAVE_EXTERN(dotnet::object);
+    LOAD_EXTERN(dotnet::object);
 }
 
 namespace unravel

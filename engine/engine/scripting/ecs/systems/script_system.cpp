@@ -13,12 +13,7 @@
 #include <engine/scripting/script.h>
 
 
-#include <monopp/mono_exception.h>
-#include <monopp/mono_field_invoker.h>
-#include <monopp/mono_internal_call.h>
-#include <monopp/mono_logger.h>
-#include <monopp/mono_method_invoker.h>
-#include <monopp/mono_property_invoker.h>
+#include <dotnetpp/dotnetpp.h>
 
 
 #include <core/base/platform/config.hpp>
@@ -49,7 +44,7 @@ std::atomic<uint64_t> compilation_version{};
 
 std::atomic_bool debug_mode{true};
 
-auto print_assembly_info(const mono::mono_assembly& assembly)
+auto print_assembly_info(const dotnet::assembly& assembly)
 {
     std::stringstream ss;
     auto refs = assembly.dump_references();
@@ -111,9 +106,9 @@ auto print_assembly_info(const mono::mono_assembly& assembly)
 
 } // namespace
 
-void script_system::log_exception(const mono::mono_exception& e, const hpp::source_location& loc)
+void script_system::log_exception(const dotnet::exception& e, const hpp::source_location& loc)
 {
-    auto frame = mono::extract_relevant_stack_frame(e.what());
+    auto frame = dotnet::extract_relevant_stack_frame(e.what());
     if(!frame.file_name.empty())
     {
         APPLOG_ERROR_LOC(frame.file_name.c_str(), frame.line, frame.function_name.c_str(), e.what());
@@ -146,23 +141,45 @@ void script_system::copy_compiled_lib(const fs::path& from, const fs::path& to)
     fs::remove(from_comments_xml, er);
 }
 
-auto script_system::find_mono(const rtti::context& ctx) -> mono::compiler_paths
+auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compiler_paths
 {
     bool is_deploy_mode = ctx.has<deploy>();
 
-    mono::compiler_paths result;
+    dotnet::compiler_paths result;
 
     if(is_deploy_mode)
     {
+#if DOTNETPP_BACKEND_MONO
         auto mono_dir = fs::resolve_protocol("engine:/mono");
         result.assembly_dir = fs::absolute(mono_dir / "lib").string();
         result.config_dir = fs::absolute(mono_dir / "etc").string();
+#else
+        fs::error_code ec;
+
+        // The managed bridge is shipped next to the bundled dotnet root; pass
+        // its location explicitly. If missing, the loader falls back to
+        // probing <exe_dir>/<bridge dir> and the working directory.
+        auto bridge_dir = fs::resolve_protocol("engine:/" + std::string(dotnet::managed_runtime_dir()));
+        if(fs::exists(bridge_dir, ec))
+        {
+            result.assembly_dir = fs::absolute(bridge_dir).string();
+        }
+
+        // Self-contained deploys bundle a pruned dotnet root (hostfxr + shared
+        // framework); pass it as the dotnet root override when present,
+        // otherwise fall back to a machine-wide install.
+        auto dotnet_dir = fs::resolve_protocol("engine:/dotnet");
+        if(fs::exists(dotnet_dir, ec))
+        {
+            result.config_dir = fs::absolute(dotnet_dir).string();
+        }
+#endif
     }
     else
     {
-        const auto& names = mono::get_common_library_names();
-        const auto& library_paths = mono::get_common_library_paths();
-        const auto& config_paths = mono::get_common_config_paths();
+        const auto& names = dotnet::get_common_library_names();
+        const auto& library_paths = dotnet::get_common_library_paths();
+        const auto& config_paths = dotnet::get_common_config_paths();
 
         for(size_t i = 0; i < library_paths.size(); ++i)
         {
@@ -182,25 +199,67 @@ auto script_system::find_mono(const rtti::context& ctx) -> mono::compiler_paths
     }
 
     {
-        const auto& names = mono::get_common_executable_names();
-        const auto& paths = mono::get_common_executable_paths();
+        const auto& names = dotnet::get_common_executable_names();
+        const auto& paths = dotnet::get_common_executable_paths();
 
         result.msc_executable = fs::find_program(names, paths).make_preferred().string();
     }
 
-    APPLOG_TRACE("MONO_PATHS:");
+    APPLOG_TRACE("DOTNET_PATHS:");
     APPLOG_TRACE("Assembly path - {}", result.assembly_dir);
     APPLOG_TRACE("Config path - {}", result.config_dir);
 
     return result;
 }
 
-auto validate_paths(const mono::compiler_paths& paths) -> bool
+/*
+ * automatic: leave CoreCLR alone (default). JIT platforms use the JIT;
+ * no-JIT packs (iOS) enable the interpreter themselves.
+ * forced: set DOTNET_InterpMode=1 for desktop testing against an
+ * interpreter-capable runtime (--interpreter forced, or
+ * UNRAVEL_FORCE_DOTNET_INTERPRETER).
+ */
+auto select_interpreter_config(const cmd_line::parser& parser) -> dotnet::interpreter_config
 {
-    return !paths.assembly_dir.empty() && !paths.config_dir.empty();
+    dotnet::interpreter_config config;
+#if defined(UNRAVEL_FORCE_DOTNET_INTERPRETER)
+    config.interp_mode = dotnet::interpreter_config::mode::forced;
+#endif
+    std::string mode;
+    if(parser.try_get("interpreter", mode) && mode == "forced")
+    {
+        config.interp_mode = dotnet::interpreter_config::mode::forced;
+    }
+    return config;
 }
 
-auto script_system::init(rtti::context& ctx) -> bool
+script_system::script_system(rtti::context& ctx, cmd_line::parser& parser)
+{
+    (void)ctx;
+    parser.set_optional<std::string>("",
+                                     "interpreter",
+                                     "auto",
+                                     "CoreCLR interpreter mode (auto|forced).");
+}
+
+auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) -> bool
+{
+#if DOTNETPP_BACKEND_MONO
+    (void)is_deploy_mode;
+    return !paths.assembly_dir.empty() && !paths.config_dir.empty() && !paths.msc_executable.empty();
+#else
+    if(is_deploy_mode)
+    {
+        // Deployed games load precompiled assemblies, so no compiler is
+        // required. The runtime comes from the bundled dotnet root
+        // (config_dir) or, if absent, from the machine install.
+        return true;
+    }
+    return !paths.msc_executable.empty();
+#endif
+}
+
+auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -214,43 +273,48 @@ auto script_system::init(rtti::context& ctx) -> bool
     ev.on_resume.connect(sentinel_, -100, this, &script_system::on_resume);
     ev.on_skip_next_frame.connect(sentinel_, -100, this, &script_system::on_skip_next_frame);
 
-    auto mono_paths = find_mono(ctx);
+    auto mono_paths = find_dotnet_paths(ctx);
 
-    if(!validate_paths(mono_paths))
+    if(!validate_paths(mono_paths, ctx.has<deploy>()))
     {
+#if DOTNETPP_BACKEND_MONO
         ctx.get_cached<loading_screen>().fail(
             "Failed to locate Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
+#else
+        ctx.get_cached<loading_screen>().fail(
+            "Failed to locate the .NET runtime. Please install it from - https://dotnet.microsoft.com/download");
+#endif
         return false;
     }
 
     debug_config_.enable_debugging = true;
 
-    mono::set_log_handler("info",
+    dotnet::set_log_handler("info",
                           [](const std::string& msg)
                           {
                               APPLOG_INFO("{}", msg);
                           });
-    mono::set_log_handler("trace",
+    dotnet::set_log_handler("trace",
                           [](const std::string& msg)
                           {
                               APPLOG_TRACE("{}", msg);
                           });
-    mono::set_log_handler("warning",
+    dotnet::set_log_handler("warning",
                           [](const std::string& msg)
                           {
                               APPLOG_WARNING("{}", msg);
                           });
-    mono::set_log_handler("error",
+    dotnet::set_log_handler("error",
                           [](const std::string& msg)
                           {
                               APPLOG_ERROR("{}", msg);
                           });
 
-    if(mono::init(mono_paths, debug_config_))
+    if(dotnet::init(mono_paths, debug_config_, select_interpreter_config(parser)))
     {
         bind_internal_calls(ctx);
 
-        mono::mono_domain::set_assemblies_path(fs::resolve_protocol(ex::get_compiled_directory("engine")).string());
+        dotnet::domain::set_assemblies_path(fs::resolve_protocol(ex::get_compiled_directory("engine")).string());
 
         try
         {
@@ -259,7 +323,7 @@ auto script_system::init(rtti::context& ctx) -> bool
                 return false;
             }
         }
-        catch(const mono::mono_exception& e)
+        catch(const dotnet::exception& e)
         {
             log_exception(e);
             return false;
@@ -268,10 +332,15 @@ auto script_system::init(rtti::context& ctx) -> bool
         initted = true;
         return true;
     }
-
+#if DOTNETPP_BACKEND_MONO
     ctx.get_cached<loading_screen>().fail(
         "Failed to initialize Mono C#. Please install it from - https://www.mono-project.com/download/stable/");
     return false;
+#else
+    ctx.get_cached<loading_screen>().fail(
+        "Failed to initialize the .NET runtime. Please install it from - https://dotnet.microsoft.com/download");
+    return false;
+#endif
 }
 
 auto script_system::deinit(rtti::context& ctx) -> bool
@@ -281,7 +350,7 @@ auto script_system::deinit(rtti::context& ctx) -> bool
     unload_app_domain();
     unload_engine_domain();
 
-    mono::shutdown();
+    dotnet::shutdown();
 
     return true;
 }
@@ -295,6 +364,8 @@ void script_system::set_debug_config(const std::string& address, uint32_t port, 
 
 auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bool
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load Engine Domain");
+
     bool is_deploy_mode = ctx.has<deploy>();
 
     if(!is_deploy_mode && recompile)
@@ -310,8 +381,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         }
     }
 
-    domain_ = std::make_unique<mono::mono_domain>("Unravel.Engine");
-    mono::mono_domain::set_current_domain(domain_.get());
+    domain_ = std::make_unique<dotnet::domain>("Unravel.Engine");
+    dotnet::domain::set_current_domain(domain_.get());
 
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
     auto engine_script_lib_temp = fs::resolve_protocol(get_lib_temp_compiled_key("engine"));
@@ -321,35 +392,56 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     auto assembly = domain_->get_assembly(engine_script_lib.string());
     // print_assembly_info(assembly);
 
-    APPLOG_TRACE("------------------------------------------------");
-    APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), reinterpret_cast<intptr_t>(domain_->get_internal_ptr()));
-    APPLOG_TRACE("------------------------------------------------");
+    APPLOG_TRACE("-------------------------------------------------------------");
+    APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), domain_->get_version());
+    APPLOG_TRACE("-------------------------------------------------------------");
 
     cache_.update_manager_type = assembly.get_type("Unravel.Core", "SystemManager");
+    cache_.component_type = assembly.get_type("Unravel.Core", "Component");
+    cache_.script_component_type = assembly.get_type("Unravel.Core", "ScriptComponent");
+    cache_.ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
 
-    // Cache methods to avoid repeated allocations every frame
+    // Cache methods once per engine domain (avoid per-call name lookup).
     cache_.update_method = cache_.update_manager_type.get_method("internal_n2m_update", 1);
     cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
     cache_.late_update_method = cache_.update_manager_type.get_method("internal_n2m_late_update", 0);
+
+    cache_.set_entity_method = cache_.component_type.get_method("internal_n2m_set_entity", 1);
+    cache_.on_create_method = cache_.script_component_type.get_method("internal_n2m_on_create", 0);
+    cache_.on_enable_method = cache_.script_component_type.get_method("internal_n2m_on_enable", 0);
+    cache_.on_disable_method = cache_.script_component_type.get_method("internal_n2m_on_disable", 0);
+    cache_.on_start_method = cache_.script_component_type.get_method("internal_n2m_on_start", 0);
+    cache_.on_destroy_method = cache_.script_component_type.get_method("internal_n2m_on_destroy", 0);
+    cache_.on_sensor_enter_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_enter", 2);
+    cache_.on_sensor_exit_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_exit", 2);
+    cache_.on_collision_enter_method =
+        cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
+    cache_.on_collision_exit_method =
+        cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 2);
+
+    cache_.ui_dispatch_event_method =
+        cache_.ui_event_manager_type.get_method("InternalDispatchEvent", 1);
 
     return true;
 }
 void script_system::unload_engine_domain()
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload Engine Domain");
     cache_ = {};
     if(domain_)
     {
-        auto domain_version = reinterpret_cast<intptr_t>(domain_->get_internal_ptr());
-        APPLOG_TRACE("-------------------------------------------------------");
-        APPLOG_TRACE("Unloading domain {} with version: {}", domain_->get_name(), domain_version);
-        APPLOG_TRACE("-------------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", domain_->get_name(), domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
     }
     domain_.reset();
-    mono::mono_domain::set_current_domain(nullptr);
+    dotnet::domain::set_current_domain(nullptr);
 }
 
 auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load App Domain");
+
     bool is_deploy_mode = ctx.has<deploy>();
 
     bool result = true;
@@ -361,8 +453,8 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         has_compilation_errors_ = !result;
     }
 
-    app_domain_ = std::make_unique<mono::mono_domain>("Unravel.App");
-    mono::mono_domain::set_current_domain(app_domain_.get());
+    app_domain_ = std::make_unique<dotnet::domain>("Unravel.App");
+    dotnet::domain::set_current_domain(app_domain_.get());
 
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
     auto app_script_lib_temp = fs::resolve_protocol(get_lib_temp_compiled_key("app"));
@@ -383,9 +475,9 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
     fs::error_code ec;
     if(fs::exists(app_script_lib, ec))
     {
-        APPLOG_TRACE("------------------------------------------------");
-        APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr()));
-        APPLOG_TRACE("------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Loading domain {} with version: {}", app_domain_->get_name(), app_domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
         try
         {
             auto assembly = app_domain_->get_assembly(app_script_lib.string());
@@ -395,9 +487,24 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
             if(!has_compilation_errors_)
             {
                 app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+
+                // Same-named types in the engine and app assemblies are two
+                // distinct .NET types - name-based lookups resolve app-first,
+                // so make the shadowing visible instead of silent.
+                auto engine_assembly = get_engine_assembly();
+                for(const auto& type : app_cache_.scriptable_component_types)
+                {
+                    auto fullname = type.get_fullname();
+                    if(engine_assembly.get_type(fullname).valid())
+                    {
+                        APPLOG_WARNING("Script type '{}' is defined in both the engine and the app scripts. "
+                                       "The app version will be used; rename it to avoid ambiguity.",
+                                       fullname);
+                    }
+                }
             }
         }
-        catch(const mono::mono_exception& e)
+        catch(const dotnet::exception& e)
         {
             log_exception(e);
             result = false;
@@ -409,17 +516,18 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 }
 void script_system::unload_app_domain()
 {
+    APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload App Domain");
+
     app_cache_ = {};
 
     if(app_domain_)
     {
-        auto domain_version = reinterpret_cast<intptr_t>(app_domain_->get_internal_ptr());
-        APPLOG_TRACE("------------------------------------------------");
-        APPLOG_TRACE("Unloading domain {} with version: {}", app_domain_->get_name(), domain_version);
-        APPLOG_TRACE("------------------------------------------------");
+        APPLOG_TRACE("-------------------------------------------------------------");
+        APPLOG_TRACE("Unloading domain {} with version: {}", app_domain_->get_name(), app_domain_->get_version());
+        APPLOG_TRACE("-------------------------------------------------------------");
     }
     app_domain_.reset();
-    mono::mono_domain::set_current_domain(domain_.get());
+    dotnet::domain::set_current_domain(domain_.get());
 }
 
 void script_system::on_create_component(entt::registry& r, entt::entity e)
@@ -492,7 +600,7 @@ void script_system::on_play_begin(hpp::span<const entt::handle> entities)
             }
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -536,7 +644,7 @@ void script_system::on_play_begin(entt::registry& entities)
                 });
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -585,7 +693,7 @@ void script_system::on_play_end(rtti::context& ctx)
     //             comp.destroy();
     //         });
     // }
-    // catch(const mono::mono_exception& e)
+    // catch(const dotnet::exception& e)
     // {
     //     log_exception(e);
     // }
@@ -657,6 +765,13 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
         if(play.is_simulation_running() && !play.is_paused())
         {
+            // Mid-frame enter_running: process() could not zero dt. Start()
+            // above still runs; skip integrating motion on this first frame.
+            if(play.frames_running() == 0)
+            {
+                dt = {};
+            }
+
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();
 
@@ -669,14 +784,14 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             {
                 APP_SCOPE_PERF("Script/System Update Managed");
                 // Use cached method to avoid repeated allocations
-                auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.update_method);
+                auto method_thunk = dotnet::make_method_invoker<void(update_data)>(cache_.update_method);
                 method_thunk(data);
             }
 
             elapsed_time_ += dt;
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -711,23 +826,20 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
             float fixed_delta_time{};
         };
 
-        if(play.is_simulation_running() && dt > delta_t::zero())
+        if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
         {
-            auto& sim = ctx.get_cached<simulation>();
-            auto time_scale = sim.get_time_scale();
-
             update_data data;
             data.fixed_delta_time = dt.count();
 
             {
                 APP_SCOPE_PERF("Script/System Fixed Update Managed");
                 // Use cached method to avoid repeated allocations
-                auto method_thunk = mono::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
+                auto method_thunk = dotnet::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
                 method_thunk(data);
             }
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -751,15 +863,15 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(play.is_simulation_running() && dt > delta_t::zero())
+            if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");
                 // Use cached method to avoid repeated allocations
-                auto method_thunk = mono::make_method_invoker<void()>(cache_.late_update_method);
+                auto method_thunk = dotnet::make_method_invoker<void()>(cache_.late_update_method);
                 method_thunk();
             }
         }
-        catch(const mono::mono_exception& e)
+        catch(const dotnet::exception& e)
         {
             log_exception(e);
         }
@@ -777,46 +889,55 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
     
 }
 
-auto script_system::get_all_scriptable_components() const -> const std::vector<mono::mono_type>&
+auto script_system::get_all_scriptable_components() const -> const std::vector<dotnet::type>&
 {
     return app_cache_.scriptable_component_types;
 }
 
-auto script_system::get_scriptable_component_base_type() const -> mono::mono_type
+auto script_system::get_scriptable_component_base_type() const -> dotnet::type
 {
-    auto comp_type = get_engine_assembly().get_type("Unravel.Core", "ScriptComponent");
-    return comp_type;
+    return cache_.script_component_type;
 }
 
-auto script_system::get_engine_assembly() const -> mono::mono_assembly
+auto script_system::get_engine_assembly() const -> dotnet::assembly
 {
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
     return domain_->get_assembly(engine_script_lib.string());
 }
 
-auto script_system::get_app_assembly() const -> mono::mono_assembly
+auto script_system::get_app_assembly() const -> dotnet::assembly
 {
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
     return app_domain_->get_assembly(app_script_lib.string());
 }
 
-auto script_system::get_type_by_fullname(const std::string& fullname) const -> mono::mono_type
+auto script_system::get_type_by_fullname(const std::string& fullname) const -> dotnet::type
 {
-    auto type = domain_->get_type(fullname);
-    if(!type.valid())
+    // App types take precedence so user code shadows engine-provided types
+    // (samples, templates) instead of silently binding to the engine copy.
+    dotnet::type type;
+    if(app_domain_)
     {
         type = app_domain_->get_type(fullname);
     }
-    
+    if(!type.valid() && domain_)
+    {
+        type = domain_->get_type(fullname);
+    }
+
     return type;
 }
 
-auto script_system::get_type(const std::string& name_space, const std::string& name) const -> mono::mono_type
+auto script_system::get_type(const std::string& name_space, const std::string& name) const -> dotnet::type
 {
-    auto type = domain_->get_type(name_space, name);
-    if(!type.valid())
+    dotnet::type type;
+    if(app_domain_)
     {
         type = app_domain_->get_type(name_space, name);
+    }
+    if(!type.valid() && domain_)
+    {
+        type = domain_->get_type(name_space, name);
     }
     return type;
 }
@@ -832,7 +953,7 @@ auto script_system::is_update_called() const -> bool
 
 auto script_system::is_debugger_attached() -> bool
 {
-    return mono::is_debugger_attached();
+    return dotnet::is_debugger_attached();
 }
 
 void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback)
@@ -997,7 +1118,7 @@ void script_system::on_sensor_enter(entt::handle sensor, entt::handle other, con
     {
         comp->on_sensor_enter(other, manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -1020,7 +1141,7 @@ void script_system::on_sensor_exit(entt::handle sensor, entt::handle other, cons
     {
         comp->on_sensor_exit(other, manifolds);
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -1051,7 +1172,7 @@ void script_system::on_collision_enter(entt::handle a, entt::handle b, const std
             }
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }
@@ -1082,7 +1203,7 @@ void script_system::on_collision_exit(entt::handle a, entt::handle b, const std:
             }
         }
     }
-    catch(const mono::mono_exception& e)
+    catch(const dotnet::exception& e)
     {
         log_exception(e);
     }

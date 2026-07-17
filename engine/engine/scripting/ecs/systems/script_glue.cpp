@@ -1,4 +1,3 @@
-#include "monopp/mono_array.h"
 #include "script_interop.h"
 #include "script_system.h"
 #include <engine/ecs/ecs.h>
@@ -6,11 +5,7 @@
 #include <engine/play_mode.h>
 
 #include <engine/engine.h>
-#include <monopp/mono_exception.h>
-#include <monopp/mono_internal_call.h>
-#include <monopp/mono_jit.h>
-#include <monort/mono_pod_wrapper.h>
-#include <monort/monort.h>
+#include <dotnetpp/dotnetpp.h>
 
 #include <engine/assets/asset_manager.h>
 #include <engine/audio/ecs/components/audio_source_component.h>
@@ -37,7 +32,6 @@
 #include <RmlUi/Core/Event.h>
 
 // Mono includes for method invocation
-#include <monopp/mono_method_invoker.h>
 
 #include <simulation/simulation.h>
 #include <filesystem/filesystem.h>
@@ -50,19 +44,19 @@ namespace unravel
 namespace
 {
 
-auto get_material_properties(const material::sptr& material) -> mono::managed_interface::material_properties
+auto get_material_properties(const material::sptr& material) -> dotnetpp_backend::managed_interface::material_properties
 {
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
-    mono::managed_interface::material_properties props;
+    dotnetpp_backend::managed_interface::material_properties props;
 
     if(material->is<pbr_material>())
     {
         const auto pbr = std::static_pointer_cast<pbr_material>(material);
-        props.base_color = converter::convert<math::color, mono::managed_interface::color>(pbr->get_base_color());
+        props.base_color = converter::convert<math::color, dotnetpp_backend::managed_interface::color>(pbr->get_base_color());
         props.emissive_color =
-            converter::convert<math::color, mono::managed_interface::color>(pbr->get_emissive_color());
-        props.tiling = converter::convert<math::vec2, mono::managed_interface::vector2>(pbr->get_tiling());
+            converter::convert<math::color, dotnetpp_backend::managed_interface::color>(pbr->get_emissive_color());
+        props.tiling = converter::convert<math::vec2, dotnetpp_backend::managed_interface::vector2>(pbr->get_tiling());
         props.roughness = pbr->get_roughness();
         props.metalness = pbr->get_metalness();
         props.bumpiness = pbr->get_bumpiness();
@@ -72,20 +66,20 @@ auto get_material_properties(const material::sptr& material) -> mono::managed_in
     return props;
 }
 
-void set_material_properties(const material::sptr& material, const mono::managed_interface::material_properties& props)
+void set_material_properties(const material::sptr& material, const dotnetpp_backend::managed_interface::material_properties& props)
 {
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
     if(material->is<pbr_material>())
     {
         auto pbr = std::static_pointer_cast<pbr_material>(material);
-        auto base_color = converter::convert<mono::managed_interface::color, math::color>(props.base_color);
+        auto base_color = converter::convert<dotnetpp_backend::managed_interface::color, math::color>(props.base_color);
         pbr->set_base_color(base_color);
 
-        auto emissive_color = converter::convert<mono::managed_interface::color, math::color>(props.emissive_color);
+        auto emissive_color = converter::convert<dotnetpp_backend::managed_interface::color, math::color>(props.emissive_color);
         pbr->set_emissive_color(emissive_color);
 
-        auto tiling = converter::convert<mono::managed_interface::vector2, math::vec2>(props.tiling);
+        auto tiling = converter::convert<dotnetpp_backend::managed_interface::vector2, math::vec2>(props.tiling);
         pbr->set_tiling(tiling);
 
         pbr->set_metalness(props.metalness);
@@ -94,14 +88,14 @@ void set_material_properties(const material::sptr& material, const mono::managed
     }
 }
 
-struct mono_asset
+struct dotnet_asset
 {
     virtual auto get_asset_uuid(const hpp::uuid& uid) const -> hpp::uuid = 0;
     virtual auto get_asset_uuid(const std::string& key) const -> hpp::uuid = 0;
 };
 
 template<typename T>
-struct mono_asset_impl : mono_asset
+struct dotnet_asset_impl : dotnet_asset
 {
     auto get_asset_uuid(const hpp::uuid& uid) const -> hpp::uuid override
     {
@@ -122,20 +116,20 @@ struct mono_asset_impl : mono_asset
     }
 };
 
-auto get_mono_asset(size_t type_hash) -> const mono_asset*
+auto get_dotnet_asset(size_t type_hash) -> const dotnet_asset*
 {
     // clang-format off
-    static std::map<size_t, std::shared_ptr<mono_asset>> reg =
+    static std::map<size_t, std::shared_ptr<dotnet_asset>> reg =
     {
-        {mono::mono_type::get_hash("Unravel.Core.Texture"),         std::make_shared<mono_asset_impl<gfx::texture>>()},
-        {mono::mono_type::get_hash("Unravel.Core.Material"),        std::make_shared<mono_asset_impl<material>>()},
-        {mono::mono_type::get_hash("Unravel.Core.Mesh"),            std::make_shared<mono_asset_impl<mesh>>()},
-        {mono::mono_type::get_hash("Unravel.Core.AnimationClip"),   std::make_shared<mono_asset_impl<animation_clip>>()},
-        {mono::mono_type::get_hash("Unravel.Core.Prefab"),          std::make_shared<mono_asset_impl<prefab>>()},
-        {mono::mono_type::get_hash("Unravel.Core.Scene"),           std::make_shared<mono_asset_impl<scene_prefab>>()},
-        {mono::mono_type::get_hash("Unravel.Core.PhysicsMaterial"), std::make_shared<mono_asset_impl<physics_material>>()},
-        {mono::mono_type::get_hash("Unravel.Core.AudioClip"),       std::make_shared<mono_asset_impl<audio_clip>>()},
-        {mono::mono_type::get_hash("Unravel.Core.Font"),            std::make_shared<mono_asset_impl<font>>()}
+        {dotnet::type::get_hash("Unravel.Core.Texture"),         std::make_shared<dotnet_asset_impl<gfx::texture>>()},
+        {dotnet::type::get_hash("Unravel.Core.Material"),        std::make_shared<dotnet_asset_impl<material>>()},
+        {dotnet::type::get_hash("Unravel.Core.Mesh"),            std::make_shared<dotnet_asset_impl<mesh>>()},
+        {dotnet::type::get_hash("Unravel.Core.AnimationClip"),   std::make_shared<dotnet_asset_impl<animation_clip>>()},
+        {dotnet::type::get_hash("Unravel.Core.Prefab"),          std::make_shared<dotnet_asset_impl<prefab>>()},
+        {dotnet::type::get_hash("Unravel.Core.Scene"),           std::make_shared<dotnet_asset_impl<scene_prefab>>()},
+        {dotnet::type::get_hash("Unravel.Core.PhysicsMaterial"), std::make_shared<dotnet_asset_impl<physics_material>>()},
+        {dotnet::type::get_hash("Unravel.Core.AudioClip"),       std::make_shared<dotnet_asset_impl<audio_clip>>()},
+        {dotnet::type::get_hash("Unravel.Core.Font"),            std::make_shared<dotnet_asset_impl<font>>()}
     };
     // clang-format on
 
@@ -144,7 +138,7 @@ auto get_mono_asset(size_t type_hash) -> const mono_asset*
     {
         return it->second.get();
     }
-    static const mono_asset* empty{};
+    static const dotnet_asset* empty{};
     return empty;
 };
 
@@ -163,13 +157,13 @@ auto get_entity_from_id(entt::entity id) -> entt::handle
 
 void raise_invalid_entity_exception()
 {
-    mono::raise_exception("System", "Exception", "Entity is invalid.");
+    dotnet::raise_exception("System", "Exception", "Entity is invalid.");
 }
 
 template<typename T>
 void raise_missing_component_exception()
 {
-    mono::raise_exception("System",
+    dotnet::raise_exception("System",
                           "Exception",
                           fmt::format("Entity does not have component of type {}.", hpp::type_name_str<T>()));
 }
@@ -241,14 +235,14 @@ void internal_m2n_reload_scene()
     seq::queue(delay, "script");
 }
 
-void internal_m2n_create_scene(const mono::mono_object& this_ptr)
+void internal_m2n_create_scene(const dotnet::object& this_ptr)
 {
-    mono::ignore(this_ptr);
+    dotnet::ignore(this_ptr);
 }
 
-void internal_m2n_destroy_scene(const mono::mono_object& this_ptr)
+void internal_m2n_destroy_scene(const dotnet::object& this_ptr)
 {
-    mono::ignore(this_ptr);
+    dotnet::ignore(this_ptr);
 }
 
 auto internal_m2n_create_entity(const std::string& tag) -> entt::entity
@@ -598,7 +592,7 @@ struct native_comp_lut
     template<typename T>
     static auto register_native_component(const std::string& name)
     {
-        size_t hash = mono::mono_type::get_hash(name);
+        size_t hash = dotnet::type::get_hash(name);
         native_comp_lut lut;
         lut.add_native = [hash](size_t type_hash, entt::handle e)
         {
@@ -657,8 +651,8 @@ int register_componetns = []()
     return 0;
 }();
 
-auto internal_add_native_component(const mono::mono_type& type, entt::handle e, script_component& script_comp)
-    -> mono::mono_object
+auto internal_add_native_component(const dotnet::type& type, entt::handle e, script_component& script_comp)
+    -> dotnet::object
 {
     // TODO OPTIMIZE
 
@@ -685,10 +679,10 @@ auto internal_add_native_component(const mono::mono_type& type, entt::handle e, 
     return {};
 }
 
-auto internal_get_native_component_impl(const mono::mono_type& type,
+auto internal_get_native_component_impl(const dotnet::type& type,
                                         entt::handle e,
                                         script_component& script_comp,
-                                        bool exists) -> mono::mono_object
+                                        bool exists) -> dotnet::object
 {
     auto comp = script_comp.get_native_component(type);
     if(exists)
@@ -708,8 +702,8 @@ auto internal_get_native_component_impl(const mono::mono_type& type,
     return {};
 }
 
-auto internal_get_native_component(const mono::mono_type& type, entt::handle e, script_component& script_comp)
-    -> mono::mono_object
+auto internal_get_native_component(const dotnet::type& type, entt::handle e, script_component& script_comp)
+    -> dotnet::object
 {
     const auto& type_hash = type.get_hash();
 
@@ -732,7 +726,7 @@ auto internal_get_native_component(const mono::mono_type& type, entt::handle e, 
     return {};
 }
 
-auto internal_remove_native_component(const mono::mono_object& obj, entt::handle e, script_component& script_comp)
+auto internal_remove_native_component(const dotnet::object& obj, entt::handle e, script_component& script_comp)
     -> bool
 {
     const auto& type = obj.get_type();
@@ -755,7 +749,7 @@ auto internal_remove_native_component(const mono::mono_object& obj, entt::handle
     return false;
 }
 
-auto internal_remove_native_component(const mono::mono_type& type, entt::handle e, script_component& script_comp)
+auto internal_remove_native_component(const dotnet::type& type, entt::handle e, script_component& script_comp)
     -> bool
 {
     const auto& type_hash = type.get_hash();
@@ -777,7 +771,7 @@ auto internal_remove_native_component(const mono::mono_type& type, entt::handle 
     return false;
 }
 
-auto internal_m2n_add_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object
+auto internal_m2n_add_component(entt::entity id, const dotnet::type& type) -> dotnet::object
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -796,7 +790,7 @@ auto internal_m2n_add_component(entt::entity id, const mono::mono_type& type) ->
     return component.pinned->get_object();
 }
 
-auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object
+auto internal_m2n_get_component(entt::entity id, const dotnet::type& type) -> dotnet::object
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -828,7 +822,7 @@ auto internal_m2n_get_component(entt::entity id, const mono::mono_type& type) ->
 }
 
 
-auto internal_m2n_get_components_impl(entt::entity id, const mono::mono_type& type) -> std::vector<mono::mono_object>
+auto internal_m2n_get_components_impl(entt::entity id, const dotnet::type& type) -> std::vector<dotnet::object>
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -847,13 +841,13 @@ auto internal_m2n_get_components_impl(entt::entity id, const mono::mono_type& ty
     return script_comp.get_script_components(type);
 }
 
-auto internal_m2n_get_components(entt::entity id, const mono::mono_type& type) -> mono::mono_array<mono::mono_object>
+auto internal_m2n_get_components(entt::entity id, const dotnet::type& type) -> dotnet::array<dotnet::object>
 {
     auto components = internal_m2n_get_components_impl(id, type);
-    return mono::mono_array<mono::mono_object>(components, type);
+    return dotnet::array<dotnet::object>(components, type);
 }
 
-auto internal_m2n_get_component_in_children(entt::entity id, const mono::mono_type& type) -> mono::mono_object
+auto internal_m2n_get_component_in_children(entt::entity id, const dotnet::type& type) -> dotnet::object
 {
     auto comp = internal_m2n_get_component(id, type);
     if(comp.valid())
@@ -875,8 +869,8 @@ auto internal_m2n_get_component_in_children(entt::entity id, const mono::mono_ty
     return {};
 }
 
-auto internal_m2n_get_components_in_children(entt::entity id, const mono::mono_type& type)
-    -> mono::mono_array<mono::mono_object>
+auto internal_m2n_get_components_in_children(entt::entity id, const dotnet::type& type)
+    -> dotnet::array<dotnet::object>
 {
     auto components = internal_m2n_get_components_impl(id, type);
     if(auto comp = safe_get_component<transform_component>(id))
@@ -888,10 +882,10 @@ auto internal_m2n_get_components_in_children(entt::entity id, const mono::mono_t
             std::move(child_components.begin(), child_components.end(), std::back_inserter(components));
         }
     }
-    return mono::mono_array<mono::mono_object>(components, type);
+    return dotnet::array<dotnet::object>(components, type);
 }
 
-auto internal_m2n_get_transform_component(entt::entity id, const mono::mono_type& type) -> mono::mono_object
+auto internal_m2n_get_transform_component(entt::entity id, const dotnet::type& type) -> dotnet::object
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -988,14 +982,14 @@ void internal_m2n_set_active_local(entt::entity id, bool active)
     }
 }
 
-auto internal_m2n_has_component(entt::entity id, const mono::mono_type& type) -> bool
+auto internal_m2n_has_component(entt::entity id, const dotnet::type& type) -> bool
 {
     auto comp = internal_m2n_get_component(id, type);
 
     return comp.valid();
 }
 
-auto internal_m2n_find_entities_with_component(const mono::mono_type& component_type) -> hpp::small_vector<entt::entity>
+auto internal_m2n_find_entities_with_component(const dotnet::type& component_type) -> hpp::small_vector<entt::entity>
 {
     auto& ctx = engine::context();
     auto& ec = ctx.get_cached<ecs>();
@@ -1021,7 +1015,7 @@ auto internal_m2n_find_entities_with_component(const mono::mono_type& component_
     return result;
 }
 
-auto internal_m2n_find_entities_with_components(const std::vector<mono::mono_type>& component_types) -> hpp::small_vector<entt::entity>
+auto internal_m2n_find_entities_with_components(const std::vector<dotnet::type>& component_types) -> hpp::small_vector<entt::entity>
 {
     auto& ctx = engine::context();
     auto& ec = ctx.get_cached<ecs>();
@@ -1063,7 +1057,7 @@ auto internal_m2n_find_entities_with_components(const std::vector<mono::mono_typ
     return result;
 }
 
-auto internal_m2n_remove_component_instance(entt::entity id, const mono::mono_object& comp) -> bool
+auto internal_m2n_remove_component_instance(entt::entity id, const dotnet::object& comp) -> bool
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -1081,7 +1075,7 @@ auto internal_m2n_remove_component_instance(entt::entity id, const mono::mono_ob
     return script_comp.remove_script_component(comp);
 }
 
-auto internal_m2n_remove_component_instance_delay(entt::entity id, const mono::mono_object& comp, float seconds_delay)
+auto internal_m2n_remove_component_instance_delay(entt::entity id, const dotnet::object& comp, float seconds_delay)
     -> bool
 {
     delta_t secs(seconds_delay);
@@ -1099,7 +1093,7 @@ auto internal_m2n_remove_component_instance_delay(entt::entity id, const mono::m
     return true;
 }
 
-auto internal_m2n_remove_component(entt::entity id, const mono::mono_type& type) -> bool
+auto internal_m2n_remove_component(entt::entity id, const dotnet::type& type) -> bool
 {
     auto e = get_entity_from_id(id);
     if(!e)
@@ -1117,7 +1111,7 @@ auto internal_m2n_remove_component(entt::entity id, const mono::mono_type& type)
     return script_comp.remove_script_component(type);
 }
 
-auto internal_m2n_remove_component_delay(entt::entity id, const mono::mono_type& type, float seconds_delay) -> bool
+auto internal_m2n_remove_component_delay(entt::entity id, const dotnet::type& type, float seconds_delay) -> bool
 {
     delta_t secs(seconds_delay);
     auto dur = std::chrono::duration_cast<seq::duration_t>(secs);
@@ -2147,7 +2141,7 @@ auto internal_m2n_animation_get_speed(entt::entity id) -> float
 //------------------------------
 auto internal_m2n_camera_screen_point_to_ray(entt::entity id,
                                              const math::vec2& origin,
-                                             mono::managed_interface::ray* managed_ray) -> bool
+                                             dotnetpp_backend::managed_interface::ray* managed_ray) -> bool
 {
     if(auto comp = safe_get_component<camera_component>(id))
     {
@@ -2156,9 +2150,9 @@ auto internal_m2n_camera_screen_point_to_ray(entt::entity id,
         bool result = comp->get_camera().viewport_to_ray(origin, ray_origin, ray_dir);
         if(result)
         {
-            using converter = mono::managed_interface::converter;
-            managed_ray->origin = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_origin);
-            managed_ray->direction = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_dir);
+            using converter = dotnet::managed_interface::converter;
+            managed_ray->origin = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_origin);
+            managed_ray->direction = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_dir);
         }
         return result;
     }
@@ -2244,7 +2238,7 @@ auto internal_m2n_model_get_shared_material_count(entt::entity id) -> int
 }
 
 auto internal_m2n_model_get_material_instance(entt::entity id, uint32_t index)
-    -> mono::managed_interface::material_properties
+    -> dotnetpp_backend::managed_interface::material_properties
 {
     if(auto comp = safe_get_component<model_component>(id))
     {
@@ -2270,10 +2264,10 @@ void internal_m2n_model_set_shared_material(entt::entity id, const hpp::uuid& ui
 }
 
 void internal_m2n_model_set_material_instance(entt::entity id,
-                                              const mono::managed_interface::material_properties& props,
+                                              const dotnetpp_backend::managed_interface::material_properties& props,
                                               uint32_t index)
 {
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
     if(auto comp = safe_get_component<model_component>(id))
     {
@@ -3198,9 +3192,9 @@ auto internal_m2n_from_to_rotation(const math::vec3& from, const math::vec3& to)
     return math::from_to_rotation(from, to);
 }
 
-auto internal_m2n_get_asset_by_uuid(const hpp::uuid& uid, const mono::mono_type& type) -> hpp::uuid
+auto internal_m2n_get_asset_by_uuid(const hpp::uuid& uid, const dotnet::type& type) -> hpp::uuid
 {
-    if(auto asset = get_mono_asset(type.get_hash()))
+    if(auto asset = get_dotnet_asset(type.get_hash()))
     {
         return asset->get_asset_uuid(uid);
     }
@@ -3208,9 +3202,9 @@ auto internal_m2n_get_asset_by_uuid(const hpp::uuid& uid, const mono::mono_type&
     return {};
 }
 
-auto internal_m2n_get_asset_by_key(const std::string& key, const mono::mono_type& type) -> hpp::uuid
+auto internal_m2n_get_asset_by_key(const std::string& key, const dotnet::type& type) -> hpp::uuid
 {
-    if(auto asset = get_mono_asset(type.get_hash()))
+    if(auto asset = get_dotnet_asset(type.get_hash()))
     {
         return asset->get_asset_uuid(key);
     }
@@ -3218,14 +3212,14 @@ auto internal_m2n_get_asset_by_key(const std::string& key, const mono::mono_type
     return {};
 }
 
-auto internal_m2n_get_material_properties(const hpp::uuid& uid) -> mono::managed_interface::material_properties
+auto internal_m2n_get_material_properties(const hpp::uuid& uid) -> dotnetpp_backend::managed_interface::material_properties
 {
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
 
-    mono::managed_interface::material_properties props;
+    dotnetpp_backend::managed_interface::material_properties props;
     auto asset = am.get_asset<material>(uid);
     if(!asset)
     {
@@ -3358,7 +3352,7 @@ auto internal_m2n_layers_layer_to_name(int layer) -> const std::string&
 
     if(layer >= csettings.layer.layers.size())
     {
-        mono::raise_exception("System", "Exception", fmt::format("Layer index {} is out of bounds.", layer));
+        dotnet::raise_exception("System", "Exception", fmt::format("Layer index {} is out of bounds.", layer));
 
         static const std::string empty;
         return empty;
@@ -3467,7 +3461,7 @@ auto internal_m2n_input_get_mouse_position() -> math::vec2
 
 //-------------------------------------------------
 
-auto internal_m2n_physics_ray_cast(mono::managed_interface::raycast_hit* hit,
+auto internal_m2n_physics_ray_cast(dotnetpp_backend::managed_interface::raycast_hit* hit,
                                    const math::vec3& origin,
                                    const math::vec3& direction,
                                    float max_distance,
@@ -3479,13 +3473,13 @@ auto internal_m2n_physics_ray_cast(mono::managed_interface::raycast_hit* hit,
 
     auto ray_hit = physics.ray_cast(origin, direction, max_distance, layer_mask, query_sensors);
 
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
     if(ray_hit)
     {
         hit->entity = ray_hit->entity;
-        hit->point = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit->point);
-        hit->normal = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit->normal);
+        hit->point = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit->point);
+        hit->normal = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit->normal);
         hit->distance = ray_hit->distance;
     }
 
@@ -3496,29 +3490,29 @@ auto internal_m2n_physics_ray_cast_all(const math::vec3& origin,
                                        const math::vec3& direction,
                                        float max_distance,
                                        int layer_mask,
-                                       bool query_sensors) -> hpp::small_vector<mono::managed_interface::raycast_hit>
+                                       bool query_sensors) -> hpp::small_vector<dotnetpp_backend::managed_interface::raycast_hit>
 {
     auto& ctx = engine::context();
     auto& physics = ctx.get_cached<physics_system>();
 
     auto ray_hits = physics.ray_cast_all(origin, direction, max_distance, layer_mask, query_sensors);
 
-    hpp::small_vector<mono::managed_interface::raycast_hit> hits;
+    hpp::small_vector<dotnetpp_backend::managed_interface::raycast_hit> hits;
 
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
     for(const auto& ray_hit : ray_hits)
     {
         auto& hit = hits.emplace_back();
         hit.entity = ray_hit.entity;
-        hit.point = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit.point);
-        hit.normal = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit.normal);
+        hit.point = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit.point);
+        hit.normal = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit.normal);
         hit.distance = ray_hit.distance;
     }
 
     return hits;
 }
 
-auto internal_m2n_physics_sphere_cast(mono::managed_interface::raycast_hit* hit,
+auto internal_m2n_physics_sphere_cast(dotnetpp_backend::managed_interface::raycast_hit* hit,
                                       const math::vec3& origin,
                                       const math::vec3& direction,
                                       float radius,
@@ -3531,13 +3525,13 @@ auto internal_m2n_physics_sphere_cast(mono::managed_interface::raycast_hit* hit,
 
     auto ray_hit = physics.sphere_cast(origin, direction, radius, max_distance, layer_mask, query_sensors);
 
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
 
     if(ray_hit)
     {
         hit->entity = ray_hit->entity;
-        hit->point = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit->point);
-        hit->normal = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit->normal);
+        hit->point = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit->point);
+        hit->normal = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit->normal);
         hit->distance = ray_hit->distance;
     }
 
@@ -3549,22 +3543,22 @@ auto internal_m2n_physics_sphere_cast_all(const math::vec3& origin,
                                           float radius,
                                           float max_distance,
                                           int layer_mask,
-                                          bool query_sensors) -> hpp::small_vector<mono::managed_interface::raycast_hit>
+                                          bool query_sensors) -> hpp::small_vector<dotnetpp_backend::managed_interface::raycast_hit>
 {
     auto& ctx = engine::context();
     auto& physics = ctx.get_cached<physics_system>();
 
     auto ray_hits = physics.sphere_cast_all(origin, direction, radius, max_distance, layer_mask, query_sensors);
 
-    hpp::small_vector<mono::managed_interface::raycast_hit> hits;
+    hpp::small_vector<dotnetpp_backend::managed_interface::raycast_hit> hits;
 
-    using converter = mono::managed_interface::converter;
+    using converter = dotnet::managed_interface::converter;
     for(const auto& ray_hit : ray_hits)
     {
         auto& hit = hits.emplace_back();
         hit.entity = ray_hit.entity;
-        hit.point = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit.point);
-        hit.normal = converter::convert<math::vec3, mono::managed_interface::vector3>(ray_hit.normal);
+        hit.point = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit.point);
+        hit.normal = converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(ray_hit.normal);
         hit.distance = ray_hit.distance;
     }
 
@@ -3999,40 +3993,22 @@ void dispatch_ui_event_to_manager(const T& event_data)
 {
     try
     {
-        auto& ctx = engine::context();
-        auto& script_sys = ctx.get<script_system>();
-        auto assembly = script_sys.get_engine_assembly();
-        
-        // Get the UIEventManager type
-        auto ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
-        if (!ui_event_manager_type.valid())
-        {
-            APPLOG_ERROR("UIEventManager type not found in assembly");
-            return;
-        }
-        
-        // Get the InternalDispatchEvent method
-        auto dispatch_method = ui_event_manager_type.get_method("InternalDispatchEvent");
-        if (!dispatch_method.valid())
+        const auto& ctx = engine::context();
+        const auto& script_cache = ctx.get_cached<script_system>().get_cache();
+
+        if(!script_cache.ui_dispatch_event_method.valid())
         {
             APPLOG_ERROR("UIEventManager.InternalDispatchEvent method not found");
             return;
         }
-        
-        // Create method invoker and call it
-        auto method_invoker = mono::make_method_invoker<void(const T&)>(dispatch_method, true);
-        if (method_invoker.valid())
-        {
-            method_invoker(event_data);
-        }
-        else
-        {
-            APPLOG_ERROR("Failed to create method invoker for UIEventManager.InternalDispatchEvent");
-        }
+
+        auto method_invoker =
+            dotnet::make_method_invoker<void(const T&)>(script_cache.ui_dispatch_event_method, false);
+        method_invoker(event_data);
     }
-    catch (const mono::mono_exception& e)
+    catch (const dotnet::exception& e)
     {
-        APPLOG_ERROR("Mono exception dispatching UI event: {}", e.what());
+        APPLOG_ERROR("C# exception dispatching UI event: {}", e.what());
     }
     catch (const std::exception& e)
     {
@@ -4106,7 +4082,7 @@ auto get_ui_event_type(const Rml::Event& event) -> ui_event_type
 
 
 // Fill base event data common to all event types
-void fill_base_event_data(mono::managed_interface::ui_event_base& event_data, 
+void fill_base_event_data(dotnetpp_backend::managed_interface::ui_event_base& event_data, 
                          const Rml::Event& event, 
                          Rml::Element* target_element, 
                          Rml::Element* current_element)
@@ -4127,7 +4103,7 @@ void dispatch_key_event_to_manager(const Rml::Event& event,
 {
      
     // Create key event data
-    mono::managed_interface::ui_key_event key_event_data;
+    dotnetpp_backend::managed_interface::ui_key_event key_event_data;
     fill_base_event_data(key_event_data, event, target_element, current_element);
     
     // Fill key-specific data based on actual RmlUi parameters
@@ -4148,7 +4124,7 @@ void dispatch_pointer_event_to_manager(const Rml::Event& event,
 {
 
     // Create pointer event data
-    mono::managed_interface::ui_pointer_event pointer_event_data;
+    dotnetpp_backend::managed_interface::ui_pointer_event pointer_event_data;
     fill_base_event_data(pointer_event_data, event, target_element, current_element);
     
     // Fill pointer-specific data based on actual RmlUi parameters
@@ -4172,7 +4148,7 @@ void dispatch_textinput_event_to_manager(const Rml::Event& event,
                                          Rml::Element* current_element)
 {
     // Create text input event data
-    mono::managed_interface::ui_textinput_event textinput_event_data;
+    dotnetpp_backend::managed_interface::ui_textinput_event textinput_event_data;
     fill_base_event_data(textinput_event_data, event, target_element, current_element);
 
           
@@ -4194,7 +4170,7 @@ void dispatch_value_event_to_manager(const Rml::Event& event,
 {
    
     // Create value event data
-    mono::managed_interface::ui_slider_event value_event_data;
+    dotnetpp_backend::managed_interface::ui_slider_event value_event_data;
     fill_base_event_data(value_event_data, event, target_element, current_element);
     
     // Fill value-specific data
@@ -4217,7 +4193,7 @@ void dispatch_change_event_to_manager(const Rml::Event& event,
 {
    
     // Create change event data
-    mono::managed_interface::ui_change_event change_event_data;
+    dotnetpp_backend::managed_interface::ui_change_event change_event_data;
     fill_base_event_data(change_event_data, event, target_element, current_element);
     
     // Fill change-specific data
@@ -4232,7 +4208,7 @@ void dispatch_base_event_to_manager(const Rml::Event& event,
                                    Rml::Element* target_element, 
                                    Rml::Element* current_element)
 {
-    mono::managed_interface::ui_event_base event_data;
+    dotnetpp_backend::managed_interface::ui_event_base event_data;
     fill_base_event_data(event_data, event, target_element, current_element);
     dispatch_ui_event_to_manager(event_data);
 }
@@ -4327,9 +4303,9 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, con
         
         APPLOG_TRACE("Ensured native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
     }
-    catch (const mono::mono_exception& e)
+    catch (const dotnet::exception& e)
     {
-        APPLOG_ERROR("Mono exception ensuring native UI event listener: {}", e.what());
+        APPLOG_ERROR("C# exception ensuring native UI event listener: {}", e.what());
     }
     catch (const std::exception& e)
     {
@@ -4805,657 +4781,655 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Log");
-        reg.add_internal_call("internal_m2n_log_trace", internal_call(internal_m2n_log_trace));
-        reg.add_internal_call("internal_m2n_log_info", internal_call(internal_m2n_log_info));
-        reg.add_internal_call("internal_m2n_log_warning", internal_call(internal_m2n_log_warning));
-        reg.add_internal_call("internal_m2n_log_error", internal_call(internal_m2n_log_error));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Log");
+        reg.add_internal_call("internal_m2n_log_trace", dotnet_internal_call(internal_m2n_log_trace));
+        reg.add_internal_call("internal_m2n_log_info", dotnet_internal_call(internal_m2n_log_info));
+        reg.add_internal_call("internal_m2n_log_warning", dotnet_internal_call(internal_m2n_log_warning));
+        reg.add_internal_call("internal_m2n_log_error", dotnet_internal_call(internal_m2n_log_error));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Scene");
-        reg.add_internal_call("internal_m2n_load_scene", internal_call(internal_m2n_load_scene));
-        reg.add_internal_call("internal_m2n_load_scene_uid", internal_call(internal_m2n_load_scene_uid));
-        reg.add_internal_call("internal_m2n_reload_scene", internal_call(internal_m2n_reload_scene));
-        reg.add_internal_call("internal_m2n_create_scene", internal_call(internal_m2n_create_scene));
-        reg.add_internal_call("internal_m2n_destroy_scene", internal_call(internal_m2n_destroy_scene));
-        reg.add_internal_call("internal_m2n_create_entity", internal_call(internal_m2n_create_entity));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Scene");
+        reg.add_internal_call("internal_m2n_load_scene", dotnet_internal_call(internal_m2n_load_scene));
+        reg.add_internal_call("internal_m2n_load_scene_uid", dotnet_internal_call(internal_m2n_load_scene_uid));
+        reg.add_internal_call("internal_m2n_reload_scene", dotnet_internal_call(internal_m2n_reload_scene));
+        reg.add_internal_call("internal_m2n_create_scene", dotnet_internal_call(internal_m2n_create_scene));
+        reg.add_internal_call("internal_m2n_destroy_scene", dotnet_internal_call(internal_m2n_destroy_scene));
+        reg.add_internal_call("internal_m2n_create_entity", dotnet_internal_call(internal_m2n_create_entity));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid",
-                              internal_call(internal_m2n_create_entity_from_prefab_uid));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key",
-                              internal_call(internal_m2n_create_entity_from_prefab_key));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_key));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_parent));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_parent));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_key_with_parent));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_parent));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position",
-                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position",
-                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_parent));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_parent));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position_parent));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_parent));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent));
         reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent",
-                              internal_call(internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent));
-        reg.add_internal_call("internal_m2n_clone_entity", internal_call(internal_m2n_clone_entity));
-        reg.add_internal_call("internal_m2n_destroy_entity", internal_call(internal_m2n_destroy_entity));
+                              dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent));
+        reg.add_internal_call("internal_m2n_clone_entity", dotnet_internal_call(internal_m2n_clone_entity));
+        reg.add_internal_call("internal_m2n_destroy_entity", dotnet_internal_call(internal_m2n_destroy_entity));
         reg.add_internal_call("internal_m2n_destroy_entity_immediate",
-                              internal_call(internal_m2n_destroy_entity_immediate));
+                              dotnet_internal_call(internal_m2n_destroy_entity_immediate));
 
-        reg.add_internal_call("internal_m2n_is_entity_valid", internal_call(internal_m2n_is_entity_valid));
-        reg.add_internal_call("internal_m2n_find_entity_by_name", internal_call(internal_m2n_find_entity_by_name));
-        reg.add_internal_call("internal_m2n_find_entities_by_name", internal_call(internal_m2n_find_entities_by_name));
-        reg.add_internal_call("internal_m2n_find_entity_by_tag", internal_call(internal_m2n_find_entity_by_tag));
-        reg.add_internal_call("internal_m2n_find_entities_by_tag", internal_call(internal_m2n_find_entities_by_tag));
-        reg.add_internal_call("internal_m2n_find_entities_with_component", internal_call(internal_m2n_find_entities_with_component));
-        reg.add_internal_call("internal_m2n_find_entities_with_components", internal_call(internal_m2n_find_entities_with_components));
+        reg.add_internal_call("internal_m2n_is_entity_valid", dotnet_internal_call(internal_m2n_is_entity_valid));
+        reg.add_internal_call("internal_m2n_find_entity_by_name", dotnet_internal_call(internal_m2n_find_entity_by_name));
+        reg.add_internal_call("internal_m2n_find_entities_by_name", dotnet_internal_call(internal_m2n_find_entities_by_name));
+        reg.add_internal_call("internal_m2n_find_entity_by_tag", dotnet_internal_call(internal_m2n_find_entity_by_tag));
+        reg.add_internal_call("internal_m2n_find_entities_by_tag", dotnet_internal_call(internal_m2n_find_entities_by_tag));
+        reg.add_internal_call("internal_m2n_find_entities_with_component", dotnet_internal_call(internal_m2n_find_entities_with_component));
+        reg.add_internal_call("internal_m2n_find_entities_with_components", dotnet_internal_call(internal_m2n_find_entities_with_components));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Entity");
-        reg.add_internal_call("internal_m2n_add_component", internal_call(internal_m2n_add_component));
-        reg.add_internal_call("internal_m2n_get_component", internal_call(internal_m2n_get_component));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Entity");
+        reg.add_internal_call("internal_m2n_add_component", dotnet_internal_call(internal_m2n_add_component));
+        reg.add_internal_call("internal_m2n_get_component", dotnet_internal_call(internal_m2n_get_component));
         reg.add_internal_call("internal_m2n_get_component_in_children",
-                              internal_call(internal_m2n_get_component_in_children));
-        reg.add_internal_call("internal_m2n_has_component", internal_call(internal_m2n_has_component));
-        reg.add_internal_call("internal_m2n_get_components", internal_call(internal_m2n_get_components));
+                              dotnet_internal_call(internal_m2n_get_component_in_children));
+        reg.add_internal_call("internal_m2n_has_component", dotnet_internal_call(internal_m2n_has_component));
+        reg.add_internal_call("internal_m2n_get_components", dotnet_internal_call(internal_m2n_get_components));
         reg.add_internal_call("internal_m2n_get_components_in_children",
-                              internal_call(internal_m2n_get_components_in_children));
+                              dotnet_internal_call(internal_m2n_get_components_in_children));
 
         reg.add_internal_call("internal_m2n_remove_component_instance",
-                              internal_call(internal_m2n_remove_component_instance));
+                              dotnet_internal_call(internal_m2n_remove_component_instance));
         reg.add_internal_call("internal_m2n_remove_component_instance_delay",
-                              internal_call(internal_m2n_remove_component_instance_delay));
+                              dotnet_internal_call(internal_m2n_remove_component_instance_delay));
 
-        reg.add_internal_call("internal_m2n_remove_component", internal_call(internal_m2n_remove_component));
+        reg.add_internal_call("internal_m2n_remove_component", dotnet_internal_call(internal_m2n_remove_component));
         reg.add_internal_call("internal_m2n_remove_component_delay",
-                              internal_call(internal_m2n_remove_component_delay));
+                              dotnet_internal_call(internal_m2n_remove_component_delay));
 
         reg.add_internal_call("internal_m2n_get_transform_component",
-                              internal_call(internal_m2n_get_transform_component));
-        reg.add_internal_call("internal_m2n_get_name", internal_call(internal_m2n_get_name));
-        reg.add_internal_call("internal_m2n_set_name", internal_call(internal_m2n_set_name));
-        reg.add_internal_call("internal_m2n_get_tag", internal_call(internal_m2n_get_tag));
-        reg.add_internal_call("internal_m2n_set_tag", internal_call(internal_m2n_set_tag));
-        reg.add_internal_call("internal_m2n_get_layers", internal_call(internal_m2n_get_layers));
-        reg.add_internal_call("internal_m2n_set_layers", internal_call(internal_m2n_set_layers));
+                              dotnet_internal_call(internal_m2n_get_transform_component));
+        reg.add_internal_call("internal_m2n_get_name", dotnet_internal_call(internal_m2n_get_name));
+        reg.add_internal_call("internal_m2n_set_name", dotnet_internal_call(internal_m2n_set_name));
+        reg.add_internal_call("internal_m2n_get_tag", dotnet_internal_call(internal_m2n_get_tag));
+        reg.add_internal_call("internal_m2n_set_tag", dotnet_internal_call(internal_m2n_set_tag));
+        reg.add_internal_call("internal_m2n_get_layers", dotnet_internal_call(internal_m2n_get_layers));
+        reg.add_internal_call("internal_m2n_set_layers", dotnet_internal_call(internal_m2n_set_layers));
 
-        reg.add_internal_call("internal_m2n_get_active_global", internal_call(internal_m2n_get_active_global));
-        reg.add_internal_call("internal_m2n_get_active_local", internal_call(internal_m2n_get_active_local));
-        reg.add_internal_call("internal_m2n_set_active_local", internal_call(internal_m2n_set_active_local));
+        reg.add_internal_call("internal_m2n_get_active_global", dotnet_internal_call(internal_m2n_get_active_global));
+        reg.add_internal_call("internal_m2n_get_active_local", dotnet_internal_call(internal_m2n_get_active_local));
+        reg.add_internal_call("internal_m2n_set_active_local", dotnet_internal_call(internal_m2n_set_active_local));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.TransformComponent");
-        reg.add_internal_call("internal_m2n_get_children", internal_call(internal_m2n_get_children));
-        reg.add_internal_call("internal_m2n_get_child", internal_call(internal_m2n_get_child));
-        reg.add_internal_call("internal_m2n_get_parent", internal_call(internal_m2n_get_parent));
-        reg.add_internal_call("internal_m2n_set_parent", internal_call(internal_m2n_set_parent));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.TransformComponent");
+        reg.add_internal_call("internal_m2n_get_children", dotnet_internal_call(internal_m2n_get_children));
+        reg.add_internal_call("internal_m2n_get_child", dotnet_internal_call(internal_m2n_get_child));
+        reg.add_internal_call("internal_m2n_get_parent", dotnet_internal_call(internal_m2n_get_parent));
+        reg.add_internal_call("internal_m2n_set_parent", dotnet_internal_call(internal_m2n_set_parent));
 
-        reg.add_internal_call("internal_m2n_get_position_global", internal_call(internal_m2n_get_position_global));
-        reg.add_internal_call("internal_m2n_set_position_global", internal_call(internal_m2n_set_position_global));
-        reg.add_internal_call("internal_m2n_move_by_global", internal_call(internal_m2n_move_by_global));
+        reg.add_internal_call("internal_m2n_get_position_global", dotnet_internal_call(internal_m2n_get_position_global));
+        reg.add_internal_call("internal_m2n_set_position_global", dotnet_internal_call(internal_m2n_set_position_global));
+        reg.add_internal_call("internal_m2n_move_by_global", dotnet_internal_call(internal_m2n_move_by_global));
 
-        reg.add_internal_call("internal_m2n_get_position_local", internal_call(internal_m2n_get_position_local));
-        reg.add_internal_call("internal_m2n_set_position_local", internal_call(internal_m2n_set_position_local));
-        reg.add_internal_call("internal_m2n_move_by_local", internal_call(internal_m2n_move_by_local));
+        reg.add_internal_call("internal_m2n_get_position_local", dotnet_internal_call(internal_m2n_get_position_local));
+        reg.add_internal_call("internal_m2n_set_position_local", dotnet_internal_call(internal_m2n_set_position_local));
+        reg.add_internal_call("internal_m2n_move_by_local", dotnet_internal_call(internal_m2n_move_by_local));
 
         // Euler
         reg.add_internal_call("internal_m2n_get_rotation_euler_global",
-                              internal_call(internal_m2n_get_rotation_euler_global));
+                              dotnet_internal_call(internal_m2n_get_rotation_euler_global));
         reg.add_internal_call("internal_m2n_set_rotation_euler_global",
-                              internal_call(internal_m2n_set_rotation_euler_global));
+                              dotnet_internal_call(internal_m2n_set_rotation_euler_global));
         reg.add_internal_call("internal_m2n_rotate_by_euler_global",
-                              internal_call(internal_m2n_rotate_by_euler_global));
+                              dotnet_internal_call(internal_m2n_rotate_by_euler_global));
 
         reg.add_internal_call("internal_m2n_get_rotation_euler_local",
-                              internal_call(internal_m2n_get_rotation_euler_local));
+                              dotnet_internal_call(internal_m2n_get_rotation_euler_local));
         reg.add_internal_call("internal_m2n_set_rotation_euler_local",
-                              internal_call(internal_m2n_set_rotation_euler_local));
-        reg.add_internal_call("internal_m2n_rotate_by_euler_local", internal_call(internal_m2n_rotate_by_euler_local));
+                              dotnet_internal_call(internal_m2n_set_rotation_euler_local));
+        reg.add_internal_call("internal_m2n_rotate_by_euler_local", dotnet_internal_call(internal_m2n_rotate_by_euler_local));
 
         // Quat
-        reg.add_internal_call("internal_m2n_get_rotation_global", internal_call(internal_m2n_get_rotation_global));
-        reg.add_internal_call("internal_m2n_set_rotation_global", internal_call(internal_m2n_set_rotation_global));
-        reg.add_internal_call("internal_m2n_rotate_by_global", internal_call(internal_m2n_rotate_by_global));
+        reg.add_internal_call("internal_m2n_get_rotation_global", dotnet_internal_call(internal_m2n_get_rotation_global));
+        reg.add_internal_call("internal_m2n_set_rotation_global", dotnet_internal_call(internal_m2n_set_rotation_global));
+        reg.add_internal_call("internal_m2n_rotate_by_global", dotnet_internal_call(internal_m2n_rotate_by_global));
 
-        reg.add_internal_call("internal_m2n_get_rotation_local", internal_call(internal_m2n_get_rotation_local));
-        reg.add_internal_call("internal_m2n_set_rotation_local", internal_call(internal_m2n_set_rotation_local));
-        reg.add_internal_call("internal_m2n_rotate_by_local", internal_call(internal_m2n_rotate_by_local));
+        reg.add_internal_call("internal_m2n_get_rotation_local", dotnet_internal_call(internal_m2n_get_rotation_local));
+        reg.add_internal_call("internal_m2n_set_rotation_local", dotnet_internal_call(internal_m2n_set_rotation_local));
+        reg.add_internal_call("internal_m2n_rotate_by_local", dotnet_internal_call(internal_m2n_rotate_by_local));
 
         // Other
-        reg.add_internal_call("internal_m2n_rotate_axis_global", internal_call(internal_m2n_rotate_axis_global));
-        reg.add_internal_call("internal_m2n_look_at", internal_call(internal_m2n_look_at));
+        reg.add_internal_call("internal_m2n_rotate_axis_global", dotnet_internal_call(internal_m2n_rotate_axis_global));
+        reg.add_internal_call("internal_m2n_look_at", dotnet_internal_call(internal_m2n_look_at));
         reg.add_internal_call("internal_m2n_transform_vector_global",
-                              internal_call(internal_m2n_transform_vector_global));
+                              dotnet_internal_call(internal_m2n_transform_vector_global));
         reg.add_internal_call("internal_m2n_inverse_transform_vector_global",
-                              internal_call(internal_m2n_inverse_transform_vector_global));
+                              dotnet_internal_call(internal_m2n_inverse_transform_vector_global));
 
         reg.add_internal_call("internal_m2n_transform_direction_global",
-                              internal_call(internal_m2n_transform_direction_global));
+                              dotnet_internal_call(internal_m2n_transform_direction_global));
         reg.add_internal_call("internal_m2n_inverse_transform_direction_global",
-                              internal_call(internal_m2n_inverse_transform_direction_global));
+                              dotnet_internal_call(internal_m2n_inverse_transform_direction_global));
 
         // Scale
-        reg.add_internal_call("internal_m2n_get_scale_global", internal_call(internal_m2n_get_scale_global));
-        reg.add_internal_call("internal_m2n_set_scale_global", internal_call(internal_m2n_set_scale_global));
-        reg.add_internal_call("internal_m2n_scale_by_global", internal_call(internal_m2n_scale_by_local));
+        reg.add_internal_call("internal_m2n_get_scale_global", dotnet_internal_call(internal_m2n_get_scale_global));
+        reg.add_internal_call("internal_m2n_set_scale_global", dotnet_internal_call(internal_m2n_set_scale_global));
+        reg.add_internal_call("internal_m2n_scale_by_global", dotnet_internal_call(internal_m2n_scale_by_local));
 
-        reg.add_internal_call("internal_m2n_get_scale_local", internal_call(internal_m2n_get_scale_local));
-        reg.add_internal_call("internal_m2n_set_scale_local", internal_call(internal_m2n_set_scale_local));
-        reg.add_internal_call("internal_m2n_scale_by_local", internal_call(internal_m2n_scale_by_local));
+        reg.add_internal_call("internal_m2n_get_scale_local", dotnet_internal_call(internal_m2n_get_scale_local));
+        reg.add_internal_call("internal_m2n_set_scale_local", dotnet_internal_call(internal_m2n_set_scale_local));
+        reg.add_internal_call("internal_m2n_scale_by_local", dotnet_internal_call(internal_m2n_scale_by_local));
 
         // Skew
-        reg.add_internal_call("internal_m2n_get_skew_global", internal_call(internal_m2n_get_skew_global));
-        reg.add_internal_call("internal_m2n_set_skew_globa", internal_call(internal_m2n_setl_skew_globa));
-        reg.add_internal_call("internal_m2n_get_skew_local", internal_call(internal_m2n_get_skew_local));
-        reg.add_internal_call("internal_m2n_set_skew_local", internal_call(internal_m2n_set_skew_local));
+        reg.add_internal_call("internal_m2n_get_skew_global", dotnet_internal_call(internal_m2n_get_skew_global));
+        reg.add_internal_call("internal_m2n_set_skew_globa", dotnet_internal_call(internal_m2n_setl_skew_globa));
+        reg.add_internal_call("internal_m2n_get_skew_local", dotnet_internal_call(internal_m2n_get_skew_local));
+        reg.add_internal_call("internal_m2n_set_skew_local", dotnet_internal_call(internal_m2n_set_skew_local));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.PhysicsComponent");
+        auto reg = dotnet::internal_call_registry("Unravel.Core.PhysicsComponent");
         reg.add_internal_call("internal_m2n_physics_apply_explosion_force",
-                              internal_call(internal_m2n_physics_apply_explosion_force));
-        reg.add_internal_call("internal_m2n_physics_apply_force", internal_call(internal_m2n_physics_apply_force));
-        reg.add_internal_call("internal_m2n_physics_apply_torque", internal_call(internal_m2n_physics_apply_torque));
-        reg.add_internal_call("internal_m2n_physics_get_velocity", internal_call(internal_m2n_physics_get_velocity));
-        reg.add_internal_call("internal_m2n_physics_set_velocity", internal_call(internal_m2n_physics_set_velocity));
+                              dotnet_internal_call(internal_m2n_physics_apply_explosion_force));
+        reg.add_internal_call("internal_m2n_physics_apply_force", dotnet_internal_call(internal_m2n_physics_apply_force));
+        reg.add_internal_call("internal_m2n_physics_apply_torque", dotnet_internal_call(internal_m2n_physics_apply_torque));
+        reg.add_internal_call("internal_m2n_physics_get_velocity", dotnet_internal_call(internal_m2n_physics_get_velocity));
+        reg.add_internal_call("internal_m2n_physics_set_velocity", dotnet_internal_call(internal_m2n_physics_set_velocity));
         reg.add_internal_call("internal_m2n_physics_get_angular_velocity",
-                              internal_call(internal_m2n_physics_get_angular_velocity));
+                              dotnet_internal_call(internal_m2n_physics_get_angular_velocity));
         reg.add_internal_call("internal_m2n_physics_set_angular_velocity",
-                              internal_call(internal_m2n_physics_set_angular_velocity));
+                              dotnet_internal_call(internal_m2n_physics_set_angular_velocity));
 
         reg.add_internal_call("internal_m2n_physics_get_include_layers",
-                              internal_call(internal_m2n_physics_get_include_layers));
+                              dotnet_internal_call(internal_m2n_physics_get_include_layers));
         reg.add_internal_call("internal_m2n_physics_set_include_layers",
-                              internal_call(internal_m2n_physics_set_include_layers));
+                              dotnet_internal_call(internal_m2n_physics_set_include_layers));
         reg.add_internal_call("internal_m2n_physics_get_exclude_layers",
-                              internal_call(internal_m2n_physics_get_exclude_layers));
+                              dotnet_internal_call(internal_m2n_physics_get_exclude_layers));
         reg.add_internal_call("internal_m2n_physics_set_exclude_layers",
-                              internal_call(internal_m2n_physics_set_exclude_layers));
+                              dotnet_internal_call(internal_m2n_physics_set_exclude_layers));
         reg.add_internal_call("internal_m2n_physics_get_collision_layers",
-                              internal_call(internal_m2n_physics_get_collision_layers));
+                              dotnet_internal_call(internal_m2n_physics_get_collision_layers));
 
         reg.add_internal_call("internal_m2n_physics_get_is_sensor",
-                              internal_call(internal_m2n_physics_get_is_sensor));
+                              dotnet_internal_call(internal_m2n_physics_get_is_sensor));
         reg.add_internal_call("internal_m2n_physics_set_is_sensor",
-                              internal_call(internal_m2n_physics_set_is_sensor));
+                              dotnet_internal_call(internal_m2n_physics_set_is_sensor));
         reg.add_internal_call("internal_m2n_physics_get_mass",
-                              internal_call(internal_m2n_physics_get_mass));
+                              dotnet_internal_call(internal_m2n_physics_get_mass));
         reg.add_internal_call("internal_m2n_physics_set_mass",
-                              internal_call(internal_m2n_physics_set_mass));
+                              dotnet_internal_call(internal_m2n_physics_set_mass));
         reg.add_internal_call("internal_m2n_physics_get_is_kinematic",
-                              internal_call(internal_m2n_physics_get_is_kinematic));
+                              dotnet_internal_call(internal_m2n_physics_get_is_kinematic));
         reg.add_internal_call("internal_m2n_physics_set_is_kinematic",
-                              internal_call(internal_m2n_physics_set_is_kinematic));
+                              dotnet_internal_call(internal_m2n_physics_set_is_kinematic));
         reg.add_internal_call("internal_m2n_physics_get_use_gravity",
-                              internal_call(internal_m2n_physics_get_use_gravity));
+                              dotnet_internal_call(internal_m2n_physics_get_use_gravity));
         reg.add_internal_call("internal_m2n_physics_set_use_gravity",
-                              internal_call(internal_m2n_physics_set_use_gravity));
+                              dotnet_internal_call(internal_m2n_physics_set_use_gravity));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.CharacterControllerComponent");
-        reg.add_internal_call("internal_m2n_cc_move", internal_call(internal_m2n_cc_move));
-        reg.add_internal_call("internal_m2n_cc_jump", internal_call(internal_m2n_cc_jump));
-        reg.add_internal_call("internal_m2n_cc_apply_impulse", internal_call(internal_m2n_cc_apply_impulse));
-        reg.add_internal_call("internal_m2n_cc_warp", internal_call(internal_m2n_cc_warp));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.CharacterControllerComponent");
+        reg.add_internal_call("internal_m2n_cc_move", dotnet_internal_call(internal_m2n_cc_move));
+        reg.add_internal_call("internal_m2n_cc_jump", dotnet_internal_call(internal_m2n_cc_jump));
+        reg.add_internal_call("internal_m2n_cc_apply_impulse", dotnet_internal_call(internal_m2n_cc_apply_impulse));
+        reg.add_internal_call("internal_m2n_cc_warp", dotnet_internal_call(internal_m2n_cc_warp));
 
-        reg.add_internal_call("internal_m2n_cc_get_is_grounded", internal_call(internal_m2n_cc_get_is_grounded));
-        reg.add_internal_call("internal_m2n_cc_get_can_jump", internal_call(internal_m2n_cc_get_can_jump));
-        reg.add_internal_call("internal_m2n_cc_get_velocity", internal_call(internal_m2n_cc_get_velocity));
+        reg.add_internal_call("internal_m2n_cc_get_is_grounded", dotnet_internal_call(internal_m2n_cc_get_is_grounded));
+        reg.add_internal_call("internal_m2n_cc_get_can_jump", dotnet_internal_call(internal_m2n_cc_get_can_jump));
+        reg.add_internal_call("internal_m2n_cc_get_velocity", dotnet_internal_call(internal_m2n_cc_get_velocity));
 
-        reg.add_internal_call("internal_m2n_cc_get_linear_velocity", internal_call(internal_m2n_cc_get_linear_velocity));
-        reg.add_internal_call("internal_m2n_cc_set_linear_velocity", internal_call(internal_m2n_cc_set_linear_velocity));
+        reg.add_internal_call("internal_m2n_cc_get_linear_velocity", dotnet_internal_call(internal_m2n_cc_get_linear_velocity));
+        reg.add_internal_call("internal_m2n_cc_set_linear_velocity", dotnet_internal_call(internal_m2n_cc_set_linear_velocity));
 
-        reg.add_internal_call("internal_m2n_cc_get_radius", internal_call(internal_m2n_cc_get_radius));
-        reg.add_internal_call("internal_m2n_cc_set_radius", internal_call(internal_m2n_cc_set_radius));
-        reg.add_internal_call("internal_m2n_cc_get_height", internal_call(internal_m2n_cc_get_height));
-        reg.add_internal_call("internal_m2n_cc_set_height", internal_call(internal_m2n_cc_set_height));
-        reg.add_internal_call("internal_m2n_cc_get_center", internal_call(internal_m2n_cc_get_center));
-        reg.add_internal_call("internal_m2n_cc_set_center", internal_call(internal_m2n_cc_set_center));
-        reg.add_internal_call("internal_m2n_cc_get_step_height", internal_call(internal_m2n_cc_get_step_height));
-        reg.add_internal_call("internal_m2n_cc_set_step_height", internal_call(internal_m2n_cc_set_step_height));
-        reg.add_internal_call("internal_m2n_cc_get_slope_limit", internal_call(internal_m2n_cc_get_slope_limit));
-        reg.add_internal_call("internal_m2n_cc_set_slope_limit", internal_call(internal_m2n_cc_set_slope_limit));
-        reg.add_internal_call("internal_m2n_cc_get_skin_width", internal_call(internal_m2n_cc_get_skin_width));
-        reg.add_internal_call("internal_m2n_cc_set_skin_width", internal_call(internal_m2n_cc_set_skin_width));
-        reg.add_internal_call("internal_m2n_cc_get_gravity_scale", internal_call(internal_m2n_cc_get_gravity_scale));
-        reg.add_internal_call("internal_m2n_cc_set_gravity_scale", internal_call(internal_m2n_cc_set_gravity_scale));
-        reg.add_internal_call("internal_m2n_cc_get_terminal_velocity", internal_call(internal_m2n_cc_get_terminal_velocity));
-        reg.add_internal_call("internal_m2n_cc_set_terminal_velocity", internal_call(internal_m2n_cc_set_terminal_velocity));
-        reg.add_internal_call("internal_m2n_cc_get_linear_damping", internal_call(internal_m2n_cc_get_linear_damping));
-        reg.add_internal_call("internal_m2n_cc_set_linear_damping", internal_call(internal_m2n_cc_set_linear_damping));
+        reg.add_internal_call("internal_m2n_cc_get_radius", dotnet_internal_call(internal_m2n_cc_get_radius));
+        reg.add_internal_call("internal_m2n_cc_set_radius", dotnet_internal_call(internal_m2n_cc_set_radius));
+        reg.add_internal_call("internal_m2n_cc_get_height", dotnet_internal_call(internal_m2n_cc_get_height));
+        reg.add_internal_call("internal_m2n_cc_set_height", dotnet_internal_call(internal_m2n_cc_set_height));
+        reg.add_internal_call("internal_m2n_cc_get_center", dotnet_internal_call(internal_m2n_cc_get_center));
+        reg.add_internal_call("internal_m2n_cc_set_center", dotnet_internal_call(internal_m2n_cc_set_center));
+        reg.add_internal_call("internal_m2n_cc_get_step_height", dotnet_internal_call(internal_m2n_cc_get_step_height));
+        reg.add_internal_call("internal_m2n_cc_set_step_height", dotnet_internal_call(internal_m2n_cc_set_step_height));
+        reg.add_internal_call("internal_m2n_cc_get_slope_limit", dotnet_internal_call(internal_m2n_cc_get_slope_limit));
+        reg.add_internal_call("internal_m2n_cc_set_slope_limit", dotnet_internal_call(internal_m2n_cc_set_slope_limit));
+        reg.add_internal_call("internal_m2n_cc_get_skin_width", dotnet_internal_call(internal_m2n_cc_get_skin_width));
+        reg.add_internal_call("internal_m2n_cc_set_skin_width", dotnet_internal_call(internal_m2n_cc_set_skin_width));
+        reg.add_internal_call("internal_m2n_cc_get_gravity_scale", dotnet_internal_call(internal_m2n_cc_get_gravity_scale));
+        reg.add_internal_call("internal_m2n_cc_set_gravity_scale", dotnet_internal_call(internal_m2n_cc_set_gravity_scale));
+        reg.add_internal_call("internal_m2n_cc_get_terminal_velocity", dotnet_internal_call(internal_m2n_cc_get_terminal_velocity));
+        reg.add_internal_call("internal_m2n_cc_set_terminal_velocity", dotnet_internal_call(internal_m2n_cc_set_terminal_velocity));
+        reg.add_internal_call("internal_m2n_cc_get_linear_damping", dotnet_internal_call(internal_m2n_cc_get_linear_damping));
+        reg.add_internal_call("internal_m2n_cc_set_linear_damping", dotnet_internal_call(internal_m2n_cc_set_linear_damping));
 
-        reg.add_internal_call("internal_m2n_cc_get_include_layers", internal_call(internal_m2n_cc_get_include_layers));
-        reg.add_internal_call("internal_m2n_cc_set_include_layers", internal_call(internal_m2n_cc_set_include_layers));
-        reg.add_internal_call("internal_m2n_cc_get_exclude_layers", internal_call(internal_m2n_cc_get_exclude_layers));
-        reg.add_internal_call("internal_m2n_cc_set_exclude_layers", internal_call(internal_m2n_cc_set_exclude_layers));
-        reg.add_internal_call("internal_m2n_cc_get_collision_layers", internal_call(internal_m2n_cc_get_collision_layers));
+        reg.add_internal_call("internal_m2n_cc_get_include_layers", dotnet_internal_call(internal_m2n_cc_get_include_layers));
+        reg.add_internal_call("internal_m2n_cc_set_include_layers", dotnet_internal_call(internal_m2n_cc_set_include_layers));
+        reg.add_internal_call("internal_m2n_cc_get_exclude_layers", dotnet_internal_call(internal_m2n_cc_get_exclude_layers));
+        reg.add_internal_call("internal_m2n_cc_set_exclude_layers", dotnet_internal_call(internal_m2n_cc_set_exclude_layers));
+        reg.add_internal_call("internal_m2n_cc_get_collision_layers", dotnet_internal_call(internal_m2n_cc_get_collision_layers));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.AnimationComponent");
-        reg.add_internal_call("internal_m2n_animation_blend", internal_call(internal_m2n_animation_blend));
-        reg.add_internal_call("internal_m2n_animation_play", internal_call(internal_m2n_animation_play));
-        reg.add_internal_call("internal_m2n_animation_pause", internal_call(internal_m2n_animation_pause));
-        reg.add_internal_call("internal_m2n_animation_resume", internal_call(internal_m2n_animation_resume));
-        reg.add_internal_call("internal_m2n_animation_stop", internal_call(internal_m2n_animation_stop));
-        reg.add_internal_call("internal_m2n_animation_set_speed", internal_call(internal_m2n_animation_set_speed));
-        reg.add_internal_call("internal_m2n_animation_get_speed", internal_call(internal_m2n_animation_get_speed));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.AnimationComponent");
+        reg.add_internal_call("internal_m2n_animation_blend", dotnet_internal_call(internal_m2n_animation_blend));
+        reg.add_internal_call("internal_m2n_animation_play", dotnet_internal_call(internal_m2n_animation_play));
+        reg.add_internal_call("internal_m2n_animation_pause", dotnet_internal_call(internal_m2n_animation_pause));
+        reg.add_internal_call("internal_m2n_animation_resume", dotnet_internal_call(internal_m2n_animation_resume));
+        reg.add_internal_call("internal_m2n_animation_stop", dotnet_internal_call(internal_m2n_animation_stop));
+        reg.add_internal_call("internal_m2n_animation_set_speed", dotnet_internal_call(internal_m2n_animation_set_speed));
+        reg.add_internal_call("internal_m2n_animation_get_speed", dotnet_internal_call(internal_m2n_animation_get_speed));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.CameraComponent");
+        auto reg = dotnet::internal_call_registry("Unravel.Core.CameraComponent");
         reg.add_internal_call("internal_m2n_camera_screen_point_to_ray",
-                              internal_call(internal_m2n_camera_screen_point_to_ray));
+                              dotnet_internal_call(internal_m2n_camera_screen_point_to_ray));
         reg.add_internal_call("internal_m2n_camera_screen_point_to_world_2d",
-                              internal_call(internal_m2n_camera_screen_point_to_world_2d));
+                              dotnet_internal_call(internal_m2n_camera_screen_point_to_world_2d));
         reg.add_internal_call("internal_m2n_camera_screen_point_to_world",
-                              internal_call(internal_m2n_camera_screen_point_to_world));
+                              dotnet_internal_call(internal_m2n_camera_screen_point_to_world));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.ModelComponent");
-        reg.add_internal_call("internal_m2n_model_get_enabled", internal_call(internal_m2n_model_get_enabled));
-        reg.add_internal_call("internal_m2n_model_set_enabled", internal_call(internal_m2n_model_set_enabled));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.ModelComponent");
+        reg.add_internal_call("internal_m2n_model_get_enabled", dotnet_internal_call(internal_m2n_model_get_enabled));
+        reg.add_internal_call("internal_m2n_model_set_enabled", dotnet_internal_call(internal_m2n_model_set_enabled));
         reg.add_internal_call("internal_m2n_model_get_shared_material",
-                              internal_call(internal_m2n_model_get_shared_material));
+                              dotnet_internal_call(internal_m2n_model_get_shared_material));
         reg.add_internal_call("internal_m2n_model_get_shared_material_count",
-                              internal_call(internal_m2n_model_get_shared_material_count));
+                              dotnet_internal_call(internal_m2n_model_get_shared_material_count));
         reg.add_internal_call("internal_m2n_model_set_shared_material",
-                              internal_call(internal_m2n_model_set_shared_material));
+                              dotnet_internal_call(internal_m2n_model_set_shared_material));
         reg.add_internal_call("internal_m2n_model_set_material_instance",
-                              internal_call(internal_m2n_model_set_material_instance));
+                              dotnet_internal_call(internal_m2n_model_set_material_instance));
         reg.add_internal_call("internal_m2n_model_get_material_instance",
-                              internal_call(internal_m2n_model_get_material_instance));
+                              dotnet_internal_call(internal_m2n_model_get_material_instance));
         reg.add_internal_call("internal_m2n_model_get_material_instance_count",
-                              internal_call(internal_m2n_model_get_material_instance_count));
+                              dotnet_internal_call(internal_m2n_model_get_material_instance_count));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.ParticleEmitterComponent");
+        auto reg = dotnet::internal_call_registry("Unravel.Core.ParticleEmitterComponent");
         reg.add_internal_call("internal_m2n_particle_emitter_get_enabled", 
-                              internal_call(internal_m2n_particle_emitter_get_enabled));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_enabled));
         reg.add_internal_call("internal_m2n_particle_emitter_set_enabled", 
-                              internal_call(internal_m2n_particle_emitter_set_enabled));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_enabled));
         reg.add_internal_call("internal_m2n_particle_emitter_get_max_particles", 
-                              internal_call(internal_m2n_particle_emitter_get_max_particles));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_max_particles));
         reg.add_internal_call("internal_m2n_particle_emitter_set_max_particles", 
-                              internal_call(internal_m2n_particle_emitter_set_max_particles));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_max_particles));
         reg.add_internal_call("internal_m2n_particle_emitter_get_shape", 
-                              internal_call(internal_m2n_particle_emitter_get_shape));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_shape));
         reg.add_internal_call("internal_m2n_particle_emitter_set_shape", 
-                              internal_call(internal_m2n_particle_emitter_set_shape));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_shape));
         reg.add_internal_call("internal_m2n_particle_emitter_get_direction", 
-                              internal_call(internal_m2n_particle_emitter_get_direction));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_direction));
         reg.add_internal_call("internal_m2n_particle_emitter_set_direction", 
-                              internal_call(internal_m2n_particle_emitter_set_direction));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_direction));
         reg.add_internal_call("internal_m2n_particle_emitter_get_gravity_scale", 
-                              internal_call(internal_m2n_particle_emitter_get_gravity_scale));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_gravity_scale));
         reg.add_internal_call("internal_m2n_particle_emitter_set_gravity_scale", 
-                              internal_call(internal_m2n_particle_emitter_set_gravity_scale));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_gravity_scale));
         reg.add_internal_call("internal_m2n_particle_emitter_get_emission_rate", 
-                              internal_call(internal_m2n_particle_emitter_get_emission_rate));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_emission_rate));
         reg.add_internal_call("internal_m2n_particle_emitter_set_emission_rate", 
-                              internal_call(internal_m2n_particle_emitter_set_emission_rate));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_emission_rate));
         reg.add_internal_call("internal_m2n_particle_emitter_get_temporal_motion", 
-                              internal_call(internal_m2n_particle_emitter_get_temporal_motion));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_temporal_motion));
         reg.add_internal_call("internal_m2n_particle_emitter_set_temporal_motion", 
-                              internal_call(internal_m2n_particle_emitter_set_temporal_motion));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_temporal_motion));
         reg.add_internal_call("internal_m2n_particle_emitter_get_velocity_damping", 
-                              internal_call(internal_m2n_particle_emitter_get_velocity_damping));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_velocity_damping));
         reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_damping", 
-                              internal_call(internal_m2n_particle_emitter_set_velocity_damping));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_velocity_damping));
         reg.add_internal_call("internal_m2n_particle_emitter_get_opacity", 
-                              internal_call(internal_m2n_particle_emitter_get_opacity));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_opacity));
         reg.add_internal_call("internal_m2n_particle_emitter_set_opacity", 
-                              internal_call(internal_m2n_particle_emitter_set_opacity));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_opacity));
         reg.add_internal_call("internal_m2n_particle_emitter_get_force_over_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_get_force_over_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_force_over_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_set_force_over_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_set_force_over_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_force_over_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_get_emission_shape_scale", 
-                              internal_call(internal_m2n_particle_emitter_get_emission_shape_scale));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_emission_shape_scale));
         reg.add_internal_call("internal_m2n_particle_emitter_set_emission_shape_scale", 
-                              internal_call(internal_m2n_particle_emitter_set_emission_shape_scale));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_emission_shape_scale));
         reg.add_internal_call("internal_m2n_particle_emitter_get_emission_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_get_emission_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_emission_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_set_emission_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_set_emission_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_emission_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_get_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime", 
-                              internal_call(internal_m2n_particle_emitter_set_lifetime));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime));
         reg.add_internal_call("internal_m2n_particle_emitter_get_position_easing", 
-                              internal_call(internal_m2n_particle_emitter_get_position_easing));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_position_easing));
         reg.add_internal_call("internal_m2n_particle_emitter_set_position_easing", 
-                              internal_call(internal_m2n_particle_emitter_set_position_easing));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_position_easing));
         reg.add_internal_call("internal_m2n_particle_emitter_get_num_particles", 
-                              internal_call(internal_m2n_particle_emitter_get_num_particles));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_num_particles));
         reg.add_internal_call("internal_m2n_particle_emitter_is_playing", 
-                              internal_call(internal_m2n_particle_emitter_is_playing));
+                              dotnet_internal_call(internal_m2n_particle_emitter_is_playing));
         reg.add_internal_call("internal_m2n_particle_emitter_is_paused", 
-                              internal_call(internal_m2n_particle_emitter_is_paused));
+                              dotnet_internal_call(internal_m2n_particle_emitter_is_paused));
         reg.add_internal_call("internal_m2n_particle_emitter_get_texture", 
-                              internal_call(internal_m2n_particle_emitter_get_texture));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_texture));
         reg.add_internal_call("internal_m2n_particle_emitter_set_texture", 
-                              internal_call(internal_m2n_particle_emitter_set_texture));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_texture));
         reg.add_internal_call("internal_m2n_particle_emitter_play", 
-                              internal_call(internal_m2n_particle_emitter_play));
+                              dotnet_internal_call(internal_m2n_particle_emitter_play));
         reg.add_internal_call("internal_m2n_particle_emitter_stop", 
-                              internal_call(internal_m2n_particle_emitter_stop));
+                              dotnet_internal_call(internal_m2n_particle_emitter_stop));
         reg.add_internal_call("internal_m2n_particle_emitter_stop_and_reset", 
-                              internal_call(internal_m2n_particle_emitter_stop_and_reset));
+                              dotnet_internal_call(internal_m2n_particle_emitter_stop_and_reset));
         reg.add_internal_call("internal_m2n_particle_emitter_pause", 
-                              internal_call(internal_m2n_particle_emitter_pause));
+                              dotnet_internal_call(internal_m2n_particle_emitter_pause));
         reg.add_internal_call("internal_m2n_particle_emitter_resume", 
-                              internal_call(internal_m2n_particle_emitter_resume));
+                              dotnet_internal_call(internal_m2n_particle_emitter_resume));
         reg.add_internal_call("internal_m2n_particle_emitter_reset_emitter", 
-                              internal_call(internal_m2n_particle_emitter_reset_emitter));
+                              dotnet_internal_call(internal_m2n_particle_emitter_reset_emitter));
         reg.add_internal_call("internal_m2n_particle_emitter_get_loop", 
-                              internal_call(internal_m2n_particle_emitter_get_loop));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_loop));
         reg.add_internal_call("internal_m2n_particle_emitter_set_loop", 
-                              internal_call(internal_m2n_particle_emitter_set_loop));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_loop));
         reg.add_internal_call("internal_m2n_particle_emitter_get_blend_mode", 
-                              internal_call(internal_m2n_particle_emitter_get_blend_mode));
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_blend_mode));
         reg.add_internal_call("internal_m2n_particle_emitter_set_blend_mode", 
-                              internal_call(internal_m2n_particle_emitter_set_blend_mode));
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_blend_mode));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.TextComponent");
-        reg.add_internal_call("internal_m2n_text_get_text", internal_call(internal_m2n_text_get_text));
-        reg.add_internal_call("internal_m2n_text_set_text", internal_call(internal_m2n_text_set_text));
-        reg.add_internal_call("internal_m2n_text_get_buffer_type", internal_call(internal_m2n_text_get_buffer_type));
-        reg.add_internal_call("internal_m2n_text_set_buffer_type", internal_call(internal_m2n_text_set_buffer_type));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.TextComponent");
+        reg.add_internal_call("internal_m2n_text_get_text", dotnet_internal_call(internal_m2n_text_get_text));
+        reg.add_internal_call("internal_m2n_text_set_text", dotnet_internal_call(internal_m2n_text_set_text));
+        reg.add_internal_call("internal_m2n_text_get_buffer_type", dotnet_internal_call(internal_m2n_text_get_buffer_type));
+        reg.add_internal_call("internal_m2n_text_set_buffer_type", dotnet_internal_call(internal_m2n_text_set_buffer_type));
         reg.add_internal_call("internal_m2n_text_get_overflow_type",
-                              internal_call(internal_m2n_text_get_overflow_type));
+                              dotnet_internal_call(internal_m2n_text_get_overflow_type));
         reg.add_internal_call("internal_m2n_text_set_overflow_type",
-                              internal_call(internal_m2n_text_set_overflow_type));
-        reg.add_internal_call("internal_m2n_text_get_font", internal_call(internal_m2n_text_get_font));
-        reg.add_internal_call("internal_m2n_text_set_font", internal_call(internal_m2n_text_set_font));
+                              dotnet_internal_call(internal_m2n_text_set_overflow_type));
+        reg.add_internal_call("internal_m2n_text_get_font", dotnet_internal_call(internal_m2n_text_get_font));
+        reg.add_internal_call("internal_m2n_text_set_font", dotnet_internal_call(internal_m2n_text_set_font));
 
-        reg.add_internal_call("internal_m2n_text_get_font_size", internal_call(internal_m2n_text_get_font_size));
-        reg.add_internal_call("internal_m2n_text_set_font_size", internal_call(internal_m2n_text_set_font_size));
+        reg.add_internal_call("internal_m2n_text_get_font_size", dotnet_internal_call(internal_m2n_text_get_font_size));
+        reg.add_internal_call("internal_m2n_text_set_font_size", dotnet_internal_call(internal_m2n_text_set_font_size));
         reg.add_internal_call("internal_m2n_text_get_render_font_size",
-                              internal_call(internal_m2n_text_get_render_font_size));
+                              dotnet_internal_call(internal_m2n_text_get_render_font_size));
 
-        reg.add_internal_call("internal_m2n_text_get_auto_size", internal_call(internal_m2n_text_get_auto_size));
-        reg.add_internal_call("internal_m2n_text_set_auto_size", internal_call(internal_m2n_text_set_auto_size));
+        reg.add_internal_call("internal_m2n_text_get_auto_size", dotnet_internal_call(internal_m2n_text_get_auto_size));
+        reg.add_internal_call("internal_m2n_text_set_auto_size", dotnet_internal_call(internal_m2n_text_set_auto_size));
 
         reg.add_internal_call("internal_m2n_text_get_auto_size_range",
-                              internal_call(internal_m2n_text_get_auto_size_range));
+                              dotnet_internal_call(internal_m2n_text_get_auto_size_range));
         reg.add_internal_call("internal_m2n_text_set_auto_size_range",
-                              internal_call(internal_m2n_text_set_auto_size_range));
+                              dotnet_internal_call(internal_m2n_text_set_auto_size_range));
 
-        reg.add_internal_call("internal_m2n_text_get_area", internal_call(internal_m2n_text_get_area));
-        reg.add_internal_call("internal_m2n_text_set_area", internal_call(internal_m2n_text_set_area));
-        reg.add_internal_call("internal_m2n_text_get_render_area", internal_call(internal_m2n_text_get_render_area));
+        reg.add_internal_call("internal_m2n_text_get_area", dotnet_internal_call(internal_m2n_text_get_area));
+        reg.add_internal_call("internal_m2n_text_set_area", dotnet_internal_call(internal_m2n_text_set_area));
+        reg.add_internal_call("internal_m2n_text_get_render_area", dotnet_internal_call(internal_m2n_text_get_render_area));
 
-        reg.add_internal_call("internal_m2n_text_get_is_rich_text", internal_call(internal_m2n_text_get_is_rich_text));
-        reg.add_internal_call("internal_m2n_text_set_is_rich_text", internal_call(internal_m2n_text_set_is_rich_text));
+        reg.add_internal_call("internal_m2n_text_get_is_rich_text", dotnet_internal_call(internal_m2n_text_get_is_rich_text));
+        reg.add_internal_call("internal_m2n_text_set_is_rich_text", dotnet_internal_call(internal_m2n_text_set_is_rich_text));
 
-        reg.add_internal_call("internal_m2n_text_get_alignment", internal_call(internal_m2n_text_get_alignment));
-        reg.add_internal_call("internal_m2n_text_set_alignment", internal_call(internal_m2n_text_set_alignment));
+        reg.add_internal_call("internal_m2n_text_get_alignment", dotnet_internal_call(internal_m2n_text_get_alignment));
+        reg.add_internal_call("internal_m2n_text_set_alignment", dotnet_internal_call(internal_m2n_text_set_alignment));
 
-        reg.add_internal_call("internal_m2n_text_get_bounds", internal_call(internal_m2n_text_get_bounds));
-        reg.add_internal_call("internal_m2n_text_get_render_bounds", internal_call(internal_m2n_text_get_render_bounds));
+        reg.add_internal_call("internal_m2n_text_get_bounds", dotnet_internal_call(internal_m2n_text_get_bounds));
+        reg.add_internal_call("internal_m2n_text_get_render_bounds", dotnet_internal_call(internal_m2n_text_get_render_bounds));
 
         // Text Style Functions
-        reg.add_internal_call("internal_m2n_text_set_opacity", internal_call(internal_m2n_text_set_opacity));
-        reg.add_internal_call("internal_m2n_text_get_opacity", internal_call(internal_m2n_text_get_opacity));
-        reg.add_internal_call("internal_m2n_text_set_text_color", internal_call(internal_m2n_text_set_text_color));
-        reg.add_internal_call("internal_m2n_text_get_text_color", internal_call(internal_m2n_text_get_text_color));
-        reg.add_internal_call("internal_m2n_text_set_background_color", internal_call(internal_m2n_text_set_background_color));
-        reg.add_internal_call("internal_m2n_text_get_background_color", internal_call(internal_m2n_text_get_background_color));
-        reg.add_internal_call("internal_m2n_text_set_foreground_color", internal_call(internal_m2n_text_set_foreground_color));
-        reg.add_internal_call("internal_m2n_text_get_foreground_color", internal_call(internal_m2n_text_get_foreground_color));
-        reg.add_internal_call("internal_m2n_text_set_overline_color", internal_call(internal_m2n_text_set_overline_color));
-        reg.add_internal_call("internal_m2n_text_get_overline_color", internal_call(internal_m2n_text_get_overline_color));
-        reg.add_internal_call("internal_m2n_text_set_underline_color", internal_call(internal_m2n_text_set_underline_color));
-        reg.add_internal_call("internal_m2n_text_get_underline_color", internal_call(internal_m2n_text_get_underline_color));
-        reg.add_internal_call("internal_m2n_text_set_strike_color", internal_call(internal_m2n_text_set_strike_color));
-        reg.add_internal_call("internal_m2n_text_get_strike_color", internal_call(internal_m2n_text_get_strike_color));
-        reg.add_internal_call("internal_m2n_text_set_outline_color", internal_call(internal_m2n_text_set_outline_color));
-        reg.add_internal_call("internal_m2n_text_get_outline_color", internal_call(internal_m2n_text_get_outline_color));
-        reg.add_internal_call("internal_m2n_text_set_outline_width", internal_call(internal_m2n_text_set_outline_width));
-        reg.add_internal_call("internal_m2n_text_get_outline_width", internal_call(internal_m2n_text_get_outline_width));
-        reg.add_internal_call("internal_m2n_text_set_shadow_offsets", internal_call(internal_m2n_text_set_shadow_offsets));
-        reg.add_internal_call("internal_m2n_text_get_shadow_offsets", internal_call(internal_m2n_text_get_shadow_offsets));
-        reg.add_internal_call("internal_m2n_text_set_shadow_color", internal_call(internal_m2n_text_set_shadow_color));
-        reg.add_internal_call("internal_m2n_text_get_shadow_color", internal_call(internal_m2n_text_get_shadow_color));
-        reg.add_internal_call("internal_m2n_text_set_shadow_softener", internal_call(internal_m2n_text_set_shadow_softener));
-        reg.add_internal_call("internal_m2n_text_get_shadow_softener", internal_call(internal_m2n_text_get_shadow_softener));
-        reg.add_internal_call("internal_m2n_text_set_style_flags", internal_call(internal_m2n_text_set_style_flags));
-        reg.add_internal_call("internal_m2n_text_get_style_flags", internal_call(internal_m2n_text_get_style_flags));
+        reg.add_internal_call("internal_m2n_text_set_opacity", dotnet_internal_call(internal_m2n_text_set_opacity));
+        reg.add_internal_call("internal_m2n_text_get_opacity", dotnet_internal_call(internal_m2n_text_get_opacity));
+        reg.add_internal_call("internal_m2n_text_set_text_color", dotnet_internal_call(internal_m2n_text_set_text_color));
+        reg.add_internal_call("internal_m2n_text_get_text_color", dotnet_internal_call(internal_m2n_text_get_text_color));
+        reg.add_internal_call("internal_m2n_text_set_background_color", dotnet_internal_call(internal_m2n_text_set_background_color));
+        reg.add_internal_call("internal_m2n_text_get_background_color", dotnet_internal_call(internal_m2n_text_get_background_color));
+        reg.add_internal_call("internal_m2n_text_set_foreground_color", dotnet_internal_call(internal_m2n_text_set_foreground_color));
+        reg.add_internal_call("internal_m2n_text_get_foreground_color", dotnet_internal_call(internal_m2n_text_get_foreground_color));
+        reg.add_internal_call("internal_m2n_text_set_overline_color", dotnet_internal_call(internal_m2n_text_set_overline_color));
+        reg.add_internal_call("internal_m2n_text_get_overline_color", dotnet_internal_call(internal_m2n_text_get_overline_color));
+        reg.add_internal_call("internal_m2n_text_set_underline_color", dotnet_internal_call(internal_m2n_text_set_underline_color));
+        reg.add_internal_call("internal_m2n_text_get_underline_color", dotnet_internal_call(internal_m2n_text_get_underline_color));
+        reg.add_internal_call("internal_m2n_text_set_strike_color", dotnet_internal_call(internal_m2n_text_set_strike_color));
+        reg.add_internal_call("internal_m2n_text_get_strike_color", dotnet_internal_call(internal_m2n_text_get_strike_color));
+        reg.add_internal_call("internal_m2n_text_set_outline_color", dotnet_internal_call(internal_m2n_text_set_outline_color));
+        reg.add_internal_call("internal_m2n_text_get_outline_color", dotnet_internal_call(internal_m2n_text_get_outline_color));
+        reg.add_internal_call("internal_m2n_text_set_outline_width", dotnet_internal_call(internal_m2n_text_set_outline_width));
+        reg.add_internal_call("internal_m2n_text_get_outline_width", dotnet_internal_call(internal_m2n_text_get_outline_width));
+        reg.add_internal_call("internal_m2n_text_set_shadow_offsets", dotnet_internal_call(internal_m2n_text_set_shadow_offsets));
+        reg.add_internal_call("internal_m2n_text_get_shadow_offsets", dotnet_internal_call(internal_m2n_text_get_shadow_offsets));
+        reg.add_internal_call("internal_m2n_text_set_shadow_color", dotnet_internal_call(internal_m2n_text_set_shadow_color));
+        reg.add_internal_call("internal_m2n_text_get_shadow_color", dotnet_internal_call(internal_m2n_text_get_shadow_color));
+        reg.add_internal_call("internal_m2n_text_set_shadow_softener", dotnet_internal_call(internal_m2n_text_set_shadow_softener));
+        reg.add_internal_call("internal_m2n_text_get_shadow_softener", dotnet_internal_call(internal_m2n_text_get_shadow_softener));
+        reg.add_internal_call("internal_m2n_text_set_style_flags", dotnet_internal_call(internal_m2n_text_set_style_flags));
+        reg.add_internal_call("internal_m2n_text_get_style_flags", dotnet_internal_call(internal_m2n_text_get_style_flags));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.LightComponent");
-        reg.add_internal_call("internal_m2n_light_get_color", internal_call(internal_m2n_light_get_color));
-        reg.add_internal_call("internal_m2n_light_set_color", internal_call(internal_m2n_light_set_color));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.LightComponent");
+        reg.add_internal_call("internal_m2n_light_get_color", dotnet_internal_call(internal_m2n_light_get_color));
+        reg.add_internal_call("internal_m2n_light_set_color", dotnet_internal_call(internal_m2n_light_set_color));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Assets");
-        reg.add_internal_call("internal_m2n_get_asset_by_uuid", internal_call(internal_m2n_get_asset_by_uuid));
-        reg.add_internal_call("internal_m2n_get_asset_by_key", internal_call(internal_m2n_get_asset_by_key));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Assets");
+        reg.add_internal_call("internal_m2n_get_asset_by_uuid", dotnet_internal_call(internal_m2n_get_asset_by_uuid));
+        reg.add_internal_call("internal_m2n_get_asset_by_key", dotnet_internal_call(internal_m2n_get_asset_by_key));
         reg.add_internal_call("internal_m2n_get_material_properties",
-                              internal_call(internal_m2n_get_material_properties));
+                              dotnet_internal_call(internal_m2n_get_material_properties));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.AudioClip");
-        reg.add_internal_call("internal_m2n_audio_clip_get_length", internal_call(internal_m2n_audio_clip_get_length));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.AudioClip");
+        reg.add_internal_call("internal_m2n_audio_clip_get_length", dotnet_internal_call(internal_m2n_audio_clip_get_length));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.AnimationClip");
-        reg.add_internal_call("internal_m2n_animation_clip_get_length", internal_call(internal_m2n_animation_clip_get_length));
-        reg.add_internal_call("internal_m2n_animation_clip_get_name", internal_call(internal_m2n_animation_clip_get_name));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.AnimationClip");
+        reg.add_internal_call("internal_m2n_animation_clip_get_length", dotnet_internal_call(internal_m2n_animation_clip_get_length));
+        reg.add_internal_call("internal_m2n_animation_clip_get_name", dotnet_internal_call(internal_m2n_animation_clip_get_name));
     }
 
     {
-        auto reg = mono::internal_call_registry("Quaternion");
-        reg.add_internal_call("internal_m2n_from_euler_rad", internal_call(internal_m2n_from_euler_rad));
-        reg.add_internal_call("internal_m2n_to_euler_rad", internal_call(internal_m2n_to_euler_rad));
-        reg.add_internal_call("internal_m2n_from_to_rotation", internal_call(internal_m2n_from_to_rotation));
-        reg.add_internal_call("internal_m2n_angle_axis", internal_call(internal_m2n_angle_axis));
-        reg.add_internal_call("internal_m2n_look_rotation", internal_call(internal_m2n_look_rotation));
+        auto reg = dotnet::internal_call_registry("Quaternion");
+        reg.add_internal_call("internal_m2n_from_euler_rad", dotnet_internal_call(internal_m2n_from_euler_rad));
+        reg.add_internal_call("internal_m2n_to_euler_rad", dotnet_internal_call(internal_m2n_to_euler_rad));
+        reg.add_internal_call("internal_m2n_from_to_rotation", dotnet_internal_call(internal_m2n_from_to_rotation));
+        reg.add_internal_call("internal_m2n_angle_axis", dotnet_internal_call(internal_m2n_angle_axis));
+        reg.add_internal_call("internal_m2n_look_rotation", dotnet_internal_call(internal_m2n_look_rotation));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Gizmos");
-        reg.add_internal_call("internal_m2n_gizmos_add_sphere", internal_call(internal_m2n_gizmos_add_sphere));
-        reg.add_internal_call("internal_m2n_gizmos_add_ray", internal_call(internal_m2n_gizmos_add_ray));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Gizmos");
+        reg.add_internal_call("internal_m2n_gizmos_add_sphere", dotnet_internal_call(internal_m2n_gizmos_add_sphere));
+        reg.add_internal_call("internal_m2n_gizmos_add_ray", dotnet_internal_call(internal_m2n_gizmos_add_ray));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Tests");
-        reg.add_internal_call("m2n_test_uuid", internal_call(m2n_test_uuid));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Tests");
+        reg.add_internal_call("m2n_test_uuid", dotnet_internal_call(m2n_test_uuid));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.LayerMask");
-        reg.add_internal_call("internal_m2n_layers_layer_to_name", internal_call(internal_m2n_layers_layer_to_name));
-        reg.add_internal_call("internal_m2n_layers_name_to_layer", internal_call(internal_m2n_layers_name_to_layer));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.LayerMask");
+        reg.add_internal_call("internal_m2n_layers_layer_to_name", dotnet_internal_call(internal_m2n_layers_layer_to_name));
+        reg.add_internal_call("internal_m2n_layers_name_to_layer", dotnet_internal_call(internal_m2n_layers_name_to_layer));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Input");
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Input");
         reg.add_internal_call("internal_m2n_input_get_analog_value",
-                              internal_call(internal_m2n_input_get_analog_value));
+                              dotnet_internal_call(internal_m2n_input_get_analog_value));
         reg.add_internal_call("internal_m2n_input_get_digital_value",
-                              internal_call(internal_m2n_input_get_analog_value));
-        reg.add_internal_call("internal_m2n_input_is_pressed", internal_call(internal_m2n_input_is_pressed));
-        reg.add_internal_call("internal_m2n_input_is_released", internal_call(internal_m2n_input_is_released));
-        reg.add_internal_call("internal_m2n_input_is_down", internal_call(internal_m2n_input_is_down));
-        reg.add_internal_call("internal_m2n_input_is_key_pressed", internal_call(internal_m2n_input_is_key_pressed));
-        reg.add_internal_call("internal_m2n_input_is_key_released", internal_call(internal_m2n_input_is_key_released));
-        reg.add_internal_call("internal_m2n_input_is_key_down", internal_call(internal_m2n_input_is_key_down));
+                              dotnet_internal_call(internal_m2n_input_get_analog_value));
+        reg.add_internal_call("internal_m2n_input_is_pressed", dotnet_internal_call(internal_m2n_input_is_pressed));
+        reg.add_internal_call("internal_m2n_input_is_released", dotnet_internal_call(internal_m2n_input_is_released));
+        reg.add_internal_call("internal_m2n_input_is_down", dotnet_internal_call(internal_m2n_input_is_down));
+        reg.add_internal_call("internal_m2n_input_is_key_pressed", dotnet_internal_call(internal_m2n_input_is_key_pressed));
+        reg.add_internal_call("internal_m2n_input_is_key_released", dotnet_internal_call(internal_m2n_input_is_key_released));
+        reg.add_internal_call("internal_m2n_input_is_key_down", dotnet_internal_call(internal_m2n_input_is_key_down));
         reg.add_internal_call("internal_m2n_input_is_mouse_button_pressed",
-                              internal_call(internal_m2n_input_is_mouse_button_pressed));
+                              dotnet_internal_call(internal_m2n_input_is_mouse_button_pressed));
         reg.add_internal_call("internal_m2n_input_is_mouse_button_released",
-                              internal_call(internal_m2n_input_is_mouse_button_released));
+                              dotnet_internal_call(internal_m2n_input_is_mouse_button_released));
         reg.add_internal_call("internal_m2n_input_is_mouse_button_down",
-                              internal_call(internal_m2n_input_is_mouse_button_down));
+                              dotnet_internal_call(internal_m2n_input_is_mouse_button_down));
         reg.add_internal_call("internal_m2n_input_get_mouse_position",
-                              internal_call(internal_m2n_input_get_mouse_position));
+                              dotnet_internal_call(internal_m2n_input_get_mouse_position));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Physics");
-        reg.add_internal_call("internal_m2n_physics_ray_cast", internal_call(internal_m2n_physics_ray_cast));
-        reg.add_internal_call("internal_m2n_physics_ray_cast_all", internal_call(internal_m2n_physics_ray_cast_all));
-        reg.add_internal_call("internal_m2n_physics_sphere_cast", internal_call(internal_m2n_physics_sphere_cast));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Physics");
+        reg.add_internal_call("internal_m2n_physics_ray_cast", dotnet_internal_call(internal_m2n_physics_ray_cast));
+        reg.add_internal_call("internal_m2n_physics_ray_cast_all", dotnet_internal_call(internal_m2n_physics_ray_cast_all));
+        reg.add_internal_call("internal_m2n_physics_sphere_cast", dotnet_internal_call(internal_m2n_physics_sphere_cast));
         reg.add_internal_call("internal_m2n_physics_sphere_cast_all",
-                              internal_call(internal_m2n_physics_sphere_cast_all));
+                              dotnet_internal_call(internal_m2n_physics_sphere_cast_all));
         reg.add_internal_call("internal_m2n_physics_sphere_overlap",
-                              internal_call(internal_m2n_physics_sphere_overlap));
+                              dotnet_internal_call(internal_m2n_physics_sphere_overlap));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.IK");
+        auto reg = dotnet::internal_call_registry("Unravel.Core.IK");
         reg.add_internal_call("internal_m2n_utils_set_ik_posiiton_ccd",
-                              internal_call(internal_m2n_utils_set_ik_posiiton_ccd));
+                              dotnet_internal_call(internal_m2n_utils_set_ik_posiiton_ccd));
         reg.add_internal_call("internal_m2n_utils_set_ik_posiiton_fabrik",
-                              internal_call(internal_m2n_utils_set_ik_posiiton_fabrik));
+                              dotnet_internal_call(internal_m2n_utils_set_ik_posiiton_fabrik));
         reg.add_internal_call("internal_m2n_utils_set_ik_posiiton_two_bone",
-                              internal_call(internal_m2n_utils_set_ik_posiiton_two_bone));
+                              dotnet_internal_call(internal_m2n_utils_set_ik_posiiton_two_bone));
 
         reg.add_internal_call("internal_m2n_utils_set_ik_look_at_posiiton",
-                              internal_call(internal_m2n_utils_set_ik_look_at_posiiton));
+                              dotnet_internal_call(internal_m2n_utils_set_ik_look_at_posiiton));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.AudioSourceComponent");
-        reg.add_internal_call("internal_m2n_audio_source_get_loop", internal_call(internal_m2n_audio_source_get_loop));
-        reg.add_internal_call("internal_m2n_audio_source_set_loop", internal_call(internal_m2n_audio_source_set_loop));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.AudioSourceComponent");
+        reg.add_internal_call("internal_m2n_audio_source_get_loop", dotnet_internal_call(internal_m2n_audio_source_get_loop));
+        reg.add_internal_call("internal_m2n_audio_source_set_loop", dotnet_internal_call(internal_m2n_audio_source_set_loop));
         reg.add_internal_call("internal_m2n_audio_source_get_volume",
-                              internal_call(internal_m2n_audio_source_get_volume));
+                              dotnet_internal_call(internal_m2n_audio_source_get_volume));
         reg.add_internal_call("internal_m2n_audio_source_set_volume",
-                              internal_call(internal_m2n_audio_source_set_volume));
+                              dotnet_internal_call(internal_m2n_audio_source_set_volume));
         reg.add_internal_call("internal_m2n_audio_source_get_pitch",
-                              internal_call(internal_m2n_audio_source_get_pitch));
+                              dotnet_internal_call(internal_m2n_audio_source_get_pitch));
         reg.add_internal_call("internal_m2n_audio_source_set_pitch",
-                              internal_call(internal_m2n_audio_source_set_pitch));
+                              dotnet_internal_call(internal_m2n_audio_source_set_pitch));
         reg.add_internal_call("internal_m2n_audio_source_get_volume_rolloff",
-                              internal_call(internal_m2n_audio_source_get_volume_rolloff));
+                              dotnet_internal_call(internal_m2n_audio_source_get_volume_rolloff));
         reg.add_internal_call("internal_m2n_audio_source_set_volume_rolloff",
-                              internal_call(internal_m2n_audio_source_set_volume_rolloff));
+                              dotnet_internal_call(internal_m2n_audio_source_set_volume_rolloff));
         reg.add_internal_call("internal_m2n_audio_source_get_min_distance",
-                              internal_call(internal_m2n_audio_source_get_min_distance));
+                              dotnet_internal_call(internal_m2n_audio_source_get_min_distance));
         reg.add_internal_call("internal_m2n_audio_source_set_min_distance",
-                              internal_call(internal_m2n_audio_source_set_min_distance));
+                              dotnet_internal_call(internal_m2n_audio_source_set_min_distance));
         reg.add_internal_call("internal_m2n_audio_source_get_max_distance",
-                              internal_call(internal_m2n_audio_source_get_max_distance));
+                              dotnet_internal_call(internal_m2n_audio_source_get_max_distance));
         reg.add_internal_call("internal_m2n_audio_source_set_max_distance",
-                              internal_call(internal_m2n_audio_source_set_max_distance));
-        reg.add_internal_call("internal_m2n_audio_source_get_mute", internal_call(internal_m2n_audio_source_get_mute));
+                              dotnet_internal_call(internal_m2n_audio_source_set_max_distance));
+        reg.add_internal_call("internal_m2n_audio_source_get_mute", dotnet_internal_call(internal_m2n_audio_source_get_mute));
 
-        reg.add_internal_call("internal_m2n_audio_source_set_mute", internal_call(internal_m2n_audio_source_set_mute));
+        reg.add_internal_call("internal_m2n_audio_source_set_mute", dotnet_internal_call(internal_m2n_audio_source_set_mute));
 
         reg.add_internal_call("internal_m2n_audio_source_is_playing",
-                              internal_call(internal_m2n_audio_source_is_playing));
+                              dotnet_internal_call(internal_m2n_audio_source_is_playing));
         reg.add_internal_call("internal_m2n_audio_source_is_paused",
-                              internal_call(internal_m2n_audio_source_is_paused));
-        reg.add_internal_call("internal_m2n_audio_source_play", internal_call(internal_m2n_audio_source_play));
-        reg.add_internal_call("internal_m2n_audio_source_stop", internal_call(internal_m2n_audio_source_stop));
+                              dotnet_internal_call(internal_m2n_audio_source_is_paused));
+        reg.add_internal_call("internal_m2n_audio_source_play", dotnet_internal_call(internal_m2n_audio_source_play));
+        reg.add_internal_call("internal_m2n_audio_source_stop", dotnet_internal_call(internal_m2n_audio_source_stop));
 
-        reg.add_internal_call("internal_m2n_audio_source_pause", internal_call(internal_m2n_audio_source_pause));
-        reg.add_internal_call("internal_m2n_audio_source_resume", internal_call(internal_m2n_audio_source_resume));
+        reg.add_internal_call("internal_m2n_audio_source_pause", dotnet_internal_call(internal_m2n_audio_source_pause));
+        reg.add_internal_call("internal_m2n_audio_source_resume", dotnet_internal_call(internal_m2n_audio_source_resume));
         reg.add_internal_call("internal_m2n_audio_source_get_audio_clip",
-                              internal_call(internal_m2n_audio_source_get_audio_clip));
+                              dotnet_internal_call(internal_m2n_audio_source_get_audio_clip));
         reg.add_internal_call("internal_m2n_audio_source_set_audio_clip",
-                              internal_call(internal_m2n_audio_source_set_audio_clip));
+                              dotnet_internal_call(internal_m2n_audio_source_set_audio_clip));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.UIDocumentComponent");
-        reg.add_internal_call("internal_m2n_ui_document_get_asset", internal_call(internal_m2n_ui_document_get_asset));
-        reg.add_internal_call("internal_m2n_ui_document_set_asset", internal_call(internal_m2n_ui_document_set_asset));
-        reg.add_internal_call("internal_m2n_ui_document_is_loaded", internal_call(internal_m2n_ui_document_is_loaded));
-        reg.add_internal_call("internal_m2n_ui_document_is_enabled", internal_call(internal_m2n_ui_document_is_enabled));
-        reg.add_internal_call("internal_m2n_ui_document_set_enabled", internal_call(internal_m2n_ui_document_set_enabled));
-        reg.add_internal_call("internal_m2n_ui_document_close", internal_call(internal_m2n_ui_document_close));
-        reg.add_internal_call("internal_m2n_ui_document_get_title", internal_call(internal_m2n_ui_document_get_title));
-        reg.add_internal_call("internal_m2n_ui_document_set_title", internal_call(internal_m2n_ui_document_set_title));
-        reg.add_internal_call("internal_m2n_ui_document_get_wrapper", internal_call(internal_m2n_ui_document_get_wrapper));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.UIDocumentComponent");
+        reg.add_internal_call("internal_m2n_ui_document_get_asset", dotnet_internal_call(internal_m2n_ui_document_get_asset));
+        reg.add_internal_call("internal_m2n_ui_document_set_asset", dotnet_internal_call(internal_m2n_ui_document_set_asset));
+        reg.add_internal_call("internal_m2n_ui_document_is_loaded", dotnet_internal_call(internal_m2n_ui_document_is_loaded));
+        reg.add_internal_call("internal_m2n_ui_document_is_enabled", dotnet_internal_call(internal_m2n_ui_document_is_enabled));
+        reg.add_internal_call("internal_m2n_ui_document_set_enabled", dotnet_internal_call(internal_m2n_ui_document_set_enabled));
+        reg.add_internal_call("internal_m2n_ui_document_close", dotnet_internal_call(internal_m2n_ui_document_close));
+        reg.add_internal_call("internal_m2n_ui_document_get_title", dotnet_internal_call(internal_m2n_ui_document_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_set_title", dotnet_internal_call(internal_m2n_ui_document_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_get_wrapper", dotnet_internal_call(internal_m2n_ui_document_get_wrapper));
     }
 
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.UIDocument");
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", internal_call(internal_m2n_ui_document_wrapper_is_valid));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", internal_call(internal_m2n_ui_document_wrapper_get_title));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", internal_call(internal_m2n_ui_document_wrapper_set_title));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_visible", internal_call(internal_m2n_ui_document_wrapper_is_visible));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_show", internal_call(internal_m2n_ui_document_wrapper_show));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_hide", internal_call(internal_m2n_ui_document_wrapper_hide));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_close", internal_call(internal_m2n_ui_document_wrapper_close));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", internal_call(internal_m2n_ui_document_query_selector_wrapper));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", internal_call(internal_m2n_ui_document_query_selector_wrapper));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.UIDocument");
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", dotnet_internal_call(internal_m2n_ui_document_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", dotnet_internal_call(internal_m2n_ui_document_wrapper_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", dotnet_internal_call(internal_m2n_ui_document_wrapper_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_visible", dotnet_internal_call(internal_m2n_ui_document_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_show", dotnet_internal_call(internal_m2n_ui_document_wrapper_show));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_hide", dotnet_internal_call(internal_m2n_ui_document_wrapper_hide));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_close", dotnet_internal_call(internal_m2n_ui_document_wrapper_close));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", dotnet_internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", dotnet_internal_call(internal_m2n_ui_document_query_selector_wrapper));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", dotnet_internal_call(internal_m2n_ui_document_query_selector_wrapper));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.UIElement");
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", internal_call(internal_m2n_ui_element_wrapper_is_valid));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_visible", internal_call(internal_m2n_ui_element_wrapper_is_visible));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_visible", internal_call(internal_m2n_ui_element_wrapper_set_visible));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_attribute", internal_call(internal_m2n_ui_element_wrapper_get_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_attribute", internal_call(internal_m2n_ui_element_wrapper_set_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_attribute", internal_call(internal_m2n_ui_element_wrapper_remove_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", internal_call(internal_m2n_ui_element_wrapper_has_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", internal_call(internal_m2n_ui_element_wrapper_set_class));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", internal_call(internal_m2n_ui_element_wrapper_is_class_set));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_sync_transform_to_entity", internal_call(internal_m2n_ui_element_wrapper_sync_transform_to_entity));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", internal_call(internal_m2n_ui_element_wrapper_focus));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", internal_call(internal_m2n_ui_element_wrapper_blur));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_click", internal_call(internal_m2n_ui_element_wrapper_click));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_into_view", internal_call(internal_m2n_ui_element_wrapper_scroll_into_view));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_id", internal_call(internal_m2n_ui_element_wrapper_get_id));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.UIElement");
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_visible", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_visible", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_has_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_class));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_class_set));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_sync_transform_to_entity", dotnet_internal_call(internal_m2n_ui_element_wrapper_sync_transform_to_entity));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", dotnet_internal_call(internal_m2n_ui_element_wrapper_focus));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", dotnet_internal_call(internal_m2n_ui_element_wrapper_blur));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_click", dotnet_internal_call(internal_m2n_ui_element_wrapper_click));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_into_view", dotnet_internal_call(internal_m2n_ui_element_wrapper_scroll_into_view));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_id", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_id));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.UIEventManager");
-        reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener", internal_call(internal_m2n_ui_ensure_native_event_listener));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventManager");
+        reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener", dotnet_internal_call(internal_m2n_ui_ensure_native_event_listener));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.UIEventBase");
-        reg.add_internal_call("internal_m2n_ui_stop_propagation", internal_call(internal_m2n_ui_stop_propagation));
-        reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation", internal_call(internal_m2n_ui_stop_immediate_propagation));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventBase");
+        reg.add_internal_call("internal_m2n_ui_stop_propagation", dotnet_internal_call(internal_m2n_ui_stop_propagation));
+        reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation", dotnet_internal_call(internal_m2n_ui_stop_immediate_propagation));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Application");
-        reg.add_internal_call("internal_m2n_application_quit", internal_call(internal_m2n_application_quit));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Application");
+        reg.add_internal_call("internal_m2n_application_quit", dotnet_internal_call(internal_m2n_application_quit));
     }
 
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Time");
-        reg.add_internal_call("internal_m2n_set_time_scale", internal_call(internal_m2n_set_time_scale));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Time");
+        reg.add_internal_call("internal_m2n_set_time_scale", dotnet_internal_call(internal_m2n_set_time_scale));
     }
     
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.Profiler");
-        reg.add_internal_call("internal_m2n_profiler_add_record", internal_call(internal_m2n_profiler_add_record));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Profiler");
+        reg.add_internal_call("internal_m2n_profiler_add_record", dotnet_internal_call(internal_m2n_profiler_add_record));
     }
     
     {
-        auto reg = mono::internal_call_registry("Unravel.Core.GCMonitor");
-        reg.add_internal_call("internal_m2n_get_mono_heap_size", internal_call(mono::gc_get_heap_size));
-        reg.add_internal_call("internal_m2n_get_mono_used_size", internal_call(mono::gc_get_used_size));
+        auto reg = dotnet::internal_call_registry("Unravel.Core.GCMonitor");
+        reg.add_internal_call("internal_m2n_get_dotnet_heap_size", dotnet_internal_call(dotnet::gc_get_heap_size));
+        reg.add_internal_call("internal_m2n_get_dotnet_used_size", dotnet_internal_call(dotnet::gc_get_used_size));
     }
-
-    // mono::managed_interface::init(assembly);
 
     return true;
 }

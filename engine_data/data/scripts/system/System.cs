@@ -601,8 +601,8 @@ namespace Unravel.Core
             if (gen0Delta > 0 || gen1Delta > 0 || gen2Delta > 0 || Math.Abs(memDelta) > 1024)
             {
                 // Get Mono heap size (native memory used by Mono runtime)
-                long monoHeap = internal_m2n_get_mono_heap_size();
-                long monoUsed = internal_m2n_get_mono_used_size();
+                long monoHeap = internal_m2n_get_dotnet_heap_size();
+                long monoUsed = internal_m2n_get_dotnet_used_size();
 
                 Log.Info($"[GC] {context} - Collections: Gen0={gen0Delta}, Gen1={gen1Delta}, Gen2={gen2Delta} | Managed: {memDelta / 1024.0:F2} KB (Total: {memory / 1024.0:F2} KB) | Mono Heap: {monoHeap / (1024.0 * 1024.0):F2} MB (Used: {monoUsed / (1024.0 * 1024.0):F2} MB)");
             }
@@ -614,15 +614,28 @@ namespace Unravel.Core
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern long internal_m2n_get_mono_heap_size();
+        private static extern long internal_m2n_get_dotnet_heap_size();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern long internal_m2n_get_mono_used_size();
+        private static extern long internal_m2n_get_dotnet_used_size();
     }
+    [AutoStaticsCleanup]
     public static class SystemManager
     {
         public static ScriptComponentManager ScriptManager = new ScriptComponentManager();
         private static GCMonitor gcMonitor = new GCMonitor();
+
+        /// <summary>
+        /// Invoked by the runtime before a script domain unloads. Re-creates
+        /// the manager so no script instances, Type buckets or method
+        /// override caches keep the unloading domain alive, while native
+        /// update callbacks keep working against a fresh, empty manager.
+        /// </summary>
+        private static void OnStaticsCleanup()
+        {
+            ScriptManager = new ScriptComponentManager();
+            gcMonitor = new GCMonitor();
+        }
         public static void internal_n2m_update(UpdateInfo info)
         {
             Time.time = info.time;

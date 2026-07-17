@@ -41,7 +41,7 @@ target_link_libraries (${target_name}
     threadpp
     assimp
     string_utils
-    monort
+    dotnetpp
     seq
     libunibreak
     engine_version

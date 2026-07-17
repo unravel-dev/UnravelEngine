@@ -8,7 +8,7 @@
 #include <limits>
 #include <string>
 #include <string_utils/utils.h>
-
+#include <filesystem/filesystem.h>
 #include <imgui/imgui_internal.h>
 
 namespace unravel
@@ -497,7 +497,7 @@ auto inspector_path::inspect(rtti::context& ctx,
         }
         else
         {
-            if(ImGui::Button(ICON_MDI_FOLDER_OPEN))
+            if(ImGui::Button(ICON_MDI_FOLDER_SEARCH))
             {
                 if(native::pick_folder_dialog(picked))
                 {
@@ -508,6 +508,16 @@ auto inspector_path::inspect(rtti::context& ctx,
                 }
             }
             ImGui::SetItemTooltipEx("Pick a location...");
+
+            if(!data.empty())
+            {
+                ImGui::SameLine();
+                if(ImGui::Button(ICON_MDI_FOLDER_OPEN))
+                {
+                    fs::show_in_graphical_env(data);
+                }
+                ImGui::SetItemTooltipEx("Open in Explorer");
+            }
         }
         ImGui::SameLine();
     }
