@@ -120,6 +120,39 @@ void console_log_panel::flush_()
 {
 }
 
+auto console_log_panel::snapshot_logs(level::level_enum min_level, size_t max_count, uint64_t after_id) const
+    -> std::vector<log_snapshot_entry>
+{
+    std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
+    std::vector<log_snapshot_entry> matched;
+    matched.reserve(std::min(max_count, entries_.size()));
+    for(size_t i = 0; i < entries_.size(); ++i)
+    {
+        const auto& entry = entries_[i];
+        if(entry.id <= after_id)
+        {
+            continue;
+        }
+        if(entry.level < min_level)
+        {
+            continue;
+        }
+        log_snapshot_entry snap;
+        snap.id = entry.id;
+        snap.level = entry.level;
+        snap.text.assign(entry.formatted.begin(), entry.formatted.end());
+        snap.filename = entry.source.filename;
+        snap.funcname = entry.source.funcname;
+        snap.line = entry.source.line;
+        matched.push_back(std::move(snap));
+    }
+    if(matched.size() > max_count)
+    {
+        matched.erase(matched.begin(), matched.end() - static_cast<std::ptrdiff_t>(max_count));
+    }
+    return matched;
+}
+
 void console_log_panel::clear_log()
 {
     {

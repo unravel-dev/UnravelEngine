@@ -32,6 +32,18 @@ Play state lives in `play_mode` (`engine/engine/play_mode.h`), not in `events`.
 | `play.is_simulation_running()` | Physics, scripts, scene on_load, UI hot-reload |
 | `play.is_paused()` | Pause/resume behavior |
 
+### Editor / MCP facade
+
+Prefer [`editor_actions`](editor/editor/editing/editor_actions.h) over calling `play_mode` ad hoc from UI/MCP:
+
+| API | Role |
+|-----|------|
+| `can_enter_play` / `toggle_play` / `set_play_active` | Enter/exit with compile-error gate |
+| `set_play_paused` / `skip_play_frame` | Pause and step |
+| `get_play_state` | Structured status |
+
+MCP tools: `play_get_state`, `play_set_active`, `play_set_paused`, `play_skip_frame` (`mcp_tools_editor.cpp`).
+
 ## Event sequence
 
 ### Enter play

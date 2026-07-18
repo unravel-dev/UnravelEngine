@@ -21,129 +21,9 @@ namespace unravel::mcp
 namespace
 {
 
-auto collect_component_names(entt::handle entity) -> std::vector<std::string>
-{
-    std::vector<std::string> names;
-    if(!entity)
-    {
-        return names;
-    }
-
-    hpp::for_each_tuple_type<all_inspectable_components>(
-        [&](auto index)
-        {
-            using ctype = std::tuple_element_t<decltype(index)::value, all_inspectable_components>;
-            if(entity.all_of<ctype>())
-            {
-                auto type = entt::resolve<ctype>();
-                names.emplace_back(entt::get_pretty_name(type));
-            }
-        });
-
-    if(entity.all_of<script_component>())
-    {
-        names.emplace_back("Script");
-    }
-    return names;
-}
-
 auto entity_to_json(entt::handle entity, int depth, int max_depth) -> std::string
 {
-    if(!entity)
-    {
-        return "null";
-    }
-
-    std::string name;
-    std::string tag;
-    if(auto* tag_comp = entity.try_get<tag_component>())
-    {
-        name = tag_comp->name;
-        tag = tag_comp->tag;
-    }
-
-    std::string parent_id;
-    bool active = true;
-    // position / rotation_euler / scale = WORLD (global). Local variants are explicit.
-    math::vec3 position_world{0.0f};
-    math::vec3 rotation_world{0.0f};
-    math::vec3 scale_world{1.0f};
-    math::vec3 position_local{0.0f};
-    math::vec3 rotation_local{0.0f};
-    math::vec3 scale_local{1.0f};
-    if(auto* transform = entity.try_get<transform_component>())
-    {
-        active = transform->is_active();
-        position_world = transform->get_position_global();
-        rotation_world = transform->get_rotation_euler_global();
-        scale_world = transform->get_scale_global();
-        position_local = transform->get_position_local();
-        rotation_local = transform->get_rotation_euler_local();
-        scale_local = transform->get_scale_local();
-        if(auto parent = transform->get_parent())
-        {
-            parent_id = entity_id_string(parent);
-        }
-    }
-
-    auto components = collect_component_names(entity);
-    std::string components_json = "[";
-    for(size_t i = 0; i < components.size(); ++i)
-    {
-        if(i > 0)
-        {
-            components_json += ",";
-        }
-        components_json += make_json_string(components[i]);
-    }
-    components_json += "]";
-
-    std::string children_json = "[]";
-    if(depth < max_depth)
-    {
-        if(auto* transform = entity.try_get<transform_component>())
-        {
-            children_json = "[";
-            const auto& children = transform->get_children();
-            for(size_t i = 0; i < children.size(); ++i)
-            {
-                if(i > 0)
-                {
-                    children_json += ",";
-                }
-                children_json += entity_to_json(children[i], depth + 1, max_depth);
-            }
-            children_json += "]";
-        }
-    }
-
-    return fmt::format(
-        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}],"components":{},"children":{}}})",
-        make_json_string(entity_id_string(entity)),
-        make_json_string(name),
-        make_json_string(tag),
-        active ? "true" : "false",
-        parent_id.empty() ? "null" : make_json_string(parent_id),
-        position_world.x,
-        position_world.y,
-        position_world.z,
-        rotation_world.x,
-        rotation_world.y,
-        rotation_world.z,
-        scale_world.x,
-        scale_world.y,
-        scale_world.z,
-        position_local.x,
-        position_local.y,
-        position_local.z,
-        rotation_local.x,
-        rotation_local.y,
-        rotation_local.z,
-        scale_local.x,
-        scale_local.y,
-        scale_local.z,
-        components_json,
-        children_json);
+    return entity_to_summary_json(entity, depth, max_depth);
 }
 
 auto parse_light_type(const std::string& value, light_type& out) -> bool
@@ -385,6 +265,7 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name="scene_list_entities",
          .description=
              "List entities in the active scene hierarchy. Optional parent_id and max_depth (default 2). "
+             "Axes: X-right, Y-up, Z-forward. "
              "Transform fields: position/rotation_euler/scale are WORLD (global); "
              "position_local/rotation_euler_local/scale_local are LOCAL (parent-relative).",
          .input_schema_json=R"({"type":"object","properties":{"parent_id":{"type":"string"},"max_depth":{"type":"integer","minimum":0}}})",
@@ -501,9 +382,10 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name="scene_create_primitive",
          .description=
              "Create an embedded mesh primitive (Cube, Sphere, Plane, Cylinder, Cone, Torus, Capsule 1m, Capsule 2m, ...). "
+             "Axes: X-right, Y-up, Z-forward. Cube is 1x1x1 centered at origin. "
              "Optional name/parent_id/position. position is WORLD space even with parent_id -- "
              "use scene_set_transform with space:\"local\" for parent-relative placement.",
-         .input_schema_json=R"({"type":"object","properties":{"primitive":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z]"}},"required":["primitive"]})",
+         .input_schema_json=R"json({"type":"object","properties":{"primitive":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["primitive"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -566,7 +448,7 @@ void register_scene_tools(mcp_tool_registry& registry)
          .description=
              "Create a light entity. Args: light_type (directional|point|spot), name, optional parent_id/position. "
              "position is WORLD space.",
-         .input_schema_json=R"({"type":"object","properties":{"light_type":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z]"}},"required":["light_type","name"]})",
+             .input_schema_json=R"json({"type":"object","properties":{"light_type":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["light_type","name"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -627,7 +509,7 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name="scene_create_camera",
          .description=
              "Create a camera entity. Args: name, optional parent_id/position. position is WORLD space.",
-         .input_schema_json=R"({"type":"object","properties":{"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z]"}},"required":["name"]})",
+         .input_schema_json=R"json({"type":"object","properties":{"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["name"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -683,7 +565,7 @@ void register_scene_tools(mcp_tool_registry& registry)
          .description=
              "Instantiate a prefab asset by key (e.g. app:/data/foo.prefab). "
              "Optional position is WORLD space.",
-         .input_schema_json=R"({"type":"object","properties":{"asset_key":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z]"}},"required":["asset_key"]})",
+         .input_schema_json=R"json({"type":"object","properties":{"asset_key":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["asset_key"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -732,7 +614,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              "defaults::create_mesh_entity_at. Optional name/parent_id/position. "
              "position is WORLD space even with parent_id.",
          .input_schema_json=
-             R"json({"type":"object","properties":{"asset_key":{"type":"string","description":"Mesh asset key"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z]"}},"required":["asset_key"]})json",
+             R"json({"type":"object","properties":{"asset_key":{"type":"string","description":"Mesh asset key"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["asset_key"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -887,11 +769,12 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name="scene_set_transform",
          .description=
-             "Set transform fields on an entity. Any of position, rotation_euler (degrees), scale. "
+             "Set transform fields on an entity. Any of position, rotation_euler (degrees [pitch_x,yaw_y,roll_z]), scale. "
+             "Axes: X-right, Y-up, Z-forward. "
              "space:\"world\" (default) uses WORLD/global pose; space:\"local\" uses parent-relative "
              "LOCAL pose. Prefer local when parenting children (doors under houses, etc.).",
          .input_schema_json=
-             R"({"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"],"default":"world","description":"world=global pose (default); local=parent-relative"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]})",
+             R"({"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"],"default":"world","description":"world=global pose (default); local=parent-relative"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"[x,y,z] X-right Y-up Z-forward"},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"degrees [pitch_x,yaw_y,roll_z]"},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]})",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -926,7 +809,8 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name="scene_get_transform",
          .description=
-             "Get an entity transform. With space:\"world\" or \"local\" returns that space only; "
+             "Get an entity transform. Axes: X-right, Y-up, Z-forward. "
+             "With space:\"world\" or \"local\" returns that space only; "
              "omit space to return both (same fields as scene_list_entities).",
          .input_schema_json=
              R"({"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]}},"required":["entity_id"]})",
@@ -1176,7 +1060,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              "Omit key/path to overwrite scene.source; provide key or absolute path for save-as "
              "(sets scene.source). Requires an open project. Refuses play mode and prefab mode.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"key":{"type":"string","description":"Asset key e.g. app:/data/Village.spfb"},"path":{"type":"string","description":"Absolute filesystem path to a .spfb"}})json",
+             R"json({"type":"object","properties":{"key":{"type":"string","description":"Asset key e.g. app:/data/Village.spfb"},"path":{"type":"string","description":"Absolute filesystem path to a .spfb"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {

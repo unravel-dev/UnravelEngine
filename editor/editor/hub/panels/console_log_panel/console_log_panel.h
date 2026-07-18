@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <string>
+#include <vector>
 
 namespace unravel
 {
@@ -38,6 +39,16 @@ public:
         uint64_t id{};
     };
 
+    struct log_snapshot_entry
+    {
+        uint64_t id{};
+        level::level_enum level{level::off};
+        std::string text;
+        std::string filename;
+        std::string funcname;
+        int line{0};
+    };
+
     using display_entries_t = hpp::small_vector<log_entry, 1024>;
     using entries_t = hpp::stack_ringbuffer<log_entry, 1024>;
 
@@ -57,6 +68,13 @@ public:
     void on_play();
     void on_recompile();
 
+    /**
+     * @brief Snapshot recent log entries (thread-safe). Newest-last order.
+     * Filters by min_level (inclusive) and optional after_id exclusive cursor.
+     */
+    auto snapshot_logs(level::level_enum min_level, size_t max_count, uint64_t after_id = 0) const
+        -> std::vector<log_snapshot_entry>;
+
 private:
     void select_log(const log_entry& entry);
     void clear_log();
@@ -70,7 +88,7 @@ private:
 
     std::array<bool, size_t(level::n_levels)> enabled_categories_{};
 
-    std::recursive_mutex entries_mutex_;
+    mutable std::recursive_mutex entries_mutex_;
     ///
     entries_t entries_;
     ///

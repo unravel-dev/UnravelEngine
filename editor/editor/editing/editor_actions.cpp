@@ -1,9 +1,12 @@
 #include "editor_actions.h"
+#include "entity_inspect.h"
 #include "engine/scripting/script.h"
 #include "engine/ui/ui_tree.h"
 
 #include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/hub/hub.h>
+#include <editor/hub/panels/console_log_panel/console_log_panel.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/system/project_manager.h>
@@ -1865,5 +1868,323 @@ auto editor_actions::rebuild_reflection_probes(rtti::context& /*ctx*/, bool forc
         count += reflection_probe_system::mark_all_dirty(*scn, force_full_first_frame);
     }
     return count;
+}
+
+auto editor_actions::can_enter_play(rtti::context& ctx, std::string* error) -> bool
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
+    {
+        return true;
+    }
+    auto& scripting = ctx.get_cached<script_system>();
+    if(scripting.has_compilation_errors())
+    {
+        if(error)
+        {
+            *error = "All compiler errors must be fixed before you can enter Play Mode!";
+        }
+        return false;
+    }
+    return true;
+}
+
+auto editor_actions::get_play_state(rtti::context& ctx) -> play_state_info
+{
+    play_state_info info;
+    if(!ctx.has<play_mode>())
+    {
+        return info;
+    }
+    auto& play = ctx.get_cached<play_mode>();
+    info.is_active = play.is_active();
+    info.is_paused = play.is_paused();
+    info.is_splash = play.is_splash();
+    info.is_simulation_running = play.is_simulation_running();
+    info.frames_running = play.frames_running();
+    if(play.is_splash())
+    {
+        info.phase = "splash";
+    }
+    else if(play.is_simulation_running())
+    {
+        info.phase = "running";
+    }
+    else if(play.is_active())
+    {
+        info.phase = "active";
+    }
+    else
+    {
+        info.phase = "inactive";
+    }
+    return info;
+}
+
+auto editor_actions::set_play_active(rtti::context& ctx, bool active, bool allow_splash, std::string* error) -> bool
+{
+    if(active && !can_enter_play(ctx, error))
+    {
+        return false;
+    }
+    ctx.get_cached<play_mode>().set_active(ctx, active, allow_splash);
+    return true;
+}
+
+auto editor_actions::toggle_play(rtti::context& ctx, bool allow_splash, std::string* error) -> bool
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_active() && !can_enter_play(ctx, error))
+    {
+        return false;
+    }
+    play.toggle(ctx, allow_splash);
+    return true;
+}
+
+auto editor_actions::set_play_paused(rtti::context& ctx, bool paused, std::string* error) -> bool
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_active())
+    {
+        if(error)
+        {
+            *error = "Play mode is not active";
+        }
+        return false;
+    }
+    play.set_paused(ctx, paused);
+    return true;
+}
+
+auto editor_actions::skip_play_frame(rtti::context& ctx, std::string* error) -> bool
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_active())
+    {
+        if(error)
+        {
+            *error = "Play mode is not active";
+        }
+        return false;
+    }
+    if(!play.is_paused())
+    {
+        if(error)
+        {
+            *error = "Play mode must be paused to skip a frame";
+        }
+        return false;
+    }
+    play.skip_next_frame(ctx);
+    return true;
+}
+
+auto editor_actions::get_selection(rtti::context& ctx) -> selection_info
+{
+    selection_info info;
+    auto& em = ctx.get_cached<editing_manager>();
+    if(auto* active = em.try_get_active_selection_as<entt::handle>())
+    {
+        info.active_entity_id = entity_id_string(*active);
+    }
+    for(const auto& handle : em.try_get_selections_as_copy<entt::handle>())
+    {
+        if(handle)
+        {
+            info.entity_ids.push_back(entity_id_string(handle));
+        }
+    }
+    return info;
+}
+
+auto editor_actions::set_selection(rtti::context& ctx,
+                                   const std::vector<std::string>& entity_ids,
+                                   bool add,
+                                   std::string* error) -> bool
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    auto* scn = em.get_active_scene(ctx);
+    if(!scn || !scn->registry)
+    {
+        if(error)
+        {
+            *error = "No active scene";
+        }
+        return false;
+    }
+    if(!add)
+    {
+        em.unselect();
+    }
+    bool any = false;
+    for(const auto& id : entity_ids)
+    {
+        auto entity = find_entity_by_id(*scn, id);
+        if(!entity)
+        {
+            if(error)
+            {
+                *error = "Entity not found: " + id;
+            }
+            return false;
+        }
+        const auto mode = (!add && !any) ? editing_manager::select_mode::normal : editing_manager::select_mode::ctrl;
+        em.select(entity, mode);
+        any = true;
+    }
+    if(!any && !add)
+    {
+        em.unselect();
+    }
+    return true;
+}
+
+void editor_actions::clear_selection(rtti::context& ctx)
+{
+    ctx.get_cached<editing_manager>().unselect();
+}
+
+auto editor_actions::get_recent_logs(rtti::context& ctx,
+                                     level::level_enum min_level,
+                                     size_t max_count,
+                                     uint64_t after_id) -> std::vector<log_query_entry>
+{
+    if(!ctx.has<hub>())
+    {
+        return {};
+    }
+    auto snapshot = ctx.get_cached<hub>().get_panels().get_console_log_panel().snapshot_logs(min_level,
+                                                                                           max_count,
+                                                                                           after_id);
+    std::vector<log_query_entry> out;
+    out.reserve(snapshot.size());
+    for(auto& entry : snapshot)
+    {
+        log_query_entry item;
+        item.id = entry.id;
+        item.level = entry.level;
+        item.text = std::move(entry.text);
+        item.filename = std::move(entry.filename);
+        item.funcname = std::move(entry.funcname);
+        item.line = entry.line;
+        out.push_back(std::move(item));
+    }
+    return out;
+}
+
+auto editor_actions::inspect_entity(rtti::context& ctx,
+                                    const std::string& entity_id,
+                                    bool include_components,
+                                    std::string* error) -> std::string
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    auto* scn = em.get_active_scene(ctx);
+    if(!scn || !scn->registry)
+    {
+        if(error)
+        {
+            *error = "No active scene";
+        }
+        return {};
+    }
+    entt::handle entity;
+    if(entity_id.empty())
+    {
+        if(auto* active = em.try_get_active_selection_as<entt::handle>())
+        {
+            entity = *active;
+        }
+        if(!entity)
+        {
+            if(error)
+            {
+                *error = "No entity_id provided and no active entity selection";
+            }
+            return {};
+        }
+    }
+    else
+    {
+        entity = find_entity_by_id(*scn, entity_id);
+        if(!entity)
+        {
+            if(error)
+            {
+                *error = "Entity not found: " + entity_id;
+            }
+            return {};
+        }
+    }
+    auto summary = entity_to_summary_json(entity, 0, 0);
+    if(!include_components)
+    {
+        return summary;
+    }
+    auto components = entity_components_serialized(entity);
+    std::string escaped;
+    escaped.reserve(components.size() + 8);
+    for(char c : components)
+    {
+        switch(c)
+        {
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                escaped += c;
+                break;
+        }
+    }
+    if(!summary.empty() && summary.back() == '}')
+    {
+        summary.pop_back();
+        summary += ",\"components_serialized\":\"" + escaped + "\"}";
+    }
+    return summary;
+}
+
+auto editor_actions::focus_scene_panel(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    auto& panel = ctx.get_cached<hub>().get_panels().get_scene_panel();
+    panel.set_visible(true);
+    panel.focus();
+    return true;
+}
+
+auto editor_actions::focus_game_panel(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    auto& panel = ctx.get_cached<hub>().get_panels().get_game_panel();
+    panel.set_visible(true);
+    panel.focus();
+    return true;
 }
 } // namespace unravel

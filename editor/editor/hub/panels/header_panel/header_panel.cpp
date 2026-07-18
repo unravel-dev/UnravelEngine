@@ -4,6 +4,7 @@
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/shortcuts.h>
 #include <editor/system/project_manager.h>
 #include <editor/system/version_manager.h>
@@ -535,16 +536,10 @@ auto header_panel::calc_center_zone_width(const ImVec2& frame_padding, const ImV
 
 void header_panel::draw_center_zone(rtti::context& ctx)
 {
-    auto& ev = ctx.get_cached<events>();
     auto& play = ctx.get_cached<play_mode>();
     ImGuiKeyChord key_chord = shortcuts::play_toggle;
     bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
-    auto& scripting = ctx.get_cached<script_system>();
-    bool has_errors = scripting.has_compilation_errors();
-    if(play.is_active())
-    {
-        has_errors = false;
-    }
+    const bool has_errors = !editor_actions::can_enter_play(ctx) && !play.is_active();
     ImGui::BeginDisabled(has_errors);
     ImGui::BeginGroup();
     if(play.is_active())
@@ -565,7 +560,7 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
     if(play_pressed)
     {
-        play.toggle(ctx, play_splash_in_editor_);
+        editor_actions::toggle_play(ctx, play_splash_in_editor_);
     }
     ImGui::SameLine();
 
@@ -577,7 +572,7 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     }
     if(ImGui::Button(ICON_MDI_PAUSE))
     {
-        play.toggle_pause(ctx);
+        editor_actions::set_play_paused(ctx, !play.is_paused());
     }
     if(play.is_paused())
     {
@@ -587,7 +582,7 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
     if(ImGui::Button(ICON_MDI_SKIP_NEXT))
     {
-        play.skip_next_frame(ctx);
+        editor_actions::skip_play_frame(ctx);
     }
     ImGui::PopItemFlag();
     ImGui::SameLine();

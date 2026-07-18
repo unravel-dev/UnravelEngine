@@ -5,11 +5,9 @@
 #include <atomic>
 #include <base/basetypes.hpp>
 #include <chrono>
-#include <condition_variable>
 #include <context/context.hpp>
 #include <deque>
 #include <functional>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,6 +16,9 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <threadpp/future.hpp>
+#include <threadpp/thread.h>
 
 namespace httplib
 {
@@ -73,35 +74,32 @@ public:
         using result_t = std::invoke_result_t<std::decay_t<Fn>>;
         static_assert(!std::is_void_v<result_t>, "invoke_on_main requires a non-void return type");
 
-        auto holder = std::make_shared<std::optional<result_t>>();
-
-        const auto status = run_on_main_thread(
-            [holder, fn = std::forward<Fn>(fn)]() mutable -> std::string
-            {
-                try
-                {
-                    *holder = fn();
-                    return "ok";
-                }
-                catch(const std::exception&)
-                {
-                    return "err";
-                }
-                catch(...)
-                {
-                    return "err";
-                }
-            },
-            timeout);
-
-        if(status != "ok" || !holder->has_value())
+        tpp::this_thread::register_this_thread();
+        auto future = tpp::async(tpp::main_thread::get_id(), std::forward<Fn>(fn));
+        if(future.wait_for(timeout) != std::future_status::ready)
         {
+            error_count_.fetch_add(1);
+            log_activity("rpc", "Timed out waiting for main thread", true);
             return std::nullopt;
         }
-        return *holder;
-    }
 
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+        try
+        {
+            return future.get();
+        }
+        catch(const std::exception& ex)
+        {
+            error_count_.fetch_add(1);
+            log_activity("rpc", std::string("Exception on main thread: ") + ex.what(), true);
+            return std::nullopt;
+        }
+        catch(...)
+        {
+            error_count_.fetch_add(1);
+            log_activity("rpc", "Exception on main thread", true);
+            return std::nullopt;
+        }
+    }
 
 private:
     using job_fn = std::function<std::string()>;
@@ -113,14 +111,7 @@ private:
     auto execute_tool_call(const std::string& tool_name,
                            const std::string& args_json,
                            const std::optional<std::string>& id) -> std::string;
-    void drain_jobs(rtti::context& ctx);
     void log_activity(std::string category, std::string message, bool is_error = false);
-
-    struct pending_job
-    {
-        job_fn work;
-        std::promise<std::string> promise;
-    };
 
     rtti::context* ctx_{nullptr};
     mcp::mcp_tool_registry registry_;
@@ -129,11 +120,6 @@ private:
     std::atomic_bool running_{false};
     bool enabled_{true};
     int port_{k_default_port};
-
-    std::mutex jobs_mutex_;
-    std::condition_variable jobs_cv_;
-    std::deque<std::shared_ptr<pending_job>> jobs_;
-    std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     mutable std::mutex activity_mutex_;
     std::deque<mcp_activity_entry> activity_;

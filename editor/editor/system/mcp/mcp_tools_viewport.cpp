@@ -255,7 +255,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_set_camera",
          .description =
-             "Set Scene panel camera position and/or rotation_euler (degrees). Cancels any in-flight "
+             "Set Scene panel camera position and/or rotation_euler (degrees). "
+             "Axes: X-right, Y-up, Z-forward. Cancels any in-flight "
              "focus animation. Optional relative:true applies position as a local-space offset.",
          .input_schema_json =
              R"json({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"relative":{"type":"boolean","description":"If true, position is added in camera local space (default false)"}}})json",

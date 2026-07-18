@@ -2,13 +2,26 @@
 name: unravel-entities
 description: >-
   Creates and edits UnravelEngine scene entities via Editor MCP: hierarchy,
-  WORLD vs LOCAL transforms, components, ScriptComponent source, and scene_save.
-  Use when spawning primitives, parenting, placing children, attaching C# scripts,
-  or persisting .spfb scenes.
+  coordinate system (X-right Y-up Z-forward), WORLD vs LOCAL transforms,
+  components, ScriptComponent source, and scene_save. Use when spawning
+  primitives, parenting, placing children, attaching C# scripts, or persisting
+  .spfb scenes.
 disable-model-invocation: true
 ---
 
 # Unravel Entities & Scripts (MCP)
+
+## Coordinate system
+
+| Axis | Direction |
+|------|-----------|
+| **X** | Right |
+| **Y** | Up |
+| **Z** | Forward |
+
+Right-handed. `rotation_euler` is degrees as `[pitch_x, yaw_y, roll_z]`.
+
+**Primitives:** embedded `Cube` is **1×1×1**, origin at **center**. Non-uniform `scale` is size in world units. When assembling props (benches, signs), place parts in **local** space: seat up on **+Y**, width on **±X**, depth / facing along **±Z** (backrest typically **−Z** if the seat faces **+Z**).
 
 ## WORLD vs LOCAL (critical)
 
@@ -22,6 +35,8 @@ disable-model-invocation: true
 | `scene_get_transform` | `space:"world"\|"local"`, or omit for both |
 
 **Rule:** Parent a child, then set pose with `space:"local"`. Never pass local offsets to world setters — parts collapse to the origin.
+
+When the parent is rotated, always set the child’s `rotation_euler:[0,0,0]` in local space together with position/scale. Omitting rotation can leave world identity, which becomes a compensating local rotation and cancels the parent (parts stick out sideways).
 
 ```json
 // Child door under a house at world (-30,0,19)
@@ -43,6 +58,11 @@ disable-model-invocation: true
 | `scene_set_name` / `scene_set_active` | Meta |
 | `scene_save` | Atomic `.spfb` write (`key`/`path` or overwrite `source`) |
 | `scene_open` / `scene_new_from_preset` / `scene_list_presets` | See `unravel-projects` |
+| `scene_inspect_entity` | Summary + optional `components_serialized`; omit `entity_id` for active selection |
+| `selection_get` / `selection_set` / `selection_clear` | Editor entity selection |
+| `play_get_state` / `play_set_active` / `play_set_paused` / `play_skip_frame` | Play mode control |
+| `logs_get_recent` | Console log tail (`min_level`, `max_count`, `after_id`) |
+| `panel_focus_scene` / `panel_focus_game` | Focus Scene or Game ImGui panel tabs |
 
 ## Script tools
 
@@ -64,6 +84,8 @@ File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer
 | Purpose | Path |
 |---------|------|
 | Scene/entity MCP | `editor/editor/system/mcp/mcp_tools_scene.cpp` |
+| Play/selection/logs MCP | `editor/editor/system/mcp/mcp_tools_editor.cpp` |
+| Editor facades | `editor/editor/editing/editor_actions.*`, `entity_inspect.*` |
 | Script MCP | `editor/editor/system/mcp/mcp_tools_scripts.cpp` |
 | Shared helpers | `editor/editor/system/mcp/mcp_tools_common.h` |
 | ScriptComponent | `engine/engine/scripting/ecs/components/script_component.h` |

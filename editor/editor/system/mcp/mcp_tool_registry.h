@@ -54,5 +54,6 @@ void register_viewport_tools(mcp_tool_registry& registry);
 void register_material_tools(mcp_tool_registry& registry);
 void register_project_tools(mcp_tool_registry& registry);
 void register_script_tools(mcp_tool_registry& registry);
+void register_editor_tools(mcp_tool_registry& registry);
 
 } // namespace unravel::mcp

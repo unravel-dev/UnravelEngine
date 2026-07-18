@@ -8,14 +8,42 @@
 #include <engine/ecs/prefab.h>
 #include <engine/threading/threader.h>
 #include <editor/deploy/deploy.h>
+#include <logging/logging.h>
 
 #include <filesystem/filesystem.h>
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace unravel
 {
+
+struct play_state_info
+{
+    std::string phase{"inactive"};
+    bool is_active{false};
+    bool is_paused{false};
+    bool is_splash{false};
+    bool is_simulation_running{false};
+    uint64_t frames_running{0};
+};
+
+struct selection_info
+{
+    std::string active_entity_id;
+    std::vector<std::string> entity_ids;
+};
+
+struct log_query_entry
+{
+    uint64_t id{0};
+    level::level_enum level{level::off};
+    std::string text;
+    std::string filename;
+    std::string funcname;
+    int line{0};
+};
 
 struct editor_actions
 {
@@ -77,6 +105,41 @@ struct editor_actions
      * @return Number of probes that were flagged.
      */
     static auto rebuild_reflection_probes(rtti::context& ctx, bool force_full_first_frame = true) -> size_t;
+
+    // Play mode (shared by header UI + MCP)
+    static auto can_enter_play(rtti::context& ctx, std::string* error = nullptr) -> bool;
+    static auto get_play_state(rtti::context& ctx) -> play_state_info;
+    static auto set_play_active(rtti::context& ctx,
+                                bool active,
+                                bool allow_splash = true,
+                                std::string* error = nullptr) -> bool;
+    static auto toggle_play(rtti::context& ctx, bool allow_splash = true, std::string* error = nullptr) -> bool;
+    static auto set_play_paused(rtti::context& ctx, bool paused, std::string* error = nullptr) -> bool;
+    static auto skip_play_frame(rtti::context& ctx, std::string* error = nullptr) -> bool;
+
+    // Selection (entity handles only for Phase A)
+    static auto get_selection(rtti::context& ctx) -> selection_info;
+    static auto set_selection(rtti::context& ctx,
+                              const std::vector<std::string>& entity_ids,
+                              bool add = false,
+                              std::string* error = nullptr) -> bool;
+    static void clear_selection(rtti::context& ctx);
+
+    // Console log history
+    static auto get_recent_logs(rtti::context& ctx,
+                                level::level_enum min_level,
+                                size_t max_count,
+                                uint64_t after_id = 0) -> std::vector<log_query_entry>;
+
+    // Entity inspect
+    static auto inspect_entity(rtti::context& ctx,
+                               const std::string& entity_id,
+                               bool include_components,
+                               std::string* error = nullptr) -> std::string;
+
+    // Panel focus (ImGui dock tabs)
+    static auto focus_scene_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
+    static auto focus_game_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
 };
 

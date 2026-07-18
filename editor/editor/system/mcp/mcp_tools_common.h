@@ -3,12 +3,12 @@
 #include "mcp_protocol.h"
 #include "mcp_tool_registry.h"
 
-#include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/scene.h>
 #include <engine/play_mode.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/entity_inspect.h>
 #include <editor/system/project_manager.h>
 #include <math/math.h>
 #include <uuid/uuid.h>
@@ -24,45 +24,12 @@ namespace unravel::mcp
 
 inline auto entity_id_string(entt::handle entity) -> std::string
 {
-    if(!entity)
-    {
-        return {};
-    }
-    if(auto* id = entity.try_get<id_component>())
-    {
-        return hpp::to_string(id->id);
-    }
-    return std::to_string(entt::to_integral(entity.entity()));
+    return unravel::entity_id_string(entity);
 }
 
 inline auto find_entity(scene& scn, const std::string& id) -> entt::handle
 {
-    if(id.empty() || !scn.registry)
-    {
-        return {};
-    }
-
-    if(auto uuid = hpp::uuid::from_string(id))
-    {
-        auto handle = scn.find_entity_by_uuid(*uuid);
-        if(handle)
-        {
-            return handle;
-        }
-    }
-
-    try
-    {
-        const auto integral = static_cast<entt::entity>(std::stoul(id));
-        if(scn.registry->valid(integral))
-        {
-            return entt::handle(*scn.registry, integral);
-        }
-    }
-    catch(...)
-    {
-    }
-    return {};
+    return find_entity_by_id(scn, id);
 }
 
 inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::string& error) -> bool

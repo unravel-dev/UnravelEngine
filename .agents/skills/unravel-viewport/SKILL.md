@@ -11,6 +11,8 @@ disable-model-invocation: true
 
 The Scene panel camera lives in a **private panel scene** (`scene_panel`), not the edit scene. Resolve it via `hub → get_scene_panel().get_camera()`.
 
+World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `look_at` `target` are world-space.
+
 ## Tools
 
 | Tool | Purpose |
@@ -23,6 +25,10 @@ The Scene panel camera lives in a **private panel scene** (`scene_panel`), not t
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
 | `viewport_reset_camera` | UI “Reset Camera” parity |
 | `viewport_screenshot_scene` / `_game` | PNG capture |
+| `panel_focus_scene` | Focus Scene panel tab (editing camera) |
+| `panel_focus_game` | Focus Game panel tab (game camera) |
+
+Prefer `panel_focus_game` before play-mode verification / game screenshots when the Game tab may be buried. Prefer `panel_focus_scene` before scene camera / selection workflows.
 
 ## Focus notes
 
@@ -51,3 +57,5 @@ The Scene panel camera lives in a **private panel scene** (`scene_panel`), not t
 | Focus APIs | `engine/engine/defaults/defaults.h` |
 | Scene panel camera | `editor/editor/hub/panels/scene_panel/scene_panel.*` |
 | MCP tools | `editor/editor/system/mcp/mcp_tools_viewport.cpp` |
+| Panel focus MCP | `editor/editor/system/mcp/mcp_tools_editor.cpp` (`panel_focus_*`) |
+| Panel focus API | `editor_actions::focus_scene_panel` / `focus_game_panel` → `panel_base::focus()` |

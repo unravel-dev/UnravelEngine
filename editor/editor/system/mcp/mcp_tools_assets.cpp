@@ -209,7 +209,9 @@ void register_asset_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name="assets_list_embedded_primitives",
-         .description="List embedded mesh primitive names usable with scene_create_primitive.",
+         .description=
+             "List embedded mesh primitive names usable with scene_create_primitive. "
+             "Axes: X-right, Y-up, Z-forward. Cube is 1x1x1 centered at origin.",
          .input_schema_json=empty_object_schema(),
          .handler=[](rtti::context&, const simdjson::dom::object&) -> tool_result
          {

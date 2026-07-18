@@ -2,7 +2,6 @@
 
 #include "mcp/mcp_protocol.h"
 
-#include <engine/events.h>
 #include <logging/logging.h>
 #include <version/version.h>
 
@@ -38,9 +37,7 @@ auto mcp_manager::init(rtti::context& ctx) -> bool
     mcp::register_material_tools(registry_);
     mcp::register_project_tools(registry_);
     mcp::register_script_tools(registry_);
-
-    auto& ev = ctx.get_cached<events>();
-    ev.on_frame_update.connect(sentinel_, this, &mcp_manager::on_frame_update);
+    mcp::register_editor_tools(registry_);
 
     log_activity("lifecycle",
                  fmt::format("Registered {} tools", registry_.tools().size()));
@@ -55,7 +52,6 @@ auto mcp_manager::init(rtti::context& ctx) -> bool
 auto mcp_manager::deinit(rtti::context& ctx) -> bool
 {
     stop();
-    sentinel_.reset();
     ctx_ = nullptr;
     return true;
 }
@@ -126,24 +122,6 @@ void mcp_manager::stop()
         server_thread_.join();
     }
     server_.reset();
-
-    {
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        while(!jobs_.empty())
-        {
-            auto job = jobs_.front();
-            jobs_.pop_front();
-            try
-            {
-                job->promise.set_value(
-                    mcp::make_json_rpc_error(std::nullopt, k_internal_error, "MCP server shutting down"));
-            }
-            catch(...)
-            {
-            }
-        }
-    }
-    jobs_cv_.notify_all();
     log_activity("lifecycle", "Server stopped");
     APPLOG_INFO("MCP server stopped");
 }
@@ -226,54 +204,33 @@ void mcp_manager::log_activity(std::string category, std::string message, bool i
     }
 }
 
-void mcp_manager::on_frame_update(rtti::context& ctx, delta_t)
-{
-    drain_jobs(ctx);
-}
-
-void mcp_manager::drain_jobs(rtti::context& ctx)
-{
-    std::deque<std::shared_ptr<pending_job>> local;
-    {
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        local.swap(jobs_);
-    }
-
-    for(auto& item : local)
-    {
-        try
-        {
-            item->promise.set_value(item->work());
-        }
-        catch(const std::exception& ex)
-        {
-            item->promise.set_value(mcp::make_json_rpc_error(std::nullopt, k_internal_error, ex.what()));
-        }
-        catch(...)
-        {
-            item->promise.set_value(mcp::make_json_rpc_error(std::nullopt, k_internal_error, "Unknown MCP job error"));
-        }
-    }
-}
-
 auto mcp_manager::run_on_main_thread(job_fn work, std::chrono::milliseconds timeout) -> std::string
 {
-    auto item = std::make_shared<pending_job>();
-    item->work = std::move(work);
-    auto future = item->promise.get_future();
-    {
-        std::lock_guard<std::mutex> lock(jobs_mutex_);
-        jobs_.push_back(item);
-    }
-    jobs_cv_.notify_one();
-
+    tpp::this_thread::register_this_thread();
+    auto future = tpp::async(tpp::main_thread::get_id(), std::move(work));
     if(future.wait_for(timeout) != std::future_status::ready)
     {
         error_count_.fetch_add(1);
         log_activity("rpc", "Timed out waiting for main thread", true);
         return mcp::make_json_rpc_error(std::nullopt, k_internal_error, "Timed out waiting for main thread");
     }
-    return future.get();
+
+    try
+    {
+        return future.get();
+    }
+    catch(const std::exception& ex)
+    {
+        error_count_.fetch_add(1);
+        log_activity("rpc", std::string("Exception on main thread: ") + ex.what(), true);
+        return mcp::make_json_rpc_error(std::nullopt, k_internal_error, ex.what());
+    }
+    catch(...)
+    {
+        error_count_.fetch_add(1);
+        log_activity("rpc", "Exception on main thread", true);
+        return mcp::make_json_rpc_error(std::nullopt, k_internal_error, "Unknown MCP job error");
+    }
 }
 
 auto mcp_manager::handle_http_request(const std::string& body) -> std::string
