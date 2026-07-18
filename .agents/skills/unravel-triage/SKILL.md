@@ -89,7 +89,7 @@ Before coding, state:
 - Do not modify `deps/3rdparty/` unless no alternative exists
 - Match existing file naming: `snake_case` for types, files, functions
 - Minimal diff — only touch what the task requires
-- Follow `.cursor/rules/cpp.mdc` for all C++ changes
+- Follow `AGENTS.md` (C++ guidelines section) for all C++ changes
 
 ## System init order (reference)
 

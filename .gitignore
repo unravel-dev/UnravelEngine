@@ -39,3 +39,12 @@
 .vs/
 .vscode/
 .cache/
+
+# Agent tool adapters (junctions/symlinks → .agents/). Recreate with tasks/link-agent-dirs.*
+.codex/
+.cursor/
+.claude/
+.gemini/
+.windsurf/
+.cline/
+.continue/

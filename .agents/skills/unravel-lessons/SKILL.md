@@ -39,9 +39,9 @@ Keep entries concise. One pattern per entry.
 
 | Symptom | Action |
 |---------|--------|
-| Style/naming violation | Already covered by `.cursor/rules/cpp.mdc` — cite rule in lesson only |
-| Repeated domain mistake | Propose addition to relevant `.cursor/skills/unravel-*/SKILL.md` |
-| Universal workflow issue | Propose addition to `.cursor/rules/workflow_orchestration.mdc` |
+| Style/naming violation | Already covered by `AGENTS.md` - cite the section in the lesson only |
+| Repeated domain mistake | Propose addition to relevant `.agents/skills/unravel-*/SKILL.md` |
+| Universal workflow issue | Propose addition to `AGENTS.md` |
 | One-off edge case | Lesson entry only |
 
 ### 3. Propose skill/rule update

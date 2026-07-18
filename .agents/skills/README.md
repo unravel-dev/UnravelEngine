@@ -1,12 +1,16 @@
 # UnravelEngine Agent Skills
 
-Project-scoped Cursor Agent Skills for UnravelEngine development. Stored in `.cursor/skills/` and shared with the repository.
+Portable, project-scoped skills for UnravelEngine. **Source of truth:** `.agents/skills/`.
+
+Always-on conventions live only in root `AGENTS.md`. Optional junctions under
+`.cursor/skills` / `.claude/skills` point here (see `.agents/README.md`).
 
 ## How to use
 
-Skills load when the task matches their `description` in frontmatter, or when you name them explicitly (e.g. "use the unravel-rendering skill").
+Skills load when the task matches their `description` in frontmatter, or when you name them
+explicitly (e.g. "use the unravel-rendering skill").
 
-Always-on conventions live in `.cursor/rules/` (C++ style, workflow, code quality). Skills add **domain-specific** knowledge only.
+Start non-trivial work with **`unravel-triage`**.
 
 ## Skill catalog
 
@@ -38,6 +42,10 @@ Always-on conventions live in `.cursor/rules/` (C++ style, workflow, code qualit
 | `unravel-audio` | OpenAL sources, listeners, spatial audio |
 | `unravel-prefabs` | Prefab assets, property overrides |
 | `unravel-profiler-debug` | GPU timeline, eviction stats, frame debugging |
+| `unravel-materials` | PBR `.mat` / MCP materials |
+| `unravel-projects` | Open project / scene presets / `.spfb` |
+| `unravel-entities` | MCP entities, transforms, scripts, scene_save |
+| `unravel-viewport` | Scene camera, focus, orbit, screenshots |
 
 ### Workflow procedures
 
@@ -57,3 +65,4 @@ Always-on conventions live in `.cursor/rules/` (C++ style, workflow, code qualit
 - Use third-person descriptions with trigger terms
 - Encode Unravel-specific paths and checklists, not generic C++ advice
 - Never modify `deps/3rdparty/` unless unavoidable
+- Reference `AGENTS.md` for always-on rules; put domain workflows in skills
