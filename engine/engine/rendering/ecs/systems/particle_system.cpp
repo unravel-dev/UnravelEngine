@@ -2,7 +2,7 @@
 #include "threadpp/thread.h"
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/ecs/components/transform_component.h>
-#include <engine/rendering/particles/ps/particle_system.h>
+#include <engine/rendering/particles/ps/particle_system_soa.h>
 #include <engine/profiler/profiler.h>
 #include <logging/logging.h>
 
@@ -18,12 +18,13 @@ auto particle_system::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    // Initialize the particle system with default parameters
-    // 64 max emitters, using default allocator
-    psInit(4096 * 4, nullptr);
+    // Initialize the soa particle system (large emitter pool for editor/scenes).
+    ps_soa::init(4096 * 4);
+    ps_soa::init_gpu(ctx);
     
+
     initialized_ = true;
-    
+
     return true;
 }
 
@@ -33,8 +34,7 @@ auto particle_system::deinit(rtti::context& ctx) -> bool
 
     if(initialized_)
     {
-        // Shutdown the particle system
-        psShutdown();
+        ps_soa::shutdown();
         initialized_ = false;
     }
     

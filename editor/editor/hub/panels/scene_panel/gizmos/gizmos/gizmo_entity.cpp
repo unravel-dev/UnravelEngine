@@ -416,7 +416,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             
             switch(shape)
             {
-                case EmitterShape::Sphere:
+                case ps_soa::emitter_shape::sphere:
                 {
                     auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
@@ -430,7 +430,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     dd.encoder.popTransform();
                     break;
                 }
-                case EmitterShape::Hemisphere:
+                case ps_soa::emitter_shape::hemisphere:
                 {
                     auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
@@ -496,7 +496,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     dd.encoder.popTransform();
                     break;
                 }
-                case EmitterShape::Circle:
+                case ps_soa::emitter_shape::circle:
                 {
                     auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
                     dd.encoder.pushTransform(math::value_ptr(transform));
@@ -508,7 +508,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     dd.encoder.popTransform();
                     break;
                 }
-                case EmitterShape::Box:
+                case ps_soa::emitter_shape::box:
                 {
                     // Draw a box
                     const float half_size = shape_size;
@@ -518,7 +518,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     dd.encoder.draw(box_aabb);
                     break;
                 }
-                case EmitterShape::Rect:
+                case ps_soa::emitter_shape::rect:
                 {
                     // Draw a rectangle in the XZ plane
                     const float half_size = shape_size;
@@ -541,7 +541,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 
                 switch(direction)
                 {
-                    case EmitterDirection::Up:
+                    case ps_soa::emitter_direction::up:
                     {
                         // Draw upward arrows
                         dd.encoder.moveTo(0.0f, 0.0f, 0.0f);
@@ -557,7 +557,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                         dd.encoder.lineTo(0.0f, arrow_length - arrow_head_size, arrow_head_size);
                         break;
                     }
-                    case EmitterDirection::Outward:
+                    case ps_soa::emitter_direction::outward:
                     {
                         // Draw multiple outward arrows
                         const int num_arrows = 6;
@@ -591,7 +591,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                         }
                         break;
                     }
-                    case EmitterDirection::Inward:
+                    case ps_soa::emitter_direction::inward:
                     {
                         // Draw multiple inward arrows
                         const int num_arrows = 6;

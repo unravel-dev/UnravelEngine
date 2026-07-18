@@ -2348,7 +2348,7 @@ void internal_m2n_particle_emitter_set_shape(entt::entity id, int shape)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_shape(static_cast<EmitterShape::Enum>(shape));
+        comp->set_shape(static_cast<ps_soa::emitter_shape>(shape));
     }
 }
 
@@ -2365,7 +2365,7 @@ void internal_m2n_particle_emitter_set_direction(entt::entity id, int direction)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_direction(static_cast<EmitterDirection::Enum>(direction));
+        comp->set_direction(static_cast<ps_soa::emitter_direction>(direction));
     }
 }
 
@@ -2657,14 +2657,31 @@ auto internal_m2n_particle_emitter_get_blend_mode(entt::entity id) -> int
     {
         return static_cast<int>(comp->get_blend_mode());
     }
-    return static_cast<int>(BlendMode::Normal);
+    return static_cast<int>(ps_soa::blend_mode::normal);
 }
 
 void internal_m2n_particle_emitter_set_blend_mode(entt::entity id, int mode)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_blend_mode(static_cast<BlendMode::Enum>(mode));
+        comp->set_blend_mode(static_cast<ps_soa::blend_mode>(mode));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_simulation_backend(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_simulation_backend());
+    }
+    return static_cast<int>(ps_soa::particle_sim_backend::cpu);
+}
+
+void internal_m2n_particle_emitter_set_simulation_backend(entt::entity id, int backend)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_simulation_backend(static_cast<ps_soa::particle_sim_backend>(backend));
     }
 }
 
@@ -5140,6 +5157,10 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
                               dotnet_internal_call(internal_m2n_particle_emitter_get_blend_mode));
         reg.add_internal_call("internal_m2n_particle_emitter_set_blend_mode", 
                               dotnet_internal_call(internal_m2n_particle_emitter_set_blend_mode));
+        reg.add_internal_call("internal_m2n_particle_emitter_get_simulation_backend",
+                              dotnet_internal_call(internal_m2n_particle_emitter_get_simulation_backend));
+        reg.add_internal_call("internal_m2n_particle_emitter_set_simulation_backend",
+                              dotnet_internal_call(internal_m2n_particle_emitter_set_simulation_backend));
     }
 
     {

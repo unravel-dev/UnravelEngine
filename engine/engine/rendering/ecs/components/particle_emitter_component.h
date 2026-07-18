@@ -1,108 +1,44 @@
 #pragma once
 
 #include <engine/ecs/components/basic_component.h>
-#include <engine/rendering/particles/ps/particle_system.h>
+#include <engine/rendering/particles/ps/particle_system_soa.h>
 #include <graphics/texture.h>
 #include <engine/assets/asset_handle.h>
 #include <bx/easing.h>
-#include <glm/vec3.hpp>
 #include <math/math.h>
 #include <base/basetypes.hpp>
-#include <array>
-
+#include <chrono>
 
 namespace unravel
 {
 
 /**
  * @class particle_emitter_component
- * @brief Component that wraps particle system emitter functionality.
+ * @brief Component that wraps the soa particle system emitter.
  */
 class particle_emitter_component : public component_crtp<particle_emitter_component, owned_component>
 {
 public:
-    /**
-     * @brief Called when the component is created.
-     * @param r The registry containing the component.
-     * @param e The entity associated with the component.
-     */
     static void on_create_component(entt::registry& r, entt::entity e);
-
-    /**
-     * @brief Called when the component is destroyed.
-     * @param r The registry containing the component.
-     * @param e The entity associated with the component.
-     */
     static void on_destroy_component(entt::registry& r, entt::entity e);
 
-    /**
-     * @brief Sets whether the emitter is enabled.
-     * @param enabled True if enabled, false otherwise.
-     */
     void set_enabled(bool enabled);
-
-    /**
-     * @brief Checks if the emitter is enabled.
-     * @return True if enabled, false otherwise.
-     */
     auto is_enabled() const -> bool;
 
-    /**
-     * @brief Gets the emitter handle.
-     * @return The emitter handle.
-     */
-    auto get_emitter_handle() const -> EmitterHandle;
+    auto get_emitter_handle() const -> ps_soa::emitter_handle;
 
-    /**
-     * @brief Sets the emitter shape.
-     * @param shape The emitter shape.
-     */
-    void set_shape(EmitterShape::Enum shape);
+    void set_shape(ps_soa::emitter_shape shape);
+    auto get_shape() const -> ps_soa::emitter_shape;
 
-    /**
-     * @brief Gets the emitter shape.
-     * @return The emitter shape.
-     */
-    auto get_shape() const -> EmitterShape::Enum;
+    void set_direction(ps_soa::emitter_direction direction);
+    auto get_direction() const -> ps_soa::emitter_direction;
 
-    /**
-     * @brief Sets the emitter direction.
-     * @param direction The emitter direction.
-     */
-    void set_direction(EmitterDirection::Enum direction);
+    void set_spawn_location(ps_soa::spawn_location spawn_location);
+    auto get_spawn_location() const -> ps_soa::spawn_location;
 
-    /**
-     * @brief Gets the emitter direction.
-     * @return The emitter direction.
-     */
-    auto get_direction() const -> EmitterDirection::Enum;
-
-    /**
-     * @brief Sets the emitter spawn location.
-     * @param spawn_location The spawn location (Inside or Surface).
-     */
-    void set_spawn_location(EmitterSpawnLocation::Enum spawn_location);
-
-    /**
-     * @brief Gets the emitter spawn location.
-     * @return The spawn location.
-     */
-    auto get_spawn_location() const -> EmitterSpawnLocation::Enum;
-
-    /**
-     * @brief Sets the maximum number of particles.
-     * @param max_particles Maximum particles count.
-     */
     void set_max_particles(uint32_t max_particles);
-
-    /**
-     * @brief Gets the maximum number of particles.
-     * @return Maximum particles count.
-     */
     auto get_max_particles() const -> uint32_t;
 
-
-    // Particle emission properties
     void set_emission_lifetime(std::chrono::duration<float> lifetime);
     auto get_emission_lifetime() const -> std::chrono::duration<float>;
 
@@ -145,21 +81,17 @@ public:
     void set_lifetime_by_emitter_speed_range(const frange_t& speed_range);
     auto get_lifetime_by_emitter_speed_range() const -> const frange_t&;
 
-    // Lifetime properties
     void set_lifetime(std::chrono::duration<float> lifetime);
     auto get_lifetime() const -> std::chrono::duration<float>;
 
-    // Velocity properties
     void set_velocity_gradient(const math::gradient<frange_t>& gradient);
     auto get_velocity_gradient() const -> const math::gradient<frange_t>&;
 
-    // Scale properties
     void set_scale_gradient(const math::gradient<frange_t>& gradient);
     auto get_scale_gradient() const -> const math::gradient<frange_t>&;
-    
+
     void set_initial_scale_3d(const math::vec3& scale);
     auto get_initial_scale_3d() const -> math::vec3;
-
 
     void set_opacity(float opacity);
     auto get_opacity() const -> float;
@@ -167,7 +99,6 @@ public:
     void set_color_intensity(float intensity);
     auto get_color_intensity() const -> float;
 
-    // Playback control
     void play();
     void play_sub_emitters();
     void stop();
@@ -182,7 +113,6 @@ public:
     auto is_paused() const -> bool;
     auto is_stopped() const -> bool;
 
-    // Loop control
     void set_loop(bool loop);
     auto is_loop() const -> bool;
 
@@ -191,94 +121,66 @@ public:
 
     void set_align_to_direction(bool align);
     auto get_align_to_direction() const -> bool;
-    
-    // Pivot control
+
     void set_pivot(const math::vec2& pivot);
     auto get_pivot() const -> math::vec2;
 
-    // Color properties
     void set_color_gradient(const math::gradient<math::color>& gradient);
     auto get_color_gradient() const -> const math::gradient<math::color>&;
 
-    // Easing functions (only position easing remains - others handled by gradients)
     void set_position_easing(bx::Easing::Enum easing);
     auto get_position_easing() const -> bx::Easing::Enum;
 
-    // Simulation method properties
-    void set_simulation_space(SimulationSpace::Enum space);
-    auto get_simulation_space() const -> SimulationSpace::Enum;
+    void set_simulation_space(ps_soa::simulation_space space);
+    auto get_simulation_space() const -> ps_soa::simulation_space;
+
+    /**
+     * @brief CPU vs GPU particle pack/sim path for this emitter (artist-selectable).
+     */
+    void set_simulation_backend(ps_soa::particle_sim_backend backend);
+    auto get_simulation_backend() const -> ps_soa::particle_sim_backend;
 
     auto get_num_particles() const -> uint32_t;
     auto get_world_bounds() const -> math::bbox;
     auto get_updated_world_bounds(const math::transform& world_transform) const -> math::bbox;
 
-    // Sprite handle
     void set_texture(const asset_handle<gfx::texture>& texture);
     auto get_texture() const -> const asset_handle<gfx::texture>&;
-    
-    // Texture mode
-    void set_texture_mode(TextureMode::Enum mode);
-    auto get_texture_mode() const -> TextureMode::Enum;
-    
-    // Render mode
-    void set_render_mode(RenderMode::Enum mode);
-    auto get_render_mode() const -> RenderMode::Enum;
-    
-    // Blend mode
-    void set_blend_mode(BlendMode::Enum mode);
-    auto get_blend_mode() const -> BlendMode::Enum;
 
-    // Texture sheet animation properties
+    void set_texture_mode(ps_soa::texture_mode mode);
+    auto get_texture_mode() const -> ps_soa::texture_mode;
+
+    void set_render_mode(ps_soa::render_mode mode);
+    auto get_render_mode() const -> ps_soa::render_mode;
+
+    void set_blend_mode(ps_soa::blend_mode mode);
+    auto get_blend_mode() const -> ps_soa::blend_mode;
+
     void set_texture_sheet_tiles(math::vec2 tiles);
     auto get_texture_sheet_tiles() const -> math::vec2;
-    
+
     void set_texture_sheet_cycles(float cycles);
     auto get_texture_sheet_cycles() const -> float;
-    
-    void set_texture_sheet_randomize(bool randomize);
-    auto get_texture_sheet_randomize() const -> bool;    
 
-    /**
-     * @brief Updates the emitter with external transform data.
-     * @param world_transform The world transform to apply to the emitter.
-     */
+    void set_texture_sheet_randomize(bool randomize);
+    auto get_texture_sheet_randomize() const -> bool;
+
     void update_emitter(const math::transform& world_transform, delta_t dt);
 
-    /**
-     * @brief Gets the emitter uniforms for direct access.
-     * @return Reference to the emitter uniforms.
-     */
-    auto get_uniforms() const -> const EmitterUniforms&;
+    auto get_desc() const -> const ps_soa::emitter_desc&;
 
-    /**
-     * @brief Recreates the emitter with current shape and direction.
-     */
     void recreate_emitter();
-
-    /**
-     * @brief Resets the emitter, clearing all particles and resetting internal state.
-     */
     void reset_emitter();
 
 private:
-    /// Whether the emitter is enabled
     bool enabled_ = true;
-
-    /// Emitter shape
-    EmitterShape::Enum shape_ = EmitterShape::Sphere;
-
-    /// Emitter direction
-    EmitterDirection::Enum direction_ = EmitterDirection::Up;
-
-    /// Maximum number of particles
+    ps_soa::emitter_shape shape_ = ps_soa::emitter_shape::sphere;
+    ps_soa::emitter_direction direction_ = ps_soa::emitter_direction::up;
     uint32_t max_particles_ = 1024;
-
-    /// Particle system emitter handle
-    EmitterHandle emitter_handle_{UINT16_MAX};
-
-    /// Emitter uniforms containing all particle properties
-    EmitterUniforms uniforms_;
-    
+    ps_soa::particle_sim_backend simulation_backend_ = ps_soa::particle_sim_backend::cpu;
+    ps_soa::emitter_handle emitter_handle_{};
+    ps_soa::emitter_desc desc_{};
+    ps_soa::emitter_transform_state transform_state_{};
     asset_handle<gfx::texture> texture_;
 };
 

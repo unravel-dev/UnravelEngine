@@ -26,6 +26,15 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Particle simulation/pack backend. Matches C++ ps_soa::particle_sim_backend.
+    /// </summary>
+    public enum ParticleSimBackend
+    {
+        CPU = 0,
+        GPU = 1
+    }
+
+    /// <summary>
     /// Represents a component that provides particle emission capabilities for an entity.
     /// </summary>
     public class ParticleEmitterComponent : Component
@@ -57,6 +66,21 @@ namespace Unravel.Core
             set
             {
                 internal_m2n_particle_emitter_set_max_particles(owner, value);
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the particle simulation backend (CPU batched gather vs GPU compute pack).
+        /// </summary>
+        public ParticleSimBackend simulationBackend
+        {
+            get
+            {
+                return (ParticleSimBackend)internal_m2n_particle_emitter_get_simulation_backend(owner);
+            }
+            set
+            {
+                internal_m2n_particle_emitter_set_simulation_backend(owner, (int)value);
             }
         }
 
@@ -474,5 +498,11 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_loop(Entity eid, bool loop);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_simulation_backend(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_simulation_backend(Entity eid, int backend);
     }
 }

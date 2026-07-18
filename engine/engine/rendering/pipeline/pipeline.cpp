@@ -42,13 +42,13 @@ namespace rendering
 {
 namespace
 {
-auto particle_blend_bgfx_state(BlendMode::Enum mode) -> uint64_t
+auto particle_blend_bgfx_state(ps_soa::blend_mode mode) -> uint64_t
 {
     switch(mode)
     {
-    case BlendMode::Additive:
+    case ps_soa::blend_mode::additive:
         return BGFX_STATE_BLEND_ADD;
-    case BlendMode::Multiply:
+    case ps_soa::blend_mode::multiply:
         return BGFX_STATE_BLEND_MULTIPLY;
     default:
         return BGFX_STATE_BLEND_NORMAL;
@@ -571,25 +571,25 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
 
         // Primary: material key (blend / texture / texture mode) so same-material emitters coalesce.
         // Secondary: distance (far → near) within a material — does not split batches. Per-particle
-        // depth sort for Normal still runs inside psRenderEmitterBatch.
+        // depth sort for Normal still runs inside ps_soa::render_emitter_batch.
         struct sort_key
         {
             particle_emitter_component* component;
-            BlendMode::Enum blend_mode;
-            TextureMode::Enum texture_mode;
+            ps_soa::blend_mode blend_mode;
+            ps_soa::texture_mode texture_mode;
             hpp::uuid texture_uid;
             float distance;
         };
         hpp::small_vector<sort_key, 16> particle_emitters;
 
-        auto blend_draw_order = [](BlendMode::Enum mode) -> int
+        auto blend_draw_order = [](ps_soa::blend_mode mode) -> int
         {
             // Order-independent blends first; alpha (Normal) last so depth-sorted particles composite on top.
             switch(mode)
             {
-            case BlendMode::Additive:
+            case ps_soa::blend_mode::additive:
                 return 0;
-            case BlendMode::Multiply:
+            case ps_soa::blend_mode::multiply:
                 return 1;
             default:
                 return 2;
@@ -644,10 +644,10 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
 
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Submit Emitter Batches");
-            hpp::small_vector<EmitterHandle, 16> current_batch;
+            hpp::small_vector<ps_soa::emitter_handle, 16> current_batch;
             asset_handle<gfx::texture> batch_texture;
-            TextureMode::Enum batch_texture_mode = TextureMode::MultiChannel;
-            BlendMode::Enum batch_blend_mode = BlendMode::Normal;
+            ps_soa::texture_mode batch_texture_mode = ps_soa::texture_mode::multi_channel;
+            ps_soa::blend_mode batch_blend_mode = ps_soa::blend_mode::normal;
             bool batch_open = false;
 
             auto flush_particle_batch = [&]()
@@ -659,14 +659,14 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
                     return;
                 }
                 APP_SCOPE_PERF("Rendering/Particle Pass/Flush Emitter Batch");
-                const bgfx::ProgramHandle program = (batch_texture_mode == TextureMode::Mask)
+                const bgfx::ProgramHandle program = (batch_texture_mode == ps_soa::texture_mode::mask)
                     ? particle_program_instanced_mask_->native_handle()
                     : particle_program_instanced_->native_handle();
                 auto texture = batch_texture.get()->native_handle();
                 const uint64_t blend_state = particle_blend_bgfx_state(batch_blend_mode);
                 // Additive / Multiply are order-independent; skip expensive per-particle depth sort.
-                const bool sort_by_depth = (batch_blend_mode == BlendMode::Normal);
-                stats_.drawn_particles += psRenderEmitterBatch(current_batch.data(),
+                const bool sort_by_depth = (batch_blend_mode == ps_soa::blend_mode::normal);
+                stats_.drawn_particles += ps_soa::render_emitter_batch(current_batch.data(),
                     static_cast<uint32_t>(current_batch.size()),
                     pass.id,
                     program,
@@ -684,8 +684,8 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
             {
                 auto* comp = particle_emitter.component;
                 const auto& tex = comp->get_texture();
-                const TextureMode::Enum tm = particle_emitter.texture_mode;
-                const BlendMode::Enum bm = particle_emitter.blend_mode;
+                const ps_soa::texture_mode tm = particle_emitter.texture_mode;
+                const ps_soa::blend_mode bm = particle_emitter.blend_mode;
                 if(batch_open && (tex != batch_texture || tm != batch_texture_mode || bm != batch_blend_mode))
                 {
                     flush_particle_batch();
@@ -700,7 +700,7 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
                 if(comp->is_enabled())
                 {
                     auto emitter_handle = comp->get_emitter_handle();
-                    if(isValid(emitter_handle))
+                    if(ps_soa::is_valid(emitter_handle))
                     {
                         current_batch.push_back(emitter_handle);
                     }
