@@ -501,6 +501,19 @@ auto should_save_component(const entt::const_handle& obj) -> bool
 template<typename Component>
 auto should_load_component(const entt::handle& obj) -> bool
 {
+    if constexpr(std::is_same_v<Component, id_component>)
+    {
+        // Instance entity UIDs are per-instance (implicit override). When syncing /
+        // loading into an existing prefab hierarchy, never overwrite them from the
+        // prefab asset. New entities still get a UID via generate_if_nil.
+        auto& load_ctx = get_load_context();
+        if(load_ctx.is_updating_prefab())
+        {
+            auto& id_comp = obj.get_or_emplace<id_component>();
+            id_comp.generate_if_nil();
+            return false;
+        }
+    }
     return true;
 }
 
