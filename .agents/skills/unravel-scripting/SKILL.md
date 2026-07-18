@@ -20,7 +20,7 @@ disable-model-invocation: true
 | Script component | `engine/engine/scripting/ecs/components/script_component.h` |
 | Meta | `engine/engine/meta/ecs/components/script_component.hpp` |
 | C# API scripts | `engine_data/data/scripts/` |
-| Embedding API | `deps/monopp/monopp/dotnetpp/` |
+| Embedding API | `deps/dotnetpp/dotnetpp/dotnetpp/` |
 
 ## Architecture
 
