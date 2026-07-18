@@ -14,6 +14,7 @@
 #include "events.h"
 #include "hub/hub.h"
 #include "imgui/imgui_interface.h"
+#include "system/mcp_manager.h"
 #include "system/project_manager.h"
 #include "system/version_manager.h"
 #include <filedialog/filedialog.h>
@@ -56,6 +57,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<thumbnail_manager>();
     ctx.add<asset_watcher>();
     ctx.add<version_manager>();
+    ctx.add<mcp_manager>();
 
     return true;
 }
@@ -186,6 +188,12 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    ls.begin_module("MCP Server");
+    if(!ls.check(ctx.get_cached<mcp_manager>().init(ctx)))
+    {
+        return false;
+    }
+
     return true;
 }
 
@@ -204,6 +212,11 @@ auto editor::deinit() -> bool
 {
     auto& ctx = engine::context();
 
+
+    if(!ctx.get_cached<mcp_manager>().deinit(ctx))
+    {
+        return false;
+    }
 
     if(!ctx.get_cached<thumbnail_manager>().deinit(ctx))
     {
@@ -269,6 +282,7 @@ auto editor::destroy() -> bool
 
     ctx.remove<project_manager>();
     ctx.remove<version_manager>();
+    ctx.remove<mcp_manager>();
 
     ctx.remove<ui_events>();
 

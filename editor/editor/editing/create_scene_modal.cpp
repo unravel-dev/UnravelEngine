@@ -148,6 +148,40 @@ void create_scene_modal::show(std::function<void(defaults::scene_preset)> on_pre
     inst.selected_preset_ = defaults::scene_preset::medium;
 }
 
+auto create_scene_modal::is_pending() -> bool
+{
+    return get_instance().show_requested_;
+}
+
+auto create_scene_modal::complete_if_pending(defaults::scene_preset preset) -> bool
+{
+    auto& inst = get_instance();
+    if(!inst.show_requested_)
+    {
+        return false;
+    }
+
+    auto callback = std::move(inst.callback_);
+    inst.callback_ = {};
+    inst.show_requested_ = false;
+    inst.open_requested_ = false;
+    inst.selected_preset_ = preset;
+
+    if(callback)
+    {
+        callback(preset);
+    }
+    return true;
+}
+
+void create_scene_modal::cancel_if_pending()
+{
+    auto& inst = get_instance();
+    inst.callback_ = {};
+    inst.show_requested_ = false;
+    inst.open_requested_ = false;
+}
+
 void create_scene_modal::render()
 {
     auto& inst = get_instance();

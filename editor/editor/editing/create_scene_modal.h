@@ -24,6 +24,17 @@ public:
      */
     static void render();
 
+    /// True when Show was requested and the user has not yet confirmed/cancelled.
+    static auto is_pending() -> bool;
+
+    /// Headless path (MCP/CLI): if a create-scene modal is pending, invoke its
+    /// callback with `preset` and dismiss it. Returns true when a pending modal
+    /// was completed.
+    static auto complete_if_pending(defaults::scene_preset preset) -> bool;
+
+    /// Dismiss a pending create-scene modal without invoking the callback.
+    static void cancel_if_pending();
+
 private:
     create_scene_modal() = default;
     static auto get_instance() -> create_scene_modal&;

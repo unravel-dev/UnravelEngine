@@ -4,11 +4,15 @@
 #include <context/context.hpp>
 
 #include <engine/assets/asset_handle.h>
+#include <engine/defaults/defaults.h>
 #include <engine/ecs/prefab.h>
 #include <engine/threading/threader.h>
 #include <editor/deploy/deploy.h>
 
 #include <filesystem/filesystem.h>
+
+#include <functional>
+#include <string>
 
 namespace unravel
 {
@@ -21,6 +25,29 @@ struct editor_actions
     static auto save_scene(rtti::context& ctx) -> bool;
     static auto save_scene_as(rtti::context& ctx) -> bool;
     static auto prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool;
+
+    /**
+     * @brief Non-modal scene load (shared by File menu + MCP). Clears edit state, loads asset,
+     * syncs prefabs, clears unsaved flag, and updates project opened_scene. Returns false on failure.
+     */
+    static auto load_scene_from_asset(rtti::context& ctx,
+                                      const asset_handle<scene_prefab>& asset,
+                                      std::string* error = nullptr) -> bool;
+
+    /**
+     * @brief Non-modal new scene from preset (shared by create-scene modal + MCP). Cancels any
+     * pending create-scene modal, builds defaults::create_scene_from_preset, clears opened_scene.
+     */
+    static auto new_scene_from_preset(rtti::context& ctx, defaults::scene_preset preset) -> bool;
+
+    /**
+     * @brief Atomic-save active scene to path/key. When update_source is true, sets scene.source
+     * and project opened_scene. Returns false on play mode or write failure.
+     */
+    static auto save_scene_to_path(rtti::context& ctx,
+                                   const fs::path& path,
+                                   bool update_source = true,
+                                   bool show_notification = true) -> bool;
 
     static auto close_project(rtti::context& ctx) -> bool;
     static auto reload_project(rtti::context& ctx) -> bool;

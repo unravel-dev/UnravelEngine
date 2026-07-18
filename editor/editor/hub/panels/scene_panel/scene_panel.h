@@ -27,6 +27,9 @@ public:
     auto get_camera() -> entt::handle;
     auto get_center() -> entt::handle;
 
+    /// Recreate the Scene panel editor camera at the default pose (UI "Reset Camera").
+    void reset_camera(rtti::context& ctx);
+
     auto get_auto_save_prefab() const -> bool;
 
     void on_project_opened();

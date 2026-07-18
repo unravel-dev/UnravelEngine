@@ -1,9 +1,11 @@
 ---
-description: 
-globs: **/*.c,**/*.cpp,**/*.h,**/*.hpp,**/*.cxx,CMakeLists.txt,*.cmake,conanfile.txt,Makefil,**/*.cc
+description: Build instructions for C and C++ source and CMake files
+globs: "**/*.c,**/*.cc,**/*.cpp,**/*.cxx,**/*.h,**/*.hpp,**/CMakeLists.txt,**/*.cmake,**/conanfile.txt,**/Makefile"
 alwaysApply: false
 ---
 
-## Building
+# Building
 
-- Prefer build using cmake commands usually under build directory. First check if there are already builds setup.
+- Prefer CMake commands.
+- First check whether an existing configured build directory is available.
+- Reuse the existing generator and configuration where possible.

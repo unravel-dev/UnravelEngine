@@ -1040,6 +1040,47 @@ auto defaults::create_audio_source_entity(rtti::context& ctx, scene& scn, const 
     return object;
 }
 
+auto defaults::parse_scene_preset(hpp::string_view value, scene_preset& out) -> bool
+{
+    if(value.empty() || value == "medium" || value == "standard" || value == "default")
+    {
+        out = scene_preset::medium;
+        return true;
+    }
+    if(value == "low")
+    {
+        out = scene_preset::low;
+        return true;
+    }
+    if(value == "high")
+    {
+        out = scene_preset::high;
+        return true;
+    }
+    if(value == "showcase")
+    {
+        out = scene_preset::showcase;
+        return true;
+    }
+    return false;
+}
+
+auto defaults::scene_preset_to_string(scene_preset preset) -> const char*
+{
+    switch(preset)
+    {
+        case scene_preset::low:
+            return "low";
+        case scene_preset::medium:
+            return "medium";
+        case scene_preset::high:
+            return "high";
+        case scene_preset::showcase:
+            return "showcase";
+    }
+    return "medium";
+}
+
 void defaults::create_default_3d_scene(rtti::context& ctx, scene& scn)
 {
     create_scene_from_preset(ctx, scn, scene_preset::medium);

@@ -85,47 +85,6 @@ auto get_new_file_simple(const fs::path& path, const std::string& name, const st
     return path / (fmt::format("{}{}", name.c_str(), i) + ext);
 }
 
-/// Instantiate a script template, substituting #SCRIPTNAME# with the
-/// destination file stem (which doubles as the class name).
-auto create_script_from_template(const fs::path& template_path, const fs::path& dst) -> bool
-{
-    std::ifstream input(template_path);
-    if(!input.is_open())
-    {
-        APPLOG_ERROR("Script template not found: {}", template_path.string());
-        return false;
-    }
-
-    std::stringstream buffer;
-    buffer << input.rdbuf();
-    auto content = buffer.str();
-
-    string_utils::alterable::replace(content, "#SCRIPTNAME#", dst.stem().string());
-
-    std::ofstream output(dst);
-    if(!output.is_open())
-    {
-        APPLOG_ERROR("Failed to create script file: {}", dst.string());
-        return false;
-    }
-    output << content;
-    return true;
-}
-
-auto is_valid_csharp_identifier(const std::string& name) -> bool
-{
-    if(name.empty() || (std::isdigit(static_cast<unsigned char>(name.front())) != 0))
-    {
-        return false;
-    }
-    return std::all_of(name.begin(),
-                       name.end(),
-                       [](unsigned char c)
-                       {
-                           return std::isalnum(c) != 0 || c == '_';
-                       });
-}
-
 /// If the renamed file is a C# script whose class name still matches the old
 /// file stem (i.e. the user never touched the file), keep them in sync by
 /// renaming the class too. Uses word-boundary matching to avoid corrupting
@@ -134,7 +93,8 @@ void sync_script_class_name(const fs::path& script_path, const std::string& old_
 {
     // Only touch the file when both names are plain identifiers - anything
     // else can't be a class name (and could break the regex below).
-    if(!is_valid_csharp_identifier(old_stem) || !is_valid_csharp_identifier(new_stem))
+    if(!asset_actions::is_valid_csharp_identifier(old_stem) ||
+       !asset_actions::is_valid_csharp_identifier(new_stem))
     {
         return;
     }
@@ -1636,7 +1596,7 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             auto new_script_template = fs::resolve_protocol("engine:/data/templates/TemplateComponent" +
                                                             ex::get_format<script>() + ".in");
 
-            if(create_script_from_template(new_script_template, available))
+            if(asset_actions::create_script_from_template(new_script_template, available))
             {
                 pending_rename = available;
             }

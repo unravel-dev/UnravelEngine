@@ -67,6 +67,16 @@ When exposing new engine features to scripts:
 4. For POD types, add layout-compatible managed struct + `dotnet_register_converter_for_pod` in `script_interop.h`
 5. Maintain API parity — breaking C# API breaks user projects
 
+## Editor MCP (scripts)
+
+For attach/edit/save via MCP, use skill `unravel-entities`:
+
+| Tool | Purpose |
+|------|---------|
+| `scripts_list_types` / `scene_add_script` / `scene_remove_script` | Type attach (not `scene_add_component`) |
+| `scripts_get_source` / `scripts_set_source` | Read/write `.cs` (atomic write) |
+| `scripts_create` | New file from `TemplateComponent.cs.in` |
+
 ## Hot-reload
 
 Triggered by `on_script_recompile` event. Script system:

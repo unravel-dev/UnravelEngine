@@ -376,11 +376,11 @@ void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
 
     gfx::frame();
 
-    // if(!request_screenshot_.empty())
-    // {
-    //     gfx::request_screen_shot(get_main_window()->get_surface()->native_handle(), request_screenshot_.c_str());
-    //     request_screenshot_ = {};
-    // }
+    if(!request_screenshot_.empty())
+    {
+        gfx::request_screen_shot(get_main_window()->get_surface()->native_handle(), request_screenshot_.c_str());
+        request_screenshot_ = {};
+    }
 
     gfx::render_pass::reset();
 }

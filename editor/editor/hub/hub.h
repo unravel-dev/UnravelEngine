@@ -17,6 +17,10 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
     void open_project_settings(rtti::context& ctx, const std::string& hint);
+
+    auto get_panels() -> imgui_panels& { return panels_; }
+    auto get_panels() const -> const imgui_panels& { return panels_; }
+
 private:
 
     void on_project_opened(rtti::context& ctx);

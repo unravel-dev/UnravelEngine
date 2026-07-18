@@ -1499,6 +1499,16 @@ auto scene_panel::get_camera() -> entt::handle
     return camera_entity;
 }
 
+void scene_panel::reset_camera(rtti::context& ctx)
+{
+    auto camera = get_camera();
+    if(camera)
+    {
+        camera.destroy();
+    }
+    defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+}
+
 auto scene_panel::get_center() -> entt::handle
 {
     entt::handle center_entity;
@@ -1832,12 +1842,7 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
     {
         if(ImGui::Button("Reset Camera"))
         {
-            auto camera = get_camera();
-            if(camera)
-            {
-                camera.destroy();
-            }
-            defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+            reset_camera(ctx);
         }
 
         ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");

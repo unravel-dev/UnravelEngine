@@ -112,6 +112,16 @@ The Editor integrates seamlessly with **Visual Studio Code** and its variants (C
 - Install the recommended extensions when prompted for the best development experience
 - Enjoy features like syntax highlighting, IntelliSense, and debugging support
 
+### Editor MCP Server
+While the editor is running, a localhost MCP (JSON-RPC over HTTP) server is available for AI tooling:
+
+- URL: `http://127.0.0.1:27182/mcp`
+- Bind: `127.0.0.1` only (default port `27182`)
+- Tools cover scene entities/primitives/components, project/asset listing, and viewport screenshots
+- `viewport_screenshot_scene` / `viewport_screenshot_game` capture the Scene/Game OBUFFER PNGs (action + wait)
+- Scene mutations go through the editor undo stack; mutating tools are rejected in play mode
+- Open **Windows → MCP Server** in the editor for status, endpoint copy, start/stop, and an activity log
+
 ## 🛠 Building from Source
 
 ### Prerequisites

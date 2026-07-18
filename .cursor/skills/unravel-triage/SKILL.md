@@ -18,6 +18,10 @@ Classify the task before writing code. Read relevant source first; never guess a
 | Rendering | shader, pass, pipeline, bgfx, material, post-process, GPU | `unravel-rendering` |
 | Editor UI | panel, inspector, gizmo, menu bar, ImGui, dock, undo | `unravel-editor-panel` |
 | Assets | import, reimport, `.meta`, uid, asset compiler, handle | `unravel-assets` |
+| Materials (MCP / `.mat`) | PBR material, `.mat`, material instance, `materials_set`, albedo/roughness maps | `unravel-materials` |
+| Projects / scenes (MCP) | open project, recent projects, `.spfb`, scene preset, hub open | `unravel-projects` |
+| Entities / transforms (MCP) | create primitive, parent, local vs world transform, scene_save, ScriptComponent MCP | `unravel-entities` |
+| Viewport camera (MCP) | scene panel camera, focus entities, look_at, orbit, viewport screenshot | `unravel-viewport` |
 | Scripting | C#, Mono, hot-reload, ScriptComponent, glue | `unravel-scripting` |
 | Physics | collision, Bullet, rigidbody, character controller | `unravel-physics` |
 | Animation | skeletal, blend space, clip, bone | `unravel-animation` |

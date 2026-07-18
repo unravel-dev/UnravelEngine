@@ -30,6 +30,7 @@ imgui_panels::imgui_panels()
     game_panel_ = std::make_unique<game_panel>(this, GAME_VIEW);
     profiler_timeline_panel_ = std::make_unique<profiler_timeline_panel>(this, PROFILER_VIEW);
     animation_panel_ = std::make_unique<animation_panel>(this);
+    mcp_panel_ = std::make_unique<mcp_panel>(this);
 
     deploy_panel_ = std::make_unique<deploy_panel>(this);
     project_settings_panel_ = std::make_unique<project_settings_panel>(this);
@@ -54,6 +55,7 @@ void imgui_panels::init(rtti::context& ctx)
     scene_panel_->init(ctx);
     game_panel_->init(ctx);
     animation_panel_->init(ctx);
+    mcp_panel_->init(ctx);
 
     auto layouts_dir = fs::resolve_protocol("editor:/settings/layouts");
     layout_manager_.init(layouts_dir);
@@ -66,6 +68,7 @@ void imgui_panels::deinit(rtti::context& ctx)
     game_panel_->deinit(ctx);
     inspector_panel_->deinit(ctx);
     animation_panel_->deinit(ctx);
+    mcp_panel_->deinit(ctx);
 }
 
 void imgui_panels::on_frame_update(rtti::context& ctx, delta_t dt)
@@ -153,6 +156,8 @@ void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 
         animation_panel_->on_frame_ui_render(ctx, ANIMATION_VIEW);
 
+        mcp_panel_->on_frame_ui_render(ctx, MCP_VIEW);
+
         deploy_panel_->on_frame_ui_render(ctx, DEPLOY_VIEW);
 
         project_settings_panel_->on_frame_ui_render(ctx, PROJECT_SETTINGS_VIEW);
@@ -221,6 +226,11 @@ auto imgui_panels::get_dockspace() -> dockspace&
 auto imgui_panels::get_animation_panel() -> animation_panel&
 {
     return *animation_panel_;
+}
+
+auto imgui_panels::get_mcp_panel() -> mcp_panel&
+{
+    return *mcp_panel_;
 }
 
 auto imgui_panels::get_profiler_timeline_panel() -> profiler_timeline_panel&

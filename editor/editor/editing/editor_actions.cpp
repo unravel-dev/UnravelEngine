@@ -878,23 +878,7 @@ auto version_major(const std::string& version) -> int
 
 auto save_scene_impl(rtti::context& ctx, const fs::path& path) -> bool
 {
-    auto& ev = ctx.get_cached<events>();
-    auto& play = ctx.get_cached<play_mode>();
-    if(play.is_active())
-    {
-        return false;
-    }
-
-    auto& ec = ctx.get_cached<ecs>();
-    if(asset_writer::atomic_save_to_file(path.string(), ec.get_scene()))
-    {
-        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000, "Scene saved."));
-
-        auto& em = ctx.get_cached<editing_manager>();
-        em.clear_unsaved_changes();
-    }
-
-    return true;
+    return editor_actions::save_scene_to_path(ctx, path, false, true);
 }
 
 auto add_extension_if_missing(const std::string& p) -> fs::path
@@ -1050,23 +1034,124 @@ void remove_unreferenced_files(const fs::path& root)
 
 auto editor_actions::new_scene(rtti::context& ctx) -> bool
 {
-    auto& ev = ctx.get_cached<events>();
     auto& play = ctx.get_cached<play_mode>();
     if(play.is_active())
     {
         return false;
     }
-    prompt_save_scene(ctx, [&ctx]() {
-        create_scene_modal::show([&ctx](defaults::scene_preset preset) {
-            auto& em = ctx.get_cached<editing_manager>();
-            em.clear();
+    prompt_save_scene(ctx,
+                      [&ctx]()
+                      {
+                          create_scene_modal::show(
+                              [&ctx](defaults::scene_preset preset)
+                              {
+                                  editor_actions::new_scene_from_preset(ctx, preset);
+                              });
+                      });
 
-            auto& ec = ctx.get_cached<ecs>();
-            ec.unload_scene();
+    return true;
+}
 
-            defaults::create_scene_from_preset(ctx, ec.get_scene(), preset);
-        });
-    });
+auto editor_actions::load_scene_from_asset(rtti::context& ctx,
+                                           const asset_handle<scene_prefab>& asset,
+                                           std::string* error) -> bool
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    em.clear();
+
+    auto& ec = ctx.get_cached<ecs>();
+    ec.unload_scene();
+
+    auto& scene = ec.get_scene();
+    if(!scene.load_from(asset))
+    {
+        if(error)
+        {
+            *error = "Failed to load scene: " + asset.id();
+        }
+        return false;
+    }
+
+    em.sync_prefab_instances(ctx, &scene);
+    em.clear_unsaved_changes();
+
+    if(ctx.has<project_manager>())
+    {
+        auto& pm = ctx.get_cached<project_manager>();
+        pm.get_project_editor_settings().scene.opened_scene = asset;
+        pm.save_project_editor_settings();
+    }
+    return true;
+}
+
+auto editor_actions::new_scene_from_preset(rtti::context& ctx, defaults::scene_preset preset) -> bool
+{
+    create_scene_modal::cancel_if_pending();
+
+    auto& em = ctx.get_cached<editing_manager>();
+    em.clear();
+
+    auto& ec = ctx.get_cached<ecs>();
+    ec.unload_scene();
+
+    defaults::create_scene_from_preset(ctx, ec.get_scene(), preset);
+    em.clear_unsaved_changes();
+
+    if(ctx.has<project_manager>())
+    {
+        auto& pm = ctx.get_cached<project_manager>();
+        pm.get_project_editor_settings().scene.opened_scene = {};
+        pm.save_project_editor_settings();
+    }
+    return true;
+}
+
+auto editor_actions::save_scene_to_path(rtti::context& ctx,
+                                        const fs::path& path,
+                                        bool update_source,
+                                        bool show_notification) -> bool
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
+    {
+        return false;
+    }
+
+    fs::path absolute = path;
+    if(fs::has_known_protocol(path))
+    {
+        absolute = fs::resolve_protocol(path);
+    }
+    absolute = fs::absolute(absolute);
+
+    auto& ec = ctx.get_cached<ecs>();
+    auto& scene = ec.get_scene();
+    if(!asset_writer::atomic_save_to_file(absolute.string(), scene))
+    {
+        return false;
+    }
+
+    auto& em = ctx.get_cached<editing_manager>();
+    em.clear_unsaved_changes();
+
+    if(show_notification)
+    {
+        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000, "Scene saved."));
+    }
+
+    if(update_source)
+    {
+        auto& am = ctx.get_cached<asset_manager>();
+        const auto protocol_key = fs::convert_to_protocol(absolute).generic_string();
+        scene.source = am.get_asset<scene_prefab>(protocol_key);
+
+        if(ctx.has<project_manager>())
+        {
+            auto& pm = ctx.get_cached<project_manager>();
+            pm.get_project_editor_settings().scene.opened_scene = scene.source;
+            pm.save_project_editor_settings();
+        }
+    }
 
     return true;
 }
@@ -1100,29 +1185,15 @@ auto editor_actions::open_scene(rtti::context& ctx) -> bool
 
 auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
 {
-    return prompt_save_scene(ctx, [&ctx, asset]() {
-        auto& em = ctx.get_cached<editing_manager>();
-        em.clear();
-        
-        auto& ec = ctx.get_cached<ecs>();
-        ec.unload_scene();
-    
-        auto& scene = ec.get_scene();
-        bool loaded = scene.load_from(asset);
-    
-        if(loaded)
-        {
-            em.sync_prefab_instances(ctx, &scene);
-            auto& pm = ctx.get_cached<project_manager>();
-            pm.get_project_editor_settings().scene.opened_scene = asset;
-            pm.save_project_editor_settings();
-        }
-
-        if(!loaded)
-        {
-            editor_actions::new_scene(ctx);
-        }
-    });
+    return prompt_save_scene(ctx,
+                             [&ctx, asset]()
+                             {
+                                 std::string error;
+                                 if(!editor_actions::load_scene_from_asset(ctx, asset, &error))
+                                 {
+                                     editor_actions::new_scene(ctx);
+                                 }
+                             });
 }
 auto editor_actions::save_scene(rtti::context& ctx) -> bool
 {

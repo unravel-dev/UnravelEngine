@@ -13,6 +13,8 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/reflection_probe.h>
 
+#include <hpp/string_view.hpp>
+
 namespace unravel
 {
 
@@ -216,6 +218,15 @@ struct defaults
         high,
         showcase
     };
+
+    /**
+     * @brief Parse a preset name (low|medium|high|showcase; aliases: standard/default -> medium).
+     * Empty string resolves to medium.
+     */
+    static auto parse_scene_preset(hpp::string_view value, scene_preset& out) -> bool;
+
+    /// Stable string for logging / MCP / UI ("low", "medium", "high", "showcase").
+    static auto scene_preset_to_string(scene_preset preset) -> const char*;
 
     /**
      * @brief Creates a default 3D scene.
