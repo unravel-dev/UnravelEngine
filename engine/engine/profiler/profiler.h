@@ -209,6 +209,12 @@ struct frame_snapshot
     int64_t gpu_memory_used_bytes{0};
     /// Process resident set (RSS / working set) at capture; bytes.
     int64_t process_resident_bytes{0};
+    /// Wall-clock frame duration in milliseconds (cached at capture for UI).
+    float frame_wall_ms{0.0f};
+    /// Main-thread busy time in milliseconds (Frame Loop CPU, or longest main root).
+    float frame_busy_ms{0.0f};
+    /// @c frame_busy_ms / @c frame_wall_ms — fraction of the frame the main thread was running.
+    float frame_cpu_ratio{1.0f};
 
     struct thread_snapshot
     {
@@ -327,7 +333,17 @@ public:
     /// @brief Clear all captured frame history.
     void clear_history();
 
-    static constexpr uint32_t max_frame_history = 2000;
+    /// @brief Absolute upper bound for @ref set_max_frame_history.
+    static constexpr uint32_t max_frame_history_limit = 2000;
+    /// @brief Default ring-buffer capacity (keeps histogram/UI cost bounded).
+    static constexpr uint32_t default_frame_history = 256;
+    /// @brief Minimum allowed capacity.
+    static constexpr uint32_t min_frame_history = 64;
+
+    /// @brief Current frame-history ring capacity.
+    [[nodiscard]] auto get_max_frame_history() const -> uint32_t;
+    /// @brief Resize history capacity, keeping the newest frames when shrinking.
+    void set_max_frame_history(uint32_t capacity);
 
 private:
     std::vector<thread_info> threads_;
@@ -343,6 +359,7 @@ private:
     std::vector<frame_snapshot> frame_history_;
     uint32_t history_write_idx_{0};
     uint32_t history_count_{0};
+    uint32_t max_frame_history_{default_frame_history};
     recording_state recording_state_{recording_state::stopped};
     int32_t selected_frame_{-1};
 

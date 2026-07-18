@@ -108,6 +108,8 @@ private:
     imgui_panels* parent_{nullptr};
 
     sample_data frame_time_history_;
+    /// Rolling frame busy ms aligned with @ref frame_time_history_ (live / recording view).
+    sample_data frame_busy_ms_history_;
     sample_data cpu_heap_mb_history_;
     sample_data gpu_memory_mb_history_;
     sample_data process_rss_mb_history_;

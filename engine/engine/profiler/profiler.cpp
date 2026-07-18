@@ -4,11 +4,97 @@
 #include <graphics/graphics.h>
 #include <dotnetpp/dotnetpp.h>
 
+#include <algorithm>
+#include <cstring>
 #include <sstream>
 #include <thread>
 
 namespace unravel
 {
+
+namespace
+{
+
+constexpr const char* main_thread_lane_name = "Main Thread";
+constexpr const char* frame_loop_scope_name = "Frame Loop";
+
+struct main_thread_busy_metrics
+{
+    float busy_ms{0.0f};
+    float busy_ratio{1.0f};
+};
+
+auto find_main_thread_snapshot(const frame_snapshot& snap) -> const frame_snapshot::thread_snapshot*
+{
+    for(const auto& ts : snap.threads)
+    {
+        if(ts.name == main_thread_lane_name)
+        {
+            return &ts;
+        }
+    }
+    for(const auto& ts : snap.threads)
+    {
+        for(const auto& ev : ts.events)
+        {
+            if(ev.depth == 0 && std::strcmp(ev.name(), frame_loop_scope_name) == 0)
+            {
+                return &ts;
+            }
+        }
+    }
+    if(!snap.threads.empty())
+    {
+        return &snap.threads.front();
+    }
+    return nullptr;
+}
+
+/// Busy time of the main thread relative to frame wall (matches Frame Loop gray/busy split).
+auto compute_main_thread_busy_metrics(const frame_snapshot& snap) -> main_thread_busy_metrics
+{
+    const float wall_ms = snap.frame_wall_ms;
+    if(wall_ms <= 0.0f)
+    {
+        return {};
+    }
+    const frame_snapshot::thread_snapshot* main_ts = find_main_thread_snapshot(snap);
+    if(main_ts == nullptr)
+    {
+        return {wall_ms, 1.0f};
+    }
+    const profile_event* chosen = nullptr;
+    int64_t best_wall_ns = -1;
+    for(const auto& ev : main_ts->events)
+    {
+        if(ev.depth != 0 || ev.end_ns <= ev.start_ns)
+        {
+            continue;
+        }
+        if(std::strcmp(ev.name(), frame_loop_scope_name) == 0)
+        {
+            chosen = &ev;
+            break;
+        }
+        const int64_t wall_ns = ev.end_ns - ev.start_ns;
+        if(wall_ns > best_wall_ns)
+        {
+            best_wall_ns = wall_ns;
+            chosen = &ev;
+        }
+    }
+    if(chosen == nullptr)
+    {
+        return {wall_ms, 1.0f};
+    }
+    const float busy_ms = std::clamp(
+        static_cast<float>(std::max<int64_t>(0, chosen->cpu_end_ns - chosen->cpu_start_ns)) / 1'000'000.0f,
+        0.0f,
+        wall_ms);
+    return {busy_ms, busy_ms / wall_ms};
+}
+
+} // namespace
 
 auto get_app_profiler() -> performance_profiler*
 {
@@ -197,17 +283,26 @@ void performance_profiler::capture_frame_snapshot()
         snapshot.frame_start_ns = emin;
     }
 
-    if(frame_history_.size() < max_frame_history)
+    if(snapshot.frame_end_ns > snapshot.frame_start_ns)
+    {
+        snapshot.frame_wall_ms =
+            static_cast<float>(snapshot.frame_end_ns - snapshot.frame_start_ns) / 1'000'000.0f;
+    }
+    const main_thread_busy_metrics main_busy = compute_main_thread_busy_metrics(snapshot);
+    snapshot.frame_busy_ms = main_busy.busy_ms;
+    snapshot.frame_cpu_ratio = main_busy.busy_ratio;
+
+    if(frame_history_.size() < max_frame_history_)
     {
         frame_history_.push_back(std::move(snapshot));
         history_count_ = static_cast<uint32_t>(frame_history_.size());
-        history_write_idx_ = history_count_ % max_frame_history;
+        history_write_idx_ = history_count_ % max_frame_history_;
     }
     else
     {
         frame_history_[history_write_idx_] = std::move(snapshot);
-        history_write_idx_ = (history_write_idx_ + 1) % max_frame_history;
-        history_count_ = max_frame_history;
+        history_write_idx_ = (history_write_idx_ + 1) % max_frame_history_;
+        history_count_ = max_frame_history_;
     }
 }
 
@@ -265,12 +360,12 @@ auto performance_profiler::get_frame_snapshot(uint32_t index) const -> const fra
         return nullptr;
     }
 
-    if(history_count_ < max_frame_history)
+    if(history_count_ < max_frame_history_)
     {
         return &frame_history_[index];
     }
 
-    uint32_t actual = (history_write_idx_ + index) % max_frame_history;
+    uint32_t actual = (history_write_idx_ + index) % max_frame_history_;
     return &frame_history_[actual];
 }
 
@@ -282,6 +377,47 @@ void performance_profiler::set_selected_frame(int32_t index)
 auto performance_profiler::get_selected_frame() const -> int32_t
 {
     return selected_frame_;
+}
+
+auto performance_profiler::get_max_frame_history() const -> uint32_t
+{
+    return max_frame_history_;
+}
+
+void performance_profiler::set_max_frame_history(uint32_t capacity)
+{
+    capacity = std::clamp(capacity, min_frame_history, max_frame_history_limit);
+    if(capacity == max_frame_history_)
+    {
+        return;
+    }
+    const uint32_t keep = std::min(history_count_, capacity);
+    const uint32_t start = history_count_ - keep;
+    std::vector<frame_snapshot> kept;
+    kept.reserve(keep);
+    for(uint32_t i = 0; i < keep; ++i)
+    {
+        const frame_snapshot* snap = get_frame_snapshot(start + i);
+        if(snap != nullptr)
+        {
+            kept.push_back(*snap);
+        }
+    }
+    frame_history_ = std::move(kept);
+    history_count_ = static_cast<uint32_t>(frame_history_.size());
+    max_frame_history_ = capacity;
+    if(history_count_ >= max_frame_history_)
+    {
+        history_write_idx_ = 0;
+    }
+    else
+    {
+        history_write_idx_ = history_count_;
+    }
+    if(selected_frame_ >= 0)
+    {
+        selected_frame_ = std::min(selected_frame_, static_cast<int32_t>(history_count_) - 1);
+    }
 }
 
 void performance_profiler::clear_history()

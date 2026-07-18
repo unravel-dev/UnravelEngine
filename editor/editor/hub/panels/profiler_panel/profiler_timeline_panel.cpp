@@ -276,31 +276,6 @@ auto compute_cpu_ratio(const profile_event& ev) -> float
     return std::clamp(static_cast<float>(cpu) / static_cast<float>(wall), 0.0f, 1.0f);
 }
 
-auto compute_frame_cpu_ratio(const frame_snapshot& snap) -> float
-{
-    int64_t total_wall = 0;
-    int64_t total_cpu = 0;
-
-    for(const auto& ts : snap.threads)
-    {
-        for(const auto& ev : ts.events)
-        {
-            if(ev.depth != 0 || ev.end_ns <= ev.start_ns)
-            {
-                continue;
-            }
-            total_wall += ev.end_ns - ev.start_ns;
-            total_cpu += std::max<int64_t>(0, ev.cpu_end_ns - ev.cpu_start_ns);
-        }
-    }
-
-    if(total_wall <= 0)
-    {
-        return 1.0f;
-    }
-    return std::clamp(static_cast<float>(total_cpu) / static_cast<float>(total_wall), 0.0f, 1.0f);
-}
-
 auto histogram_bar_color(float ms) -> ImU32
 {
     if(ms > 33.333f)
@@ -312,6 +287,48 @@ auto histogram_bar_color(float ms) -> ImU32
         return IM_COL32(200, 160, 50, 200);
     }
     return IM_COL32(60, 150, 60, 200);
+}
+
+/// Draw one histogram column (optionally with CPU/wait split and outline).
+void draw_histogram_column(ImDrawList* draw_list,
+                           float x0,
+                           float x1,
+                           float bottom_y,
+                           float ms,
+                           float cpu_ratio,
+                           float scale_max,
+                           bool draw_cpu_split,
+                           bool draw_outline)
+{
+    if(ms <= 0.0f || scale_max <= 0.0f)
+    {
+        return;
+    }
+    const float h_frac = std::clamp(ms / scale_max, 0.01f, 1.0f);
+    const float bar_h = histogram_inner_height * h_frac;
+    const float y_top = bottom_y - bar_h;
+    const ImU32 cpu_col = histogram_bar_color(ms);
+    // Full bar height = frame wall time. Base fill must contrast with the chart background
+    // (30,30,30) so wait time is visible; the old wait color matched the bg and looked empty.
+    constexpr ImU32 hist_wait_fill = IM_COL32(72, 72, 88, 255);
+    if(draw_cpu_split)
+    {
+        draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), hist_wait_fill);
+        const float cpu_h = bar_h * std::clamp(cpu_ratio, 0.0f, 1.0f);
+        if(cpu_h >= min_visible_width_px)
+        {
+            draw_list->AddRectFilled(ImVec2(x0, bottom_y - cpu_h), ImVec2(x1, bottom_y), cpu_col);
+        }
+    }
+    else
+    {
+        draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), cpu_col);
+    }
+    if(draw_outline && (x1 - x0) >= 2.0f)
+    {
+        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
+                           IM_COL32(140, 140, 160, 140), 0.0f, 0, 1.0f);
+    }
 }
 
 void render_histogram_bars(ImDrawList* draw_list,
@@ -328,38 +345,68 @@ void render_histogram_bars(ImDrawList* draw_list,
     draw_list->PushClipRect(canvas_pos,
                             ImVec2(canvas_pos.x + bar_width, canvas_pos.y + frame_bar_height), true);
 
-    for(int32_t i = first_frame; i <= last_frame; ++i)
+    // When many frames share a pixel, max-pool into one column so spikes stay visible
+    // without emitting thousands of overlapping ImGui primitives.
+    constexpr float min_column_px = 1.0f;
+    const bool use_pixel_buckets = entry_w < min_column_px;
+    // Always show busy vs wait (matches Frame Loop). Skip outlines when columns are thin.
+    constexpr bool draw_cpu_split = true;
+    const bool draw_outline = entry_w >= 4.0f;
+
+    if(use_pixel_buckets && entry_w > 0.0f)
     {
-        const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
-        if(!snap || snap->frame_end_ns <= snap->frame_start_ns)
+        const int32_t col_count = std::max(1, static_cast<int32_t>(std::floor(bar_width)));
+        for(int32_t col = 0; col < col_count; ++col)
         {
-            continue;
+            const float i0f = hist_start + static_cast<float>(col) / entry_w;
+            const float i1f = hist_start + static_cast<float>(col + 1) / entry_w;
+            int32_t i0 = std::max(first_frame, static_cast<int32_t>(std::floor(i0f)));
+            int32_t i1 = std::min(last_frame, static_cast<int32_t>(std::ceil(i1f)) - 1);
+            if(i1 < i0)
+            {
+                continue;
+            }
+            float peak_ms = 0.0f;
+            float peak_cpu = 1.0f;
+            for(int32_t i = i0; i <= i1; ++i)
+            {
+                const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
+                if(snap == nullptr || snap->frame_wall_ms <= 0.0f)
+                {
+                    continue;
+                }
+                if(snap->frame_wall_ms > peak_ms)
+                {
+                    peak_ms = snap->frame_wall_ms;
+                    peak_cpu = snap->frame_cpu_ratio;
+                }
+            }
+            const float x0 = canvas_pos.x + static_cast<float>(col);
+            const float x1 = canvas_pos.x + static_cast<float>(col + 1);
+            draw_histogram_column(draw_list, x0, x1, bottom_y, peak_ms, peak_cpu, scale_max, draw_cpu_split, false);
         }
-
-        float ms = static_cast<float>(snap->frame_end_ns - snap->frame_start_ns) / 1'000'000.0f;
-        float h_frac = std::clamp(ms / scale_max, 0.01f, 1.0f);
-        float bar_h = histogram_inner_height * h_frac;
-
-        float x0 = canvas_pos.x + (static_cast<float>(i) - hist_start) * entry_w;
-        float x1 = canvas_pos.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
-        float y_top = bottom_y - bar_h;
-
-        float cpu_ratio = compute_frame_cpu_ratio(*snap);
-        float cpu_h = bar_h * cpu_ratio;
-
-        ImU32 cpu_col = histogram_bar_color(ms);
-        // Full bar height = frame wall time. Base fill must contrast with the chart background
-        // (30,30,30) so wait time is visible; the old wait color matched the bg and looked empty.
-        constexpr ImU32 hist_wait_fill = IM_COL32(72, 72, 88, 255);
-        draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), hist_wait_fill);
-
-        if(cpu_h >= min_visible_width_px)
+    }
+    else
+    {
+        for(int32_t i = first_frame; i <= last_frame; ++i)
         {
-            draw_list->AddRectFilled(ImVec2(x0, bottom_y - cpu_h), ImVec2(x1, bottom_y), cpu_col);
+            const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
+            if(snap == nullptr || snap->frame_wall_ms <= 0.0f)
+            {
+                continue;
+            }
+            const float x0 = canvas_pos.x + (static_cast<float>(i) - hist_start) * entry_w;
+            const float x1 = canvas_pos.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
+            draw_histogram_column(draw_list,
+                                  x0,
+                                  x1,
+                                  bottom_y,
+                                  snap->frame_wall_ms,
+                                  snap->frame_cpu_ratio,
+                                  scale_max,
+                                  draw_cpu_split,
+                                  draw_outline);
         }
-
-        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
-                           IM_COL32(140, 140, 160, 140), 0.0f, 0, 1.0f);
     }
 
     draw_list->PopClipRect();
@@ -455,25 +502,64 @@ void render_memory_mb_row(ImDrawList* draw_list,
                             ImVec2(row_top_left.x + bar_width, row_top_left.y + memory_hist_row_height),
                             true);
 
-    for(int32_t i = first_frame; i <= last_frame; ++i)
+    constexpr float min_column_px = 1.0f;
+    const bool use_pixel_buckets = entry_w < min_column_px && entry_w > 0.0f;
+    const bool draw_outline = entry_w >= 4.0f;
+
+    auto draw_mem_col = [&](float x0, float x1, float mb)
     {
-        const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
-        if(!snap)
-        {
-            continue;
-        }
-        const float mb = memory_mb_from_snapshot(snap, metric);
         const float h_frac =
             (scale_max_mb > 0.001f) ? std::clamp(mb / scale_max_mb, 0.02f, 1.0f) : 0.02f;
         const float bar_h = inner_h * h_frac;
-
-        const float x0 = row_top_left.x + (static_cast<float>(i) - hist_start) * entry_w;
-        const float x1 = row_top_left.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
         const float y_top = bottom_y - bar_h;
-
         draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
-        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
-                           IM_COL32(100, 100, 120, 100), 0.0f, 0, 1.0f);
+        if(draw_outline && (x1 - x0) >= 2.0f)
+        {
+            draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
+                               IM_COL32(100, 100, 120, 100), 0.0f, 0, 1.0f);
+        }
+    };
+
+    if(use_pixel_buckets)
+    {
+        const int32_t col_count = std::max(1, static_cast<int32_t>(std::floor(bar_width)));
+        for(int32_t col = 0; col < col_count; ++col)
+        {
+            const float i0f = hist_start + static_cast<float>(col) / entry_w;
+            const float i1f = hist_start + static_cast<float>(col + 1) / entry_w;
+            int32_t i0 = std::max(first_frame, static_cast<int32_t>(std::floor(i0f)));
+            int32_t i1 = std::min(last_frame, static_cast<int32_t>(std::ceil(i1f)) - 1);
+            if(i1 < i0)
+            {
+                continue;
+            }
+            float peak_mb = 0.0f;
+            for(int32_t i = i0; i <= i1; ++i)
+            {
+                const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
+                if(snap != nullptr)
+                {
+                    peak_mb = std::max(peak_mb, memory_mb_from_snapshot(snap, metric));
+                }
+            }
+            draw_mem_col(row_top_left.x + static_cast<float>(col),
+                         row_top_left.x + static_cast<float>(col + 1),
+                         peak_mb);
+        }
+    }
+    else
+    {
+        for(int32_t i = first_frame; i <= last_frame; ++i)
+        {
+            const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
+            if(snap == nullptr)
+            {
+                continue;
+            }
+            const float x0 = row_top_left.x + (static_cast<float>(i) - hist_start) * entry_w;
+            const float x1 = row_top_left.x + (static_cast<float>(i + 1) - hist_start) * entry_w;
+            draw_mem_col(x0, x1, memory_mb_from_snapshot(snap, metric));
+        }
     }
 
     draw_list->PopClipRect();
@@ -485,7 +571,8 @@ void render_live_sample_row(ImDrawList* draw_list,
                             const sample_data& samples,
                             float scale_max,
                             ImU32 fill_col,
-                            bool is_frame_ms_row)
+                            bool is_frame_ms_row,
+                            const sample_data* busy_samples = nullptr)
 {
     const int n = static_cast<int>(sample_data::num_samples);
     if(n <= 0 || scale_max <= 0.0f)
@@ -506,28 +593,92 @@ void render_live_sample_row(ImDrawList* draw_list,
 
     const int offset = samples.get_offset();
     const float* vals = samples.get_values();
+    const float* busy_vals = (busy_samples != nullptr) ? busy_samples->get_values() : nullptr;
+    const int busy_offset = (busy_samples != nullptr) ? busy_samples->get_offset() : 0;
+    const bool draw_busy_split = is_frame_ms_row && busy_vals != nullptr;
+    const bool draw_outline = entry_w >= 4.0f;
+    const bool use_pixel_buckets = entry_w < 1.0f;
 
-    for(int col = 0; col < n; ++col)
+    auto busy_ratio_at = [&](int sample_col, float wall_ms) -> float
     {
-        const int idx = (offset + col) % n;
-        const float v = vals[idx];
-        const float h_frac = std::clamp(v / scale_max, 0.02f, 1.0f);
-        const float bar_h = inner_h * h_frac;
-        const float x0 = row_top_left.x + static_cast<float>(col) * entry_w;
-        const float x1 = row_top_left.x + static_cast<float>(col + 1) * entry_w;
-        const float y_top = bottom_y - bar_h;
+        if(!draw_busy_split || wall_ms <= 0.001f)
+        {
+            return 1.0f;
+        }
+        const int bidx = (busy_offset + sample_col) % n;
+        return std::clamp(busy_vals[bidx] / wall_ms, 0.0f, 1.0f);
+    };
 
-        if(is_frame_ms_row)
+    if(use_pixel_buckets)
+    {
+        const int col_count = std::max(1, static_cast<int>(std::floor(bar_width)));
+        const float samples_per_col = static_cast<float>(n) / static_cast<float>(col_count);
+        for(int col = 0; col < col_count; ++col)
         {
-            const ImU32 col = histogram_bar_color(v);
-            draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), col);
+            const int s0 = static_cast<int>(std::floor(static_cast<float>(col) * samples_per_col));
+            int s1 = static_cast<int>(std::floor(static_cast<float>(col + 1) * samples_per_col)) - 1;
+            s1 = std::max(s0, std::min(s1, n - 1));
+            float peak = 0.0f;
+            float peak_ratio = 1.0f;
+            for(int s = s0; s <= s1; ++s)
+            {
+                const int idx = (offset + s) % n;
+                const float v = vals[idx];
+                if(v > peak)
+                {
+                    peak = v;
+                    peak_ratio = busy_ratio_at(s, v);
+                }
+            }
+            const float x0 = row_top_left.x + static_cast<float>(col);
+            const float x1 = row_top_left.x + static_cast<float>(col + 1);
+            if(is_frame_ms_row)
+            {
+                draw_histogram_column(draw_list, x0, x1, bottom_y, peak, peak_ratio, scale_max, draw_busy_split,
+                                      false);
+            }
+            else
+            {
+                const float h_frac = std::clamp(peak / scale_max, 0.02f, 1.0f);
+                const float bar_h = inner_h * h_frac;
+                const float y_top = bottom_y - bar_h;
+                draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
+            }
         }
-        else
+    }
+    else
+    {
+        for(int col = 0; col < n; ++col)
         {
-            draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
+            const int idx = (offset + col) % n;
+            const float v = vals[idx];
+            const float x0 = row_top_left.x + static_cast<float>(col) * entry_w;
+            const float x1 = row_top_left.x + static_cast<float>(col + 1) * entry_w;
+            if(is_frame_ms_row)
+            {
+                draw_histogram_column(draw_list,
+                                      x0,
+                                      x1,
+                                      bottom_y,
+                                      v,
+                                      busy_ratio_at(col, v),
+                                      scale_max,
+                                      draw_busy_split,
+                                      draw_outline);
+            }
+            else
+            {
+                const float h_frac = std::clamp(v / scale_max, 0.02f, 1.0f);
+                const float bar_h = inner_h * h_frac;
+                const float y_top = bottom_y - bar_h;
+                draw_list->AddRectFilled(ImVec2(x0, y_top), ImVec2(x1, bottom_y), fill_col);
+                if(draw_outline)
+                {
+                    draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
+                                       IM_COL32(100, 100, 120, 80), 0.0f, 0, 1.0f);
+                }
+            }
         }
-        draw_list->AddRect(ImVec2(x0 + 0.5f, y_top + 0.5f), ImVec2(x1 - 0.5f, bottom_y - 0.5f),
-                           IM_COL32(100, 100, 120, 80), 0.0f, 0, 1.0f);
     }
 
     draw_list->PopClipRect();
@@ -654,14 +805,14 @@ void profiler_timeline_panel::timeline_render_event_block(const lane_context& lc
         ImGui::SetNextWindowViewportToCurrent();
         ImGui::BeginTooltip();
         ImGui::Text("%s", ev.name());
-        ImGui::Text("Wall:  %s", format_time(wall_ms).c_str());
-        ImGui::Text("CPU:   %s (%.0f%%)", format_time(cpu_ms).c_str(), cpu_ratio * 100.0f);
+        ImGui::Text("Wall:   %s", format_time(wall_ms).c_str());
+        ImGui::Text("Busy:   %s (%.0f%%)", format_time(cpu_ms).c_str(), cpu_ratio * 100.0f);
         if(wait_ms > 0.0001f)
         {
-            ImGui::Text("Wait:  %s (%.0f%%)", format_time(wait_ms).c_str(),
-                         (1.0f - cpu_ratio) * 100.0f);
+            ImGui::Text("Idle:   %s (%.0f%%)", format_time(wait_ms).c_str(),
+                        (1.0f - cpu_ratio) * 100.0f);
         }
-        ImGui::Text("Depth: %d", ev.depth);
+        ImGui::Text("Depth:  %d", ev.depth);
         ImGui::Text("Thread: %s", thread_name.c_str());
         ImGui::EndTooltip();
     }
@@ -855,6 +1006,44 @@ void profiler_timeline_panel::draw_recording_toolbar()
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine();
 
+    {
+        static constexpr uint32_t history_presets[] = {64, 128, 256, 512, 1024, 2000};
+        static constexpr const char* history_labels[] = {"64", "128", "256", "512", "1024", "2000"};
+        const uint32_t current_cap = profiler->get_max_frame_history();
+        int current_idx = 2; // default 256
+        for(int i = 0; i < static_cast<int>(IM_ARRAYSIZE(history_presets)); ++i)
+        {
+            if(history_presets[i] == current_cap)
+            {
+                current_idx = i;
+                break;
+            }
+        }
+        ImGui::SetNextItemWidth(80.0f);
+        if(ImGui::Combo("History", &current_idx, history_labels, IM_ARRAYSIZE(history_labels)))
+        {
+            profiler->set_max_frame_history(history_presets[current_idx]);
+            if(selected_frame_ >= 0)
+            {
+                const uint32_t count = profiler->get_frame_count();
+                if(count == 0)
+                {
+                    selected_frame_ = -1;
+                }
+                else
+                {
+                    selected_frame_ = std::min(selected_frame_, static_cast<int32_t>(count) - 1);
+                }
+            }
+            last_centered_frame_ = -2;
+        }
+        ImGui::SetItemTooltipEx("Max captured frames. Lower values reduce histogram cost.");
+    }
+
+    ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
+
     double visible_ms = view_duration_ns_ / 1'000'000.0;
     if(visible_ms >= 1.0)
     {
@@ -918,10 +1107,12 @@ void profiler_timeline_panel::draw_live_histogram_stack(float bar_width)
     const float max_gpu_mb = std::max(gpu_memory_mb_history_.get_max(), 1.0f) * 1.1f;
     const float max_rss_mb = std::max(process_rss_mb_history_.get_max(), 1.0f) * 1.1f;
 
-    render_live_sample_row(dl, pos, bar_width, frame_time_history_, max_ms, 0, true);
+    render_live_sample_row(dl, pos, bar_width, frame_time_history_, max_ms, 0, true, &frame_busy_ms_history_);
     const float frame_bottom = pos.y + frame_bar_height;
     render_histogram_guides(dl, pos, bar_width, frame_bottom, max_ms);
-    dl->AddText(ImVec2(pos.x + 4, pos.y + 2), IM_COL32(180, 180, 200, 200), "Frame (ms)");
+    dl->AddText(ImVec2(pos.x + 4, pos.y + 2),
+                IM_COL32(180, 180, 200, 200),
+                "Frame wall (ms) — color: busy, gray: wait");
 
     float row_y = frame_bottom;
     if(show_histogram_managed_heap_)
@@ -964,13 +1155,26 @@ void profiler_timeline_panel::draw_frame_selector_bar()
     }
     frame_time_history_.push_sample(frame_ms);
 
+    const uint32_t frame_count = profiler->get_frame_count();
+    float frame_busy_ms = frame_ms;
+    if(frame_count > 0)
+    {
+        const frame_snapshot* latest = profiler->get_frame_snapshot(frame_count - 1);
+        if(latest != nullptr)
+        {
+            frame_busy_ms = latest->frame_busy_ms;
+        }
+    }
+    frame_busy_ms_history_.push_sample(frame_busy_ms);
+
     ImGui::Checkbox("Managed heap", &show_histogram_managed_heap_);
     ImGui::SameLine();
     ImGui::Checkbox("GPU memory", &show_histogram_gpu_memory_);
     ImGui::SameLine();
     ImGui::Checkbox("Process RSS", &show_histogram_process_rss_);
 
-    uint32_t frame_count = profiler->get_frame_count();
+    // Use captured snapshots whenever available (recording and paused) so bar count
+    // matches History capacity. Live rolling samples are only for the empty pre-record state.
     if(frame_count == 0)
     {
         const float cpu_mb = static_cast<float>(dotnet::gc_get_used_size()) / megabyte_divisor;
@@ -1035,15 +1239,11 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
     for(int32_t i = first_vis; i <= last_vis; ++i)
     {
         const auto* snap = profiler->get_frame_snapshot(static_cast<uint32_t>(i));
-        if(!snap)
+        if(snap == nullptr)
         {
             continue;
         }
-        if(snap->frame_end_ns > snap->frame_start_ns)
-        {
-            float ms = static_cast<float>(snap->frame_end_ns - snap->frame_start_ns) / 1'000'000.0f;
-            max_frame_ms = std::max(max_frame_ms, ms);
-        }
+        max_frame_ms = std::max(max_frame_ms, snap->frame_wall_ms);
         if(show_histogram_managed_heap_)
         {
             max_cpu_mb =
@@ -1071,7 +1271,8 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
     effective_selected = std::clamp(effective_selected, 0, static_cast<int32_t>(frame_count) - 1);
 
     draw_list->AddText(ImVec2(canvas_pos.x + 4, canvas_pos.y + 2),
-                       IM_COL32(180, 180, 200, 200), "Frame (ms)");
+                       IM_COL32(180, 180, 200, 200),
+                       "Frame wall (ms) — color: busy, gray: wait");
 
     render_histogram_bars(draw_list, profiler, first_vis, last_vis,
                           canvas_pos, frame_bottom_y, bar_width, eff_start, entry_w, scale_max);
@@ -1150,21 +1351,21 @@ void profiler_timeline_panel::handle_histogram_input(performance_profiler* profi
         if(hovered)
         {
             const auto* hsnap = profiler->get_frame_snapshot(static_cast<uint32_t>(hover_idx));
-            if(hsnap && hsnap->frame_end_ns > hsnap->frame_start_ns)
+            if(hsnap && hsnap->frame_wall_ms > 0.0f)
             {
-                float hms = static_cast<float>(hsnap->frame_end_ns - hsnap->frame_start_ns) / 1'000'000.0f;
-                float cpu_ratio = compute_frame_cpu_ratio(*hsnap);
-                float cpu_ms = hms * cpu_ratio;
-                float wait_ms = hms - cpu_ms;
+                const float hms = hsnap->frame_wall_ms;
+                const float busy_ms = hsnap->frame_busy_ms;
+                const float wait_ms = std::max(0.0f, hms - busy_ms);
+                const float busy_pct = (hms > 0.001f) ? (busy_ms / hms) * 100.0f : 0.0f;
 
                 ImGui::SetNextWindowViewportToCurrent();
                 ImGui::BeginTooltip();
                 ImGui::Text("Frame %d / %u", hover_idx + 1, frame_count);
-                ImGui::Text("Wall: %.2f ms (%.0f FPS)", hms, hms > 0.001f ? 1000.0f / hms : 0.0f);
-                ImGui::Text("CPU:  %.2f ms (%.0f%%)", cpu_ms, cpu_ratio * 100.0f);
+                ImGui::Text("Wall:       %.2f ms (%.0f FPS)", hms, hms > 0.001f ? 1000.0f / hms : 0.0f);
+                ImGui::Text("Busy:  %.2f ms (%.0f%%)", busy_ms, busy_pct);
                 if(wait_ms > 0.001f)
                 {
-                    ImGui::Text("Wait: %.2f ms (%.0f%%)", wait_ms, (1.0f - cpu_ratio) * 100.0f);
+                    ImGui::Text("Wait:  %.2f ms (%.0f%%)", wait_ms, 100.0f - busy_pct);
                 }
                 const auto heap_pretty = format_bytes(
                     static_cast<std::uint64_t>(std::max<int64_t>(0, hsnap->cpu_heap_used_bytes)), 0);
@@ -1371,17 +1572,31 @@ void profiler_timeline_panel::draw_timeline()
 
     double sel_start = static_cast<double>(selected_snap->frame_start_ns);
     double sel_end = static_cast<double>(selected_snap->frame_end_ns);
+    const double sel_duration_ns = sel_end - sel_start;
+    const bool selection_changed = (frame_idx != last_centered_frame_);
 
     // -- View positioning ------------------------------------------------
+    if(selection_changed)
+    {
+        // Grow the visible window to fit a longer frame; do not shrink for short ones
+        // (preserves manual zoom-out and avoids fighting zoom-in every redraw).
+        constexpr double frame_fit_padding = 1.1;
+        if(sel_duration_ns > view_duration_ns_)
+        {
+            view_duration_ns_ = std::clamp(sel_duration_ns * frame_fit_padding,
+                                           min_view_duration_ns,
+                                           max_view_duration_ns);
+        }
+        last_centered_frame_ = frame_idx;
+    }
     if(auto_follow_)
     {
         view_start_ns_ = sel_end - view_duration_ns_ * 0.85;
     }
-    else if(frame_idx != last_centered_frame_)
+    else if(selection_changed)
     {
-        double center = (sel_start + sel_end) / 2.0;
+        const double center = (sel_start + sel_end) / 2.0;
         view_start_ns_ = center - view_duration_ns_ / 2.0;
-        last_centered_frame_ = frame_idx;
     }
 
     // -- Layout ----------------------------------------------------------
