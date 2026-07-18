@@ -311,6 +311,23 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "GPU"},
         });
 
+    entt::meta_factory<particle_emitter_component::culling_mode>{}
+        .type("ParticleCullingMode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ParticleCullingMode"},
+            entt::attribute{"pretty_name", "Particle Culling Mode"},
+        })
+        .data<particle_emitter_component::culling_mode::always_simulate>("always_simulate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "always_simulate"},
+            entt::attribute{"pretty_name", "Always Simulate"},
+        })
+        .data<particle_emitter_component::culling_mode::renderer_based>("renderer_based"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "renderer_based"},
+            entt::attribute{"pretty_name", "Renderer Based"},
+        });
+
     entt::meta_factory<particle_emitter_component>{}
         .type("particle_emitter_component"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -329,6 +346,14 @@ REFLECT(particle_emitter_component)
             entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
             entt::attribute{"tooltip", "Controls whether the particle emitter actively spawns and updates particles. Disabled emitters stop emission but existing particles continue to animate."},
+        })
+        .data<&particle_emitter_component::set_culling_mode, &particle_emitter_component::get_culling_mode>("culling_mode"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "culling_mode"},
+            entt::attribute{"pretty_name", "Culling Mode"},
+            entt::attribute{"tooltip",
+                            "Always Simulate: update even when not drawn. "
+                            "Renderer Based: freeze spawn/sim when no camera drew the emitter last frame (same as animation)."},
         })
         .data<&particle_emitter_component::set_loop, &particle_emitter_component::is_loop>("loop"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -678,10 +703,12 @@ REFLECT(particle_emitter_component)
 SAVE(particle_emitter_component)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
+    try_save(ar, ser20::make_nvp("culling_mode", obj.get_culling_mode()));
     try_save(ar, ser20::make_nvp("shape", obj.get_shape()));
     try_save(ar, ser20::make_nvp("direction", obj.get_direction()));
     try_save(ar, ser20::make_nvp("spawn_location", obj.get_spawn_location()));
     try_save(ar, ser20::make_nvp("simulation_space", obj.get_simulation_space()));
+    try_save(ar, ser20::make_nvp("simulation_backend", obj.get_simulation_backend()));
     try_save(ar, ser20::make_nvp("max_particles", obj.get_max_particles()));
     
     
@@ -744,6 +771,12 @@ LOAD(particle_emitter_component)
     {
         obj.set_enabled(enabled);
     }
+
+    particle_emitter_component::culling_mode culling_mode{};
+    if(try_load(ar, ser20::make_nvp("culling_mode", culling_mode)))
+    {
+        obj.set_culling_mode(culling_mode);
+    }
     
     ps_soa::emitter_shape shape{ps_soa::emitter_shape::sphere};
     ps_soa::emitter_direction direction{ps_soa::emitter_direction::up};
@@ -766,6 +799,12 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("simulation_space", simulation_space)))
     {
         obj.set_simulation_space(simulation_space);
+    }
+
+    ps_soa::particle_sim_backend simulation_backend{ps_soa::particle_sim_backend::cpu};
+    if(try_load(ar, ser20::make_nvp("simulation_backend", simulation_backend)))
+    {
+        obj.set_simulation_backend(simulation_backend);
     }
     
     uint32_t max_particles{1024};

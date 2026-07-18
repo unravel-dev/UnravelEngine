@@ -19,11 +19,25 @@ namespace unravel
 class particle_emitter_component : public component_crtp<particle_emitter_component, owned_component>
 {
 public:
+    enum class culling_mode : uint8_t
+    {
+        always_simulate,
+        renderer_based,
+    };
+
     static void on_create_component(entt::registry& r, entt::entity e);
     static void on_destroy_component(entt::registry& r, entt::entity e);
 
     void set_enabled(bool enabled);
     auto is_enabled() const -> bool;
+
+    void set_culling_mode(culling_mode mode);
+    auto get_culling_mode() const -> culling_mode;
+
+    void set_last_render_frame(uint64_t frame);
+    auto get_last_render_frame() const noexcept -> uint64_t;
+    auto is_newly_created() const noexcept -> bool;
+    auto was_used_last_frame() const noexcept -> bool;
 
     auto get_emitter_handle() const -> ps_soa::emitter_handle;
 
@@ -174,6 +188,8 @@ public:
 
 private:
     bool enabled_ = true;
+    culling_mode culling_mode_ = culling_mode::renderer_based;
+    uint64_t last_render_frame_ = 0;
     ps_soa::emitter_shape shape_ = ps_soa::emitter_shape::sphere;
     ps_soa::emitter_direction direction_ = ps_soa::emitter_direction::up;
     uint32_t max_particles_ = 1024;

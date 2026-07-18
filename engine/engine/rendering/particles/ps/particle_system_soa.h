@@ -87,6 +87,19 @@ void update_emitter(emitter_handle handle,
                     emitter_playback_desc& playback);
 
 /**
+ * @brief Refresh transform-driven world bounds without advancing sim (renderer-based freeze).
+ */
+void update_emitter_bounds_only(emitter_handle handle,
+                                const emitter_desc& desc,
+                                emitter_transform_state& transform);
+
+/**
+ * @brief Flush staged GPU spawns and advance resident GPU sim for awake emitters.
+ * @note Call once per frame on the main/render thread after parallel update_emitter.
+ */
+void sync_gpu_simulation();
+
+/**
  * @brief True after the first successful update.
  */
 auto has_updated(emitter_handle handle) -> bool;

@@ -41,7 +41,10 @@ constexpr uint32_t k_min_rows_per_job = 256;
 
 particle_sim_backend g_default_sim_backend = particle_sim_backend::cpu;
 bool g_gpu_sim_available = false;
-std::shared_ptr<gpu_program> g_pack_program;
+std::shared_ptr<gpu_program> g_compact_pack_program;
+std::shared_ptr<gpu_program> g_spawn_scatter_program;
+std::shared_ptr<gpu_program> g_indirect_args_program;
+std::shared_ptr<gpu_program> g_sort_program;
 bgfx::UniformHandle g_u_pack0 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack1 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack2 = BGFX_INVALID_HANDLE;
@@ -49,9 +52,29 @@ bgfx::UniformHandle g_u_pack3 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack4 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack5 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_local_to_world = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_args0 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_sort0 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_sort1 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_spawn0 = BGFX_INVALID_HANDLE;
 bgfx::VertexLayout g_gpu_vec4_layout;
 bgfx::VertexLayout g_gpu_instance_layout;
 bool g_gpu_layouts_ready = false;
+constexpr uint32_t k_quad_index_count = 6;
+
+auto next_pow2_u32(uint32_t value) -> uint32_t
+{
+    if(value <= 1u)
+    {
+        return 1u;
+    }
+    uint32_t v = value - 1u;
+    v |= v >> 1u;
+    v |= v >> 2u;
+    v |= v >> 4u;
+    v |= v >> 8u;
+    v |= v >> 16u;
+    return v + 1u;
+}
 
 void ensure_gpu_layouts()
 {
@@ -78,24 +101,41 @@ struct emitter_gpu_resources
     bool has_backend_override = false;
     bool luts_valid = false;
     bool luts_gpu_dirty = true;
-    bool order_identity_uploaded = false;
     bool cached_need_color_speed = false;
     bool cached_need_ease = false;
     emitter_feature cached_features = emitter_feature::none;
     bx::EaseFn cached_ease_pos = nullptr;
     uint32_t gpu_capacity = 0;
+    /// Exclusive end of slot range that may contain live sim data (for compact dispatch).
+    uint32_t high_water = 0;
+    float sim_dt = 0.0f;
     bgfx::DynamicVertexBufferHandle sim_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle instance_vb = BGFX_INVALID_HANDLE;
-    bgfx::DynamicIndexBufferHandle order_ib = BGFX_INVALID_HANDLE;
+    bgfx::DynamicIndexBufferHandle counter_ib = BGFX_INVALID_HANDLE;
+    bgfx::IndirectBufferHandle indirect_buf = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_speed_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle ease_lut_vb = BGFX_INVALID_HANDLE;
-    std::vector<gpu_sim_particle> sim_staging;
+    bgfx::DynamicVertexBufferHandle spawn_vb = BGFX_INVALID_HANDLE;
+    bgfx::DynamicIndexBufferHandle spawn_slots_ib = BGFX_INVALID_HANDLE;
+    uint32_t spawn_upload_capacity = 0;
+    std::vector<uint32_t> free_list;
+    std::vector<uint32_t> active_slots;
+    std::vector<gpu_sim_particle> spawn_particles;
+    std::vector<uint32_t> spawn_slots;
     std::vector<math::vec4> color_lut;
     std::vector<math::vec4> color_speed_lut;
     std::vector<math::vec4> ease_lut;
-    std::vector<uint32_t> order_staging;
     emitter_sim_constants constants{};
+    /// Grow-only world-space trail AABB (union of particle trajectory hulls).
+    math::bbox trail_bounds{};
+    bool trail_bounds_valid = false;
+
+    void clear_trail_bounds()
+    {
+        trail_bounds.reset();
+        trail_bounds_valid = false;
+    }
 
     void destroy_buffers()
     {
@@ -109,10 +149,15 @@ struct emitter_gpu_resources
             bgfx::destroy(instance_vb);
             instance_vb = BGFX_INVALID_HANDLE;
         }
-        if(bgfx::isValid(order_ib))
+        if(bgfx::isValid(counter_ib))
         {
-            bgfx::destroy(order_ib);
-            order_ib = BGFX_INVALID_HANDLE;
+            bgfx::destroy(counter_ib);
+            counter_ib = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(indirect_buf))
+        {
+            bgfx::destroy(indirect_buf);
+            indirect_buf = BGFX_INVALID_HANDLE;
         }
         if(bgfx::isValid(color_lut_vb))
         {
@@ -129,45 +174,106 @@ struct emitter_gpu_resources
             bgfx::destroy(ease_lut_vb);
             ease_lut_vb = BGFX_INVALID_HANDLE;
         }
+        if(bgfx::isValid(spawn_vb))
+        {
+            bgfx::destroy(spawn_vb);
+            spawn_vb = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(spawn_slots_ib))
+        {
+            bgfx::destroy(spawn_slots_ib);
+            spawn_slots_ib = BGFX_INVALID_HANDLE;
+        }
         gpu_capacity = 0;
+        high_water = 0;
+        spawn_upload_capacity = 0;
         pending_pack = false;
         luts_gpu_dirty = true;
-        order_identity_uploaded = false;
+        free_list.clear();
+        active_slots.clear();
+        spawn_particles.clear();
+        spawn_slots.clear();
+        clear_trail_bounds();
     }
 
-    void ensure_capacity(uint32_t max_particles)
+    void ensure_spawn_upload_capacity(uint32_t spawn_count)
     {
-        ensure_gpu_layouts();
-        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb))
+        if(spawn_count == 0)
         {
             return;
+        }
+        if(spawn_upload_capacity >= spawn_count && bgfx::isValid(spawn_vb) && bgfx::isValid(spawn_slots_ib))
+        {
+            return;
+        }
+        if(bgfx::isValid(spawn_vb))
+        {
+            bgfx::destroy(spawn_vb);
+            spawn_vb = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(spawn_slots_ib))
+        {
+            bgfx::destroy(spawn_slots_ib);
+            spawn_slots_ib = BGFX_INVALID_HANDLE;
+        }
+        spawn_upload_capacity = math::max(spawn_count, 64u);
+        const uint16_t spawn_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
+                                     BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        const uint16_t slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE | BGFX_BUFFER_INDEX32 |
+                                    BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        spawn_vb = bgfx::createDynamicVertexBuffer(spawn_upload_capacity * k_gpu_sim_vec4s_per_particle,
+                                                   g_gpu_vec4_layout,
+                                                   spawn_flags);
+        spawn_slots_ib = bgfx::createDynamicIndexBuffer(spawn_upload_capacity, slot_flags);
+    }
+
+    void reset_freelist(uint32_t max_particles)
+    {
+        free_list.resize(max_particles);
+        for(uint32_t i = 0; i < max_particles; ++i)
+        {
+            free_list[i] = max_particles - 1u - i;
+        }
+    }
+
+    /// @return true when buffers were (re)created and CPU→GPU resync is required.
+    auto ensure_capacity(uint32_t max_particles) -> bool
+    {
+        ensure_gpu_layouts();
+        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb) && bgfx::isValid(counter_ib) &&
+           bgfx::isValid(indirect_buf))
+        {
+            return false;
         }
         const bool keep_pending = pending_pack;
         destroy_buffers();
         pending_pack = keep_pending;
         luts_gpu_dirty = true;
         gpu_capacity = max_particles;
-        const uint16_t sim_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
+        const uint16_t sim_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
                                    BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t instance_flags = BGFX_BUFFER_COMPUTE_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
+        const uint16_t instance_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
                                         BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t order_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE | BGFX_BUFFER_INDEX32 |
-                                    BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        const uint16_t counter_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32 |
+                                       BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        const uint16_t lut_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
+                                   BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
         sim_vb = bgfx::createDynamicVertexBuffer(max_particles * k_gpu_sim_vec4s_per_particle,
                                                  g_gpu_vec4_layout,
                                                  sim_flags);
         instance_vb = bgfx::createDynamicVertexBuffer(max_particles, g_gpu_instance_layout, instance_flags);
-        order_ib = bgfx::createDynamicIndexBuffer(max_particles, order_flags);
-        color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, sim_flags);
-        color_speed_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, sim_flags);
-        ease_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, sim_flags);
-        order_staging.resize(max_particles);
-        for(uint32_t i = 0; i < max_particles; ++i)
-        {
-            order_staging[i] = i;
-        }
-        bgfx::update(order_ib, 0, bgfx::copy(order_staging.data(), uint32_t(sizeof(uint32_t) * max_particles)));
-        order_identity_uploaded = true;
+        counter_ib = bgfx::createDynamicIndexBuffer(1, counter_flags);
+        indirect_buf = bgfx::createIndirectBuffer(1);
+        color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
+        color_speed_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
+        ease_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
+        reset_freelist(max_particles);
+        std::vector<gpu_sim_particle> zeros(max_particles);
+        std::memset(zeros.data(), 0, sizeof(gpu_sim_particle) * max_particles);
+        bgfx::update(sim_vb, 0, bgfx::copy(zeros.data(), uint32_t(sizeof(gpu_sim_particle) * max_particles)));
+        uint32_t zero_count = 0;
+        bgfx::update(counter_ib, 0, bgfx::copy(&zero_count, sizeof(uint32_t)));
+        return true;
     }
 };
 
@@ -554,9 +660,31 @@ struct emitter
     {
         sim.reset();
         particles_.clear_live();
+        for(uint32_t i = 0; i < particles_.capacity; ++i)
+        {
+            particles_.lifespan[i] = 0.0f;
+            particles_.life[i] = 0.0f;
+        }
         rng_.reset();
         gpu_.pending_pack = false;
         gpu_.luts_valid = false;
+        gpu_.active_slots.clear();
+        gpu_.high_water = 0;
+        gpu_.spawn_particles.clear();
+        gpu_.spawn_slots.clear();
+        gpu_.clear_trail_bounds();
+        if(gpu_.gpu_capacity > 0)
+        {
+            gpu_.reset_freelist(gpu_.gpu_capacity);
+            if(bgfx::isValid(gpu_.sim_vb))
+            {
+                std::vector<gpu_sim_particle> zeros(gpu_.gpu_capacity);
+                std::memset(zeros.data(), 0, sizeof(gpu_sim_particle) * gpu_.gpu_capacity);
+                bgfx::update(gpu_.sim_vb,
+                             0,
+                             bgfx::copy(zeros.data(), uint32_t(sizeof(gpu_sim_particle) * gpu_.gpu_capacity)));
+            }
+        }
     }
 
     auto resolve_backend() const -> particle_sim_backend
@@ -623,88 +751,283 @@ struct emitter
         gpu_.luts_gpu_dirty = true;
     }
 
-    void prepare_gpu_pack(const emitter_desc& desc, const emitter_sim_constants& constants, math::bbox& aabb)
+    auto compute_gpu_particle_radius(const emitter_desc& desc, const emitter_sim_constants& constants) const -> float
     {
-        APP_SCOPE_PERF("Particles/SOA Prepare GPU Pack");
-        const uint32_t count = particles_.count;
-        gpu_.constants = constants;
-        gpu_.sim_staging.resize(count);
-        ensure_gpu_luts(desc, constants);
-        const bool need_align = has_feature(constants.features, emitter_feature::align_to_direction);
-        const bool need_ease = has_feature(constants.features, emitter_feature::non_linear_ease);
-        const bool need_local = has_feature(constants.features, emitter_feature::local_space);
-        const bool need_size_speed = has_feature(constants.features, emitter_feature::size_by_speed);
+        const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
+        const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
+        const float max_author_scale = math::max(math::max(start_scale_range.min, start_scale_range.max),
+                                                 math::max(end_scale_range.min, end_scale_range.max));
+        float size_speed_mul = 1.0f;
+        if(has_feature(constants.features, emitter_feature::size_by_speed))
+        {
+            size_speed_mul = math::max(constants.size_by_speed_range.min, constants.size_by_speed_range.max);
+        }
         const float base_extent = math::max(constants.particle_scale_3d.x,
                                             math::max(constants.particle_scale_3d.y, constants.particle_scale_3d.z)) *
                                   0.5f;
         const math::vec2 pivot_offset = constants.pivot - math::vec2(0.5f, 0.5f);
         const float pivot_pad_factor = math::max(math::abs(pivot_offset.x), math::abs(pivot_offset.y)) * 2.0f;
-        const float size_speed_mul =
-            need_size_speed ? math::max(constants.size_by_speed_range.min, constants.size_by_speed_range.max) : 1.0f;
-        for(uint32_t i = 0; i < count; ++i)
+        const float particle_scale = max_author_scale * constants.avg_system_scale * size_speed_mul;
+        const float max_extent = base_extent * particle_scale;
+        return max_extent + pivot_pad_factor * max_extent;
+    }
+
+    void accumulate_conservative_gpu_bounds(math::bbox& aabb,
+                                            const emitter_desc& desc,
+                                            const emitter_sim_constants& constants,
+                                            const math::vec3& emitter_pos)
+    {
+        const float particle_radius = compute_gpu_particle_radius(desc, constants);
+        const math::vec3 shape_pad = math::abs(desc.emission.shape_scale) + math::abs(desc.emission.shape_position);
+        const float shape_radius = math::length(shape_pad);
+        expand_aabb_sphere(aabb, emitter_pos, shape_radius + particle_radius);
+    }
+
+    void expand_gpu_trail_bounds_for_particle(const math::vec3& start,
+                                              const math::vec3& end0,
+                                              const math::vec3& end1,
+                                              float particle_radius)
+    {
+        // Path is a double-mix of start/end0/end1 — covered by the convex hull of those points.
+        if(!gpu_.trail_bounds_valid)
         {
-            const float life = particles_.life[i];
-            const float tt = (need_ease && constants.ease_pos) ? constants.ease_pos(life) : life;
-            gpu_sim_particle& dst = gpu_.sim_staging[i];
-            dst.start_x = particles_.start[i].x;
-            dst.start_y = particles_.start[i].y;
-            dst.start_z = particles_.start[i].z;
-            dst.life = life;
-            dst.end0_x = particles_.end0[i].x;
-            dst.end0_y = particles_.end0[i].y;
-            dst.end0_z = particles_.end0[i].z;
-            dst.lifespan = particles_.lifespan[i];
-            dst.end1_x = particles_.end1[i].x;
-            dst.end1_y = particles_.end1[i].y;
-            dst.end1_z = particles_.end1[i].z;
-            dst.scale_start = particles_.scale_start[i];
-            dst.scale_end = particles_.scale_end[i];
-            dst.texsheet_seed = particles_.texsheet_seed[i];
-            dst.pad0 = 0.0f;
-            dst.pad1 = 0.0f;
-            math::quat rot = math::identity<math::quat>();
-            if(need_align)
+            gpu_.trail_bounds.reset();
+            gpu_.trail_bounds_valid = true;
+        }
+        expand_aabb_sphere(gpu_.trail_bounds, start, particle_radius);
+        expand_aabb_sphere(gpu_.trail_bounds, end0, particle_radius);
+        expand_aabb_sphere(gpu_.trail_bounds, end1, particle_radius);
+    }
+
+    void rebuild_gpu_trail_bounds_from_live(float particle_radius)
+    {
+        gpu_.clear_trail_bounds();
+        for(uint32_t slot : gpu_.active_slots)
+        {
+            expand_gpu_trail_bounds_for_particle(particles_.start[slot],
+                                                particles_.end0[slot],
+                                                particles_.end1[slot],
+                                                particle_radius);
+        }
+    }
+
+    void rebuild_gpu_slot_lists()
+    {
+        gpu_.free_list.clear();
+        gpu_.active_slots.clear();
+        uint32_t high = 0;
+        for(uint32_t i = 0; i < particles_.capacity; ++i)
+        {
+            if(particles_.lifespan[i] <= 0.0f)
             {
-                const math::vec3 velocity0 = particles_.end0[i] - particles_.start[i];
-                const math::vec3 velocity1 = particles_.end1[i] - particles_.end0[i];
-                const math::vec3 current_velocity = math::mix(velocity0, velocity1, tt);
-                const float velocity_len_sq = math::dot(current_velocity, current_velocity);
-                if(velocity_len_sq > 0.0001f)
-                {
-                    const math::vec3 direction = math::normalize(current_velocity);
-                    math::vec3 up_ref(0.0f, 1.0f, 0.0f);
-                    if(math::abs(math::dot(direction, up_ref)) > 0.99f)
-                    {
-                        up_ref = math::vec3(1.0f, 0.0f, 0.0f);
-                    }
-                    rot = math::look_rotation(direction, up_ref);
-                }
+                particles_.lifespan[i] = 0.0f;
+                particles_.life[i] = 0.0f;
+                gpu_.free_list.push_back(i);
+                continue;
             }
-            dst.rot_x = rot.x;
-            dst.rot_y = rot.y;
-            dst.rot_z = rot.z;
-            dst.rot_w = rot.w;
-            const math::vec3 p0 = math::mix(particles_.start[i], particles_.end0[i], tt);
-            const math::vec3 p1 = math::mix(particles_.end0[i], particles_.end1[i], tt);
-            math::vec3 local_pos = math::mix(p0, p1, tt);
-            if(need_local)
+            gpu_.active_slots.push_back(i);
+            high = math::max(high, i + 1u);
+        }
+        particles_.count = uint32_t(gpu_.active_slots.size());
+        gpu_.high_water = high;
+    }
+
+    void reclaim_gpu_slots(float sim_dt)
+    {
+        if(gpu_.active_slots.empty())
+        {
+            particles_.count = 0;
+            gpu_.high_water = 0;
+            gpu_.clear_trail_bounds();
+            return;
+        }
+        APP_SCOPE_PERF("Particles/SOA GPU Reclaim");
+        uint32_t write = 0;
+        uint32_t high = 0;
+        for(uint32_t i = 0; i < gpu_.active_slots.size(); ++i)
+        {
+            const uint32_t slot = gpu_.active_slots[i];
+            particles_.life[slot] += sim_dt / math::max(particles_.lifespan[slot], k_min_particle_lifespan);
+            if(particles_.life[slot] > 1.0f)
             {
-                const math::vec4 world_pos4 = constants.local_to_world * math::vec4(local_pos, 1.0f);
-                particles_.position[i] = math::vec3(world_pos4.x, world_pos4.y, world_pos4.z);
+                particles_.lifespan[slot] = 0.0f;
+                particles_.life[slot] = 0.0f;
+                gpu_.free_list.push_back(slot);
+                continue;
+            }
+            gpu_.active_slots[write++] = slot;
+            high = math::max(high, slot + 1u);
+        }
+        gpu_.active_slots.resize(write);
+        particles_.count = write;
+        gpu_.high_water = high;
+        if(write == 0)
+        {
+            gpu_.clear_trail_bounds();
+        }
+        if(gpu_.free_list.empty() && write < particles_.capacity)
+        {
+            rebuild_gpu_slot_lists();
+        }
+    }
+
+    void fill_gpu_sim_particle(uint32_t slot, gpu_sim_particle& dst) const
+    {
+        dst.start_x = particles_.start[slot].x;
+        dst.start_y = particles_.start[slot].y;
+        dst.start_z = particles_.start[slot].z;
+        dst.life = particles_.life[slot];
+        dst.end0_x = particles_.end0[slot].x;
+        dst.end0_y = particles_.end0[slot].y;
+        dst.end0_z = particles_.end0[slot].z;
+        dst.lifespan = particles_.lifespan[slot];
+        dst.end1_x = particles_.end1[slot].x;
+        dst.end1_y = particles_.end1[slot].y;
+        dst.end1_z = particles_.end1[slot].z;
+        dst.scale_start = particles_.scale_start[slot];
+        dst.scale_end = particles_.scale_end[slot];
+        dst.texsheet_seed = particles_.texsheet_seed[slot];
+        dst.pad0 = 0.0f;
+        dst.pad1 = 0.0f;
+        const math::quat rot = math::identity<math::quat>();
+        dst.rot_x = rot.x;
+        dst.rot_y = rot.y;
+        dst.rot_z = rot.z;
+        dst.rot_w = rot.w;
+    }
+
+    void stage_gpu_spawn(uint32_t slot)
+    {
+        gpu_sim_particle dst{};
+        fill_gpu_sim_particle(slot, dst);
+        gpu_.spawn_particles.push_back(dst);
+        gpu_.spawn_slots.push_back(slot);
+        gpu_.active_slots.push_back(slot);
+        gpu_.high_water = math::max(gpu_.high_water, slot + 1u);
+    }
+
+    void upload_gpu_sim_slot(uint32_t slot)
+    {
+        if(!bgfx::isValid(gpu_.sim_vb) || slot >= gpu_.gpu_capacity)
+        {
+            return;
+        }
+        gpu_sim_particle dst{};
+        fill_gpu_sim_particle(slot, dst);
+        bgfx::update(gpu_.sim_vb,
+                     slot * k_gpu_sim_vec4s_per_particle,
+                     bgfx::copy(&dst, sizeof(gpu_sim_particle)));
+    }
+
+    /// Fallback: coalesce staged slots into contiguous bgfx::update runs.
+    void flush_gpu_spawn_uploads_cpu()
+    {
+        const uint32_t spawn_count = uint32_t(gpu_.spawn_slots.size());
+        if(spawn_count == 0 || !bgfx::isValid(gpu_.sim_vb))
+        {
+            gpu_.spawn_particles.clear();
+            gpu_.spawn_slots.clear();
+            return;
+        }
+        std::vector<uint32_t> order(spawn_count);
+        for(uint32_t i = 0; i < spawn_count; ++i)
+        {
+            order[i] = i;
+        }
+        std::sort(order.begin(),
+                  order.end(),
+                  [&](uint32_t a, uint32_t b)
+                  {
+                      return gpu_.spawn_slots[a] < gpu_.spawn_slots[b];
+                  });
+        std::vector<gpu_sim_particle> run;
+        run.reserve(64);
+        uint32_t run_start_slot = 0;
+        auto flush_run = [&]()
+        {
+            if(run.empty())
+            {
+                return;
+            }
+            bgfx::update(gpu_.sim_vb,
+                         run_start_slot * k_gpu_sim_vec4s_per_particle,
+                         bgfx::copy(run.data(), uint32_t(sizeof(gpu_sim_particle) * run.size())));
+            run.clear();
+        };
+        for(uint32_t oi = 0; oi < spawn_count; ++oi)
+        {
+            const uint32_t src = order[oi];
+            const uint32_t slot = gpu_.spawn_slots[src];
+            if(run.empty())
+            {
+                run_start_slot = slot;
+                run.push_back(gpu_.spawn_particles[src]);
+                continue;
+            }
+            const uint32_t expected = run_start_slot + uint32_t(run.size());
+            if(slot == expected)
+            {
+                run.push_back(gpu_.spawn_particles[src]);
+                continue;
+            }
+            flush_run();
+            run_start_slot = slot;
+            run.push_back(gpu_.spawn_particles[src]);
+        }
+        flush_run();
+        gpu_.spawn_particles.clear();
+        gpu_.spawn_slots.clear();
+    }
+
+    void resync_gpu_slots_from_cpu()
+    {
+        // Dense CPU layout only guarantees live data in [0, count). Clear the rest.
+        for(uint32_t i = particles_.count; i < particles_.capacity; ++i)
+        {
+            particles_.lifespan[i] = 0.0f;
+            particles_.life[i] = 0.0f;
+        }
+        rebuild_gpu_slot_lists();
+        for(uint32_t slot : gpu_.active_slots)
+        {
+            upload_gpu_sim_slot(slot);
+        }
+    }
+
+    void prepare_gpu_resident(const emitter_desc& desc,
+                              const emitter_sim_constants& constants,
+                              math::bbox& aabb,
+                              const math::vec3& emitter_pos,
+                              float sim_dt)
+    {
+        APP_SCOPE_PERF("Particles/SOA Prepare GPU Resident");
+        gpu_.constants = constants;
+        gpu_.sim_dt = sim_dt;
+        ensure_gpu_luts(desc, constants);
+        accumulate_conservative_gpu_bounds(aabb, desc, constants, emitter_pos);
+        // World trails stay where spawned; rebuild hull from live control points so bounds shrink on death.
+        if(desc.motion.space == simulation_space::world)
+        {
+            if(particles_.count == 0)
+            {
+                gpu_.clear_trail_bounds();
             }
             else
             {
-                particles_.position[i] = local_pos;
+                rebuild_gpu_trail_bounds_from_live(compute_gpu_particle_radius(desc, constants));
             }
-            const float scale =
-                math::mix(particles_.scale_start[i], particles_.scale_end[i], life) * constants.avg_system_scale *
-                size_speed_mul;
-            particles_.scale[i] = scale;
-            const float max_extent = base_extent * scale;
-            const float radius = max_extent + pivot_pad_factor * max_extent;
-            expand_aabb_sphere(aabb, particles_.position[i], radius);
+            if(gpu_.trail_bounds_valid)
+            {
+                aabb.add_point(gpu_.trail_bounds.min);
+                aabb.add_point(gpu_.trail_bounds.max);
+            }
         }
-        gpu_.pending_pack = count > 0;
+        gpu_.pending_pack = particles_.count > 0;
+        if(!gpu_.pending_pack)
+        {
+            gpu_.spawn_particles.clear();
+            gpu_.spawn_slots.clear();
+        }
     }
 
     void update(float dt,
@@ -755,16 +1078,19 @@ struct emitter
         aabb.reset();
         aabb.add_point(current_pos - math::vec3(0.5f));
         aabb.add_point(current_pos + math::vec3(0.5f));
-        compact_alive(sim_dt);
         const bool use_gpu = wants_gpu_pack();
-        if(!use_gpu)
+        if(use_gpu)
         {
-            APP_SCOPE_PERF("Particles/SOA Update Properties");
-            update_particles_range(particles_, 0, particles_.count, desc, constants);
+            if(gpu_.ensure_capacity(particles_.capacity))
+            {
+                resync_gpu_slots_from_cpu();
+            }
         }
         else
         {
-            gpu_.pending_pack = false;
+            compact_alive(sim_dt);
+            APP_SCOPE_PERF("Particles/SOA Update Properties");
+            update_particles_range(particles_, 0, particles_.count, desc, constants);
         }
         if(desc.emission.emission_lifetime > 0.0f && playback.playing)
         {
@@ -778,7 +1104,9 @@ struct emitter
         particles_.count = math::min(particles_.count, particles_.capacity);
         if(use_gpu)
         {
-            prepare_gpu_pack(desc, constants, aabb);
+            // Shadow life matches the upcoming GPU compact-pack advance; frees slots for next frame.
+            reclaim_gpu_slots(sim_dt);
+            prepare_gpu_resident(desc, constants, aabb, current_pos, sim_dt);
         }
         else
         {
@@ -788,6 +1116,28 @@ struct emitter
         {
             sim.first_update = false;
         }
+        sim.world_bounds = aabb;
+        transform.previous = transform.current;
+    }
+
+    void update_bounds_only(const emitter_desc& desc, emitter_transform_state& transform)
+    {
+        // Frozen: keep last trail/particle AABB and union a cheap emitter region so the
+        // emitter can re-enter any drawing camera without advancing life/emission.
+        const math::vec3 current_pos = transform.current.get_position();
+        math::bbox aabb = sim.world_bounds;
+        if(!aabb.is_populated())
+        {
+            aabb.reset();
+            aabb.add_point(current_pos - math::vec3(0.5f));
+            aabb.add_point(current_pos + math::vec3(0.5f));
+        }
+        emitter_sim_constants constants{};
+        bake_constants(desc, transform, constants);
+        accumulate_conservative_gpu_bounds(aabb, desc, constants, current_pos);
+        gpu_.pending_pack = false;
+        gpu_.spawn_particles.clear();
+        gpu_.spawn_slots.clear();
         sim.world_bounds = aabb;
         transform.previous = transform.current;
     }
@@ -855,11 +1205,16 @@ struct emitter
         sim.emission_time_accum += dt;
         const uint32_t num_to_emit = uint32_t(sim.emission_time_accum / time_per_particle);
         sim.emission_time_accum -= float(num_to_emit) * time_per_particle;
-        const uint32_t max_emittable = particles_.capacity - particles_.count;
+        const uint32_t max_emittable =
+            skip_cpu_properties ? uint32_t(gpu_.free_list.size()) : (particles_.capacity - particles_.count);
         const uint32_t actual_emit_count = math::min(num_to_emit, max_emittable);
         if(actual_emit_count == 0)
         {
             return;
+        }
+        if(skip_cpu_properties && gpu_.ensure_capacity(particles_.capacity))
+        {
+            resync_gpu_slots_from_cpu();
         }
         const math::vec3 effective_position = transform.current.get_position();
         const math::vec3 system_scale = transform.current.get_scale();
@@ -888,19 +1243,31 @@ struct emitter
             force_vector *= system_scale;
         }
         const float velocity_damping_factor = (1.0f - desc.motion.velocity_damping);
+        const bool expand_world_trail =
+            skip_cpu_properties && desc.motion.space == simulation_space::world;
+        const float gpu_trail_particle_radius =
+            expand_world_trail ? compute_gpu_particle_radius(desc, constants) : 0.0f;
         math::vec3 prev_pos = transform.previous.get_position();
         if(sim.temporal_count >= 2)
         {
             prev_pos = sim.temporal_positions[sim.temporal_count - 2];
         }
-        const uint32_t base_index = particles_.count;
-        particles_.count += actual_emit_count;
+        const uint32_t base_index = skip_cpu_properties ? 0u : particles_.count;
+        if(!skip_cpu_properties)
+        {
+            particles_.count += actual_emit_count;
+        }
         sim.total_particles_spawned += actual_emit_count;
         const auto emit_one = [&](uint32_t ii, bx::RngMwc& rng)
         {
             const float base_emission_phase = float(ii) / float(actual_emit_count);
             const float emission_phase = base_emission_phase * desc.motion.temporal_motion;
-            const uint32_t index = base_index + ii;
+            uint32_t index = base_index + ii;
+            if(skip_cpu_properties)
+            {
+                index = gpu_.free_list.back();
+                gpu_.free_list.pop_back();
+            }
             const math::vec3 up(0.0f, 1.0f, 0.0f);
             math::vec3 pos;
             if(desc.emission.spawn_location == spawn_location::surface)
@@ -1041,6 +1408,13 @@ struct emitter
                 particles_.end0[index] = particles_.start[index] + velocity * velocity_damping_factor;
             }
             particles_.end1[index] = particles_.end0[index] + gravity_vector + force_vector;
+            if(expand_world_trail)
+            {
+                expand_gpu_trail_bounds_for_particle(particles_.start[index],
+                                                    particles_.end0[index],
+                                                    particles_.end1[index],
+                                                    gpu_trail_particle_radius);
+            }
             const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
             const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
             particles_.scale_start[index] = math::mix(start_scale_range.min, start_scale_range.max, frand01(rng));
@@ -1050,11 +1424,24 @@ struct emitter
             {
                 update_particle_properties(particles_, index, desc, constants);
             }
+            else
+            {
+                stage_gpu_spawn(index);
+            }
         };
         APP_SCOPE_PERF("Particles/SOA Spawn");
+        if(skip_cpu_properties)
+        {
+            gpu_.spawn_particles.reserve(gpu_.spawn_particles.size() + actual_emit_count);
+            gpu_.spawn_slots.reserve(gpu_.spawn_slots.size() + actual_emit_count);
+        }
         for(uint32_t ii = 0; ii < actual_emit_count; ++ii)
         {
             emit_one(ii, rng_);
+        }
+        if(skip_cpu_properties)
+        {
+            particles_.count += actual_emit_count;
         }
     }
 
@@ -1179,7 +1566,30 @@ struct particle_system_soa
             bgfx::destroy(g_u_local_to_world);
             g_u_local_to_world = BGFX_INVALID_HANDLE;
         }
-        g_pack_program.reset();
+        if(bgfx::isValid(g_u_args0))
+        {
+            bgfx::destroy(g_u_args0);
+            g_u_args0 = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(g_u_sort0))
+        {
+            bgfx::destroy(g_u_sort0);
+            g_u_sort0 = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(g_u_sort1))
+        {
+            bgfx::destroy(g_u_sort1);
+            g_u_sort1 = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(g_u_spawn0))
+        {
+            bgfx::destroy(g_u_spawn0);
+            g_u_spawn0 = BGFX_INVALID_HANDLE;
+        }
+        g_compact_pack_program.reset();
+        g_spawn_scatter_program.reset();
+        g_indirect_args_program.reset();
+        g_sort_program.reset();
         g_gpu_sim_available = false;
         g_default_sim_backend = particle_sim_backend::cpu;
         bgfx::destroy(tex_color_);
@@ -1195,20 +1605,49 @@ struct particle_system_soa
     void init_gpu(rtti::context& ctx)
     {
         auto& am = ctx.get_cached<asset_manager>();
-        auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_pack.sc");
-        if(!cs)
+        auto cs_compact = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_compact_pack.sc");
+        auto cs_spawn = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_spawn_scatter.sc");
+        auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_indirect_args.sc");
+        auto cs_sort = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_sort_bitonic.sc");
+        if(!cs_compact)
         {
-            APPLOG_WARNING("Particles: GPU pack shader missing; CPU backend only");
+            APPLOG_WARNING("Particles: GPU resident compact shader missing; CPU backend only");
             g_gpu_sim_available = false;
             return;
         }
-        g_pack_program = std::make_shared<gpu_program>(cs);
-        if(!g_pack_program || !g_pack_program->is_valid())
+        g_compact_pack_program = std::make_shared<gpu_program>(cs_compact);
+        if(!g_compact_pack_program || !g_compact_pack_program->is_valid())
         {
-            APPLOG_WARNING("Particles: GPU pack program invalid; CPU backend only");
-            g_pack_program.reset();
+            APPLOG_WARNING("Particles: GPU resident compact program invalid; CPU backend only");
+            g_compact_pack_program.reset();
             g_gpu_sim_available = false;
             return;
+        }
+        if(cs_spawn)
+        {
+            g_spawn_scatter_program = std::make_shared<gpu_program>(cs_spawn);
+            if(!g_spawn_scatter_program || !g_spawn_scatter_program->is_valid())
+            {
+                APPLOG_WARNING("Particles: GPU spawn scatter program invalid; using CPU coalesce uploads");
+                g_spawn_scatter_program.reset();
+            }
+        }
+        if(cs_args)
+        {
+            g_indirect_args_program = std::make_shared<gpu_program>(cs_args);
+            if(!g_indirect_args_program || !g_indirect_args_program->is_valid())
+            {
+                g_indirect_args_program.reset();
+            }
+        }
+        if(cs_sort)
+        {
+            g_sort_program = std::make_shared<gpu_program>(cs_sort);
+            if(!g_sort_program || !g_sort_program->is_valid())
+            {
+                APPLOG_WARNING("Particles: GPU sort program invalid; Normal blend will be unsorted on GPU path");
+                g_sort_program.reset();
+            }
         }
         g_u_pack0 = bgfx::createUniform("u_pack0", bgfx::UniformType::Vec4);
         g_u_pack1 = bgfx::createUniform("u_pack1", bgfx::UniformType::Vec4);
@@ -1217,71 +1656,67 @@ struct particle_system_soa
         g_u_pack4 = bgfx::createUniform("u_pack4", bgfx::UniformType::Vec4);
         g_u_pack5 = bgfx::createUniform("u_pack5", bgfx::UniformType::Vec4);
         g_u_local_to_world = bgfx::createUniform("u_localToWorld", bgfx::UniformType::Mat4);
+        g_u_args0 = bgfx::createUniform("u_args0", bgfx::UniformType::Vec4);
+        g_u_sort0 = bgfx::createUniform("u_sort0", bgfx::UniformType::Vec4);
+        g_u_sort1 = bgfx::createUniform("u_sort1", bgfx::UniformType::Vec4);
+        g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
         ensure_gpu_layouts();
         g_gpu_sim_available = true;
-        APPLOG_INFO("Particles: GPU pack available (per-emitter Simulation Backend)");
+        APPLOG_INFO("Particles: GPU resident sim available (per-emitter Simulation Backend)");
     }
 
-    auto dispatch_gpu_pack(emitter& em, bool sort_by_depth, const math::vec3& eye, bgfx::ViewId pack_view) -> bool
+    void flush_emitter_gpu_spawns(emitter& em, bgfx::ViewId view)
     {
-        if(!em.gpu_.pending_pack || em.particles_.count == 0 || !g_pack_program)
+        const uint32_t spawn_count = uint32_t(em.gpu_.spawn_slots.size());
+        if(spawn_count == 0)
+        {
+            return;
+        }
+        APP_SCOPE_PERF("Particles/SOA GPU Spawn Upload");
+        // Scatter CS: two contiguous uploads + one dispatch beats sorting/coalescing many
+        // sparse bgfx::update calls when freelist slots are fragmented.
+        if(g_spawn_scatter_program && g_spawn_scatter_program->begin() && bgfx::isValid(em.gpu_.sim_vb))
+        {
+            em.gpu_.ensure_spawn_upload_capacity(spawn_count);
+            if(bgfx::isValid(em.gpu_.spawn_vb) && bgfx::isValid(em.gpu_.spawn_slots_ib))
+            {
+                bgfx::update(em.gpu_.spawn_vb,
+                             0,
+                             bgfx::copy(em.gpu_.spawn_particles.data(),
+                                        uint32_t(sizeof(gpu_sim_particle) * spawn_count)));
+                bgfx::update(em.gpu_.spawn_slots_ib,
+                             0,
+                             bgfx::copy(em.gpu_.spawn_slots.data(), uint32_t(sizeof(uint32_t) * spawn_count)));
+                float spawn0[4] = {float(spawn_count), 0.0f, 0.0f, 0.0f};
+                bgfx::setBuffer(0, em.gpu_.spawn_vb, bgfx::Access::Read);
+                bgfx::setBuffer(1, em.gpu_.spawn_slots_ib, bgfx::Access::Read);
+                bgfx::setBuffer(2, em.gpu_.sim_vb, bgfx::Access::ReadWrite);
+                bgfx::setUniform(g_u_spawn0, spawn0);
+                const uint32_t groups = (spawn_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+                bgfx::dispatch(view, g_spawn_scatter_program->native_handle(), groups, 1, 1);
+                g_spawn_scatter_program->end();
+                em.gpu_.spawn_particles.clear();
+                em.gpu_.spawn_slots.clear();
+                return;
+            }
+            g_spawn_scatter_program->end();
+        }
+        em.flush_gpu_spawn_uploads_cpu();
+    }
+
+    auto dispatch_gpu_resident(emitter& em, bool sort_by_depth, const math::vec3& eye, bgfx::ViewId pack_view) -> bool
+    {
+        if(!em.gpu_.pending_pack || em.particles_.count == 0 || !g_compact_pack_program)
         {
             return false;
         }
-        APP_SCOPE_PERF("Particles/SOA GPU Pack Dispatch");
-        const uint32_t count = em.particles_.count;
+        APP_SCOPE_PERF("Particles/SOA GPU Resident Dispatch");
         em.gpu_.ensure_capacity(em.particles_.capacity);
-        if(!bgfx::isValid(em.gpu_.sim_vb) || !bgfx::isValid(em.gpu_.instance_vb))
+        if(!bgfx::isValid(em.gpu_.sim_vb) || !bgfx::isValid(em.gpu_.instance_vb) || !bgfx::isValid(em.gpu_.counter_ib))
         {
             return false;
         }
-        if(sort_by_depth)
-        {
-            em.gpu_.order_staging.resize(count);
-            gpu_sort_scratch_.resize(count);
-            for(uint32_t i = 0; i < count; ++i)
-            {
-                const math::vec3 delta = eye - em.particles_.position[i];
-                gpu_sort_scratch_[i] = batched_particle{math::dot(delta, delta), 0, i};
-            }
-            if(count >= 512)
-            {
-                radix_sort_desc_distances(gpu_sort_scratch_, radix_scratch_);
-            }
-            else
-            {
-                std::sort(gpu_sort_scratch_.begin(),
-                          gpu_sort_scratch_.end(),
-                          [](const batched_particle& a, const batched_particle& b)
-                          {
-                              return a.dist > b.dist;
-                          });
-            }
-            for(uint32_t i = 0; i < count; ++i)
-            {
-                em.gpu_.order_staging[i] = gpu_sort_scratch_[i].particle_idx;
-            }
-            bgfx::update(em.gpu_.order_ib,
-                         0,
-                         bgfx::copy(em.gpu_.order_staging.data(), uint32_t(sizeof(uint32_t) * count)));
-            em.gpu_.order_identity_uploaded = false;
-        }
-        else if(!em.gpu_.order_identity_uploaded)
-        {
-            em.gpu_.order_staging.resize(em.gpu_.gpu_capacity);
-            for(uint32_t i = 0; i < em.gpu_.gpu_capacity; ++i)
-            {
-                em.gpu_.order_staging[i] = i;
-            }
-            bgfx::update(em.gpu_.order_ib,
-                         0,
-                         bgfx::copy(em.gpu_.order_staging.data(),
-                                    uint32_t(sizeof(uint32_t) * em.gpu_.gpu_capacity)));
-            em.gpu_.order_identity_uploaded = true;
-        }
-        bgfx::update(em.gpu_.sim_vb,
-                     0,
-                     bgfx::copy(em.gpu_.sim_staging.data(), uint32_t(sizeof(gpu_sim_particle) * count)));
+        flush_emitter_gpu_spawns(em, pack_view);
         if(em.gpu_.luts_gpu_dirty)
         {
             bgfx::update(em.gpu_.color_lut_vb,
@@ -1295,29 +1730,35 @@ struct particle_system_soa
                          bgfx::copy(em.gpu_.ease_lut.data(), uint32_t(sizeof(math::vec4) * k_gpu_lut_size)));
             em.gpu_.luts_gpu_dirty = false;
         }
+        uint32_t zero_count = 0;
+        bgfx::update(em.gpu_.counter_ib, 0, bgfx::copy(&zero_count, sizeof(uint32_t)));
         const auto& c = em.gpu_.constants;
+        const uint32_t dispatch_count = math::max(em.gpu_.high_water, 1u);
         float pack0[4] = {c.opacity,
                           c.color_intensity,
                           c.avg_system_scale,
                           float(static_cast<int>(c.render_mode))};
-        float pack1[4] = {c.pivot.x, c.pivot.y, float(count), float(gpu_feature_mask(c.features))};
+        float pack1[4] = {c.pivot.x, c.pivot.y, float(dispatch_count), float(gpu_feature_mask(c.features))};
         float pack2[4] = {c.particle_scale_3d.x, c.particle_scale_3d.y, c.particle_scale_3d.z, c.tex_sheet_cycles};
         float pack3[4] = {c.tex_sheet_tiles.x,
                           c.tex_sheet_tiles.y,
                           c.tex_sheet_randomize ? 1.0f : 0.0f,
-                          0.0f};
+                          float(k_quad_index_count)};
         float pack4[4] = {c.size_by_speed_range.min,
                           c.size_by_speed_range.max,
                           c.inv_size_by_speed_velocity_span,
                           c.size_by_speed_velocity_range.min};
-        float pack5[4] = {c.inv_color_by_speed_velocity_span, c.color_by_speed_velocity_range.min, 0.0f, 0.0f};
-        if(!g_pack_program->begin())
+        float pack5[4] = {c.inv_color_by_speed_velocity_span,
+                          c.color_by_speed_velocity_range.min,
+                          em.gpu_.sim_dt,
+                          0.0f};
+        if(!g_compact_pack_program->begin())
         {
             return false;
         }
-        bgfx::setBuffer(0, em.gpu_.sim_vb, bgfx::Access::Read);
-        bgfx::setBuffer(1, em.gpu_.order_ib, bgfx::Access::Read);
-        bgfx::setBuffer(2, em.gpu_.instance_vb, bgfx::Access::Write);
+        bgfx::setBuffer(0, em.gpu_.sim_vb, bgfx::Access::ReadWrite);
+        bgfx::setBuffer(1, em.gpu_.instance_vb, bgfx::Access::Write);
+        bgfx::setBuffer(2, em.gpu_.counter_ib, bgfx::Access::ReadWrite);
         bgfx::setBuffer(3, em.gpu_.color_lut_vb, bgfx::Access::Read);
         bgfx::setBuffer(4, em.gpu_.color_speed_lut_vb, bgfx::Access::Read);
         bgfx::setBuffer(5, em.gpu_.ease_lut_vb, bgfx::Access::Read);
@@ -1328,9 +1769,11 @@ struct particle_system_soa
         bgfx::setUniform(g_u_pack4, pack4);
         bgfx::setUniform(g_u_pack5, pack5);
         bgfx::setUniform(g_u_local_to_world, &c.local_to_world[0][0]);
-        const uint32_t groups = (count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
-        bgfx::dispatch(pack_view, g_pack_program->native_handle(), groups, 1, 1);
-        g_pack_program->end();
+        const uint32_t groups = (dispatch_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+        bgfx::dispatch(pack_view, g_compact_pack_program->native_handle(), groups, 1, 1);
+        g_compact_pack_program->end();
+        (void)sort_by_depth;
+        (void)eye;
         return true;
     }
 
@@ -1343,6 +1786,11 @@ struct particle_system_soa
                           uint64_t blend_state) -> uint32_t
     {
         APP_SCOPE_PERF("Particles/SOA GPU Draw");
+        const uint32_t draw_count = em.particles_.count;
+        if(draw_count == 0)
+        {
+            return 0;
+        }
         bgfx::setVertexBuffer(0, quad_vbh_);
         bgfx::setIndexBuffer(quad_ibh_);
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
@@ -1350,9 +1798,12 @@ struct particle_system_soa
         bgfx::setTexture(0, tex_color_, texture);
         bgfx::setUniform(view_camera_, view_camera);
         bgfx::setUniform(eye_pos_, eye_pos_vec4);
-        bgfx::setInstanceDataBuffer(em.gpu_.instance_vb, 0, em.particles_.count);
+        // Compact-pack densifies into [0, alive). CPU shadow count matches after reclaim.
+        // Prefer explicit instance count over indirect — writing IndirectBuffer from CS is
+        // not reliable on all backends and previously left instanceCount at 0.
+        bgfx::setInstanceDataBuffer(em.gpu_.instance_vb, 0, draw_count);
         bgfx::submit(view, program);
-        return em.particles_.count;
+        return draw_count;
     }
 
     auto create_emitter(emitter_shape shape, emitter_direction direction, uint32_t max_particles) -> emitter_handle
@@ -1387,6 +1838,66 @@ struct particle_system_soa
         BX_ASSERT(is_valid(handle), "update_emitter invalid handle");
         emitters_[handle.idx].update(dt, desc, transform, playback);
         bake_constants(desc, transform, emitters_[handle.idx].cached_constants_);
+    }
+
+    void update_emitter_bounds_only(emitter_handle handle,
+                                    const emitter_desc& desc,
+                                    emitter_transform_state& transform)
+    {
+        BX_ASSERT(is_valid(handle), "update_emitter_bounds_only invalid handle");
+        emitters_[handle.idx].update_bounds_only(desc, transform);
+        bake_constants(desc, transform, emitters_[handle.idx].cached_constants_);
+    }
+
+    void sync_gpu_simulation()
+    {
+        if(!g_gpu_sim_available || !emitter_alloc_)
+        {
+            return;
+        }
+        const uint16_t num_handles = emitter_alloc_->getNumHandles();
+        if(num_handles == 0)
+        {
+            return;
+        }
+        bool any_work = false;
+        const uint16_t* handles = emitter_alloc_->getHandles();
+        for(uint16_t i = 0; i < num_handles; ++i)
+        {
+            emitter& em = emitters_[handles[i]];
+            if(!em.wants_gpu_pack())
+            {
+                continue;
+            }
+            if(em.gpu_.pending_pack || !em.gpu_.spawn_slots.empty())
+            {
+                any_work = true;
+                break;
+            }
+        }
+        if(!any_work)
+        {
+            return;
+        }
+        APP_SCOPE_PERF("Particles/SOA GPU Sync");
+        // Before particle draw so this view id sorts earlier. Renderer-based freeze
+        // clears pending_pack so undrawn emitters are skipped here.
+        gfx::render_pass pass("Particles/GPU Sim");
+        pass.touch();
+        const math::vec3 eye(0.0f);
+        for(uint16_t i = 0; i < num_handles; ++i)
+        {
+            emitter& em = emitters_[handles[i]];
+            if(!em.wants_gpu_pack())
+            {
+                continue;
+            }
+            if(!em.gpu_.pending_pack && em.gpu_.spawn_slots.empty())
+            {
+                continue;
+            }
+            dispatch_gpu_resident(em, false, eye, pass.id);
+        }
     }
 
     auto has_updated(emitter_handle handle) -> bool
@@ -1762,9 +2273,14 @@ struct particle_system_soa
                 continue;
             }
             emitter& em = emitters_[handles[i].idx];
-            if(em.gpu_.pending_pack && em.wants_gpu_pack())
+            // GPU-backend emitters must never use the CPU instance path — their SoA
+            // render caches are not maintained and produce garbage quads.
+            if(em.wants_gpu_pack())
             {
-                gpu_emitters_scratch_.push_back(handles[i]);
+                if(em.gpu_.pending_pack)
+                {
+                    gpu_emitters_scratch_.push_back(handles[i]);
+                }
             }
             else
             {
@@ -1787,18 +2303,15 @@ struct particle_system_soa
         }
         if(!gpu_emitters_scratch_.empty())
         {
-            // One compute view for the whole batch — do not allocate a pass per emitter.
-            gfx::render_pass pack_pass("Particles/GPU Pack");
+            // Pack/spawn flush already ran in sync_gpu_simulation (before cull).
+            // Draw only — re-packing here would double-advance GPU life.
             for(emitter_handle handle : gpu_emitters_scratch_)
             {
                 emitter& em = emitters_[handle.idx];
-                if(!dispatch_gpu_pack(em, sort_by_depth, eye, pack_pass.id))
-                {
-                    continue;
-                }
                 rendered += draw_gpu_emitter(em, view, program, view_camera, eye_pos_vec4, texture, blend_state);
             }
         }
+        (void)sort_by_depth;
         return rendered;
     }
 
@@ -1807,7 +2320,6 @@ struct particle_system_soa
     std::vector<emitter> emitters_;
     std::vector<batched_particle> batched_scratch_;
     std::vector<batched_particle> radix_scratch_;
-    std::vector<batched_particle> gpu_sort_scratch_;
     std::vector<uint32_t> prefix_scratch_;
     std::vector<emitter_handle> gpu_emitters_scratch_;
     std::vector<emitter_handle> cpu_handles_scratch_;
@@ -1884,6 +2396,18 @@ void update_emitter(emitter_handle handle,
                     emitter_playback_desc& playback)
 {
     g_system.update_emitter(handle, dt, desc, transform, playback);
+}
+
+void update_emitter_bounds_only(emitter_handle handle,
+                                const emitter_desc& desc,
+                                emitter_transform_state& transform)
+{
+    g_system.update_emitter_bounds_only(handle, desc, transform);
+}
+
+void sync_gpu_simulation()
+{
+    g_system.sync_gpu_simulation();
 }
 
 auto has_updated(emitter_handle handle) -> bool

@@ -9,7 +9,7 @@ namespace unravel
 namespace ps_soa
 {
 
-/// Selects CPU vs GPU simulation/pack backend.
+/// Selects CPU vs resident-GPU simulation backend.
 enum class particle_sim_backend : uint8_t
 {
     cpu = 0,

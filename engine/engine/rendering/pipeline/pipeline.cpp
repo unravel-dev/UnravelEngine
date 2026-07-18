@@ -607,6 +607,9 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
                         return;
                     }
 
+                    // Renderer-based culling feedback (same as model_component).
+                    particle_emitter_comp.set_last_render_frame(uint64_t(gfx::get_render_frame()));
+
                     const auto& tex = particle_emitter_comp.get_texture();
                     const float distance = math::distance2(bounds.get_center(), cam_pos);
                     particle_emitters.emplace_back(sort_key{&particle_emitter_comp,

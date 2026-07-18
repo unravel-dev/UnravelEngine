@@ -1,8 +1,9 @@
 #include "particle_emitter_component.h"
 #include "math/transform.hpp"
 #include <engine/ecs/ecs_utils.h>
-#include <logging/logging.h>
 #include <engine/rendering/material.h>
+#include <graphics/graphics.h>
+#include <logging/logging.h>
 
 namespace math
 {
@@ -584,12 +585,58 @@ auto particle_emitter_component::get_texture_sheet_randomize() const -> bool
     return desc_.render.tex_sheet_randomize;
 }
 
+void particle_emitter_component::set_culling_mode(culling_mode mode)
+{
+    culling_mode_ = mode;
+}
+
+auto particle_emitter_component::get_culling_mode() const -> culling_mode
+{
+    return culling_mode_;
+}
+
+void particle_emitter_component::set_last_render_frame(uint64_t frame)
+{
+    last_render_frame_ = frame;
+}
+
+auto particle_emitter_component::get_last_render_frame() const noexcept -> uint64_t
+{
+    return last_render_frame_;
+}
+
+auto particle_emitter_component::is_newly_created() const noexcept -> bool
+{
+    return last_render_frame_ == 0;
+}
+
+auto particle_emitter_component::was_used_last_frame() const noexcept -> bool
+{
+    const auto current_frame = uint64_t(gfx::get_render_frame());
+    const bool is_new = is_newly_created();
+    const bool was_used_recently = current_frame - last_render_frame_ <= 1;
+    return is_new || was_used_recently;
+}
+
 void particle_emitter_component::update_emitter(const math::transform& world_transform, delta_t dt)
 {
-    if(ps_soa::is_valid(emitter_handle_) && enabled_)
+    if(!ps_soa::is_valid(emitter_handle_) || !enabled_)
     {
-        transform_state_.current = world_transform;
+        return;
+    }
+    transform_state_.current = world_transform;
+    bool should_simulate = true;
+    if(culling_mode_ == culling_mode::renderer_based && !was_used_last_frame())
+    {
+        should_simulate = false;
+    }
+    if(should_simulate)
+    {
         ps_soa::update_emitter(emitter_handle_, dt.count(), desc_, transform_state_, desc_.playback);
+    }
+    else
+    {
+        ps_soa::update_emitter_bounds_only(emitter_handle_, desc_, transform_state_);
     }
 }
 
