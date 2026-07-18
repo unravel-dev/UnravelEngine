@@ -30,7 +30,7 @@ Start non-trivial work with **`unravel-triage`**.
 | `unravel-rendering` | Shaders, render passes, pipeline, post-processing |
 | `unravel-editor-panel` | ImGui panels, menus, gizmos, undo/redo UI |
 | `unravel-assets` | Importers, `.meta`, compilation, async loading |
-| `unravel-scripting` | Mono/C# API, hot-reload, script glue |
+| `unravel-scripting` | C# / CoreCLR (dotnetpp), hot-reload, script glue |
 
 ### Domain (Tier 2)
 
@@ -56,7 +56,7 @@ Start non-trivial work with **`unravel-triage`**.
 | `unravel-add-inspector` | Custom inspector for a reflected type |
 | `unravel-shader-change` | Edit bgfx `.sc` shaders |
 | `unravel-play-mode-change` | Edit vs play mode separation |
-| `unravel-build-verify` | CMake, CI, data targets, Mono |
+| `unravel-build-verify` | CMake, CI, data targets, .NET SDK |
 | `unravel-bug-investigation` | Structured bug fix workflow |
 
 ## Authoring guidelines

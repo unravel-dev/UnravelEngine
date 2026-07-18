@@ -26,7 +26,7 @@ Meta registration required for inspector editing.
 
 ## Recompile triggers
 
-Editor menu: Header → Recompile → Scripts (Engine/Editor/Project)
+Editor menu: Header -> Recompile -> Scripts (Engine/Editor/Project)
 
 Event: `on_script_recompile(ctx, protocol, version)`
 
@@ -53,8 +53,8 @@ reg.add_internal_call("internal_m2n_do_thing", dotnet_internal_call(internal_m2n
 For layout-compatible value types shared between C++ and C#:
 
 ```cpp
-// script_interop.h — engine POD structs in mono::managed_interface
-dotnet_register_converter_for_pod(math::vec3, mono::managed_interface::vector3);
+// script_interop.h — engine POD structs in managed_interface
+dotnet_register_converter_for_pod(math::vec3, dotnetpp_backend::managed_interface::vector3);
 ```
 
 Converter specializations live in `dotnetpp_backend::managed_interface` (`.cpp`):
@@ -63,59 +63,58 @@ Converter specializations live in `dotnetpp_backend::managed_interface` (`.cpp`)
 namespace dotnetpp_backend {
 namespace managed_interface {
 template<>
-auto converter::convert(const math::vec3& v) -> mono::managed_interface::vector3
+auto converter::convert(const math::vec3& v) -> vector3
 {
     return {v.x, v.y, v.z};
 }
 }}
 ```
 
-`dotnetpp_backend` is a macro (defined in `dotnet_managed.h`) that expands to `mono` or `clr`. Converter specializations use:
+`dotnetpp_backend` is a macro (defined in `dotnet_managed.h`) that expands to the active
+backend namespace. Prefer calling through `dotnet::managed_interface::converter` for
+conversions in glue code. Use `dotnet::` for everything else (`object`, `domain`,
+`type`, `get_managed_ptr`, etc.).
 
-```cpp
-namespace dotnetpp_backend::managed_interface {
-template<>
-auto converter::convert(const math::vec3& v) -> mono::managed_interface::vector3 { ... }
-}
-```
-
-The preprocessor expands `dotnetpp_backend` to the active backend — no `#ifdef` in user code. Use `dotnet::` for everything else (`object`, `domain`, `get_managed_ptr`, etc.).
-
-Custom reference-type converters specialize `dotnet_converter<T>` with `dotnet::managed_ptr` as the managed handle type.
+Custom reference-type converters specialize `dotnet_converter<T>` with `dotnet::managed_ptr`
+as the managed handle type.
 
 ## Collision / sensor callbacks
 
-Physics system forwards to script_system → C#:
+Physics system forwards to script_system -> C#:
 
 - `on_collision_enter` / `exit`
 - `on_sensor_enter` / `exit`
 
-Bridge code in physics + script glue — update both sides. Manifold points use `mono::managed_interface::manifold_point`.
+Bridge code in physics + script glue — update both sides. Manifold points use
+`dotnetpp_backend::managed_interface::manifold_point`.
 
-## dotnetpp API quick map
+## dotnetpp API (current)
 
-| Old (`mono::`) | New (`dotnet::`) |
-|----------------|------------------|
-| `mono_domain` | `domain` |
-| `mono_assembly` | `assembly` |
-| `mono_type` | `type` |
-| `mono_object` | `object` |
-| `mono_method` | `method` |
-| `mono_field` | `field` |
-| `mono_property` | `property` |
-| `mono_array<T>` | `array<T>` |
-| `mono_list<T>` | `list<T>` |
-| `mono_exception` | `exception` |
-| `internal_call(f)` | `dotnet_internal_call(f)` |
-| `mono_converter<T>` | `dotnet_converter<T>` |
-| `register_basic_mono_converter_for_pod` | `dotnet_register_converter_for_pod` |
-| `mono::managed_interface::converter` (specialize) | `dotnetpp_backend::managed_interface::converter` |
+| Type / helper | Name |
+|---------------|------|
+| Domain | `dotnet::domain` |
+| Assembly | `dotnet::assembly` |
+| Type | `dotnet::type` |
+| Object | `dotnet::object` |
+| Method | `dotnet::method` |
+| Field | `dotnet::field` |
+| Property | `dotnet::property` |
+| Array | `dotnet::array<T>` |
+| List | `dotnet::list<T>` |
+| Exception | `dotnet::exception` |
+| Internal call | `dotnet_internal_call(f)` |
+| Converter | `dotnet_converter<T>` |
+| POD register | `dotnet_register_converter_for_pod` |
+| Converter specialize | `dotnetpp_backend::managed_interface::converter` |
 
-Include `<dotnetpp/dotnetpp.h>` (umbrella) or individual `dotnetpp/dotnet_*.h` headers. Link `dotnetpp` in CMake (not `monopp` directly).
+Include `<dotnetpp/dotnetpp.h>` (umbrella) or individual `dotnetpp/dotnet_*.h` headers.
+Link `dotnetpp` in CMake.
 
-## Domain unload, statics cleanup, leak detection (CoreCLR)
+## Domain unload, statics cleanup, leak detection
 
-Mono destroys a domain wholesale (statics + instances). CoreCLR domains are collectible `AssemblyLoadContext`s — a static field in a *surviving* assembly (engine managers, caches keyed by script `Type`s, event subscriptions) silently pins the unloaded domain forever.
+CoreCLR domains are collectible `AssemblyLoadContext`s — a static field in a *surviving*
+assembly (engine managers, caches keyed by script `Type`s, event subscriptions) silently
+pins the unloaded domain forever.
 
 `Bridge.Unload.cs` (clrpp managed side) handles this on every domain unload:
 
@@ -129,6 +128,6 @@ Classes with statics that hold script instances/Types/delegates MUST be marked `
 
 Interned-handle purge gotcha: ownership checks members by **DeclaringType and ReflectedType** — a `PropertyInfo` declared on an engine base class but reflected through an app type pins the app domain via `m_reflectedTypeCache`.
 
-### Managed bridge deployment (CoreCLR)
+### Managed bridge deployment
 
-The bridge payload (`Clrpp.Managed.dll` + `Clrpp.Managed.runtimeconfig.json` + optional NuGet deps: `Mono.Cecil*` for icall weaving, `Microsoft.Diagnostics.*`/`Microsoft.Extensions.*` for leak analysis) is deployed by CMake into a **`clrpp/` subfolder** next to the executables. The native loader (`clr_bridge.cpp initialize`) probes: explicit `compiler_paths::assembly_dir` (and its `clrpp/` child), `<exe_dir>/clrpp`, `<exe_dir>`, `<cwd>/clrpp`, `<cwd>`. The bridge resolves its own dependencies from its own directory (`Resolving` hook in `Bridge.Core.cs`), so the whole folder is self-contained — ship the `clrpp/` folder as-is when deploying. Optional dlls may be omitted from a shipped game: without Cecil, icall weaving is disabled (scripts with `[InternalCall]` will not work on coreclr until woven); without ClrMD, leak reports lose the GC-snapshot analysis.
+The bridge payload (`Clrpp.Managed.dll` + `Clrpp.Managed.runtimeconfig.json` + optional NuGet deps: `Mono.Cecil*` for icall weaving, `Microsoft.Diagnostics.*`/`Microsoft.Extensions.*` for leak analysis) is deployed by CMake into a **`clrpp/` subfolder** next to the executables. The native loader (`clr_bridge.cpp initialize`) probes: explicit `compiler_paths::assembly_dir` (and its `clrpp/` child), `<exe_dir>/clrpp`, `<exe_dir>`, `<cwd>/clrpp`, `<cwd>`. The bridge resolves its own dependencies from its own directory (`Resolving` hook in `Bridge.Core.cs`), so the whole folder is self-contained — ship the `clrpp/` folder as-is when deploying. Optional dlls may be omitted from a shipped game: without Cecil, icall weaving is disabled (scripts with `[InternalCall]` will not work on CoreCLR until woven); without ClrMD, leak reports lose the GC-snapshot analysis.

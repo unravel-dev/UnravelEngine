@@ -22,14 +22,14 @@ Classify the task before writing code. Read relevant source first; never guess a
 | Projects / scenes (MCP) | open project, recent projects, `.spfb`, scene preset, hub open | `unravel-projects` |
 | Entities / transforms (MCP) | create primitive, parent, local vs world transform, scene_save, ScriptComponent MCP | `unravel-entities` |
 | Viewport camera (MCP) | scene panel camera, focus entities, look_at, orbit, viewport screenshot | `unravel-viewport` |
-| Scripting | C#, Mono, hot-reload, ScriptComponent, glue | `unravel-scripting` |
+| Scripting | C#, CoreCLR/dotnetpp, hot-reload, ScriptComponent, glue | `unravel-scripting` |
 | Physics | collision, Bullet, rigidbody, character controller | `unravel-physics` |
 | Animation | skeletal, blend space, clip, bone | `unravel-animation` |
 | Game UI | RmlUi, HTML, CSS, ui_document | `unravel-ui-rmlui` |
 | Audio | OpenAL, audio source, listener | `unravel-audio` |
 | Prefabs | prefab override, instance, template | `unravel-prefabs` |
 | Profiler | GPU timeline, eviction, frame stats | `unravel-profiler-debug` |
-| Build / CI | CMake, workflow, Mono, CPack | `unravel-build-verify` |
+| Build / CI | CMake, workflow, .NET SDK, CPack | `unravel-build-verify` |
 | Play mode | splash, play state, on_play_begin, simulation gating | `unravel-play-mode-change` |
 
 If multiple domains apply, list all and identify the **primary** change surface.

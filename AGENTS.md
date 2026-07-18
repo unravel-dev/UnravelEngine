@@ -12,6 +12,30 @@ skills** under `.agents/skills/` - do not load them all at once.
 | `CLAUDE.md` | Optional one-line import of this file for Claude Code |
 | `.cursor/skills`, `.claude/skills` | Optional junctions to `.agents/skills` (see `.agents/README.md`) |
 
+## Precedence
+
+1. Explicit user instructions in the current chat  
+2. This file (`AGENTS.md`)  
+3. On-demand skills under `.agents/skills/`  
+
+Skills add procedures and domain checklists. They do not override hard rules here
+unless the user says so.
+
+## Repository map
+
+| Path | Role |
+|------|------|
+| `engine/` | Runtime library: ECS, rendering, assets, scripting, physics, audio |
+| `editor/` | Editor executable and ImGui hub (must not be required at game runtime) |
+| `game/` | Game / player runner |
+| `engine_data/`, `editor_data/` | Shipped data (shaders, scripts, UI); rebuild `engine_data` / `editor_data` when changed |
+| `deps/` | Third-party; use, almost never modify (`deps/3rdparty/` especially) |
+| `cmake/`, `CMakeLists.txt`, `CMakePresets.json` | Build system |
+| `.agents/skills/` | Domain and workflow skills |
+| `tasks/` | Optional agent notes (`todo.md`, `lessons.md`) |
+
+Bootstrap order and system list: see skill `unravel-triage`.
+
 ## Agent behavior
 
 - Act as a principal C++ / engine engineer with many years of experience.
@@ -28,6 +52,8 @@ skills** under `.agents/skills/` - do not load them all at once.
 
 ## Start here on non-trivial work
 
+Skip triage for trivial one-file edits with an obvious touch point.
+
 1. Read skill **`unravel-triage`** (`.agents/skills/unravel-triage/SKILL.md`).
 2. Classify domain, list files to read, then open the matching domain / workflow skill.
 3. For large or cross-cutting design, use **`unravel-architect`**.
@@ -43,6 +69,9 @@ Skill catalog: `.agents/skills/README.md`.
 - Serialization / meta / prefabs / C# parity: check the triage skill's cross-cutting
   list before adding components or reflected fields.
 - Prefer English in code and comments; ASCII only in source.
+- Do not create git commits, amend, push, or open PRs unless the user explicitly asks.
+- Never update git config; never force-push `main`/`master`; avoid destructive git
+  commands unless the user explicitly requests them.
 
 ## Code quality
 
@@ -88,9 +117,29 @@ Skill catalog: `.agents/skills/README.md`.
 
 ### Subagents
 
-- Use subagents to keep the main context clean when the tool supports them.
-- Offload research, exploration, and parallel analysis.
-- One focused task per subagent.
+Use only when the tool supports them and context isolation helps.
+
+**Do use for:** broad or parallel codebase research, noisy shell/build logs,
+independent verification. One clear goal per subagent. The prompt must be
+self-contained (paths, constraints, definition of done) - subagents do not see
+the parent chat history.
+
+**Do not use for:** single-file edits, work that needs the full conversation,
+or short procedures a skill already covers end-to-end. Prefer skills over
+subagents for repeatable checklists.
+
+**Model class (not product names):**
+
+| Role | Model class |
+|------|-------------|
+| Explore / search | Fast / cheap |
+| Shell / log-heavy | Fast / cheap |
+| Implement / multi-file refactor | Inherit parent (or stronger if parent is light) |
+| Review / verify | Inherit or strong; separate context from the implementer |
+
+Omit an explicit model unless the user requests one. Prefer inherit / tool
+defaults so user Settings are not overridden. Do not hardcode vendor model IDs
+in prompts or in this file - they change often.
 
 ### Self-improvement
 
@@ -103,7 +152,10 @@ Skill catalog: `.agents/skills/README.md`.
 - Never mark a task complete without proving it works.
 - Diff behavior against the baseline when relevant.
 - Ask: would a staff engineer approve this?
-- Run tests, check logs, or demonstrate correctness.
+- For UnravelEngine, prefer concrete checks:
+  - Compile the touched target (`engine`, `editor`, and/or `game`).
+  - Manual or MCP smoke when editor/scene behavior changed.
+- Details: skill `unravel-build-verify`.
 
 ### Elegance (balanced)
 
@@ -136,8 +188,7 @@ Skill catalog: `.agents/skills/README.md`.
 - Prefer CMake commands.
 - First check whether an existing configured build directory is available.
 - Reuse the existing generator and configuration where possible.
-- Common output: `build/RelWithDebInfo/` (or the active preset under `build/`).
-- Data targets: `engine_data`, `editor_data` when shaders/assets change.
+- Common output: `build/RelWithDebInfo/`, `build/Debug/` (or the active preset under `build/`).
 - Details and checklists: skill `unravel-build-verify`.
 
 ## C++ guidelines

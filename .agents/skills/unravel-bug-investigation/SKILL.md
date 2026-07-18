@@ -39,7 +39,7 @@ Narrow the failure surface:
 | Crash on play | `on_play_begin` handlers, physics, scripts |
 | Save/load | serialization, meta, prefab paths |
 | Asset missing | `unravel-assets`, UID, `.meta` |
-| Script error | `unravel-scripting`, Mono console |
+| Script error | `unravel-scripting`, managed / editor console |
 | Performance | `unravel-profiler-debug` |
 
 Use logging (`APPLOG_*`), breakpoints, or stats overlay as appropriate.

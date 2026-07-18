@@ -2,8 +2,8 @@
 name: unravel-build-verify
 description: >-
   Builds and verifies UnravelEngine: CMake targets, engine_data/editor_data copy,
-  Mono dependency, sanitizers, and CI workflows. Use after code changes, before
-  marking work complete, or when fixing build/CI failures.
+  .NET SDK / CoreCLR scripting dependency, sanitizers, and CI workflows. Use after
+  code changes, before marking work complete, or when fixing build/CI failures.
 disable-model-invocation: true
 ---
 
@@ -45,7 +45,7 @@ cmake --build build --target editor_data
 
 - **CMake 3.16+**
 - **C++20** compiler
-- **Mono 6.12+** for scripting (editor and script tests)
+- **.NET 9 SDK** for C# scripting (`dotnet` on `PATH`; CoreCLR via dotnetpp)
 - **Git LFS** for large assets
 
 ## Build options (CMakeLists.txt)
@@ -82,13 +82,15 @@ After code changes:
 
 Shader changes require `engine_data` target rebuild — not just C++ link.
 
-## Mono / scripting verify
+## Scripting / .NET verify
 
 If scripting touched:
 
+- [ ] `dotnet --info` reports an SDK (not only a runtime)
 - [ ] Project scripts compile from editor Recompile menu
 - [ ] Hot-reload succeeds
-- [ ] No Mono assembly load errors in console
+- [ ] No managed assembly load errors in console
+- [ ] `clrpp/` bridge payload present next to the exe when using CoreCLR
 
 ## Packaging
 
@@ -100,7 +102,8 @@ CPack configured for Windows/Linux/macOS ZIP. Test packaging only when release-r
 |-------|-------|
 | Missing meta symbol | Forgot to add `.cpp` to CMake |
 | Shader compile fail | `.sc` syntax; rebuild engine_data |
-| Mono not found | Mono 6.12+ in PATH |
+| `dotnet` not found | Install .NET 9 SDK; ensure it is on `PATH` |
+| Script compile fails | `dotnet --info` must show an SDK |
 | Stale shader binary | Clean engine_data compiled output |
 | LFS pointer file | `git lfs pull` |
 
