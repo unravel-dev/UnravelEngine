@@ -25,8 +25,8 @@
 [submodule "deps/audiopp/audiopp"]
 	path = deps/audiopp/audiopp
 	url = https://github.com/unravel-dev/audiopp.git
-[submodule "deps/monopp/monopp"]
-	path = deps/monopp/monopp
+[submodule "deps/dotnetpp/dotnetpp"]
+	path = deps/dotnetpp/dotnetpp
 	url = https://github.com/unravel-dev/monopp.git
 [submodule "deps/3rdparty/entt/entt"]
 	path = deps/3rdparty/entt/entt
