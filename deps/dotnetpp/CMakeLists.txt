@@ -2,7 +2,7 @@ set(BUILD_DOTNETPP_SHARED ${BUILD_SHARED_LIBS} CACHE BOOL "Build shared library"
 
 set(DOTNETPP_BACKEND "coreclr" CACHE STRING "dotnetpp runtime backend (mono|coreclr)" FORCE)
 
-add_subdirectory( monopp )
+add_subdirectory( dotnetpp )
 
 if(UNRAVEL_UNITY_BUILD)
     if(DOTNETPP_BACKEND STREQUAL "mono")
