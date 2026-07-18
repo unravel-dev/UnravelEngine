@@ -80,7 +80,12 @@ Add branch in `get_component_icon<T>()` with appropriate `ICON_MDI_*`.
 **Files:** `engine_data/data/scripts/scene/components/`
 
 - Mirror component fields as C# properties
-- Add glue in `script_glue.cpp` if native access needed
+- Native glue (when needed):
+  1. Add `engine/engine/scripting/ecs/systems/bindings/<type>_bindings.cpp`
+  2. Implement `internal_m2n_*` using helpers from `bindings/script_glue_common.h` (`safe_get_component`, etc.)
+  3. Expose `void register_<type>_script_bindings()` and declare it in `bindings/script_bindings.h`
+  4. Call that register from `script_glue.cpp` (`script_system::bind_internal_calls`)
+  5. Match the C# `DllImport` / internal-call name strings exactly
 
 ## Step 9: Custom inspector (only if default meta UI insufficient)
 
