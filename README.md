@@ -21,7 +21,7 @@
 ### Try it
 1. Download the latest release from [Releases](https://github.com/unravel-dev/UnravelEngine/releases)
 2. Install the [.NET 9 SDK](https://dotnet.microsoft.com/download) (required for C# scripting)
-3. Extract and run `editor.exe` (Windows) or `editor` (Linux)
+
 
 ### System Requirements
 | Component | Minimum | Recommended |
@@ -70,9 +70,9 @@
 - **Async Asset Loading** - Non-blocking resource management
 
 ### 📁 **Format Support**
-- **3D Models**: OBJ, FBX, GLTF, DAE, and more
+- **3D Models**: OBJ, FBX, GLTF, GLB, DAE, and more
 - **Audio**: WAV, MP3, OGG formats
-- **Textures**: PNG, JPG, DDS, HDR formats
+- **Textures**: PNG, JPG, TGA, DDS, KTX, HDR formats
 
 ### 🎯 **Graphics APIs**
 DirectX 11 • DirectX 12 • Vulkan • OpenGL
@@ -117,9 +117,6 @@ While the editor is running, a localhost MCP (JSON-RPC over HTTP) server is avai
 
 - URL: `http://127.0.0.1:27182/mcp`
 - Bind: `127.0.0.1` only (default port `27182`)
-- Tools cover scene entities/primitives/components, project/asset listing, and viewport screenshots
-- `viewport_screenshot_scene` / `viewport_screenshot_game` capture the Scene/Game OBUFFER PNGs (action + wait)
-- Scene mutations go through the editor undo stack; mutating tools are rejected in play mode
 - Open **Windows → MCP Server** in the editor for status, endpoint copy, start/stop, and an activity log
 
 ## 🛠 Building from Source
@@ -143,12 +140,18 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 
 # Run editor
-./build/bin/editor
+cd build/bin
+
+./UnravelEditor.exe
+
+or
+
+./unravel-editor
 ```
 
 ### Platform-Specific Notes
 - **Windows**: MSVC or Clang recommended
-- **Linux**: Install a recent .NET 9 SDK package from [Microsoft’s install docs](https://learn.microsoft.com/dotnet/core/install/linux); see also [workflow dependencies](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml)
+- **Linux**: Install a recent .NET 9 SDK package from package manager or [Microsoft’s install docs](https://learn.microsoft.com/dotnet/core/install/linux); see also [workflow dependencies](https://github.com/unravel-dev/UnravelEngine/blob/main/.github/workflows/linux.yml)
 - **macOS**: Xcode command line tools required, plus the .NET 9 SDK
 
 ### Troubleshooting
