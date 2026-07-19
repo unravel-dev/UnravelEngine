@@ -49,6 +49,8 @@ private:
 };
 
 void register_scene_tools(mcp_tool_registry& registry);
+void register_scene_batch_tools(mcp_tool_registry& registry);
+void register_ops_batch_tools(mcp_tool_registry& registry);
 void register_asset_tools(mcp_tool_registry& registry);
 void register_viewport_tools(mcp_tool_registry& registry);
 void register_material_tools(mcp_tool_registry& registry);

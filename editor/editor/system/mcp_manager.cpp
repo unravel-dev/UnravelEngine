@@ -32,6 +32,8 @@ auto mcp_manager::init(rtti::context& ctx) -> bool
 {
     ctx_ = &ctx;
     mcp::register_scene_tools(registry_);
+    mcp::register_scene_batch_tools(registry_);
+    mcp::register_ops_batch_tools(registry_);
     mcp::register_asset_tools(registry_);
     mcp::register_viewport_tools(registry_);
     mcp::register_material_tools(registry_);

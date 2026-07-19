@@ -18,14 +18,16 @@ deps → engine (lib) → editor (exe)
 
 Custom data targets: `engine_data`, `editor_data`
 
+Prefer building Debug builds.
+
 ## Build commands
 
 ```bash
 # Configure (example)
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
 
 # Full build
-cmake --build build --config Release
+cmake --build build --config Debug
 
 # Data only (shaders/assets copy)
 cmake --build build --target engine_data

@@ -24,13 +24,17 @@ Save parity: inspector `inspector_asset_handle_material` on `edit_finished`.
 
 | Tool | Purpose |
 |------|---------|
-| `materials_create` | New `.mat` (`path` or `folder`+`name`) |
-| `materials_get` | Read props by `key` / `uid` |
+| `materials_create_batch` | New `.mat` files (`items`: `path` or `folder`+`name`) |
+| `materials_get_batch` | Read props for many (`items`: `key` / `uid`) |
 | `materials_set` | Mutate asset; `save` default `true`; optional `wait_ms` |
 | `materials_list_properties` | Supported property schema |
-| `scene_set_model_material` | Shared slot: `entity_id`, `index`, `material_key` |
-| `scene_set_model_material_instance` | Runtime instance props; no `.mat` |
-| `scene_clear_model_material_instance` | Drop instance → use asset again |
+| `scene_set_model_materials_batch` | Shared slot assignments (one undo) |
+| `scene_set_model_material_instances_batch` | Runtime instance props; no `.mat` |
+| `scene_clear_model_material_instances_batch` | Drop instances → use assets again |
+| `assets_find_batch` | Find materials (and all other asset types) by `type`/`prefix`/`name_contains` |
+| `window_request_focus` | Focus/raise editor OS window so asset watcher can import new `.mat` files |
+
+When the editor is unfocused, filesystem watcher events may not run — call `window_request_focus` before `materials_create_batch` / `assets_wait_ready_batch` if creates do not land.
 
 Single-property edits: one-key `properties` object. Bulk: multiple keys in one call.
 
@@ -63,7 +67,7 @@ Single-property edits: one-key `properties` object. Bulk: multiple keys in one c
 
 ## Rules of thumb
 
-1. Need a reusable material → `materials_create` / `materials_set` (save).
-2. Only this entity should look different → `scene_set_model_material_instance`.
-3. Point an entity at an existing `.mat` → `scene_set_model_material`.
+1. Need a reusable material → `materials_create_batch` / `materials_set` (save).
+2. Only this entity should look different → `scene_set_model_material_instances_batch`.
+3. Point entities at existing `.mat` → `scene_set_model_materials_batch`.
 4. Play mode blocks scene mutators (`require_edit_scene`).

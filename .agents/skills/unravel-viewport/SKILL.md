@@ -20,7 +20,7 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `viewport_get_camera` | Read pose / FOV / ortho |
 | `viewport_set_camera` | Set `position` / `rotation_euler`; `relative:true` = local offset |
 | `viewport_look_at` | Aim at world `target` (optional `position`, `up`) |
-| `viewport_focus_entities` | `defaults::focus_camera_on_entities` (same as F / double-click) |
+| `viewport_focus_entities_batch` | `defaults::focus_camera_on_entities` (same as F / double-click) |
 | `viewport_focus_bounds` | Focus sphere (`center`+`radius`) or box (`min`+`max`) |
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
 | `viewport_reset_camera` | UI “Reset Camera” parity |

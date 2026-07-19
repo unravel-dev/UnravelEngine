@@ -43,105 +43,6 @@ auto apply_result_to_json(const material_apply_result& result) -> std::string
                        list_json(result.errors));
 }
 
-auto read_wait_ms(const simdjson::dom::object& args, int64_t default_ms = 1000) -> std::chrono::milliseconds
-{
-    int64_t wait_ms = default_ms;
-    if(args["wait_ms"].get(wait_ms))
-    {
-        wait_ms = default_ms;
-    }
-    if(wait_ms < 0)
-    {
-        wait_ms = 0;
-    }
-    if(wait_ms > 15000)
-    {
-        wait_ms = 15000;
-    }
-    return std::chrono::milliseconds(wait_ms);
-}
-
-auto resolve_create_key(const simdjson::dom::object& args, std::string& error) -> std::string
-{
-    std::string path;
-    std::string folder;
-    std::string name;
-    read_string(args, "path", path);
-    read_string(args, "folder", folder);
-    read_string(args, "name", name);
-
-    if(!path.empty())
-    {
-        return normalize_material_key(path);
-    }
-    if(folder.empty() || name.empty())
-    {
-        error = "Provide path, or folder + name";
-        return {};
-    }
-
-    auto key = folder;
-    if(!key.empty() && key.back() != '/')
-    {
-        key.push_back('/');
-    }
-    key += name;
-    return normalize_material_key(key);
-}
-
-auto require_model_entity(rtti::context& ctx,
-                          const simdjson::dom::object& args,
-                          entt::handle& entity,
-                          uint32_t& index,
-                          std::string& error) -> bool
-{
-    scene* scn = nullptr;
-    if(!require_edit_scene(ctx, scn, error))
-    {
-        return false;
-    }
-
-    std::string entity_id;
-    if(!read_string(args, "entity_id", entity_id))
-    {
-        error = "Missing entity_id";
-        return false;
-    }
-
-    entity = find_entity(*scn, entity_id);
-    if(!entity)
-    {
-        error = "Entity not found: " + entity_id;
-        return false;
-    }
-    if(!entity.all_of<model_component>())
-    {
-        error = "Entity has no model_component";
-        return false;
-    }
-
-    int64_t index_i = 0;
-    if(args["index"].get(index_i))
-    {
-        index_i = 0;
-    }
-    if(index_i < 0)
-    {
-        error = "index must be >= 0";
-        return false;
-    }
-    index = static_cast<uint32_t>(index_i);
-    return true;
-}
-
-auto sleep_worker(std::chrono::milliseconds wait_ms) -> void
-{
-    if(wait_ms.count() > 0)
-    {
-        std::this_thread::sleep_for(wait_ms);
-    }
-}
-
 } // namespace
 
 void register_material_tools(mcp_tool_registry& registry)
@@ -149,7 +50,7 @@ void register_material_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "materials_list_properties",
          .description = "List supported PBR material property names/types for materials_set and "
-                        "scene_set_model_material_instance.",
+                        "scene_set_model_material_instances_batch.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context&, const simdjson::dom::object&) -> tool_result
@@ -157,113 +58,6 @@ void register_material_tools(mcp_tool_registry& registry)
              return {.text = list_material_property_schema_json(), .is_error = false};
          },
          .mutates_scene = false});
-
-    registry.add(
-        {.name = "materials_get",
-         .description = "Read PBR material properties as JSON by asset key or uid.",
-         .input_schema_json =
-             R"({"type":"object","properties":{"key":{"type":"string"},"uid":{"type":"string"}}})",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             std::string key;
-             std::string uid;
-             read_string(args, "key", key);
-             read_string(args, "uid", uid);
-
-             std::string error;
-             auto handle = resolve_material_asset(ctx, key, uid, error);
-             if(!handle)
-             {
-                 return {.text = error, .is_error = true};
-             }
-
-             auto mat = handle.get();
-             if(!mat)
-             {
-                 return {.text = "Material asset not loaded", .is_error = true};
-             }
-
-             return {.text = fmt::format(R"({{"key":{},"uid":{},"properties":{}}})",
-                                         make_json_string(handle.id()),
-                                         make_json_string(hpp::to_string(handle.uid())),
-                                         material_to_json(*mat)),
-                     .is_error = false};
-         },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "materials_create",
-         .description =
-             "Create a new PBR .mat asset (content-browser parity). Provide path, or folder + name. "
-             "Saves to disk then briefly waits for the asset watcher.",
-         .input_schema_json =
-             R"({"type":"object","properties":{"path":{"type":"string","description":"Full asset key e.g. app:/data/MyMat.mat"},"folder":{"type":"string"},"name":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}}})",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             auto& mcp = ctx.get_cached<mcp_manager>();
-             const auto wait_ms = read_wait_ms(args, 1000);
-
-             std::string key_error;
-             const auto key = resolve_create_key(args, key_error);
-             if(key.empty())
-             {
-                 return {.text = key_error, .is_error = true};
-             }
-
-             auto create_result = mcp.invoke_on_main(
-                 [&ctx, key]() -> tool_result
-                 {
-                     if(ctx.has<project_manager>())
-                     {
-                         auto& pm = ctx.get_cached<project_manager>();
-                         if(key.rfind("app:/", 0) == 0 && !pm.has_open_project())
-                         {
-                             return {.text = "No project open", .is_error = true};
-                         }
-                     }
-
-                     fs::error_code ec;
-                     const auto absolute = fs::absolute(fs::resolve_protocol(key));
-                     if(fs::exists(absolute, ec))
-                     {
-                         return {.text = "Material already exists: " + key, .is_error = true};
-                     }
-
-                     fs::create_directories(absolute.parent_path(), ec);
-
-                     auto& am = ctx.get_cached<asset_manager>();
-                     auto handle = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
-                     if(!handle)
-                     {
-                         return {.text = "Failed to create material instance", .is_error = true};
-                     }
-
-                     std::string save_error;
-                     if(!save_material_asset(ctx, handle, save_error))
-                     {
-                         return {.text = save_error, .is_error = true};
-                     }
-
-                     return {.text = fmt::format(R"({{"key":{},"uid":{},"saved":true}})",
-                                                 make_json_string(handle.id()),
-                                                 make_json_string(hpp::to_string(handle.uid()))),
-                             .is_error = false};
-                 });
-
-             if(!create_result)
-             {
-                 return {.text = "Timed out creating material on main thread", .is_error = true};
-             }
-             if(!create_result->is_error)
-             {
-                 sleep_worker(wait_ms);
-             }
-             return *create_result;
-         },
-         .mutates_scene = false,
-         .requires_main_thread = false});
 
     registry.add(
         {.name = "materials_set",
@@ -362,188 +156,450 @@ void register_material_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
-        {.name = "scene_set_model_material",
-         .description =
-             "Assign a shared material asset to a model_component material slot (writes scene/prefab "
-             "overrides only; does not mutate the .mat file).",
+        {.name = "materials_get_batch",
+         .description = "Read PBR material properties for many assets. Each item: key and/or uid.",
          .input_schema_json =
-             R"({"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0},"material_key":{"type":"string"}},"required":["entity_id","material_key"]})",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"uid":{"type":"string"}}}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             entt::handle entity;
-             uint32_t index = 0;
-             std::string error;
-             if(!require_model_entity(ctx, args, entity, index, error))
+             simdjson::dom::array items_arr;
+             if(args["items"].get(items_arr))
              {
-                 return {.text = error, .is_error = true};
+                 return {.text = "Missing items array", .is_error = true};
              }
-
-             std::string material_key;
-             if(!read_string(args, "material_key", material_key))
+             std::string results = "[";
+             bool first = true;
+             size_t ok_count = 0;
+             size_t requested = 0;
+             for(auto el : items_arr)
              {
-                 return {.text = "Missing material_key", .is_error = true};
-             }
-
-             auto material = resolve_material_asset(ctx, material_key, {}, error);
-             if(!material)
-             {
-                 return {.text = error, .is_error = true};
-             }
-
-             auto& model_comp = entity.get<model_component>();
-             const auto old_model = model_comp.get_model();
-             auto new_model = old_model;
-             new_model.set_material(material, index);
-
-             auto& em = ctx.get_cached<editing_manager>();
-             em.do_action(
-                 "MCP Set Model Material",
-                 [entity, new_model]()
+                 ++requested;
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
                  {
-                     if(auto* mc = entity.try_get<model_component>())
-                     {
-                         mc->set_model(new_model);
-                         prefab_override_context::mark_material_as_changed(entity);
-                     }
-                 },
-                 [entity, old_model]()
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 std::string key;
+                 std::string uid;
+                 read_string(obj, "key", key);
+                 read_string(obj, "uid", uid);
+                 std::string error;
+                 auto handle = resolve_material_asset(ctx, key, uid, error);
+                 if(!first)
                  {
-                     if(auto* mc = entity.try_get<model_component>())
+                     results += ",";
+                 }
+                 first = false;
+                 if(!handle)
+                 {
+                     results += fmt::format(R"({{"ok":false,"key":{},"uid":{},"error":{}}})",
+                                            make_json_string(key),
+                                            make_json_string(uid),
+                                            make_json_string(error));
+                     continue;
+                 }
+                 auto mat = handle.get();
+                 if(!mat)
+                 {
+                     results += fmt::format(R"({{"ok":false,"key":{},"uid":{},"error":{}}})",
+                                            make_json_string(handle.id()),
+                                            make_json_string(hpp::to_string(handle.uid())),
+                                            make_json_string("Material asset not loaded"));
+                     continue;
+                 }
+                 ++ok_count;
+                 results += fmt::format(R"({{"ok":true,"key":{},"uid":{},"properties":{}}})",
+                                        make_json_string(handle.id()),
+                                        make_json_string(hpp::to_string(handle.uid())),
+                                        material_to_json(*mat));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, requested),
+                     .is_error = ok_count == 0 && requested > 0};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "materials_create_batch",
+         .description =
+             "Create many PBR .mat assets. Each item: path, or folder + name. Optional wait_ms after "
+             "the batch (shared).",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"}}}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto wait_ms = read_wait_ms(args, 1000);
+             simdjson::dom::array items_arr;
+             if(args["items"].get(items_arr))
+             {
+                 return {.text = "Missing items array", .is_error = true};
+             }
+             struct item_t
+             {
+                 std::string path;
+                 std::string folder;
+                 std::string name;
+             };
+             std::vector<item_t> items;
+             for(auto el : items_arr)
+             {
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
+                 {
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 item_t item{};
+                 read_string(obj, "path", item.path);
+                 read_string(obj, "folder", item.folder);
+                 read_string(obj, "name", item.name);
+                 items.push_back(std::move(item));
+             }
+             if(items.empty())
+             {
+                 return {.text = "items array is empty", .is_error = true};
+             }
+             auto create_result = mcp.invoke_on_main(
+                 [&ctx, items]() -> tool_result
+                 {
+                     if(ctx.has<project_manager>())
                      {
-                         mc->set_model(old_model);
-                         prefab_override_context::mark_material_as_changed(entity);
+                         auto& pm = ctx.get_cached<project_manager>();
+                         if(!pm.has_open_project())
+                         {
+                             for(const auto& item : items)
+                             {
+                                 const auto probe = item.path.empty() ? item.folder : item.path;
+                                 if(probe.rfind("app:/", 0) == 0)
+                                 {
+                                     return {.text = "No project open", .is_error = true};
+                                 }
+                             }
+                         }
                      }
+                     auto& am = ctx.get_cached<asset_manager>();
+                     std::string results = "[";
+                     bool first = true;
+                     size_t ok_count = 0;
+                     for(const auto& item : items)
+                     {
+                         if(!first)
+                         {
+                             results += ",";
+                         }
+                         first = false;
+                         std::string key;
+                         std::string key_error;
+                         if(!item.path.empty())
+                         {
+                             key = normalize_material_key(item.path);
+                         }
+                         else if(!item.folder.empty() && !item.name.empty())
+                         {
+                             key = item.folder;
+                             if(!key.empty() && key.back() != '/')
+                             {
+                                 key.push_back('/');
+                             }
+                             key += item.name;
+                             key = normalize_material_key(key);
+                         }
+                         else
+                         {
+                             key_error = "Provide path, or folder + name";
+                         }
+                         if(key.empty())
+                         {
+                             results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(key_error));
+                             continue;
+                         }
+                         fs::error_code ec;
+                         const auto absolute = fs::absolute(fs::resolve_protocol(key));
+                         if(fs::exists(absolute, ec))
+                         {
+                             results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
+                                                    make_json_string(key),
+                                                    make_json_string("Material already exists: " + key));
+                             continue;
+                         }
+                         fs::create_directories(absolute.parent_path(), ec);
+                         auto handle = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
+                         if(!handle)
+                         {
+                             results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
+                                                    make_json_string(key),
+                                                    make_json_string("Failed to create material instance"));
+                             continue;
+                         }
+                         std::string save_error;
+                         if(!save_material_asset(ctx, handle, save_error))
+                         {
+                             results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
+                                                    make_json_string(key),
+                                                    make_json_string(save_error));
+                             continue;
+                         }
+                         ++ok_count;
+                         results += fmt::format(R"({{"ok":true,"key":{},"uid":{},"saved":true}})",
+                                                make_json_string(handle.id()),
+                                                make_json_string(hpp::to_string(handle.uid())));
+                     }
+                     results += "]";
+                     return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})",
+                                                 results,
+                                                 ok_count,
+                                                 items.size()),
+                             .is_error = ok_count == 0};
                  });
+             if(!create_result)
+             {
+                 return {.text = "Timed out creating materials on main thread", .is_error = true};
+             }
+             if(!create_result->is_error)
+             {
+                 sleep_worker(wait_ms);
+             }
+             return *create_result;
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
 
-             return {.text = fmt::format(R"({{"entity_id":{},"index":{},"material_key":{}}})",
-                                         make_json_string(entity_id_string(entity)),
-                                         index,
-                                         make_json_string(material.id())),
-                     .is_error = false};
+    registry.add(
+        {.name = "scene_set_model_material_instances_batch",
+         .description =
+             "Edit per-entity runtime material instances on model slots (batch). Does NOT write .mat "
+             "files. Each item: entity_id, properties object, optional index.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items_arr;
+             if(args["items"].get(items_arr))
+             {
+                 return {.text = "Missing items array", .is_error = true};
+             }
+             struct item_t
+             {
+                 std::string entity_id;
+                 uint32_t index{0};
+                 std::string props_json;
+             };
+             std::vector<item_t> items;
+             for(auto el : items_arr)
+             {
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
+                 {
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 item_t item{};
+                 if(!read_string(obj, "entity_id", item.entity_id) || item.entity_id.empty())
+                 {
+                     return {.text = "Item missing entity_id", .is_error = true};
+                 }
+                 int64_t index_i = 0;
+                 if(!obj["index"].get(index_i) && index_i >= 0)
+                 {
+                     item.index = static_cast<uint32_t>(index_i);
+                 }
+                 if(obj["properties"].error())
+                 {
+                     return {.text = "Item missing properties object", .is_error = true};
+                 }
+                 item.props_json = std::string(simdjson::minify(obj["properties"]));
+                 items.push_back(std::move(item));
+             }
+             if(items.empty())
+             {
+                 return {.text = "items array is empty", .is_error = true};
+             }
+             std::string results = "[";
+             bool first = true;
+             size_t ok_count = 0;
+             auto& em = ctx.get_cached<editing_manager>();
+             for(const auto& item : items)
+             {
+                 if(!first)
+                 {
+                     results += ",";
+                 }
+                 first = false;
+                 auto entity = find_entity(*scn, item.entity_id);
+                 if(!entity || !entity.all_of<model_component>())
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})",
+                                            make_json_string(item.entity_id),
+                                            make_json_string(entity ? "Entity has no model_component"
+                                                                    : "Entity not found"));
+                     continue;
+                 }
+                 simdjson::dom::parser parser;
+                 simdjson::dom::element root;
+                 if(parser.parse(item.props_json).get(root))
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":"Failed to parse properties"}})",
+                                            make_json_string(item.entity_id));
+                     continue;
+                 }
+                 simdjson::dom::object properties;
+                 if(root.get(properties))
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":"properties must be an object"}})",
+                                            make_json_string(item.entity_id));
+                     continue;
+                 }
+                 auto& model_comp = entity.get<model_component>();
+                 const auto old_model = model_comp.get_model();
+                 auto new_model = old_model;
+                 if(!new_model.get_material(item.index).is_valid())
+                 {
+                     new_model.set_material_instance(std::make_shared<pbr_material>(), item.index);
+                 }
+                 auto instance = new_model.get_or_emplace_material_instance(item.index);
+                 if(!instance)
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":"Failed to create material instance"}})",
+                                            make_json_string(item.entity_id));
+                     continue;
+                 }
+                 auto applied = apply_material_properties(ctx, instance, properties);
+                 if(!applied.ok)
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"result":{}}})",
+                                            make_json_string(item.entity_id),
+                                            apply_result_to_json(applied));
+                     continue;
+                 }
+                 em.do_action(
+                     "MCP Set Model Material Instance",
+                     [entity, new_model]()
+                     {
+                         if(auto* mc = entity.try_get<model_component>())
+                         {
+                             mc->set_model(new_model);
+                             prefab_override_context::mark_material_as_changed(entity);
+                         }
+                     },
+                     [entity, old_model]()
+                     {
+                         if(auto* mc = entity.try_get<model_component>())
+                         {
+                             mc->set_model(old_model);
+                             prefab_override_context::mark_material_as_changed(entity);
+                         }
+                     });
+                 ++ok_count;
+                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"result":{}}})",
+                                        make_json_string(entity_id_string(entity)),
+                                        item.index,
+                                        apply_result_to_json(applied));
+             }
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, items.size()),
+                     .is_error = ok_count == 0};
          },
          .mutates_scene = true});
 
     registry.add(
-        {.name = "scene_set_model_material_instance",
+        {.name = "scene_clear_model_material_instances_batch",
          .description =
-             "Edit a per-entity runtime material instance on a model slot (get_or_emplace + set_model). "
-             "Does NOT write a .mat file. Use for prototype/scene-only overrides.",
+             "Clear runtime material instances on model slots (batch) so shared assets are used again.",
          .input_schema_json =
-             R"({"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]})",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             entt::handle entity;
-             uint32_t index = 0;
+             scene* scn = nullptr;
              std::string error;
-             if(!require_model_entity(ctx, args, entity, index, error))
+             if(!require_edit_scene(ctx, scn, error))
              {
                  return {.text = error, .is_error = true};
              }
-
-             simdjson::dom::object properties;
-             if(args["properties"].get(properties))
+             simdjson::dom::array items_arr;
+             if(args["items"].get(items_arr))
              {
-                 return {.text = "Missing properties object", .is_error = true};
+                 return {.text = "Missing items array", .is_error = true};
              }
-
-             auto& model_comp = entity.get<model_component>();
-             const auto old_model = model_comp.get_model();
-             auto new_model = old_model;
-             // Avoid get_or_emplace path that clones a null slot material.
-             if(!new_model.get_material(index).is_valid())
-             {
-                 new_model.set_material_instance(std::make_shared<pbr_material>(), index);
-             }
-             auto instance = new_model.get_or_emplace_material_instance(index);
-             if(!instance)
-             {
-                 return {.text = "Failed to create material instance", .is_error = true};
-             }
-
-             auto applied = apply_material_properties(ctx, instance, properties);
-             if(!applied.ok)
-             {
-                 return {.text = apply_result_to_json(applied), .is_error = true};
-             }
-
+             std::string results = "[";
+             bool first = true;
+             size_t ok_count = 0;
+             size_t requested = 0;
              auto& em = ctx.get_cached<editing_manager>();
-             em.do_action(
-                 "MCP Set Model Material Instance",
-                 [entity, new_model]()
-                 {
-                     if(auto* mc = entity.try_get<model_component>())
-                     {
-                         mc->set_model(new_model);
-                         prefab_override_context::mark_material_as_changed(entity);
-                     }
-                 },
-                 [entity, old_model]()
-                 {
-                     if(auto* mc = entity.try_get<model_component>())
-                     {
-                         mc->set_model(old_model);
-                         prefab_override_context::mark_material_as_changed(entity);
-                     }
-                 });
-
-             return {.text = fmt::format(R"({{"entity_id":{},"index":{},"result":{}}})",
-                                         make_json_string(entity_id_string(entity)),
-                                         index,
-                                         apply_result_to_json(applied)),
-                     .is_error = false};
-         },
-         .mutates_scene = true});
-
-    registry.add(
-        {.name = "scene_clear_model_material_instance",
-         .description =
-             "Clear a runtime material instance on a model slot so the shared asset is used again.",
-         .input_schema_json =
-             R"({"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0}},"required":["entity_id"]})",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             entt::handle entity;
-             uint32_t index = 0;
-             std::string error;
-             if(!require_model_entity(ctx, args, entity, index, error))
+             for(auto el : items_arr)
              {
-                 return {.text = error, .is_error = true};
+                 ++requested;
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
+                 {
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 std::string entity_id;
+                 if(!read_string(obj, "entity_id", entity_id) || entity_id.empty())
+                 {
+                     return {.text = "Item missing entity_id", .is_error = true};
+                 }
+                 uint32_t index = 0;
+                 int64_t index_i = 0;
+                 if(!obj["index"].get(index_i) && index_i >= 0)
+                 {
+                     index = static_cast<uint32_t>(index_i);
+                 }
+                 if(!first)
+                 {
+                     results += ",";
+                 }
+                 first = false;
+                 auto entity = find_entity(*scn, entity_id);
+                 if(!entity || !entity.all_of<model_component>())
+                 {
+                     results += fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})",
+                                            make_json_string(entity_id),
+                                            make_json_string(entity ? "Entity has no model_component"
+                                                                    : "Entity not found"));
+                     continue;
+                 }
+                 auto& model_comp = entity.get<model_component>();
+                 const auto old_model = model_comp.get_model();
+                 auto new_model = old_model;
+                 new_model.set_material_instance(nullptr, index);
+                 em.do_action(
+                     "MCP Clear Model Material Instance",
+                     [entity, new_model]()
+                     {
+                         if(auto* mc = entity.try_get<model_component>())
+                         {
+                             mc->set_model(new_model);
+                             prefab_override_context::mark_material_as_changed(entity);
+                         }
+                     },
+                     [entity, old_model]()
+                     {
+                         if(auto* mc = entity.try_get<model_component>())
+                         {
+                             mc->set_model(old_model);
+                             prefab_override_context::mark_material_as_changed(entity);
+                         }
+                     });
+                 ++ok_count;
+                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"cleared":true}})",
+                                        make_json_string(entity_id_string(entity)),
+                                        index);
              }
-
-             auto& model_comp = entity.get<model_component>();
-             const auto old_model = model_comp.get_model();
-             auto new_model = old_model;
-             new_model.set_material_instance(nullptr, index);
-
-             auto& em = ctx.get_cached<editing_manager>();
-             em.do_action(
-                 "MCP Clear Model Material Instance",
-                 [entity, new_model]()
-                 {
-                     if(auto* mc = entity.try_get<model_component>())
-                     {
-                         mc->set_model(new_model);
-                         prefab_override_context::mark_material_as_changed(entity);
-                     }
-                 },
-                 [entity, old_model]()
-                 {
-                     if(auto* mc = entity.try_get<model_component>())
-                     {
-                         mc->set_model(old_model);
-                         prefab_override_context::mark_material_as_changed(entity);
-                     }
-                 });
-
-             return {.text = fmt::format(R"({{"entity_id":{},"index":{},"cleared":true}})",
-                                         make_json_string(entity_id_string(entity)),
-                                         index),
-                     .is_error = false};
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, requested),
+                     .is_error = ok_count == 0 && requested > 0};
          },
          .mutates_scene = true});
 }
 
 } // namespace unravel::mcp
+

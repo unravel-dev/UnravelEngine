@@ -141,6 +141,12 @@ struct editor_actions
     static auto focus_scene_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
     static auto focus_game_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
+    /**
+     * @brief Focus/raise the OS main window so asset watcher and similar focus-gated
+     * work can run (e.g. after MCP creates materials while Cursor has focus).
+     */
+    static auto request_main_window_focus(rtti::context& ctx, std::string* error = nullptr) -> bool;
+
 };
 
 } // namespace unravel

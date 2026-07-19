@@ -64,6 +64,28 @@ Importers live in `engine/engine/assets/impl/importers/`.
 
 Context menu actions in `content_browser_panel.cpp`.
 
+## MCP tools
+
+| Tool | Purpose |
+|------|---------|
+| `assets_list_batch` | List by protocol (`app`/`engine`/`editor`); optional `type` |
+| `assets_find_batch` | Search **any** asset type: `protocol` (incl. `all`), `type`, `prefix`, `name_contains`, `limit` |
+| `assets_get_batch` | Metadata for many (`items`: `key` / `uid`) |
+| `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, …) |
+| `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |
+| `assets_create_folder` | Create folder under protocol path |
+| `assets_reimport_batch` | Reimport many keys (+ optional `wait_ms`) |
+| `assets_wait_ready_batch` | Poll until material/mesh/prefab (or meta/file) keys are ready |
+| `assets_get_mesh_info` | Mesh local AABB |
+| `prefabs_create_from_entities_batch` | Save entity hierarchies as `.pfb` |
+| `window_request_focus` | Focus/raise editor OS window (watcher gated when unfocused) |
+
+If create/reimport appears stuck while agent app has focus, call `window_request_focus` then `assets_wait_ready_batch`.
+
+`type` filters accept `mat`, `.mat`, `pfb`, `emesh`, `etex`, `cs`, `spfb`, etc. (aliases normalized).
+
+Code: `editor/editor/system/mcp/mcp_tools_assets.cpp`.
+
 ## Protocols and paths
 
 Asset manager uses virtual filesystem protocols for engine vs project vs editor data. Respect protocol boundaries — do not hardcode absolute paths.

@@ -86,24 +86,6 @@ auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
     return found;
 }
 
-auto read_wait_ms(const simdjson::dom::object& args) -> std::chrono::milliseconds
-{
-    int64_t wait_ms = 3000;
-    if(args["wait_ms"].get(wait_ms))
-    {
-        wait_ms = 3000;
-    }
-    if(wait_ms < 100)
-    {
-        wait_ms = 100;
-    }
-    if(wait_ms > 15000)
-    {
-        wait_ms = 15000;
-    }
-    return std::chrono::milliseconds(wait_ms);
-}
-
 auto vec3_to_json(const math::vec3& v) -> std::string
 {
     return fmt::format("[{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z);
@@ -212,7 +194,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", read_wait_ms(args));
+             return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", read_wait_ms(args, 3000));
          },
          .mutates_scene = false,
          .requires_main_thread = false});
@@ -228,7 +210,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", read_wait_ms(args));
+             return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", read_wait_ms(args, 3000));
          },
          .mutates_scene = false,
          .requires_main_thread = false});
@@ -358,7 +340,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
-        {.name = "viewport_focus_entities",
+        {.name = "viewport_focus_entities_batch",
          .description =
              "Focus the Scene panel camera on one or more scene entities using "
              "defaults::focus_camera_on_entities (same as hierarchy F / double-click). "

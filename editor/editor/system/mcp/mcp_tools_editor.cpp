@@ -184,7 +184,7 @@ void register_editor_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
-        {.name = "selection_set",
+        {.name = "selection_set_batch",
          .description =
              "Set editor entity selection by UUID (or integral) ids. "
              "mode=normal (default) replaces selection; mode=add appends (ctrl-select).",
@@ -251,26 +251,21 @@ void register_editor_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
-        {.name = "scene_inspect_entity",
+        {.name = "window_request_focus",
          .description =
-             "Inspect an entity: summary JSON plus optional components_serialized dump. "
-             "Omit entity_id to use the active selection.",
-         .input_schema_json =
-             R"({"type":"object","properties":{"entity_id":{"type":"string"},"include_components":{"type":"boolean","default":true}}})",
+             "Focus and raise the editor OS main window (os::window::request_focus). Call before "
+             "asset create/reimport when the editor is unfocused so filesystem watcher events can "
+             "fire (materials, folders, etc.). Restores the window if minimized.",
+         .input_schema_json = empty_object_schema(),
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
              {
-                 std::string entity_id;
-                 read_string(args, "entity_id", entity_id);
-                 bool include_components = true;
-                 read_bool(args, "include_components", include_components);
                  std::string error;
-                 auto json = editor_actions::inspect_entity(ctx, entity_id, include_components, &error);
-                 if(json.empty())
+                 if(!editor_actions::request_main_window_focus(ctx, &error))
                  {
-                     return {.text = error.empty() ? "Inspect failed" : error, .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
-                 return {.text = std::move(json), .is_error = false};
+                 return {.text = R"({"ok":true,"requested":true})", .is_error = false};
              },
          .mutates_scene = false});
 
@@ -355,6 +350,54 @@ void register_editor_tools(mcp_tool_registry& registry)
                  return {.text = std::move(json), .is_error = false};
              },
          .mutates_scene = false});
+
+    registry.add(
+        {.name = "edit_undo",
+         .description = "Undo the last undoable editor action (same as Ctrl+Z).",
+         .input_schema_json = empty_object_schema(),
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             {
+                 std::string error;
+                 if(!require_not_play_mode(ctx, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 auto& em = ctx.get_cached<editing_manager>();
+                 if(!em.can_undo())
+                 {
+                     return {.text = R"({"ok":false,"undone":false,"reason":"nothing to undo"})", .is_error = false};
+                 }
+                 auto action = em.undo();
+                 const auto name = action ? action->name : std::string{};
+                 return {.text = fmt::format(R"({{"ok":true,"undone":true,"action":{}}})", make_json_string(name)),
+                         .is_error = false};
+             },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "edit_redo",
+         .description = "Redo the last undone editor action (same as Ctrl+Y).",
+         .input_schema_json = empty_object_schema(),
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             {
+                 std::string error;
+                 if(!require_not_play_mode(ctx, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 auto& em = ctx.get_cached<editing_manager>();
+                 if(!em.can_redo())
+                 {
+                     return {.text = R"({"ok":false,"redone":false,"reason":"nothing to redo"})", .is_error = false};
+                 }
+                 auto action = em.redo();
+                 const auto name = action ? action->name : std::string{};
+                 return {.text = fmt::format(R"({{"ok":true,"redone":true,"action":{}}})", make_json_string(name)),
+                         .is_error = false};
+             },
+         .mutates_scene = true});
 }
 
 } // namespace unravel::mcp

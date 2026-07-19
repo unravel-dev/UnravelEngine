@@ -24,6 +24,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
+#include <engine/rendering/renderer.h>
 #include <engine/ecs/scene.h>
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
@@ -2185,6 +2186,44 @@ auto editor_actions::focus_game_panel(rtti::context& ctx, std::string* error) ->
     auto& panel = ctx.get_cached<hub>().get_panels().get_game_panel();
     panel.set_visible(true);
     panel.focus();
+    return true;
+}
+
+auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<renderer>())
+    {
+        if(error)
+        {
+            *error = "Renderer is not available";
+        }
+        return false;
+    }
+    auto* main_window = ctx.get_cached<renderer>().get_main_window();
+    if(!main_window)
+    {
+        if(error)
+        {
+            *error = "Main window is not available";
+        }
+        return false;
+    }
+    auto& window = main_window->get_window();
+    if(!window.is_open())
+    {
+        if(error)
+        {
+            *error = "Main window is not open";
+        }
+        return false;
+    }
+    if(window.is_minimized())
+    {
+        window.restore();
+    }
+    window.show();
+    window.raise();
+    window.request_focus();
     return true;
 }
 } // namespace unravel

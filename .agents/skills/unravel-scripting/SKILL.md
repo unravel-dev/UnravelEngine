@@ -76,9 +76,9 @@ For attach/edit/save via MCP, use skill `unravel-entities`:
 
 | Tool | Purpose |
 |------|---------|
-| `scripts_list_types` / `scene_add_script` / `scene_remove_script` | Type attach (not `scene_add_component`) |
-| `scripts_get_source` / `scripts_set_source` | Read/write `.cs` (atomic write) |
-| `scripts_create` | New file from `TemplateComponent.cs.in` |
+| `scripts_list_types` / `scene_add_scripts_batch` / `scene_remove_scripts_batch` | Type attach (not `scene_add_components_batch`) |
+| `scripts_get_source` / `scripts_set_sources_batch` | Read/write `.cs` (atomic write) |
+| `scripts_create_batch` | New files from `TemplateComponent.cs.in` |
 
 ## Hot-reload
 
