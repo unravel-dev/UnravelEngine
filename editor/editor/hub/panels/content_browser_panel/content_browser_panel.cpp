@@ -6,6 +6,7 @@
 #include "filesystem/filesystem.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/assets/asset_actions.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
@@ -1737,35 +1738,7 @@ void content_browser_panel::import(rtti::context& ctx, const fs::path& target_pa
 
 void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std::string>& paths, const fs::path& target_path)
 {
-    auto& ts = ctx.get_cached<threader>();
-
-    for(auto& path : paths)
-    {
-        fs::path p = fs::path(path).make_preferred();
-        fs::path filename = p.filename();
-
-        APPLOG_INFO("Importing {0}", filename.string());
-        auto task = ts.pool->schedule("Importing " + filename.extension().string(),
-            [target_path](const fs::path& path, const fs::path& filename)
-            {
-                fs::error_code err;
-                fs::path dir = target_path / filename;
-                if(fs::is_directory(path, err))
-                {
-                    fs::copy(path, dir, fs::copy_options::recursive, err);
-                    if(err)
-                    {
-                        APPLOG_ERROR("Failed to import directory {}, error: {}", path.string(), err.message());
-                    }
-                }
-                else 
-                {
-                    asset_writer::atomic_copy_file(path, dir, err);
-                }
-            },
-            p,
-            filename);
-    }
+    editor_actions::import_files(ctx, paths, target_path);
 }
 
 void content_browser_panel::prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete)

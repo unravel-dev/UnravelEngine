@@ -788,7 +788,7 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
             if(!os::window::is_any_focused())
             {
                 // APPLOG_TRACE("Application lost focus");
-                fs::watcher::pause();
+                // fs::watcher::pause();
             }
         }
         if(e.window.type == os::window_event_id::focus_gained)
@@ -796,7 +796,7 @@ void asset_watcher::on_os_event(rtti::context& ctx, os::event& e)
             if(os::window::is_any_focused())
             {
                 // APPLOG_TRACE("Application gained focus");
-                fs::watcher::resume();
+                // fs::watcher::resume();
             }
         }
     }

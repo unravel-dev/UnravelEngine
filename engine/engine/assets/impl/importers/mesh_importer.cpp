@@ -4,6 +4,7 @@
 #include "bimg/encode.h"
 
 #include "../asset_extensions.h"
+#include "../asset_writer.h"
 
 #include <graphics/graphics.h>
 #include <logging/logging.h>
@@ -52,6 +53,7 @@ void apply_texture_conversion(bimg::ImageContainer* image, const std::string& se
 void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& output_file,
                              const std::string& semantic, bool inverse);
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image);
+auto atomic_image_save(const fs::path& output_file, bimg::ImageContainer* image) -> bool;
 
 /**
  * @brief Per-material scalar/vector multipliers from the KHR_materials_pbrSpecularGlossiness
@@ -1256,7 +1258,7 @@ void process_embedded_texture(const aiTexture* assimp_tex,
                 // Apply workflow-specific texture conversions
                 apply_texture_conversion(image, texture.semantic, texture.inverse);
 
-                imageSave(output_file.string().c_str(), image);
+                atomic_image_save(output_file, image);
 
                 bimg::imageFree(image);
             }
@@ -1697,6 +1699,23 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
 }
 
 /**
+ * @brief Atomically save an ImageContainer via imageSave.
+ * Callback only writes the temp path; atomic_write_file owns rename/cleanup.
+ */
+auto atomic_image_save(const fs::path& output_file, bimg::ImageContainer* image) -> bool
+{
+    fs::error_code ec;
+    asset_writer::atomic_write_file(
+        output_file,
+        [&](const fs::path& temp)
+        {
+            imageSave(temp.string().c_str(), image);
+        },
+        ec);
+    return !ec;
+}
+
+/**
  * @brief Write a raw RGBA8 buffer to a PNG file. Used for sibling outputs that
  * we synthesize directly without going through bimg::ImageContainer.
  *
@@ -1706,28 +1725,38 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
  * that stb_image — and any other compliant TGA reader — re-interprets as BGRA,
  * yielding an R↔B swap at load time. PNG carries explicit format metadata and
  * imageWritePng honors the RGBA8 parameter, so this round-trips correctly.
+ *
+ * Writes through asset_writer::atomic_write_file so watchers never observe a
+ * partial PNG.
  */
 auto write_rgba8_png(const fs::path& output_file,
                      uint32_t width,
                      uint32_t height,
                      const uint8_t* rgba8_data) -> bool
 {
-    bx::FileWriter writer;
-    bx::Error err;
-    if(!bx::open(&writer, output_file.string().c_str(), false, &err))
-    {
-        return false;
-    }
-    bimg::imageWritePng(&writer,
-                        width,
-                        height,
-                        width * 4,
-                        rgba8_data,
-                        bimg::TextureFormat::RGBA8,
-                        false,
-                        &err);
-    bx::close(&writer);
-    return err.isOk();
+    fs::error_code ec;
+    asset_writer::atomic_write_file(
+        output_file,
+        [&](const fs::path& temp)
+        {
+            bx::FileWriter writer;
+            bx::Error err;
+            if(!bx::open(&writer, temp.string().c_str(), false, &err))
+            {
+                return;
+            }
+            bimg::imageWritePng(&writer,
+                                width,
+                                height,
+                                width * 4,
+                                rgba8_data,
+                                bimg::TextureFormat::RGBA8,
+                                false,
+                                &err);
+            bx::close(&writer);
+        },
+        ec);
+    return !ec;
 }
 
 /**
@@ -2963,7 +2992,7 @@ void execute_texture_job(const texture_job& job,
             if(image)
             {
                 apply_texture_conversion(image, result.semantic, result.inverse);
-                imageSave(converted_file.string().c_str(), image);
+                atomic_image_save(converted_file, image);
                 bimg::imageFree(image);
                 result.name = converted_name;
                 APPLOG_TRACE("Mesh Importer: Applied {} conversion to external texture: {}", result.semantic, result.name);
@@ -3774,7 +3803,7 @@ void process_material(asset_manager& am,
                     fs::error_code ec;
                     if(fs::exists(old_filepath, ec))
                     {
-                        fs::rename(old_filepath, fixed_filepath, ec);
+                        asset_writer::atomic_rename_file(old_filepath, fixed_filepath, ec);
                     }
                     else
                     {
@@ -3783,7 +3812,7 @@ void process_material(asset_manager& am,
                         fixed_filepath = output_dir / fixed_relative;
                         if(fs::exists(old_filepath, ec))
                         {
-                            fs::copy_file(old_filepath, fixed_filepath, ec);
+                            asset_writer::atomic_copy_file(old_filepath, fixed_filepath, ec);
                         }
                     }
                     tex.name = fixed_relative.generic_string();
@@ -3919,7 +3948,7 @@ void process_material(asset_manager& am,
             if(image)
             {
                 apply_texture_conversion(image, texture.semantic, texture.inverse);
-                imageSave(converted_file.string().c_str(), image);
+                atomic_image_save(converted_file, image);
                 bimg::imageFree(image);
                 texture.name = converted_name;
                 APPLOG_TRACE("Mesh Importer: Applied {} conversion to external texture: {}", texture.semantic, texture.name);

@@ -16,16 +16,6 @@ namespace unravel::mcp
 namespace
 {
 
-struct transform_snapshot
-{
-    math::vec3 position{};
-    math::vec3 rotation_euler{};
-    math::vec3 scale{1.0f, 1.0f, 1.0f};
-    bool has_position{false};
-    bool has_rotation{false};
-    bool has_scale{false};
-};
-
 struct primitive_batch_item
 {
     std::string primitive;
@@ -36,75 +26,6 @@ struct primitive_batch_item
     bool is_local{true};
     uint32_t material_index{0};
 };
-
-auto read_optional_vec3_from_object(const simdjson::dom::object& obj, const char* key, math::vec3& out) -> bool
-{
-    simdjson::dom::array arr;
-    if(obj[key].get(arr))
-    {
-        return false;
-    }
-    std::vector<double> values;
-    for(auto el : arr)
-    {
-        double v = 0.0;
-        if(el.get(v))
-        {
-            return false;
-        }
-        values.push_back(v);
-    }
-    if(values.size() != 3)
-    {
-        return false;
-    }
-    out = math::vec3{static_cast<float>(values[0]), static_cast<float>(values[1]), static_cast<float>(values[2])};
-    return true;
-}
-
-auto read_transform_snapshot(const simdjson::dom::object& obj, transform_snapshot& out) -> void
-{
-    out.has_position = read_optional_vec3_from_object(obj, "position", out.position);
-    out.has_rotation = read_optional_vec3_from_object(obj, "rotation_euler", out.rotation_euler);
-    out.has_scale = read_optional_vec3_from_object(obj, "scale", out.scale);
-}
-
-void apply_pose_direct(entt::handle entity, const transform_snapshot& pose, bool is_local)
-{
-    if(!entity || !entity.all_of<transform_component>())
-    {
-        return;
-    }
-    auto& transform = entity.get<transform_component>();
-    if(is_local)
-    {
-        if(pose.has_position)
-        {
-            transform.set_position_local(pose.position);
-        }
-        if(pose.has_rotation)
-        {
-            transform.set_rotation_euler_local(pose.rotation_euler);
-        }
-        if(pose.has_scale)
-        {
-            transform.set_scale_local(pose.scale);
-        }
-        return;
-    }
-    if(pose.has_position)
-    {
-        transform.set_position_global(pose.position);
-    }
-    if(pose.has_rotation)
-    {
-        transform.set_rotation_euler_global(pose.rotation_euler);
-    }
-    if(pose.has_scale)
-    {
-        transform.set_scale_global(pose.scale);
-    }
-}
 
 auto apply_material_direct(rtti::context& ctx, entt::handle entity, const std::string& material_key, uint32_t index)
     -> bool

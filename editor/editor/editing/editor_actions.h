@@ -12,6 +12,7 @@
 
 #include <filesystem/filesystem.h>
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
@@ -43,6 +44,18 @@ struct log_query_entry
     std::string filename;
     std::string funcname;
     int line{0};
+};
+
+/**
+ * @brief One async content-browser-style import job (external path -> project folder).
+ */
+struct import_files_item
+{
+    std::string source_path;
+    std::string dest_path;
+    std::string dest_key;
+    bool is_directory{false};
+    tpp::shared_future<bool> future;
 };
 
 struct editor_actions
@@ -146,6 +159,27 @@ struct editor_actions
      * work can run (e.g. after MCP creates materials while Cursor has focus).
      */
     static auto request_main_window_focus(rtti::context& ctx, std::string* error = nullptr) -> bool;
+
+    /**
+     * @brief Copy external files/folders into target_path (content-browser Import parity).
+     *
+     * When async is true (default), schedules thread-pool copy jobs and returns
+     * immediately — call wait_import_jobs before treating destinations as present.
+     * When async is false, copies synchronously and sets each item's future to a
+     * ready result (preferred for MCP / automation). Asset compilation remains
+     * asynchronous via the asset watcher after files land on disk.
+     */
+    static auto import_files(rtti::context& ctx,
+                             const std::vector<std::string>& paths,
+                             const fs::path& target_path,
+                             bool async = true) -> std::vector<import_files_item>;
+
+    /**
+     * @brief Block until all import copy jobs complete or timeout elapses.
+     * @return true when every job finished successfully within timeout.
+     */
+    static auto wait_import_jobs(std::vector<import_files_item>& items,
+                                 std::chrono::milliseconds timeout) -> bool;
 
 };
 

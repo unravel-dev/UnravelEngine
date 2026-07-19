@@ -4,6 +4,7 @@
 
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -147,6 +148,63 @@ auto try_wait_asset_ready(rtti::context& ctx, const std::string& key, std::chron
         std::this_thread::sleep_for(std::chrono::milliseconds(32));
     }
     return false;
+}
+
+auto read_import_timeout_ms(const simdjson::dom::object& args, int64_t default_ms) -> std::chrono::milliseconds
+{
+    int64_t timeout_ms = default_ms;
+    if(args["wait_ms"].get(timeout_ms))
+    {
+        timeout_ms = default_ms;
+    }
+    if(timeout_ms < 0)
+    {
+        timeout_ms = 0;
+    }
+    if(timeout_ms > 60000)
+    {
+        timeout_ms = 60000;
+    }
+    return std::chrono::milliseconds(timeout_ms);
+}
+
+auto collect_imported_asset_keys(const import_files_item& item) -> std::vector<std::string>
+{
+    std::vector<std::string> keys;
+    if(item.dest_key.empty())
+    {
+        return keys;
+    }
+    if(!item.is_directory)
+    {
+        keys.push_back(item.dest_key);
+        return keys;
+    }
+    fs::error_code ec;
+    const fs::path root(item.dest_path);
+    const auto meta_ext = ex::get_meta_format();
+    for(fs::recursive_directory_iterator it(root, ec), end; it != end && !ec; it.increment(ec))
+    {
+        if(!it->is_regular_file(ec))
+        {
+            continue;
+        }
+        const auto path = it->path();
+        if(path.extension().generic_string() == meta_ext)
+        {
+            continue;
+        }
+        const auto key = fs::convert_to_protocol(path).generic_string();
+        if(!key.empty())
+        {
+            keys.push_back(key);
+        }
+    }
+    if(keys.empty())
+    {
+        keys.push_back(item.dest_key);
+    }
+    return keys;
 }
 
 } // namespace
@@ -493,6 +551,158 @@ void register_asset_tools(mcp_tool_registry& registry)
                  sleep_worker(wait_ms);
              }
              return *create_result;
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "assets_import_files",
+         .description =
+             "Import external files/folders into the open project (content-browser Import parity). "
+             "Never download into the project first — stage files outside app:/ (e.g. OS temp), "
+             "then pass those absolute paths here. paths: absolute filesystem paths outside the "
+             "project. folder: destination protocol key (e.g. app:/data/Imported). Waits for "
+             "async copy jobs, then polls until imported asset keys are ready (wait_ms, default "
+             "15000, max 60000). Focuses the editor window so the asset watcher can process "
+             "new files.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             const auto wait_ms = read_import_timeout_ms(args, 15000);
+             simdjson::dom::array paths_arr;
+             if(args["paths"].get(paths_arr))
+             {
+                 return {.text = "Missing paths array", .is_error = true};
+             }
+             std::string folder;
+             if(!read_string(args, "folder", folder) || folder.empty())
+             {
+                 return {.text = "Missing folder", .is_error = true};
+             }
+             folder = normalize_folder_key(folder);
+             if(!starts_with(folder, "app:/"))
+             {
+                 return {.text = "folder must be under app:/ (project data)", .is_error = true};
+             }
+             std::vector<std::string> paths;
+             for(auto el : paths_arr)
+             {
+                 std::string_view path_view;
+                 if(el.get(path_view) || path_view.empty())
+                 {
+                     return {.text = "Each paths entry must be a non-empty string", .is_error = true};
+                 }
+                 paths.emplace_back(path_view);
+             }
+             if(paths.empty())
+             {
+                 return {.text = "paths array is empty", .is_error = true};
+             }
+             std::string project_error;
+             if(!require_open_project(ctx, project_error))
+             {
+                 return {.text = project_error, .is_error = true};
+             }
+             fs::error_code ec;
+             const auto project_root = fs::absolute(fs::resolve_protocol("app:/"));
+             for(const auto& path : paths)
+             {
+                 const auto absolute_source = fs::absolute(fs::path(path));
+                 if(fs::is_any_parent_path(project_root, absolute_source) ||
+                    fs::equivalent(project_root, absolute_source, ec))
+                 {
+                     return {.text =
+                                 "paths must be outside the project folder; download/stage "
+                                 "elsewhere then import (rejected: " +
+                                 absolute_source.generic_string() + ")",
+                             .is_error = true};
+                 }
+             }
+             const auto target_path = fs::absolute(fs::resolve_protocol(folder));
+             if(fs::exists(target_path, ec) && !fs::is_directory(target_path, ec))
+             {
+                 return {.text = "folder resolves to a non-directory path: " + folder, .is_error = true};
+             }
+             {
+                 std::string focus_error;
+                 editor_actions::request_main_window_focus(ctx, &focus_error);
+             }
+             auto items = editor_actions::import_files(ctx, paths, target_path, false);
+             const bool copied = editor_actions::wait_import_jobs(items, wait_ms);
+             const auto ready_deadline = std::chrono::steady_clock::now() + wait_ms;
+             std::string results = "[";
+             bool first = true;
+             size_t ready_count = 0;
+             size_t imported_count = 0;
+             for(auto& item : items)
+             {
+                 bool copy_ok = false;
+                 if(item.future.valid() &&
+                    item.future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
+                 {
+                     copy_ok = item.future.get();
+                 }
+                 const auto keys = collect_imported_asset_keys(item);
+                 if(keys.empty())
+                 {
+                     if(!first)
+                     {
+                         results += ",";
+                     }
+                     first = false;
+                     results += fmt::format(
+                         R"({{"ok":{},"source":{},"dest":{},"key":{},"is_directory":{},"ready":false,"error":"No destination key"}})",
+                         copy_ok ? "true" : "false",
+                         make_json_string(item.source_path),
+                         make_json_string(item.dest_path),
+                         make_json_string(item.dest_key),
+                         item.is_directory ? "true" : "false");
+                     continue;
+                 }
+                 imported_count += keys.size();
+                 for(const auto& key : keys)
+                 {
+                     bool ready = false;
+                     if(copy_ok)
+                     {
+                         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             ready_deadline - std::chrono::steady_clock::now());
+                         ready = try_wait_asset_ready(
+                             ctx,
+                             key,
+                             remaining.count() > 0 ? remaining : std::chrono::milliseconds(0));
+                     }
+                     if(ready)
+                     {
+                         ++ready_count;
+                     }
+                     if(!first)
+                     {
+                         results += ",";
+                     }
+                     first = false;
+                     results += fmt::format(
+                         R"({{"ok":{},"source":{},"dest":{},"key":{},"is_directory":{},"ready":{}}})",
+                         copy_ok ? "true" : "false",
+                         make_json_string(item.source_path),
+                         make_json_string(item.dest_path),
+                         make_json_string(key),
+                         item.is_directory ? "true" : "false",
+                         ready ? "true" : "false");
+                 }
+             }
+             results += "]";
+             const bool ok = copied && ready_count == imported_count && imported_count > 0;
+             return {.text = fmt::format(
+                         R"({{"folder":{},"results":{},"imported":{},"ready":{},"copied":{}}})",
+                         make_json_string(folder),
+                         results,
+                         imported_count,
+                         ready_count,
+                         copied ? "true" : "false"),
+                     .is_error = !ok};
          },
          .mutates_scene = false,
          .requires_main_thread = false});

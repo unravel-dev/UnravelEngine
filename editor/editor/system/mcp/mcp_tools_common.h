@@ -9,6 +9,7 @@
 #include <engine/play_mode.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/entity_inspect.h>
+#include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/system/project_manager.h>
 #include <math/math.h>
 #include <uuid/uuid.h>
@@ -158,6 +159,76 @@ inline auto read_transform_space(const simdjson::dom::object& args, bool& out_is
     }
     error = "Invalid space (use \"world\" or \"local\")";
     return false;
+}
+
+struct transform_snapshot
+{
+    math::vec3 position{};
+    math::vec3 rotation_euler{};
+    math::vec3 scale{1.0f, 1.0f, 1.0f};
+    bool has_position{false};
+    bool has_rotation{false};
+    bool has_scale{false};
+};
+
+inline auto read_transform_snapshot(const simdjson::dom::object& obj, transform_snapshot& out) -> void
+{
+    out.has_position = read_vec3(obj, "position", out.position);
+    out.has_rotation = read_vec3(obj, "rotation_euler", out.rotation_euler);
+    out.has_scale = read_vec3(obj, "scale", out.scale);
+}
+
+inline void apply_pose_direct(entt::handle entity, const transform_snapshot& pose, bool is_local)
+{
+    if(!entity || !entity.all_of<transform_component>())
+    {
+        return;
+    }
+    auto& transform = entity.get<transform_component>();
+    if(is_local)
+    {
+        if(pose.has_position)
+        {
+            transform.set_position_local(pose.position);
+        }
+        if(pose.has_rotation)
+        {
+            transform.set_rotation_euler_local(pose.rotation_euler);
+        }
+        if(pose.has_scale)
+        {
+            transform.set_scale_local(pose.scale);
+        }
+        if(pose.has_position || pose.has_rotation || pose.has_scale)
+        {
+            prefab_override_context::mark_transform_as_changed(entity,
+                                                              pose.has_position,
+                                                              pose.has_rotation,
+                                                              pose.has_scale,
+                                                              false);
+        }
+        return;
+    }
+    if(pose.has_position)
+    {
+        transform.set_position_global(pose.position);
+    }
+    if(pose.has_rotation)
+    {
+        transform.set_rotation_euler_global(pose.rotation_euler);
+    }
+    if(pose.has_scale)
+    {
+        transform.set_scale_global(pose.scale);
+    }
+    if(pose.has_position || pose.has_rotation || pose.has_scale)
+    {
+        prefab_override_context::mark_transform_global_as_changed(entity,
+                                                                 pose.has_position,
+                                                                 pose.has_rotation,
+                                                                 pose.has_scale,
+                                                                 false);
+    }
 }
 
 inline auto read_wait_ms(const simdjson::dom::object& args, int64_t default_ms = 1000) -> std::chrono::milliseconds

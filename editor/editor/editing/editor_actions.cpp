@@ -2226,4 +2226,102 @@ auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* 
     window.request_focus();
     return true;
 }
+
+auto editor_actions::import_files(rtti::context& ctx,
+                                  const std::vector<std::string>& paths,
+                                  const fs::path& target_path,
+                                  bool async) -> std::vector<import_files_item>
+{
+    auto& ts = ctx.get_cached<threader>();
+    std::vector<import_files_item> items;
+    items.reserve(paths.size());
+    fs::error_code ec;
+    fs::create_directories(target_path, ec);
+    auto copy_one = [](const fs::path& source, const fs::path& dest, bool is_directory) -> bool
+    {
+        fs::error_code err;
+        if(is_directory)
+        {
+            fs::copy(source, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, err);
+            if(err)
+            {
+                APPLOG_ERROR("Failed to import directory {}, error: {}", source.string(), err.message());
+                return false;
+            }
+            return true;
+        }
+        asset_writer::atomic_copy_file(source, dest, err);
+        if(err)
+        {
+            APPLOG_ERROR("Failed to import file {}, error: {}", source.string(), err.message());
+            return false;
+        }
+        return true;
+    };
+    for(const auto& path : paths)
+    {
+        import_files_item item{};
+        fs::path source = fs::path(path).make_preferred();
+        fs::path filename = source.filename();
+        fs::path dest = target_path / filename;
+        item.source_path = source.generic_string();
+        item.dest_path = dest.generic_string();
+        item.is_directory = fs::is_directory(source, ec);
+        const auto protocol = fs::convert_to_protocol(dest);
+        if(!protocol.empty())
+        {
+            item.dest_key = protocol.generic_string();
+        }
+        APPLOG_INFO("Importing {0}", filename.string());
+        if(async)
+        {
+            auto job = ts.pool->schedule("Importing " + filename.extension().string(),
+                                         copy_one,
+                                         source,
+                                         dest,
+                                         item.is_directory);
+            item.future = job.share();
+        }
+        else
+        {
+            const bool ok = copy_one(source, dest, item.is_directory);
+            item.future = tpp::make_ready_future<bool>(bool(ok)).share();
+        }
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
+auto editor_actions::wait_import_jobs(std::vector<import_files_item>& items,
+                                      std::chrono::milliseconds timeout) -> bool
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    bool all_ok = true;
+    for(auto& item : items)
+    {
+        if(!item.future.valid())
+        {
+            all_ok = false;
+            continue;
+        }
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if(remaining.count() <= 0)
+        {
+            all_ok = false;
+            break;
+        }
+        const auto status = item.future.wait_for(remaining);
+        if(status != std::future_status::ready)
+        {
+            all_ok = false;
+            break;
+        }
+        if(!item.future.get())
+        {
+            all_ok = false;
+        }
+    }
+    return all_ok;
+}
 } // namespace unravel

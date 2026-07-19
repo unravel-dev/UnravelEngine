@@ -74,13 +74,24 @@ Context menu actions in `content_browser_panel.cpp`.
 | `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, …) |
 | `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |
 | `assets_create_folder` | Create folder under protocol path |
+| `assets_import_files` | Copy external files/folders into `app:/...` (content-browser Import); waits for copy + ready |
 | `assets_reimport_batch` | Reimport many keys (+ optional `wait_ms`) |
 | `assets_wait_ready_batch` | Poll until material/mesh/prefab (or meta/file) keys are ready |
 | `assets_get_mesh_info` | Mesh local AABB |
 | `prefabs_create_from_entities_batch` | Save entity hierarchies as `.pfb` |
 | `window_request_focus` | Focus/raise editor OS window (watcher gated when unfocused) |
 
-If create/reimport appears stuck while agent app has focus, call `window_request_focus` then `assets_wait_ready_batch`.
+If create/reimport/import appears stuck while agent app has focus, call `window_request_focus` then `assets_wait_ready_batch`.
+
+### Import workflow (required)
+
+**Never download or write fetched assets directly into the project (`app:/`).**
+
+1. Download/stage to an OS temp (or other non-project) directory.
+2. Call `assets_import_files` with those absolute paths and a destination `folder` under `app:/`.
+3. Use returned `key`s; optionally `assets_wait_ready_batch` if needed.
+
+`assets_import_files` rejects source paths under the project root. It uses `editor_actions::import_files` / `wait_import_jobs` (content-browser Import parity), focuses the editor window, waits for async copies, then polls until ready (`wait_ms`, default 15000).
 
 `type` filters accept `mat`, `.mat`, `pfb`, `emesh`, `etex`, `cs`, `spfb`, etc. (aliases normalized).
 
