@@ -46,24 +46,6 @@ auto parse_light_type(const std::string& value, light_type& out) -> bool
     return false;
 }
 
-auto resolve_addable_component(const std::string& name) -> entt::meta_type
-{
-    entt::meta_type found{};
-    hpp::for_each_tuple_type<all_addable_components>(
-        [&](auto index)
-        {
-            using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
-            auto type = entt::resolve<ctype>();
-            auto pretty = std::string(entt::get_pretty_name(type));
-            auto raw = std::string(entt::get_name(type));
-            if(pretty == name || raw == name)
-            {
-                found = type;
-            }
-        });
-    return found;
-}
-
 void maybe_set_parent(rtti::context& ctx, entt::handle entity, entt::handle parent)
 {
     if(!entity || !parent)
