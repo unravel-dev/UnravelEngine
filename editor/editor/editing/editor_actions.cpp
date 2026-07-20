@@ -1364,7 +1364,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                APPLOG_INFO("Deploying Dependencies...");
 
                                fs::path app_executable =
-                                   fs::resolve_protocol("binary:/game" + fs::executable_extension());
+                                   fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
                                auto deps = get_dependencies(app_executable);
 
                                fs::error_code ec;
