@@ -46,3 +46,6 @@
 [submodule "deps/3rdparty/watcher/watcher"]
 	path = deps/3rdparty/watcher/watcher
 	url = https://github.com/e-dant/watcher.git
+[submodule "deps/3rdparty/cpp-httplib/cpp-httplib"]
+	path = deps/3rdparty/cpp-httplib/cpp-httplib
+	url = https://github.com/yhirose/cpp-httplib.git
