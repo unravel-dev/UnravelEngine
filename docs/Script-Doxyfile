@@ -74,7 +74,6 @@ PROJECT_ICON           =
 # entered, it will be relative to the location where Doxygen was started. If
 # left blank the current directory will be used.
 
-# Relative to the working directory. Run: cd docs && doxygen Script-Doxyfile
 OUTPUT_DIRECTORY       = script-api
 
 # If the CREATE_SUBDIRS tag is set to YES then Doxygen will create up to 4096
@@ -525,7 +524,7 @@ TIMESTAMP              = NO
 # normally produced when WARNINGS is set to YES.
 # The default value is: NO.
 
-EXTRACT_ALL            = NO
+EXTRACT_ALL            = YES
 
 # If the EXTRACT_PRIVATE tag is set to YES, all private members of a class will
 # be included in the documentation.

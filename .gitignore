@@ -52,4 +52,7 @@
 # API docs output (tasks/generate-api-docs.ps1 / .sh)
 docs/script-api/
 docs/engine-api/
+docs/makrdown/
+docs/api/
+docs/_site/
 docs/_generated/
