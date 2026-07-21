@@ -75,8 +75,8 @@ PROJECT_ICON           =
 # left blank the current directory will be used.
 
 OUTPUT_DIRECTORY       = script-api
-
 # If the CREATE_SUBDIRS tag is set to YES then Doxygen will create up to 4096
+
 # sub-directories (in 2 levels) under the output directory of each output format
 # and will distribute the generated files over these directories. Enabling this
 # option can be useful when feeding Doxygen a huge amount of source files, where
