@@ -84,11 +84,13 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
     fs::error_code err;
     if(!fs::exists(compiled_output_path, err) || err)
     {
+        APPLOG_WARNING("Compiled output does not exist for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
     auto manifest_path = asset_compiler::get_manifest_path(compiled_output_path);
     if(!fs::exists(manifest_path, err) || err)
     {
+        APPLOG_WARNING("Manifest does not exist for {}, recompilation needed", compiled_output_path.string());
         return true;
     }
     asset_compiler::asset_manifest manifest;

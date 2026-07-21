@@ -45,8 +45,8 @@ struct asset_manifest
     /// Compute fingerprint from source file only
     void compute_source_fingerprint(const fs::path& source_key);
 
-    /// Compute fingerprint from dependency files in source parse order.
-    /// If dependency_paths is empty, falls back to source-only fingerprint.
+    /// Compute fingerprint from the source file plus external dependency paths
+    /// (in that order). If dependency_paths is empty, falls back to source-only.
     void compute_source_fingerprint(const fs::path& source_key, const std::vector<fs::path>& dependency_paths);
 
 };

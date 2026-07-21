@@ -59,16 +59,45 @@ auto visit_key_for_path(const fs::path& file_path) -> std::string
     return fs::absolute(file_path).string();
 }
 
+void append_shader_varying_dependency(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    const std::string file_name = file_path.stem().string();
+    const fs::path dir = file_path.parent_path();
+    fs::path varying = dir / (file_name + ".io");
+    fs::error_code err;
+    if(!fs::exists(varying, err))
+    {
+        varying = dir / "varying.def.io";
+    }
+    if(!fs::exists(varying, err))
+    {
+        varying = dir / "varying.def.sc";
+    }
+    if(fs::exists(varying, err))
+    {
+        processed_files.push_back(varying);
+    }
+}
+
 void resolve_shader_dependencies(const fs::path& file_path,
                                  std::vector<fs::path>& processed_files,
-                                 std::unordered_set<std::string>& visited)
+                                 std::unordered_set<std::string>& visited,
+                                 bool is_root)
 {
     if(!visited.insert(visit_key_for_path(file_path)).second)
     {
         return;
     }
 
-    processed_files.push_back(file_path);
+    // Root source is watched separately; only emit external deps here.
+    if(is_root)
+    {
+        append_shader_varying_dependency(file_path, processed_files);
+    }
+    else
+    {
+        processed_files.push_back(file_path);
+    }
 
     std::ifstream file(file_path);
     if(!file.is_open())
@@ -97,20 +126,25 @@ void resolve_shader_dependencies(const fs::path& file_path,
         }
         const std::string include_path = normalize_dependency_path_string(line.substr(start, end - start));
         const fs::path resolved_path = fs::absolute(file_path.parent_path() / fs::path(include_path));
-        resolve_shader_dependencies(resolved_path, processed_files, visited);
+        resolve_shader_dependencies(resolved_path, processed_files, visited, false);
     }
 }
 
 void resolve_ui_tree_dependencies(const fs::path& file_path,
                                   std::vector<fs::path>& processed_files,
-                                  std::unordered_set<std::string>& visited)
+                                  std::unordered_set<std::string>& visited,
+                                  bool is_root)
 {
     if(!visited.insert(visit_key_for_path(file_path)).second)
     {
         return;
     }
 
-    processed_files.push_back(file_path);
+    // Root source is watched separately; only emit linked deps here.
+    if(!is_root)
+    {
+        processed_files.push_back(file_path);
+    }
 
     std::ifstream file(file_path);
     if(!file.is_open())
@@ -137,7 +171,7 @@ void resolve_ui_tree_dependencies(const fs::path& file_path,
             auto extension = resolved_path.extension().string();
             if(std::find(supported_deps.begin(), supported_deps.end(), extension) != supported_deps.end())
             {
-                resolve_ui_tree_dependencies(resolved_path, processed_files, visited);
+                resolve_ui_tree_dependencies(resolved_path, processed_files, visited, false);
             }
         }
         pos = tag_end + 1;
@@ -150,14 +184,14 @@ template<>
 void resolve_dependencies<gfx::shader>(const fs::path& file_path, std::vector<fs::path>& processed_files)
 {
     std::unordered_set<std::string> visited;
-    resolve_shader_dependencies(file_path, processed_files, visited);
+    resolve_shader_dependencies(file_path, processed_files, visited, true);
 }
 
 template<>
 void resolve_dependencies<ui_tree>(const fs::path& file_path, std::vector<fs::path>& processed_files)
 {
     std::unordered_set<std::string> visited;
-    resolve_ui_tree_dependencies(file_path, processed_files, visited);
+    resolve_ui_tree_dependencies(file_path, processed_files, visited, true);
 }
 
 } // namespace asset_compiler

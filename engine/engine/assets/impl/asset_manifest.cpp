@@ -44,8 +44,17 @@ void asset_manifest::compute_source_fingerprint(const fs::path& source_key,
             return;
         }
 
+        // Source is watched separately and omitted from dependency_paths;
+        // still include it so the combined fingerprint tracks root edits.
         std::vector<std::string> fingerprints;
-        fingerprints.reserve(dependency_paths.size());
+        fingerprints.reserve(dependency_paths.size() + 1);
+        {
+            const auto source_fingerprint_part = hash_file(source_file_path);
+            if(!source_fingerprint_part.empty())
+            {
+                fingerprints.push_back(source_fingerprint_part);
+            }
+        }
         for(const auto& dep_path : dependency_paths)
         {
             fs::error_code dep_ec;
