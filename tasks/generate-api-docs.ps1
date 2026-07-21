@@ -32,23 +32,6 @@ function Assert-Command([string] $Name)
     }
 }
 
-function Rename-ApiIndexToReadme([string] $MarkdownDir)
-{
-    $apiPath = Join-Path $MarkdownDir "api.md"
-    $readmePath = Join-Path $MarkdownDir "README.md"
-    if (-not (Test-Path $apiPath))
-    {
-        Write-Host "Warning: expected index missing: $apiPath"
-        return
-    }
-    if (Test-Path $readmePath)
-    {
-        Remove-Item -Force $readmePath
-    }
-    Move-Item -Force $apiPath $readmePath
-    Write-Host "Renamed api.md -> README.md in $MarkdownDir"
-}
-
 function Invoke-Moxygen([string] $XmlDir, [string] $OutputPattern, [string] $Language)
 {
     if (-not (Test-Path (Join-Path $XmlDir "index.xml")))
@@ -75,18 +58,15 @@ function Invoke-Moxygen([string] $XmlDir, [string] $OutputPattern, [string] $Lan
         {
             throw "moxygen failed with exit code $LASTEXITCODE"
         }
+        return
     }
-    else
+    Assert-Command "npx"
+    Write-Host "npx --yes moxygen $($moxygenArgs -join ' ')"
+    & npx --yes moxygen @moxygenArgs
+    if ($LASTEXITCODE -ne 0)
     {
-        Assert-Command "npx"
-        Write-Host "npx --yes moxygen $($moxygenArgs -join ' ')"
-        & npx --yes moxygen @moxygenArgs
-        if ($LASTEXITCODE -ne 0)
-        {
-            throw "npx moxygen failed with exit code $LASTEXITCODE"
-        }
+        throw "npx moxygen failed with exit code $LASTEXITCODE"
     }
-    Rename-ApiIndexToReadme -MarkdownDir $outDir
 }
 
 $runScript = (-not $EngineOnly) -or $ScriptOnly
@@ -136,7 +116,7 @@ if (-not $SkipMoxygen)
         # C# sources; moxygen has no csharp templates (only cpp/java). java is closer.
         Invoke-Moxygen `
             -XmlDir (Join-Path $docs "script-api\xml") `
-            -OutputPattern (Join-Path $docs "markdown\script-api\%s.md") `
+            -OutputPattern (Join-Path $docs "script-api\markdown\%s.md") `
             -Language "java"
     }
     if ($runEngine)
@@ -144,7 +124,7 @@ if (-not $SkipMoxygen)
         Write-Host "=== moxygen engine-api ==="
         Invoke-Moxygen `
             -XmlDir (Join-Path $docs "engine-api\xml") `
-            -OutputPattern (Join-Path $docs "markdown\engine-api\%s.md") `
+            -OutputPattern (Join-Path $docs "engine-api\markdown\%s.md") `
             -Language "cpp"
     }
 }
@@ -152,4 +132,4 @@ if (-not $SkipMoxygen)
 Write-Host "Done."
 Write-Host "  HTML:     docs/script-api/html , docs/engine-api/html"
 Write-Host "  XML:      docs/script-api/xml  , docs/engine-api/xml"
-Write-Host "  Markdown: docs/markdown/script-api , docs/markdown/engine-api"
+Write-Host "  Markdown: docs/script-api/markdown , docs/engine-api/markdown"

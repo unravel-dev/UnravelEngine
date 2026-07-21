@@ -46,30 +46,15 @@ need_cmd() {
   }
 }
 
-rename_api_index_to_readme() {
-  local markdown_dir="$1"
-  local api_path="${markdown_dir}/api.md"
-  local readme_path="${markdown_dir}/README.md"
-  if [[ ! -f "${api_path}" ]]; then
-    echo "Warning: expected index missing: ${api_path}"
-    return 0
-  fi
-  rm -f "${readme_path}"
-  mv "${api_path}" "${readme_path}"
-  echo "Renamed api.md -> README.md in ${markdown_dir}"
-}
-
 run_moxygen() {
   local xml_dir="$1"
   local output_pattern="$2"
   local language="$3"
-  local out_dir
-  out_dir="$(dirname "${output_pattern}")"
   if [[ ! -f "${xml_dir}/index.xml" ]]; then
     echo "Doxygen XML missing (expected index.xml): ${xml_dir}" >&2
     exit 1
   fi
-  mkdir -p "${out_dir}"
+  mkdir -p "$(dirname "${output_pattern}")"
   local args=(--html-anchors --classes --language "${language}" --output "${output_pattern}" "${xml_dir}")
   if command -v moxygen >/dev/null 2>&1; then
     echo "moxygen ${args[*]}"
@@ -79,7 +64,6 @@ run_moxygen() {
     echo "npx --yes moxygen ${args[*]}"
     npx --yes moxygen "${args[@]}"
   fi
-  rename_api_index_to_readme "${out_dir}"
 }
 
 if [[ "${SKIP_DOXYGEN}" -eq 0 ]]; then
@@ -102,14 +86,14 @@ if [[ "${SKIP_MOXYGEN}" -eq 0 ]]; then
     # C# sources; moxygen has no csharp templates (only cpp/java). java is closer.
     run_moxygen \
       "${DOCS}/script-api/xml" \
-      "${DOCS}/markdown/script-api/%s.md" \
+      "${DOCS}/script-api/markdown/%s.md" \
       java
   fi
   if [[ "${RUN_ENGINE}" -eq 1 ]]; then
     echo "=== moxygen engine-api ==="
     run_moxygen \
       "${DOCS}/engine-api/xml" \
-      "${DOCS}/markdown/engine-api/%s.md" \
+      "${DOCS}/engine-api/markdown/%s.md" \
       cpp
   fi
 fi
@@ -117,4 +101,4 @@ fi
 echo "Done."
 echo "  HTML:     docs/script-api/html , docs/engine-api/html"
 echo "  XML:      docs/script-api/xml  , docs/engine-api/xml"
-echo "  Markdown: docs/markdown/script-api , docs/markdown/engine-api"
+echo "  Markdown: docs/script-api/markdown , docs/engine-api/markdown"
