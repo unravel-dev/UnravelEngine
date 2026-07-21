@@ -3,6 +3,9 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Representation of four-dimensional vectors.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Vector4 : IEquatable<Vector4>, IFormattable
 {

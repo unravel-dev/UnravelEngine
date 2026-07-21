@@ -2,6 +2,9 @@ using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Axis-aligned bounding box defined by minimum and maximum corners.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Bounds : IEquatable<Bounds>
 {

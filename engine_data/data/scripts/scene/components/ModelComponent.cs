@@ -27,6 +27,9 @@ namespace Unravel.Core
             }
         }
 
+        /// <summary>
+        /// Gets the number of shared (asset-backed) materials on the model.
+        /// </summary>
         public int GetSharedMaterialsCount()
         {
             return internal_m2n_model_get_shared_material_count(owner);
@@ -62,6 +65,9 @@ namespace Unravel.Core
             return material;
         }
 
+        /// <summary>
+        /// Gets the number of material instances on the model.
+        /// </summary>
         public int GetMaterialsCount()
         {
             return internal_m2n_model_get_material_instance_count(owner);
@@ -114,6 +120,9 @@ namespace Unravel.Core
             internal_m2n_model_set_material_instance(owner, material.GetProperties(), index);
         }
 
+        /// <summary>
+        /// Clears all material instances so the model uses its shared materials again.
+        /// </summary>
         public void ResetMaterials()
         {
             var count = GetSharedMaterialsCount();

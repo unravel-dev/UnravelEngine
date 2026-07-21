@@ -154,6 +154,10 @@ namespace Unravel.Core
         }
 
 
+        /// <summary>
+        /// Synchronizes this element's transform to follow the given entity.
+        /// </summary>
+        /// <param name="transformEntity">The entity whose transform to sync from.</param>
         public void SyncTransformToEntity(Entity transformEntity)
         {
             internal_m2n_ui_element_wrapper_sync_transform_to_entity(nativePtr, ownerEntity, transformEntity);

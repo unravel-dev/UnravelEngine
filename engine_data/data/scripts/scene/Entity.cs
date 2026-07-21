@@ -28,11 +28,18 @@ namespace Unravel.Core
 			get => internal_m2n_get_active_global(this);
 		}
 
+		/// <summary>
+		/// Gets whether the entity is active locally (independent of parent hierarchy).
+		/// </summary>
 		public bool activeLocal
 		{
 			get => internal_m2n_get_active_local(this);
 		}
 
+		/// <summary>
+		/// Sets the local active state of the entity.
+		/// </summary>
+		/// <param name="active">Whether the entity should be active locally.</param>
 		public void SetActive(bool active)
 		{
 			internal_m2n_set_active_local(this, active);
@@ -262,6 +269,11 @@ namespace Unravel.Core
 			return internal_m2n_remove_component_instance(component.owner, component);
 		}
 
+		/// <summary>
+		/// Removes the specified component instance from this entity.
+		/// </summary>
+		/// <param name="component">The component instance to remove.</param>
+		/// <returns><c>true</c> if the component was successfully removed; otherwise, <c>false</c>.</returns>
 		public bool RemoveComponent(Component component)
 		{
 			return internal_m2n_remove_component_instance(this, component);
@@ -277,6 +289,12 @@ namespace Unravel.Core
 			return internal_m2n_remove_component_instance_delay(component.owner, component, secondsDelay);
 		}
 
+		/// <summary>
+		/// Removes the specified component instance from this entity after a delay.
+		/// </summary>
+		/// <param name="component">The component instance to remove.</param>
+		/// <param name="secondsDelay">Delay in seconds before the component is removed.</param>
+		/// <returns><c>true</c> if the delayed removal was scheduled; otherwise, <c>false</c>.</returns>
 		public bool RemoveComponent(Component component, float secondsDelay)
 		{
 			return internal_m2n_remove_component_instance_delay(this, component, secondsDelay);

@@ -2,6 +2,9 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Internal helpers used by <see cref="Mathf"/>.
+/// </summary>
 [StructLayout(LayoutKind.Sequential, Size = 1)]
 public struct MathfInternal
 {
@@ -12,6 +15,9 @@ public struct MathfInternal
     public static bool IsFlushToZeroEnabled = FloatMinDenormal == 0f;
 }
 
+/// <summary>
+/// A collection of common math functions.
+/// </summary>
 [StructLayout(LayoutKind.Sequential, Size = 1)]
 public struct Mathf
 {

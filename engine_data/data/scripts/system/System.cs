@@ -27,29 +27,57 @@ namespace Unravel.Core
         }
     }
 
+    /// <summary>
+    /// Per-frame timing values pushed from native into managed code.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct UpdateInfo
     {
+        /// <summary>Elapsed time in seconds since play began.</summary>
         public float time;
+        /// <summary>Seconds since the previous update frame.</summary>
         public float deltaTime;
+        /// <summary>Current time scale multiplier.</summary>
         public float timeScale;
+        /// <summary>Number of update frames since play began.</summary>
         public long frameCount;
     }
 
+    /// <summary>
+    /// Fixed-step timing values pushed from native into managed code.
+    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct FixedUpdateInfo
     {
+        /// <summary>Seconds for the current fixed update step.</summary>
         public float deltaTime;
     }
 
+    /// <summary>
+    /// Provides global timing information for gameplay scripts.
+    /// </summary>
     public static class Time
     {
+        /// <summary>
+        /// Elapsed time in seconds since play began.
+        /// </summary>
         public static float time;
+
+        /// <summary>
+        /// Seconds since the previous update frame (scaled by <see cref="timeScale"/>).
+        /// </summary>
         public static float deltaTime;
+
         internal static float _timeScale = 1.0f;
 
+        /// <summary>
+        /// Seconds for the current fixed update step.
+        /// </summary>
         public static float fixedDeltaTime;
 
+        /// <summary>
+        /// Number of update frames since play began.
+        /// </summary>
         public static long frameCount;
 
         /// <summary>
@@ -565,6 +593,9 @@ namespace Unravel.Core
     }
 
 
+    /// <summary>
+    /// Tracks managed GC activity and optionally logs collection/memory deltas.
+    /// </summary>
     public class GCMonitor
     {
         private int lastGen0Count;
@@ -572,11 +603,17 @@ namespace Unravel.Core
         private int lastGen2Count;
         private long lastMemory;
 
+        /// <summary>
+        /// Creates a monitor and captures the current GC baseline.
+        /// </summary>
         public GCMonitor()
         {
             Reset();
         }
 
+        /// <summary>
+        /// Resets the baseline collection counts and managed memory size.
+        /// </summary>
         public void Reset()
         {
             lastGen0Count = GC.CollectionCount(0);
@@ -585,6 +622,10 @@ namespace Unravel.Core
             lastMemory = GC.GetTotalMemory(false);
         }
 
+        /// <summary>
+        /// Compares current GC stats to the baseline and logs notable changes.
+        /// </summary>
+        /// <param name="context">Optional label included in the log message.</param>
         public void CheckAndLog(string context = "")
         {
             int gen0 = GC.CollectionCount(0);
@@ -619,9 +660,15 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern long internal_m2n_get_dotnet_used_size();
     }
+    /// <summary>
+    /// Entry point for native-to-managed frame updates and script component dispatch.
+    /// </summary>
     [AutoStaticsCleanup]
     public static class SystemManager
     {
+        /// <summary>
+        /// Global manager that invokes script component update callbacks.
+        /// </summary>
         public static ScriptComponentManager ScriptManager = new ScriptComponentManager();
         private static GCMonitor gcMonitor = new GCMonitor();
 
@@ -665,8 +712,15 @@ namespace Unravel.Core
 
 
 
+    /// <summary>
+    /// Helpers for throwing managed exceptions from native bridge code.
+    /// </summary>
     public static class ExceptionHelper
     {
+        /// <summary>
+        /// Throws an <see cref="InvalidOperationException"/> with the given message.
+        /// </summary>
+        /// <param name="message">Exception message.</param>
         public static void ThrowException(string message)
         {
             throw new InvalidOperationException(message);

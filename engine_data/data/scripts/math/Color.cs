@@ -3,6 +3,9 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Representation of RGBA colors in floating-point format (0-1 range).
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Color : IEquatable<Color>, IFormattable
 {

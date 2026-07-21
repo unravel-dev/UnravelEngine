@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
 
-// Pooled arrays are keyed by (and contain) script types, which would pin an
-// unloading script domain. Fields are non-readonly, so the default cleanup
-// (reset to null) applies; pools repopulate lazily on next use.
+/// <summary>
+/// Extension methods for stable in-place sorting of lists.
+/// </summary>
+/// <remarks>
+/// Pooled arrays are keyed by (and contain) script types, which would pin an
+/// unloading script domain. Fields are non-readonly, so the default cleanup
+/// (reset to null) applies; pools repopulate lazily on next use.
+/// </remarks>
 [Unravel.Core.AutoStaticsCleanup]
 public static class StableSortExtensions
 {

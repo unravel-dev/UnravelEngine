@@ -4,9 +4,11 @@ using System.Runtime.CompilerServices;
 namespace Unravel.Core
 {
 
+    /// <summary>
+    /// Inverse-kinematics helpers for skeletal chains.
+    /// </summary>
     public static class IK
     {
-
         /// <summary>
         /// Solves a CCD IK chain so the end effector reaches <paramref name="target"/>.
         /// <paramref name="pole"/> is a world-space hint for which side of the
@@ -51,6 +53,9 @@ namespace Unravel.Core
             internal_m2n_utils_set_ik_posiiton_two_bone(entity, target, pole, weight, soften);
         }
 
+        /// <summary>
+        /// Orients <paramref name="entity"/> to look toward <paramref name="target"/> with the given blend weight.
+        /// </summary>
         public static void SetIKLookAtPosition(Entity entity, Vector3 target, float weight = 1.0f)
         {
             internal_m2n_utils_set_ik_look_at_posiiton(entity, target, weight);

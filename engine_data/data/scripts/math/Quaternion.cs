@@ -3,6 +3,9 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Quaternions are used to represent rotations.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Quaternion : IEquatable<Quaternion>, IFormattable
 {

@@ -125,18 +125,27 @@ namespace Unravel.Core
             set { internal_m2n_cc_set_linear_damping(owner, value); }
         }
 
+        /// <summary>
+        /// Layers that this character should collide with (include filter).
+        /// </summary>
         public LayerMask includeLayers
         {
             get { return internal_m2n_cc_get_include_layers(owner); }
             set { internal_m2n_cc_set_include_layers(owner, value); }
         }
 
+        /// <summary>
+        /// Layers that this character should ignore (exclude filter).
+        /// </summary>
         public LayerMask excludeLayers
         {
             get { return internal_m2n_cc_get_exclude_layers(owner); }
             set { internal_m2n_cc_set_exclude_layers(owner, value); }
         }
 
+        /// <summary>
+        /// Effective collision layer mask after applying include and exclude filters.
+        /// </summary>
         public LayerMask collisionLayers
         {
             get { return internal_m2n_cc_get_collision_layers(owner); }

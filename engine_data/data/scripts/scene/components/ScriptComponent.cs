@@ -6,9 +6,15 @@ using System.Reflection;
 namespace Unravel.Core
 {
 
+    /// <summary>
+    /// Records the source file path of a script class for editor and tooling use.
+    /// </summary>
     [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
     public sealed class ScriptSourceFileAttribute : Attribute
     {
+        /// <summary>
+        /// Absolute or compiler-provided path to the script source file.
+        /// </summary>
         public string Path { get; }
         public ScriptSourceFileAttribute([CallerFilePath] string path = "") => Path = path;
     }

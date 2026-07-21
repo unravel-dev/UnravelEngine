@@ -2,6 +2,9 @@ using System.Collections.Generic;
 
 namespace Unravel.Core
 {
+/// <summary>
+/// Extension methods for <see cref="TransformComponent"/>.
+/// </summary>
 public static class TransformComponentExtensions
 {
     /// <summary>

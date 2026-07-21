@@ -3,6 +3,9 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Representation of 3D vectors and points.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Vector3 : IEquatable<Vector3>, IFormattable
 {

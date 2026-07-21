@@ -1,15 +1,22 @@
 using System;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Extension methods for converting byte arrays to blittable structs.
+/// </summary>
 public static class ByteArrayExtensions
 {
-    // Public function to convert a byte array to a single struct
+    /// <summary>
+    /// Converts a byte array to a single struct of type <typeparamref name="T"/>.
+    /// </summary>
     public static T ToStruct<T>(this byte[] data) where T : struct
     {
         return ToStructImpl<T>(data, 0, data.Length);
     }
 
-    // Public function to convert a byte array to an array of structs
+    /// <summary>
+    /// Converts a byte array to an array of structs of type <typeparamref name="T"/>.
+    /// </summary>
     public static T[] ToStructArray<T>(this byte[] data) where T : struct
     {
         int structSize = Marshal.SizeOf<T>();

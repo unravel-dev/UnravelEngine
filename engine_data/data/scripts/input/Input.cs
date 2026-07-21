@@ -8,6 +8,9 @@ namespace Unravel.Core
     /// </summary>
     public static class Input
     {
+        /// <summary>
+        /// Gets the current mouse position in screen coordinates.
+        /// </summary>
         public static Vector2 mousePosition
         {
             get
@@ -15,6 +18,7 @@ namespace Unravel.Core
                 return internal_m2n_input_get_mouse_position();
             }
         }
+
         /// <summary>
         /// Gets the analog value of an input axis.
         /// </summary>
@@ -75,32 +79,61 @@ namespace Unravel.Core
             return internal_m2n_input_is_down(action);
         }
 
-
+        /// <summary>
+        /// Checks if the specified key was pressed during the current frame.
+        /// </summary>
+        /// <param name="code">The key code to query.</param>
+        /// <returns><c>true</c> if the key was pressed during this frame; otherwise, <c>false</c>.</returns>
         public static bool IsPressed(KeyCode code)
         {
             return internal_m2n_input_is_key_pressed(code);
         }
 
+        /// <summary>
+        /// Checks if the specified key was released during the current frame.
+        /// </summary>
+        /// <param name="code">The key code to query.</param>
+        /// <returns><c>true</c> if the key was released during this frame; otherwise, <c>false</c>.</returns>
         public static bool IsReleased(KeyCode code)
         {
             return internal_m2n_input_is_key_released(code);
         }
 
+        /// <summary>
+        /// Checks if the specified key is currently being held down.
+        /// </summary>
+        /// <param name="code">The key code to query.</param>
+        /// <returns><c>true</c> if the key is currently being held down; otherwise, <c>false</c>.</returns>
         public static bool IsDown(KeyCode code)
         {
             return internal_m2n_input_is_key_down(code);
         }
 
+        /// <summary>
+        /// Checks if the specified mouse button was pressed during the current frame.
+        /// </summary>
+        /// <param name="button">The mouse button to query.</param>
+        /// <returns><c>true</c> if the button was pressed during this frame; otherwise, <c>false</c>.</returns>
         public static bool IsPressed(MouseButton button)
         {
             return internal_m2n_input_is_mouse_button_pressed(button);
         }
 
+        /// <summary>
+        /// Checks if the specified mouse button was released during the current frame.
+        /// </summary>
+        /// <param name="button">The mouse button to query.</param>
+        /// <returns><c>true</c> if the button was released during this frame; otherwise, <c>false</c>.</returns>
         public static bool IsReleased(MouseButton button)
         {
             return internal_m2n_input_is_mouse_button_released(button);
         }
 
+        /// <summary>
+        /// Checks if the specified mouse button is currently being held down.
+        /// </summary>
+        /// <param name="button">The mouse button to query.</param>
+        /// <returns><c>true</c> if the button is currently being held down; otherwise, <c>false</c>.</returns>
         public static bool IsDown(MouseButton button)
         {
             return internal_m2n_input_is_mouse_button_down(button);

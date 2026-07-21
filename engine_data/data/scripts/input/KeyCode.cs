@@ -4,6 +4,9 @@ using System.Runtime.InteropServices;
 
 namespace Unravel.Core
 {
+    /// <summary>
+    /// Identifies a mouse button for <see cref="Input"/> queries.
+    /// </summary>
     public enum MouseButton : int
     {
         Left,
@@ -24,6 +27,9 @@ namespace Unravel.Core
         Button16
     }
 
+    /// <summary>
+    /// Identifies a keyboard key for <see cref="Input"/> queries.
+    /// </summary>
     public enum KeyCode : int
     {
         Unknown,

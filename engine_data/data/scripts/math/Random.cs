@@ -2,6 +2,9 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+/// <summary>
+/// Pseudo-random number generator utilities for gameplay and sampling.
+/// </summary>
 public static class Random
 {
     private static ulong[] s_State;

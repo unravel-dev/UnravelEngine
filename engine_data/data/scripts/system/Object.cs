@@ -3,11 +3,20 @@ using System.Runtime.CompilerServices;
 
 namespace Unravel.Core
 {
+    /// <summary>
+    /// Base class for managed wrappers around native engine objects.
+    /// Equality accounts for validity; invalid instances are never equal.
+    /// </summary>
     public abstract class NativeObject : IEquatable<NativeObject>
     {
+        /// <summary>
+        /// Returns whether this object still refers to a valid native instance.
+        /// </summary>
         public abstract bool IsValid();
 
-        // Implement IEquatable<NativeObject>
+        /// <summary>
+        /// Determines whether this instance is equal to another <see cref="NativeObject"/>.
+        /// </summary>
         public bool Equals(NativeObject other)
         {
             // Check for null and compare run-time types.
@@ -30,13 +39,17 @@ namespace Unravel.Core
             return false;
         }
 
-        // Override Equals(object)
+        /// <summary>
+        /// Determines whether this instance is equal to the specified object.
+        /// </summary>
         public override bool Equals(object obj)
         {
             return Equals(obj as NativeObject);
         }
 
-        // Override GetHashCode()
+        /// <summary>
+        /// Returns a hash code for this instance.
+        /// </summary>
         public override int GetHashCode()
         {
             if (!IsValid())
@@ -54,9 +67,13 @@ namespace Unravel.Core
             return base.GetHashCode();
         }
 
-        // Overload operator ==
-        // NOTE: This operator is expensive because it calls IsValid() which may involve native calls.
-        // For performance-critical code (like per-frame checks), use ReferenceEquals(obj, null) instead.
+        /// <summary>
+        /// Compares two <see cref="NativeObject"/> instances for equality.
+        /// </summary>
+        /// <remarks>
+        /// Expensive: calls <see cref="IsValid"/>, which may involve native calls.
+        /// For performance-critical null checks, prefer <see cref="object.ReferenceEquals"/>.
+        /// </remarks>
         public static bool operator ==(NativeObject left, NativeObject right)
         {        // // Fast path: if either is actually null (reference), treat as null
             if (!ReferenceEquals(left, null))
@@ -71,7 +88,9 @@ namespace Unravel.Core
         }
 
 
-        // Overload operator !=
+        /// <summary>
+        /// Compares two <see cref="NativeObject"/> instances for inequality.
+        /// </summary>
         public static bool operator !=(NativeObject left, NativeObject right)
         {
             return !(left == right);

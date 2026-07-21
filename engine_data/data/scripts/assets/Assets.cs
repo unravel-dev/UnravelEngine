@@ -5,9 +5,17 @@ using System.Runtime.InteropServices;
 namespace Unravel.Core
 {
 
+/// <summary>
+/// Loads and resolves assets by key or unique identifier.
+/// </summary>
 public class Assets
 {
-   
+    /// <summary>
+    /// Loads an asset of type <typeparamref name="T"/> by asset key.
+    /// </summary>
+    /// <typeparam name="T">The asset type to load.</typeparam>
+    /// <param name="key">The asset key (protocol path or project key).</param>
+    /// <returns>A new asset handle for the resolved asset.</returns>
     public static T GetAsset<T>(string key) where T : Asset<T>, new()
     {
         var asset_uid = internal_m2n_get_asset_by_key(key, typeof(T));
@@ -16,6 +24,12 @@ public class Assets
         return asset;
     }
 
+    /// <summary>
+    /// Loads an asset of type <typeparamref name="T"/> by unique identifier.
+    /// </summary>
+    /// <typeparam name="T">The asset type to load.</typeparam>
+    /// <param name="uid">The asset unique identifier.</param>
+    /// <returns>A new asset handle for the resolved asset.</returns>
     public static T GetAsset<T>(Guid uid) where T : Asset<T>, new()
     {
         var asset_uid = internal_m2n_get_asset_by_uuid(uid, typeof(T));
@@ -24,7 +38,11 @@ public class Assets
         return asset;
     }
 
-    // Specialized overload for Material
+    /// <summary>
+    /// Loads a <see cref="Material"/> by asset key and populates its properties.
+    /// </summary>
+    /// <param name="key">The material asset key.</param>
+    /// <returns>The loaded material.</returns>
     public static Material GetAsset(string key)
     {
         var asset_uid = internal_m2n_get_asset_by_key(key, typeof(Material));
@@ -34,7 +52,11 @@ public class Assets
         return material;
     }
 
-    // Specialized overload for Material (by Guid)
+    /// <summary>
+    /// Loads a <see cref="Material"/> by unique identifier and populates its properties.
+    /// </summary>
+    /// <param name="uid">The material unique identifier.</param>
+    /// <returns>The loaded material.</returns>
     public static Material GetAsset(Guid uid)
     {
         var asset_uid = internal_m2n_get_asset_by_uuid(uid, typeof(Material));
@@ -44,48 +66,81 @@ public class Assets
         return material;
     }
 
-    
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern Guid internal_m2n_get_asset_by_uuid(Guid uid, Type obj);
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern Guid internal_m2n_get_asset_by_key(string key, Type obj);
 
-
     [MethodImpl(MethodImplOptions.InternalCall)]
     internal static extern MaterialProperties internal_m2n_get_material_properties(Guid uid);
-
 }
 
+/// <summary>
+/// Texture asset handle.
+/// </summary>
 public class Texture : Asset<Texture>
 {
 }
 
+/// <summary>
+/// Blittable material property block exchanged with native code.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct MaterialProperties
 {
+    /// <summary>
+    /// Whether this property block contains valid data.
+    /// </summary>
     public bool valid;
 
+    /// <summary>
+    /// Base (albedo) color.
+    /// </summary>
     public Color baseColor;
 
+    /// <summary>
+    /// Emissive color.
+    /// </summary>
     public Color emissiveColor;
 
+    /// <summary>
+    /// UV tiling scale.
+    /// </summary>
     public Vector2 tiling;
 
+    /// <summary>
+    /// Surface roughness.
+    /// </summary>
     public float roughness;
 
+    /// <summary>
+    /// Surface metalness.
+    /// </summary>
     public float metalness;
 
+    /// <summary>
+    /// Normal-map bump intensity.
+    /// </summary>
     public float bumpiness;
 }
 
-
+/// <summary>
+/// Material asset with editable shading properties.
+/// </summary>
 public class Material : Asset<Material>
 {
+    /// <summary>
+    /// Creates an empty material handle.
+    /// </summary>
     public Material()
     {
-
     }
+
+    /// <summary>
+    /// Creates a material copy with the same properties as <paramref name="rhs"/>.
+    /// </summary>
+    /// <param name="rhs">The material to copy properties from.</param>
     public Material(Material rhs)
     {
         SetProperties(rhs.GetProperties());
@@ -103,7 +158,6 @@ public class Material : Asset<Material>
         this.roughness = props.roughness;
         this.metalness = props.metalness;
         this.bumpiness = props.bumpiness;
-
     }
 
     internal MaterialProperties GetProperties()
@@ -119,28 +173,52 @@ public class Material : Asset<Material>
         return props;
     }
 
+    /// <summary>
+    /// Base (albedo) color.
+    /// </summary>
     public Color color = Color.white;
 
+    /// <summary>
+    /// Emissive color.
+    /// </summary>
     public Color emissiveColor = Color.black;
 
+    /// <summary>
+    /// UV tiling scale.
+    /// </summary>
     public Vector2 tiling = Vector2.one;
 
+    /// <summary>
+    /// Surface roughness.
+    /// </summary>
     public float roughness = 0.0f;
 
+    /// <summary>
+    /// Surface metalness.
+    /// </summary>
     public float metalness = 0.0f;
 
+    /// <summary>
+    /// Normal-map bump intensity.
+    /// </summary>
     public float bumpiness = 1.0f;
 }
 
+/// <summary>
+/// Mesh asset handle.
+/// </summary>
 public class Mesh : Asset<Mesh>
 {
 }
 
+/// <summary>
+/// Animation clip asset handle.
+/// </summary>
 public class AnimationClip : Asset<AnimationClip>
 {
-    //
-    // Summary:
-    //     The length of the animation clip in seconds. (Read Only)
+    /// <summary>
+    /// Gets the length of the animation clip in seconds.
+    /// </summary>
     public float length
     {
         get
@@ -149,9 +227,9 @@ public class AnimationClip : Asset<AnimationClip>
         }
     }
 
-    //
-    // Summary:
-    //     The name of the animation clip. (Read Only)
+    /// <summary>
+    /// Gets the name of the animation clip.
+    /// </summary>
     public string name
     {
         get
@@ -167,28 +245,42 @@ public class AnimationClip : Asset<AnimationClip>
     private static extern string internal_m2n_animation_clip_get_name(Guid uid);
 }
 
-
+/// <summary>
+/// Physics material asset handle.
+/// </summary>
 public class PhysicsMaterial : Asset<PhysicsMaterial>
 {
 }
 
+/// <summary>
+/// UI visual-tree (RML/layout) asset handle.
+/// </summary>
 public class VisualTree : Asset<VisualTree>
 {
 }
 
+/// <summary>
+/// UI stylesheet asset handle.
+/// </summary>
 public class StyleSheet : Asset<StyleSheet>
 {
-
 }
 
+/// <summary>
+/// Font asset handle.
+/// </summary>
 public class Font : Asset<Font>
 {
 }
+
+/// <summary>
+/// Audio clip asset handle.
+/// </summary>
 public class AudioClip : Asset<AudioClip>
 {
-    //
-    // Summary:
-    //     The length of the audio clip in seconds. (Read Only)
+    /// <summary>
+    /// Gets the length of the audio clip in seconds.
+    /// </summary>
     public float length
     {
         get
@@ -197,37 +289,8 @@ public class AudioClip : Asset<AudioClip>
         }
     }
 
-    //
-    // Summary:
-    //     The length of the audio clip in samples. (Read Only)
-    // public extern int samples
-    // {
-    //     [MethodImpl(MethodImplOptions.InternalCall)]
-    //     get;
-    // }
-
-    // //
-    // // Summary:
-    // //     The number of channels in the audio clip. (Read Only)
-    // public extern int channels
-    // {
-    //     [MethodImpl(MethodImplOptions.InternalCall)]
-    //     get;
-    // }
-
-    // //
-    // // Summary:
-    // //     The sample frequency of the clip in Hertz. (Read Only)
-    // public extern int frequency
-    // {
-    //     [MethodImpl(MethodImplOptions.InternalCall)]
-    //     get;
-    // }
-
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern float internal_m2n_audio_clip_get_length(Guid uid);
 }
 
 }
-
-

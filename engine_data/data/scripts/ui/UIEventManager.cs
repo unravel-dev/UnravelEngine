@@ -5,6 +5,9 @@ using System.Runtime.CompilerServices;
 namespace Unravel.Core
 {
 
+    /// <summary>
+    /// Phase of UI event dispatch in the capture/target/bubble model.
+    /// </summary>
     public enum EventPhase
     {
         None,
@@ -12,25 +15,39 @@ namespace Unravel.Core
         Target = 2,
         Bubble = 4
     }
+    /// <summary>
+    /// Base type for UI events dispatched through <see cref="UIEventManager"/>.
+    /// </summary>
     public class UIEventBase
     {
         private IntPtr nativePtr = IntPtr.Zero;
-        //
-        // Summary:
-        //     The ID of the element that triggered the event.
+        /// <summary>
+        /// The ID of the element that triggered the event.
+        /// </summary>
         public string targetElementId;
+
+        /// <summary>
+        /// Native pointer to the element that triggered the event.
+        /// </summary>
         public IntPtr targetElementPtr = IntPtr.Zero;
 
-        //
-        // Summary:
-        //     The ID of the element that received the event.
+        /// <summary>
+        /// The ID of the element that received the event.
+        /// </summary>
         public string currentElementId;
+
+        /// <summary>
+        /// Native pointer to the element that received the event.
+        /// </summary>
         public IntPtr currentElementPtr = IntPtr.Zero;
 
+        /// <summary>
+        /// Current dispatch phase of the event.
+        /// </summary>
         public EventPhase phase = EventPhase.None;
-        //
-        // Summary:
-        //     The type of event that occurred (e.g., "click", "mousedown").
+        /// <summary>
+        /// The type of event that occurred (e.g., "click", "mousedown").
+        /// </summary>
         public string eventType;
 
         // Note: Mouse and keyboard specific properties have been moved to derived event types
@@ -59,6 +76,10 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_stop_immediate_propagation(IntPtr nativePtr);
     }
+    /// <summary>
+    /// Callback invoked when a UI event is dispatched to a subscribed element.
+    /// </summary>
+    /// <param name="ev">The event being dispatched.</param>
     public delegate void UIEventCallback(UIEventBase ev);
 
     /// <summary>

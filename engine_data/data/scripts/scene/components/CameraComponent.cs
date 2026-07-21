@@ -22,11 +22,21 @@ namespace Unravel.Core
             return internal_m2n_camera_screen_point_to_ray(owner, pos, out ray);
         }
 
+        /// <summary>
+        /// Converts a 2D screen-space position to a world-space point on the camera's near plane.
+        /// </summary>
+        /// <param name="pos">The position in screen space, typically in pixel coordinates.</param>
+        /// <returns>The corresponding world-space position.</returns>
         public Vector3 ScreenPointToWorld(Vector2 pos)
         {
             return internal_m2n_camera_screen_point_to_world_2d(owner, pos);
         }
 
+        /// <summary>
+        /// Converts a screen-space position with depth (z) to a world-space point.
+        /// </summary>
+        /// <param name="pos">The position in screen space; z is depth.</param>
+        /// <returns>The corresponding world-space position.</returns>
         public Vector3 ScreenPointToWorld(Vector3 pos)
         {
             return internal_m2n_camera_screen_point_to_world(owner, pos);

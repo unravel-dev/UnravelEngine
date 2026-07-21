@@ -237,7 +237,7 @@ namespace Unravel.Core
         }
 
 
-         // <summary>
+        /// <summary>
         /// Finds all entities with the specified name.
         /// </summary>
         /// <param name="name">The name to search for.</param>

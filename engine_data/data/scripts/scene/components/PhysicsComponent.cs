@@ -12,6 +12,9 @@ namespace Unravel.Core
     public class PhysicsComponent : Component
     {
     
+        /// <summary>
+        /// Layers that this body should collide with (include filter).
+        /// </summary>
         public LayerMask includeLayers
         {
             get
@@ -23,6 +26,9 @@ namespace Unravel.Core
                 internal_m2n_physics_set_include_layers(owner, value);
             }
         }
+        /// <summary>
+        /// Layers that this body should ignore (exclude filter).
+        /// </summary>
         public LayerMask excludeLayers
         {
             get
@@ -35,6 +41,9 @@ namespace Unravel.Core
             }
         }
 
+        /// <summary>
+        /// Effective collision layer mask after applying include and exclude filters.
+        /// </summary>
         public LayerMask collisionLayers
         {
             get

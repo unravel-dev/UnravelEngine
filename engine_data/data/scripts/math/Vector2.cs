@@ -4,6 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 
+/// <summary>
+/// Representation of 2D vectors and points.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Vector2 : IEquatable<Vector2>, IFormattable
 {

@@ -3,8 +3,14 @@ using System.Runtime.CompilerServices;
 
 namespace Unravel.Core
 {
+    /// <summary>
+    /// Light source component attached to an entity.
+    /// </summary>
     public class LightComponent : Component
     {
+        /// <summary>
+        /// Color of the light.
+        /// </summary>
         public Color color
         {
             get
