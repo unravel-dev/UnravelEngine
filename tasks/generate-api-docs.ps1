@@ -32,6 +32,23 @@ function Assert-Command([string] $Name)
     }
 }
 
+function Rename-ApiIndexToReadme([string] $MarkdownDir)
+{
+    $apiPath = Join-Path $MarkdownDir "api.md"
+    $readmePath = Join-Path $MarkdownDir "README.md"
+    if (-not (Test-Path $apiPath))
+    {
+        Write-Host "Warning: expected index missing: $apiPath"
+        return
+    }
+    if (Test-Path $readmePath)
+    {
+        Remove-Item -Force $readmePath
+    }
+    Move-Item -Force $apiPath $readmePath
+    Write-Host "Renamed api.md -> README.md in $MarkdownDir"
+}
+
 function Invoke-Moxygen([string] $XmlDir, [string] $OutputPattern, [string] $Language)
 {
     if (-not (Test-Path (Join-Path $XmlDir "index.xml")))
@@ -58,15 +75,18 @@ function Invoke-Moxygen([string] $XmlDir, [string] $OutputPattern, [string] $Lan
         {
             throw "moxygen failed with exit code $LASTEXITCODE"
         }
-        return
     }
-    Assert-Command "npx"
-    Write-Host "npx --yes moxygen $($moxygenArgs -join ' ')"
-    & npx --yes moxygen @moxygenArgs
-    if ($LASTEXITCODE -ne 0)
+    else
     {
-        throw "npx moxygen failed with exit code $LASTEXITCODE"
+        Assert-Command "npx"
+        Write-Host "npx --yes moxygen $($moxygenArgs -join ' ')"
+        & npx --yes moxygen @moxygenArgs
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "npx moxygen failed with exit code $LASTEXITCODE"
+        }
     }
+    Rename-ApiIndexToReadme -MarkdownDir $outDir
 }
 
 $runScript = (-not $EngineOnly) -or $ScriptOnly

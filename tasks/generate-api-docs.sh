@@ -46,15 +46,30 @@ need_cmd() {
   }
 }
 
+rename_api_index_to_readme() {
+  local markdown_dir="$1"
+  local api_path="${markdown_dir}/api.md"
+  local readme_path="${markdown_dir}/README.md"
+  if [[ ! -f "${api_path}" ]]; then
+    echo "Warning: expected index missing: ${api_path}"
+    return 0
+  fi
+  rm -f "${readme_path}"
+  mv "${api_path}" "${readme_path}"
+  echo "Renamed api.md -> README.md in ${markdown_dir}"
+}
+
 run_moxygen() {
   local xml_dir="$1"
   local output_pattern="$2"
   local language="$3"
+  local out_dir
+  out_dir="$(dirname "${output_pattern}")"
   if [[ ! -f "${xml_dir}/index.xml" ]]; then
     echo "Doxygen XML missing (expected index.xml): ${xml_dir}" >&2
     exit 1
   fi
-  mkdir -p "$(dirname "${output_pattern}")"
+  mkdir -p "${out_dir}"
   local args=(--html-anchors --classes --language "${language}" --output "${output_pattern}" "${xml_dir}")
   if command -v moxygen >/dev/null 2>&1; then
     echo "moxygen ${args[*]}"
@@ -64,6 +79,7 @@ run_moxygen() {
     echo "npx --yes moxygen ${args[*]}"
     npx --yes moxygen "${args[@]}"
   fi
+  rename_api_index_to_readme "${out_dir}"
 }
 
 if [[ "${SKIP_DOXYGEN}" -eq 0 ]]; then
