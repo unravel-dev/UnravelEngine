@@ -61,6 +61,11 @@ public:
 
     void create_project(rtti::context& ctx, const fs::path& project_path);
 
+    /// Copies editor agent instruction templates into the project root as
+    /// `AGENTS.md` and `CLAUDE.md` (overwrites existing). Returns true when
+    /// `AGENTS.md` was written successfully.
+    auto regenerate_agent_files() -> bool;
+
     void save_editor_settings();
 
     void load_editor_settings();

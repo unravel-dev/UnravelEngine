@@ -217,10 +217,28 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
         if(ImGui::BeginMenu("Developer"))
         {
+            auto& pm = ctx.get_cached<project_manager>();
+            if(ImGui::MenuItem("Regenerate Agent Files", nullptr, false, pm.has_open_project()))
+            {
+                if(pm.regenerate_agent_files())
+                {
+                    ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success,
+                                                       3000,
+                                                       "Regenerated AGENTS.md and CLAUDE.md in the project root."));
+                }
+                else
+                {
+                    ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error,
+                                                       4000,
+                                                       "Failed to regenerate agent files. Check the log."));
+                }
+            }
+            ImGui::SetItemTooltip(
+                "Overwrite AGENTS.md and CLAUDE.md in the open project with the editor templates.\n"
+                "Use after updating engine agent guidance, or to restore deleted files.");
 
             if(ImGui::BeginMenu("Assets"))
             {
-
                 if(ImGui::BeginMenu("Regenerate"))
                 {
                     if(ImGui::MenuItem("Meta(Engine)"))

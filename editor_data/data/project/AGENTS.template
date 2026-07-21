@@ -1,0 +1,56 @@
+# Unravel game project — agent instructions
+
+Always-on rules for AI coding agents working in this project.
+
+## Layout
+
+- `app:/` is this project root. Source content and scripts live under `app:/data/`.
+- Asset keys look like `app:/data/Foo/Bar.ext` — never use OS absolute paths for assets.
+- Put all game `.cs` scripts under `data/` (any subfolder). Scripts outside `data/` are not compiled.
+- Do **not** edit `compiled/`, or change `.meta` UIDs, unless the user explicitly asks.
+- A new project may have no saved scene yet; scenes persist as `.spfb` under `data/` after save.
+
+## Engine API
+
+- Engine script sources live in the parent `data` folder of the `engine-script.dll`
+  referenced by the project's `.csproj`. Read those before inventing helpers.
+- Use any public function and class defined there.
+- Prefer provided engine utilities: math (`Vector2`/`Vector3`/`Quaternion`/`Mathf`/…),
+  `Random`, `Physics`, `Input`, `Assets`, `Scene`, components, UI, gizmos, logging, etc.
+
+## Scripts
+
+- Inherit `ScriptComponent` and keep `[ScriptSourceFile]` on the class.
+- Lifecycle: `OnCreate` → `OnEnable` → `OnStart` (play mode) → `OnUpdate` /
+  `OnFixedUpdate` / `OnLateUpdate` → `OnDisable` / `OnDestroy`.
+- Load assets with `Assets.GetAsset<T>("app:/data/...")` (or by `Guid`), not a Unity-style Load API.
+- Prefabs: `Scene.Instantiate("app:/data/....pfb")`. Scenes: `Scene.LoadScene(...)`.
+- Hot-reload: avoid static caches of `Type`, delegates, or script instances across recompile;
+  use `[AutoStaticsCleanup]` when statics must be cleared.
+
+## Entities
+
+- `Entity` is a **struct** and cannot be compared to `null`.
+- Use `entity.IsValid()`, or the bool conversion: `if (entity)` / `if (!entity)`.
+
+## Assets
+
+- Do **not** create or modify real assets (prefabs, `.meta`, compiled assets) unless
+  the user explicitly asks. Prefer scene and script changes.
+- Prefer importing through the editor/content browser rather than hand-copying files
+  into the project without sidecars.
+
+## Working style
+
+- Gameplay hooks (`OnStart` / `OnUpdate`) run in play mode; do not assume edit-time
+  mutations apply while playing.
+
+## RCSS / RmlUi
+
+- Do not use the `solid` keyword.
+- Only use RmlUi-supported properties:
+  - https://mikke89.github.io/RmlUiDoc/pages/rcss/property_index.html
+  - https://mikke89.github.io/RmlUiDoc/pages/rcss/font_effects.html
+  - https://mikke89.github.io/RmlUiDoc/pages/rcss/filters.html
+- Color alpha is **0–255**, not 0–1.
+- In `.rcss` files always use **`dp`** (density-independent pixels) instead of `px`.

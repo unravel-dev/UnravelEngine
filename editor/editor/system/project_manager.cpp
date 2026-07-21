@@ -48,6 +48,43 @@ fs::path app_settings_cfg = "app:/settings/settings.cfg";
 fs::path app_editor_cfg = "app:/editor/editor.cfg";
 fs::path app_project_cfg = "app:/project.cfg";
 fs::path editor_cfg = fs::persistent_path() / "unravel" / "editor.cfg";
+fs::path agents_template_path = "editor:/data/project/AGENTS.template";
+fs::path claude_template_path = "editor:/data/project/CLAUDE.template";
+
+auto seed_project_agent_files(const fs::path& project_path) -> bool
+{
+    fs::error_code err;
+    bool agents_ok = false;
+    const fs::path agents_template = fs::resolve_protocol(agents_template_path);
+    const fs::path agents_dst = project_path / "AGENTS.md";
+    if(fs::exists(agents_template, err))
+    {
+        fs::copy_file(agents_template, agents_dst, fs::copy_options::overwrite_existing, err);
+        if(err)
+        {
+            APPLOG_WARNING("Failed to seed AGENTS.md into {}: {}", project_path.string(), err.message());
+        }
+        else
+        {
+            agents_ok = true;
+        }
+    }
+    else
+    {
+        APPLOG_WARNING("Agent instructions template missing: {}", agents_template.string());
+    }
+    const fs::path claude_template = fs::resolve_protocol(claude_template_path);
+    const fs::path claude_dst = project_path / "CLAUDE.md";
+    if(fs::exists(claude_template, err))
+    {
+        fs::copy_file(claude_template, claude_dst, fs::copy_options::overwrite_existing, err);
+        if(err)
+        {
+            APPLOG_WARNING("Failed to seed CLAUDE.md into {}: {}", project_path.string(), err.message());
+        }
+    }
+    return agents_ok;
+}
 
 } // namespace
 
@@ -342,9 +379,22 @@ void project_manager::create_project(rtti::context& ctx, const fs::path& project
         return;
     }
 
+    seed_project_agent_files(project_path);
+
     fs::add_path_protocol("app", project_path);
 
     open_project(ctx, project_path);
+}
+
+auto project_manager::regenerate_agent_files() -> bool
+{
+    if(!has_open_project())
+    {
+        APPLOG_WARNING("Cannot regenerate agent files: no project is open");
+        return false;
+    }
+    const fs::path project_path = fs::resolve_protocol("app:/");
+    return seed_project_agent_files(project_path);
 }
 
 void project_manager::fixup_editor_settings_on_save()
