@@ -582,7 +582,9 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     }
     ImGui::SameLine();
 
-    if(play.is_paused())
+    // use local variable since set_play_paused can change it.
+    bool is_paused = play.is_paused();
+    if(is_paused)
     {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.38f, 0.08f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.48f, 0.14f, 1.0f));
@@ -590,9 +592,9 @@ void header_panel::draw_center_zone(rtti::context& ctx)
     }
     if(ImGui::Button(ICON_MDI_PAUSE))
     {
-        editor_actions::set_play_paused(ctx, !play.is_paused());
+        editor_actions::set_play_paused(ctx, !is_paused);
     }
-    if(play.is_paused())
+    if(is_paused)
     {
         ImGui::PopStyleColor(3);
     }
