@@ -1705,14 +1705,23 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
 auto atomic_image_save(const fs::path& output_file, bimg::ImageContainer* image) -> bool
 {
     fs::error_code ec;
+    bool wrote = false;
+    const std::string format_hint = output_file.string();
     asset_writer::atomic_write_file(
         output_file,
         [&](const fs::path& temp)
         {
-            imageSave(temp.string().c_str(), image);
+            // Temp is `.<uuid>.temp` (watcher-safe). Pass the final destination as
+            // format_hint so imageSave can still pick dds/png/etc.
+            wrote = imageSave(temp.string().c_str(), image, format_hint.c_str());
+            if(!wrote)
+            {
+                fs::error_code remove_ec;
+                fs::remove(temp, remove_ec);
+            }
         },
         ec);
-    return !ec;
+    return wrote && !ec;
 }
 
 /**

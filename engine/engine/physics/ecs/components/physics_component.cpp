@@ -20,20 +20,21 @@ void physics_component::on_destroy_component(entt::registry& r, entt::entity e)
 {
 }
 
-void physics_component::set_is_kinematic(bool kinematic)
+void physics_component::set_body_type(rigidbody_type type)
 {
-    if(is_kinematic_ == kinematic)
+    if(body_type_ == type)
     {
         return;
     }
 
-    is_kinematic_ = kinematic;
+    body_type_ = type;
 
     on_change_kind();
 }
-auto physics_component::is_kinematic() const noexcept -> bool
+
+auto physics_component::get_body_type() const noexcept -> rigidbody_type
 {
-    return is_kinematic_;
+    return body_type_;
 }
 
 void physics_component::on_change_kind()
@@ -82,15 +83,11 @@ void physics_component::set_mass(float mass)
         return;
     }
 
-    // if(mass <= EDYN_EPSILON && mass >= edyn::large_scalar)
-    // {
-    //     return;
-    // }
-
     mass_ = mass;
 
     on_change_mass();
 }
+
 auto physics_component::get_mass() const noexcept -> float
 {
     return mass_;
@@ -113,6 +110,7 @@ void physics_component::set_is_sensor(bool sensor)
 
     on_change_sensor();
 }
+
 auto physics_component::is_sensor() const noexcept -> bool
 {
     return is_sensor_;
@@ -163,10 +161,12 @@ auto physics_component::get_shapes_count() const -> size_t
 {
     return compound_shape_.size();
 }
+
 auto physics_component::get_shape_by_index(size_t index) const -> const physics_compound_shape&
 {
     return compound_shape_.at(index);
 }
+
 void physics_component::set_shape_by_index(size_t index, const physics_compound_shape& shape)
 {
     compound_shape_.at(index) = shape;
@@ -176,6 +176,7 @@ auto physics_component::get_shapes() const -> const std::vector<physics_compound
 {
     return compound_shape_;
 }
+
 void physics_component::set_shapes(const std::vector<physics_compound_shape>& shape)
 {
     compound_shape_ = shape;
@@ -193,6 +194,7 @@ auto physics_component::get_material() const -> const asset_handle<physics_mater
 {
     return material_;
 }
+
 void physics_component::set_material(const asset_handle<physics_material>& material)
 {
     if(material_ == material)
@@ -251,6 +253,7 @@ void physics_component::set_freeze_rotation(const math::bvec3& xyz)
     dirty_.set();
     set_property_dirty(physics_property::constraints, true);
 }
+
 void physics_component::set_freeze_position(const math::bvec3& xyz)
 {
     if(freeze_position_xyz_ == xyz)
@@ -267,6 +270,7 @@ auto physics_component::get_freeze_rotation() const -> const math::bvec3&
 {
     return freeze_rotation_xyz_;
 }
+
 auto physics_component::get_freeze_position() const -> const math::bvec3&
 {
     return freeze_position_xyz_;
@@ -276,6 +280,7 @@ auto physics_component::get_velocity() const -> const math::vec3&
 {
     return velocity_;
 }
+
 void physics_component::set_velocity(const math::vec3& velocity)
 {
     velocity_ = velocity;
@@ -283,10 +288,16 @@ void physics_component::set_velocity(const math::vec3& velocity)
     set_property_dirty(physics_property::velocity, true);
 }
 
+void physics_component::set_velocity_internal(const math::vec3& velocity) noexcept
+{
+    velocity_ = velocity;
+}
+
 auto physics_component::get_angular_velocity() const -> const math::vec3&
 {
     return angular_velocity_;
 }
+
 void physics_component::set_angular_velocity(const math::vec3& velocity)
 {
     angular_velocity_ = velocity;
@@ -295,10 +306,16 @@ void physics_component::set_angular_velocity(const math::vec3& velocity)
     set_property_dirty(physics_property::angular_velocity, true);
 }
 
+void physics_component::set_angular_velocity_internal(const math::vec3& velocity) noexcept
+{
+    angular_velocity_ = velocity;
+}
+
 auto physics_component::get_collision_include_mask() const -> layer_mask
 {
     return collision_include_mask_;
 }
+
 void physics_component::set_collision_include_mask(layer_mask group)
 {
     dirty_.set();
@@ -310,6 +327,7 @@ auto physics_component::get_collision_exclude_mask() const -> layer_mask
 {
     return collision_exclude_mask_;
 }
+
 void physics_component::set_collision_exclude_mask(layer_mask mask)
 {
     dirty_.set();

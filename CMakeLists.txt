@@ -173,10 +173,6 @@ endif()
 
 set(UNRAVEL_UNITY_BUILD ON)
 
-# Compile-time physics backend selection (currently only bullet is implemented).
-set(UNRAVEL_PHYSICS_BACKEND "bullet" CACHE STRING "Physics backend (bullet)")
-set_property(CACHE UNRAVEL_PHYSICS_BACKEND PROPERTY STRINGS bullet)
-
 add_subdirectory(deps)
 #add_subdirectory(version)
 add_subdirectory(engine)

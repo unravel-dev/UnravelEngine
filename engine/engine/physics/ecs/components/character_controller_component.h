@@ -79,6 +79,10 @@ public:
 
     auto get_collision_mask() const -> layer_mask;
 
+    /**
+     * @brief Queue a collision-constrained displacement applied once on the next
+     *        physics step. Not re-applied across fixed-step catch-up.
+     */
     void move(const math::vec3& displacement);
 
     /**

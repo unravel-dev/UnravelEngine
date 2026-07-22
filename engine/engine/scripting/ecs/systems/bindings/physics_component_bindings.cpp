@@ -158,21 +158,21 @@ void internal_m2n_physics_set_mass(entt::entity id, float mass)
     }
 }
 
-auto internal_m2n_physics_get_is_kinematic(entt::entity id) -> bool
+auto internal_m2n_physics_get_body_type(entt::entity id) -> rigidbody_type
 {
     if(auto comp = safe_get_component<physics_component>(id))
     {
-        return comp->is_kinematic();
+        return comp->get_body_type();
     }
 
-    return false;
+    return rigidbody_type::dynamic;
 }
 
-void internal_m2n_physics_set_is_kinematic(entt::entity id, bool kinematic)
+void internal_m2n_physics_set_body_type(entt::entity id, rigidbody_type type)
 {
     if(auto comp = safe_get_component<physics_component>(id))
     {
-        comp->set_is_kinematic(kinematic);
+        comp->set_body_type(type);
     }
 }
 
@@ -231,10 +231,10 @@ void register_physics_component_script_bindings()
                             dotnet_internal_call(internal_m2n_physics_get_mass));
     reg.add_internal_call("internal_m2n_physics_set_mass",
                             dotnet_internal_call(internal_m2n_physics_set_mass));
-    reg.add_internal_call("internal_m2n_physics_get_is_kinematic",
-                            dotnet_internal_call(internal_m2n_physics_get_is_kinematic));
-    reg.add_internal_call("internal_m2n_physics_set_is_kinematic",
-                            dotnet_internal_call(internal_m2n_physics_set_is_kinematic));
+    reg.add_internal_call("internal_m2n_physics_get_body_type",
+                            dotnet_internal_call(internal_m2n_physics_get_body_type));
+    reg.add_internal_call("internal_m2n_physics_set_body_type",
+                            dotnet_internal_call(internal_m2n_physics_set_body_type));
     reg.add_internal_call("internal_m2n_physics_get_use_gravity",
                             dotnet_internal_call(internal_m2n_physics_get_use_gravity));
     reg.add_internal_call("internal_m2n_physics_set_use_gravity",

@@ -35,9 +35,9 @@
 #include <utility>
 #include <vector>
 
-#ifdef NDEBUG
+// #ifdef NDEBUG
 #define BULLET_MT 1
-#endif
+// #endif
 
 #ifdef BULLET_MT
 #include "LinearMath/btThreads.h"
@@ -380,36 +380,37 @@ void override_combine_callbacks()
     gCalculateCombinedSpinningFrictionCallback = combined_spinning_friction_callback;
 }
 
+// Owned only when created via btCreateDefaultTaskScheduler(). Sequential/OpenMP/TBB/PPL
+// getters return static instances and must never be deleted.
+btITaskScheduler* owned_task_scheduler = nullptr;
+
 void setup_task_scheduler()
 {
 #ifdef BULLET_MT
-    // Select and initialize a task scheduler
-    btITaskScheduler* scheduler = btGetTaskScheduler();
-    if(!scheduler)
-        scheduler = btCreateDefaultTaskScheduler(); // Use Intel TBB if available
-
-    if(!scheduler)
-        scheduler = btGetSequentialTaskScheduler(); // Fallback to single-threaded
-
-    // Set the chosen scheduler
-    if(scheduler)
+    if(btGetTaskScheduler())
     {
-        btSetTaskScheduler(scheduler);
+        return;
     }
+    owned_task_scheduler = btCreateDefaultTaskScheduler();
+    if(owned_task_scheduler)
+    {
+        btSetTaskScheduler(owned_task_scheduler);
+        return;
+    }
+    // Always-available static fallback - not owned by us.
+    btSetTaskScheduler(btGetSequentialTaskScheduler());
 #endif
 }
 
 void cleanup_task_scheduler()
 {
 #ifdef BULLET_MT
-    // Select and initialize a task scheduler
-    btITaskScheduler* scheduler = btGetTaskScheduler();
-    if(scheduler)
+    btSetTaskScheduler(nullptr);
+    if(owned_task_scheduler)
     {
-        btSetTaskScheduler(nullptr);
-        delete scheduler;
+        delete owned_task_scheduler;
+        owned_task_scheduler = nullptr;
     }
-
 #endif
 }
 
@@ -679,10 +680,14 @@ struct character_controller
     std::shared_ptr<btKinematicCharacterController> controller{};
     int collision_filter_group{};
     int collision_filter_mask{};
+    // Accumulated Move() displacement; flushed once per simulate then cleared.
+    math::vec3 pending_displacement{};
 };
 
 struct world
 {
+    // Declared before dynamics_world so it outlives the world (pair cache holds a raw ptr).
+    std::shared_ptr<btGhostPairCallback> ghost_pair_callback;
     std::shared_ptr<btBroadphaseInterface> broadphase;
     std::shared_ptr<btCollisionDispatcher> dispatcher;
     std::shared_ptr<btConstraintSolver> solver;
@@ -1232,7 +1237,9 @@ auto create_dynamics_world() -> bullet::world
 
 #ifdef BULLET_MT
     auto dispatcher = std::make_shared<btCollisionDispatcherMt>(collision_config.get());
-    auto solver_pool = std::make_shared<btConstraintSolverPoolMt>(std::thread::hardware_concurrency() - 1);
+    const unsigned int hardware_threads = std::thread::hardware_concurrency();
+    const int solver_threads = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
+    auto solver_pool = std::make_shared<btConstraintSolverPoolMt>(solver_threads);
     auto solver = std::make_shared<btSequentialImpulseConstraintSolverMt>();
     world.dynamics_world = std::make_shared<btDiscreteDynamicsWorldMt>(dispatcher.get(),
                                                                        broadphase.get(),
@@ -1255,7 +1262,8 @@ auto create_dynamics_world() -> bullet::world
     world.solver = solver;
     world.dynamics_world->setGravity(gravity_earth);
     world.dynamics_world->setForceUpdateAllAabbs(false);
-    world.dynamics_world->getPairCache()->setInternalGhostPairCallback(new btGhostPairCallback());
+    world.ghost_pair_callback = std::make_shared<btGhostPairCallback>();
+    world.dynamics_world->getPairCache()->setInternalGhostPairCallback(world.ghost_pair_callback.get());
     return world;
 }
 
@@ -1494,27 +1502,28 @@ void update_rigidbody_shape_scale(bullet::world& world, bullet::rigidbody& body,
     }
 }
 
-// Updated to preserve existing collision flags when switching kinematic/dynamic
 void update_rigidbody_kind(bullet::rigidbody& body, physics_component& comp)
 {
-    // Read current flags
     auto flags = body.internal->getCollisionFlags();
-    auto rbFlags = body.internal->getFlags();
+    flags &= ~(btCollisionObject::CF_KINEMATIC_OBJECT | btCollisionObject::CF_STATIC_OBJECT);
 
-    if(comp.is_kinematic())
+    switch(comp.get_body_type())
     {
-        // Set kinematic bit, clear static if previously set
-        flags |= btCollisionObject::CF_KINEMATIC_OBJECT;
-        flags &= ~btCollisionObject::CF_DYNAMIC_OBJECT;
-
-        body.internal->setCollisionFlags(flags);
-    }
-    else
-    {
-        // Clear kinematic bit, optionally set dynamic bit
-        flags &= ~btCollisionObject::CF_KINEMATIC_OBJECT;
-        flags |= btCollisionObject::CF_DYNAMIC_OBJECT; // ensure dynamic flag
-        body.internal->setCollisionFlags(flags);
+        case rigidbody_type::static_body:
+            flags |= btCollisionObject::CF_STATIC_OBJECT;
+            body.internal->setCollisionFlags(flags);
+            body.internal->forceActivationState(ISLAND_SLEEPING);
+            break;
+        case rigidbody_type::kinematic:
+            flags |= btCollisionObject::CF_KINEMATIC_OBJECT;
+            body.internal->setCollisionFlags(flags);
+            body.internal->forceActivationState(DISABLE_DEACTIVATION);
+            break;
+        case rigidbody_type::dynamic:
+            body.internal->setCollisionFlags(flags);
+            body.internal->forceActivationState(ACTIVE_TAG);
+            body.internal->setDeactivationTime(0.0f);
+            break;
     }
 }
 
@@ -1599,16 +1608,24 @@ void update_rigidbody_mass_and_inertia(bullet::rigidbody& body, physics_componen
 {
     btScalar mass(0);
     btVector3 local_inertia(0, 0, 0);
-    if(!comp.is_kinematic())
+    if(comp.get_body_type() == rigidbody_type::dynamic)
     {
+        // Bullet treats mass 0 as static (invMass 0). Dynamic bodies must keep a positive mass
+        // even if the collision shape is not ready yet, otherwise impulses/gravity become no-ops.
+        mass = comp.get_mass();
+        if(mass <= 0.0f)
+        {
+            mass = 1.0f;
+        }
         auto shape = body.internal->getCollisionShape();
         if(shape)
         {
-            mass = comp.get_mass();
             shape->calculateLocalInertia(mass, local_inertia);
         }
     }
     body.internal->setMassProps(mass, local_inertia);
+    // setMassProps toggles CF_STATIC_OBJECT from mass; re-apply kind flags afterward.
+    update_rigidbody_kind(body, comp);
 }
 
 void update_rigidbody_gravity(bullet::world& world, bullet::rigidbody& body, physics_component& comp)
@@ -1619,8 +1636,8 @@ void update_rigidbody_gravity(bullet::world& world, bullet::rigidbody& body, phy
     }
     else
     {
+        // Do not clear linear velocity here - that would wipe same-frame impulses.
         body.internal->setGravity(btVector3{0, 0, 0});
-        body.internal->setLinearVelocity(btVector3(0, 0, 0));
     }
 }
 
@@ -1678,16 +1695,23 @@ void set_rigidbody_active(bullet::world& world, bullet::rigidbody& body, bool en
 
 void update_rigidbody_full(bullet::world& world, bullet::rigidbody& body, physics_component& comp)
 {
-    update_rigidbody_kind(body, comp);
+    // Kind is applied inside update_rigidbody_mass_and_inertia (after setMassProps).
     update_rigidbody_shape(body, comp);
     update_rigidbody_mass_and_inertia(body, comp);
     update_rigidbody_material(body, comp);
     update_rigidbody_sensor(body, comp);
     update_rigidbody_constraints(body, comp);
+    update_rigidbody_gravity(world, body, comp);
+    // Velocity last so explicit velocities / impulses are not overwritten by earlier setup.
     update_rigidbody_velocity(body, comp);
     update_rigidbody_angular_velocity(body, comp);
-    update_rigidbody_gravity(world, body, comp);
     update_rigidbody_collision_layer(world, body, comp);
+}
+
+auto find_bullet_world() -> bullet::world*
+{
+    auto& registry = *engine::context().get_cached<ecs>().get_scene().registry;
+    return registry.ctx().find<bullet::world>();
 }
 
 void make_rigidbody(bullet::world& world, entt::handle entity, physics_component& comp)
@@ -1700,6 +1724,20 @@ void make_rigidbody(bullet::world& world, entt::handle entity, physics_component
     body.internal->setFlags(BT_DISABLE_WORLD_GRAVITY);
 
     update_rigidbody_full(world, body, comp);
+
+    // Apply ECS pose immediately so same-frame ApplyForce / queries hit the correct transform.
+    if(auto* transform = entity.try_get<transform_component>())
+    {
+        const btTransform bt_trans(bullet::to_bullet(transform->get_rotation_global()),
+                                   bullet::to_bullet(transform->get_position_global()));
+        body.internal->setWorldTransform(bt_trans);
+        body.internal->setInterpolationWorldTransform(bt_trans);
+        if(body.internal_shape && comp.is_autoscaled())
+        {
+            // Set scale before add; AABB is built when the body enters the world.
+            body.internal_shape->setLocalScaling(bullet::to_bullet(transform->get_scale_global()));
+        }
+    }
 
     if(entity.all_of<active_component>())
     {
@@ -1764,6 +1802,10 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
                 update_rigidbody_constraints(body, comp);
                 comp.set_property_dirty(physics_property::gravity, true);
             }
+            if(comp.is_property_dirty(physics_property::gravity))
+            {
+                update_rigidbody_gravity(world, body, comp);
+            }
             if(comp.is_property_dirty(physics_property::velocity))
             {
                 update_rigidbody_velocity(body, comp);
@@ -1773,17 +1815,12 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
                 update_rigidbody_angular_velocity(body, comp);
             }
 
-            if(comp.is_property_dirty(physics_property::gravity))
-            {
-                update_rigidbody_gravity(world, body, comp);
-            }
-
             // here we check internally for a change
             update_rigidbody_material(body, comp);
             update_rigidbody_collision_layer(world, body, comp);
         }
 
-        if(!comp.is_kinematic())
+        if(comp.get_body_type() == rigidbody_type::dynamic)
         {
             if(comp.are_any_properties_dirty())
             {
@@ -1795,7 +1832,100 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
     comp.set_dirty(system_id, false);
 }
 
-auto sync_transforms(bullet::world& world, physics_component& comp, const transform_component& transform) -> bool
+auto make_bt_transform(const transform_component& transform) -> btTransform
+{
+    const auto& p = transform.get_position_global();
+    const auto& q = transform.get_rotation_global();
+    return btTransform(bullet::to_bullet(q), bullet::to_bullet(p));
+}
+
+void apply_shape_scale_if_needed(bullet::world& world,
+                                 bullet::rigidbody& body,
+                                 physics_component& comp,
+                                 const transform_component& transform)
+{
+    if(body.internal_shape && comp.is_autoscaled())
+    {
+        update_rigidbody_shape_scale(world, body, transform.get_scale_global());
+    }
+}
+
+auto compute_angular_velocity(const btQuaternion& from, const btQuaternion& to, float dt) -> btVector3
+{
+    if(dt <= 0.0f)
+    {
+        return btVector3(0, 0, 0);
+    }
+    btQuaternion delta = to * from.inverse();
+    btScalar angle = delta.getAngle();
+    if(angle > SIMD_PI)
+    {
+        angle -= SIMD_2_PI;
+    }
+    if(btFuzzyZero(angle))
+    {
+        return btVector3(0, 0, 0);
+    }
+    btVector3 axis = delta.getAxis();
+    return axis * (angle / dt);
+}
+
+void set_static_transform(bullet::world& world,
+                          bullet::rigidbody& body,
+                          physics_component& comp,
+                          const transform_component& transform)
+{
+    const btTransform bt_trans = make_bt_transform(transform);
+    body.internal->setWorldTransform(bt_trans);
+    body.internal->setInterpolationWorldTransform(bt_trans);
+    body.internal->setLinearVelocity(btVector3(0, 0, 0));
+    body.internal->setAngularVelocity(btVector3(0, 0, 0));
+    apply_shape_scale_if_needed(world, body, comp, transform);
+    world.dynamics_world->updateSingleAabb(body.internal.get());
+}
+
+void move_kinematic_transform(bullet::world& world,
+                              bullet::rigidbody& body,
+                              physics_component& comp,
+                              const transform_component& transform,
+                              float step_dt)
+{
+    const btTransform bt_trans = make_bt_transform(transform);
+    const btTransform& current = body.internal->getWorldTransform();
+    if(step_dt > 0.0f)
+    {
+        const btVector3 lin_vel = (bt_trans.getOrigin() - current.getOrigin()) / step_dt;
+        const btVector3 ang_vel = compute_angular_velocity(current.getRotation(), bt_trans.getRotation(), step_dt);
+        body.internal->setLinearVelocity(lin_vel);
+        body.internal->setAngularVelocity(ang_vel);
+    }
+    else
+    {
+        body.internal->setLinearVelocity(btVector3(0, 0, 0));
+        body.internal->setAngularVelocity(btVector3(0, 0, 0));
+    }
+    body.internal->setWorldTransform(bt_trans);
+    body.internal->setInterpolationWorldTransform(bt_trans);
+    apply_shape_scale_if_needed(world, body, comp, transform);
+    world.dynamics_world->updateSingleAabb(body.internal.get());
+}
+
+void teleport_dynamic_transform(bullet::world& world,
+                                bullet::rigidbody& body,
+                                physics_component& comp,
+                                const transform_component& transform)
+{
+    const btTransform bt_trans = make_bt_transform(transform);
+    body.internal->setWorldTransform(bt_trans);
+    body.internal->setInterpolationWorldTransform(bt_trans);
+    apply_shape_scale_if_needed(world, body, comp, transform);
+    wake_up(body);
+}
+
+auto sync_transforms_to_physics(bullet::world& world,
+                                physics_component& comp,
+                                const transform_component& transform,
+                                float step_dt) -> bool
 {
     auto owner = comp.get_owner();
     auto& body = owner.get<bullet::rigidbody>();
@@ -1805,27 +1935,29 @@ auto sync_transforms(bullet::world& world, physics_component& comp, const transf
         return false;
     }
 
-    const auto& p = transform.get_position_global();
-    const auto& q = transform.get_rotation_global();
-    const auto& s = transform.get_scale_global();
-
-    auto bt_pos = bullet::to_bullet(p);
-    auto bt_rot = bullet::to_bullet(q);
-    btTransform bt_trans(bt_rot, bt_pos);
-    body.internal->setWorldTransform(bt_trans);
-
-    if(body.internal_shape && comp.is_autoscaled())
+    switch(comp.get_body_type())
     {
-        update_rigidbody_shape_scale(world, body, s);
+        case rigidbody_type::static_body:
+            set_static_transform(world, body, comp, transform);
+            break;
+        case rigidbody_type::kinematic:
+            move_kinematic_transform(world, body, comp, transform, step_dt);
+            break;
+        case rigidbody_type::dynamic:
+            teleport_dynamic_transform(world, body, comp, transform);
+            break;
     }
-
-    wake_up(body);
 
     return true;
 }
 
-auto sync_state(physics_component& comp) -> bool
+auto sync_transforms_from_physics(physics_component& comp, transform_component& transform) -> bool
 {
+    if(comp.get_body_type() != rigidbody_type::dynamic)
+    {
+        return false;
+    }
+
     auto owner = comp.get_owner();
     auto body = owner.try_get<bullet::rigidbody>();
 
@@ -1839,60 +1971,51 @@ auto sync_state(physics_component& comp) -> bool
         return false;
     }
 
-    comp.set_velocity(bullet::from_bullet(body->internal->getLinearVelocity()));
-    comp.set_angular_velocity(bullet::from_bullet(body->internal->getAngularVelocity()));
-
-    return true;
-}
-
-auto sync_transforms(physics_component& comp, transform_component& transform) -> bool
-{
-    auto owner = comp.get_owner();
-    auto body = owner.try_get<bullet::rigidbody>();
-
-    if(!body || !body->internal)
-    {
-        return false;
-    }
-
-    if(!body->internal->isActive())
-    {
-        return false;
-    }
+    comp.set_velocity_internal(bullet::from_bullet(body->internal->getLinearVelocity()));
+    comp.set_angular_velocity_internal(bullet::from_bullet(body->internal->getAngularVelocity()));
 
     const auto& bt_trans = body->internal->getWorldTransform();
     auto p = bullet::from_bullet(bt_trans.getOrigin());
     auto q = bullet::from_bullet(bt_trans.getRotation());
 
-    // Here we are using a more generous epsilon to
-    // take into account any conversion errors between us and bullet
+    // Generous epsilon for Bullet float conversion noise.
     float epsilon = 0.009f;
     return transform.set_position_and_rotation_global(p, q, epsilon);
 }
 
-auto to_physics(bullet::world& world, transform_component& transform, physics_component& comp) -> bool
+auto to_physics(bullet::world& world,
+                transform_component& transform,
+                physics_component& comp,
+                float step_dt) -> bool
 {
     bool transform_dirty = transform.is_dirty(system_id);
     bool rigidbody_dirty = comp.is_dirty(system_id);
 
-    // if(rigidbody_dirty)
+    sync_physics_body(world, comp);
+
+    // Dynamic bodies are simulation-authored: only push ECS transform on teleport/dirty pose.
+    // Property dirty (e.g. ApplyForce syncing velocity) must not teleport and fight physics.
+    if(comp.get_body_type() == rigidbody_type::dynamic)
     {
-        sync_physics_body(world, comp);
+        if(transform_dirty)
+        {
+            return sync_transforms_to_physics(world, comp, transform, step_dt);
+        }
+        return false;
     }
 
+    // Static / kinematic: ECS is authoritative when transform or body setup changed.
     if(transform_dirty || rigidbody_dirty)
     {
-        return sync_transforms(world, comp, transform);
+        return sync_transforms_to_physics(world, comp, transform, step_dt);
     }
 
     return false;
 }
 
-auto from_physics(bullet::world& world, transform_component& transform, physics_component& comp) -> bool
+auto from_physics(transform_component& transform, physics_component& comp) -> bool
 {
-    sync_state(comp);
-
-    bool result = sync_transforms(comp, transform);
+    bool result = sync_transforms_from_physics(comp, transform);
 
     transform.set_dirty(system_id, false);
     comp.set_dirty(system_id, false);
@@ -1940,9 +2063,14 @@ void destroy_character_controller_body(bullet::world& world,
                                        bool from_cc_component)
 {
     auto cc = entity.try_get<bullet::character_controller>();
-    if(cc && cc->controller)
+    if(cc)
     {
-        world.remove_character_controller(*cc);
+        cc->pending_displacement = math::vec3{0.0f};
+        if(cc->controller)
+        {
+            cc->controller->setWalkDirection(btVector3(0, 0, 0));
+            world.remove_character_controller(*cc);
+        }
     }
     if(from_cc_component)
     {
@@ -2010,11 +2138,18 @@ auto to_physics_cc(bullet::world& world,
     bool transform_dirty = transform.is_dirty(system_id);
     bool cc_dirty = comp.is_dirty(system_id);
     sync_character_controller_body(world, comp);
+    auto owner = comp.get_owner();
+    auto* cc = owner.try_get<bullet::character_controller>();
+    if(!cc || !cc->controller)
+    {
+        return false;
+    }
+    // Flush pending Move() once for this fixed step (before simulate).
+    cc->controller->setWalkDirection(bullet::to_bullet(cc->pending_displacement));
+    cc->pending_displacement = math::vec3{0.0f};
     if(transform_dirty || cc_dirty)
     {
-        auto owner = comp.get_owner();
-        auto* cc = owner.try_get<bullet::character_controller>();
-        if(!cc || !cc->ghost)
+        if(!cc->ghost)
         {
             return false;
         }
@@ -2033,10 +2168,12 @@ auto from_physics_cc(bullet::world& world,
 {
     auto owner = comp.get_owner();
     auto* cc = owner.try_get<bullet::character_controller>();
-    if(!cc || !cc->ghost)
+    if(!cc || !cc->ghost || !cc->controller)
     {
         return false;
     }
+    // Clear walk direction so the next catch-up step does not re-apply Move.
+    cc->controller->setVelocityForTimeInterval(btVector3(0, 0, 0), 0.0f);
     const auto& bt_trans = cc->ghost->getWorldTransform();
     auto p = bullet::from_bullet(bt_trans.getOrigin()) - comp.get_center();
     auto q = bullet::from_bullet(bt_trans.getRotation());
@@ -2211,7 +2348,9 @@ void bullet_backend::move_character(character_controller_component& comp, const 
     {
         return;
     }
-    cc->controller->setWalkDirection(bullet::to_bullet(displacement));
+    // Accumulate for the next simulate flush; do not setWalkDirection here — Bullet
+    // would re-apply that vector on every catch-up substep.
+    cc->pending_displacement += displacement;
 }
 
 void bullet_backend::jump_character(character_controller_component& comp, const math::vec3& direction)
@@ -2315,108 +2454,149 @@ void bullet_backend::apply_explosion_force(physics_component& comp,
                                            float upwards_modifier,
                                            force_mode mode)
 {
-    auto owner = comp.get_owner();
-
-    if(auto bbody = owner.try_get<bullet::rigidbody>())
+    if(comp.get_body_type() != rigidbody_type::dynamic)
     {
-        const auto& body = bbody->internal;
+        return;
+    }
 
-        // Ensure the object is a dynamic rigid body
-        if(body && body->getInvMass() > 0)
-        {
-            // Get the position of the rigid body
-            btVector3 body_position = body->getWorldTransform().getOrigin();
+    auto* world = find_bullet_world();
+    if(!world)
+    {
+        return;
+    }
 
-            // Calculate the vector from the explosion position to the body
-            btVector3 direction = body_position - bullet::to_bullet(explosion_position);
-            float distance = direction.length();
+    auto owner = comp.get_owner();
+    // Flush pending prefab/spawn dirty state so the impulse hits a correct dynamic body.
+    const bool force_recreate = !owner.all_of<bullet::rigidbody>();
+    sync_physics_body(*world, comp, force_recreate);
 
-            // Skip objects outside the explosion radius
-            if(distance > explosion_radius && explosion_radius > 0.0f)
-            {
-                return;
-            }
+    auto* bbody = owner.try_get<bullet::rigidbody>();
+    if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
+    {
+        return;
+    }
 
-            // Normalize the direction vector
-            if(distance > 0.0f)
-            {
-                direction /= distance; // Normalize direction
-            }
-            else
-            {
-                direction.setZero(); // If explosion is at the same position as the body
-            }
+    const auto& body = bbody->internal;
+    btVector3 body_position = body->getWorldTransform().getOrigin();
+    btVector3 direction = body_position - bullet::to_bullet(explosion_position);
+    float distance = direction.length();
 
-            // Apply upwards modifier
-            if(upwards_modifier != 0.0f)
-            {
-                direction.setY(direction.getY() + upwards_modifier);
-                direction.normalize();
-            }
+    if(distance > explosion_radius && explosion_radius > 0.0f)
+    {
+        return;
+    }
 
-            // Calculate the explosion force magnitude based on distance
-            float attenuation = 1.0f - (distance / explosion_radius);
-            btVector3 force = direction * explosion_force * attenuation;
+    if(distance > 0.0f)
+    {
+        direction /= distance;
+    }
+    else
+    {
+        direction.setZero();
+    }
 
-            if(add_force(body.get(), force, mode))
-            {
-                comp.set_velocity(bullet::from_bullet(body->getLinearVelocity()));
+    if(upwards_modifier != 0.0f)
+    {
+        direction.setY(direction.getY() + upwards_modifier);
+        direction.normalize();
+    }
 
-                wake_up(*bbody);
-            }
-        }
+    float attenuation = explosion_radius > 0.0f ? (1.0f - (distance / explosion_radius)) : 1.0f;
+    btVector3 force = direction * explosion_force * attenuation;
+
+    if(add_force(body.get(), force, mode))
+    {
+        comp.set_velocity_internal(bullet::from_bullet(body->getLinearVelocity()));
+        body->forceActivationState(ACTIVE_TAG);
+        body->setDeactivationTime(0.0f);
     }
 }
 
 void bullet_backend::apply_force(physics_component& comp, const math::vec3& force, force_mode mode)
 {
-    auto owner = comp.get_owner();
-
-    if(auto bbody = owner.try_get<bullet::rigidbody>())
+    if(comp.get_body_type() != rigidbody_type::dynamic)
     {
-        const auto& body = bbody->internal;
-        auto vector = bullet::to_bullet(force);
-
-        if(add_force(body.get(), vector, mode))
-        {
-            comp.set_velocity(bullet::from_bullet(body->getLinearVelocity()));
-            wake_up(*bbody);
-        }
+        return;
     }
+
+    auto* world = find_bullet_world();
+    if(!world)
+    {
+        return;
+    }
+
+    auto owner = comp.get_owner();
+    // Flush pending prefab/spawn dirty state so the impulse hits a correct dynamic body.
+    const bool force_recreate = !owner.all_of<bullet::rigidbody>();
+    sync_physics_body(*world, comp, force_recreate);
+
+    auto* bbody = owner.try_get<bullet::rigidbody>();
+    if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
+    {
+        return;
+    }
+
+    auto vector = bullet::to_bullet(force);
+    if(!add_force(bbody->internal.get(), vector, mode))
+    {
+        return;
+    }
+
+    // Cache only - do not dirty, or the next sync can fight the just-applied impulse.
+    comp.set_velocity_internal(bullet::from_bullet(bbody->internal->getLinearVelocity()));
+    bbody->internal->forceActivationState(ACTIVE_TAG);
+    bbody->internal->setDeactivationTime(0.0f);
 }
 
 void bullet_backend::apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode)
 {
-    auto owner = comp.get_owner();
-
-    if(auto bbody = owner.try_get<bullet::rigidbody>())
+    if(comp.get_body_type() != rigidbody_type::dynamic)
     {
-        auto vector = bullet::to_bullet(torque);
-        const auto& body = bbody->internal;
-
-        if(add_torque(body.get(), vector, mode))
-        {
-            comp.set_angular_velocity(bullet::from_bullet(body->getAngularVelocity()));
-            wake_up(*bbody);
-        }
+        return;
     }
+
+    auto* world = find_bullet_world();
+    if(!world)
+    {
+        return;
+    }
+
+    auto owner = comp.get_owner();
+    const bool force_recreate = !owner.all_of<bullet::rigidbody>();
+    sync_physics_body(*world, comp, force_recreate);
+
+    auto* bbody = owner.try_get<bullet::rigidbody>();
+    if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
+    {
+        return;
+    }
+
+    auto vector = bullet::to_bullet(torque);
+    if(!add_torque(bbody->internal.get(), vector, mode))
+    {
+        return;
+    }
+
+    comp.set_angular_velocity_internal(bullet::from_bullet(bbody->internal->getAngularVelocity()));
+    bbody->internal->forceActivationState(ACTIVE_TAG);
+    bbody->internal->setDeactivationTime(0.0f);
 }
 
 void bullet_backend::clear_kinematic_velocities(physics_component& comp)
 {
-    if(comp.is_kinematic())
+    if(comp.get_body_type() != rigidbody_type::kinematic)
     {
-        auto owner = comp.get_owner();
+        return;
+    }
 
-        if(auto bbody = owner.try_get<bullet::rigidbody>())
-        {
-            bbody->internal->clearForces();
-
-            comp.set_velocity(bullet::from_bullet(bbody->internal->getLinearVelocity()));
-            comp.set_angular_velocity(bullet::from_bullet(bbody->internal->getAngularVelocity()));
-
-            wake_up(*bbody);
-        }
+    auto owner = comp.get_owner();
+    if(auto bbody = owner.try_get<bullet::rigidbody>())
+    {
+        bbody->internal->clearForces();
+        bbody->internal->setLinearVelocity(btVector3(0, 0, 0));
+        bbody->internal->setAngularVelocity(btVector3(0, 0, 0));
+        comp.set_velocity_internal(math::vec3{0.0f, 0.0f, 0.0f});
+        comp.set_angular_velocity_internal(math::vec3{0.0f, 0.0f, 0.0f});
     }
 }
 
@@ -2553,97 +2733,61 @@ void bullet_backend::on_resume(rtti::context& ctx)
 {
 }
 
-void bullet_backend::on_skip_next_frame(rtti::context& ctx)
+void bullet_backend::sync_to_physics(rtti::context& ctx, delta_t step_dt)
 {
-    delta_t step(1.0f / 60.0f);
-    on_frame_update(ctx, step);
+    APP_SCOPE_PERF("Physics/Bullet/Sync Transforms To Physics");
+    auto& ec = ctx.get_cached<ecs>();
+    auto& registry = *ec.get_scene().registry;
+    auto& world = registry.ctx().get<bullet::world>();
+    const float dt = step_dt.count();
+
+    registry.view<transform_component, physics_component, active_component>().each(
+        [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
+        {
+            to_physics(world, transform, rigidbody, dt);
+        });
+    registry.view<transform_component, character_controller_component, active_component>().each(
+        [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
+        {
+            to_physics_cc(world, transform, cc_comp);
+        });
 }
 
-void bullet_backend::on_frame_update(rtti::context& ctx, delta_t dt)
+void bullet_backend::simulate(delta_t step_dt)
 {
-    APP_SCOPE_PERF("Physics/Bullet/Update");
-    auto& ev = ctx.get_cached<events>();
+    auto& ctx = engine::context();
+    auto& ec = ctx.get_cached<ecs>();
+    auto& registry = *ec.get_scene().registry;
+    auto& world = registry.ctx().get<bullet::world>();
+    const float dt = step_dt.count();
+    world.simulate(dt, dt, 1);
+}
 
+void bullet_backend::sync_from_physics(rtti::context& ctx)
+{
+    APP_SCOPE_PERF("Physics/Bullet/Sync Transforms From Physics");
     auto& ec = ctx.get_cached<ecs>();
     auto& registry = *ec.get_scene().registry;
     auto& world = registry.ctx().get<bullet::world>();
 
-    if(dt > delta_t::zero())
-    {
-        float fixed_time_step = 1.0f / 50.0f;
-        int max_subs_steps = 3;
-
-        if(ctx.has<settings>())
+    registry.view<transform_component, physics_component, active_component>().each(
+        [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
         {
-            auto& ss = ctx.get<settings>();
-            fixed_time_step = ss.time.fixed_timestep;
-            max_subs_steps = ss.time.max_fixed_steps;
-        }
-
-        // Accumulate time
-        world.elapsed += dt.count();
-
-        int steps = 0;
-        while(world.elapsed >= fixed_time_step && steps < max_subs_steps)
+            from_physics(transform, rigidbody);
+        });
+    registry.view<transform_component, character_controller_component, active_component>().each(
+        [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
         {
-            APP_SCOPE_PERF("Physics/Bullet/Fixed Update");
-            delta_t step_dt(fixed_time_step);
-            ev.on_frame_fixed_update(ctx, step_dt);
+            from_physics_cc(world, transform, cc_comp);
+        });
+}
 
-            // update phyiscs spatial properties from transform
-            uint64_t physics_entities{};
-            uint64_t physics_entities_synced{};
-
-            {
-                APP_SCOPE_PERF("Physics/Bullet/Sync Transforms To Physics");
-                registry.view<transform_component, physics_component, active_component>().each(
-                    [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
-                    {
-                        physics_entities++;
-                        if(to_physics(world, transform, rigidbody))
-                        {
-                            physics_entities_synced++;
-                        }
-                    });
-                registry.view<transform_component, character_controller_component, active_component>().each(
-                    [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
-                    {
-                        to_physics_cc(world, transform, cc_comp);
-                    });
-            }
-
-            world.simulate(fixed_time_step, fixed_time_step, 1);
-
-            physics_entities = {};
-            physics_entities_synced = {};
-            {
-                APP_SCOPE_PERF("Physics/Bullet/Sync Transforms From Physics");
-                registry.view<transform_component, physics_component, active_component>().each(
-                    [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
-                    {
-                        physics_entities++;
-                        if(from_physics(world, transform, rigidbody))
-                        {
-                            physics_entities_synced++;
-                        }
-                    });
-                registry.view<transform_component, character_controller_component, active_component>().each(
-                    [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
-                    {
-                        from_physics_cc(world, transform, cc_comp);
-                    });
-            }
-
-            // APPLOG_TRACE("Physics Update: entities {} -> synced from physics {}",
-            //              physics_entities,
-            //              physics_entities_synced);
-
-            world.process_manifolds();
-
-            world.elapsed -= fixed_time_step;
-            steps++;
-        }
-    }
+void bullet_backend::dispatch_contacts(rtti::context& ctx)
+{
+    auto& ec = ctx.get_cached<ecs>();
+    auto& registry = *ec.get_scene().registry;
+    auto& world = registry.ctx().get<bullet::world>();
+    world.process_manifolds();
 }
 
 void bullet_backend::draw_system_gizmos(rtti::context& ctx, const camera& cam, gfx::dd_raii& dd)

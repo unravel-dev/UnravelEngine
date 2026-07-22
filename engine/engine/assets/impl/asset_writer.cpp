@@ -620,6 +620,21 @@ void atomic_write_file(const fs::path& dst,
         return;
     }
 
+    {
+        // Reject empty temps so a failed format-dispatch write cannot rename a
+        // 0-byte file over good source data.
+        const auto size = fs::file_size(temp, ec);
+        if(ec)
+        {
+            return;
+        }
+        if(size == 0)
+        {
+            ec = std::make_error_code(std::errc::io_error);
+            return;
+        }
+    }
+
     if(!sync_file(temp, ec))
     {
         return;

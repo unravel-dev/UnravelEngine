@@ -193,6 +193,31 @@ LOAD(physics_cylinder_shape)
 LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_binary_t);
 
+REFLECT(rigidbody_type)
+{
+    entt::meta_factory<rigidbody_type>{}
+        .type("rigidbody_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rigidbody_type"},
+            entt::attribute{"pretty_name", "Body Type"},
+        })
+        .data<rigidbody_type::static_body>("static_body"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "static_body"},
+            entt::attribute{"pretty_name", "Static"},
+        })
+        .data<rigidbody_type::kinematic>("kinematic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "kinematic"},
+            entt::attribute{"pretty_name", "Kinematic"},
+        })
+        .data<rigidbody_type::dynamic>("dynamic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "dynamic"},
+            entt::attribute{"pretty_name", "Dynamic"},
+        });
+}
+
 REFLECT(mesh_collision_type)
 {
     entt::meta_factory<mesh_collision_type>{}
@@ -314,11 +339,13 @@ REFLECT(physics_component)
             entt::attribute{"pretty_name", "Use Gravity"},
             entt::attribute{"tooltip", "Simulate gravity for this rigidbody."},
         })
-        .data<&physics_component::set_is_kinematic, &physics_component::is_kinematic>("is_kinematic"_hs)
+        .data<&physics_component::set_body_type, &physics_component::get_body_type>("body_type"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "is_kinematic"},
-            entt::attribute{"pretty_name", "Is Kinematic"},
-            entt::attribute{"tooltip", "Is the rigidbody kinematic(A rigid body that is not affected by others and can be moved directly.)"},
+            entt::attribute{"name", "body_type"},
+            entt::attribute{"pretty_name", "Body Type"},
+            entt::attribute{"tooltip",
+                            "Static: ECS may teleport (AABB update). Kinematic: ECS-driven, pushes dynamics. Dynamic: "
+                            "fully simulated."},
         })
         .data<&physics_component::set_is_sensor, &physics_component::is_sensor>("is_sensor"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -396,7 +423,7 @@ REFLECT(physics_component)
 SAVE(physics_component)
 {
     try_save(ar, ser20::make_nvp("is_using_gravity", obj.is_using_gravity()));
-    try_save(ar, ser20::make_nvp("is_kinematic", obj.is_kinematic()));
+    try_save(ar, ser20::make_nvp("body_type", obj.get_body_type()));
     try_save(ar, ser20::make_nvp("is_sensor", obj.is_sensor()));
     try_save(ar, ser20::make_nvp("is_autoscaled", obj.is_autoscaled()));
     try_save(ar, ser20::make_nvp("mass", obj.get_mass()));
@@ -419,10 +446,19 @@ LOAD(physics_component)
         obj.set_is_using_gravity(is_using_gravity);
     }
 
-    bool is_kinematic{};
-    if(try_load(ar, ser20::make_nvp("is_kinematic", is_kinematic)))
+    rigidbody_type body_type{rigidbody_type::static_body};
+    if(try_load(ar, ser20::make_nvp("body_type", body_type)))
     {
-        obj.set_is_kinematic(is_kinematic);
+        obj.set_body_type(body_type);
+    }
+    else
+    {
+        // Legacy: bool is_kinematic -> kinematic/dynamic.
+        bool is_kinematic{};
+        if(try_load(ar, ser20::make_nvp("is_kinematic", is_kinematic)))
+        {
+            obj.set_body_type(is_kinematic ? rigidbody_type::kinematic : rigidbody_type::dynamic);
+        }
     }
 
     bool is_sensor{};

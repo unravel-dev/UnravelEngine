@@ -786,37 +786,35 @@ bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameB
     return result;
 }
 
-bool imageSave(const char* saveAs, bimg::ImageContainer* image)
+bool imageSave(const char* saveAs, bimg::ImageContainer* image, const char* format_hint)
 {
-    if (!image)
+    if (!image || !saveAs)
     {
         return false;
     }
-    // Write the image to file based on its extension
+    // Format dispatch key: explicit hint (final destination path/ext) or save path.
+    const char* format_key = (format_hint && format_hint[0] != '\0') ? format_hint : saveAs;
     bx::FileWriter writer;
     bx::Error err;
 
     if (bx::open(&writer, saveAs, false, &err))
     {
-        if (!bx::strFindI(saveAs, "tga").isEmpty())
+        if (!bx::strFindI(format_key, "tga").isEmpty())
         {
             bimg::imageWriteTga(&writer, image->m_width, image->m_height, image->m_width * 4, image->m_data, false, false, &err);
         }
-        else if (!bx::strFindI(saveAs, "ktx").isEmpty())
+        else if (!bx::strFindI(format_key, "ktx").isEmpty())
         {
             bimg::imageWriteKtx(&writer, *image, image->m_data, image->m_size, &err);
-
         }
-        else if (!bx::strFindI(saveAs, "dds").isEmpty())
+        else if (!bx::strFindI(format_key, "dds").isEmpty())
         {
             bimg::imageWriteDds(&writer, *image, image->m_data, image->m_size, &err);
-
         }
-        else if (!bx::strFindI(saveAs, "png").isEmpty())
+        else if (!bx::strFindI(format_key, "png").isEmpty())
         {
             if (image->m_format != bimg::TextureFormat::RGBA8)
             {
-
                 auto converted = bimg::imageConvert(entry::getAllocator(), bimg::TextureFormat::RGBA8, *image);
                 if(converted)
                 {
@@ -853,9 +851,8 @@ bool imageSave(const char* saveAs, bimg::ImageContainer* image)
                                     , &err
                                     );
             }
-
         }
-        else if (!bx::strFindI(saveAs, "exr").isEmpty())
+        else if (!bx::strFindI(format_key, "exr").isEmpty())
         {
             bimg::ImageMip mip;
             bimg::imageGetRawData(*image, 0, 0, image->m_data, image->m_size, mip);
@@ -869,7 +866,7 @@ bool imageSave(const char* saveAs, bimg::ImageContainer* image)
                                 , &err
                                 );
         }
-        else if (!bx::strFindI(saveAs, "hdr").isEmpty())
+        else if (!bx::strFindI(format_key, "hdr").isEmpty())
         {
             bimg::ImageMip mip;
             bimg::imageGetRawData(*image, 0, 0, image->m_data, image->m_size, mip);
@@ -884,10 +881,8 @@ bool imageSave(const char* saveAs, bimg::ImageContainer* image)
                                 );
         }
 
-
         bx::close(&writer);
     }
 
     return err.isOk();
-
 }

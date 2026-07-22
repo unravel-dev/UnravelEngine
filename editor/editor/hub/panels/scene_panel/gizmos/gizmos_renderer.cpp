@@ -9,7 +9,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 
-#include <engine/physics/backend/bullet/bullet_backend.h>
+#include <engine/physics/ecs/systems/physics_system.h>
 
 #include "gizmos/gizmos.h"
 
@@ -83,7 +83,7 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     
         gfx::dd_raii dd(pass.id);
     
-        bullet_backend::draw_system_gizmos(ctx, camera, dd);
+        ctx.get_cached<physics_system>().draw_system_gizmos(ctx, camera, dd);
     
         draw_selection_gizmos(ctx, camera, dd, dd_2d);
     

@@ -22,6 +22,7 @@ SAVE_EXTERN(physics_cylinder_shape);
 LOAD_EXTERN(physics_cylinder_shape);
 REFLECT_EXTERN(physics_cylinder_shape);
 
+REFLECT_EXTERN(rigidbody_type);
 REFLECT_EXTERN(mesh_collision_type);
 
 SAVE_EXTERN(physics_mesh_shape);

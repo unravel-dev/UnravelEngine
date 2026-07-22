@@ -153,6 +153,9 @@ namespace Unravel.Core
 
         /// <summary>
         /// Moves the character by a displacement vector. The movement is constrained by collisions.
+        /// Displacement is applied once on the next physics step, not repeated
+        /// across fixed-step catch-up. Prefer Move(velocity * Time.deltaTime) from OnUpdate,
+        /// or Move(velocity * Time.fixedDeltaTime) from OnFixedUpdate.
         /// </summary>
         /// <param name="displacement">The world-space displacement to apply.</param>
         public void Move(Vector3 displacement)
