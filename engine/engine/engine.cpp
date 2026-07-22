@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <exception>
 #include <logging/logging.h>
+#include <service/service.h>
 
 
 #include <seq/seq.h>
@@ -46,6 +47,7 @@ auto context_ptr() -> rtti::context*&
     return ctx;
 }
 std::atomic<bool> is_shutting_down{false};
+std::atomic<bool> is_restart_requested{false};
 
 void update_input_zone(const renderer& rend, input_system& input)
 {
@@ -510,8 +512,14 @@ auto engine::process() -> int
         if(should_quit)
         {
             ctx.get_cached<play_mode>().set_active(ctx, false);
+            const bool restart = is_restart_requested.exchange(false);
             is_shutting_down = false;
-            return 0;
+            if(restart)
+            {
+                APPLOG_INFO("Engine process returning restart action");
+                return SERVICE_RESULT_RESTART;
+            }
+            return SERVICE_RESULT_EXIT;
         }
 
         {   
@@ -562,6 +570,14 @@ auto engine::process() -> int
 }
 auto engine::interrupt() -> bool
 {
+    is_shutting_down = true;
+    return true;
+}
+
+auto engine::request_restart() -> bool
+{
+    APPLOG_INFO("Application restart requested");
+    is_restart_requested = true;
     is_shutting_down = true;
     return true;
 }

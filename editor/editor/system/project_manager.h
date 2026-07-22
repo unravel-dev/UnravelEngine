@@ -9,7 +9,8 @@
 #include <cmd_line/parser.h>
 
 #include <cstdint>
-
+#include <string>
+#include <vector>
 
 namespace unravel
 {
@@ -69,6 +70,11 @@ public:
     void save_editor_settings();
 
     void load_editor_settings();
+
+    /**
+     * @brief Prepares restart CLI args: persists recent projects and sets -p recent.
+     */
+    void prepare_restart(std::vector<std::string>& arguments);
 
     auto get_name() const -> const std::string&;
 

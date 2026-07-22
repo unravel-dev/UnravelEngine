@@ -2,14 +2,35 @@
 #include "entt/core/fwd.hpp"
 #include "entt/meta/meta.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <csignal>
 #include <iostream>
+#include <vector>
 
 #include <entt/meta/resolve.hpp>
 #include <entt/meta/utility.hpp>
 #include <entt/core/hashed_string.hpp>
 
+#include <process/process.h>
+#include <process/startup_arguments.h>
+
 using namespace std::chrono_literals;
+
+namespace
+{
+
+auto make_argv_pointers(std::vector<std::string>& storage) -> std::vector<char*>
+{
+    std::vector<char*> pointers;
+    pointers.reserve(storage.size());
+    for(auto& argument : storage)
+    {
+        pointers.push_back(argument.data());
+    }
+    return pointers;
+}
+
+} // namespace
 
 service::service(int argc, char* argv[]) : parser_(argc, argv)
 {
@@ -163,30 +184,89 @@ auto service::get_cmd_line_parser() -> cmd_line::parser&
     return parser_;
 }
 
+void service::prepare_restart(std::vector<std::string>& arguments)
+{
+    for(const auto& module : modules_)
+    {
+        using namespace entt::literals;
+        auto type = entt::resolve(entt::hashed_string{module.desc.type_name.c_str()});
+        auto func = type.func("prepare_restart"_hs);
+        if(!func)
+        {
+            continue;
+        }
+        func.invoke({}, entt::forward_as_meta(arguments));
+    }
+}
+
 auto service_main(const char* name, int argc, char* argv[]) -> int
 {
+    const unravel::process::startup_arguments startup =
+        unravel::process::parse_startup_arguments(argc, argv);
+    if(startup.has_parse_error)
+    {
+        std::cerr << "Failed to parse startup arguments: " << startup.parse_error << std::endl;
+        return EXIT_FAILURE;
+    }
+    if(startup.restart_from_pid)
+    {
+        std::cout << "Restarting: waiting for process " << *startup.restart_from_pid << " to exit"
+                  << std::endl;
+        if(!unravel::process::wait_for_process_exit(*startup.restart_from_pid))
+        {
+            std::cerr << "Failed while waiting for process " << *startup.restart_from_pid << std::endl;
+            return EXIT_FAILURE;
+        }
+        std::cout << "Restarting: previous process exited, continuing startup" << std::endl;
+    }
+    std::vector<std::string> service_argv_storage = unravel::process::build_service_argv(startup);
+    std::vector<char*> service_argv = make_argv_pointers(service_argv_storage);
+    const int service_argc = static_cast<int>(service_argv.size());
     std::vector<module_desc> modules{{name, name}};
-
     int run = SERVICE_RESULT_RUN;
     while(run != SERVICE_RESULT_EXIT)
     {
-        service app(argc, argv);
-
+        service app(service_argc, service_argv.data());
         if(!app.load(modules))
         {
             return -1;
         }
-
-        while(run == SERVICE_RESULT_RUN)
+        for(;;)
         {
-            run = app.process(); 
+            while(run == SERVICE_RESULT_RUN)
+            {
+                run = app.process();
+            }
+            if(run == SERVICE_RESULT_RESTART)
+            {
+                const std::uint32_t next_restart_count = startup.restart_count + 1;
+                auto replacement_arguments =
+                    unravel::process::build_replacement_application_arguments(startup);
+                app.prepare_restart(replacement_arguments);
+                std::cout << "Restart requested: spawning replacement process (count="
+                          << next_restart_count << ")" << std::endl;
+                const unravel::process::restart_result spawn_result =
+                    unravel::process::spawn_replacement(replacement_arguments, next_restart_count);
+                if(!spawn_result.success)
+                {
+                    std::cerr << "Failed to spawn replacement process: " << spawn_result.error.message()
+                              << " (" << spawn_result.error.value() << ")" << std::endl;
+                    run = SERVICE_RESULT_RUN;
+                    continue;
+                }
+                std::cout << "Replacement process spawned successfully" << std::endl;
+                if(!app.unload())
+                {
+                    return -1;
+                }
+                return 0;
+            }
+            break;
         }
-
         if(!app.unload())
         {
             return -1;
         }
     }
-
     return 0;
 }

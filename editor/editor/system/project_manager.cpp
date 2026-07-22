@@ -403,15 +403,10 @@ void project_manager::fixup_editor_settings_on_save()
     if(has_open_project())
     {
         auto& rp = editor_settings_.projects.recent_projects;
-        auto project_path = fs::resolve_protocol("app:/");
-        if(std::find_if(std::begin(rp),
-                        std::end(rp),
-                        [&](const auto& prj)
-                        {
-                            return project_path.generic_string() == prj;
-                        }) == std::end(rp))
+        const std::string project_path = fs::resolve_protocol("app:/").generic_string();
+        if(std::find(std::begin(rp), std::end(rp), project_path) == std::end(rp))
         {
-            rp.emplace_back(std::move(project_path));
+            rp.push_back(project_path);
         }
 
         std::sort(std::begin(rp),
@@ -424,6 +419,10 @@ void project_manager::fixup_editor_settings_on_save()
 
                       return lhs_time > rhs_time;
                   });
+
+        // Keep the open project first so -p recent reopens the active project.
+        rp.erase(std::remove(rp.begin(), rp.end(), project_path), rp.end());
+        rp.insert(rp.begin(), project_path);
     }
 }
 void project_manager::fixup_editor_settings_on_load()
@@ -477,6 +476,38 @@ void project_manager::save_editor_settings()
 
     const fs::path config = editor_cfg;
     asset_writer::atomic_save_to_file(config.string(), editor_settings_);
+}
+
+void project_manager::prepare_restart(std::vector<std::string>& arguments)
+{
+    if(!has_open_project())
+    {
+        return;
+    }
+    // Persist recent-projects (open project first) so -p recent reopens it.
+    save_editor_settings();
+    std::vector<std::string> filtered;
+    filtered.reserve(arguments.size() + 2);
+    for(std::size_t i = 0; i < arguments.size(); ++i)
+    {
+        const std::string& argument = arguments[i];
+        if(argument == "-p" || argument == "--project")
+        {
+            if(i + 1 < arguments.size())
+            {
+                ++i;
+            }
+            continue;
+        }
+        if(argument.rfind("--project=", 0) == 0)
+        {
+            continue;
+        }
+        filtered.push_back(argument);
+    }
+    filtered.emplace_back("-p");
+    filtered.emplace_back("recent");
+    arguments = std::move(filtered);
 }
 
 auto project_manager::get_name() const -> const std::string&

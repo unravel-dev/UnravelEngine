@@ -1317,6 +1317,13 @@ auto editor_actions::reload_project(rtti::context& ctx) -> bool
     return true;
 }
 
+auto editor_actions::restart_editor(rtti::context& ctx) -> bool
+{
+    (void)ctx;
+    APPLOG_INFO("Editor restart requested from menu (reason=user_menu)");
+    return engine::request_restart();
+}
+
 void editor_actions::run_project(const fs::path& executable_path)
 {
     subprocess::call(executable_path.string());

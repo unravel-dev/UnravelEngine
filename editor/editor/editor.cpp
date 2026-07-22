@@ -32,7 +32,8 @@ REFLECTION_REGISTRATION
         .func<&editor::deinit>("deinit"_hs)
         .func<&editor::destroy>("destroy"_hs)
         .func<&editor::process>("process"_hs)
-        .func<&editor::interrupt>("interrupt"_hs);
+        .func<&editor::interrupt>("interrupt"_hs)
+        .func<&editor::prepare_restart>("prepare_restart"_hs);
 
 
 }
@@ -296,6 +297,13 @@ auto editor::process() -> int
 auto editor::interrupt() -> bool
 {
     return engine::interrupt();
+}
+
+void editor::prepare_restart(std::vector<std::string>& arguments)
+{
+    auto& ctx = engine::context();
+    auto& pm = ctx.get_cached<project_manager>();
+    pm.prepare_restart(arguments);
 }
 
 } // namespace unravel

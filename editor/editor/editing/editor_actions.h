@@ -92,6 +92,7 @@ struct editor_actions
 
     static auto close_project(rtti::context& ctx) -> bool;
     static auto reload_project(rtti::context& ctx) -> bool;
+    static auto restart_editor(rtti::context& ctx) -> bool;
 
     static void run_project(const fs::path& executable_path);
     static auto deploy_project(rtti::context& ctx, const deploy_settings& params)

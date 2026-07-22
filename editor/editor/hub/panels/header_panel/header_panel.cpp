@@ -131,6 +131,11 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 editor_actions::save_scene_as(ctx);
             }
 
+            if(ImGui::MenuItem("Restart Editor", nullptr))
+            {
+                editor_actions::restart_editor(ctx);
+            }
+
             if(ImGui::MenuItem("Reload Project", nullptr))
             {
                 editor_actions::reload_project(ctx);

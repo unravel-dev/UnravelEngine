@@ -4,6 +4,9 @@
 #include <context/context.hpp>
 #include <entt/meta/meta.hpp>
 
+#include <string>
+#include <vector>
+
 struct module_desc
 {
     std::string lib_name;
@@ -18,6 +21,7 @@ struct module_data
 #define SERVICE_RESULT_EXIT 0
 #define SERVICE_RESULT_RUN 1
 #define SERVICE_RESULT_RELOAD 2
+#define SERVICE_RESULT_RESTART 3
 
 struct service
 {
@@ -31,6 +35,13 @@ struct service
     auto init() -> bool;
     auto process() -> int;
     auto interrupt() -> bool;
+
+    /**
+     * @brief Lets loaded modules prepare for process restart (e.g. adjust spawn args).
+     *
+     * Optional per-module meta hook: prepare_restart.
+     */
+    void prepare_restart(std::vector<std::string>& arguments);
 
     auto get_cmd_line_parser() -> cmd_line::parser&;
 
