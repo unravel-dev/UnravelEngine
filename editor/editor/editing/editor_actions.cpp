@@ -377,105 +377,179 @@ void generate_workspace_file(const std::string& file_path,
     APPLOG_TRACE("Workspace {}", file_path);
 }
 
+namespace
+{
+
+auto collect_csharp_sources(const fs::path& source_directory, std::vector<fs::path>& out_sources) -> bool
+{
+    fs::error_code ec;
+    const fs::recursive_directory_iterator end;
+    fs::recursive_directory_iterator it(source_directory, ec);
+    if(ec)
+    {
+        APPLOG_ERROR("Failed to iterate source directory {}: {}", source_directory.string(), ec.message());
+        return false;
+    }
+    while(it != end)
+    {
+        const fs::path current_path = it->path();
+        const bool is_regular = it->is_regular_file(ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to query {}: {}", current_path.string(), ec.message());
+            return false;
+        }
+        if(is_regular && current_path.extension() == ".cs")
+        {
+            out_sources.push_back(current_path);
+        }
+        it.increment(ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed while iterating {}: {}", source_directory.string(), ec.message());
+            return false;
+        }
+    }
+    return true;
+}
+
+auto validate_csproj_inputs(const fs::path& source_directory,
+                            const std::vector<fs::path>& external_dll_paths,
+                            const fs::path& output_directory) -> bool
+{
+    fs::error_code ec;
+    fs::create_directories(output_directory, ec);
+    if(ec)
+    {
+        APPLOG_ERROR("Failed to create output directory {}: {}", output_directory.string(), ec.message());
+        return false;
+    }
+    if(!fs::exists(source_directory, ec) || !fs::is_directory(source_directory, ec))
+    {
+        APPLOG_ERROR("Source directory does not exist or is not a directory: {}", source_directory.string());
+        return false;
+    }
+    for(const auto& dll_path : external_dll_paths)
+    {
+        if(!fs::exists(dll_path, ec) || !fs::is_regular_file(dll_path, ec))
+        {
+            APPLOG_ERROR("External DLL does not exist or is not a file: {}", dll_path.string());
+            return false;
+        }
+    }
+    return true;
+}
+
+auto write_csproj_file(const fs::path& csproj_path, const std::string& csproj_content) -> bool
+{
+    std::ofstream csproj_file(csproj_path);
+    if(!csproj_file.is_open())
+    {
+        APPLOG_ERROR("Failed to create .csproj file at {}", csproj_path.string());
+        return false;
+    }
+    csproj_file << csproj_content;
+    if(!csproj_file)
+    {
+        APPLOG_ERROR("Failed to write .csproj file at {}", csproj_path.string());
+        return false;
+    }
+    APPLOG_TRACE("Generated {}", csproj_path.string());
+    return true;
+}
+
+auto build_external_dll_references(const std::vector<fs::path>& external_dll_paths) -> std::string
+{
+    std::string external_dll_references;
+    fs::error_code ec;
+    for(const auto& dll_path : external_dll_paths)
+    {
+        const std::string dll_name = dll_path.filename().string();
+        const fs::path dll_absolute_path = fs::absolute(dll_path, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to resolve absolute path for {}: {}", dll_path.string(), ec.message());
+            return {};
+        }
+        external_dll_references += "    <Reference Include=\"" + dll_name + "\">\n";
+        external_dll_references += "      <HintPath>" + dll_absolute_path.generic_string() + "</HintPath>\n";
+        external_dll_references += "      <Private>False</Private>\n";
+        external_dll_references += "    </Reference>\n";
+    }
+    return external_dll_references;
+}
+
+} // namespace
+
 /**
  * @brief Generates a .csproj file based on the provided parameters.
  *
- * @param source_directory Directory containing C# source files.
- * @param external_dll_path Path to the external DLL to reference.
- * @param output_directory Directory where the .csproj file will be generated.
- * @param project_name Name of the project and the .csproj file (default: "MyLibrary").
- * @param dotnet_sdk_version Target .NET version as major.minor. Empty picks
- *        the runtime-configured version (dotnet::get_dotnet_version).
- *
- * @throws std::runtime_error if the .csproj file cannot be created.
+ * @return true on success; false on failure (errors are logged, never thrown).
  */
 #if !DOTNETPP_BACKEND_MONO
-void generate_csproj(const fs::path& source_directory,
+auto generate_csproj(const fs::path& source_directory,
                      const std::vector<fs::path>& external_dll_paths,
                      const fs::path& output_directory,
                      const std::string& project_name = "MyLibrary",
-                     std::string dotnet_sdk_version = {})
+                     std::string dotnet_sdk_version = {}) -> bool
 {
     if(dotnet_sdk_version.empty())
     {
         dotnet_sdk_version = dotnet::get_dotnet_version();
     }
-    // Ensure the output directory exists
-    try
+    if(!validate_csproj_inputs(source_directory, external_dll_paths, output_directory))
     {
-        fs::create_directories(output_directory);
+        return false;
     }
-    catch(const fs::filesystem_error& e)
-    {
-        throw std::runtime_error("Failed to create output directory: " + std::string(e.what()));
-    }
-
-    // Verify that the source directory exists
-    if(!fs::exists(source_directory) || !fs::is_directory(source_directory))
-    {
-        throw std::runtime_error("Source directory does not exist or is not a directory: " + source_directory.string());
-    }
-
-    // Verify that all external DLLs exist and are files
-    for(const auto& dll_path : external_dll_paths)
-    {
-        if(!fs::exists(dll_path) || !fs::is_regular_file(dll_path))
-        {
-            throw std::runtime_error("External DLL does not exist or is not a file: " + dll_path.string());
-        }
-    }
-
-    // Collect all C# source files from the specified source directory
     std::vector<fs::path> csharp_sources;
-    try
+    if(!collect_csharp_sources(source_directory, csharp_sources))
     {
-        for(const auto& entry : fs::recursive_directory_iterator(source_directory))
-        {
-            if(entry.is_regular_file() && entry.path().extension() == ".cs")
-            {
-                // Compute the relative path from the source directory
-                fs::path relative_path = fs::relative(entry.path(), source_directory);
-                csharp_sources.push_back(relative_path);
-            }
-        }
+        return false;
     }
-    catch(const fs::filesystem_error& e)
+    fs::error_code ec;
+    const fs::path csproj_directory = fs::absolute(output_directory, ec);
+    if(ec)
     {
-        throw std::runtime_error("Error while iterating source directory: " + std::string(e.what()));
+        APPLOG_ERROR("Failed to resolve output directory {}: {}", output_directory.string(), ec.message());
+        return false;
     }
-
-    // Generate the list of source files for the .csproj file with <Link> elements (for virtual folders)
+    const fs::path source_root = fs::absolute(source_directory, ec);
+    if(ec)
+    {
+        APPLOG_ERROR("Failed to resolve source directory {}: {}", source_directory.string(), ec.message());
+        return false;
+    }
     std::string csharp_source_items;
     for(const auto& source_file : csharp_sources)
     {
-        // Convert path to generic format (forward slashes)
-        std::string source_file_str = source_file.string();
-        fs::path full_physical_path = fs::absolute(source_directory / source_file);
-        std::string full_physical_path_str = full_physical_path.string();
-
-        // Construct the <Compile Include> with <Link>
-        csharp_source_items += "    <Compile Include=\"" + full_physical_path_str + "\">\n";
-        csharp_source_items += "      <Link>" + source_file_str + "</Link>\n";
+        const fs::path absolute_source = fs::absolute(source_file, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to resolve source {}: {}", source_file.string(), ec.message());
+            return false;
+        }
+        const fs::path include_path = fs::relative(absolute_source, csproj_directory, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to make relative include for {}: {}", absolute_source.string(), ec.message());
+            return false;
+        }
+        const fs::path link_path = fs::relative(absolute_source, source_root, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to make relative link for {}: {}", absolute_source.string(), ec.message());
+            return false;
+        }
+        csharp_source_items += "    <Compile Include=\"" + include_path.generic_string() + "\">\n";
+        csharp_source_items += "      <Link>" + link_path.generic_string() + "</Link>\n";
         csharp_source_items += "    </Compile>\n";
     }
-
-    // Generate external DLL references
-    std::string external_dll_references;
-    for(const auto& dll_path : external_dll_paths)
+    const std::string external_dll_references = build_external_dll_references(external_dll_paths);
+    if(external_dll_references.empty() && !external_dll_paths.empty())
     {
-        std::string dll_name = dll_path.filename().string();
-        fs::path dll_absolute_path = fs::absolute(dll_path);
-        std::string dll_absolute_path_str = dll_absolute_path.string(); // Forward slashes
-
-        external_dll_references += "    <Reference Include=\"" + dll_name + "\">\n";
-        external_dll_references += "      <HintPath>" + dll_absolute_path_str + "</HintPath>\n";
-        external_dll_references += "      <Private>False</Private>\n";
-        external_dll_references += "    </Reference>\n";
+        return false;
     }
-
-    // Build the .csproj content. This project exists for IDE tooling
-    // (intellisense/analyzers); the engine compiles scripts itself with csc.
-    // Keep build outputs in temp/ so restores don't pollute the project dir.
+    // IDE tooling project; engine compiles scripts with csc. Keep outputs under temp/.
     std::string csproj_content;
     csproj_content += "<Project Sdk=\"Microsoft.NET.Sdk\">\n";
     csproj_content += "  <PropertyGroup>\n";
@@ -489,8 +563,7 @@ void generate_csproj(const fs::path& source_directory,
     csproj_content += "    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>\n";
     csproj_content += "    <BaseOutputPath>temp/bin</BaseOutputPath>\n";
     csproj_content += "    <BaseIntermediateOutputPath>temp/obj</BaseIntermediateOutputPath>\n";
-    csproj_content +=
-        "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n"; // Disable default .cs file inclusion
+    csproj_content += "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>\n";
     csproj_content += "  </PropertyGroup>\n";
     csproj_content += "  <ItemGroup>\n";
     csproj_content += csharp_source_items;
@@ -499,101 +572,57 @@ void generate_csproj(const fs::path& source_directory,
     csproj_content += external_dll_references;
     csproj_content += "  </ItemGroup>\n";
     csproj_content += "</Project>\n";
-
-    // Define the path to the .csproj file
-    fs::path csproj_path = output_directory / (project_name + ".csproj");
-
-    // Write the .csproj file
-    std::ofstream csproj_file(csproj_path);
-    if(!csproj_file.is_open())
-    {
-        APPLOG_ERROR("Failed to create .csproj file at {}", csproj_path.string());
-        return;
-    }
-
-    csproj_file << csproj_content;
-
-    APPLOG_TRACE("Generated {}", csproj_path.string());
+    const fs::path csproj_path = output_directory / (project_name + ".csproj");
+    return write_csproj_file(csproj_path, csproj_content);
 }
 #else
-void generate_csproj_legacy(const fs::path& source_directory,
+auto generate_csproj_legacy(const fs::path& source_directory,
                             const std::vector<fs::path>& external_dll_paths,
                             const fs::path& output_directory,
                             const std::string& project_name = "MyLibrary",
-                            const std::string& dotnet_framework_version = "v4.7.1")
+                            const std::string& dotnet_framework_version = "v4.7.1") -> bool
 {
-    auto uid = generate_uuid(project_name);
-    fs::path output_path = fs::path("temp") / "bin" / "Debug";
-    fs::path intermediate_output_path = fs::path("temp") / "obj" / "Debug";
-
-    // Ensure the output directory exists
-    try
+    const auto uid = generate_uuid(project_name);
+    const fs::path output_path = fs::path("temp") / "bin" / "Debug";
+    const fs::path intermediate_output_path = fs::path("temp") / "obj" / "Debug";
+    if(!validate_csproj_inputs(source_directory, external_dll_paths, output_directory))
     {
-        fs::create_directories(output_directory);
+        return false;
     }
-    catch(const fs::filesystem_error& e)
-    {
-        throw std::runtime_error("Failed to create output directory: " + std::string(e.what()));
-    }
-
-    // Verify that the source directory exists
-    if(!fs::exists(source_directory) || !fs::is_directory(source_directory))
-    {
-        throw std::runtime_error("Source directory does not exist or is not a directory: " + source_directory.string());
-    }
-
-    // Verify that all external DLLs exist and are files
-    for(const auto& dll_path : external_dll_paths)
-    {
-        if(!fs::exists(dll_path) || !fs::is_regular_file(dll_path))
-        {
-            throw std::runtime_error("External DLL does not exist or is not a file: " + dll_path.string());
-        }
-    }
-
-    // Collect all C# source files from the specified source directory
     std::vector<fs::path> csharp_sources;
-    try
+    if(!collect_csharp_sources(source_directory, csharp_sources))
     {
-        for(const auto& entry : fs::recursive_directory_iterator(source_directory))
-        {
-            if(entry.is_regular_file() && entry.path().extension() == ".cs")
-            {
-                // Compute the relative path from the output directory
-                fs::path relative_path = fs::relative(entry.path(), output_directory);
-                csharp_sources.push_back(relative_path);
-            }
-        }
+        return false;
     }
-    catch(const fs::filesystem_error& e)
+    fs::error_code ec;
+    const fs::path csproj_directory = fs::absolute(output_directory, ec);
+    if(ec)
     {
-        throw std::runtime_error("Error while iterating source directory: " + std::string(e.what()));
+        APPLOG_ERROR("Failed to resolve output directory {}: {}", output_directory.string(), ec.message());
+        return false;
     }
-
-    // Generate the list of source files for the .csproj file
     std::string csharp_source_items;
     for(const auto& source_file : csharp_sources)
     {
-        // Convert path to generic format (forward slashes)
-        std::string source_file_str = source_file.string();
-        csharp_source_items += "    <Compile Include=\"" + source_file_str + "\" />\n";
+        const fs::path absolute_source = fs::absolute(source_file, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to resolve source {}: {}", source_file.string(), ec.message());
+            return false;
+        }
+        const fs::path include_path = fs::relative(absolute_source, csproj_directory, ec);
+        if(ec)
+        {
+            APPLOG_ERROR("Failed to make relative include for {}: {}", absolute_source.string(), ec.message());
+            return false;
+        }
+        csharp_source_items += "    <Compile Include=\"" + include_path.generic_string() + "\" />\n";
     }
-
-    // Generate external DLL references
-    std::string external_dll_references;
-    for(const auto& dll_path : external_dll_paths)
+    const std::string external_dll_references = build_external_dll_references(external_dll_paths);
+    if(external_dll_references.empty() && !external_dll_paths.empty())
     {
-        std::string dll_name = dll_path.filename().string();
-        fs::path dll_absolute_path = fs::absolute(dll_path);
-        std::string dll_absolute_path_str = dll_absolute_path.string(); // Forward slashes
-
-        external_dll_references += "    <Reference Include=\"" + dll_name + "\">\n";
-        external_dll_references += "      <HintPath>" + dll_absolute_path_str + "</HintPath>\n";
-        external_dll_references += "      <Private>False</Private>\n"; // Mimic Unity's references
-        external_dll_references += "    </Reference>\n";
+        return false;
     }
-
-    // Build the .csproj content
     std::string csproj_content;
     csproj_content += "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
     csproj_content += "<Project ToolsVersion=\"4.0\" DefaultTargets=\"Build\" "
@@ -614,60 +643,21 @@ void generate_csproj_legacy(const fs::path& source_directory,
     csproj_content += "    <TargetFrameworkVersion>" + dotnet_framework_version + "</TargetFrameworkVersion>\n";
     csproj_content += "    <FileAlignment>512</FileAlignment>\n";
     csproj_content += "    <BaseDirectory>.</BaseDirectory>\n";
-    csproj_content += "    <OutputPath>" + output_path.string() + "</OutputPath>\n";
+    csproj_content += "    <OutputPath>" + output_path.generic_string() + "</OutputPath>\n";
     csproj_content +=
-        "    <IntermediateOutputPath>" + intermediate_output_path.string() + "</IntermediateOutputPath>\n";
-
+        "    <IntermediateOutputPath>" + intermediate_output_path.generic_string() + "</IntermediateOutputPath>\n";
     csproj_content += "  </PropertyGroup>\n";
-
-    // Add other necessary PropertyGroups as needed (similar to the Unity example)
-    // ...
-
-    // ItemGroup for Compile (C# files)
     csproj_content += "  <ItemGroup>\n";
     csproj_content += csharp_source_items;
     csproj_content += "  </ItemGroup>\n";
-
-    // ItemGroup for References
     csproj_content += "  <ItemGroup>\n";
     csproj_content += external_dll_references;
     csproj_content += "  </ItemGroup>\n";
-
-    // Add other ItemGroups as needed (e.g., Analyzers, etc.)
-    // ...
-
-    // Import the C# targets
     csproj_content += "  <Import Project=\"$(MSBuildToolsPath)\\Microsoft.CSharp.targets\" />\n";
-
-    // Optionally add custom Targets
     csproj_content += "  <Target Name=\"GenerateTargetFrameworkMonikerAttribute\" />\n";
-
-    // Optionally add BeforeBuild and AfterBuild targets
-    csproj_content +=
-        "  <!-- To modify your build process, add your task inside one of the targets below and uncomment it.\n";
-    csproj_content += "       Other similar extension points exist, see Microsoft.Common.targets.\n";
-    csproj_content += "  <Target Name=\"BeforeBuild\">\n";
-    csproj_content += "  </Target>\n";
-    csproj_content += "  <Target Name=\"AfterBuild\">\n";
-    csproj_content += "  </Target>\n";
-    csproj_content += "  -->\n";
-
     csproj_content += "</Project>\n";
-
-    // Define the path to the .csproj file
-    fs::path csproj_path = output_directory / (project_name + ".csproj");
-
-    // Write the .csproj file
-    std::ofstream csproj_file(csproj_path);
-    if(!csproj_file.is_open())
-    {
-        APPLOG_ERROR("Failed to create .csproj file at {}", csproj_path.string());
-        return;
-    }
-
-    csproj_file << csproj_content;
-
-    APPLOG_TRACE("Generated {}", csproj_path.string());
+    const fs::path csproj_path = output_directory / (project_name + ".csproj");
+    return write_csproj_file(csproj_path, csproj_content);
 }
 #endif
 
@@ -1719,9 +1709,9 @@ void editor_actions::generate_script_workspace()
     auto output_path = fs::resolve_protocol("app:/");
 
 #if DOTNETPP_BACKEND_MONO
-    generate_csproj_legacy(source_path, {engine_dep}, output_path, project_name);
+    (void)generate_csproj_legacy(source_path, {engine_dep}, output_path, project_name);
 #else
-    generate_csproj(source_path, {engine_dep}, output_path, project_name);
+    (void)generate_csproj(source_path, {engine_dep}, output_path, project_name);
 #endif
 }
 
