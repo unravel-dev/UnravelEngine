@@ -1563,6 +1563,8 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     params.output_name = str_output;
     params.output_doc_name = temp_xml.string();
+    // Project/app scripts: keep /doc for IntelliSense, skip missing-comment noise.
+    params.suppress_doc_warnings = (protocol != "engine");
     if(params.files.empty())
     {
         fs::remove(output, err);
