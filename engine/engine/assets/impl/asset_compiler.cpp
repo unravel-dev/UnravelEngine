@@ -40,6 +40,8 @@
 #include <fstream>
 #include <dotnetpp/dotnetpp.h>
 #include <regex>
+#include <sstream>
+#include <hpp/string_view.hpp>
 #include <subprocess/subprocess.hpp>
 
 #include <core/base/platform/config.hpp>
@@ -1469,59 +1471,51 @@ struct script_compilation_entry
     std::string msg{};  // Full error line
 };
 
-// Function to parse all compilation errors
-auto parse_compilation_errors(const std::string& log) -> std::vector<script_compilation_entry>
+/**
+ * Parse csc/dotnet diagnostics line-by-line.
+ * Avoid greedy .* over the full compiler log: that pattern triggers
+ * std::regex_error(error_complexity) on large outputs (MSVC STL).
+ * Expected line form: path(line,col): error|warning CS....: message
+ */
+auto parse_compilation_entries(const std::string& log, hpp::string_view severity)
+    -> std::vector<script_compilation_entry>
 {
-    // Regular expression to extract the warning details
-    std::regex warning_regex(R"((.*)\((\d+),\d+\): error .*)");
+    // Path cannot contain '(' or newlines; keeps matching linear.
+    const std::string pattern =
+        std::string(R"(^([^\n(]+)\((\d+),\d+\):\s*)") + std::string(severity) + R"(\b.*)";
+    const std::regex entry_regex(pattern, std::regex::ECMAScript | std::regex::optimize);
+
     std::vector<script_compilation_entry> entries;
-
-    // Use std::sregex_iterator to find all matches
-    auto begin = std::sregex_iterator(log.begin(), log.end(), warning_regex);
-    auto end = std::sregex_iterator();
-
-    for(auto it = begin; it != end; ++it)
+    std::istringstream stream(log);
+    std::string line;
+    while(std::getline(stream, line))
     {
-        const std::smatch& match = *it;
-        if(match.size() >= 3)
+        if(!line.empty() && line.back() == '\r')
         {
-            script_compilation_entry entry;
-            entry.file = match[1].str();            // Extract file path
-            entry.line = std::stoi(match[2].str()); // Extract line number
-            entry.msg = match[0].str();             // Extract full warning line
-            entries.emplace_back(std::move(entry));
+            line.pop_back();
         }
+        std::smatch match;
+        if(!std::regex_match(line, match, entry_regex) || match.size() < 3)
+        {
+            continue;
+        }
+        script_compilation_entry entry;
+        entry.file = match[1].str();
+        entry.line = std::stoi(match[2].str());
+        entry.msg = match[0].str();
+        entries.emplace_back(std::move(entry));
     }
-
     return entries;
 }
 
-// Function to parse all compilation warnings
+auto parse_compilation_errors(const std::string& log) -> std::vector<script_compilation_entry>
+{
+    return parse_compilation_entries(log, "error");
+}
+
 auto parse_compilation_warnings(const std::string& log) -> std::vector<script_compilation_entry>
 {
-    // Regular expression to extract the warning details
-    std::regex warning_regex(R"((.*)\((\d+),\d+\): error .*)");
-    std::vector<script_compilation_entry> entries;
-
-    // Use std::sregex_iterator to find all matches
-    auto begin = std::sregex_iterator(log.begin(), log.end(), warning_regex);
-    auto end = std::sregex_iterator();
-
-    for(auto it = begin; it != end; ++it)
-    {
-        const std::smatch& match = *it;
-        if(match.size() >= 3)
-        {
-            script_compilation_entry entry;
-            entry.file = match[1].str();            // Extract file path
-            entry.line = std::stoi(match[2].str()); // Extract line number
-            entry.msg = match[0].str();             // Extract full warning line
-            entries.emplace_back(std::move(entry));
-        }
-
-    }
-
-    return entries;
+    return parse_compilation_entries(log, "warning");
 }
 
 template<>
