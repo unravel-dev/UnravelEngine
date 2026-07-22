@@ -1563,8 +1563,11 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     params.output_name = str_output;
     params.output_doc_name = temp_xml.string();
-    // Project/app scripts: keep /doc for IntelliSense, skip missing-comment noise.
-    params.suppress_doc_warnings = (protocol != "engine");
+    // Project/app scripts: keep /doc for IntelliSense, skip doc/comment noise and
+    // CS0649 for fields assigned from the inspector/native rather than C#.
+    const bool is_app_scripts = (protocol != "engine");
+    params.suppress_doc_warnings = is_app_scripts;
+    params.suppress_unassigned_field_warnings = is_app_scripts;
     if(params.files.empty())
     {
         fs::remove(output, err);
