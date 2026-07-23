@@ -30,9 +30,6 @@ auto MsgBox::OpenPopup(std::function<void(ModalResult)> callback) -> void
     animation_state_ = AnimationState::Opening;
     animation_start_ = std::chrono::steady_clock::now();
     animation_progress_ = 0.0f;
-    // Defer ImGui::OpenPopup until Draw(): OpenPopup + BeginPopupModal must run
-    // at the same ID stack level (hub root via RenderMessageBoxes). Calling
-    // OpenPopup from inside Project Settings binds a different popup ID.
     open_requested_ = true;
 }
 
