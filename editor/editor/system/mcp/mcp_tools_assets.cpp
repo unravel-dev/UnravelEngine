@@ -241,10 +241,10 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_list_batch",
          .description =
-             "List assets for a protocol group: app, engine, or editor. Optional type filter "
-             "(extension e.g. mat, .mat, pfb, emesh, etex, cs, spfb).",
+             "List assets for a protocol (app|engine|editor). Optional type filter and limit "
+             "(default 200). Prefer assets_find_batch for filtered search.",
          .input_schema_json =
-             R"({"type":"object","properties":{"protocol":{"type":"string","enum":["app","engine","editor"]},"type":{"type":"string"}},"required":["protocol"]})",
+             R"({"type":"object","properties":{"protocol":{"type":"string","enum":["app","engine","editor"]},"type":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}},"required":["protocol"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -266,11 +266,23 @@ void register_asset_tools(mcp_tool_registry& registry)
                  type_filter = normalize_asset_type_filter(type_filter);
              }
 
+             int64_t limit = 200;
+             if(args["limit"].get(limit))
+             {
+                 limit = 200;
+             }
+             if(limit < 1)
+             {
+                 limit = 1;
+             }
+
              auto& am = ctx.get_cached<asset_manager>();
              auto locations = am.get_all_assets(group);
 
              std::string json = "[";
              bool first = true;
+             size_t count = 0;
+             bool truncated = false;
              for(const auto& location : locations)
              {
                  auto meta = am.get_metadata_for_key(location);
@@ -282,24 +294,34 @@ void register_asset_tools(mcp_tool_registry& registry)
                          continue;
                      }
                  }
+                 if(static_cast<int64_t>(count) >= limit)
+                 {
+                     truncated = true;
+                     break;
+                 }
                  if(!first)
                  {
                      json += ",";
                  }
                  first = false;
                  json += asset_entry_json(hpp::to_string(meta.meta.uid), location, meta.meta.type);
+                 ++count;
              }
              json += "]";
-             return {.text = json, .is_error = false};
+             return {.text = fmt::format(R"({{"assets":{},"count":{},"limit":{},"truncated":{}}})",
+                                         json,
+                                         count,
+                                         limit,
+                                         truncated ? "true" : "false"),
+                     .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
         {.name = "assets_find_batch",
          .description =
-             "Search assets across app/engine/editor (or one protocol). Filters: type (any extension: "
-             "mat, pfb, emesh, etex, cs, spfb, ...), prefix (location starts with), name_contains "
-             "(case-insensitive path/stem match). Optional limit (default 200).",
+             "Search assets by type, prefix, and/or name_contains. Optional protocol and limit "
+             "(default 200).",
          .input_schema_json = R"json({"type":"object","properties":{"protocol":{"type":"string","enum":["app","engine","editor","all"],"default":"all"},"type":{"type":"string","description":"Asset extension/type filter e.g. mat, .pfb, emesh"},"prefix":{"type":"string","description":"Location prefix e.g. app:/data/Materials/"},"name_contains":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -347,11 +369,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  limit = 1;
              }
-             if(limit > 5000)
-             {
-                 limit = 5000;
-             }
-
+             
              auto& am = ctx.get_cached<asset_manager>();
              std::string json = "[";
              bool first = true;
@@ -438,8 +456,7 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_list_embedded_primitives",
          .description =
-             "List embedded mesh primitive names usable with scene_create_primitives_batch. "
-             "Axes: X-right, Y-up, Z-forward. Cube is 1x1x1 centered at origin.",
+             "List embedded mesh primitive names for scene_create_primitives_batch. Cube is 1x1x1 at origin.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context&, const simdjson::dom::object&) -> tool_result
@@ -558,13 +575,8 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_import_files",
          .description =
-             "Import external files/folders into the open project (content-browser Import parity). "
-             "Never download into the project first — stage files outside app:/ (e.g. OS temp), "
-             "then pass those absolute paths here. paths: absolute filesystem paths outside the "
-             "project. folder: destination protocol key (e.g. app:/data/Imported). Waits for "
-             "async copy jobs, then polls until imported asset keys are ready (wait_ms, default "
-             "15000, max 60000). Focuses the editor window so the asset watcher can process "
-             "new files.",
+             "Import absolute filesystem paths (outside project) into folder (app:/...). "
+             "Waits for copy+ready (wait_ms, default 15000).",
          .input_schema_json =
              R"json({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",
          .handler =
@@ -709,9 +721,7 @@ void register_asset_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "assets_get_mesh_info",
-         .description =
-             "Get mesh asset local AABB (min/max/center/extents). key is any mesh-format asset "
-             "(see ex::get_suported_formats<mesh>). Axes: X-right, Y-up, Z-forward.",
+         .description = "Get mesh asset local AABB (min/max/center/extents) by asset key.",
          .input_schema_json = R"json({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result

@@ -96,8 +96,7 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "play_set_active",
          .description =
-             "Enter or exit play mode. Blocked when inactive and scripts have compile errors. "
-             "Optional allow_splash (default true).",
+             "Enter or exit play mode. Blocked when scripts have compile errors. Optional allow_splash.",
          .input_schema_json =
              R"({"type":"object","properties":{"active":{"type":"boolean"},"allow_splash":{"type":"boolean"}},"required":["active"]})",
          .handler =
@@ -115,7 +114,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      return {.text = error, .is_error = true};
                  }
-                 return {.text = play_state_to_json(editor_actions::get_play_state(ctx)), .is_error = false};
+                 return {.text = fmt::format(R"({{"ok":true,"active":{}}})", active ? "true" : "false"),
+                         .is_error = false};
              },
          .mutates_scene = false});
 
@@ -137,7 +137,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      return {.text = error, .is_error = true};
                  }
-                 return {.text = play_state_to_json(editor_actions::get_play_state(ctx)), .is_error = false};
+                 return {.text = fmt::format(R"({{"ok":true,"paused":{}}})", paused ? "true" : "false"),
+                         .is_error = false};
              },
          .mutates_scene = false});
 
@@ -153,7 +154,7 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      return {.text = error, .is_error = true};
                  }
-                 return {.text = play_state_to_json(editor_actions::get_play_state(ctx)), .is_error = false};
+                 return {.text = R"({"ok":true})", .is_error = false};
              },
          .mutates_scene = false});
 
@@ -253,9 +254,7 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "window_request_focus",
          .description =
-             "Focus and raise the editor OS main window (os::window::request_focus). Call before "
-             "asset create/reimport when the editor is unfocused so filesystem watcher events can "
-             "fire (materials, folders, etc.). Restores the window if minimized.",
+             "Focus/raise the editor OS window so filesystem watchers can process asset changes.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result

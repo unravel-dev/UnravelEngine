@@ -84,6 +84,6 @@ Open/new/save require an open project. Paths may be absolute; keys are normalize
 ## Rules of thumb
 
 1. Prefer `project_list_recent` → `project_open` with `recent_index` over guessing paths.
-2. After open, use `scene_get_info` / `scene_list_entities_batch` before spawning content.
+2. After open, use `scene_get_info` / `scene_get_hierarchy_batch` before spawning content.
 3. Do not call UI `editor_actions::new_scene` / `open_scene` from automation — they show ImGui modals.
 4. Asset work under `app:/` needs an open project; `engine:/` / `editor:/` do not.

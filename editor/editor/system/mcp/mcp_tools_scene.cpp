@@ -21,11 +21,6 @@ namespace unravel::mcp
 namespace
 {
 
-auto entity_to_json(entt::handle entity, int depth, int max_depth) -> std::string
-{
-    return entity_to_summary_json(entity, depth, max_depth);
-}
-
 auto parse_light_type(const std::string& value, light_type& out) -> bool
 {
     if(value == "directional" || value == "Directional")
@@ -244,20 +239,20 @@ void register_scene_tools(mcp_tool_registry& registry)
          .mutates_scene=false});
 
     registry.add(
-        {.name="scene_list_entities_batch",
-         .description=
-             "List entities in the active scene hierarchy. Optional parent_id and max_depth (default 2). "
-             "Axes: X-right, Y-up, Z-forward. "
-             "Transform fields: position/rotation_euler/scale are WORLD (global); "
-             "position_local/rotation_euler_local/scale_local are LOCAL (parent-relative).",
-         .input_schema_json=R"({"type":"object","properties":{"parent_id":{"type":"string"},"max_depth":{"type":"integer","minimum":0}}})",
-         .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+        {.name = "scene_get_hierarchy_batch",
+         .description =
+             "Browse scene hierarchy as lean id/name/children nodes. Optional parent_id, max_depth "
+             "(default 2), limit (default 200).",
+         .input_schema_json =
+             R"({"type":"object","properties":{"parent_id":{"type":"string"},"max_depth":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":5000}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& em = ctx.get_cached<editing_manager>();
              auto* scn = em.get_active_scene(ctx);
              if(!scn || !scn->registry)
              {
-                 return {.text="No active scene", .is_error=true};
+                 return {.text = "No active scene", .is_error = true};
              }
 
              int64_t max_depth = 2;
@@ -270,19 +265,46 @@ void register_scene_tools(mcp_tool_registry& registry)
                  max_depth = 0;
              }
 
+             int64_t limit = 200;
+             if(args["limit"].get(limit))
+             {
+                 limit = 200;
+             }
+             if(limit < 1)
+             {
+                 limit = 1;
+             }
+
              std::string parent_id;
              read_string(args, "parent_id", parent_id);
 
+             size_t nodes_emitted = 0;
+             bool truncated = false;
              std::string json = "[";
              bool first = true;
              auto append = [&](entt::handle entity)
              {
+                 if(nodes_emitted >= static_cast<size_t>(limit))
+                 {
+                     truncated = true;
+                     return;
+                 }
+                 auto node = entity_hierarchy_node_json(entity,
+                                                       0,
+                                                       static_cast<int>(max_depth),
+                                                       nodes_emitted,
+                                                       static_cast<size_t>(limit),
+                                                       truncated);
+                 if(node == "null")
+                 {
+                     return;
+                 }
                  if(!first)
                  {
                      json += ",";
                  }
                  first = false;
-                 json += entity_to_json(entity, 0, static_cast<int>(max_depth));
+                 json += node;
              };
 
              if(!parent_id.empty())
@@ -290,7 +312,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                  auto parent = find_entity(*scn, parent_id);
                  if(!parent)
                  {
-                     return {.text="Entity not found: " + parent_id, .is_error=true};
+                     return {.text = "Entity not found: " + parent_id, .is_error = true};
                  }
                  if(auto* transform = parent.try_get<transform_component>())
                  {
@@ -303,23 +325,257 @@ void register_scene_tools(mcp_tool_registry& registry)
              else
              {
                  scn->registry->view<root_component, transform_component>().each(
-                     [&](auto e, auto&&, auto&& transform)
+                     [&](auto, auto&&, auto&& transform)
                      {
                          append(transform.get_owner());
                      });
              }
 
              json += "]";
-             return {.text=json, .is_error=false};
+             return {.text = fmt::format(R"({{"entities":{},"count":{},"limit":{},"truncated":{}}})",
+                                         json,
+                                         nodes_emitted,
+                                         limit,
+                                         truncated ? "true" : "false"),
+                     .is_error = false};
          },
-         .mutates_scene=false});
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scene_get_entities_batch",
+         .description = "Get pose and meta for many entities (no children/components).",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& em = ctx.get_cached<editing_manager>();
+             auto* scn = em.get_active_scene(ctx);
+             if(!scn || !scn->registry)
+             {
+                 return {.text = "No active scene", .is_error = true};
+             }
+             simdjson::dom::array ids;
+             if(args["entity_ids"].get(ids))
+             {
+                 return {.text = "Missing entity_ids", .is_error = true};
+             }
+             std::string json = "[";
+             size_t count = 0;
+             for(auto el : ids)
+             {
+                 std::string_view id_view;
+                 if(el.get(id_view))
+                 {
+                     return {.text = "entity_ids must be strings", .is_error = true};
+                 }
+                 auto entity = find_entity(*scn, std::string(id_view));
+                 if(!entity)
+                 {
+                     return {.text = "Entity not found: " + std::string(id_view), .is_error = true};
+                 }
+                 if(count > 0)
+                 {
+                     json += ",";
+                 }
+                 json += entity_to_pose_json(entity);
+                 ++count;
+             }
+             json += "]";
+             return {.text = fmt::format(R"({{"entities":{},"count":{}}})", json, count), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scene_get_children_batch",
+         .description = "Get immediate children (id/name) for many entities.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& em = ctx.get_cached<editing_manager>();
+             auto* scn = em.get_active_scene(ctx);
+             if(!scn || !scn->registry)
+             {
+                 return {.text = "No active scene", .is_error = true};
+             }
+             simdjson::dom::array ids;
+             if(args["entity_ids"].get(ids))
+             {
+                 return {.text = "Missing entity_ids", .is_error = true};
+             }
+             std::string json = "[";
+             size_t count = 0;
+             for(auto el : ids)
+             {
+                 std::string_view id_view;
+                 if(el.get(id_view))
+                 {
+                     return {.text = "entity_ids must be strings", .is_error = true};
+                 }
+                 const auto entity_id = std::string(id_view);
+                 auto entity = find_entity(*scn, entity_id);
+                 if(!entity)
+                 {
+                     return {.text = "Entity not found: " + entity_id, .is_error = true};
+                 }
+                 std::string children = "[";
+                 bool first_child = true;
+                 if(auto* transform = entity.try_get<transform_component>())
+                 {
+                     for(auto child : transform->get_children())
+                     {
+                         if(!first_child)
+                         {
+                             children += ",";
+                         }
+                         first_child = false;
+                         children += entity_to_lean_json(child, false);
+                     }
+                 }
+                 children += "]";
+                 if(count > 0)
+                 {
+                     json += ",";
+                 }
+                 json += fmt::format(R"({{"entity_id":{},"children":{}}})", make_json_string(entity_id), children);
+                 ++count;
+             }
+             json += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{}}})", json, count), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scene_list_entity_components_batch",
+         .description = "List component pretty names present on many entities.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& em = ctx.get_cached<editing_manager>();
+             auto* scn = em.get_active_scene(ctx);
+             if(!scn || !scn->registry)
+             {
+                 return {.text = "No active scene", .is_error = true};
+             }
+             simdjson::dom::array ids;
+             if(args["entity_ids"].get(ids))
+             {
+                 return {.text = "Missing entity_ids", .is_error = true};
+             }
+             std::string json = "[";
+             size_t count = 0;
+             for(auto el : ids)
+             {
+                 std::string_view id_view;
+                 if(el.get(id_view))
+                 {
+                     return {.text = "entity_ids must be strings", .is_error = true};
+                 }
+                 const auto entity_id = std::string(id_view);
+                 auto entity = find_entity(*scn, entity_id);
+                 if(!entity)
+                 {
+                     return {.text = "Entity not found: " + entity_id, .is_error = true};
+                 }
+                 auto names = collect_component_pretty_names(entity);
+                 std::string components = "[";
+                 for(size_t i = 0; i < names.size(); ++i)
+                 {
+                     if(i > 0)
+                     {
+                         components += ",";
+                     }
+                     components += make_json_string(names[i]);
+                 }
+                 components += "]";
+                 if(count > 0)
+                 {
+                     json += ",";
+                 }
+                 json += fmt::format(R"({{"entity_id":{},"components":{}}})", make_json_string(entity_id), components);
+                 ++count;
+             }
+             json += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{}}})", json, count), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scene_get_components_batch",
+         .description =
+             "Serialize specific components on entities. Each item: entity_id + component pretty name.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"}},"required":["entity_id","component"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& em = ctx.get_cached<editing_manager>();
+             auto* scn = em.get_active_scene(ctx);
+             if(!scn || !scn->registry)
+             {
+                 return {.text = "No active scene", .is_error = true};
+             }
+             simdjson::dom::array items;
+             if(args["items"].get(items))
+             {
+                 return {.text = "Missing items", .is_error = true};
+             }
+             std::string json = "[";
+             size_t count = 0;
+             for(auto el : items)
+             {
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
+                 {
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 std::string entity_id;
+                 std::string component;
+                 if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "component", component))
+                 {
+                     return {.text = "Item requires entity_id and component", .is_error = true};
+                 }
+                 auto entity = find_entity(*scn, entity_id);
+                 if(!entity)
+                 {
+                     return {.text = "Entity not found: " + entity_id, .is_error = true};
+                 }
+                 std::string error;
+                 auto data = entity_component_serialized(entity, component, error);
+                 if(count > 0)
+                 {
+                     json += ",";
+                 }
+                 if(data.empty())
+                 {
+                     json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(component),
+                                         make_json_string(error));
+                 }
+                 else
+                 {
+                     json += fmt::format(R"({{"ok":true,"entity_id":{},"component":{},"data":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(component),
+                                         make_json_string(data));
+                 }
+                 ++count;
+             }
+             json += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{}}})", json, count), .is_error = false};
+         },
+         .mutates_scene = false});
 
     registry.add(
         {.name="scene_create_light",
          .description=
-             "Create a light entity. Args: light_type (directional|point|spot), name, optional parent_id/position. "
-             "position is WORLD space.",
-             .input_schema_json=R"json({"type":"object","properties":{"light_type":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["light_type","name"]})json",
+             "Create a light entity. Args: light_type (directional|point|spot), name, optional parent_id/position (WORLD).",
+             .input_schema_json=R"json({"type":"object","properties":{"light_type":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["light_type","name"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -372,15 +628,14 @@ void register_scene_tools(mcp_tool_registry& registry)
              {
                  maybe_set_position(ctx, created, position);
              }
-             return {.text=entity_to_json(created, 0, 0), .is_error=false};
+             return {.text = entity_to_lean_json(created, true), .is_error = false};
          },
          .mutates_scene=true});
 
     registry.add(
         {.name="scene_create_camera",
-         .description=
-             "Create a camera entity. Args: name, optional parent_id/position. position is WORLD space.",
-         .input_schema_json=R"json({"type":"object","properties":{"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3,"description":"WORLD space [x,y,z] (X-right, Y-up, Z-forward)"}},"required":["name"]})json",
+         .description="Create a camera entity. Args: name, optional parent_id/position (WORLD).",
+         .input_schema_json=R"json({"type":"object","properties":{"name":{"type":"string"},"parent_id":{"type":"string"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["name"]})json",
          .handler=[](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
@@ -427,7 +682,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              {
                  maybe_set_position(ctx, created, position);
              }
-             return {.text=entity_to_json(created, 0, 0), .is_error=false};
+             return {.text = entity_to_lean_json(created, true), .is_error = false};
          },
          .mutates_scene=true});
 
@@ -498,9 +753,7 @@ void register_scene_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "scene_list_presets",
-         .description =
-             "List defaults::scene_preset values usable with scene_new_from_preset / project_open "
-             "(low, medium, high, showcase).",
+         .description = "List scene presets: low, medium, high, showcase.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context&, const simdjson::dom::object&) -> tool_result
@@ -512,9 +765,8 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_save",
          .description =
-             "Save the active edit scene to a .spfb via asset_writer::atomic_save_to_file. "
-             "Omit key/path to overwrite scene.source; provide key or absolute path for save-as "
-             "(sets scene.source). Requires an open project. Refuses play mode and prefab mode.",
+             "Save the active edit scene to .spfb. Omit key/path to overwrite source; else save-as. "
+             "Requires open project; refuses play/prefab mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"key":{"type":"string","description":"Asset key e.g. app:/data/Village.spfb"},"path":{"type":"string","description":"Absolute filesystem path to a .spfb"}}})json",
          .handler =
@@ -573,8 +825,7 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_open",
          .description =
-             "Open a scene asset (.spfb) by key or absolute path. No ImGui save prompt; pass "
-             "force:true (default) to discard unsaved changes. Requires an open project.",
+             "Open a .spfb scene by key or path. force:true (default) discards unsaved changes.",
          .input_schema_json =
              R"json({"type":"object","properties":{"key":{"type":"string","description":"Asset key e.g. app:/data/MyScene.spfb"},"path":{"type":"string","description":"Absolute filesystem path to a .spfb"},"force":{"type":"boolean","default":true}},"required":[]})json",
          .handler =
@@ -645,9 +896,8 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_new_from_preset",
          .description =
-             "Create a new unsaved scene from defaults::scene_preset (camera, skylight, probe, "
-             "volume). No ImGui modal. Presets: low|medium|high|showcase (default medium). "
-             "Requires an open project. force:true (default) discards unsaved changes.",
+             "Create a new unsaved scene from preset (low|medium|high|showcase, default medium). "
+             "force:true (default) discards unsaved changes.",
          .input_schema_json =
              R"({"type":"object","properties":{"preset":{"type":"string","enum":["low","medium","high","showcase"]},"force":{"type":"boolean","default":true}}})",
          .handler =

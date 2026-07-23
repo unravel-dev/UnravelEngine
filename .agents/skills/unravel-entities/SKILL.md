@@ -30,7 +30,7 @@ Right-handed. `rotation_euler` is degrees as `[pitch_x, yaw_y, roll_z]`.
 | `scene_create_*` / `*_batch` create `position` | **WORLD** (global), even with `parent_id` (unless item sets `space:"local"`) |
 | `scene_set_transforms_batch` default `space:"world"` | **WORLD** |
 | `scene_set_transforms_batch` `space:"local"` | **LOCAL** (parent-relative) |
-| `scene_list_entities_batch` / entity JSON `position`, `rotation_euler`, `scale` | **WORLD** |
+| `scene_get_entities_batch` / pose JSON `position`, `rotation_euler`, `scale` | **WORLD** |
 | Same JSON `position_local`, `rotation_euler_local`, `scale_local` | **LOCAL** |
 | `scene_get_transforms_batch` | per-item `space:"world"\|"local"` |
 
@@ -45,14 +45,20 @@ When the parent is rotated, always set the child’s `rotation_euler:[0,0,0]` in
 
 ## Entity tools
 
+Browse lean, then drill in:
+
 | Tool | Purpose |
 |------|---------|
-| `scene_list_entities_batch` | Hierarchy; world + local transforms |
-| `scene_find_entities_batch` | Find by `name_contains` / `name_exact` (optional `parent_id`) |
+| `scene_get_hierarchy_batch` | Lean tree (`id`/`name`/`children`); optional `parent_id`, `max_depth`, `limit` |
+| `scene_get_entities_batch` | Pose + meta for `entity_ids` (no children/components) |
+| `scene_get_children_batch` | Immediate children (`id`/`name`) for many entities |
+| `scene_list_entity_components_batch` | Component pretty names on many entities |
+| `scene_get_components_batch` | Serialize specific `{entity_id, component}` items |
+| `scene_find_entities_batch` | Find by `name_contains` / `name_exact` (optional `parent_id`); returns lean ids |
 | `scene_get_transforms_batch` | Many entity poses (`items` with `entity_id`, optional `space`) |
 | `scene_set_transforms_batch` | Many poses in one undoable action |
 | `scene_set_parents_batch` | Reparent / unparent many (keeps world pose) |
-| `scene_create_entities_batch` / `scene_create_primitives_batch` / `scene_create_meshes_batch` / `scene_create_from_prefab_batch` | Spawn batches (`items` array) |
+| `scene_create_entities_batch` / `scene_create_primitives_batch` / `scene_create_meshes_batch` / `scene_create_from_prefab_batch` | Spawn batches (`items` array); returns lean `{id,name,parent_id}` |
 | `scene_create_light` / `scene_create_camera` | Single light/camera spawn |
 | `scene_duplicate_entities_batch` | Clone hierarchies (undoable) |
 | `scene_get_bounds_batch` | World AABB for one or many entities |
@@ -63,7 +69,6 @@ When the parent is rotated, always set the child’s `rotation_euler:[0,0,0]` in
 | `scene_set_model_materials_batch` | Assign materials to many model slots (one undo) |
 | `scene_save` | Atomic `.spfb` write (`key`/`path` or overwrite `source`) |
 | `scene_open` / `scene_new_from_preset` / `scene_list_presets` | See `unravel-projects` |
-| `scene_inspect_entities_batch` | Summary + optional `components_serialized` for many ids |
 | `selection_get` / `selection_set_batch` / `selection_clear` | Editor entity selection |
 | `edit_undo` / `edit_redo` | Undo stack (Ctrl+Z / Ctrl+Y parity) |
 | `play_get_state` / `play_set_active` / `play_set_paused` / `play_skip_frame` | Play mode control |

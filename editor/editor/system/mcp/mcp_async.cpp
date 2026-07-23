@@ -185,11 +185,11 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
     if(!submitted)
     {
-        return {.text = "Timed out requesting screenshot on main thread", .is_error = true};
+        return {.text = "Timed out requesting capture on main thread", .is_error = true};
     }
     if(!*submitted)
     {
-        return {.text = state->error.empty() ? "Failed to request screenshot" : state->error, .is_error = true};
+        return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }
 
     const auto deadline = std::chrono::steady_clock::now() + wait_timeout;
@@ -242,11 +242,11 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
     if(!wrote)
     {
-        return {.text = "Timed out writing screenshot PNG on main thread", .is_error = true};
+        return {.text = "Timed out writing capture PNG on main thread", .is_error = true};
     }
     if(!*wrote)
     {
-        return {.text = write_error.empty() ? "Failed to write screenshot PNG" : write_error, .is_error = true};
+        return {.text = write_error.empty() ? "Failed to write capture PNG" : write_error, .is_error = true};
     }
 
     std::string read_error;
@@ -256,14 +256,12 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
     if(bytes.empty())
     {
-        return {.text = read_error.empty() ? "Failed to read screenshot PNG" : read_error, .is_error = true};
+        return {.text = read_error.empty() ? "Failed to read capture PNG" : read_error, .is_error = true};
     }
 
     tool_result result;
-    result.text = fmt::format(R"({{"source":{},"path":{},"bytes":{},"width":{},"height":{},"mime":"image/png"}})",
+    result.text = fmt::format(R"({{"source":{},"width":{},"height":{}}})",
                               make_json_string(tag),
-                              make_json_string(png_path.generic_string()),
-                              bytes.size(),
                               state->width,
                               state->height);
     result.image_base64 = encode_base64(bytes);

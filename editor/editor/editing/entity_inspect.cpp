@@ -8,6 +8,8 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <hpp/utility.hpp>
 #include <math/math.h>
+#include <serialization/associative_archive.h>
+#include <serialization/serialization.h>
 #include <uuid/uuid.h>
 
 #include <logging/logging.h>
@@ -58,6 +60,29 @@ auto json_escape(const std::string& value) -> std::string
 auto make_json_string(const std::string& value) -> std::string
 {
     return "\"" + json_escape(value) + "\"";
+}
+
+auto entity_name_tag(entt::handle entity, std::string& name, std::string& tag) -> void
+{
+    name.clear();
+    tag.clear();
+    if(auto* tag_comp = entity.try_get<tag_component>())
+    {
+        name = tag_comp->name;
+        tag = tag_comp->tag;
+    }
+}
+
+auto entity_parent_id(entt::handle entity) -> std::string
+{
+    if(auto* transform = entity.try_get<transform_component>())
+    {
+        if(auto parent = transform->get_parent())
+        {
+            return entity_id_string(parent);
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -128,7 +153,7 @@ auto collect_component_pretty_names(entt::handle entity) -> std::vector<std::str
     return names;
 }
 
-auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> std::string
+auto entity_to_lean_json(entt::handle entity, bool include_parent_id) -> std::string
 {
     if(!entity)
     {
@@ -136,11 +161,29 @@ auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> st
     }
     std::string name;
     std::string tag;
-    if(auto* tag_comp = entity.try_get<tag_component>())
+    entity_name_tag(entity, name, tag);
+    if(!include_parent_id)
     {
-        name = tag_comp->name;
-        tag = tag_comp->tag;
+        return fmt::format(R"({{"id":{},"name":{}}})",
+                           make_json_string(entity_id_string(entity)),
+                           make_json_string(name));
     }
+    const auto parent_id = entity_parent_id(entity);
+    return fmt::format(R"({{"id":{},"name":{},"parent_id":{}}})",
+                       make_json_string(entity_id_string(entity)),
+                       make_json_string(name),
+                       parent_id.empty() ? "null" : make_json_string(parent_id));
+}
+
+auto entity_to_pose_json(entt::handle entity) -> std::string
+{
+    if(!entity)
+    {
+        return "null";
+    }
+    std::string name;
+    std::string tag;
+    entity_name_tag(entity, name, tag);
     std::string parent_id;
     bool active = true;
     math::vec3 position_world{0.0f};
@@ -158,10 +201,118 @@ auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> st
         position_local = transform->get_position_local();
         rotation_local = transform->get_rotation_euler_local();
         scale_local = transform->get_scale_local();
-        if(auto parent = transform->get_parent())
+        parent_id = entity_parent_id(entity);
+    }
+    return fmt::format(
+        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}]}})",
+        make_json_string(entity_id_string(entity)),
+        make_json_string(name),
+        make_json_string(tag),
+        active ? "true" : "false",
+        parent_id.empty() ? "null" : make_json_string(parent_id),
+        position_world.x,
+        position_world.y,
+        position_world.z,
+        rotation_world.x,
+        rotation_world.y,
+        rotation_world.z,
+        scale_world.x,
+        scale_world.y,
+        scale_world.z,
+        position_local.x,
+        position_local.y,
+        position_local.z,
+        rotation_local.x,
+        rotation_local.y,
+        rotation_local.z,
+        scale_local.x,
+        scale_local.y,
+        scale_local.z);
+}
+
+auto entity_hierarchy_node_json(entt::handle entity,
+                                int depth,
+                                int max_depth,
+                                size_t& nodes_emitted,
+                                size_t node_limit,
+                                bool& truncated) -> std::string
+{
+    if(!entity)
+    {
+        return "null";
+    }
+    if(nodes_emitted >= node_limit)
+    {
+        truncated = true;
+        return "null";
+    }
+    ++nodes_emitted;
+    std::string name;
+    std::string tag;
+    entity_name_tag(entity, name, tag);
+    std::string children_json = "[]";
+    if(depth < max_depth)
+    {
+        if(auto* transform = entity.try_get<transform_component>())
         {
-            parent_id = entity_id_string(parent);
+            children_json = "[";
+            bool first = true;
+            for(auto child : transform->get_children())
+            {
+                if(nodes_emitted >= node_limit)
+                {
+                    truncated = true;
+                    break;
+                }
+                auto child_json =
+                    entity_hierarchy_node_json(child, depth + 1, max_depth, nodes_emitted, node_limit, truncated);
+                if(child_json == "null")
+                {
+                    continue;
+                }
+                if(!first)
+                {
+                    children_json += ",";
+                }
+                first = false;
+                children_json += child_json;
+            }
+            children_json += "]";
         }
+    }
+    return fmt::format(R"({{"id":{},"name":{},"children":{}}})",
+                       make_json_string(entity_id_string(entity)),
+                       make_json_string(name),
+                       children_json);
+}
+
+auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> std::string
+{
+    if(!entity)
+    {
+        return "null";
+    }
+    std::string name;
+    std::string tag;
+    entity_name_tag(entity, name, tag);
+    std::string parent_id;
+    bool active = true;
+    math::vec3 position_world{0.0f};
+    math::vec3 rotation_world{0.0f};
+    math::vec3 scale_world{1.0f};
+    math::vec3 position_local{0.0f};
+    math::vec3 rotation_local{0.0f};
+    math::vec3 scale_local{1.0f};
+    if(auto* transform = entity.try_get<transform_component>())
+    {
+        active = transform->is_active();
+        position_world = transform->get_position_global();
+        rotation_world = transform->get_rotation_euler_global();
+        scale_world = transform->get_scale_global();
+        position_local = transform->get_position_local();
+        rotation_local = transform->get_rotation_euler_local();
+        scale_local = transform->get_scale_local();
+        parent_id = entity_parent_id(entity);
     }
     auto components = collect_component_pretty_names(entity);
     std::string components_json = "[";
@@ -229,6 +380,80 @@ auto entity_components_serialized(entt::handle entity) -> std::string
     }
     std::stringstream stream;
     save_to_stream(stream, entt::const_handle{entity});
+    return stream.str();
+}
+
+auto entity_component_serialized(entt::handle entity, const std::string& component_pretty_name, std::string& error)
+    -> std::string
+{
+    error.clear();
+    if(!entity)
+    {
+        error = "Invalid entity";
+        return {};
+    }
+    if(component_pretty_name.empty())
+    {
+        error = "Missing component name";
+        return {};
+    }
+    bool matched_name = false;
+    bool present = false;
+    std::stringstream stream;
+    try
+    {
+        auto ar = ser20::create_oarchive_associative(stream);
+        hpp::for_each_tuple_type<all_serializeable_components>(
+            [&](auto index)
+            {
+                using ctype = std::tuple_element_t<decltype(index)::value, all_serializeable_components>;
+                auto type = entt::resolve<ctype>();
+                const auto pretty = std::string(entt::get_pretty_name(type));
+                if(pretty != component_pretty_name)
+                {
+                    return;
+                }
+                matched_name = true;
+                auto* component = entity.try_get<ctype>();
+                if(!component)
+                {
+                    return;
+                }
+                present = true;
+                const auto name = entt::get_name(type);
+                try_save(ar, ser20::make_nvp(name, *component));
+            });
+        if(!matched_name)
+        {
+            auto script_type = entt::resolve<script_component>();
+            const auto script_pretty = std::string(entt::get_pretty_name(script_type));
+            if(script_pretty == component_pretty_name)
+            {
+                matched_name = true;
+                if(auto* component = entity.try_get<script_component>())
+                {
+                    present = true;
+                    const auto name = entt::get_name(script_type);
+                    try_save(ar, ser20::make_nvp(name, *component));
+                }
+            }
+        }
+    }
+    catch(const std::exception& e)
+    {
+        error = fmt::format("Failed to serialize component: {}", e.what());
+        return {};
+    }
+    if(!matched_name)
+    {
+        error = "Unknown component: " + component_pretty_name;
+        return {};
+    }
+    if(!present)
+    {
+        error = "Component not present on entity: " + component_pretty_name;
+        return {};
+    }
     return stream.str();
 }
 

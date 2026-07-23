@@ -48,9 +48,7 @@ void register_project_tools(mcp_tool_registry& registry)
 {
     registry.add(
         {.name = "project_list_recent",
-         .description =
-             "List recent project directories from editor.cfg (absolute paths), with on-disk "
-             "existence and inspect_project compatibility status.",
+         .description = "List recent project directories with existence and compatibility status.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -92,10 +90,8 @@ void register_project_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "project_open",
          .description =
-             "Open a project by absolute path, recent:true (most recent), or recent_index. "
-             "Bypasses UI confirmations. If open_project would show the create-scene modal "
-             "(no last/startup scene), completes it with preset (default medium). "
-             "May take a while while assets are watched.",
+             "Open a project by path, recent:true, or recent_index. Uses preset (default medium) "
+             "when no startup scene exists.",
          .input_schema_json =
              R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project directory, or 'recent'"},"recent":{"type":"boolean"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Used only when a new scene modal would appear; default medium"},"force":{"type":"boolean","description":"Discard unsaved scene changes before open; default true"}}})json",
          .handler =
@@ -217,9 +213,7 @@ void register_project_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "project_close",
-         .description =
-             "Close the current project (no ImGui save prompt). Pass force:true (default) to "
-             "discard unsaved scene changes.",
+         .description = "Close the current project. force:true (default) discards unsaved scene changes.",
          .input_schema_json =
              R"({"type":"object","properties":{"force":{"type":"boolean","default":true}}})",
          .handler =

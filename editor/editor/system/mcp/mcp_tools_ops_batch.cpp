@@ -65,7 +65,7 @@ auto summarize_created(const std::vector<entt::handle>& created, size_t requeste
         {
             json += ",";
         }
-        json += entity_to_summary_json(created[i], 0, 0);
+        json += entity_to_lean_json(created[i], true);
     }
     json += "]";
     return {.text = fmt::format(R"({{"created":{},"count":{},"requested":{}}})", json, created.size(), requested),
@@ -827,7 +827,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_get_transforms_batch",
          .description =
              "Get transforms for many entities. Each item: entity_id, optional space world|local "
-             "(omit space for both, same as scene_list_entities_batch fields).",
+             "(omit space for both world and local fields).",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
@@ -872,7 +872,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      read_string(obj, "space", space);
                      if(space.empty())
                      {
-                         json += entity_to_summary_json(entity, 0, 0);
+                         json += entity_to_pose_json(entity);
                      }
                      else
                      {
@@ -903,74 +903,6 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  }
                  json += "]";
                  return {.text = fmt::format(R"({{"transforms":{},"count":{}}})", json, count), .is_error = false};
-             },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "scene_inspect_entities_batch",
-         .description =
-             "Inspect many entities. Provide entity_ids array, or items with entity_id. Optional "
-             "include_components (default false).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"}},"required":["entity_id"]}},"include_components":{"type":"boolean"}}})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 bool include_components = false;
-                 read_bool(args, "include_components", include_components);
-                 std::vector<std::string> ids;
-                 simdjson::dom::array id_arr;
-                 if(!args["entity_ids"].get(id_arr))
-                 {
-                     for(auto el : id_arr)
-                     {
-                         std::string_view id_view;
-                         if(el.get(id_view))
-                         {
-                             return {.text = "entity_ids must be strings", .is_error = true};
-                         }
-                         ids.emplace_back(id_view);
-                     }
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!args["items"].get(items_arr))
-                 {
-                     for(auto el : items_arr)
-                     {
-                         simdjson::dom::object obj;
-                         if(el.get(obj))
-                         {
-                             return {.text = "Each item must be an object", .is_error = true};
-                         }
-                         std::string entity_id;
-                         if(!read_string(obj, "entity_id", entity_id))
-                         {
-                             return {.text = "Item missing entity_id", .is_error = true};
-                         }
-                         ids.push_back(entity_id);
-                     }
-                 }
-                 if(ids.empty())
-                 {
-                     return {.text = "Provide entity_ids or items", .is_error = true};
-                 }
-                 std::string json = "[";
-                 for(size_t i = 0; i < ids.size(); ++i)
-                 {
-                     if(i > 0)
-                     {
-                         json += ",";
-                     }
-                     std::string error;
-                     auto one = editor_actions::inspect_entity(ctx, ids[i], include_components, &error);
-                     if(one.empty())
-                     {
-                         return {.text = error.empty() ? "Inspect failed" : error, .is_error = true};
-                     }
-                     json += one;
-                 }
-                 json += "]";
-                 return {.text = fmt::format(R"({{"entities":{},"count":{}}})", json, ids.size()), .is_error = false};
              },
          .mutates_scene = false});
 

@@ -68,8 +68,8 @@ Context menu actions in `content_browser_panel.cpp`.
 
 | Tool | Purpose |
 |------|---------|
-| `assets_list_batch` | List by protocol (`app`/`engine`/`editor`); optional `type` |
-| `assets_find_batch` | Search **any** asset type: `protocol` (incl. `all`), `type`, `prefix`, `name_contains`, `limit` |
+| `assets_list_batch` | List by protocol (`app`/`engine`/`editor`); optional `type`, `limit` (default 200) |
+| `assets_find_batch` | Prefer for search: `protocol` (incl. `all`), `type`, `prefix`, `name_contains`, `limit` |
 | `assets_get_batch` | Metadata for many (`items`: `key` / `uid`) |
 | `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, …) |
 | `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |

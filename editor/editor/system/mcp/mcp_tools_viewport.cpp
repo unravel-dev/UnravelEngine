@@ -184,12 +184,10 @@ auto resolve_focus_entities(rtti::context& ctx,
 void register_viewport_tools(mcp_tool_registry& registry)
 {
     registry.add(
-        {.name = "viewport_screenshot_scene",
-         .description = "Capture a PNG screenshot of the Scene panel OBUFFER (editor viewport). "
-                        "Blit + GPU readback of the offscreen color target (action + wait). "
-                        "Returns an image content block plus metadata JSON.",
+        {.name = "viewport_capture_scene",
+         .description = "Capture Scene panel viewport as PNG (image content). Optional wait_ms.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000,"description":"Max time to wait for PNG after requesting capture (default 3000)."}}})",
+             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -200,12 +198,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
-        {.name = "viewport_screenshot_game",
-         .description = "Capture a PNG screenshot of the Game panel OBUFFER (active scene camera). "
-                        "Blit + GPU readback of the offscreen color target (action + wait). "
-                        "Returns an image content block plus metadata JSON.",
+        {.name = "viewport_capture_game",
+         .description = "Capture Game panel / active camera as PNG (image content). Optional wait_ms.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000,"description":"Max time to wait for PNG after requesting capture (default 3000)."}}})",
+             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -218,8 +214,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_get_camera",
          .description =
-             "Get the Scene panel editor camera pose (position, rotation_euler degrees, forward/up, "
-             "fov, ortho_size). This is the viewport camera, not a scene Camera entity.",
+             "Get Scene panel editor camera pose (position, rotation_euler, forward/up, fov, ortho_size).",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -238,10 +233,9 @@ void register_viewport_tools(mcp_tool_registry& registry)
         {.name = "viewport_set_camera",
          .description =
              "Set Scene panel camera position and/or rotation_euler (degrees). "
-             "Axes: X-right, Y-up, Z-forward. Cancels any in-flight "
-             "focus animation. Optional relative:true applies position as a local-space offset.",
+             "Optional relative:true applies position in camera local space.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"relative":{"type":"boolean","description":"If true, position is added in camera local space (default false)"}}})json",
+             R"json({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"relative":{"type":"boolean"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -286,15 +280,14 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  tc.set_rotation_euler_global(rotation);
              }
 
-             return {.text = camera_to_json(camera), .is_error = false};
+             return {.text = R"({"ok":true})", .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
         {.name = "viewport_look_at",
          .description =
-             "Aim the Scene panel camera at a world-space target point. Optional position moves the "
-             "camera first; optional up vector (default world up).",
+             "Aim Scene panel camera at a world-space target. Optional position and up (default world up).",
          .input_schema_json =
              R"json({"type":"object","properties":{"target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"up":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["target"]})json",
          .handler =
@@ -332,22 +325,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  tc.look_at(target);
              }
 
-             return {.text = fmt::format(R"({{"ok":true,"target":{},"camera":{}}})",
-                                         vec3_to_json(target),
-                                         camera_to_json(camera)),
-                     .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"target":{}}})", vec3_to_json(target)), .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
         {.name = "viewport_focus_entities_batch",
          .description =
-             "Focus the Scene panel camera on one or more scene entities using "
-             "defaults::focus_camera_on_entities (same as hierarchy F / double-click). "
-             "Keeps current rotation unless aim:true (look at bounds center first). "
-             "duration default 0.4s; use 0 for instant.",
+             "Focus Scene panel camera on entities (dolly along current forward). "
+             "duration default 0.4; use 0 for instant.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"duration":{"type":"number","minimum":0,"maximum":10},"aim":{"type":"boolean","description":"Look at the entities' bounds center before focusing (default false)"}}})json",
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"duration":{"type":"number","minimum":0,"maximum":10}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -364,21 +352,12 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
 
-             bool aim = false;
-             read_bool(args, "aim", aim);
              const float duration = read_duration(args, 0.4f);
 
              cancel_camera_focus();
-
              defaults::focus_camera_on_entities(camera, hpp::span<const entt::handle>{entities}, duration);
-    
 
-             return {.text = fmt::format(
-                         R"({{"ok":true,"count":{},"duration":{:.3g},"aim":{},"camera":{}}})",
-                         entities.size(),
-                         duration,
-                         aim ? "true" : "false",
-                         camera_to_json(camera)),
+             return {.text = fmt::format(R"({{"ok":true,"count":{},"duration":{:.3g}}})", entities.size(), duration),
                      .is_error = false};
          },
          .mutates_scene = false});
@@ -386,10 +365,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_focus_bounds",
          .description =
-             "Focus the Scene panel camera on a world-space sphere (center+radius) or box "
-             "(min+max) via defaults::focus_camera_on_bounds. Optional aim:true looks at center first.",
+             "Focus Scene panel camera on a world sphere (center+radius) or box (min+max). "
+             "duration default 0.4; use 0 for instant.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0},"min":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"max":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"duration":{"type":"number","minimum":0,"maximum":10},"aim":{"type":"boolean"}}})json",
+             R"json({"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0},"min":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"max":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"duration":{"type":"number","minimum":0,"maximum":10}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -401,8 +380,6 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
 
              const float duration = read_duration(args, 0.4f);
-             bool aim = false;
-             read_bool(args, "aim", aim);
 
              math::vec3 center{};
              math::vec3 min_v{};
@@ -421,10 +398,6 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  math::bbox box;
                  box.add_point(min_v);
                  box.add_point(max_v);
-                 if(aim)
-                 {
-                     camera.get<transform_component>().look_at(box.get_center());
-                 }
                  defaults::focus_camera_on_bounds(camera, box, duration);
              }
              else if(has_center && has_radius)
@@ -434,10 +407,6 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      radius = 0.001;
                  }
                  math::bsphere sphere{center, static_cast<float>(radius)};
-                 if(aim)
-                 {
-                     camera.get<transform_component>().look_at(center);
-                 }
                  defaults::focus_camera_on_bounds(camera, sphere, duration);
              }
              else
@@ -445,22 +414,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  return {.text = "Provide center+radius, or min+max", .is_error = true};
              }
 
-             return {.text = fmt::format(R"({{"ok":true,"duration":{:.3g},"aim":{},"camera":{}}})",
-                                         duration,
-                                         aim ? "true" : "false",
-                                         camera_to_json(camera)),
-                     .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"duration":{:.3g}}})", duration), .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
         {.name = "viewport_orbit_camera",
          .description =
-             "Orbit the Scene panel camera around a world pivot by yaw/pitch degrees (Y-up then "
-             "camera-right). Defaults pivot to current look target estimate from focus, or "
-             "explicit pivot. Keeps distance to pivot.",
+             "Orbit Scene panel camera around a world pivot by yaw/pitch degrees. "
+             "Optional pivot and distance.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"yaw":{"type":"number","description":"Degrees around world up"},"pitch":{"type":"number","description":"Degrees around camera right"},"pivot":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"distance":{"type":"number","minimum":0.01,"description":"Optional override distance to pivot"}}})json",
+             R"json({"type":"object","properties":{"yaw":{"type":"number"},"pitch":{"type":"number"},"pivot":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"distance":{"type":"number","minimum":0.01}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -515,20 +479,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              tc.look_at(pivot);
 
-             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"yaw":{:.3g},"pitch":{:.3g},"camera":{}}})",
+             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"yaw":{:.3g},"pitch":{:.3g}}})",
                                          vec3_to_json(pivot),
                                          yaw,
-                                         pitch,
-                                         camera_to_json(camera)),
+                                         pitch),
                      .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
         {.name = "viewport_reset_camera",
-         .description =
-             "Reset the Scene panel camera to the default editor pose (same as Scene panel "
-             "Reset Camera button).",
+         .description = "Reset Scene panel camera to the default editor pose.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -543,8 +504,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-             return {.text = fmt::format(R"({{"ok":true,"camera":{}}})", camera_to_json(camera)),
-                     .is_error = false};
+             return {.text = R"({"ok":true})", .is_error = false};
          },
          .mutates_scene = false});
 }

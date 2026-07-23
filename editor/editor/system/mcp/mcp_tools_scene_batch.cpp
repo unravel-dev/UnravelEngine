@@ -105,10 +105,8 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_create_primitives_batch",
          .description =
-             "Create many embedded mesh primitives in one undoable action. Each item: primitive, optional "
-             "name/parent_id/material_key/material_index, position/rotation_euler/scale, space "
-             "(local default|world). Axes: X-right, Y-up, Z-forward. Prefer space:\"local\" with "
-             "rotation_euler:[0,0,0] under rotated parents.",
+             "Create embedded mesh primitives in one undoable action. Each item: primitive, optional "
+             "name/parent_id/material_key/material_index, pose, space (local default|world).",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"primitive":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"material_key":{"type":"string"},"material_index":{"type":"integer","minimum":0},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["primitive"]}}},"required":["items"]})json",
          .handler =
@@ -205,7 +203,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      json += ",";
                  }
-                 json += entity_to_summary_json(created[i], 0, 0);
+                 json += entity_to_lean_json(created[i], true);
              }
              json += "]";
              return {.text = fmt::format(R"({{"created":{},"count":{},"requested":{}}})",
@@ -220,7 +218,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_set_transforms_batch",
          .description =
              "Set transforms on many entities in one undoable action. Each item: entity_id, optional "
-             "space/position/rotation_euler/scale. Axes: X-right, Y-up, Z-forward.",
+             "space/position/rotation_euler/scale.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
@@ -414,7 +412,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_get_bounds_batch",
          .description =
              "Get world-space AABB for one entity_id or many entity_ids (union). Optional depth "
-             "(-1 = full hierarchy). Axes: X-right, Y-up, Z-forward.",
+             "(-1 = full hierarchy).",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"depth":{"type":"integer"}}})json",
          .handler =
@@ -523,10 +521,6 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              {
                  limit = 1;
              }
-             if(limit > 5000)
-             {
-                 limit = 5000;
-             }
 
              std::vector<entt::handle> matches;
              std::string parent_id;
@@ -563,7 +557,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      json += ",";
                  }
-                 json += entity_to_summary_json(matches[i], 0, 0);
+                 json += entity_to_lean_json(matches[i], true);
              }
              json += "]";
              return {.text = fmt::format(R"({{"entities":{},"count":{},"limit":{}}})",
@@ -576,8 +570,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "scene_duplicate_entities_batch",
-         .description =
-             "Duplicate entities (clone hierarchy) in one undoable action. Returns created entity summaries.",
+         .description = "Duplicate entities (clone hierarchy) in one undoable action.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
          .handler =
@@ -636,7 +629,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      json += ",";
                  }
-                 json += entity_to_summary_json(created[i], 0, 0);
+                 json += entity_to_lean_json(created[i], true);
              }
              json += "]";
              return {.text = fmt::format(R"({{"created":{},"count":{}}})", json, created.size()),
