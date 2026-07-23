@@ -485,22 +485,18 @@ auto engine::process() -> int
 
         input.manager.before_events_update();
 
-        bool should_quit = false;
+        bool should_quit = is_shutting_down;
 
         {
             APP_SCOPE_PERF("Poll OS Events");
             os::event e{};
-            while(os::poll_event(e))
+            while(!should_quit && os::poll_event(e))
             {
                 ev.on_os_event(ctx, e);
 
                 input.manager.on_os_event(e);
 
-                should_quit = rend.get_main_window() == nullptr || is_shutting_down;
-                if(should_quit)
-                {
-                    break;
-                }
+                should_quit |= rend.get_main_window() == nullptr;
             }
         }
 
