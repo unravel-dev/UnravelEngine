@@ -56,13 +56,14 @@ auto seed_project_agent_files(const fs::path& project_path) -> bool
     fs::error_code err;
     bool agents_ok = false;
     const fs::path agents_template = fs::resolve_protocol(agents_template_path);
-    const fs::path agents_dst = project_path / "AGENTS.md";
+    // Engine-owned name so a user AGENTS.md is never overwritten.
+    const fs::path agents_dst = project_path / "UNRAVEL-AGENTS.md";
     if(fs::exists(agents_template, err))
     {
         fs::copy_file(agents_template, agents_dst, fs::copy_options::overwrite_existing, err);
         if(err)
         {
-            APPLOG_WARNING("Failed to seed AGENTS.md into {}: {}", project_path.string(), err.message());
+            APPLOG_WARNING("Failed to seed UNRAVEL-AGENTS.md into {}: {}", project_path.string(), err.message());
         }
         else
         {
@@ -73,16 +74,7 @@ auto seed_project_agent_files(const fs::path& project_path) -> bool
     {
         APPLOG_WARNING("Agent instructions template missing: {}", agents_template.string());
     }
-    const fs::path claude_template = fs::resolve_protocol(claude_template_path);
-    const fs::path claude_dst = project_path / "CLAUDE.md";
-    if(fs::exists(claude_template, err))
-    {
-        fs::copy_file(claude_template, claude_dst, fs::copy_options::overwrite_existing, err);
-        if(err)
-        {
-            APPLOG_WARNING("Failed to seed CLAUDE.md into {}: {}", project_path.string(), err.message());
-        }
-    }
+
     return agents_ok;
 }
 
@@ -159,8 +151,8 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     save_editor_settings();
 
-
     editor_actions::generate_script_workspace();
+    seed_project_agent_files(project_path);
 
     auto& ls = ctx.get_cached<loading_screen>();
     ls.begin_module("Opening project");
@@ -378,8 +370,6 @@ void project_manager::create_project(rtti::context& ctx, const fs::path& project
         APPLOG_ERROR("Failed to create project directory {0}", project_path.string());
         return;
     }
-
-    seed_project_agent_files(project_path);
 
     fs::add_path_protocol("app", project_path);
 
