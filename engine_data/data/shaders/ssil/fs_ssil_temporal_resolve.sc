@@ -42,12 +42,16 @@ uniform mat4 u_prev_view_proj;
 
 // Replace NaN/Inf (which RGBA16F can carry across frames if anything ever wrote a denorm
 // or overflowed) with zero, so the running mean does not stick permanently dark/bright.
+// Do not call isnan()/isinf(): shaderc lowers those to equal/notEqual(float, float),
+// which OpenGL GLSL rejects (those builtins are vector-only). Use x!=x for NaN and a
+// finite threshold above RGBA16F range for Inf.
 vec4 SSIL_SanitizeRgba(vec4 v)
 {
-    bvec4 bad = bvec4(isnan(v.x) || isinf(v.x),
-                      isnan(v.y) || isinf(v.y),
-                      isnan(v.z) || isinf(v.z),
-                      isnan(v.w) || isinf(v.w));
+    const float k_inf_threshold = 1e30;
+    bvec4 bad = bvec4(v.x != v.x || abs(v.x) > k_inf_threshold,
+                      v.y != v.y || abs(v.y) > k_inf_threshold,
+                      v.z != v.z || abs(v.z) > k_inf_threshold,
+                      v.w != v.w || abs(v.w) > k_inf_threshold);
     return mix(v, vec4_splat(0.0), vec4(float(bad.x), float(bad.y), float(bad.z), float(bad.w)));
 }
 
