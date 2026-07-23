@@ -243,22 +243,28 @@ auto service_main(const char* name, int argc, char* argv[]) -> int
                 auto replacement_arguments =
                     unravel::process::build_replacement_application_arguments(startup);
                 app.prepare_restart(replacement_arguments);
-                std::cout << "Restart requested: spawning replacement process (count="
+                std::cout << "Restart requested: handing off to replacement process (count="
                           << next_restart_count << ")" << std::endl;
                 const unravel::process::restart_result spawn_result =
-                    unravel::process::spawn_replacement(replacement_arguments, next_restart_count);
+                    unravel::process::spawn_replacement(replacement_arguments,
+                                                        next_restart_count,
+                                                        [&]()
+                                                        {
+                                                            return app.unload();
+                                                        });
                 if(!spawn_result.success)
                 {
-                    std::cerr << "Failed to spawn replacement process: " << spawn_result.error.message()
-                              << " (" << spawn_result.error.value() << ")" << std::endl;
+                    std::cerr << "Failed to hand off to replacement process: "
+                              << spawn_result.error.message() << " (" << spawn_result.error.value()
+                              << ")" << std::endl;
+                    if(spawn_result.resources_released)
+                    {
+                        return EXIT_FAILURE;
+                    }
                     run = SERVICE_RESULT_RUN;
                     continue;
                 }
-                std::cout << "Replacement process spawned successfully" << std::endl;
-                if(!app.unload())
-                {
-                    return -1;
-                }
+                std::cout << "Replacement process handoff succeeded" << std::endl;
                 return 0;
             }
             break;

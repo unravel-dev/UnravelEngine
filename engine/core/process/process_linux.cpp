@@ -2,9 +2,7 @@
 
 #include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <limits>
-#include <spawn.h>
 #include <signal.h>
 #include <thread>
 #include <unistd.h>
@@ -24,6 +22,18 @@ constexpr auto WAIT_POLL_INTERVAL = std::chrono::milliseconds(20);
 auto make_errno_error(int code) -> std::error_code
 {
     return std::error_code(code, std::generic_category());
+}
+
+auto make_argv_pointers(std::vector<std::string>& command_arguments) -> std::vector<char*>
+{
+    std::vector<char*> argv;
+    argv.reserve(command_arguments.size() + 1);
+    for(auto& argument : command_arguments)
+    {
+        argv.push_back(argument.data());
+    }
+    argv.push_back(nullptr);
+    return argv;
 }
 
 } // namespace
@@ -51,51 +61,36 @@ auto get_current_process_id() -> std::uint64_t
     return static_cast<std::uint64_t>(getpid());
 }
 
-auto spawn_replacement(const std::vector<std::string>& arguments, std::uint32_t restart_count) -> restart_result
+auto spawn_replacement(const std::vector<std::string>& arguments,
+                       std::uint32_t restart_count,
+                       const std::function<bool()>& release_resources) -> restart_result
 {
+    // In-place exec: shell keeps this PID as the foreground job (Ctrl+C works).
+    // Sibling spawn + parent exit makes waitpid return and the shell reclaim the TTY.
+    // Do not use setsid() — that detaches from the controlling terminal.
     restart_result result{};
-    const std::vector<std::string> command_arguments =
-        build_replacement_command_arguments(arguments, restart_count);
+    if(!release_resources)
+    {
+        result.error = make_errno_error(EINVAL);
+        return result;
+    }
+    if(!release_resources())
+    {
+        result.resources_released = true;
+        result.error = make_errno_error(EIO);
+        return result;
+    }
+    result.resources_released = true;
+    std::vector<std::string> command_arguments =
+        build_replacement_command_arguments(arguments, restart_count, false);
     if(command_arguments.empty() || command_arguments.front().empty())
     {
         result.error = make_errno_error(ENOENT);
         return result;
     }
-    std::vector<char*> argv;
-    argv.reserve(command_arguments.size() + 1);
-    for(const auto& argument : command_arguments)
-    {
-        argv.push_back(const_cast<char*>(argument.c_str()));
-    }
-    argv.push_back(nullptr);
-    posix_spawnattr_t attributes{};
-    if(posix_spawnattr_init(&attributes) != 0)
-    {
-        result.error = make_errno_error(errno);
-        return result;
-    }
-    posix_spawn_file_actions_t file_actions{};
-    if(posix_spawn_file_actions_init(&file_actions) != 0)
-    {
-        posix_spawnattr_destroy(&attributes);
-        result.error = make_errno_error(errno);
-        return result;
-    }
-    pid_t child_pid = 0;
-    const int spawn_status = posix_spawn(&child_pid,
-                                         command_arguments.front().c_str(),
-                                         &file_actions,
-                                         &attributes,
-                                         argv.data(),
-                                         environ);
-    posix_spawn_file_actions_destroy(&file_actions);
-    posix_spawnattr_destroy(&attributes);
-    if(spawn_status != 0)
-    {
-        result.error = make_errno_error(spawn_status);
-        return result;
-    }
-    result.success = true;
+    std::vector<char*> argv = make_argv_pointers(command_arguments);
+    execve(command_arguments.front().c_str(), argv.data(), environ);
+    result.error = make_errno_error(errno);
     return result;
 }
 

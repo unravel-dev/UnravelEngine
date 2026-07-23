@@ -12,6 +12,7 @@
 #include <engine/ecs/ecs.h>
 
 #include "events.h"
+#include <engine/settings/boot_config.h>
 #include <engine/animation/ecs/systems/animation_system.h>
 #include <engine/audio/ecs/systems/audio_system.h>
 #include <engine/ecs/systems/transform_system.h>
@@ -168,6 +169,9 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<input_system>();
     ctx.add<script_system>(ctx, parser);
     ctx.add<ui_system>();
+
+    parser.set_optional<std::string>("B", "physics", "auto", "Select preferred physics backend.");
+
     return true;
 }
 
@@ -434,6 +438,7 @@ auto engine::destroy() -> bool
     ctx.remove<logging>();
 
     ctx.remove<loading_screen>();
+    ctx.remove<boot_config>();
 
     bool empty = ctx.empty();
     if(!empty)

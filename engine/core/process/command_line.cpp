@@ -107,13 +107,18 @@ auto build_windows_command_line(const std::vector<std::string>& arguments) -> st
 }
 
 auto build_replacement_command_arguments(const std::vector<std::string>& application_arguments,
-                                         std::uint32_t restart_count) -> std::vector<std::string>
+                                         std::uint32_t restart_count,
+                                         bool include_restart_from_pid) -> std::vector<std::string>
 {
     std::vector<std::string> arguments;
     arguments.reserve(application_arguments.size() + 4);
     arguments.push_back(get_executable_path());
     arguments.insert(arguments.end(), application_arguments.begin(), application_arguments.end());
-    arguments.emplace_back(std::string(RESTART_FROM_PID_PREFIX) + std::to_string(get_current_process_id()));
+    if(include_restart_from_pid)
+    {
+        arguments.emplace_back(std::string(RESTART_FROM_PID_PREFIX) +
+                               std::to_string(get_current_process_id()));
+    }
     arguments.emplace_back(RESTARTED_FLAG);
     arguments.emplace_back(std::string(RESTART_COUNT_PREFIX) + std::to_string(restart_count));
     return arguments;

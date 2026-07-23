@@ -30,6 +30,9 @@ auto MsgBox::OpenPopup(std::function<void(ModalResult)> callback) -> void
     animation_state_ = AnimationState::Opening;
     animation_start_ = std::chrono::steady_clock::now();
     animation_progress_ = 0.0f;
+    // Defer ImGui::OpenPopup until Draw(): OpenPopup + BeginPopupModal must run
+    // at the same ID stack level (hub root via RenderMessageBoxes). Calling
+    // OpenPopup from inside Project Settings binds a different popup ID.
     open_requested_ = true;
 }
 
@@ -81,11 +84,11 @@ auto MsgBox::Draw() -> bool
         (title_ + "###MsgBox" + std::to_string(id_counter_)) : 
         ("###MsgBox" + std::to_string(id_counter_));
     
-	if (open_requested_)
-	{
-		ImGui::OpenPopup(window_title.c_str());
-		open_requested_ = false;
-	}
+    if (open_requested_)
+    {
+        ImGui::OpenPopup(window_title.c_str());
+        open_requested_ = false;
+    }
 
     if (ImGui::BeginPopupModal(window_title.c_str(), &is_open, flags))
     {
@@ -111,10 +114,19 @@ auto MsgBox::Draw() -> bool
         ImGui::Spacing();
         
         DrawButtons();
+
+        // Close only while inside this popup — CloseCurrentPopup outside BeginPopupModal
+        // can dismiss an unrelated outer modal.
+        if (animation_state_ == AnimationState::Closing && animation_progress_ >= 1.0f)
+        {
+            ImGui::CloseCurrentPopup();
+            animation_state_ = AnimationState::Closed;
+        }
         
         ImGui::EndPopup();
     }
-    else if (!is_open && animation_state_ != AnimationState::Closing)
+    else if (!is_open && animation_state_ != AnimationState::Closing &&
+             animation_state_ != AnimationState::Closed)
     {
         // User closed via X button or Escape
         animation_state_ = AnimationState::Closing;
@@ -316,11 +328,7 @@ auto MsgBox::UpdateAnimation() -> void
         {
             animation_state_ = AnimationState::Open;
         }
-        else if (animation_state_ == AnimationState::Closing)
-        {
-            animation_state_ = AnimationState::Closed;
-            ImGui::CloseCurrentPopup();
-        }
+        // Closing completion (CloseCurrentPopup) is handled inside BeginPopupModal.
     }
 }
 

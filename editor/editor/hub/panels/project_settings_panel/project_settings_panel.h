@@ -23,7 +23,7 @@ private:
     void draw_ui(rtti::context& ctx);
 
     imgui_panels* parent_{};
-    bool show_request_{};
+    bool visible_{};
     std::string hint_{};
 
     using callback_t = std::function<void(rtti::context&)>;

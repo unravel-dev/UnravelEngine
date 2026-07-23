@@ -36,12 +36,28 @@ cmake --build build --target editor_data
 
 ## Output directories
 
-| Output | Path |
-|--------|------|
-| Executables | `build/bin/` |
-| Libraries | `build/lib/` |
-| Engine runtime data | `build/bin/data/engine/` |
-| Editor runtime data | `build/bin/data/editor/` |
+CMake sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` to `build/bin` (see root `CMakeLists.txt`).
+On multi-config generators (Visual Studio), that becomes `build/bin/<Config>/`.
+
+| Output | CMake default path |
+|--------|--------------------|
+| Executables | `build/bin/<Config>/` (e.g. `RelWithDebInfo`) |
+| Libraries | `build/lib/<Config>/` |
+| Engine runtime data | `build/bin/<Config>/data/engine/` (via `engine_data`) |
+| Editor runtime data | `build/bin/<Config>/data/editor/` (via `editor_data`) |
+| Clrpp managed | `build/bin/<Config>/clrpp/` |
+
+**Legacy / local layout:** some machines also have a populated `build/<Config>/bin/`
+(e.g. `build/RelWithDebInfo/bin/`) with a full runtime. Do not assume the just-linked
+exe directory is launchable.
+
+### Launching the editor/game
+
+1. Prefer a directory that already has `data/` and `clrpp/Clrpp.Managed.dll`.
+2. If CMake wrote a newer exe to `build/bin/<Config>/` but runtime data lives under
+   `build/<Config>/bin/`, copy the exe into the populated bin and launch from there
+   (or rebuild `engine_data` / `editor_data` into the CMake output dir).
+3. Set the process working directory to that bin folder.
 
 ## Requirements
 

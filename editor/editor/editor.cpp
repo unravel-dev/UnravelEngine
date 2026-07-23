@@ -72,6 +72,10 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     {
         native::message_box(message, native::dialog_type::ok, native::icon_type::error, module);
     });
+
+    // Peek project boot settings (if -p/--project) before cold system init.
+    ctx.get_cached<project_manager>().prepare_boot_config(ctx, parser);
+
     // --- Phase 1: core systems (no ImGui yet, console-only progress) ---
 
     if(!engine::init_core(parser))

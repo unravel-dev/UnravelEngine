@@ -188,7 +188,11 @@ in prompts or in this file - they change often.
 - Prefer CMake commands.
 - First check whether an existing configured build directory is available.
 - Reuse the existing generator and configuration where possible.
-- Common output: `build/RelWithDebInfo/`, `build/Debug/` (or the active preset under `build/`).
+- CMake default runtime dir is `build/bin/` (multi-config: `build/bin/<Config>/`).
+  Some local/VS trees still use `build/<Config>/bin/` — both may exist.
+- When launching editor/game, use the directory that contains a complete runtime
+  (`data/`, `clrpp/`), not merely where a fresh `.exe` was linked. Prefer the
+  user's known working bin if it has those assets; copy the new exe there if needed.
 - Details and checklists: skill `unravel-build-verify`.
 
 ## C++ guidelines

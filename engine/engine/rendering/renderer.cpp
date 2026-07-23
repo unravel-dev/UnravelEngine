@@ -3,7 +3,9 @@
 #include "../events.h"
 #include "spdlog/common.h"
 #include "gpu_program.h"
+#include <engine/engine.h>
 #include <engine/profiler/profiler.h>
+#include <engine/settings/boot_config.h>
 #include <engine/settings/settings.h>
 
 #include <base/assert.hpp>
@@ -247,31 +249,17 @@ void renderer::on_os_event(rtti::context& ctx, os::event& e)
 
 auto renderer::get_renderer_type(const cmd_line::parser& parser) const -> gfx::renderer_type
 {
-    // auto detect
-    auto preferred_renderer_type = gfx::renderer_type::Count;
-
-    std::string preferred_renderer;
-    if(parser.try_get("renderer", preferred_renderer))
+    auto& ctx = engine::context();
+    if(ctx.has<boot_config>())
     {
-        if(preferred_renderer == "opengl")
-        {
-            preferred_renderer_type = gfx::renderer_type::OpenGL;
-        }
-        else if(preferred_renderer == "vulkan")
-        {
-            preferred_renderer_type = gfx::renderer_type::Vulkan;
-        }
-        else if(preferred_renderer == "directx11" || preferred_renderer == "direct3d11" || preferred_renderer == "dx11")
-        {
-            preferred_renderer_type = gfx::renderer_type::Direct3D11;
-        }
-        else if(preferred_renderer == "directx12" || preferred_renderer == "direct3d12" || preferred_renderer == "dx12")
-        {
-            preferred_renderer_type = gfx::renderer_type::Direct3D12;
-        }
+        return preferred_renderer_to_gfx_type(ctx.get<boot_config>().renderer);
     }
-
-    return preferred_renderer_type;
+    std::string preferred_renderer_arg;
+    if(parser.try_get("renderer", preferred_renderer_arg))
+    {
+        return preferred_renderer_to_gfx_type(preferred_renderer_from_string(preferred_renderer_arg));
+    }
+    return gfx::renderer_type::Count;
 }
 
 auto renderer::get_reset_flags(const cmd_line::parser& parser) const -> uint32_t
@@ -299,6 +287,7 @@ auto renderer::get_reset_flags(bool vsync) const -> uint32_t
 
 renderer::~renderer()
 {
+    gfx::frames(2, BGFX_FRAME_FLUSH);
     render_window_.reset();
 
     gfx::set_trace_logger(nullptr);

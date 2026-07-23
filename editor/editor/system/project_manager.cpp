@@ -24,12 +24,15 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
 #include <engine/loading_screen.h>
+#include <engine/engine.h>
+#include <engine/settings/boot_config.h>
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
 
 #include <uuid/uuid.h>
 
+#include <algorithm>
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
 #include <hpp/uuid.hpp>
@@ -123,14 +126,19 @@ void project_manager::close_project(rtti::context& ctx)
 
 auto project_manager::open_project(rtti::context& ctx, const fs::path& project_path) -> bool
 {
-    close_project(ctx);
-
     fs::error_code err;
     if(!fs::exists(project_path, err))
     {
         APPLOG_ERROR("Project directory doesn't exist {0}", project_path.string());
         return false;
     }
+
+    if(try_restart_for_boot_mismatch(ctx, project_path))
+    {
+        return true;
+    }
+
+    close_project(ctx);
 
     APPLOG_TRACE("Opening project directory {0}", project_path.string());
 
@@ -470,7 +478,8 @@ void project_manager::save_editor_settings()
 
 void project_manager::prepare_restart(std::vector<std::string>& arguments)
 {
-    if(!has_open_project())
+    const bool should_reopen_project = has_open_project() || restart_opens_recent_;
+    if(!should_reopen_project)
     {
         return;
     }
@@ -493,11 +502,125 @@ void project_manager::prepare_restart(std::vector<std::string>& arguments)
         {
             continue;
         }
+        // Drop cold-boot CLI flags so the next process applies project boot settings.
+        if(argument == "-r" || argument == "--renderer")
+        {
+            if(i + 1 < arguments.size())
+            {
+                ++i;
+            }
+            continue;
+        }
+        if(argument.rfind("--renderer=", 0) == 0)
+        {
+            continue;
+        }
+        if(argument == "-B" || argument == "--physics")
+        {
+            if(i + 1 < arguments.size())
+            {
+                ++i;
+            }
+            continue;
+        }
+        if(argument.rfind("--physics=", 0) == 0)
+        {
+            continue;
+        }
         filtered.push_back(argument);
     }
     filtered.emplace_back("-p");
     filtered.emplace_back("recent");
     arguments = std::move(filtered);
+}
+
+auto project_manager::resolve_project_cli_path(const std::string& project_arg) const -> fs::path
+{
+    if(project_arg.empty())
+    {
+        return {};
+    }
+    if(project_arg == "recent")
+    {
+        const auto& items = editor_settings_.projects.recent_projects;
+        if(items.empty())
+        {
+            return {};
+        }
+        return fs::path(items.front());
+    }
+    return fs::path(project_arg);
+}
+
+void project_manager::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser)
+{
+    boot_config project_hint{};
+    std::string project_arg;
+    if(parser.try_get("project", project_arg) && !project_arg.empty())
+    {
+        const fs::path project_path = resolve_project_cli_path(project_arg);
+        if(!project_path.empty())
+        {
+            project_hint = peek_project_boot_config(project_path);
+            APPLOG_INFO("Boot config from project {}: renderer={} physics={}",
+                        project_path.string(),
+                        preferred_renderer_to_string(project_hint.renderer),
+                        physics_backend_to_string(project_hint.physics));
+        }
+    }
+    boot_config resolved = resolve_boot_config(parser, project_hint);
+    if(ctx.has<boot_config>())
+    {
+        ctx.get<boot_config>() = resolved;
+    }
+    else
+    {
+        ctx.add<boot_config>(resolved);
+    }
+    APPLOG_INFO("Resolved boot config: renderer={} (cli={}) physics={} (cli={})",
+                preferred_renderer_to_string(resolved.renderer),
+                resolved.cli.renderer,
+                physics_backend_to_string(resolved.physics),
+                resolved.cli.physics);
+}
+
+void project_manager::push_recent_project(const fs::path& project_path)
+{
+    auto& recent = editor_settings_.projects.recent_projects;
+    const fs::path normalized = fs::path(project_path).generic_string();
+    recent.erase(std::remove(recent.begin(), recent.end(), normalized), recent.end());
+    recent.insert(recent.begin(), normalized);
+    save_editor_settings();
+}
+
+auto project_manager::try_restart_for_boot_mismatch(rtti::context& ctx, const fs::path& project_path) -> bool
+{
+    const fs::path settings_path = project_path / "settings" / "settings.cfg";
+    fs::error_code err;
+    if(!fs::exists(settings_path, err))
+    {
+        return false;
+    }
+    if(!ctx.has<boot_config>())
+    {
+        return false;
+    }
+    const boot_config project_boot = peek_project_boot_config(project_path);
+    const boot_config& active = ctx.get<boot_config>();
+    if(!boot_config_requires_restart(active, project_boot))
+    {
+        return false;
+    }
+    APPLOG_INFO(
+        "Project boot settings require restart (active renderer={} physics={}, project renderer={} physics={})",
+        preferred_renderer_to_string(active.renderer),
+        physics_backend_to_string(active.physics),
+        preferred_renderer_to_string(project_boot.renderer),
+        physics_backend_to_string(project_boot.physics));
+    push_recent_project(project_path);
+    restart_opens_recent_ = true;
+    engine::request_restart();
+    return true;
 }
 
 auto project_manager::get_name() const -> const std::string&
@@ -561,18 +684,9 @@ auto project_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -
     std::string project;
     if(parser.try_get("project", project) && !project.empty())
     {
-        if(project == "recent")
+        const fs::path project_path = resolve_project_cli_path(project);
+        if(!project_path.empty())
         {
-            const auto& items = editor_settings_.projects.recent_projects;
-            if(!items.empty())
-            {
-                fs::path project_path = items.front();
-                return open_project(ctx, project_path);
-            }
-        }
-        else
-        {
-            fs::path project_path = project;
             return open_project(ctx, project_path);
         }
     }

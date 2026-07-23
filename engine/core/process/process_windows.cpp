@@ -79,11 +79,18 @@ auto get_current_process_id() -> std::uint64_t
     return static_cast<std::uint64_t>(GetCurrentProcessId());
 }
 
-auto spawn_replacement(const std::vector<std::string>& arguments, std::uint32_t restart_count) -> restart_result
+auto spawn_replacement(const std::vector<std::string>& arguments,
+                       std::uint32_t restart_count,
+                       const std::function<bool()>& release_resources) -> restart_result
 {
     restart_result result{};
+    if(!release_resources)
+    {
+        result.error = make_windows_error(ERROR_INVALID_PARAMETER);
+        return result;
+    }
     const std::vector<std::string> command_arguments =
-        build_replacement_command_arguments(arguments, restart_count);
+        build_replacement_command_arguments(arguments, restart_count, true);
     if(command_arguments.empty() || command_arguments.front().empty())
     {
         result.error = make_windows_error(ERROR_FILE_NOT_FOUND);
@@ -115,6 +122,13 @@ auto spawn_replacement(const std::vector<std::string>& arguments, std::uint32_t 
     }
     CloseHandle(process_info.hThread);
     CloseHandle(process_info.hProcess);
+    if(!release_resources())
+    {
+        result.resources_released = true;
+        result.error = make_windows_error(ERROR_INTERNAL_ERROR);
+        return result;
+    }
+    result.resources_released = true;
     result.success = true;
     return result;
 }

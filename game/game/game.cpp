@@ -7,6 +7,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/settings/boot_config.h>
 #include "runner/runner.h"
 
 #include <filesystem/filesystem.h>
@@ -15,7 +16,7 @@
 
 namespace unravel
 {
- 
+
 REFLECTION_REGISTRATION
 {
     entt::meta_factory<game>{}
@@ -47,18 +48,31 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
 auto game::init(const cmd_line::parser& parser) -> bool
 {
-    if(!engine::init_core(parser))
+    if(!init_protocols(parser))
     {
         return false;
     }
 
     auto& ctx = engine::context();
 
-    if(!init_assets(ctx, parser))
+    // Peek settings for cold boot fields only. Asset handles inside settings.cfg
+    // cannot resolve yet (databases not loaded); that is expected here.
+    if(!prepare_boot_config(ctx, parser))
     {
         return false;
     }
 
+    if(!engine::init_core(parser))
+    {
+        return false;
+    }
+
+    if(!init_assets(ctx))
+    {
+        return false;
+    }
+
+    // Full settings load now that asset databases can resolve handles.
     if(!init_settings(ctx))
     {
         return false;
@@ -96,24 +110,10 @@ auto game::init(const cmd_line::parser& parser) -> bool
     return true;
 }
 
-auto game::init_settings(rtti::context& ctx) -> bool
-{
-    auto& s = ctx.add<settings>();
-    auto settings_path = fs::resolve_protocol("app:/settings/settings.cfg");
-    if(!load_from_file(settings_path.string(), s))
-    {
-        APPLOG_CRITICAL("Failed to load project settings {}", settings_path.string());
-        return false;
-    }
-
-    return true;
-}
-
-auto game::init_assets(rtti::context& ctx, const cmd_line::parser& parser) -> bool
+auto game::init_protocols(const cmd_line::parser& parser) -> bool
 {
     std::string appdata;
     parser.try_get("appdata", appdata);
-
     if(!appdata.empty())
     {
         fs::path app_data = appdata;
@@ -126,21 +126,55 @@ auto game::init_assets(rtti::context& ctx, const cmd_line::parser& parser) -> bo
         fs::path app_data = binary_path / "data" / "app";
         fs::add_path_protocol("app", app_data);
     }
+    return true;
+}
 
+auto game::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool
+{
+    const fs::path app_root = fs::resolve_protocol("app:/");
+    const boot_config project_hint = peek_project_boot_config(app_root);
+    const boot_config resolved = resolve_boot_config(parser, project_hint);
+    if(ctx.has<boot_config>())
+    {
+        ctx.get<boot_config>() = resolved;
+    }
+    else
+    {
+        ctx.add<boot_config>(resolved);
+    }
+    APPLOG_INFO("Resolved boot config: renderer={} (cli={}) physics={} (cli={})",
+                preferred_renderer_to_string(resolved.renderer),
+                resolved.cli.renderer,
+                physics_backend_to_string(resolved.physics),
+                resolved.cli.physics);
+    return true;
+}
+
+auto game::init_settings(rtti::context& ctx) -> bool
+{
+    auto& s = ctx.add<settings>();
+    const auto settings_path = fs::resolve_protocol("app:/settings/settings.cfg");
+    if(!load_from_file(settings_path.string(), s))
+    {
+        APPLOG_CRITICAL("Failed to load project settings {}", settings_path.string());
+        return false;
+    }
+    return true;
+}
+
+auto game::init_assets(rtti::context& ctx) -> bool
+{
     auto& am = ctx.get_cached<asset_manager>();
-
     if(!am.load_database("engine:/"))
     {
         APPLOG_CRITICAL("Failed to load engine asset pack.");
         return false;
     }
-
     if(!am.load_database("app:/"))
     {
         APPLOG_CRITICAL("Failed to load app asset pack.");
         return false;
     }
-
     return true;
 }
 

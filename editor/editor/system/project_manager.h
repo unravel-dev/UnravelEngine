@@ -73,8 +73,25 @@ public:
 
     /**
      * @brief Prepares restart CLI args: persists recent projects and sets -p recent.
+     *
+     * Also strips -r/--renderer so the next process applies project boot settings.
      */
     void prepare_restart(std::vector<std::string>& arguments);
+
+    /**
+     * @brief Resolves a -p/--project CLI value to an absolute project directory.
+     *
+     * Supports the special value "recent" (first recent project). Returns empty
+     * when the value cannot be resolved.
+     */
+    [[nodiscard]] auto resolve_project_cli_path(const std::string& project_arg) const -> fs::path;
+
+    /**
+     * @brief Peeks project boot settings and publishes a resolved @ref boot_config.
+     *
+     * Call before @ref engine::init_core when a project CLI arg may be present.
+     */
+    void prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser);
 
     auto get_name() const -> const std::string&;
 
@@ -104,6 +121,8 @@ public:
 private:
     void fixup_editor_settings_on_save();
     void fixup_editor_settings_on_load();
+    void push_recent_project(const fs::path& project_path);
+    [[nodiscard]] auto try_restart_for_boot_mismatch(rtti::context& ctx, const fs::path& project_path) -> bool;
 
     void setup_directory(rtti::context& ctx, fs::syncer& syncer);
     void setup_meta_syncer(rtti::context& ctx, fs::syncer& syncer, const fs::path& data_dir, const fs::path& meta_dir);
@@ -122,6 +141,8 @@ private:
     editor_settings editor_settings_;
     project_editor_settings project_editor_settings_;
     project_info project_info_;
+    /// When true, @ref prepare_restart adds -p recent even if no project is open yet.
+    bool restart_opens_recent_{false};
 
     fs::syncer app_meta_syncer_;
     fs::syncer app_cache_syncer_;

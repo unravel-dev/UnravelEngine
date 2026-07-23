@@ -7,7 +7,9 @@
 #include <engine/layers/layer_mask.h>
 #include <engine/input/input.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/physics/physics_types.h>
 #include <engine/rendering/eviction_settings.h>
+#include <engine/settings/boot_config.h>
 #include <graphics/texture.h>
 
 #include <string>
@@ -77,6 +79,8 @@ struct settings
 
     struct graphics_settings
     {
+        /// Per-platform preferred renderer. Applied at process start (cold); changing it requires restart.
+        platform_renderer_settings renderer;
         /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
         /// in standalone builds; the renderer drives it every frame from this configuration.
         eviction_settings eviction;
@@ -152,13 +156,15 @@ struct settings
         std::array<std::string, 32> layers = get_reserved_layers_as_array();
     } layer;
 
-    struct time_settings
+    struct physics_settings
     {
-        friend auto operator==(const time_settings& lhs, const time_settings& rhs) -> bool = default;
-
+        /// Cold: physics engine adapter. Applied at process start; changing it requires restart.
+        physics_backend_type backend{physics_backend_type::bullet};
         float fixed_timestep{0.02f};
         int max_fixed_steps{3};
-    } time;
+
+        friend auto operator==(const physics_settings& lhs, const physics_settings& rhs) -> bool = default;
+    } physics;
 
     friend auto operator==(const settings& lhs, const settings& rhs) -> bool = default;
 

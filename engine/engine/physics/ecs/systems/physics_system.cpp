@@ -7,6 +7,7 @@
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
+#include <engine/settings/boot_config.h>
 #include <engine/settings/settings.h>
 
 #include <logging/logging.h>
@@ -43,7 +44,16 @@ auto physics_system::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    backend_ = create_physics_backend(physics_backend_type::bullet);
+    physics_backend_type backend_type = physics_backend_type::bullet;
+    if(ctx.has<boot_config>())
+    {
+        backend_type = ctx.get<boot_config>().physics;
+    }
+    APPLOG_INFO("{}::{}: creating physics backend {}",
+                hpp::type_name_str(*this),
+                __func__,
+                physics_backend_to_string(backend_type));
+    backend_ = create_physics_backend(backend_type);
     if(!backend_)
     {
         APPLOG_ERROR("{}::{}: failed to create physics backend", hpp::type_name_str(*this), __func__);
@@ -148,8 +158,8 @@ void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
     if(ctx.has<settings>())
     {
         auto& ss = ctx.get<settings>();
-        fixed_time_step = ss.time.fixed_timestep;
-        max_subs_steps = ss.time.max_fixed_steps;
+        fixed_time_step = ss.physics.fixed_timestep;
+        max_subs_steps = ss.physics.max_fixed_steps;
     }
 
     auto& ev = ctx.get_cached<events>();

@@ -27,10 +27,13 @@ auto get_current_process_id() -> std::uint64_t
     return 0;
 }
 
-auto spawn_replacement(const std::vector<std::string>& arguments, std::uint32_t restart_count) -> restart_result
+auto spawn_replacement(const std::vector<std::string>& arguments,
+                       std::uint32_t restart_count,
+                       const std::function<bool()>& release_resources) -> restart_result
 {
     (void)arguments;
     (void)restart_count;
+    (void)release_resources;
     restart_result result{};
     result.error = make_unsupported_error();
     return result;

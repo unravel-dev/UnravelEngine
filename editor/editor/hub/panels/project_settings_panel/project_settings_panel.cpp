@@ -3,8 +3,11 @@
 #include "../panels_defs.h"
 
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/system/project_manager.h>
+#include <engine/engine.h>
 #include <engine/input/input.h>
+#include <engine/settings/boot_config.h>
 
 #include <filedialog/filedialog.h>
 #include <imgui/imgui.h>
@@ -291,12 +294,28 @@ void draw_graphics_settings(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& settings = pm.get_settings();
+    const preferred_renderer renderer_before = settings.graphics.renderer.get_for_current_platform();
 
     ImGui::PushItemWidth(150.0f);
 
     if(inspect(ctx, settings.graphics).edit_finished)
     {
         pm.save_project_settings(ctx);
+        if(settings.graphics.renderer.get_for_current_platform() != renderer_before)
+        {
+            ImBox::ShowQuestion(
+                "Restart required",
+                "The renderer backend for this platform was changed.\n\n"
+                "The editor must restart for the new backend to take effect.\n"
+                "Restart now?",
+                [](ImBox::ModalResult result)
+                {
+                    if(result == ImBox::ModalResult::Yes)
+                    {
+                        engine::request_restart();
+                    }
+                });
+        }
     }
 
     ImGui::PopItemWidth();
@@ -976,16 +995,32 @@ void draw_input_settings(rtti::context& ctx)
     }
 }
 
-void draw_time_settings(rtti::context& ctx)
+void draw_physics_settings(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& settings = pm.get_settings();
+    const physics_backend_type backend_before = settings.physics.backend;
 
     ImGui::PushItemWidth(150.0f);
 
-    if(inspect(ctx, settings.time).edit_finished)
+    if(inspect(ctx, settings.physics).edit_finished)
     {
         pm.save_project_settings(ctx);
+        if(settings.physics.backend != backend_before)
+        {
+            ImBox::ShowQuestion(
+                "Restart required",
+                "The physics backend was changed.\n\n"
+                "The editor must restart for the new backend to take effect.\n"
+                "Restart now?",
+                [](ImBox::ModalResult result)
+                {
+                    if(result == ImBox::ModalResult::Yes)
+                    {
+                        engine::request_restart();
+                    }
+                });
+        }
     }
 
     ImGui::PopItemWidth();
@@ -999,28 +1034,22 @@ project_settings_panel::project_settings_panel(imgui_panels* parent) : parent_(p
 
 void project_settings_panel::show(bool s, const std::string& hint)
 {
-    show_request_ = s;
+    visible_ = s;
     hint_ = hint;
 }
 
 void project_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
 {
-    if(show_request_)
+    if(!visible_)
     {
-        ImGui::OpenPopup(name);
-        show_request_ = false;
+        return;
     }
-
-    ImGui::SetNextWindowSize(ImGui::GetMainViewport()->Size * 0.5f);
-    bool show = true;
-    if(ImGui::BeginPopupModal(name, &show))
+    ImGui::SetNextWindowSize(ImGui::GetMainViewport()->Size * 0.5f, ImGuiCond_FirstUseEver);
+    if(ImGui::Begin(name, &visible_))
     {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
-
         draw_ui(ctx);
-
-        ImGui::EndPopup();
     }
+    ImGui::End();
 }
 
 void project_settings_panel::draw_ui(rtti::context& ctx)
@@ -1043,7 +1072,7 @@ void project_settings_panel::draw_ui(rtti::context& ctx)
                                                  {"Standalone", &draw_standalone_settings},
                                                  {"Layers", &draw_layers_settings},
                                                  {"Input", &draw_input_settings},
-                                                 {"Time", &draw_time_settings}};
+                                                 {"Physics", &draw_physics_settings}};
     // Child A: the categories list
     // We fix the width of this child, so the right child uses the remaining space.
     ImGui::BeginChild("##LeftSidebar", avail * ImVec2(0.15f, 1.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
