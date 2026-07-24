@@ -829,6 +829,13 @@ auto draw_item(const content_browser_item& item)
                 fs::show_in_graphical_env(absolute_path);
             }
 
+            if(ImGui::MenuItemIcon(ICON_MDI_LINK, "Copy Path"))
+            {
+                const std::string protocol_path =
+                    fs::convert_to_protocol(absolute_path).generic_string();
+                ImGui::SetClipboardText(protocol_path.c_str());
+            }
+
             const bool can_reimport_file = asset_actions::can_reimport(absolute_path);
             if(ImGui::MenuItemIcon(ICON_MDI_REFRESH, "Reimport", nullptr, can_reimport_file))
             {
