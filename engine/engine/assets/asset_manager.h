@@ -3,6 +3,7 @@
 
 #include "asset_flags.h"
 #include "asset_storage.h"
+#include "impl/asset_extensions.h"
 #include <cassert>
 #include <map>
 #include <mutex>
@@ -161,7 +162,17 @@ public:
                    load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
         auto& storage = get_storage<T>();
-        return load_asset_from_file_impl<T>(key,
+        if(ex::should_keep_key_as_is(key))
+        {
+            return load_asset_from_file_impl<T>(key,
+                                                flags,
+                                                mode,
+                                                storage.container_mutex,
+                                                storage.container,
+                                                storage.load_from_file);
+        }
+        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
+        return load_asset_from_file_impl<T>(resolved_key,
                                             flags,
                                             mode,
                                             storage.container_mutex,
@@ -207,7 +218,15 @@ public:
     auto register_asset(const std::string& key) -> asset_handle<T>
     {
         auto& storage = get_storage<T>();
-        return register_asset_impl<T>(key,
+        if(ex::should_keep_key_as_is(key))
+        {
+            return register_asset_impl<T>(key,
+                                          storage.container_mutex,
+                                          storage.container,
+                                          storage.load_from_file);
+        }
+        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
+        return register_asset_impl<T>(resolved_key,
                                       storage.container_mutex,
                                       storage.container,
                                       storage.load_from_file);
@@ -264,7 +283,12 @@ public:
     auto find_asset(const std::string& key) const -> const asset_handle<T>&
     {
         auto& storage = get_storage<T>();
-        return find_asset_impl<T>(key, storage.container_mutex, storage.container);
+        if(ex::should_keep_key_as_is(key))
+        {
+            return find_asset_impl<T>(key, storage.container_mutex, storage.container);
+        }
+        const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
+        return find_asset_impl<T>(resolved_key, storage.container_mutex, storage.container);
     }
 
     /**

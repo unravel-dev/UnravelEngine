@@ -1,6 +1,7 @@
 #pragma once
 #include "engine/scripting/script.h"
 #include <engine/engine_export.h>
+#include <filesystem/filesystem.h>
 #include <string>
 #include <vector>
 
@@ -273,6 +274,80 @@ inline auto get_format(bool include_dot = true) -> std::string
         return format;
     }
     return format.substr(1);
+}
+
+/**
+ * @brief True when the last path segment has a filename extension (e.g. ".spfb").
+ *
+ * Allocation-free scan from the end. Leading-dot names (".gitignore") are not
+ * treated as having an extension.
+ */
+inline auto has_filename_extension(const std::string& key) noexcept -> bool
+{
+    if(key.empty())
+    {
+        return false;
+    }
+    for(std::size_t i = key.size(); i-- > 0;)
+    {
+        const char c = key[i];
+        if(c == '/' || c == '\\')
+        {
+            return false;
+        }
+        if(c == '.')
+        {
+            const bool has_chars_after = (i + 1) < key.size();
+            const bool not_leading_dot =
+                (i > 0) && key[i - 1] != '/' && key[i - 1] != '\\';
+            return has_chars_after && not_leading_dot;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief True for runtime/embedded instance keys such as "engine:/embedded/cube".
+ *
+ * These keys intentionally have no filename extension and must not be rewritten.
+ */
+inline auto is_embedded_key(const std::string& key) noexcept -> bool
+{
+    constexpr const char* k_embedded_marker = ":/embedded/";
+    return key.find(k_embedded_marker) != std::string::npos;
+}
+
+/**
+ * @brief True when @p key should be used as-is (has an extension or is embedded).
+ */
+inline auto should_keep_key_as_is(const std::string& key) noexcept -> bool
+{
+    return has_filename_extension(key) || is_embedded_key(key);
+}
+
+/**
+ * @brief Appends a supported extension when @p key has none.
+ *
+ * Call only when @ref should_keep_key_as_is returns false. Tries each supported
+ * format for @tparam T against the filesystem; the first existing candidate wins.
+ * If none exist, appends the primary format for @tparam T.
+ */
+template<typename T>
+inline auto resolve_key_missing_extension(const std::string& key) -> std::string
+{
+    fs::error_code err;
+    for(const auto& format : get_suported_formats<T>())
+    {
+        std::string candidate;
+        candidate.reserve(key.size() + format.size());
+        candidate.assign(key);
+        candidate.append(format);
+        if(fs::exists(fs::resolve_protocol(candidate), err))
+        {
+            return candidate;
+        }
+    }
+    return key + get_format<T>();
 }
 
 template<typename T>

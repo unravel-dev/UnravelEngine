@@ -14,7 +14,10 @@ public class Assets
     /// Loads an asset of type <typeparamref name="T"/> by asset key.
     /// </summary>
     /// <typeparam name="T">The asset type to load.</typeparam>
-    /// <param name="key">The asset key (protocol path or project key).</param>
+    /// <param name="key">
+    /// The asset key (protocol path or project key). The type-specific extension
+    /// may be omitted (e.g. <c>app:/data/key</c> for a <c>.spfb</c> scene).
+    /// </param>
     /// <returns>A new asset handle for the resolved asset.</returns>
     public static T GetAsset<T>(string key) where T : Asset<T>, new()
     {
@@ -41,7 +44,7 @@ public class Assets
     /// <summary>
     /// Loads a <see cref="Material"/> by asset key and populates its properties.
     /// </summary>
-    /// <param name="key">The material asset key.</param>
+    /// <param name="key">The material asset key (extension optional).</param>
     /// <returns>The loaded material.</returns>
     public static Material GetAsset(string key)
     {
