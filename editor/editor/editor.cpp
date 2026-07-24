@@ -7,6 +7,9 @@
 #include <simulation/simulation.h>
 #include <version/version.h>
 
+#include <cstdint>
+#include <string>
+
 #include "assets/asset_watcher.h"
 #include "editing/editing_manager.h"
 #include "editing/picking_manager.h"
@@ -84,7 +87,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     }
 
     ls.begin_module("Window");
-    if(!ls.check(init_window(ctx)))
+    if(!ls.check(init_window(ctx, parser)))
     {
         return false;
     }
@@ -202,13 +205,29 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     return true;
 }
 
-auto editor::init_window(rtti::context& ctx) -> bool
+auto editor::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     auto title = fmt::format("Unravel Editor <{}> {}", gfx::get_renderer_name(gfx::get_renderer_type()), version::get_full());
-    uint32_t flags = os::window::resizable | os::window::maximized;
-    auto primary_display = os::display::get_primary_display_index();
-
     auto& rend = ctx.get_cached<renderer>();
+    std::string window_geometry;
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool maximized = false;
+    if(parser.try_get("window", window_geometry) &&
+       renderer::parse_window_geometry(window_geometry, x, y, width, height, maximized))
+    {
+        uint32_t flags = os::window::resizable;
+        if(maximized)
+        {
+            flags |= os::window::maximized;
+        }
+        rend.create_window(title, x, y, width, height, flags);
+        return true;
+    }
+    const uint32_t flags = os::window::resizable | os::window::maximized;
+    const auto primary_display = os::display::get_primary_display_index();
     rend.create_window_for_display(primary_display, title, flags);
     return true;
 }
@@ -308,6 +327,8 @@ void editor::prepare_restart(std::vector<std::string>& arguments)
     auto& ctx = engine::context();
     auto& pm = ctx.get_cached<project_manager>();
     pm.prepare_restart(arguments);
+    auto& rend = ctx.get_cached<renderer>();
+    rend.prepare_restart(arguments);
 }
 
 } // namespace unravel

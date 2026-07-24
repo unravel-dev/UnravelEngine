@@ -15,7 +15,9 @@
 
 #include <logging/logging.h>
 
+#include <cstdio>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace unravel
@@ -118,6 +120,10 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
 
     parser.set_optional<std::string>("r", "renderer", "auto", "Select preferred renderer.");
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
+    parser.set_optional<std::string>("W",
+                                     "window",
+                                     "",
+                                     "Main window geometry as x,y,w,h[,maximized] (used across restarts).");
 }
 
 auto renderer::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
@@ -158,9 +164,106 @@ auto renderer::create_window_for_display(int index, const std::string& title, ui
     return render_window_;
 }
 
+auto renderer::create_window(const std::string& title,
+                             int32_t x,
+                             int32_t y,
+                             uint32_t width,
+                             uint32_t height,
+                             uint32_t flags) -> const std::unique_ptr<render_window>&
+{
+    os::window window(title, x, y, width, height, flags);
+    set_main_window(std::move(window));
+    return render_window_;
+}
+
 void renderer::set_main_window(os::window&& window)
 {
     render_window_ = std::make_unique<render_window>(std::move(window));
+}
+
+namespace
+{
+constexpr const char* WINDOW_GEOMETRY_PREFIX = "--window=";
+constexpr uint32_t MIN_WINDOW_DIMENSION = 64;
+
+void strip_window_geometry_arguments(std::vector<std::string>& arguments)
+{
+    std::vector<std::string> filtered;
+    filtered.reserve(arguments.size());
+    for(std::size_t i = 0; i < arguments.size(); ++i)
+    {
+        const std::string& argument = arguments[i];
+        if(argument.rfind(WINDOW_GEOMETRY_PREFIX, 0) == 0)
+        {
+            continue;
+        }
+        if(argument == "-W" || argument == "--window")
+        {
+            if(i + 1 < arguments.size())
+            {
+                ++i;
+            }
+            continue;
+        }
+        filtered.push_back(argument);
+    }
+    arguments = std::move(filtered);
+}
+} // namespace
+
+auto renderer::parse_window_geometry(const std::string& value,
+                                     int32_t& x,
+                                     int32_t& y,
+                                     uint32_t& width,
+                                     uint32_t& height,
+                                     bool& maximized) -> bool
+{
+    if(value.empty())
+    {
+        return false;
+    }
+    int parsed_x = 0;
+    int parsed_y = 0;
+    int parsed_w = 0;
+    int parsed_h = 0;
+    int parsed_maximized = 0;
+    const int field_count =
+        std::sscanf(value.c_str(), "%d,%d,%d,%d,%d", &parsed_x, &parsed_y, &parsed_w, &parsed_h, &parsed_maximized);
+    if(field_count != 4 && field_count != 5)
+    {
+        return false;
+    }
+    if(parsed_w < static_cast<int>(MIN_WINDOW_DIMENSION) || parsed_h < static_cast<int>(MIN_WINDOW_DIMENSION))
+    {
+        return false;
+    }
+    x = parsed_x;
+    y = parsed_y;
+    width = static_cast<uint32_t>(parsed_w);
+    height = static_cast<uint32_t>(parsed_h);
+    maximized = field_count == 5 && parsed_maximized != 0;
+    return true;
+}
+
+void renderer::prepare_restart(std::vector<std::string>& arguments)
+{
+    strip_window_geometry_arguments(arguments);
+    auto* main_window = get_main_window();
+    if(!main_window)
+    {
+        return;
+    }
+    auto& window = main_window->get_window();
+    const auto position = window.get_position();
+    const auto size = window.get_size();
+    if(size.w < MIN_WINDOW_DIMENSION || size.h < MIN_WINDOW_DIMENSION)
+    {
+        return;
+    }
+    const int maximized = window.is_maximized() ? 1 : 0;
+    arguments.emplace_back(std::string(WINDOW_GEOMETRY_PREFIX) + std::to_string(position.x) + "," +
+                           std::to_string(position.y) + "," + std::to_string(size.w) + "," +
+                           std::to_string(size.h) + "," + std::to_string(maximized));
 }
 
 auto renderer::deinit(rtti::context& ctx) -> bool

@@ -18,7 +18,7 @@ struct game
     static auto init_protocols(const cmd_line::parser& parser) -> bool;
     static auto prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     static auto init_settings(rtti::context& ctx) -> bool;
-    static auto init_window(rtti::context& ctx) -> bool;
+    static auto init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     static auto init_assets(rtti::context& ctx) -> bool;
 };
 } // namespace unravel

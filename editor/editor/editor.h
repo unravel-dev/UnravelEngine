@@ -23,6 +23,6 @@ struct editor
      */
     static void prepare_restart(std::vector<std::string>& arguments);
 
-    static auto init_window(rtti::context& ctx) -> bool;
+    static auto init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
 };
 } // namespace unravel

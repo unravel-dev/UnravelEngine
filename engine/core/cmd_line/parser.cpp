@@ -222,12 +222,32 @@ auto parser::run(std::ostream& output, std::ostream& error) -> bool
         for(const auto& arg : arguments_)
         {
             auto isarg = !arg.empty() && arg[0] == '-';
-            auto associated = isarg ? find(arg) : nullptr;
+            std::string flag = arg;
+            std::string inline_value;
+            if(isarg)
+            {
+                const auto equals = arg.find('=');
+                if(equals != std::string::npos && equals > 1)
+                {
+                    flag = arg.substr(0, equals);
+                    inline_value = arg.substr(equals + 1);
+                }
+            }
+            auto associated = isarg ? find(flag) : nullptr;
 
             if(associated != nullptr)
             {
                 current = associated;
                 associated->handled = true;
+                if(!inline_value.empty())
+                {
+                    current->arguments.push_back(inline_value);
+                    current->handled = true;
+                    if(!current->variadic)
+                    {
+                        current = find_default();
+                    }
+                }
             }
             else if(current == nullptr)
             {
