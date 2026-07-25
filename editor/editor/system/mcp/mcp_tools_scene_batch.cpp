@@ -50,6 +50,10 @@ auto apply_material_direct(rtti::context& ctx, entt::handle entity, const std::s
 
 auto entity_matches_name(entt::handle entity, const std::string& name_contains, const std::string& name_exact) -> bool
 {
+    if(name_contains.empty() && name_exact.empty())
+    {
+        return true;
+    }
     auto* tag = entity.try_get<tag_component>();
     if(!tag)
     {
@@ -59,9 +63,26 @@ auto entity_matches_name(entt::handle entity, const std::string& name_contains, 
     {
         return tag->name == name_exact;
     }
-    if(!name_contains.empty())
+    return contains_ci(tag->name, name_contains);
+}
+
+auto entity_matches_filters(entt::handle entity,
+                            const std::string& name_contains,
+                            const std::string& name_exact,
+                            const std::string& component_type,
+                            const std::string& script_type) -> bool
+{
+    if(!entity_matches_name(entity, name_contains, name_exact))
     {
-        return contains_ci(tag->name, name_contains);
+        return false;
+    }
+    if(!component_type.empty() && !entity_has_component_pretty_name(entity, component_type))
+    {
+        return false;
+    }
+    if(!script_type.empty() && !entity_has_script_type(entity, script_type))
+    {
+        return false;
     }
     return true;
 }
@@ -69,6 +90,8 @@ auto entity_matches_name(entt::handle entity, const std::string& name_contains, 
 void collect_matching_entities(entt::handle entity,
                                const std::string& name_contains,
                                const std::string& name_exact,
+                               const std::string& component_type,
+                               const std::string& script_type,
                                std::vector<entt::handle>& out,
                                size_t limit)
 {
@@ -76,7 +99,7 @@ void collect_matching_entities(entt::handle entity,
     {
         return;
     }
-    if(entity_matches_name(entity, name_contains, name_exact))
+    if(entity_matches_filters(entity, name_contains, name_exact, component_type, script_type))
     {
         out.push_back(entity);
         if(out.size() >= limit)
@@ -90,7 +113,7 @@ void collect_matching_entities(entt::handle entity,
     }
     for(auto child : entity.get<transform_component>().get_children())
     {
-        collect_matching_entities(child, name_contains, name_exact, out, limit);
+        collect_matching_entities(child, name_contains, name_exact, component_type, script_type, out, limit);
         if(out.size() >= limit)
         {
             return;
@@ -412,7 +435,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_get_bounds_batch",
          .description =
              "Get world-space AABB for one entity_id or many entity_ids (union). Optional depth "
-             "(-1 = full hierarchy).",
+             "(-1 = full hierarchy). Allowed in play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"depth":{"type":"integer"}}})json",
          .handler =
@@ -420,7 +443,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
          {
              scene* scn = nullptr;
              std::string error;
-             if(!require_edit_scene(ctx, scn, error))
+             if(!require_active_scene(ctx, scn, error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -489,27 +512,34 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_find_entities_batch",
          .description =
-             "Find entities by name_contains (case-insensitive) and/or name_exact. Optional parent_id "
-             "limits search to that subtree; omit to search whole scene. Optional limit (default 100).",
+             "Find entities by name_contains and/or name_exact and/or component_type (pretty name) "
+             "and/or script_type (C# full name). Filters AND together. Optional parent_id / limit "
+             "(default 100). Allowed in play mode.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"parent_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
+             R"json({"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"component_type":{"type":"string"},"script_type":{"type":"string"},"parent_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              scene* scn = nullptr;
              std::string error;
-             if(!require_edit_scene(ctx, scn, error))
+             if(!require_active_scene(ctx, scn, error))
              {
                  return {.text = error, .is_error = true};
              }
 
              std::string name_contains;
              std::string name_exact;
+             std::string component_type;
+             std::string script_type;
              read_string(args, "name_contains", name_contains);
              read_string(args, "name_exact", name_exact);
-             if(name_contains.empty() && name_exact.empty())
+             read_string(args, "component_type", component_type);
+             read_string(args, "script_type", script_type);
+             if(name_contains.empty() && name_exact.empty() && component_type.empty() && script_type.empty())
              {
-                 return {.text = "Provide name_contains and/or name_exact", .is_error = true};
+                 return {.text =
+                             "Provide name_contains, name_exact, component_type, and/or script_type",
+                         .is_error = true};
              }
 
              int64_t limit = 100;
@@ -531,7 +561,13 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Parent not found: " + parent_id, .is_error = true};
                  }
-                 collect_matching_entities(parent, name_contains, name_exact, matches, static_cast<size_t>(limit));
+                 collect_matching_entities(parent,
+                                           name_contains,
+                                           name_exact,
+                                           component_type,
+                                           script_type,
+                                           matches,
+                                           static_cast<size_t>(limit));
              }
              else
              {
@@ -543,7 +579,11 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                              return;
                          }
                          entt::handle entity(*scn->registry, entt_id);
-                         if(entity_matches_name(entity, name_contains, name_exact))
+                         if(entity_matches_filters(entity,
+                                                   name_contains,
+                                                   name_exact,
+                                                   component_type,
+                                                   script_type))
                          {
                              matches.push_back(entity);
                          }

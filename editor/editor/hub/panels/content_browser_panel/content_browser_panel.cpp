@@ -1745,7 +1745,7 @@ void content_browser_panel::import(rtti::context& ctx, const fs::path& target_pa
 
 void content_browser_panel::on_import(rtti::context& ctx, const std::vector<std::string>& paths, const fs::path& target_path)
 {
-    editor_actions::import_files(ctx, paths, target_path);
+    editor_actions::import_files(ctx, paths, target_path, true);
 }
 
 void content_browser_panel::prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete)

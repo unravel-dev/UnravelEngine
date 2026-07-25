@@ -17,7 +17,9 @@
 #include <engine/rendering/mesh.h>
 #include <filesystem/filesystem.h>
 
+#include <algorithm>
 #include <chrono>
+#include <vector>
 
 namespace unravel::mcp
 {
@@ -106,13 +108,15 @@ auto poll_handle_ready(asset_manager& am, const std::string& key, std::chrono::m
         {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(32));
+        tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
     }
     return handle && handle.is_ready();
 }
 
 auto try_wait_asset_ready(rtti::context& ctx, const std::string& key, std::chrono::milliseconds timeout) -> bool
 {
+    tpp::this_thread::register_this_thread();
+
     auto& am = ctx.get_cached<asset_manager>();
     const auto ext = fs::path(key).extension().generic_string();
     if(matches_asset_extension<material>(ext))
@@ -145,7 +149,7 @@ auto try_wait_asset_ready(rtti::context& ctx, const std::string& key, std::chron
         {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(32));
+        tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
     }
     return false;
 }
@@ -641,21 +645,16 @@ void register_asset_tools(mcp_tool_registry& registry)
                  std::string focus_error;
                  editor_actions::request_main_window_focus(ctx, &focus_error);
              }
-             auto items = editor_actions::import_files(ctx, paths, target_path, false);
-             const bool copied = editor_actions::wait_import_jobs(items, wait_ms);
+             auto import_result = editor_actions::import_files(ctx, paths, target_path, true);
+             const bool copied = editor_actions::wait_import_jobs(import_result, wait_ms);
              const auto ready_deadline = std::chrono::steady_clock::now() + wait_ms;
              std::string results = "[";
              bool first = true;
              size_t ready_count = 0;
              size_t imported_count = 0;
-             for(auto& item : items)
+             for(auto& item : import_result.items)
              {
-                 bool copy_ok = false;
-                 if(item.future.valid() &&
-                    item.future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready)
-                 {
-                     copy_ok = item.future.get();
-                 }
+                 const bool copy_ok = copied;
                  const auto keys = collect_imported_asset_keys(item);
                  if(keys.empty())
                  {
@@ -917,8 +916,8 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_wait_ready_batch",
          .description =
-             "Wait until many asset keys are loadable/ready (poll). timeout_ms applies per key "
-             "(default 5000).",
+             "Wait until many asset keys are loadable/ready (poll). timeout_ms is a shared "
+             "deadline for the whole batch (default 15000, max 60000).",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
          .handler =
@@ -929,10 +928,10 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  return {.text = "Missing items array", .is_error = true};
              }
-             int64_t timeout_ms = 5000;
+             int64_t timeout_ms = 15000;
              if(args["timeout_ms"].get(timeout_ms))
              {
-                 timeout_ms = 5000;
+                 timeout_ms = 15000;
              }
              if(timeout_ms < 0)
              {
@@ -942,13 +941,10 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  timeout_ms = 60000;
              }
-             std::string results = "[";
-             bool first = true;
-             size_t ok_count = 0;
-             size_t requested = 0;
+             std::vector<std::string> keys;
+             keys.reserve(32);
              for(auto el : items_arr)
              {
-                 ++requested;
                  simdjson::dom::object obj;
                  if(el.get(obj))
                  {
@@ -959,24 +955,66 @@ void register_asset_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item missing key", .is_error = true};
                  }
-                 const bool ready =
-                     try_wait_asset_ready(ctx, key, std::chrono::milliseconds(timeout_ms));
+                 keys.push_back(std::move(key));
+             }
+             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+             std::vector<char> ready_flags(keys.size(), 0);
+             size_t ok_count = 0;
+             // Shared-deadline poll: do not spend the full timeout on each key sequentially.
+             while(ok_count < keys.size() && std::chrono::steady_clock::now() < deadline)
+             {
+                 ok_count = 0;
+                 for(size_t i = 0; i < keys.size(); ++i)
+                 {
+                     if(ready_flags[i])
+                     {
+                         ++ok_count;
+                         continue;
+                     }
+                     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         deadline - std::chrono::steady_clock::now());
+                     if(remaining.count() <= 0)
+                     {
+                         break;
+                     }
+                     // Short slice so other keys keep getting checked under the shared budget.
+                     const auto slice = (std::min)(remaining, std::chrono::milliseconds(100));
+                     if(try_wait_asset_ready(ctx, keys[i], slice))
+                     {
+                         ready_flags[i] = 1;
+                         ++ok_count;
+                     }
+                 }
+                 if(ok_count < keys.size() && std::chrono::steady_clock::now() < deadline)
+                 {
+                     tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
+                 }
+             }
+             std::string results = "[";
+             bool first = true;
+             ok_count = 0;
+             for(size_t i = 0; i < keys.size(); ++i)
+             {
                  if(!first)
                  {
                      results += ",";
                  }
                  first = false;
-                 if(ready)
+                 if(ready_flags[i])
                  {
                      ++ok_count;
                  }
                  results += fmt::format(R"({{"key":{},"ready":{}}})",
-                                        make_json_string(key),
-                                        ready ? "true" : "false");
+                                        make_json_string(keys[i]),
+                                        ready_flags[i] ? "true" : "false");
              }
              results += "]";
-             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})", results, ok_count, requested),
-                     .is_error = ok_count != requested};
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"timeout_ms":{}}})",
+                                        results,
+                                        ok_count,
+                                        keys.size(),
+                                        timeout_ms),
+                     .is_error = ok_count != keys.size()};
          },
          .mutates_scene = false,
          .requires_main_thread = false});

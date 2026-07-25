@@ -90,10 +90,19 @@ void engine_termination_handler(const crash::signal_info& info)
 
 void engine_crash_handler(const crash::signal_info& info, const crash::trace_info& trace)
 {
-    // Log the crash with full details
-    APPLOG_CRITICAL("Crash signal ({}) -> {}\n{}", info.signal_number, info.signal_name, trace.formatted_trace);
-
-    // Try emergency cleanup
+    // Best-effort only: CrashLog.txt / minidump are already written by the crash module
+    // with async-signal/SEH-safe I/O. spdlog may deadlock if the faulting thread holds a lock.
+    try
+    {
+        APPLOG_CRITICAL("Crash ({:#x}) -> {}\n{}",
+                        static_cast<unsigned>(info.signal_number),
+                        info.signal_name,
+                        trace.formatted_trace);
+        APPLOG_FLUSH();
+    }
+    catch(...)
+    {
+    }
     engine::interrupt();
 
     APPLOG_FLUSH();
@@ -101,9 +110,14 @@ void engine_crash_handler(const crash::signal_info& info, const crash::trace_inf
 
 void engine_exception_handler(const crash::exception_info& info, const crash::trace_info& trace)
 {
-    APPLOG_CRITICAL("{}\n{}", info.exception_message, trace.formatted_trace);
-
-    // Same emergency cleanup as crash handler
+    try
+    {
+        APPLOG_CRITICAL("{}\n{}", info.exception_message, trace.formatted_trace);
+        APPLOG_FLUSH();
+    }
+    catch(...)
+    {
+    }
     engine::interrupt();
 
     APPLOG_FLUSH();
@@ -139,15 +153,19 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<logging>();
     ctx.add<loading_screen>();
 
-    // Install engine crash handlers immediately after logging is available
+    // Install engine crash handlers immediately after logging is available.
+    // Windows AVs go through SEH; CrashLog.txt (+ .dmp) are written crash-safely
+    // before these callbacks run.
     crash::install_handlers(crash::crash_handlers{
         .interrupt_handler = engine_interrupt_handler,
         .termination_handler = engine_termination_handler,
         .crash_handler = engine_crash_handler,
         .exception_handler = engine_exception_handler,
+        .crash_log_path = "CrashLog.txt",
+        .write_minidump = true,
     });
 
-    APPLOG_INFO("Engine crash handlers installed");
+    APPLOG_INFO("Engine crash handlers installed (CrashLog.txt / minidump enabled)");
 
     ctx.add<simulation>();
     ctx.add<events>();

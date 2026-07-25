@@ -31,14 +31,20 @@ auto encode_base64(const std::vector<uint8_t>& bytes) -> std::string;
 
 auto make_temp_screenshot_stem(const std::string& tag) -> std::filesystem::path;
 
+struct capture_options
+{
+    std::chrono::milliseconds wait_timeout{std::chrono::milliseconds(500)};
+    /// Downscale factor in (0, 1]; uses bimg linear resize. Prefer 0.5 to cut tokens.
+    double scale{1.0};
+};
+
 /// Action + wait: blit an offscreen FBO color attachment into a READ_BACK
 /// texture (bgfx::requestScreenShot only supports window surfaces), wait for
-/// GPU readback while frames pump, write PNG, and return an image tool_result.
+/// GPU readback while frames pump, scale/encode via bimg PNG, return image tool_result.
 auto capture_fbo_screenshot(mcp_manager& mcp,
                             rtti::context& ctx,
                             const std::function<gfx::frame_buffer::ptr(rtti::context&)>& resolve_fbo,
                             const std::string& tag,
-                            std::chrono::milliseconds wait_timeout = std::chrono::milliseconds(3000))
-    -> tool_result;
+                            const capture_options& options = {}) -> tool_result;
 
 } // namespace unravel::mcp

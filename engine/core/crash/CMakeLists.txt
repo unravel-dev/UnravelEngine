@@ -11,6 +11,10 @@ target_include_directories(${target_name}
 
 target_link_libraries(${target_name} PRIVATE cpptrace::cpptrace base hpp)
 
+if(WIN32)
+    target_link_libraries(${target_name} PRIVATE dbghelp)
+endif()
+
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

@@ -2,6 +2,7 @@
 #include "entity_inspect.h"
 #include "engine/scripting/script.h"
 #include "engine/ui/ui_tree.h"
+#include "threadpp/thread.h"
 
 #include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editing_manager.h>
@@ -1758,14 +1759,16 @@ void editor_actions::recompile_shaders(const std::string& group)
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     auto shaders = am.get_assets<gfx::shader>(group);
-    fs::watcher::pause();
-    for(auto& asset : shaders)
-    {
-        fs::error_code ec;
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-        fs::watcher::touch(path, false);
-    }
-    fs::watcher::resume();
+    fs::watcher::with_paused(
+        [&]
+        {
+            for(auto& asset : shaders)
+            {
+                fs::error_code ec;
+                auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                fs::watcher::touch(path, false);
+            }
+        });
 }
 
 void editor_actions::recompile_textures(const std::string& group)
@@ -1773,14 +1776,16 @@ void editor_actions::recompile_textures(const std::string& group)
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     auto textures = am.get_assets<gfx::texture>(group);
-    fs::watcher::pause();
-    for(auto& asset : textures)
-    {
-        fs::error_code ec;
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-        fs::watcher::touch(path, false);
-    }
-    fs::watcher::resume();
+    fs::watcher::with_paused(
+        [&]
+        {
+            for(auto& asset : textures)
+            {
+                fs::error_code ec;
+                auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                fs::watcher::touch(path, false);
+            }
+        });
 }
 
 void editor_actions::recompile_meshes(const std::string& group)
@@ -1788,69 +1793,76 @@ void editor_actions::recompile_meshes(const std::string& group)
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     auto meshes = am.get_assets<mesh>(group);
-    fs::watcher::pause();
-    for(auto& asset : meshes)
-    {
-        fs::error_code ec;
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-        fs::watcher::touch(path, false);
-    }
-    fs::watcher::resume();
+    fs::watcher::with_paused(
+        [&]
+        {
+            for(auto& asset : meshes)
+            {
+                fs::error_code ec;
+                auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                fs::watcher::touch(path, false);
+            }
+        });
 }
 
 void editor_actions::recompile_ui(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    fs::watcher::pause();
-    {
-        auto assets = am.get_assets<ui_tree>(group);
-        for(auto& asset : assets)
+    fs::watcher::with_paused(
+        [&]
         {
-            fs::error_code ec;
-            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-            fs::watcher::touch(path, false);
-        }
-    }
-    {
-        auto assets = am.get_assets<style_sheet>(group);
-        for(auto& asset : assets)
-        {
-            fs::error_code ec;
-            auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-            fs::watcher::touch(path, false);
-        }
-    }
-   
-    fs::watcher::resume();
+            {
+                auto assets = am.get_assets<ui_tree>(group);
+                for(auto& asset : assets)
+                {
+                    fs::error_code ec;
+                    auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                    fs::watcher::touch(path, false);
+                }
+            }
+            {
+                auto assets = am.get_assets<style_sheet>(group);
+                for(auto& asset : assets)
+                {
+                    fs::error_code ec;
+                    auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                    fs::watcher::touch(path, false);
+                }
+            }
+        });
 }
 void editor_actions::recompile_scripts(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     auto scripts = am.get_assets<script>(group);
-    fs::watcher::pause();
-    for(auto& asset : scripts)
-    {
-        fs::error_code ec;
-        auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-        fs::watcher::touch(path, false);
-    }
-    fs::watcher::resume();
+    fs::watcher::with_paused(
+        [&]
+        {
+            for(auto& asset : scripts)
+            {
+                fs::error_code ec;
+                auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
+                fs::watcher::touch(path, false);
+            }
+        });
 }
 void editor_actions::recompile_all(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
     auto assets = am.get_all_assets(group);
-    fs::watcher::pause();
-    for(auto& asset : assets)
-    {
-        fs::error_code ec;
-        auto path = fs::absolute(fs::resolve_protocol(asset).string(), ec);
-        fs::watcher::touch(path, false);
-    }
-    fs::watcher::resume();
+    fs::watcher::with_paused(
+        [&]
+        {
+            for(auto& asset : assets)
+            {
+                fs::error_code ec;
+                auto path = fs::absolute(fs::resolve_protocol(asset).string(), ec);
+                fs::watcher::touch(path, false);
+            }
+        });
 }
 
 auto editor_actions::rebuild_reflection_probes(rtti::context& /*ctx*/, bool force_full_first_frame) -> size_t
@@ -2227,34 +2239,12 @@ auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* 
 auto editor_actions::import_files(rtti::context& ctx,
                                   const std::vector<std::string>& paths,
                                   const fs::path& target_path,
-                                  bool async) -> std::vector<import_files_item>
+                                  bool async) -> import_files_result
 {
-    auto& ts = ctx.get_cached<threader>();
-    std::vector<import_files_item> items;
-    items.reserve(paths.size());
+    import_files_result result;
+    result.items.reserve(paths.size());
     fs::error_code ec;
     fs::create_directories(target_path, ec);
-    auto copy_one = [](const fs::path& source, const fs::path& dest, bool is_directory) -> bool
-    {
-        fs::error_code err;
-        if(is_directory)
-        {
-            fs::copy(source, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, err);
-            if(err)
-            {
-                APPLOG_ERROR("Failed to import directory {}, error: {}", source.string(), err.message());
-                return false;
-            }
-            return true;
-        }
-        asset_writer::atomic_copy_file(source, dest, err);
-        if(err)
-        {
-            APPLOG_ERROR("Failed to import file {}, error: {}", source.string(), err.message());
-            return false;
-        }
-        return true;
-    };
     for(const auto& path : paths)
     {
         import_files_item item{};
@@ -2269,56 +2259,79 @@ auto editor_actions::import_files(rtti::context& ctx,
         {
             item.dest_key = protocol.generic_string();
         }
-        APPLOG_INFO("Importing {0}", filename.string());
-        if(async)
-        {
-            auto job = ts.pool->schedule("Importing " + filename.extension().string(),
-                                         copy_one,
-                                         source,
-                                         dest,
-                                         item.is_directory);
-            item.future = job.share();
-        }
-        else
-        {
-            const bool ok = copy_one(source, dest, item.is_directory);
-            item.future = tpp::make_ready_future<bool>(bool(ok)).share();
-        }
-        items.push_back(std::move(item));
+        result.items.push_back(std::move(item));
     }
-    return items;
+    auto copy_batch = [items = result.items]() -> bool
+    {
+        auto copy_one = [](const fs::path& source, const fs::path& dest, bool is_directory) -> bool
+        {
+            fs::error_code err;
+            if(is_directory)
+            {
+                fs::copy(source, dest, fs::copy_options::recursive | fs::copy_options::overwrite_existing, err);
+                if(err)
+                {
+                    APPLOG_ERROR("Failed to import directory {}, error: {}", source.string(), err.message());
+                    return false;
+                }
+                return true;
+            }
+            asset_writer::atomic_copy_file(source, dest, err);
+            if(err)
+            {
+                APPLOG_ERROR("Failed to import file {}, error: {}", source.string(), err.message());
+                return false;
+            }
+            return true;
+        };
+        // Pause for the whole batch so glTF/.bin/texture sets are never observed mid-copy.
+        fs::watcher::scoped_pause pause_guard;
+        bool all_ok = true;
+        for(const auto& item : items)
+        {
+            const fs::path source(item.source_path);
+            const fs::path dest(item.dest_path);
+            APPLOG_INFO("Importing {0}", source.filename().string());
+            const bool ok = copy_one(source, dest, item.is_directory);
+            if(ok)
+            {
+                // Ensure the watcher notices the full import even if OS events were coalesced.
+                fs::watcher::touch(dest, item.is_directory);
+            }
+            else
+            {
+                all_ok = false;
+            }
+        }
+        return all_ok;
+    };
+    if(async)
+    {
+        auto& ts = ctx.get_cached<threader>();
+        auto job = ts.pool->schedule("Importing files", std::move(copy_batch));
+        result.future = job.share();
+    }
+    else
+    {
+        const bool ok = copy_batch();
+        result.future = tpp::make_ready_future<bool>(bool(ok)).share();
+    }
+    return result;
 }
 
-auto editor_actions::wait_import_jobs(std::vector<import_files_item>& items,
+auto editor_actions::wait_import_jobs(import_files_result& result,
                                       std::chrono::milliseconds timeout) -> bool
 {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    bool all_ok = true;
-    for(auto& item : items)
+    tpp::this_thread::register_this_thread();
+    if(!result.future.valid())
     {
-        if(!item.future.valid())
-        {
-            all_ok = false;
-            continue;
-        }
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
-        if(remaining.count() <= 0)
-        {
-            all_ok = false;
-            break;
-        }
-        const auto status = item.future.wait_for(remaining);
-        if(status != std::future_status::ready)
-        {
-            all_ok = false;
-            break;
-        }
-        if(!item.future.get())
-        {
-            all_ok = false;
-        }
+        return false;
     }
-    return all_ok;
+    const auto status = result.future.wait_for(timeout);
+    if(status != std::future_status::ready)
+    {
+        return false;
+    }
+    return result.future.get();
 }
 } // namespace unravel

@@ -823,6 +823,11 @@ auto mesh::bind_armature(std::unique_ptr<armature_node>& root) -> bool
 
 auto mesh::load_mesh(load_data&& data) -> bool
 {
+    if(data.vertex_data.empty())
+    {
+        APPLOG_ERROR("Vertex data is empty");
+        return false;
+    }
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
     default_material_uids_ = std::move(data.default_material_uids);

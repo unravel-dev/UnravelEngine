@@ -1,23 +1,8 @@
 /**
- * @file crash_handlers.hpp
- * @brief Modern C++20 cross-platform crash handler using cpptrace
- *
- * This crash handler provides comprehensive crash detection and logging capabilities
- * using the cpptrace library for robust, cross-platform stack trace generation.
- * It intercepts all crash possibilities and logs detailed stack traces.
- *
- * Features:
- * - Cross-platform crash handling using cpptrace
- * - Unified signal handling across platforms
- * - Comprehensive crash logging with detailed context
- * - Minimal OS-specific code
- * - Thread-safe crash detection
- * - Callback-based architecture
- *
- * @author UnravelEngine Team
- * @version 3.0
+ * @file crash.hpp
+ * @brief Cross-platform crash handlers (POSIX signals + Windows SEH) with
+ *        crash-safe logging and optional minidumps.
  */
-
 #pragma once
 
 #include <string>
@@ -25,52 +10,49 @@
 namespace unravel::crash
 {
 
-/// Signal information structure
-struct signal_info {
-    int signal_number;      ///< Signal number (SIGINT, SIGSEGV, etc.)
-    const char* signal_name; ///< Human-readable signal name
+/// Signal / fault information
+struct signal_info
+{
+    int signal_number;       ///< Signal number or Windows exception code (cast)
+    const char* signal_name; ///< Human-readable name
 };
 
-/// Exception information structure  
-struct exception_info {
-    std::string exception_type;     ///< Exception type name (demangled)
-    std::string exception_message;  ///< Exception message/description
+/// Exception information (std::terminate path)
+struct exception_info
+{
+    std::string exception_type;
+    std::string exception_message;
 };
 
 /// Stack trace information
-struct trace_info {
-    std::string formatted_trace;  ///< Formatted stack trace string
+struct trace_info
+{
+    std::string formatted_trace;
 };
 
-// Callback function types
-using interrupt_handler_t = void(*)(const signal_info& info);
-using termination_handler_t = void(*)(const signal_info& info);
-using crash_handler_t = void(*)(const signal_info& info, const trace_info& trace);
-using exception_handler_t = void(*)(const exception_info& info, const trace_info& trace);
-
+using interrupt_handler_t = void (*)(const signal_info& info);
+using termination_handler_t = void (*)(const signal_info& info);
+using crash_handler_t = void (*)(const signal_info& info, const trace_info& trace);
+using exception_handler_t = void (*)(const exception_info& info, const trace_info& trace);
 
 struct crash_handlers
 {
-    // Callback function for interrupt signals, or nullptr for default behavior
-    interrupt_handler_t interrupt_handler;
-
-    // Callback function for termination signals, or nullptr for default behavior
-    termination_handler_t termination_handler;
-
-    // Callback function for crash signals, or nullptr for default behavior
-    crash_handler_t crash_handler;
-
-    // Callback function for C++ exceptions, or nullptr for default behavior
-    exception_handler_t exception_handler;
+    interrupt_handler_t interrupt_handler{nullptr};
+    termination_handler_t termination_handler{nullptr};
+    crash_handler_t crash_handler{nullptr};
+    exception_handler_t exception_handler{nullptr};
+    /// Append-only emergency log (crash-safe OS writes). Default: "CrashLog.txt".
+    const char* crash_log_path{"CrashLog.txt"};
+    /// Windows: write a minidump next to the crash log. Ignored elsewhere.
+    bool write_minidump{true};
 };
 
 /**
- * @brief Install comprehensive crash handlers
+ * @brief Install crash handlers once for the process.
  *
- * Sets up all crash detection mechanisms for the current platform.
- * This function is thread-safe and can be called multiple times.
- * 
- * @note Call the set_*_handler functions before calling this to customize behavior
+ * On Windows installs SetUnhandledExceptionFilter (primary for AVs) plus CRT
+ * signals. On POSIX installs sigaction with an alternate stack. Always installs
+ * std::terminate. User callbacks are best-effort after a crash-safe log write.
  */
 auto install_handlers(const crash_handlers& handlers) -> void;
 

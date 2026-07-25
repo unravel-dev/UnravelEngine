@@ -185,28 +185,46 @@ void register_viewport_tools(mcp_tool_registry& registry)
 {
     registry.add(
         {.name = "viewport_capture_scene",
-         .description = "Capture Scene panel viewport as PNG (image content). Optional wait_ms.",
+         .description =
+             "Capture Scene panel viewport as PNG (image content). Optional wait_ms (default 500), "
+             "scale (0-1, default 1; bimg linear resize). Prefer scale 0.5 to save tokens.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000}}})",
+             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", read_wait_ms(args, 3000));
+             capture_options options{};
+             options.wait_timeout = read_wait_ms(args, 500);
+             double scale = 1.0;
+             if(!args["scale"].get(scale))
+             {
+                 options.scale = scale;
+             }
+             return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", options);
          },
          .mutates_scene = false,
          .requires_main_thread = false});
 
     registry.add(
         {.name = "viewport_capture_game",
-         .description = "Capture Game panel / active camera as PNG (image content). Optional wait_ms.",
+         .description =
+             "Capture Game panel / active camera as PNG (image content). Optional wait_ms (default 500), "
+             "scale (0-1, default 1; bimg linear resize).",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000}}})",
+             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", read_wait_ms(args, 3000));
+             capture_options options{};
+             options.wait_timeout = read_wait_ms(args, 500);
+             double scale = 1.0;
+             if(!args["scale"].get(scale))
+             {
+                 options.scale = scale;
+             }
+             return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
          },
          .mutates_scene = false,
          .requires_main_thread = false});

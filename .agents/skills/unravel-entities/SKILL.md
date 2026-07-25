@@ -49,19 +49,21 @@ Browse lean, then drill in:
 
 | Tool | Purpose |
 |------|---------|
+| `editor_get_status` | Bootstrap: project + scene + play in one call (prefer over separate info tools) |
 | `scene_get_hierarchy_batch` | Lean tree (`id`/`name`/`children`); optional `parent_id`, `max_depth`, `limit` |
-| `scene_get_entities_batch` | Pose + meta for `entity_ids` (no children/components) |
+| `scene_get_entities_batch` | `detail`: `pose` (default), `summary` (includes component names), `components` (+ typed `component_properties`; optional `components[]` filter) |
 | `scene_get_children_batch` | Immediate children (`id`/`name`) for many entities |
-| `scene_list_entity_components_batch` | Component pretty names on many entities |
-| `scene_get_components_batch` | Serialize specific `{entity_id, component}` items |
-| `scene_find_entities_batch` | Find by `name_contains` / `name_exact` (optional `parent_id`); returns lean ids |
+| `scene_list_component_properties` | Schema for MCP-editable typed keys (optional `component` filter) |
+| `scene_get_component_properties_batch` | Typed get: `{entity_id, component, script_type?, properties?[]}` |
+| `scene_set_component_properties_batch` | Typed set via real setters (one undo). Supported: Light, Skylight, Audio Source, Camera, Volume, Script |
+| `scene_find_entities_batch` | Find by `name_contains` / `name_exact` / `component_type` / `script_type` (AND); play-safe |
 | `scene_get_transforms_batch` | Many entity poses (`items` with `entity_id`, optional `space`) |
 | `scene_set_transforms_batch` | Many poses in one undoable action |
 | `scene_set_parents_batch` | Reparent / unparent many (keeps world pose) |
 | `scene_create_entities_batch` / `scene_create_primitives_batch` / `scene_create_meshes_batch` / `scene_create_from_prefab_batch` | Spawn batches (`items` array); returns lean `{id,name,parent_id}` |
 | `scene_create_light` / `scene_create_camera` | Single light/camera spawn |
 | `scene_duplicate_entities_batch` | Clone hierarchies (undoable) |
-| `scene_get_bounds_batch` | World AABB for one or many entities |
+| `scene_get_bounds_batch` | World AABB for one or many entities (play-safe) |
 | `scene_add_components_batch` / `scene_remove_components_batch` | Engine components only |
 | `scene_list_component_types` | Addable engine types |
 | `scene_delete_entities_batch` | Delete by ids |
@@ -74,6 +76,8 @@ Browse lean, then drill in:
 | `play_get_state` / `play_set_active` / `play_set_paused` / `play_skip_frame` | Play mode control |
 | `logs_get_recent` | Console log tail (`min_level`, `max_count`, `after_id`) |
 | `panel_focus_scene` / `panel_focus_game` | Focus Scene or Game ImGui panel tabs |
+
+Component names: use `scene_get_entities_batch` with `detail:"summary"`. Patch fields via typed property tools (`scene_list_component_properties` → get → set); do not round-trip ser20 JSON. Hierarchy parent/children stay on transform/parent tools. Component must already exist before set.
 
 ## Script tools
 
@@ -95,6 +99,7 @@ File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer
 | Purpose | Path |
 |---------|------|
 | Scene/entity MCP | `editor/editor/system/mcp/mcp_tools_scene.cpp` |
+| Typed component properties | `editor/editor/system/mcp/mcp_component_utils.*` |
 | Batch/find/bounds MCP | `editor/editor/system/mcp/mcp_tools_scene_batch.cpp` |
 | Ops batch MCP | `editor/editor/system/mcp/mcp_tools_ops_batch.cpp` |
 | Play/selection/logs/undo MCP | `editor/editor/system/mcp/mcp_tools_editor.cpp` |
@@ -107,8 +112,10 @@ File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer
 
 ## Rules of thumb
 
-1. Create at world positions; compose hierarchies with `space:"local"`.
-2. Prefer `scene_create_primitives_batch` / `scene_set_transforms_batch` for procedural builds.
-3. After large procedural builds, call `scene_save` with an `app:/data/...spfb` key.
-4. Prefer `scripts_list_types` → `scene_add_scripts_batch` over guessing type names.
-5. Edit C# with `scripts_set_sources_batch`; wait for recompile before `scene_add_scripts_batch` on new types.
+1. Start with `editor_get_status`, then `scene_get_hierarchy_batch` / `scene_find_entities_batch`.
+2. Create at world positions; compose hierarchies with `space:"local"`.
+3. Prefer `scene_create_primitives_batch` / `scene_set_transforms_batch` for procedural builds.
+4. Inspect with `detail:"summary"` or typed `scene_get_component_properties_batch`; mutate with `scene_set_component_properties_batch` (not ser20 blobs / not source rewrites for tuning).
+5. After large procedural builds, call `scene_save` with an `app:/data/...spfb` key.
+6. Prefer `scripts_list_types` → `scene_add_scripts_batch` over guessing type names.
+7. Edit C# with `scripts_set_sources_batch`; wait for recompile before `scene_add_scripts_batch` on new types.

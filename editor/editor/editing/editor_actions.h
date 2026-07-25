@@ -47,7 +47,7 @@ struct log_query_entry
 };
 
 /**
- * @brief One async content-browser-style import job (external path -> project folder).
+ * @brief One content-browser-style import entry (external path -> project folder).
  */
 struct import_files_item
 {
@@ -55,6 +55,17 @@ struct import_files_item
     std::string dest_path;
     std::string dest_key;
     bool is_directory{false};
+};
+
+/**
+ * @brief Batch import result: resolved items plus one future for the whole copy job.
+ *
+ * When async, `future` is a single thread-pool job that copies every item (watcher paused
+ * for the batch). When sync, `future` is already ready with the overall success flag.
+ */
+struct import_files_result
+{
+    std::vector<import_files_item> items;
     tpp::shared_future<bool> future;
 };
 
@@ -164,22 +175,23 @@ struct editor_actions
     /**
      * @brief Copy external files/folders into target_path (content-browser Import parity).
      *
-     * When async is true (default), schedules thread-pool copy jobs and returns
-     * immediately — call wait_import_jobs before treating destinations as present.
-     * When async is false, copies synchronously and sets each item's future to a
-     * ready result (preferred for MCP / automation). Asset compilation remains
-     * asynchronous via the asset watcher after files land on disk.
+     * Resolves item destinations immediately. Copies run as one batch with the filesystem
+     * watcher paused so multi-file assets (glTF + .bin + textures) are never observed
+     * incomplete. When async is true (default), schedules a single thread-pool job and
+     * returns immediately — call wait_import_jobs before treating destinations as present.
+     * When async is false, copies on the calling thread and returns a ready future.
+     * Asset compilation remains asynchronous via the asset watcher after resume.
      */
     static auto import_files(rtti::context& ctx,
                              const std::vector<std::string>& paths,
                              const fs::path& target_path,
-                             bool async = true) -> std::vector<import_files_item>;
+                             bool async = true) -> import_files_result;
 
     /**
-     * @brief Block until all import copy jobs complete or timeout elapses.
-     * @return true when every job finished successfully within timeout.
+     * @brief Block until the batch import copy job completes or timeout elapses.
+     * @return true when the job finished successfully within timeout.
      */
-    static auto wait_import_jobs(std::vector<import_files_item>& items,
+    static auto wait_import_jobs(import_files_result& result,
                                  std::chrono::milliseconds timeout) -> bool;
 
 };

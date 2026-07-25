@@ -12,6 +12,7 @@
 #include <serialization/serialization.h>
 #include <uuid/uuid.h>
 
+#include <algorithm>
 #include <logging/logging.h>
 #include <sstream>
 
@@ -151,6 +152,41 @@ auto collect_component_pretty_names(entt::handle entity) -> std::vector<std::str
         names.emplace_back(entt::get_pretty_name(type));
     }
     return names;
+}
+
+auto entity_has_component_pretty_name(entt::handle entity, const std::string& component_pretty_name) -> bool
+{
+    if(!entity || component_pretty_name.empty())
+    {
+        return false;
+    }
+    const auto names = collect_component_pretty_names(entity);
+    return std::find(names.begin(), names.end(), component_pretty_name) != names.end();
+}
+
+auto entity_has_script_type(entt::handle entity, const std::string& script_type_name) -> bool
+{
+    if(!entity || script_type_name.empty())
+    {
+        return false;
+    }
+    auto* sc = entity.try_get<script_component>();
+    if(!sc)
+    {
+        return false;
+    }
+    for(const auto& obj : sc->get_script_components())
+    {
+        if(!obj.pinned)
+        {
+            continue;
+        }
+        if(obj.pinned->get_object().get_type().get_fullname() == script_type_name)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 auto entity_to_lean_json(entt::handle entity, bool include_parent_id) -> std::string
@@ -378,82 +414,9 @@ auto entity_components_serialized(entt::handle entity) -> std::string
     {
         return {};
     }
+    // Full entity persistence path — pushes save_context (required for Transform links).
     std::stringstream stream;
     save_to_stream(stream, entt::const_handle{entity});
-    return stream.str();
-}
-
-auto entity_component_serialized(entt::handle entity, const std::string& component_pretty_name, std::string& error)
-    -> std::string
-{
-    error.clear();
-    if(!entity)
-    {
-        error = "Invalid entity";
-        return {};
-    }
-    if(component_pretty_name.empty())
-    {
-        error = "Missing component name";
-        return {};
-    }
-    bool matched_name = false;
-    bool present = false;
-    std::stringstream stream;
-    try
-    {
-        auto ar = ser20::create_oarchive_associative(stream);
-        hpp::for_each_tuple_type<all_serializeable_components>(
-            [&](auto index)
-            {
-                using ctype = std::tuple_element_t<decltype(index)::value, all_serializeable_components>;
-                auto type = entt::resolve<ctype>();
-                const auto pretty = std::string(entt::get_pretty_name(type));
-                if(pretty != component_pretty_name)
-                {
-                    return;
-                }
-                matched_name = true;
-                auto* component = entity.try_get<ctype>();
-                if(!component)
-                {
-                    return;
-                }
-                present = true;
-                const auto name = entt::get_name(type);
-                try_save(ar, ser20::make_nvp(name, *component));
-            });
-        if(!matched_name)
-        {
-            auto script_type = entt::resolve<script_component>();
-            const auto script_pretty = std::string(entt::get_pretty_name(script_type));
-            if(script_pretty == component_pretty_name)
-            {
-                matched_name = true;
-                if(auto* component = entity.try_get<script_component>())
-                {
-                    present = true;
-                    const auto name = entt::get_name(script_type);
-                    try_save(ar, ser20::make_nvp(name, *component));
-                }
-            }
-        }
-    }
-    catch(const std::exception& e)
-    {
-        error = fmt::format("Failed to serialize component: {}", e.what());
-        return {};
-    }
-    if(!matched_name)
-    {
-        error = "Unknown component: " + component_pretty_name;
-        return {};
-    }
-    if(!present)
-    {
-        error = "Component not present on entity: " + component_pretty_name;
-        return {};
-    }
     return stream.str();
 }
 

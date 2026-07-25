@@ -39,15 +39,8 @@ inline auto find_entity(scene& scn, const std::string& id) -> entt::handle
     return find_entity_by_id(scn, id);
 }
 
-inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::string& error) -> bool
+inline auto require_active_scene(rtti::context& ctx, scene*& out_scene, std::string& error) -> bool
 {
-    auto* play = ctx.has<play_mode>() ? &ctx.get_cached<play_mode>() : nullptr;
-    if(play && play->is_active())
-    {
-        error = "Scene is in play mode; mutating tools are disabled";
-        return false;
-    }
-
     auto& em = ctx.get_cached<editing_manager>();
     out_scene = em.get_active_scene(ctx);
     if(!out_scene || !out_scene->registry)
@@ -56,6 +49,17 @@ inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::strin
         return false;
     }
     return true;
+}
+
+inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::string& error) -> bool
+{
+    auto* play = ctx.has<play_mode>() ? &ctx.get_cached<play_mode>() : nullptr;
+    if(play && play->is_active())
+    {
+        error = "Scene is in play mode; mutating tools are disabled";
+        return false;
+    }
+    return require_active_scene(ctx, out_scene, error);
 }
 
 inline auto read_string(const simdjson::dom::object& args, const char* key, std::string& out) -> bool

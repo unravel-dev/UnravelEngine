@@ -1,6 +1,8 @@
 #include "mcp_tools_common.h"
 
 #include <editor/editing/editor_actions.h>
+#include <editor/system/project_manager.h>
+#include <filesystem/filesystem.h>
 
 #include <algorithm>
 #include <logging/logging.h>
@@ -82,6 +84,73 @@ auto play_state_to_json(const play_state_info& info) -> std::string
 
 void register_editor_tools(mcp_tool_registry& registry)
 {
+    registry.add(
+        {.name = "editor_get_status",
+         .description =
+             "Bootstrap status: open project, active scene, and play state in one call. Prefer this "
+             "over separate project_get_info + scene_get_info + play_get_state.",
+         .input_schema_json = empty_object_schema(),
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             {
+                 std::string project_json = R"({"open":false})";
+                 if(ctx.has<project_manager>())
+                 {
+                     auto& pm = ctx.get_cached<project_manager>();
+                     if(pm.has_open_project())
+                     {
+                         const auto& info = pm.get_project_info();
+                         const auto path = fs::resolve_protocol("app:/").generic_string();
+                         project_json = fmt::format(R"({{"open":true,"name":{},"path":{},"guid":{}}})",
+                                                    make_json_string(pm.get_name()),
+                                                    make_json_string(path),
+                                                    make_json_string(info.project_guid));
+                     }
+                 }
+
+                 std::string phase = "inactive";
+                 if(ctx.has<play_mode>())
+                 {
+                     auto& play = ctx.get_cached<play_mode>();
+                     if(play.is_splash())
+                     {
+                         phase = "splash";
+                     }
+                     else if(play.is_simulation_running())
+                     {
+                         phase = "running";
+                     }
+                     else if(play.is_active())
+                     {
+                         phase = "active";
+                     }
+                 }
+
+                 std::string scene_json = fmt::format(R"({{"has_scene":false,"play_phase":{}}})",
+                                                      make_json_string(phase));
+                 auto& em = ctx.get_cached<editing_manager>();
+                 auto* scn = em.get_active_scene(ctx);
+                 if(scn && scn->registry)
+                 {
+                     const auto entity_count = scn->registry->storage<entt::entity>().size();
+                     const auto source = scn->source ? scn->source.id() : std::string{};
+                     scene_json =
+                         fmt::format(R"({{"has_scene":true,"tag":{},"source":{},"entity_count":{},"play_phase":{}}})",
+                                     make_json_string(scn->tag),
+                                     make_json_string(source),
+                                     entity_count,
+                                     make_json_string(phase));
+                 }
+
+                 const auto play_json = play_state_to_json(editor_actions::get_play_state(ctx));
+                 return {.text = fmt::format(R"({{"project":{},"scene":{},"play":{}}})",
+                                             project_json,
+                                             scene_json,
+                                             play_json),
+                         .is_error = false};
+             },
+         .mutates_scene = false});
+
     registry.add(
         {.name = "play_get_state",
          .description = "Get editor play mode state: phase, active, paused, splash, frames_running.",

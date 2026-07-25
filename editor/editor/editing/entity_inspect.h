@@ -45,19 +45,24 @@ auto entity_hierarchy_node_json(entt::handle entity,
                                 bool& truncated) -> std::string;
 
 /**
- * @brief Full associative serialization of serializeable components (scene-file format).
+ * @brief Full entity dump via entity.hpp save_to_stream (includes save_context).
+ *        Intended for debug/export only — not for MCP property editing.
  */
 auto entity_components_serialized(entt::handle entity) -> std::string;
-
-/**
- * @brief Serialize a single component by pretty name. Sets error on failure.
- */
-auto entity_component_serialized(entt::handle entity, const std::string& component_pretty_name, std::string& error)
-    -> std::string;
 
 /**
  * @brief Component pretty-names present on the entity (inspectable + Script).
  */
 auto collect_component_pretty_names(entt::handle entity) -> std::vector<std::string>;
+
+/**
+ * @brief True if entity has a component with the given pretty name.
+ */
+auto entity_has_component_pretty_name(entt::handle entity, const std::string& component_pretty_name) -> bool;
+
+/**
+ * @brief True if entity has a pinned ScriptComponent instance of the given C# type name.
+ */
+auto entity_has_script_type(entt::handle entity, const std::string& script_type_name) -> bool;
 
 } // namespace unravel

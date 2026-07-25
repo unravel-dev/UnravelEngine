@@ -2,10 +2,11 @@
 #define FS_WATCHER_H
 
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
-#include <cstdint>
 
 #include "filesystem.h"
 #include "pattern_filter.h"
@@ -18,6 +19,27 @@ namespace fs
 class watcher
 {
 public:
+    /**
+     * @brief RAII pause of all filesystem watchers for the current scope.
+     *
+     * Use around multi-file writes (e.g. glTF + .bin + textures) so the asset
+     * pipeline does not observe incomplete sets. Events are buffered while paused
+     * and flushed on resume.
+     */
+    class scoped_pause
+    {
+    public:
+        scoped_pause()
+        {
+            watcher::pause();
+        }
+        ~scoped_pause()
+        {
+            watcher::resume();
+        }
+        scoped_pause(const scoped_pause&) = delete;
+        auto operator=(const scoped_pause&) -> scoped_pause& = delete;
+    };
     enum entry_status
     {
         created,
@@ -97,6 +119,16 @@ public:
     /// </summary>
     //-----------------------------------------------------------------------------
     static void resume();
+
+    /**
+     * @brief Pause all watchers, invoke fn, then resume (even if fn throws).
+     */
+    template<typename F>
+    static auto with_paused(F&& fn) -> decltype(std::forward<F>(fn)())
+    {
+        scoped_pause guard;
+        return std::forward<F>(fn)();
+    }
 
 };
 

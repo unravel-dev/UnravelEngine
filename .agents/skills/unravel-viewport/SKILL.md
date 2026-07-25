@@ -24,11 +24,13 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `viewport_focus_bounds` | Focus sphere (`center`+`radius`) or box (`min`+`max`) |
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
 | `viewport_reset_camera` | UI “Reset Camera” parity |
-| `viewport_capture_scene` / `viewport_capture_game` | PNG capture (image content) |
+| `viewport_capture_scene` / `viewport_capture_game` | PNG capture; `wait_ms` (default 500), `scale` (default 1, bimg linear resize) |
 | `panel_focus_scene` | Focus Scene panel tab (editing camera) |
 | `panel_focus_game` | Focus Game panel tab (game camera) |
 
 Prefer `panel_focus_game` before play-mode verification / game captures when the Game tab may be buried. Prefer `panel_focus_scene` before scene camera / selection workflows.
+
+For agent loops, prefer `scale:0.5` to cut token cost. Default `wait_ms` is 500. Scaling/encoding uses bimg.
 
 Mutation tools return lean `{ok:true}` (plus small args). Full pose only from `viewport_get_camera`.
 

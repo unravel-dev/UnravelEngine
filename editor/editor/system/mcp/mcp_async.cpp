@@ -12,8 +12,12 @@
 #include <uuid/uuid.h>
 
 #include <bimg/bimg.h>
+#include <bimg/encode.h>
+#include <bx/allocator.h>
 #include <bx/file.h>
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <memory>
 #include <thread>
@@ -33,6 +37,103 @@ struct fbo_capture_state
     std::string error;
 };
 
+auto bimg_allocator() -> bx::AllocatorI*
+{
+    static bx::DefaultAllocator allocator;
+    return &allocator;
+}
+
+/**
+ * @brief Scale RGBA8 pixels with bimg (RGBA32F linear resize). scale in (0,1].
+ */
+auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
+                      uint16_t src_w,
+                      uint16_t src_h,
+                      double scale,
+                      std::vector<uint8_t>& out_pixels,
+                      uint16_t& out_w,
+                      uint16_t& out_h,
+                      std::string& error) -> bool
+{
+    if(src_w == 0 || src_h == 0 || src.size() < static_cast<size_t>(src_w) * src_h * 4u)
+    {
+        error = "Invalid source image for scale";
+        return false;
+    }
+    if(scale <= 0.0)
+    {
+        scale = 1.0;
+    }
+    if(scale > 1.0)
+    {
+        scale = 1.0;
+    }
+    out_w = static_cast<uint16_t>(std::max(1.0, std::floor(static_cast<double>(src_w) * scale)));
+    out_h = static_cast<uint16_t>(std::max(1.0, std::floor(static_cast<double>(src_h) * scale)));
+    if(out_w == src_w && out_h == src_h)
+    {
+        out_pixels = src;
+        return true;
+    }
+
+    auto* allocator = bimg_allocator();
+    bimg::ImageContainer* src_rgba8 =
+        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA8, src_w, src_h, 1, 1, false, false, src.data());
+    if(!src_rgba8)
+    {
+        error = "bimg::imageAlloc failed for source RGBA8";
+        return false;
+    }
+
+    bimg::ImageContainer* src_f32 = bimg::imageConvert(allocator, bimg::TextureFormat::RGBA32F, *src_rgba8);
+    bimg::imageFree(src_rgba8);
+    if(!src_f32)
+    {
+        error = "bimg::imageConvert to RGBA32F failed";
+        return false;
+    }
+
+    bimg::ImageContainer* dst_f32 =
+        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA32F, out_w, out_h, 1, 1, false, false);
+    if(!dst_f32)
+    {
+        bimg::imageFree(src_f32);
+        error = "bimg::imageAlloc failed for resized RGBA32F";
+        return false;
+    }
+
+    if(!bimg::imageResizeRgba32fLinear(dst_f32, src_f32))
+    {
+        bimg::imageFree(src_f32);
+        bimg::imageFree(dst_f32);
+        error = "bimg::imageResizeRgba32fLinear failed";
+        return false;
+    }
+    bimg::imageFree(src_f32);
+
+    bimg::ImageContainer* dst_rgba8 = bimg::imageConvert(allocator, bimg::TextureFormat::RGBA8, *dst_f32);
+    bimg::imageFree(dst_f32);
+    if(!dst_rgba8)
+    {
+        error = "bimg::imageConvert to RGBA8 failed";
+        return false;
+    }
+
+    bimg::ImageMip mip{};
+    if(!bimg::imageGetRawData(*dst_rgba8, 0, 0, dst_rgba8->m_data, dst_rgba8->m_size, mip))
+    {
+        bimg::imageFree(dst_rgba8);
+        error = "bimg::imageGetRawData failed after resize";
+        return false;
+    }
+
+    out_pixels.assign(mip.m_data, mip.m_data + mip.m_size);
+    out_w = static_cast<uint16_t>(mip.m_width);
+    out_h = static_cast<uint16_t>(mip.m_height);
+    bimg::imageFree(dst_rgba8);
+    return true;
+}
+
 auto write_rgba_png(const std::filesystem::path& path,
                     uint16_t width,
                     uint16_t height,
@@ -47,6 +148,7 @@ auto write_rgba_png(const std::filesystem::path& path,
     }
 
     const uint32_t pitch = static_cast<uint32_t>(width) * 4u;
+    bx::Error err;
     bimg::imageWritePng(&writer,
                         width,
                         height,
@@ -54,8 +156,13 @@ auto write_rgba_png(const std::filesystem::path& path,
                         pixels.data(),
                         bimg::TextureFormat::RGBA8,
                         false,
-                        nullptr);
+                        &err);
     bx::close(&writer);
+    if(!err.isOk())
+    {
+        error = "bimg::imageWritePng failed";
+        return false;
+    }
     return true;
 }
 
@@ -74,7 +181,6 @@ auto wait_for_file(const std::filesystem::path& path,
             const auto size = std::filesystem::file_size(path, ec);
             if(!ec && size > 0)
             {
-                // Allow a short settle so the writer finishes closing the file.
                 std::this_thread::sleep_for(std::chrono::milliseconds(16));
                 return true;
             }
@@ -128,12 +234,10 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
                             rtti::context& ctx,
                             const std::function<gfx::frame_buffer::ptr(rtti::context&)>& resolve_fbo,
                             const std::string& tag,
-                            std::chrono::milliseconds wait_timeout) -> tool_result
+                            const capture_options& options) -> tool_result
 {
     // bgfx::requestScreenShot only works for *window* framebuffers. Scene/Game
     // OBUFFER targets are offscreen, so we blit into a READ_BACK texture instead.
-    const auto stem = make_temp_screenshot_stem(tag);
-    const auto png_path = std::filesystem::path(stem.generic_string() + ".png");
     auto state = std::make_shared<fbo_capture_state>();
 
     const auto submitted = mcp.invoke_on_main(
@@ -192,7 +296,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + wait_timeout;
+    const auto deadline = std::chrono::steady_clock::now() + options.wait_timeout;
     bool ready = false;
     while(std::chrono::steady_clock::now() < deadline)
     {
@@ -226,44 +330,49 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
                 .is_error = true};
     }
 
-    std::string write_error;
-    const auto wrote = mcp.invoke_on_main(
-        [state, &png_path, &write_error]() -> bool
+    mcp.invoke_on_main(
+        [state]() -> bool
         {
-            const bool ok = write_rgba_png(png_path, state->width, state->height, state->pixels, write_error);
             if(bgfx::isValid(state->blit_tex))
             {
                 gfx::destroy(state->blit_tex);
                 state->blit_tex = BGFX_INVALID_HANDLE;
             }
-            return ok;
+            return true;
         },
         std::chrono::milliseconds(10000));
 
-    if(!wrote)
+    uint16_t out_w = state->width;
+    uint16_t out_h = state->height;
+    std::vector<uint8_t> pixels;
+    std::string scale_error;
+    if(!scale_rgba8_bimg(state->pixels, state->width, state->height, options.scale, pixels, out_w, out_h, scale_error))
     {
-        return {.text = "Timed out writing capture PNG on main thread", .is_error = true};
-    }
-    if(!*wrote)
-    {
-        return {.text = write_error.empty() ? "Failed to write capture PNG" : write_error, .is_error = true};
+        return {.text = scale_error, .is_error = true};
     }
 
-    std::string read_error;
-    auto bytes = read_file_bytes(png_path, read_error);
+    const auto stem = make_temp_screenshot_stem(tag);
+    const auto png_path = std::filesystem::path(stem.generic_string() + ".png");
+    std::string encode_error;
+    if(!write_rgba_png(png_path, out_w, out_h, pixels, encode_error))
+    {
+        return {.text = encode_error, .is_error = true};
+    }
+
+    auto bytes = read_file_bytes(png_path, encode_error);
     std::error_code ec;
     std::filesystem::remove(png_path, ec);
-
     if(bytes.empty())
     {
-        return {.text = read_error.empty() ? "Failed to read capture PNG" : read_error, .is_error = true};
+        return {.text = encode_error.empty() ? "Failed to read capture PNG" : encode_error, .is_error = true};
     }
 
     tool_result result;
-    result.text = fmt::format(R"({{"source":{},"width":{},"height":{}}})",
+    result.text = fmt::format(R"({{"source":{},"width":{},"height":{},"format":"png","scale":{:.6g}}})",
                               make_json_string(tag),
-                              state->width,
-                              state->height);
+                              out_w,
+                              out_h,
+                              options.scale);
     result.image_base64 = encode_base64(bytes);
     result.image_mime = "image/png";
     result.is_error = false;

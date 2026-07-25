@@ -1012,75 +1012,71 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     std::vector<animation_clip> animations;
     std::vector<importer::imported_material> materials;
     std::vector<importer::imported_texture> textures;
-
+    // load_mesh_data_from_file waits for multi-file companions (.gltf/.bin, .obj/.mtl)
+    // before Assimp runs, so incomplete copies cannot produce empty mesh buffers.
     if(!importer::load_mesh_data_from_file(am, absolute_path, *importer, data, animations, materials, textures))
     {
         APPLOG_ERROR("Failed compilation of {0}", str_input);
         return false;
     }
-    if(!data.vertex_data.empty())
+    // Never write a manifest / "successful" compile for an empty mesh. That happens when a
+    // multi-file source (.gltf + .bin) was observed before companions finished copying.
+    if(data.vertex_data.empty())
     {
-        // IMPORTANT:
-        // For skinned meshes, the skin binding step can duplicate vertices and rewrite triangle indices
-        // to ensure a consistent bone palette per submesh. LODs must be generated AFTER this rewrite,
-        // otherwise the stored LOD index buffers will reference the wrong vertices at runtime.
-        if(data.skin_data.has_bones())
+        APPLOG_ERROR("Failed compilation of {0}: imported mesh has no vertex data "
+                     "(source companions may still be incomplete)",
+                     str_input);
+        return false;
+    }
+    // IMPORTANT:
+    // For skinned meshes, the skin binding step can duplicate vertices and rewrite triangle indices
+    // to ensure a consistent bone palette per submesh. LODs must be generated AFTER this rewrite,
+    // otherwise the stored LOD index buffers will reference the wrong vertices at runtime.
+    if(data.skin_data.has_bones())
+    {
+        APP_SCOPE_PERF("Apply Skin to Load Data");
+        if(!mesh::apply_skin_to_load_data(data))
         {
-            APP_SCOPE_PERF("Apply Skin to Load Data");
-            if(!mesh::apply_skin_to_load_data(data))
-            {
-                APPLOG_ERROR("Failed to apply skinning data before generating LODs for {0}", str_input);
-                return false;
-            }
+            APPLOG_ERROR("Failed to apply skinning data before generating LODs for {0}", str_input);
+            return false;
         }
-
-        // Generate LODs offline during compilation (no GPU buffers created)
-        if(importer->model.generate_lods)
+    }
+    // Generate LODs offline during compilation (no GPU buffers created)
+    if(importer->model.generate_lods)
+    {
+        // Use custom LOD configs if provided, otherwise use defaults
+        auto lod_configs = mesh::generate_default_lod_configs(data, importer->model.lod_target_error);
+        if(!lod_configs.empty())
         {
-            // Use custom LOD configs if provided, otherwise use defaults
-            auto lod_configs = mesh::generate_default_lod_configs(data, importer->model.lod_target_error);
-            
-            
-            if(!lod_configs.empty())
-            {
-                APP_SCOPE_PERF("Generate LODs for Load Data");
-                mesh::generate_lods_for_load_data(data, lod_configs);
-            }
+            APP_SCOPE_PERF("Generate LODs for Load Data");
+            mesh::generate_lods_for_load_data(data, lod_configs);
         }
-        
-        // Save materials and register their UIDs before writing the mesh binary
-        data.default_material_uids.reserve(materials.size());
-
-        APPLOG_INFO("Adding default material UIDs for {0}", str_input);
-
-        for(const auto& material : materials)
+    }
+    // Save materials and register their UIDs before writing the mesh binary
+    data.default_material_uids.reserve(materials.size());
+    APPLOG_INFO("Adding default material UIDs for {0}", str_input);
+    for(const auto& material : materials)
+    {
+        fs::path mat_output;
+        if(material.name.empty())
         {
-            fs::path mat_output;
-
-            if(material.name.empty())
-            {
-                mat_output = (dir / file).string() + ".mat";
-            }
-            else
-            {
-                mat_output = dir / (material.name + ".mat");
-            }
-
-            auto uid = am.add_asset_for_path(mat_output, false);
-            data.default_material_uids.push_back(uid);
-
-            asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), material.mat);
-            }, err);
-
+            mat_output = (dir / file).string() + ".mat";
         }
-
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
+        else
         {
-            save_to_file_bin(temp.string(), data);
+            mat_output = dir / (material.name + ".mat");
+        }
+        auto uid = am.add_asset_for_path(mat_output, false);
+        data.default_material_uids.push_back(uid);
+        asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) -> void
+        {
+            save_to_file(temp.string(), material.mat);
         }, err);
     }
+    asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
+    {
+        save_to_file_bin(temp.string(), data);
+    }, err);
 
     {
         APP_SCOPE_PERF("Write Animations");

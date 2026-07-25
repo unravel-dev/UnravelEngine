@@ -1,6 +1,8 @@
 #include "asset_dependencies.h"
 #include "asset_extensions.h"
+#include "importers/mesh_importer.h"
 
+#include <engine/rendering/mesh.h>
 #include <engine/ui/ui_tree.h>
 #include <graphics/shader.h>
 #include <string_utils/utils.h>
@@ -192,6 +194,14 @@ void resolve_dependencies<ui_tree>(const fs::path& file_path, std::vector<fs::pa
 {
     std::unordered_set<std::string> visited;
     resolve_ui_tree_dependencies(file_path, processed_files, visited, true);
+}
+
+template<>
+void resolve_dependencies<mesh>(const fs::path& file_path, std::vector<fs::path>& processed_files)
+{
+    // Root .gltf/.obj is watched separately; only sidecars (.bin, textures, .mtl) are listed.
+    const auto deps = importer::collect_mesh_external_dependencies(file_path);
+    processed_files.insert(processed_files.end(), deps.begin(), deps.end());
 }
 
 } // namespace asset_compiler

@@ -1,4 +1,5 @@
 #include "mcp_tools_common.h"
+#include "mcp_component_utils.h"
 
 #include <editor/editing/actions/actions.h>
 #include <editor/editing/editor_actions.h>
@@ -343,22 +344,45 @@ void register_scene_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "scene_get_entities_batch",
-         .description = "Get pose and meta for many entities (no children/components).",
+         .description =
+             "Get many entities. detail=pose (default), summary (pose + component names), or "
+             "components (summary + typed property bags for supported components). Optional "
+             "components[] filter when detail=components (pretty names: Light, Skylight, ...).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"detail":{"type":"string","enum":["pose","summary","components"]},"components":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             if(!scn || !scn->registry)
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_active_scene(ctx, scn, error))
              {
-                 return {.text = "No active scene", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              simdjson::dom::array ids;
              if(args["entity_ids"].get(ids))
              {
                  return {.text = "Missing entity_ids", .is_error = true};
+             }
+             std::string detail = "pose";
+             read_string(args, "detail", detail);
+             if(detail != "pose" && detail != "summary" && detail != "components")
+             {
+                 return {.text = "Invalid detail (use pose, summary, or components)", .is_error = true};
+             }
+             std::vector<std::string> component_filter;
+             simdjson::dom::array components_arr;
+             if(!args["components"].get(components_arr))
+             {
+                 for(auto el : components_arr)
+                 {
+                     std::string_view name_view;
+                     if(el.get(name_view))
+                     {
+                         return {.text = "components must be strings", .is_error = true};
+                     }
+                     component_filter.emplace_back(name_view);
+                 }
              }
              std::string json = "[";
              size_t count = 0;
@@ -378,11 +402,35 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      json += ",";
                  }
-                 json += entity_to_pose_json(entity);
+                 if(detail == "pose")
+                 {
+                     json += entity_to_pose_json(entity);
+                 }
+                 else if(detail == "summary")
+                 {
+                     json += entity_to_summary_json(entity, 0, 0);
+                 }
+                 else
+                 {
+                     auto summary = entity_to_summary_json(entity, 0, 0);
+                     if(!summary.empty() && summary.back() == '}')
+                     {
+                         summary.pop_back();
+                     }
+                     const auto* filter_ptr = component_filter.empty() ? nullptr : &component_filter;
+                     json += summary;
+                     json += R"(,"component_properties":)";
+                     json += entity_supported_component_properties_json(ctx, entity, filter_ptr);
+                     json += "}";
+                 }
                  ++count;
              }
              json += "]";
-             return {.text = fmt::format(R"({{"entities":{},"count":{}}})", json, count), .is_error = false};
+             return {.text = fmt::format(R"({{"entities":{},"count":{},"detail":{}}})",
+                                         json,
+                                         count,
+                                         make_json_string(detail)),
+                     .is_error = false};
          },
          .mutates_scene = false});
 
@@ -448,76 +496,38 @@ void register_scene_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
-        {.name = "scene_list_entity_components_batch",
-         .description = "List component pretty names present on many entities.",
+        {.name = "scene_list_component_properties",
+         .description =
+             "List MCP-editable typed property schema. Optional component filter (Light, Skylight, "
+             "Audio Source, Camera, Volume, Script). Prefer over leaking ser20 JSON blobs.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
+             R"json({"type":"object","properties":{"component":{"type":"string"}}})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             [](rtti::context& /*ctx*/, const simdjson::dom::object& args) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             if(!scn || !scn->registry)
-             {
-                 return {.text = "No active scene", .is_error = true};
-             }
-             simdjson::dom::array ids;
-             if(args["entity_ids"].get(ids))
-             {
-                 return {.text = "Missing entity_ids", .is_error = true};
-             }
-             std::string json = "[";
-             size_t count = 0;
-             for(auto el : ids)
-             {
-                 std::string_view id_view;
-                 if(el.get(id_view))
-                 {
-                     return {.text = "entity_ids must be strings", .is_error = true};
-                 }
-                 const auto entity_id = std::string(id_view);
-                 auto entity = find_entity(*scn, entity_id);
-                 if(!entity)
-                 {
-                     return {.text = "Entity not found: " + entity_id, .is_error = true};
-                 }
-                 auto names = collect_component_pretty_names(entity);
-                 std::string components = "[";
-                 for(size_t i = 0; i < names.size(); ++i)
-                 {
-                     if(i > 0)
-                     {
-                         components += ",";
-                     }
-                     components += make_json_string(names[i]);
-                 }
-                 components += "]";
-                 if(count > 0)
-                 {
-                     json += ",";
-                 }
-                 json += fmt::format(R"({{"entity_id":{},"components":{}}})", make_json_string(entity_id), components);
-                 ++count;
-             }
-             json += "]";
-             return {.text = fmt::format(R"({{"results":{},"count":{}}})", json, count), .is_error = false};
+             std::string component;
+             read_string(args, "component", component);
+             return {.text = fmt::format(R"({{"properties":{}}})", list_component_property_schema_json(component)),
+                     .is_error = false};
          },
          .mutates_scene = false});
 
     registry.add(
-        {.name = "scene_get_components_batch",
+        {.name = "scene_get_component_properties_batch",
          .description =
-             "Serialize specific components on entities. Each item: entity_id + component pretty name.",
+             "Read typed properties for supported components. Each item: entity_id, component "
+             "(Light|Skylight|Audio Source|Camera|Volume|Script), optional script_type (required for "
+             "Script), optional properties[] key filter.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"}},"required":["entity_id","component"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             if(!scn || !scn->registry)
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_active_scene(ctx, scn, error))
              {
-                 return {.text = "No active scene", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              simdjson::dom::array items;
              if(args["items"].get(items))
@@ -539,18 +549,57 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item requires entity_id and component", .is_error = true};
                  }
-                 auto entity = find_entity(*scn, entity_id);
-                 if(!entity)
+                 std::string script_type;
+                 read_string(obj, "script_type", script_type);
+                 std::vector<std::string> property_filter;
+                 simdjson::dom::array props_arr;
+                 if(!obj["properties"].get(props_arr))
                  {
-                     return {.text = "Entity not found: " + entity_id, .is_error = true};
+                     for(auto prop_el : props_arr)
+                     {
+                         std::string_view name_view;
+                         if(prop_el.get(name_view))
+                         {
+                             return {.text = "properties must be strings", .is_error = true};
+                         }
+                         property_filter.emplace_back(name_view);
+                     }
                  }
-                 std::string error;
-                 auto data = entity_component_serialized(entity, component, error);
+                 auto entity = find_entity(*scn, entity_id);
                  if(count > 0)
                  {
                      json += ",";
                  }
-                 if(data.empty())
+                 if(!entity)
+                 {
+                     json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(component),
+                                         make_json_string("Entity not found: " + entity_id));
+                     ++count;
+                     continue;
+                 }
+                 if(!is_supported_component_pretty_name(component))
+                 {
+                     json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(component),
+                                         make_json_string("Unsupported component for typed properties"));
+                     ++count;
+                     continue;
+                 }
+                 if(component == "Script" && script_type.empty())
+                 {
+                     json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
+                                         make_json_string(entity_id),
+                                         make_json_string(component),
+                                         make_json_string("script_type is required for Script"));
+                     ++count;
+                     continue;
+                 }
+                 const auto* filter_ptr = property_filter.empty() ? nullptr : &property_filter;
+                 auto props = component_properties_to_json(ctx, entity, component, script_type, filter_ptr, error);
+                 if(props.empty())
                  {
                      json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
                                          make_json_string(entity_id),
@@ -559,10 +608,10 @@ void register_scene_tools(mcp_tool_registry& registry)
                  }
                  else
                  {
-                     json += fmt::format(R"({{"ok":true,"entity_id":{},"component":{},"data":{}}})",
+                     json += fmt::format(R"({{"ok":true,"entity_id":{},"component":{},"properties":{}}})",
                                          make_json_string(entity_id),
                                          make_json_string(component),
-                                         make_json_string(data));
+                                         props);
                  }
                  ++count;
              }
@@ -570,6 +619,158 @@ void register_scene_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"results":{},"count":{}}})", json, count), .is_error = false};
          },
          .mutates_scene = false});
+
+    registry.add(
+        {.name = "scene_set_component_properties_batch",
+         .description =
+             "Set typed properties on supported components in one undoable action. Each item: "
+             "entity_id, component, properties object; script_type required for Script. Component must "
+             "already exist (use scene_add_components_batch / scene_add_scripts_batch first). Hierarchy "
+             "parent/children stay on transform tools — not here.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_edit_scene(ctx, scn, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             simdjson::dom::array items;
+             if(args["items"].get(items))
+             {
+                 return {.text = "Missing items", .is_error = true};
+             }
+             struct entry
+             {
+                 entt::handle entity{};
+                 std::string component;
+                 std::string script_type;
+                 std::string new_props_json;
+                 std::string old_props_json;
+             };
+             auto apply_props_json = [&ctx](entt::handle entity,
+                                            const std::string& component,
+                                            const std::string& script_type,
+                                            const std::string& props_json,
+                                            std::string& apply_error) -> bool
+             {
+                 simdjson::dom::parser parser;
+                 simdjson::dom::element root;
+                 if(parser.parse(props_json).get(root))
+                 {
+                     apply_error = "Failed to parse properties JSON";
+                     return false;
+                 }
+                 simdjson::dom::object props;
+                 if(root.get(props))
+                 {
+                     apply_error = "properties must be an object";
+                     return false;
+                 }
+                 auto result = apply_component_properties(ctx, entity, component, script_type, props);
+                 if(!result.ok)
+                 {
+                     apply_error = component_apply_result_to_json(result);
+                     return false;
+                 }
+                 return true;
+             };
+             std::vector<entry> entries;
+             for(auto el : items)
+             {
+                 simdjson::dom::object obj;
+                 if(el.get(obj))
+                 {
+                     return {.text = "Each item must be an object", .is_error = true};
+                 }
+                 std::string entity_id;
+                 std::string component;
+                 if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "component", component))
+                 {
+                     return {.text = "Item requires entity_id and component", .is_error = true};
+                 }
+                 std::string script_type;
+                 read_string(obj, "script_type", script_type);
+                 simdjson::dom::object properties;
+                 if(obj["properties"].get(properties))
+                 {
+                     return {.text = "Item requires properties object", .is_error = true};
+                 }
+                 auto entity = find_entity(*scn, entity_id);
+                 if(!entity)
+                 {
+                     return {.text = "Entity not found: " + entity_id, .is_error = true};
+                 }
+                 if(!is_supported_component_pretty_name(component))
+                 {
+                     return {.text = "Unsupported component for typed properties: " + component, .is_error = true};
+                 }
+                 if(component == "Script" && script_type.empty())
+                 {
+                     return {.text = "script_type is required for Script", .is_error = true};
+                 }
+                 std::vector<std::string> changed_keys;
+                 for(auto field_el : properties)
+                 {
+                     const std::string key(field_el.key);
+                     if(key != "script_type")
+                     {
+                         changed_keys.push_back(key);
+                     }
+                 }
+                 const auto* filter_ptr = changed_keys.empty() ? nullptr : &changed_keys;
+                 auto old_props = component_properties_to_json(ctx, entity, component, script_type, filter_ptr, error);
+                 if(old_props.empty())
+                 {
+                     return {.text = error.empty() ? ("Failed to read properties before set: " + component) : error,
+                             .is_error = true};
+                 }
+                 const std::string new_props = std::string(simdjson::minify(obj["properties"]));
+                 std::string apply_error;
+                 if(!apply_props_json(entity, component, script_type, new_props, apply_error))
+                 {
+                     (void)apply_props_json(entity, component, script_type, old_props, apply_error);
+                     return {.text = apply_error.empty() ? ("Failed to apply properties: " + component) : apply_error,
+                             .is_error = true};
+                 }
+                 (void)apply_props_json(entity, component, script_type, old_props, apply_error);
+                 entry e{};
+                 e.entity = entity;
+                 e.component = std::move(component);
+                 e.script_type = std::move(script_type);
+                 e.new_props_json = new_props;
+                 e.old_props_json = std::move(old_props);
+                 entries.push_back(std::move(e));
+             }
+             if(entries.empty())
+             {
+                 return {.text = "No items to apply", .is_error = true};
+             }
+             auto& em = ctx.get_cached<editing_manager>();
+             em.do_action(
+                 "MCP Batch Set Component Properties",
+                 [entries, apply_props_json]()
+                 {
+                     for(const auto& e : entries)
+                     {
+                         std::string apply_error;
+                         (void)apply_props_json(e.entity, e.component, e.script_type, e.new_props_json, apply_error);
+                     }
+                 },
+                 [entries, apply_props_json]()
+                 {
+                     for(const auto& e : entries)
+                     {
+                         std::string apply_error;
+                         (void)apply_props_json(e.entity, e.component, e.script_type, e.old_props_json, apply_error);
+                     }
+                 });
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+         },
+         .mutates_scene = true});
 
     registry.add(
         {.name="scene_create_light",
