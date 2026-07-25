@@ -28,6 +28,50 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Whether the model casts shadows.
+        /// </summary>
+        public bool castsShadow
+        {
+            get => internal_m2n_model_get_casts_shadow(owner);
+            set => internal_m2n_model_set_casts_shadow(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the model is treated as static for rendering.
+        /// </summary>
+        public bool isStatic
+        {
+            get => internal_m2n_model_get_static(owner);
+            set => internal_m2n_model_set_static(owner, value);
+        }
+
+        /// <summary>
+        /// LOD 0 mesh asset assigned to the model.
+        /// </summary>
+        public Mesh mesh
+        {
+            get
+            {
+                var uid = internal_m2n_model_get_mesh(owner);
+                if (uid == Guid.Empty)
+                {
+                    return null;
+                }
+                return new Mesh { uid = uid };
+            }
+            set => internal_m2n_model_set_mesh(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// LOD selection bias applied when choosing mesh LOD levels.
+        /// </summary>
+        public float lodSelectionBias
+        {
+            get => internal_m2n_model_get_lod_selection_bias(owner);
+            set => internal_m2n_model_set_lod_selection_bias(owner, value);
+        }
+
+        /// <summary>
         /// Gets the number of shared (asset-backed) materials on the model.
         /// </summary>
         public int GetSharedMaterialsCount()
@@ -194,6 +238,30 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_model_set_enabled(Entity eid, bool enabled);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_model_get_casts_shadow(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_casts_shadow(Entity eid, bool castsShadow);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_model_get_static(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_static(Entity eid, bool isStatic);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_model_get_mesh(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_mesh(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_model_get_lod_selection_bias(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_model_set_lod_selection_bias(Entity eid, float bias);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Guid internal_m2n_model_get_shared_material(Entity eid, uint index);

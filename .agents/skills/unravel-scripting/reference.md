@@ -1,5 +1,40 @@
 # Scripting Reference
 
+## Native component C# parity
+
+Expose via: C# wrapper in `engine_data/data/scripts/scene/components/` +
+`native_comp_lut::register_native_component` in `scene_bindings.cpp` +
+`*_bindings.cpp` + declare/register in `script_bindings.h` / `script_glue.cpp`.
+
+| Native | C# | Notes |
+|--------|----|-------|
+| `transform_component` | `TransformComponent` | Full |
+| `id_component` | `IdComponent` | Marker |
+| `model_component` | `ModelComponent` | enabled, mesh, shadows, static, LOD bias, materials |
+| `camera_component` | `CameraComponent` | FOV/clip/projection/masks + screen queries |
+| `light_component` | `LightComponent` | type, color, intensity, range, spot, shadows |
+| `skylight_component` | `SkylightComponent` | mode, turbidity, clouds, irradiance, cubemap |
+| `reflection_probe_component` | `ReflectionProbeComponent` | type/method/update/resolution + `MarkDirty` |
+| `physics_component` | `PhysicsComponent` | Strong |
+| `character_controller_component` | `CharacterControllerComponent` | Strong |
+| `animation_component` | `AnimationComponent` | play/blend/speed/autoplay/root motion/clip |
+| `audio_source_component` | `AudioSourceComponent` | Strong |
+| `audio_listener_component` | `AudioListenerComponent` | Marker |
+| `bone_component` | `BoneComponent` | `boneIndex` |
+| `submesh_component` | `SubmeshComponent` | entry enable/shadow/material override |
+| `text_component` | `TextComponent` | Strong |
+| `particle_emitter_component` | `ParticleEmitterComponent` | Strong |
+| `ui_document_component` | `UIDocumentComponent` | Strong |
+| `volume_component` | `VolumeComponent` | mode/priority/weight/blend/extents |
+
+**Intentional non-exposures (do not add as `Component` types):**
+
+- `tag_component` / `layer_component` — use `Entity.name` / `Entity.tag` / `Entity.layers`
+- `prefab_component` / `prefab_id_component` — use `Prefab` asset + `Scene.Instantiate`
+- `test_component` — editor/dev serialization smoke test only
+- `root_component` / `active_component` — runtime markers; active is on `Entity`
+- `script_component` — host for user `ScriptComponent` subclasses, not Add-able as native type
+
 ## script_system init hooks
 
 From `script_system.cpp` event priorities:
@@ -44,8 +79,8 @@ auto reg = dotnet::internal_call_registry("Unravel.Core.MyClass");
 reg.add_internal_call("internal_m2n_do_thing", dotnet_internal_call(internal_m2n_do_thing));
 ```
 
-3. Add static wrapper in C# utility class using `[MethodImpl(MethodImplOptions.InternalCall)]`
-4. Document in script template if user-facing
+3. Add public C# wrapper using `[MethodImpl(MethodImplOptions.InternalCall)]`
+4. **XML-document** the public type/member (`/// <summary>`, `<param>`, `<returns>` as applicable)
 5. Test hot-reload and play mode
 
 ## POD type registration

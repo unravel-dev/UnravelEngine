@@ -8,10 +8,19 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential, Size = 1)]
 public struct MathfInternal
 {
+    /// <summary>
+    /// Smallest positive normalized single-precision float value.
+    /// </summary>
     public static volatile float FloatMinNormal = 1.17549435E-38f;
 
+    /// <summary>
+    /// Smallest positive denormalized single-precision float value.
+    /// </summary>
     public static volatile float FloatMinDenormal = float.Epsilon;
 
+    /// <summary>
+    /// True when denormals flush to zero on this runtime.
+    /// </summary>
     public static bool IsFlushToZeroEnabled = FloatMinDenormal == 0f;
 }
 

@@ -69,6 +69,28 @@ When exposing new engine features to scripts:
 3. Register internal call with `dotnet::add_internal_call` / `dotnet::internal_call_registry` and `dotnet_internal_call()`
 4. For POD types, add layout-compatible managed struct + `dotnet_register_converter_for_pod` in `script_interop.h`
 5. Maintain API parity — breaking C# API breaks user projects
+6. **Document every public C# API** (required — see below)
+
+## C# XML documentation (required)
+
+All public surface in `engine_data/data/scripts/` (except `samples/` and `test/`) must have XML docs:
+
+| Member | Required tags |
+|--------|----------------|
+| `public class` / `struct` / `enum` / `interface` | `/// <summary>` |
+| `public` properties / fields / constants / events | `/// <summary>` |
+| `public` methods / constructors | `/// <summary>`, plus `/// <param>` for each parameter and `/// <returns>` when non-void |
+| Enum members | `/// <summary>` on each value |
+
+Rules:
+
+- Write docs for **game-facing** APIs (`Unravel.Core` components, `Entity`, `Scene`, `Assets`, `Input`, math, UI).
+- Use `<see cref="..."/>` and `<paramref name="..."/>` where they clarify relationships.
+- Do not leave placeholder summaries ("Gets or sets the value").
+- Private/`internal` members and `[InternalCall]` externs do not need docs.
+- When editing an existing public API, add any missing docs in the same change.
+
+Verification: every new/changed `public` member under `engine_data/data/scripts/` (outside samples/test) has a preceding `///` block.
 
 ## Editor MCP (scripts)
 
@@ -97,6 +119,7 @@ whose statics hold script instances, script `Type`s, or delegates with `[AutoSta
 ## Verification checklist
 
 - [ ] C# API mirrors C++ behavior
+- [ ] Public C# members have XML documentation (`summary` / `param` / `returns` as required)
 - [ ] ScriptComponent add/remove in inspector works
 - [ ] Lifecycle hooks fire in correct order (create -> start -> update)
 - [ ] Hot-reload preserves or correctly resets state
@@ -108,6 +131,7 @@ whose statics hold script instances, script `Type`s, or delegates with `[AutoSta
 
 - Exposing raw pointers to C# without lifetime management
 - Missing glue registration for new native method
+- Shipping public C# APIs without XML documentation
 - C# API change without migration note
 - Script logic in C++ that belongs in `script_system` dispatch
 - Forgetting play-mode-only guards on runtime script state

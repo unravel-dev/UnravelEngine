@@ -16,6 +16,11 @@ namespace Unravel.Core
         /// Absolute or compiler-provided path to the script source file.
         /// </summary>
         public string Path { get; }
+
+        /// <summary>
+        /// Creates the attribute, capturing the caller source path by default.
+        /// </summary>
+        /// <param name="path">Source file path; filled by the compiler when omitted.</param>
         public ScriptSourceFileAttribute([CallerFilePath] string path = "") => Path = path;
     }
     /// <summary>

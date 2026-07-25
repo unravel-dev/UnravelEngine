@@ -142,6 +142,10 @@ namespace Unravel.Core
         // Base ScriptComponent type for override detection
         private static readonly Type scriptComponentBaseType = typeof(ScriptComponent);
 
+        /// <summary>
+        /// Creates a manager, optionally seeding per-type update priorities.
+        /// </summary>
+        /// <param name="typePriorityMap">Optional map of script type to update priority.</param>
         public ScriptComponentManager(Dictionary<Type, int> typePriorityMap = null)
         {
             if (typePriorityMap != null)
@@ -154,10 +158,11 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Add a ScriptComponent. 
-        /// If we're currently invoking, we defer it into 'pendingOps'. 
+        /// Add a ScriptComponent.
+        /// If we're currently invoking, we defer it into 'pendingOps'.
         /// Otherwise, we insert it directly into the appropriate type bucket.
         /// </summary>
+        /// <param name="comp">Script component instance to register for updates.</param>
         public void Add(ScriptComponent comp)
         {
             if (ReferenceEquals(comp, null)) return;
@@ -175,10 +180,11 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Remove a ScriptComponent. 
+        /// Remove a ScriptComponent.
         /// Uses O(1) dictionary lookup instead of linear search.
         /// If we are invoking, defer the operation and collapse with existing operations.
         /// </summary>
+        /// <param name="comp">Script component instance to unregister.</param>
         public void Remove(ScriptComponent comp)
         {
             if (ReferenceEquals(comp, null)) return;
@@ -209,9 +215,19 @@ namespace Unravel.Core
             isInvoking = false;
         }
 
-        // Public update methods
+        /// <summary>
+        /// Invokes <see cref="ScriptComponent.OnUpdate"/> for registered components in priority order.
+        /// </summary>
         public void InvokeUpdate() => InvokeInternal(updateAction);
+
+        /// <summary>
+        /// Invokes <see cref="ScriptComponent.OnFixedUpdate"/> for registered components in priority order.
+        /// </summary>
         public void InvokeFixedUpdate() => InvokeInternal(fixedUpdateAction);
+
+        /// <summary>
+        /// Invokes <see cref="ScriptComponent.OnLateUpdate"/> for registered components in priority order.
+        /// </summary>
         public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction);
 
         // The core logic for iteration in priority order, plus deferred add & remove cleanup
@@ -683,6 +699,10 @@ namespace Unravel.Core
             ScriptManager = new ScriptComponentManager();
             gcMonitor = new GCMonitor();
         }
+        /// <summary>
+        /// Native-to-managed frame update entry point. Updates <see cref="Time"/> and dispatches OnUpdate.
+        /// </summary>
+        /// <param name="info">Per-frame timing values from the engine.</param>
         public static void internal_n2m_update(UpdateInfo info)
         {
             Time.time = info.time;
@@ -695,7 +715,10 @@ namespace Unravel.Core
             // gcMonitor.CheckAndLog("Update");
         }
 
-
+        /// <summary>
+        /// Native-to-managed fixed update entry point. Updates fixed delta time and dispatches OnFixedUpdate.
+        /// </summary>
+        /// <param name="info">Fixed-step timing values from the engine.</param>
         public static void internal_n2m_fixed_update(FixedUpdateInfo info)
         {
             Time.fixedDeltaTime = info.deltaTime;
@@ -703,6 +726,9 @@ namespace Unravel.Core
             ScriptManager.InvokeFixedUpdate();
         }
 
+        /// <summary>
+        /// Native-to-managed late update entry point. Dispatches OnLateUpdate.
+        /// </summary>
         public static void internal_n2m_late_update()
         {
             ScriptManager.InvokeLateUpdate();

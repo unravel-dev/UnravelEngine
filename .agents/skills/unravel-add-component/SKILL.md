@@ -80,6 +80,7 @@ Add branch in `get_component_icon<T>()` with appropriate `ICON_MDI_*`.
 **Files:** `engine_data/data/scripts/scene/components/`
 
 - Mirror component fields as C# properties
+- **XML-document every public type, property, method, and enum member** (`/// <summary>`, plus `<param>` / `<returns>` on methods). Required by skill `unravel-scripting`.
 - Native glue (when needed):
   1. Add `engine/engine/scripting/ecs/systems/bindings/<type>_bindings.cpp`
   2. Implement `internal_m2n_*` using helpers from `bindings/script_glue_common.h` (`safe_get_component`, etc.)

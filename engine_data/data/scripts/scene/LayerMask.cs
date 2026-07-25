@@ -12,7 +12,13 @@ namespace Unravel.Core
     [StructLayout(LayoutKind.Sequential)]
     public struct LayerMask
     {
+        /// <summary>
+        /// Mask with no layers selected.
+        /// </summary>
         public const int Nothing = 0;
+        /// <summary>
+        /// Mask with all layers selected.
+        /// </summary>
         public const int Everything = -1;
         /// <summary>
         /// The raw integer value representing the layer mask.

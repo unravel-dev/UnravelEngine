@@ -23,6 +23,11 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_particle_emitter_component_script_bindings();
     register_text_component_script_bindings();
     register_light_component_script_bindings();
+    register_skylight_component_script_bindings();
+    register_reflection_probe_component_script_bindings();
+    register_submesh_component_script_bindings();
+    register_bone_component_script_bindings();
+    register_volume_component_script_bindings();
     register_assets_script_bindings();
     register_math_script_bindings();
     register_gizmos_script_bindings();

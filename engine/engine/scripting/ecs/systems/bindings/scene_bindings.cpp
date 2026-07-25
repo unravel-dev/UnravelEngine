@@ -462,6 +462,7 @@ int register_componetns = []()
     native_comp_lut::register_native_component<model_component>("Unravel.Core.ModelComponent");
     native_comp_lut::register_native_component<camera_component>("Unravel.Core.CameraComponent");
     native_comp_lut::register_native_component<light_component>("Unravel.Core.LightComponent");
+    native_comp_lut::register_native_component<skylight_component>("Unravel.Core.SkylightComponent");
     native_comp_lut::register_native_component<reflection_probe_component>("Unravel.Core.ReflectionProbeComponent");
     native_comp_lut::register_native_component<physics_component>("Unravel.Core.PhysicsComponent");
     native_comp_lut::register_native_component<animation_component>("Unravel.Core.AnimationComponent");
@@ -473,6 +474,7 @@ int register_componetns = []()
     native_comp_lut::register_native_component<particle_emitter_component>("Unravel.Core.ParticleEmitterComponent");
     native_comp_lut::register_native_component<ui_document_component>("Unravel.Core.UIDocumentComponent");
     native_comp_lut::register_native_component<character_controller_component>("Unravel.Core.CharacterControllerComponent");
+    native_comp_lut::register_native_component<volume_component>("Unravel.Core.VolumeComponent");
 
     return 0;
 }();

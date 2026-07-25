@@ -6,6 +6,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/mesh.h>
 
 namespace unravel
 {
@@ -27,6 +28,81 @@ void internal_m2n_model_set_enabled(entt::entity id, bool enabled)
     if(auto comp = safe_get_component<model_component>(id))
     {
         comp->set_enabled(enabled);
+    }
+}
+
+auto internal_m2n_model_get_casts_shadow(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->casts_shadow();
+    }
+    return false;
+}
+
+void internal_m2n_model_set_casts_shadow(entt::entity id, bool casts_shadow)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->set_casts_shadow(casts_shadow);
+    }
+}
+
+auto internal_m2n_model_get_static(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->is_static();
+    }
+    return false;
+}
+
+void internal_m2n_model_set_static(entt::entity id, bool is_static)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->set_static(is_static);
+    }
+}
+
+auto internal_m2n_model_get_mesh(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->get_model().get_lod(0).uid();
+    }
+    return {};
+}
+
+void internal_m2n_model_set_mesh(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        auto& ctx = engine::context();
+        auto& am = ctx.get_cached<asset_manager>();
+        auto asset = am.get_asset<mesh>(uid);
+        auto model = comp->get_model();
+        model.set_lod(asset, 0);
+        comp->set_model(model);
+    }
+}
+
+auto internal_m2n_model_get_lod_selection_bias(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        return comp->get_model().get_lod_selection_bias();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_model_set_lod_selection_bias(entt::entity id, float bias)
+{
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        auto model = comp->get_model();
+        model.set_lod_selection_bias(bias);
+        comp->set_model(model);
     }
 }
 
@@ -121,6 +197,18 @@ void register_model_component_script_bindings()
     auto reg = dotnet::internal_call_registry("Unravel.Core.ModelComponent");
     reg.add_internal_call("internal_m2n_model_get_enabled", dotnet_internal_call(internal_m2n_model_get_enabled));
     reg.add_internal_call("internal_m2n_model_set_enabled", dotnet_internal_call(internal_m2n_model_set_enabled));
+    reg.add_internal_call("internal_m2n_model_get_casts_shadow",
+                          dotnet_internal_call(internal_m2n_model_get_casts_shadow));
+    reg.add_internal_call("internal_m2n_model_set_casts_shadow",
+                          dotnet_internal_call(internal_m2n_model_set_casts_shadow));
+    reg.add_internal_call("internal_m2n_model_get_static", dotnet_internal_call(internal_m2n_model_get_static));
+    reg.add_internal_call("internal_m2n_model_set_static", dotnet_internal_call(internal_m2n_model_set_static));
+    reg.add_internal_call("internal_m2n_model_get_mesh", dotnet_internal_call(internal_m2n_model_get_mesh));
+    reg.add_internal_call("internal_m2n_model_set_mesh", dotnet_internal_call(internal_m2n_model_set_mesh));
+    reg.add_internal_call("internal_m2n_model_get_lod_selection_bias",
+                          dotnet_internal_call(internal_m2n_model_get_lod_selection_bias));
+    reg.add_internal_call("internal_m2n_model_set_lod_selection_bias",
+                          dotnet_internal_call(internal_m2n_model_set_lod_selection_bias));
     reg.add_internal_call("internal_m2n_model_get_shared_material",
                             dotnet_internal_call(internal_m2n_model_get_shared_material));
     reg.add_internal_call("internal_m2n_model_get_shared_material_count",

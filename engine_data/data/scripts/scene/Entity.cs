@@ -13,6 +13,9 @@ namespace Unravel.Core
 	[StructLayout(LayoutKind.Sequential)]
 	public struct Entity : IEquatable<Entity>, IFormattable
 	{
+		/// <summary>
+		/// Sentinel entity with id 0. Use to represent a missing or destroyed entity.
+		/// </summary>
 		public static readonly Entity Invalid = new Entity(0);
 		/// <summary>
 		/// Gets the unique identifier of the entity.
