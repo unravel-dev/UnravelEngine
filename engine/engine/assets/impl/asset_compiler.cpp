@@ -37,12 +37,14 @@
 
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
+#include <cmath>
 #include <fstream>
 #include <dotnetpp/dotnetpp.h>
 #include <regex>
 #include <sstream>
 #include <hpp/string_view.hpp>
 #include <subprocess/subprocess.hpp>
+#include <string_utils/utils.h>
 
 #include <core/base/platform/config.hpp>
 
@@ -106,6 +108,10 @@ struct input_texture_info
     uint32_t height{};
     bool fits_max_size{true};
 };
+
+/// Lat-long HDRIs are authored at 2:1. Allow a small tolerance for odd sizes.
+constexpr float k_equirect_aspect_ratio = 2.0f;
+constexpr float k_equirect_aspect_tolerance = 0.05f;
 
 auto texture_size_to_pixel_limit(texture_importer_meta::texture_size size) -> uint32_t
 {
@@ -184,6 +190,43 @@ auto get_input_texture_info(const fs::path& input_path, texture_importer_meta::t
     }
 
     return result;
+}
+
+auto is_approximately_equirect_aspect(uint32_t width, uint32_t height) -> bool
+{
+    if(width == 0 || height == 0)
+    {
+        return false;
+    }
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    return std::fabs(aspect - k_equirect_aspect_ratio) <= k_equirect_aspect_tolerance;
+}
+
+/**
+ * @brief Builds default texture importer settings for a newly discovered source.
+ *
+ * Radiance HDR panoramas almost always feed sky/IBL cubemaps (Unreal-like), so
+ * `.hdr` defaults to equirect. EXR is also used for regular HDR maps, so only
+ * promote when the image is a ~2:1 lat-long panorama.
+ */
+auto create_default_texture_importer_meta(const fs::path& input_path) -> std::shared_ptr<texture_importer_meta>
+{
+    auto importer = std::make_shared<texture_importer_meta>();
+    const auto extension = string_utils::to_lower(input_path.extension().string());
+    if(extension == ".hdr")
+    {
+        importer->type = texture_importer_meta::texture_type::equirect;
+        return importer;
+    }
+    if(extension == ".exr")
+    {
+        const auto info = get_input_texture_info(input_path, texture_importer_meta::texture_size::project_default);
+        if(is_approximately_equirect_aspect(info.width, info.height))
+        {
+            importer->type = texture_importer_meta::texture_type::equirect;
+        }
+    }
+    return importer;
 }
 
 // auto run_process(const std::string& process, const std::vector<std::string>& args_array, bool check_retcode, std::string& err) -> bool
@@ -469,8 +512,10 @@ auto compile_texture_to_file(const fs::path& input_path,
 
     const bool needs_format_conversion = input_info.format != format;
     const bool needs_downscale = !input_info.fits_max_size;
+    // Equirect must always run through texturec; a raw copy cannot produce a cubemap.
+    const bool needs_equirect_projection = importer.type == texture_importer_meta::texture_type::equirect;
 
-    if(needs_format_conversion || needs_downscale)
+    if(needs_format_conversion || needs_downscale || needs_equirect_projection)
     {
         if(needs_downscale && !needs_format_conversion)
         {
@@ -861,9 +906,10 @@ auto read_importer<gfx::texture>(asset_manager& am, const fs::path& key) -> std:
     {
         if(!meta.importer)
         {
-            meta.importer = std::make_shared<texture_importer_meta>();
+            const fs::path input_path = resolve_input_file(key);
+            meta.importer = create_default_texture_importer_meta(input_path);
 
-            meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
+            meta.uid = am.add_asset_info_for_path(input_path, meta, true);
 
             fs::error_code err;
             asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
