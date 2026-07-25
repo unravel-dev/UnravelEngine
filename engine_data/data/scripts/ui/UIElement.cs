@@ -6,15 +6,13 @@ namespace Unravel.Core
 {
 
     /// <summary>
-    /// Represents a wrapper around a native RmlUi element with managed lifetime.
-    /// The C++ side owns the lifetime and will invalidate this wrapper when the element is destroyed.
+    /// Managed wrapper around a native RmlUi element (<c>Rml::Element</c>).
+    /// Prefer obtaining instances via <see cref="UIDocument.GetElementById"/> /
+    /// <see cref="UIDocument.QuerySelector"/> so wrappers are cached by native pointer.
     /// </summary>
     public class UIElement : NativeObject
     {
-        // Internal pointer to the C++ Rml::Element - managed by C++
         private IntPtr nativePtr = IntPtr.Zero;
-
-        // Entity that owns this UI element
         private readonly Entity ownerEntity;
 
         /// <summary>
@@ -36,7 +34,7 @@ namespace Unravel.Core
         public string ElementId => IsValid() ? internal_m2n_ui_element_wrapper_get_id(nativePtr, ownerEntity) : "";
 
         /// <summary>
-        /// Internal constructor - only called from C++ side.
+        /// Internal constructor - use <see cref="UIEventManager.GetOrCreateWrapper"/>.
         /// </summary>
         internal UIElement(IntPtr ptr, Entity owner)
         {
@@ -45,7 +43,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Called by C++ when the native element is destroyed to invalidate this wrapper.
+        /// Invalidates this wrapper after the native element is closed or destroyed.
         /// </summary>
         internal void Invalidate()
         {

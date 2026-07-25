@@ -15,12 +15,14 @@ namespace Unravel.Core
         Target = 2,
         Bubble = 4
     }
+
     /// <summary>
     /// Base type for UI events dispatched through <see cref="UIEventManager"/>.
     /// </summary>
     public class UIEventBase
     {
         private IntPtr nativePtr = IntPtr.Zero;
+
         /// <summary>
         /// The ID of the element that triggered the event.
         /// </summary>
@@ -45,13 +47,11 @@ namespace Unravel.Core
         /// Current dispatch phase of the event.
         /// </summary>
         public EventPhase phase = EventPhase.None;
+
         /// <summary>
         /// The type of event that occurred (e.g., "click", "mousedown").
         /// </summary>
         public string eventType;
-
-        // Note: Mouse and keyboard specific properties have been moved to derived event types
-        // for better type safety and cleaner architecture.
 
         /// <summary>
         /// Stops propagation of the event if it is interruptible, but finish all listeners on the current element.
@@ -69,13 +69,13 @@ namespace Unravel.Core
             internal_m2n_ui_stop_immediate_propagation(nativePtr);
         }
 
-        // Internal calls to C++ functions
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_stop_propagation(IntPtr nativePtr);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_stop_immediate_propagation(IntPtr nativePtr);
     }
+
     /// <summary>
     /// Callback invoked when a UI event is dispatched to a subscribed element.
     /// </summary>
@@ -84,69 +84,110 @@ namespace Unravel.Core
 
     /// <summary>
     /// Global UI event manager that handles all UI event dispatching.
-    /// Similar to ScriptComponentManager but for UI events.
+    /// Subscriptions are keyed by native element pointer so multiple managed wrappers
+    /// for the same element share one subscription set.
     /// </summary>
     [AutoStaticsCleanup]
     public static class UIEventManager
     {
-         // Base event subscription storage for backward compatibility
-         private static readonly Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>> baseSubscriptions
-             = new Dictionary<UIElement, Dictionary<string, List<UIEventCallback>>>();
+        private static readonly Dictionary<IntPtr, UIElement> wrappersByPtr
+            = new Dictionary<IntPtr, UIElement>();
 
-         /// <summary>
-         /// Invoked by the runtime before a script domain unloads. Subscribed
-         /// callbacks usually target script instances, which would otherwise
-         /// keep the unloading domain alive.
-         /// </summary>
-         private static void OnStaticsCleanup()
-         {
-             baseSubscriptions.Clear();
-             typedSubscriptions.Clear();
-             pendingOperations.Clear();
-             isDispatching = false;
-         }
+        private static readonly Dictionary<IntPtr, Dictionary<string, List<UIEventCallback>>> baseSubscriptions
+            = new Dictionary<IntPtr, Dictionary<string, List<UIEventCallback>>>();
 
-         // Type-specific callback storage: Element -> EventType -> Type -> List<Delegates>
-         private static readonly Dictionary<UIElement, Dictionary<string, Dictionary<Type, List<Delegate>>>> typedSubscriptions
-             = new Dictionary<UIElement, Dictionary<string, Dictionary<Type, List<Delegate>>>>();
+        private static readonly Dictionary<IntPtr, Dictionary<string, Dictionary<Type, List<Delegate>>>> typedSubscriptions
+            = new Dictionary<IntPtr, Dictionary<string, Dictionary<Type, List<Delegate>>>>();
 
-         private static bool isDispatching = false;
-         
-         // Unified pending operations list to preserve order
-         private static readonly List<PendingOperation> pendingOperations = new List<PendingOperation>();
+        private static readonly Dictionary<IntPtr, HashSet<string>> attachedNativeEvents
+            = new Dictionary<IntPtr, HashSet<string>>();
 
-         private enum OperationType
-         {
-             Subscribe,
-             Unsubscribe,
-             SubscribeTyped,
-             UnsubscribeTyped,
-             UnsubscribeAll
-         }
+        private static bool isDispatching = false;
+        private static readonly List<PendingOperation> pendingOperations = new List<PendingOperation>();
 
-         private struct PendingOperation
-         {
-             public OperationType type;
-             public UIElement elementWrapper;
-             public string eventType;
-             public UIEventCallback baseCallback;
-             public Type callbackType;
-             public Delegate typedCallback;
-         }
+        private enum OperationType
+        {
+            Subscribe,
+            Unsubscribe,
+            SubscribeTyped,
+            UnsubscribeTyped,
+            UnsubscribeAll,
+            UnsubscribeAllForOwner,
+            UnsubscribeAllForOwnerInvalidate
+        }
+
+        private struct PendingOperation
+        {
+            public OperationType type;
+            public UIElement elementWrapper;
+            public Entity owner;
+            public string eventType;
+            public UIEventCallback baseCallback;
+            public Type callbackType;
+            public Delegate typedCallback;
+        }
 
         /// <summary>
-        /// Subscribe to a UI event. This is called by UIElement.AddEventListener.
+        /// Invoked by the runtime before a script domain unloads. Subscribed
+        /// callbacks usually target script instances, which would otherwise
+        /// keep the unloading domain alive.
         /// </summary>
-        /// <param name="elementWrapper">The UIElement instance</param>
-        /// <param name="eventType">The type of event (e.g., "click")</param>
-        /// <param name="callback">The callback to invoke</param>
+        private static void OnStaticsCleanup()
+        {
+            baseSubscriptions.Clear();
+            typedSubscriptions.Clear();
+            attachedNativeEvents.Clear();
+            wrappersByPtr.Clear();
+            pendingOperations.Clear();
+            isDispatching = false;
+            UIDocument.ClearCache();
+        }
+
+        /// <summary>
+        /// Returns a cached wrapper for the native element pointer, creating one if needed.
+        /// </summary>
+        /// <param name="ptr">Native <c>Rml::Element*</c>.</param>
+        /// <param name="owner">Entity that owns the UI document.</param>
+        /// <returns>Canonical <see cref="UIElement"/> for this pointer, or null.</returns>
+        internal static UIElement GetOrCreateWrapper(IntPtr ptr, Entity owner)
+        {
+            if (ptr == IntPtr.Zero)
+            {
+                return null;
+            }
+            if (wrappersByPtr.TryGetValue(ptr, out UIElement existing))
+            {
+                if (existing.GetNativePointer() == ptr && existing.Owner == owner)
+                {
+                    return existing;
+                }
+                existing.Invalidate();
+                wrappersByPtr.Remove(ptr);
+            }
+            UIElement wrapper = new UIElement(ptr, owner);
+            wrappersByPtr[ptr] = wrapper;
+            return wrapper;
+        }
+
+        /// <summary>
+        /// Subscribe to a UI event. This is called by UIElement.RegisterCallback.
+        /// </summary>
+        /// <param name="elementWrapper">The UIElement instance.</param>
+        /// <param name="eventType">The type of event (e.g., "click").</param>
+        /// <param name="callback">The callback to invoke.</param>
         public static void Subscribe(UIElement elementWrapper, string eventType, UIEventCallback callback)
         {
-            if (callback == null || elementWrapper == null) return;
-
+            if (callback == null || elementWrapper == null)
+            {
+                return;
+            }
+            IntPtr ptr = elementWrapper.GetNativePointer();
+            if (ptr == IntPtr.Zero)
+            {
+                return;
+            }
             if (isDispatching)
             {
-                // Defer subscription during event dispatch
                 pendingOperations.Add(new PendingOperation
                 {
                     type = OperationType.Subscribe,
@@ -156,40 +197,41 @@ namespace Unravel.Core
                 });
                 return;
             }
-
-            // Ensure the nested dictionaries exist
-            if (!baseSubscriptions.ContainsKey(elementWrapper))
+            RegisterCanonicalWrapper(elementWrapper, ptr);
+            if (!baseSubscriptions.TryGetValue(ptr, out Dictionary<string, List<UIEventCallback>> byEvent))
             {
-                baseSubscriptions[elementWrapper] = new Dictionary<string, List<UIEventCallback>>();
+                byEvent = new Dictionary<string, List<UIEventCallback>>();
+                baseSubscriptions[ptr] = byEvent;
             }
-
-            if (!baseSubscriptions[elementWrapper].ContainsKey(eventType))
+            if (!byEvent.TryGetValue(eventType, out List<UIEventCallback> callbacks))
             {
-                baseSubscriptions[elementWrapper][eventType] = new List<UIEventCallback>();
+                callbacks = new List<UIEventCallback>();
+                byEvent[eventType] = callbacks;
             }
-
-            // Add the callback
-            baseSubscriptions[elementWrapper][eventType].Add(callback);
-
-            // Ensure the C++ side has an event listener attached to this element
-            // Pass the wrapper's native pointer directly
-            EnsureNativeEventListener(elementWrapper, eventType);
+            callbacks.Add(callback);
+            EnsureNativeEventListener(ptr, eventType);
         }
 
         /// <summary>
         /// Unsubscribe from a UI event.
         /// </summary>
-        /// <param name="elementWrapper">The UIElement instance</param>
-        /// <param name="eventType">The type of event</param>
-        /// <param name="callback">The callback to remove</param>
-        /// <returns>True if the callback was found and removed</returns>
+        /// <param name="elementWrapper">The UIElement instance.</param>
+        /// <param name="eventType">The type of event.</param>
+        /// <param name="callback">The callback to remove.</param>
+        /// <returns>True if the callback was found and removed.</returns>
         public static bool Unsubscribe(UIElement elementWrapper, string eventType, UIEventCallback callback)
         {
-            if (callback == null || elementWrapper == null) return false;
-
+            if (callback == null || elementWrapper == null)
+            {
+                return false;
+            }
+            IntPtr ptr = elementWrapper.GetNativePointer();
+            if (ptr == IntPtr.Zero)
+            {
+                return false;
+            }
             if (isDispatching)
             {
-                // Defer unsubscription during event dispatch
                 pendingOperations.Add(new PendingOperation
                 {
                     type = OperationType.Unsubscribe,
@@ -197,140 +239,401 @@ namespace Unravel.Core
                     eventType = eventType,
                     baseCallback = callback
                 });
-                return true; // Assume it will be removed
+                return true;
             }
-
-            // Navigate to the callback list
-            if (!baseSubscriptions.ContainsKey(elementWrapper) ||
-                !baseSubscriptions[elementWrapper].ContainsKey(eventType))
+            if (!baseSubscriptions.TryGetValue(ptr, out Dictionary<string, List<UIEventCallback>> byEvent) ||
+                !byEvent.TryGetValue(eventType, out List<UIEventCallback> callbacks))
             {
                 return false;
             }
-
-            var callbacks = baseSubscriptions[elementWrapper][eventType];
             bool removed = callbacks.Remove(callback);
-
-            // Clean up empty collections
             if (callbacks.Count == 0)
             {
-                baseSubscriptions[elementWrapper].Remove(eventType);
-
-                if (baseSubscriptions[elementWrapper].Count == 0)
+                byEvent.Remove(eventType);
+                if (byEvent.Count == 0)
                 {
-                    baseSubscriptions.Remove(elementWrapper);
+                    baseSubscriptions.Remove(ptr);
                 }
+                MaybeRemoveNativeEventListener(ptr, eventType);
             }
-
             return removed;
         }
 
         /// <summary>
         /// Unsubscribe all callbacks from a specific UIElement.
-        /// This removes the element from both base and typed subscription dictionaries.
         /// </summary>
-        /// <param name="elementWrapper">The UIElement to unsubscribe from</param>
-        /// <returns>True if any subscriptions were removed (or will be removed if deferred)</returns>
+        /// <param name="elementWrapper">The UIElement to unsubscribe from.</param>
+        /// <returns>True if any subscriptions were removed (or will be removed if deferred).</returns>
         public static bool UnsubscribeAll(UIElement elementWrapper)
         {
-            if (elementWrapper == null) return false;
-
+            if (elementWrapper == null)
+            {
+                return false;
+            }
+            IntPtr ptr = elementWrapper.GetNativePointer();
+            if (ptr == IntPtr.Zero)
+            {
+                return false;
+            }
             if (isDispatching)
             {
-                // Defer the operation until after dispatch completes
                 pendingOperations.Add(new PendingOperation
                 {
                     type = OperationType.UnsubscribeAll,
                     elementWrapper = elementWrapper
                 });
-                return true; // Assume it will be removed
+                return true;
             }
-
-            bool hadBase = baseSubscriptions.Remove(elementWrapper);
-            bool hadTyped = typedSubscriptions.Remove(elementWrapper);
-
-            return hadBase || hadTyped;
+            return ClearSubscriptionsForPtr(ptr);
         }
 
         /// <summary>
-        /// Dispatch a UI event. This is called from C++ when an event occurs.
+        /// Removes all UI event subscriptions for wrappers owned by the given entity.
+        /// Called automatically when a <see cref="ScriptComponent"/> is destroyed so
+        /// callbacks cannot pin destroyed script instances.
         /// </summary>
-        /// <param name="eventData">The event data</param>
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        public static extern void DispatchEvent(UIEventBase ev);
+        /// <param name="owner">Entity whose UI element subscriptions should be cleared.</param>
+        public static void UnsubscribeAllForOwner(Entity owner)
+        {
+            UnsubscribeAllForOwner(owner, invalidateWrappers: false);
+        }
+
+        /// <summary>
+        /// Removes all UI event subscriptions for wrappers owned by the given entity.
+        /// </summary>
+        /// <param name="owner">Entity whose UI element subscriptions should be cleared.</param>
+        /// <param name="invalidateWrappers">
+        /// When true, also invalidates cached element/document wrappers (use on document Close).
+        /// </param>
+        public static void UnsubscribeAllForOwner(Entity owner, bool invalidateWrappers)
+        {
+            if (isDispatching)
+            {
+                pendingOperations.Add(new PendingOperation
+                {
+                    type = invalidateWrappers
+                        ? OperationType.UnsubscribeAllForOwnerInvalidate
+                        : OperationType.UnsubscribeAllForOwner,
+                    owner = owner
+                });
+                return;
+            }
+            List<IntPtr> ownedPtrs = null;
+            foreach (KeyValuePair<IntPtr, UIElement> kvp in wrappersByPtr)
+            {
+                if (kvp.Value.Owner == owner)
+                {
+                    if (ownedPtrs == null)
+                    {
+                        ownedPtrs = new List<IntPtr>();
+                    }
+                    ownedPtrs.Add(kvp.Key);
+                }
+            }
+            if (ownedPtrs != null)
+            {
+                foreach (IntPtr ptr in ownedPtrs)
+                {
+                    ClearSubscriptionsForPtr(ptr);
+                    if (invalidateWrappers && wrappersByPtr.TryGetValue(ptr, out UIElement wrapper))
+                    {
+                        wrapper.Invalidate();
+                        wrappersByPtr.Remove(ptr);
+                    }
+                }
+            }
+            if (invalidateWrappers)
+            {
+                UIDocument.InvalidateForOwner(owner);
+            }
+        }
+
+        /// <summary>
+        /// Invalidates a cached element wrapper and clears its subscriptions.
+        /// </summary>
+        /// <param name="ptr">Native element pointer.</param>
+        internal static void InvalidateElement(IntPtr ptr)
+        {
+            if (ptr == IntPtr.Zero)
+            {
+                return;
+            }
+            ClearSubscriptionsForPtr(ptr);
+            if (wrappersByPtr.TryGetValue(ptr, out UIElement wrapper))
+            {
+                wrapper.Invalidate();
+                wrappersByPtr.Remove(ptr);
+            }
+        }
 
         /// <summary>
         /// Internal method called by C++ to dispatch events to managed callbacks.
         /// </summary>
-        /// <param name="ev">The event data</param>
+        /// <param name="ev">The event data.</param>
         internal static void InternalDispatchEvent(UIEventBase ev)
         {
             isDispatching = true;
             try
             {
-                // Find the wrapper that matches the current element ID
-                UIElement targetWrapper = FindTargetWrapper(ev);
-                
-                if (targetWrapper != null)
+                if (wrappersByPtr.TryGetValue(ev.currentElementPtr, out UIElement targetWrapper))
                 {
-                    // Dispatch to typed callbacks first (zero casting!)
-                    DispatchTypedCallbacks(targetWrapper, ev);
-                    
-                    // Then dispatch to base callbacks for backward compatibility
-                    DispatchBaseCallbacks(targetWrapper, ev);
+                    DispatchTypedCallbacks(ev.currentElementPtr, ev);
+                    DispatchBaseCallbacks(ev.currentElementPtr, ev);
                 }
             }
             finally
             {
                 isDispatching = false;
             }
-
-            // Process pending subscriptions and unsubscriptions
             ProcessPendingOperations();
         }
 
-        private static UIElement FindTargetWrapper(UIEventBase ev)
+        /// <summary>
+        /// Subscribe to a typed UI event with compile-time type safety.
+        /// </summary>
+        /// <typeparam name="T">Event type (must derive from <see cref="UIEventBase"/>).</typeparam>
+        /// <param name="elementWrapper">The UIElement instance.</param>
+        /// <param name="eventType">The type of event to listen for.</param>
+        /// <param name="callback">The callback to invoke.</param>
+        public static void Subscribe<T>(UIElement elementWrapper, string eventType, Action<T> callback) where T : UIEventBase
         {
-            // Check both subscription dictionaries for the wrapper
-            foreach (var wrapper in baseSubscriptions.Keys)
-            {
-                if (wrapper.GetNativePointer() == ev.currentElementPtr)
-                {
-                    return wrapper;
-                }
-            }
-            
-            foreach (var wrapper in typedSubscriptions.Keys)
-            {
-                if (wrapper.GetNativePointer() == ev.currentElementPtr)
-                {
-                    return wrapper;
-                }
-            }
-            
-            return null;
-        }
-
-        private static void DispatchTypedCallbacks(UIElement targetWrapper, UIEventBase ev)
-        {
-            if (!typedSubscriptions.ContainsKey(targetWrapper) ||
-                !typedSubscriptions[targetWrapper].ContainsKey(ev.eventType))
+            if (callback == null || elementWrapper == null)
             {
                 return;
             }
-
-            var eventTypeDict = typedSubscriptions[targetWrapper][ev.eventType];
-            var actualEventType = ev.GetType();
-
-            // Direct dispatch - no casting because we stored Action<T> directly
-            if (eventTypeDict.ContainsKey(actualEventType))
+            if (isDispatching)
             {
-                var callbacks = eventTypeDict[actualEventType];
-                foreach (var callback in callbacks)
+                pendingOperations.Add(new PendingOperation
                 {
+                    type = OperationType.SubscribeTyped,
+                    elementWrapper = elementWrapper,
+                    eventType = eventType,
+                    callbackType = typeof(T),
+                    typedCallback = callback
+                });
+                return;
+            }
+            SubscribeTypedInternal(elementWrapper, eventType, typeof(T), callback);
+        }
+
+        /// <summary>
+        /// Unsubscribe from a typed UI event.
+        /// </summary>
+        /// <typeparam name="T">Event type (must derive from <see cref="UIEventBase"/>).</typeparam>
+        /// <param name="elementWrapper">The UIElement instance.</param>
+        /// <param name="eventType">The type of event.</param>
+        /// <param name="callback">The callback to remove.</param>
+        /// <returns>True if the callback was found and removed.</returns>
+        public static bool Unsubscribe<T>(UIElement elementWrapper, string eventType, Action<T> callback) where T : UIEventBase
+        {
+            if (callback == null || elementWrapper == null)
+            {
+                return false;
+            }
+            if (isDispatching)
+            {
+                pendingOperations.Add(new PendingOperation
+                {
+                    type = OperationType.UnsubscribeTyped,
+                    elementWrapper = elementWrapper,
+                    eventType = eventType,
+                    callbackType = typeof(T),
+                    typedCallback = callback
+                });
+                return true;
+            }
+            return UnsubscribeTypedInternal(elementWrapper, eventType, typeof(T), callback);
+        }
+
+        /// <summary>
+        /// Get the number of active subscriptions (for debugging/monitoring).
+        /// </summary>
+        /// <returns>Total number of registered callbacks.</returns>
+        public static int GetSubscriptionCount()
+        {
+            int count = 0;
+            foreach (Dictionary<string, List<UIEventCallback>> elementSubs in baseSubscriptions.Values)
+            {
+                foreach (List<UIEventCallback> eventCallbacks in elementSubs.Values)
+                {
+                    count += eventCallbacks.Count;
+                }
+            }
+            foreach (Dictionary<string, Dictionary<Type, List<Delegate>>> elementSubs in typedSubscriptions.Values)
+            {
+                foreach (Dictionary<Type, List<Delegate>> eventTypes in elementSubs.Values)
+                {
+                    foreach (List<Delegate> typeCallbacks in eventTypes.Values)
+                    {
+                        count += typeCallbacks.Count;
+                    }
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Get subscription info for debugging.
+        /// </summary>
+        /// <returns>Human-readable subscription summary.</returns>
+        public static string GetSubscriptionInfo()
+        {
+            var info = $"Total subscriptions: {GetSubscriptionCount()}\n";
+            info += $"Cached wrappers: {wrappersByPtr.Count}\n";
+            info += $"Elements with base subscriptions: {baseSubscriptions.Count}\n";
+            info += $"Elements with typed subscriptions: {typedSubscriptions.Count}\n";
+            foreach (KeyValuePair<IntPtr, Dictionary<string, List<UIEventCallback>>> elementKvp in baseSubscriptions)
+            {
+                string elementId = ResolveElementId(elementKvp.Key);
+                info += $"  Base Element '{elementId}': {elementKvp.Value.Count} event types\n";
+                foreach (KeyValuePair<string, List<UIEventCallback>> eventKvp in elementKvp.Value)
+                {
+                    info += $"    Event '{eventKvp.Key}': {eventKvp.Value.Count} callbacks\n";
+                }
+            }
+            foreach (KeyValuePair<IntPtr, Dictionary<string, Dictionary<Type, List<Delegate>>>> elementKvp in typedSubscriptions)
+            {
+                string elementId = ResolveElementId(elementKvp.Key);
+                info += $"  Typed Element '{elementId}': {elementKvp.Value.Count} event types\n";
+                foreach (KeyValuePair<string, Dictionary<Type, List<Delegate>>> eventKvp in elementKvp.Value)
+                {
+                    foreach (KeyValuePair<Type, List<Delegate>> typeKvp in eventKvp.Value)
+                    {
+                        info += $"    Event '{eventKvp.Key}' ({typeKvp.Key.Name}): {typeKvp.Value.Count} callbacks\n";
+                    }
+                }
+            }
+            return info;
+        }
+
+        private static string ResolveElementId(IntPtr ptr)
+        {
+            if (wrappersByPtr.TryGetValue(ptr, out UIElement wrapper) && wrapper.IsValid())
+            {
+                return wrapper.ElementId;
+            }
+            return "[INVALID]";
+        }
+
+        private static void RegisterCanonicalWrapper(UIElement elementWrapper, IntPtr ptr)
+        {
+            if (wrappersByPtr.TryGetValue(ptr, out UIElement existing))
+            {
+                if (ReferenceEquals(existing, elementWrapper))
+                {
+                    return;
+                }
+                if (existing.GetNativePointer() == ptr && existing.Owner == elementWrapper.Owner)
+                {
+                    return;
+                }
+                existing.Invalidate();
+            }
+            wrappersByPtr[ptr] = elementWrapper;
+        }
+
+        private static void SubscribeTypedInternal(UIElement elementWrapper, string eventType, Type callbackType, Delegate callback)
+        {
+            IntPtr ptr = elementWrapper.GetNativePointer();
+            if (ptr == IntPtr.Zero)
+            {
+                return;
+            }
+            RegisterCanonicalWrapper(elementWrapper, ptr);
+            if (!typedSubscriptions.TryGetValue(ptr, out Dictionary<string, Dictionary<Type, List<Delegate>>> byEvent))
+            {
+                byEvent = new Dictionary<string, Dictionary<Type, List<Delegate>>>();
+                typedSubscriptions[ptr] = byEvent;
+            }
+            if (!byEvent.TryGetValue(eventType, out Dictionary<Type, List<Delegate>> byType))
+            {
+                byType = new Dictionary<Type, List<Delegate>>();
+                byEvent[eventType] = byType;
+            }
+            if (!byType.TryGetValue(callbackType, out List<Delegate> callbacks))
+            {
+                callbacks = new List<Delegate>();
+                byType[callbackType] = callbacks;
+            }
+            callbacks.Add(callback);
+            EnsureNativeEventListener(ptr, eventType);
+        }
+
+        private static bool UnsubscribeTypedInternal(UIElement elementWrapper, string eventType, Type callbackType, Delegate callback)
+        {
+            IntPtr ptr = elementWrapper.GetNativePointer();
+            if (ptr == IntPtr.Zero)
+            {
+                return false;
+            }
+            if (!typedSubscriptions.TryGetValue(ptr, out Dictionary<string, Dictionary<Type, List<Delegate>>> byEvent) ||
+                !byEvent.TryGetValue(eventType, out Dictionary<Type, List<Delegate>> byType) ||
+                !byType.TryGetValue(callbackType, out List<Delegate> callbacks))
+            {
+                return false;
+            }
+            bool removed = callbacks.Remove(callback);
+            if (callbacks.Count == 0)
+            {
+                byType.Remove(callbackType);
+                if (byType.Count == 0)
+                {
+                    byEvent.Remove(eventType);
+                    if (byEvent.Count == 0)
+                    {
+                        typedSubscriptions.Remove(ptr);
+                    }
+                    MaybeRemoveNativeEventListener(ptr, eventType);
+                }
+            }
+            return removed;
+        }
+
+        private static bool ClearSubscriptionsForPtr(IntPtr ptr)
+        {
+            bool hadBase = baseSubscriptions.Remove(ptr);
+            bool hadTyped = typedSubscriptions.Remove(ptr);
+            if (attachedNativeEvents.TryGetValue(ptr, out HashSet<string> events))
+            {
+                foreach (string eventType in events)
+                {
+                    internal_m2n_ui_remove_native_event_listener(ptr, eventType);
+                }
+                attachedNativeEvents.Remove(ptr);
+            }
+            return hadBase || hadTyped;
+        }
+
+        private static void DispatchTypedCallbacks(IntPtr ptr, UIEventBase ev)
+        {
+            if (!typedSubscriptions.TryGetValue(ptr, out Dictionary<string, Dictionary<Type, List<Delegate>>> byEvent) ||
+                !byEvent.TryGetValue(ev.eventType, out Dictionary<Type, List<Delegate>> byType))
+            {
+                return;
+            }
+            Type actualEventType = ev.GetType();
+            foreach (KeyValuePair<Type, List<Delegate>> typeKvp in byType)
+            {
+                Type callbackType = typeKvp.Key;
+                if (!callbackType.IsAssignableFrom(actualEventType))
+                {
+                    continue;
+                }
+                List<Delegate> callbacks = typeKvp.Value;
+                for (int i = 0; i < callbacks.Count; i++)
+                {
+                    Delegate callback = callbacks[i];
                     try
                     {
-                        // Direct invocation - callback is already Action<T> where T matches ev's actual type
-                        callback.DynamicInvoke(ev);
+                        if (callbackType == actualEventType)
+                        {
+                            callback.DynamicInvoke(ev);
+                        }
+                        else
+                        {
+                            // Assignable base (e.g. Action<UIEventBase> receiving UIChangeEvent).
+                            callback.DynamicInvoke(ev);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -340,19 +643,16 @@ namespace Unravel.Core
             }
         }
 
-        private static void DispatchBaseCallbacks(UIElement targetWrapper, UIEventBase ev)
+        private static void DispatchBaseCallbacks(IntPtr ptr, UIEventBase ev)
         {
-            if (!baseSubscriptions.ContainsKey(targetWrapper) ||
-                !baseSubscriptions[targetWrapper].ContainsKey(ev.eventType))
+            if (!baseSubscriptions.TryGetValue(ptr, out Dictionary<string, List<UIEventCallback>> byEvent) ||
+                !byEvent.TryGetValue(ev.eventType, out List<UIEventCallback> callbacks))
             {
                 return;
             }
-
-            var callbacks = baseSubscriptions[targetWrapper][ev.eventType];
-
-            // Invoke all base callbacks for this event
-            foreach (var callback in callbacks)
+            for (int i = 0; i < callbacks.Count; i++)
             {
+                UIEventCallback callback = callbacks[i];
                 try
                 {
                     callback?.Invoke(ev);
@@ -366,244 +666,99 @@ namespace Unravel.Core
 
         private static void ProcessPendingOperations()
         {
-            // Process all pending operations in the order they were added
             for (int i = 0; i < pendingOperations.Count; i++)
             {
-                var op = pendingOperations[i];
-                
+                PendingOperation op = pendingOperations[i];
                 switch (op.type)
                 {
                     case OperationType.Subscribe:
                         Subscribe(op.elementWrapper, op.eventType, op.baseCallback);
                         break;
-                        
                     case OperationType.Unsubscribe:
                         Unsubscribe(op.elementWrapper, op.eventType, op.baseCallback);
                         break;
-                        
                     case OperationType.SubscribeTyped:
                         SubscribeTypedInternal(op.elementWrapper, op.eventType, op.callbackType, op.typedCallback);
                         break;
-                        
                     case OperationType.UnsubscribeTyped:
                         UnsubscribeTypedInternal(op.elementWrapper, op.eventType, op.callbackType, op.typedCallback);
                         break;
-                        
                     case OperationType.UnsubscribeAll:
-                        baseSubscriptions.Remove(op.elementWrapper);
-                        typedSubscriptions.Remove(op.elementWrapper);
+                        if (op.elementWrapper != null)
+                        {
+                            IntPtr ptr = op.elementWrapper.GetNativePointer();
+                            if (ptr != IntPtr.Zero)
+                            {
+                                ClearSubscriptionsForPtr(ptr);
+                            }
+                        }
+                        break;
+                    case OperationType.UnsubscribeAllForOwner:
+                        UnsubscribeAllForOwner(op.owner, invalidateWrappers: false);
+                        break;
+                    case OperationType.UnsubscribeAllForOwnerInvalidate:
+                        UnsubscribeAllForOwner(op.owner, invalidateWrappers: true);
                         break;
                 }
             }
-            
             pendingOperations.Clear();
         }
 
-        /// <summary>
-        /// Ensure that the C++ side has a native event listener for this event type.
-        /// </summary>
-        private static void EnsureNativeEventListener(UIElement elementWrapper, string eventType)
+        private static void EnsureNativeEventListener(IntPtr ptr, string eventType)
         {
-            // Call C++ to ensure an event listener is attached to the element
-            // Pass the wrapper's native pointer directly for efficiency
-            internal_m2n_ui_ensure_native_event_listener(elementWrapper.GetNativePointer(), eventType);
+            if (!attachedNativeEvents.TryGetValue(ptr, out HashSet<string> events))
+            {
+                events = new HashSet<string>();
+                attachedNativeEvents[ptr] = events;
+            }
+            if (events.Add(eventType))
+            {
+                internal_m2n_ui_ensure_native_event_listener(ptr, eventType);
+            }
         }
 
-        /// <summary>
-        /// Get the number of active subscriptions (for debugging/monitoring).
-        /// </summary>
-        public static int GetSubscriptionCount()
+        private static void MaybeRemoveNativeEventListener(IntPtr ptr, string eventType)
         {
-            int count = 0;
-            
-            // Count Base subscriptions
-            foreach (var elementSubs in baseSubscriptions.Values)
+            if (HasAnySubscription(ptr, eventType))
             {
-                foreach (var eventCallbacks in elementSubs.Values)
-                {
-                    count += eventCallbacks.Count;
-                }
-            }
-            
-            // Count typed subscriptions
-            foreach (var elementSubs in typedSubscriptions.Values)
-            {
-                foreach (var eventTypes in elementSubs.Values)
-                {
-                    foreach (var typeCallbacks in eventTypes.Values)
-                    {
-                        count += typeCallbacks.Count;
-                    }
-                }
-            }
-            
-            return count;
-        }
-
-        /// <summary>
-        /// Subscribe to a typed UI event with compile-time type safety and zero runtime casting.
-        /// </summary>
-        public static void Subscribe<T>(UIElement elementWrapper, string eventType, Action<T> callback) where T : UIEventBase
-        {
-            if (callback == null || elementWrapper == null) return;
-
-            if (isDispatching)
-            {
-                // Defer subscription during event dispatch
-                pendingOperations.Add(new PendingOperation
-                {
-                    type = OperationType.SubscribeTyped,
-                    elementWrapper = elementWrapper,
-                    eventType = eventType,
-                    callbackType = typeof(T),
-                    typedCallback = callback
-                });
                 return;
             }
-
-            SubscribeTypedInternal(elementWrapper, eventType, typeof(T), callback);
-        }
-
-        /// <summary>
-        /// Unsubscribe from a typed UI event.
-        /// </summary>
-        public static bool Unsubscribe<T>(UIElement elementWrapper, string eventType, Action<T> callback) where T : UIEventBase
-        {
-            if (callback == null || elementWrapper == null) return false;
-
-            if (isDispatching)
+            if (attachedNativeEvents.TryGetValue(ptr, out HashSet<string> events) && events.Remove(eventType))
             {
-                // Defer unsubscription during event dispatch
-                pendingOperations.Add(new PendingOperation
+                internal_m2n_ui_remove_native_event_listener(ptr, eventType);
+                if (events.Count == 0)
                 {
-                    type = OperationType.UnsubscribeTyped,
-                    elementWrapper = elementWrapper,
-                    eventType = eventType,
-                    callbackType = typeof(T),
-                    typedCallback = callback
-                });
-                return true; // Assume it will be removed
+                    attachedNativeEvents.Remove(ptr);
+                }
             }
-
-            return UnsubscribeTypedInternal(elementWrapper, eventType, typeof(T), callback);
         }
 
-        private static void SubscribeTypedInternal(UIElement elementWrapper, string eventType, Type callbackType, Delegate callback)
+        private static bool HasAnySubscription(IntPtr ptr, string eventType)
         {
-            // Ensure nested dictionaries exist
-            if (!typedSubscriptions.ContainsKey(elementWrapper))
+            if (baseSubscriptions.TryGetValue(ptr, out Dictionary<string, List<UIEventCallback>> baseByEvent) &&
+                baseByEvent.TryGetValue(eventType, out List<UIEventCallback> baseCallbacks) &&
+                baseCallbacks.Count > 0)
             {
-                typedSubscriptions[elementWrapper] = new Dictionary<string, Dictionary<Type, List<Delegate>>>();
+                return true;
             }
-
-            if (!typedSubscriptions[elementWrapper].ContainsKey(eventType))
+            if (typedSubscriptions.TryGetValue(ptr, out Dictionary<string, Dictionary<Type, List<Delegate>>> typedByEvent) &&
+                typedByEvent.TryGetValue(eventType, out Dictionary<Type, List<Delegate>> byType))
             {
-                typedSubscriptions[elementWrapper][eventType] = new Dictionary<Type, List<Delegate>>();
-            }
-
-            var eventTypeDict = typedSubscriptions[elementWrapper][eventType];
-
-            if (!eventTypeDict.ContainsKey(callbackType))
-            {
-                eventTypeDict[callbackType] = new List<Delegate>();
-            }
-
-            // Store the callback directly as Action<T> - no wrapper needed!
-            eventTypeDict[callbackType].Add(callback);
-
-            // Ensure the C++ side has an event listener attached to this element
-            EnsureNativeEventListener(elementWrapper, eventType);
-        }
-
-        private static bool UnsubscribeTypedInternal(UIElement elementWrapper, string eventType, Type callbackType, Delegate callback)
-        {
-            // Navigate to the callback list
-            if (!typedSubscriptions.ContainsKey(elementWrapper) ||
-                !typedSubscriptions[elementWrapper].ContainsKey(eventType) ||
-                !typedSubscriptions[elementWrapper][eventType].ContainsKey(callbackType))
-            {
-                return false;
-            }
-
-            var callbacks = typedSubscriptions[elementWrapper][eventType][callbackType];
-            bool removed = callbacks.Remove(callback);
-
-			Log.Info($"UIEventManager: Unsubscribed from {eventType} event on {elementWrapper.ElementId}");
-
-            // Clean up empty collections
-            if (callbacks.Count == 0)
-            {
-                typedSubscriptions[elementWrapper][eventType].Remove(callbackType);
-
-				Log.Info($"UIEventManager: Removed {callbackType.Name} callback from {eventType} event on {elementWrapper.ElementId}");
-
-                if (typedSubscriptions[elementWrapper][eventType].Count == 0)
+                foreach (List<Delegate> callbacks in byType.Values)
                 {
-					Log.Info($"UIEventManager: Removed {eventType} event from {elementWrapper.ElementId}");
-
-                    typedSubscriptions[elementWrapper].Remove(eventType);
-
-                    if (typedSubscriptions[elementWrapper].Count == 0)
+                    if (callbacks.Count > 0)
                     {
-						Log.Info($"UIEventManager: Removed {elementWrapper.ElementId} from UIEventManager");
-
-                        typedSubscriptions.Remove(elementWrapper);
+                        return true;
                     }
                 }
             }
-
-            return removed;
+            return false;
         }
 
-        /// <summary>
-        /// Get subscription info for debugging.
-        /// </summary>
-        public static string GetSubscriptionInfo()
-        {
-            var info = $"Total subscriptions: {GetSubscriptionCount()}\n";
-            info += $"Elements with base subscriptions: {baseSubscriptions.Count}\n";
-            info += $"Elements with typed subscriptions: {typedSubscriptions.Count}\n";
-
-            foreach (var elementKvp in baseSubscriptions)
-            {   
-                var elementWrapper = elementKvp.Key;
-                var elementSubs = elementKvp.Value;
-                var elementId = elementWrapper.IsValid() ? elementWrapper.ElementId : "[INVALID]";
-                info += $"  Base Element '{elementId}': {elementSubs.Count} event types\n";
-
-                foreach (var eventKvp in elementSubs)
-                {
-                    var eventType = eventKvp.Key;
-                    var callbacks = eventKvp.Value;
-                    info += $"    Event '{eventType}': {callbacks.Count} callbacks\n";
-                }
-            }
-
-            foreach (var elementKvp in typedSubscriptions)
-            {
-                var elementWrapper = elementKvp.Key;
-                var elementSubs = elementKvp.Value;
-                var elementId = elementWrapper.IsValid() ? elementWrapper.ElementId : "[INVALID]";
-                info += $"  Typed Element '{elementId}': {elementSubs.Count} event types\n";
-
-                foreach (var eventKvp in elementSubs)
-                {
-                    var eventType = eventKvp.Key;
-                    var typeCallbacks = eventKvp.Value;
-                    foreach (var typeKvp in typeCallbacks)
-                    {
-                        var callbackType = typeKvp.Key;
-                        var callbacks = typeKvp.Value;
-                        info += $"    Event '{eventType}' ({callbackType.Name}): {callbacks.Count} callbacks\n";
-                    }
-                }
-            }
-
-            return info;
-        }
-
-        // Internal call to ensure native event listener
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_ensure_native_event_listener(IntPtr elementPtr, string eventType);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_ui_remove_native_event_listener(IntPtr elementPtr, string eventType);
     }
 }

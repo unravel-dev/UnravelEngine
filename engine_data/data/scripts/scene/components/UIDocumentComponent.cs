@@ -5,7 +5,7 @@ namespace Unravel.Core
 {
     /// <summary>
     /// Component that manages an RmlUi document for rendering HTML/CSS-based user interfaces.
-    /// Each component instance holds its own document while sharing the global UI context.
+    /// Each component owns its own RmlUi context and document (context-per-document).
     /// </summary>
     public class UIDocumentComponent : Component
     {
@@ -70,18 +70,20 @@ namespace Unravel.Core
 
         /// <summary>
         /// Closes the UI document, unloading it from memory.
+        /// Invalidates cached wrappers and clears UI event subscriptions for this entity.
         /// The document will need to be reloaded before it can be used again.
         /// </summary>
         public void Close()
         {
+            UIEventManager.UnsubscribeAllForOwner(owner, invalidateWrappers: true);
             internal_m2n_ui_document_close(owner);
         }
 
         // ==== Wrapper Object Creation ====
 
         /// <summary>
-        /// Gets a wrapper object for this UI document that can be cached and used for direct access.
-        /// The wrapper will be automatically invalidated when the document is destroyed.
+        /// Gets a cached wrapper for this UI document for direct access.
+        /// Repeated calls return the same instance while the native document remains valid.
         /// </summary>
         /// <returns>A UIDocument if the document is loaded; otherwise, null.</returns>
         public UIDocument GetDocument()
@@ -90,14 +92,8 @@ namespace Unravel.Core
             {
                 return null;
             }
-            
-            var documentPtr = internal_m2n_ui_document_get_wrapper(owner);
-            if (documentPtr == IntPtr.Zero)
-            {
-                return null;
-            }
-            
-            return new UIDocument(documentPtr, owner);
+            IntPtr documentPtr = internal_m2n_ui_document_get_wrapper(owner);
+            return UIDocument.GetOrCreate(documentPtr, owner);
         }
 
         // ==== Internal Calls ====

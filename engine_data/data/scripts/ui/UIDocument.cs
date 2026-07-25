@@ -1,18 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace Unravel.Core
 {
     /// <summary>
-    /// Represents a wrapper around a native RmlUi document with managed lifetime.
-    /// The C++ side owns the lifetime and will invalidate this wrapper when the document is destroyed.
+    /// Managed wrapper around a native RmlUi document (<c>Rml::ElementDocument</c>).
+    /// Each <see cref="UIDocumentComponent"/> owns its own RmlUi context and document.
+    /// Wrappers are cached by native pointer so repeated queries return the same instance.
     /// </summary>
     public class UIDocument : NativeObject
     {
-        // Internal pointer to the C++ Rml::ElementDocument - managed by C++
+        private static readonly Dictionary<IntPtr, UIDocument> s_cache = new Dictionary<IntPtr, UIDocument>();
+
         private IntPtr nativePtr = IntPtr.Zero;
-        
-        // Entity that owns this UI document
         private readonly Entity ownerEntity;
 
         /// <summary>
@@ -22,13 +23,14 @@ namespace Unravel.Core
         {
             return nativePtr != IntPtr.Zero && internal_m2n_ui_document_wrapper_is_valid(nativePtr, ownerEntity);
         }
+
         /// <summary>
         /// Gets the entity that owns this UI document.
         /// </summary>
         public Entity Owner => ownerEntity;
 
         /// <summary>
-        /// Internal constructor - only called from C++ side.
+        /// Internal constructor - use <see cref="GetOrCreate"/>.
         /// </summary>
         internal UIDocument(IntPtr ptr, Entity owner)
         {
@@ -37,14 +39,82 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Called by C++ when the native document is destroyed to invalidate this wrapper.
+        /// Returns a cached document wrapper for the native pointer, creating one if needed.
+        /// </summary>
+        /// <param name="ptr">Native document pointer.</param>
+        /// <param name="owner">Owning entity.</param>
+        /// <returns>Canonical wrapper, or null when <paramref name="ptr"/> is zero.</returns>
+        internal static UIDocument GetOrCreate(IntPtr ptr, Entity owner)
+        {
+            if (ptr == IntPtr.Zero)
+            {
+                return null;
+            }
+            if (s_cache.TryGetValue(ptr, out UIDocument existing))
+            {
+                if (existing.nativePtr == ptr && existing.ownerEntity == owner)
+                {
+                    return existing;
+                }
+                existing.Invalidate();
+                s_cache.Remove(ptr);
+            }
+            UIDocument document = new UIDocument(ptr, owner);
+            s_cache[ptr] = document;
+            return document;
+        }
+
+        /// <summary>
+        /// Invalidates and removes all cached document wrappers for the given owner entity.
+        /// </summary>
+        /// <param name="owner">Entity whose document wrappers should be invalidated.</param>
+        internal static void InvalidateForOwner(Entity owner)
+        {
+            List<IntPtr> toRemove = null;
+            foreach (KeyValuePair<IntPtr, UIDocument> kvp in s_cache)
+            {
+                if (kvp.Value.ownerEntity == owner)
+                {
+                    if (toRemove == null)
+                    {
+                        toRemove = new List<IntPtr>();
+                    }
+                    toRemove.Add(kvp.Key);
+                }
+            }
+            if (toRemove == null)
+            {
+                return;
+            }
+            foreach (IntPtr ptr in toRemove)
+            {
+                if (s_cache.TryGetValue(ptr, out UIDocument document))
+                {
+                    document.Invalidate();
+                    s_cache.Remove(ptr);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Clears the document wrapper cache (domain unload).
+        /// </summary>
+        internal static void ClearCache()
+        {
+            s_cache.Clear();
+        }
+
+        /// <summary>
+        /// Called when the native document is closed or destroyed.
         /// </summary>
         internal void Invalidate()
         {
+            if (nativePtr != IntPtr.Zero)
+            {
+                s_cache.Remove(nativePtr);
+            }
             nativePtr = IntPtr.Zero;
         }
-
-        // ==== Document Properties ====
 
         /// <summary>
         /// Gets or sets the title of the document.
@@ -72,8 +142,6 @@ namespace Unravel.Core
             }
         }
 
-        // ==== Document Methods ====
-
         /// <summary>
         /// Shows the document.
         /// </summary>
@@ -92,15 +160,20 @@ namespace Unravel.Core
 
         /// <summary>
         /// Closes the document and removes it from the context.
-        /// After calling this, the wrapper will become invalid.
+        /// Invalidates this wrapper, clears related element wrappers, and drops event subscriptions.
         /// </summary>
         public void Close()
         {
-            internal_m2n_ui_document_wrapper_close(nativePtr, ownerEntity);
-            // The C++ side will call Invalidate() after closing
+            IntPtr ptr = nativePtr;
+            if (ptr == IntPtr.Zero)
+            {
+                return;
+            }
+            // Drop managed + native listeners while the document is still alive.
+            UIEventManager.UnsubscribeAllForOwner(ownerEntity, invalidateWrappers: true);
+            internal_m2n_ui_document_wrapper_close(ptr, ownerEntity);
+            Invalidate();
         }
-
-        // ==== Element Query Methods ====
 
         /// <summary>
         /// Gets an element wrapper by its ID.
@@ -109,12 +182,8 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement GetElementById(string elementId)
         {
-            var elementPtr = internal_m2n_ui_document_wrapper_get_element_by_id(nativePtr, ownerEntity, elementId);
-            if (elementPtr == IntPtr.Zero)
-            {
-                return null;
-            }
-            return new UIElement(elementPtr, ownerEntity);
+            IntPtr elementPtr = internal_m2n_ui_document_wrapper_get_element_by_id(nativePtr, ownerEntity, elementId);
+            return UIEventManager.GetOrCreateWrapper(elementPtr, ownerEntity);
         }
 
         /// <summary>
@@ -124,12 +193,8 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement QuerySelector(string selector)
         {
-            var elementPtr = internal_m2n_ui_document_wrapper_query_selector(nativePtr, ownerEntity, selector);
-            if (elementPtr == IntPtr.Zero)
-            {
-                return null;
-            }
-            return new UIElement(elementPtr, ownerEntity);
+            IntPtr elementPtr = internal_m2n_ui_document_wrapper_query_selector(nativePtr, ownerEntity, selector);
+            return UIEventManager.GetOrCreateWrapper(elementPtr, ownerEntity);
         }
 
         /// <summary>
@@ -139,8 +204,6 @@ namespace Unravel.Core
         {
             return $"UIDocument(Entity: {ownerEntity}, Title: '{Title}')";
         }
-
-        // ==== Internal Calls ====
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_ui_document_wrapper_is_valid(IntPtr documentPtr, Entity ownerEntity);

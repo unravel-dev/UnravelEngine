@@ -118,7 +118,7 @@ namespace Unravel.Samples
 
             if (textInputElement != null)
             {
-                textInputElement.RegisterCallback<UIEventBase>("change", OnTextInputChange);
+                textInputElement.RegisterCallback<UIChangeEvent>("change", OnTextInputChange);
                 textInputElement.RegisterCallback<UIKeyEvent>("keydown", OnTextInputKeyDown);
             }
         }
@@ -157,14 +157,12 @@ namespace Unravel.Samples
             }
         }
 
-        private void OnTextInputChange(UIEventBase ev)
+        private void OnTextInputChange(UIChangeEvent ev)
         {
             if (textInputElement != null)
             {
-                var value = textInputElement.GetAttribute("value");
+                string value = ev.value ?? textInputElement.GetAttribute("value");
                 Log.Info($"Text input changed to: {value}");
-                
-                // Update title with the input value
                 if (titleElement != null)
                 {
                     titleElement.InnerRml = string.IsNullOrEmpty(value) ? "UI Wrapper Demo" : value;
@@ -194,9 +192,8 @@ namespace Unravel.Samples
 
         public override void OnDestroy()
         {
-            // No need to manually clean up wrappers - they automatically become invalid
-            // when the underlying C++ objects are destroyed
-            // Event callbacks are also automatically cleaned up by the UIEventManager
+            // UIEventManager.UnsubscribeAllForOwner runs from ScriptComponent destroy
+            // before OnDestroy, so UI callbacks do not pin this instance after teardown.
             Log.Info("UI wrapper controller destroyed");
         }
 

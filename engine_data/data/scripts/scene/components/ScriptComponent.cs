@@ -171,10 +171,12 @@ namespace Unravel.Core
 
         /// <summary>
         /// Internal method invoked when the script is destroyed. Calls <see cref="OnDestroy"/> and unsubscribes <see cref="OnUpdate"/> from the update system.
+        /// Also clears UI event subscriptions owned by this entity so callbacks cannot pin destroyed scripts.
         /// </summary>
         private void internal_n2m_on_destroy()
         {
             SystemManager.ScriptManager.Remove(this);
+            UIEventManager.UnsubscribeAllForOwner(owner);
             OnDestroy();
         }
 

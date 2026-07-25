@@ -221,37 +221,28 @@ auto get_ui_event_type(const Rml::Event& event) -> ui_event_type
         return ui_event_type::textinput;
     }
     
-    // Check pointer events
+    // Check pointer events (including full drag family)
     if (event_id == Rml::EventId::Click || event_id == Rml::EventId::Mousedown || event_id == Rml::EventId::Mouseup ||
         event_id == Rml::EventId::Mousemove || event_id == Rml::EventId::Mouseover || event_id == Rml::EventId::Mouseout ||
         event_id == Rml::EventId::Mousescroll || event_id == Rml::EventId::Dblclick || event_id == Rml::EventId::Drag ||
-        event_id == Rml::EventId::Dragstart || event_id == Rml::EventId::Dragover || event_id == Rml::EventId::Dragdrop)
+        event_id == Rml::EventId::Dragstart || event_id == Rml::EventId::Dragover || event_id == Rml::EventId::Dragdrop ||
+        event_id == Rml::EventId::Dragmove || event_id == Rml::EventId::Dragout || event_id == Rml::EventId::Dragend ||
+        event_id == Rml::EventId::Handledrag)
     {
         return ui_event_type::pointer;
     }
-    
-    // Check change events (need to examine the event more closely)
+    // Change always classifies, including empty values (e.g. cleared text fields).
     if (event_id == Rml::EventId::Change)
     {
-        auto value_str = event.GetParameter<std::string>("value", "");
-        if (!value_str.empty())
+        if (auto* element = event.GetCurrentElement())
         {
-            // If the element doesn't have min/max attributes, it's likely a text input or similar (change event)
-            if (auto* element = event.GetCurrentElement())
+            if (element->HasAttribute("min") || element->HasAttribute("max"))
             {
-                if (!element->HasAttribute("min") && !element->HasAttribute("max"))
-                {
-                    return ui_event_type::change;
-                }
-                else
-                {
-                    // Has min/max attributes, likely a slider (value event)
-                    return ui_event_type::value;
-                }
+                return ui_event_type::value;
             }
         }
+        return ui_event_type::change;
     }
-    
     return ui_event_type::unknown;
 }
 
@@ -467,15 +458,10 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, con
     {
         return;
     }
-
     try
-    {        
+    {
         auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
-        
-        // Add event listener to the element
-        // Note: RmlUi handles duplicate listeners internally, so it's safe to call this multiple times
         element->AddEventListener(event_type, &g_ui_global_listener);
-        
         APPLOG_TRACE("Ensured native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
     }
     catch (const dotnet::exception& e)
@@ -485,6 +471,28 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_ptr, con
     catch (const std::exception& e)
     {
         APPLOG_ERROR("Error ensuring native UI event listener: {}", e.what());
+    }
+}
+
+void internal_m2n_ui_remove_native_event_listener(std::intptr_t element_ptr, const std::string& event_type)
+{
+    if (element_ptr == 0)
+    {
+        return;
+    }
+    try
+    {
+        auto* element = reinterpret_cast<Rml::Element*>(element_ptr);
+        element->RemoveEventListener(event_type, &g_ui_global_listener);
+        APPLOG_TRACE("Removed native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
+    }
+    catch (const dotnet::exception& e)
+    {
+        APPLOG_ERROR("C# exception removing native UI event listener: {}", e.what());
+    }
+    catch (const std::exception& e)
+    {
+        APPLOG_ERROR("Error removing native UI event listener: {}", e.what());
     }
 }
 
@@ -517,7 +525,7 @@ void internal_m2n_ui_stop_immediate_propagation(std::intptr_t native_ptr)
     try
     {
         auto* current_event = g_ui_global_listener.get_current_event();
-        if (current_event)
+        if (current_event && current_event == reinterpret_cast<Rml::Event*>(native_ptr))
         {
             current_event->StopImmediatePropagation();
         }
@@ -982,7 +990,6 @@ void register_ui_document_script_bindings()
         reg.add_internal_call("internal_m2n_ui_document_wrapper_close", dotnet_internal_call(internal_m2n_ui_document_wrapper_close));
         reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", dotnet_internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
         reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", dotnet_internal_call(internal_m2n_ui_document_query_selector_wrapper));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", dotnet_internal_call(internal_m2n_ui_document_query_selector_wrapper));
     }
 }
 
@@ -1016,12 +1023,16 @@ void register_ui_event_script_bindings()
     APPLOG_TRACE("{}", __func__);
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventManager");
-        reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener", dotnet_internal_call(internal_m2n_ui_ensure_native_event_listener));
+        reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener",
+                              dotnet_internal_call(internal_m2n_ui_ensure_native_event_listener));
+        reg.add_internal_call("internal_m2n_ui_remove_native_event_listener",
+                              dotnet_internal_call(internal_m2n_ui_remove_native_event_listener));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventBase");
         reg.add_internal_call("internal_m2n_ui_stop_propagation", dotnet_internal_call(internal_m2n_ui_stop_propagation));
-        reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation", dotnet_internal_call(internal_m2n_ui_stop_immediate_propagation));
+        reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation",
+                              dotnet_internal_call(internal_m2n_ui_stop_immediate_propagation));
     }
 }
 
