@@ -141,15 +141,6 @@ struct emitter_gpu_resources
     std::vector<math::vec4> color_speed_lut;
     std::vector<math::vec4> ease_lut;
     emitter_sim_constants constants{};
-    /// Grow-only world-space trail AABB (union of particle trajectory hulls).
-    math::bbox trail_bounds{};
-    bool trail_bounds_valid = false;
-
-    void clear_trail_bounds()
-    {
-        trail_bounds.reset();
-        trail_bounds_valid = false;
-    }
 
     void destroy_buffers()
     {
@@ -218,7 +209,6 @@ struct emitter_gpu_resources
         active_slots.clear();
         spawn_particles.clear();
         spawn_slots.clear();
-        clear_trail_bounds();
     }
 
     void ensure_spawn_upload_capacity(uint32_t spawn_count)
@@ -728,7 +718,6 @@ struct emitter
         gpu_.high_water = 0;
         gpu_.spawn_particles.clear();
         gpu_.spawn_slots.clear();
-        gpu_.clear_trail_bounds();
         if(gpu_.gpu_capacity > 0)
         {
             gpu_.reset_freelist(gpu_.gpu_capacity);
@@ -840,31 +829,50 @@ struct emitter
         expand_aabb_sphere(aabb, emitter_pos, shape_radius + particle_radius);
     }
 
-    void expand_gpu_trail_bounds_for_particle(const math::vec3& start,
-                                              const math::vec3& end0,
-                                              const math::vec3& end1,
-                                              float particle_radius)
+    void accumulate_gpu_live_bounds(math::bbox& aabb, const emitter_sim_constants& constants)
     {
-        // Path is a double-mix of start/end0/end1 — covered by the convex hull of those points.
-        if(!gpu_.trail_bounds_valid)
+        if(gpu_.active_slots.empty())
         {
-            gpu_.trail_bounds.reset();
-            gpu_.trail_bounds_valid = true;
+            return;
         }
-        expand_aabb_sphere(gpu_.trail_bounds, start, particle_radius);
-        expand_aabb_sphere(gpu_.trail_bounds, end0, particle_radius);
-        expand_aabb_sphere(gpu_.trail_bounds, end1, particle_radius);
-    }
-
-    void rebuild_gpu_trail_bounds_from_live(float particle_radius)
-    {
-        gpu_.clear_trail_bounds();
+        APP_SCOPE_PERF("Particles/SOA GPU Live Bounds");
+        const float base_extent = math::max(constants.particle_scale_3d.x,
+                                            math::max(constants.particle_scale_3d.y, constants.particle_scale_3d.z)) *
+                                  0.5f;
+        const math::vec2 pivot_offset = constants.pivot - math::vec2(0.5f, 0.5f);
+        const float pivot_pad_factor = math::max(math::abs(pivot_offset.x), math::abs(pivot_offset.y)) * 2.0f;
+        const bool use_ease = has_feature(constants.features, emitter_feature::non_linear_ease) && constants.ease_pos;
+        const bool use_local = has_feature(constants.features, emitter_feature::local_space);
+        const bool use_size_speed = has_feature(constants.features, emitter_feature::size_by_speed);
         for(uint32_t slot : gpu_.active_slots)
         {
-            expand_gpu_trail_bounds_for_particle(particles_.start[slot],
-                                                particles_.end0[slot],
-                                                particles_.end1[slot],
-                                                particle_radius);
+            const float life = particles_.life[slot];
+            const float tt = use_ease ? constants.ease_pos(life) : life;
+            const math::vec3 p0 = math::mix(particles_.start[slot], particles_.end0[slot], tt);
+            const math::vec3 p1 = math::mix(particles_.end0[slot], particles_.end1[slot], tt);
+            math::vec3 world_pos = math::mix(p0, p1, tt);
+            if(use_local)
+            {
+                const math::vec4 wp = constants.local_to_world * math::vec4(world_pos, 1.0f);
+                world_pos = math::vec3(wp.x, wp.y, wp.z);
+            }
+            float scale =
+                math::mix(particles_.scale_start[slot], particles_.scale_end[slot], life) * constants.avg_system_scale;
+            if(use_size_speed)
+            {
+                const float particle_speed = calculate_particle_speed(particles_.start[slot],
+                                                                      particles_.end0[slot],
+                                                                      particles_.end1[slot],
+                                                                      particles_.lifespan[slot],
+                                                                      tt);
+                const float speed_factor = math::clamp((particle_speed - constants.size_by_speed_velocity_range.min) *
+                                                          constants.inv_size_by_speed_velocity_span,
+                                                      0.0f,
+                                                      1.0f);
+                scale *= math::mix(constants.size_by_speed_range.min, constants.size_by_speed_range.max, speed_factor);
+            }
+            const float max_extent = base_extent * scale;
+            expand_aabb_sphere(aabb, world_pos, max_extent + pivot_pad_factor * max_extent);
         }
     }
 
@@ -895,7 +903,6 @@ struct emitter
         {
             particles_.count = 0;
             gpu_.high_water = 0;
-            gpu_.clear_trail_bounds();
             return;
         }
         APP_SCOPE_PERF("Particles/SOA GPU Reclaim");
@@ -918,10 +925,6 @@ struct emitter
         gpu_.active_slots.resize(write);
         particles_.count = write;
         gpu_.high_water = high;
-        if(write == 0)
-        {
-            gpu_.clear_trail_bounds();
-        }
         if(gpu_.free_list.empty() && write < particles_.capacity)
         {
             rebuild_gpu_slot_lists();
@@ -1061,23 +1064,16 @@ struct emitter
         gpu_.constants = constants;
         gpu_.sim_dt = sim_dt;
         ensure_gpu_luts(desc, constants);
-        accumulate_conservative_gpu_bounds(aabb, desc, constants, emitter_pos);
-        // World trails stay where spawned; rebuild hull from live control points so bounds shrink on death.
-        if(desc.motion.space == simulation_space::world)
+        if(particles_.count == 0)
         {
-            if(particles_.count == 0)
-            {
-                gpu_.clear_trail_bounds();
-            }
-            else
-            {
-                rebuild_gpu_trail_bounds_from_live(compute_gpu_particle_radius(desc, constants));
-            }
-            if(gpu_.trail_bounds_valid)
-            {
-                aabb.add_point(gpu_.trail_bounds.min);
-                aabb.add_point(gpu_.trail_bounds.max);
-            }
+            // Empty: keep a conservative emitter pad so new spawns can re-enter cameras.
+            accumulate_conservative_gpu_bounds(aabb, desc, constants, emitter_pos);
+        }
+        else
+        {
+            // Live particles: tight current pose (same math as pack), no path-hull pad.
+            aabb.reset();
+            accumulate_gpu_live_bounds(aabb, constants);
         }
         gpu_.pending_pack = particles_.count > 0;
         if(!gpu_.pending_pack)
@@ -1133,8 +1129,6 @@ struct emitter
         sim.features = constants.features;
         math::bbox aabb;
         aabb.reset();
-        aabb.add_point(current_pos - math::vec3(0.5f));
-        aabb.add_point(current_pos + math::vec3(0.5f));
         const bool use_gpu = wants_gpu_pack();
         if(use_gpu)
         {
@@ -1165,8 +1159,15 @@ struct emitter
             reclaim_gpu_slots(sim_dt);
             prepare_gpu_resident(desc, constants, aabb, current_pos, sim_dt);
         }
+        else if(particles_.count == 0)
+        {
+            // Empty: small emitter pad so the system can re-enter camera culls.
+            aabb.add_point(current_pos - math::vec3(0.5f));
+            aabb.add_point(current_pos + math::vec3(0.5f));
+        }
         else
         {
+            // Live particles only — do not seed emitter±0.5 (that pulled the AABB below the spawn disk).
             accumulate_world_bounds(aabb, constants);
         }
         if(sim.first_update)
@@ -1179,7 +1180,7 @@ struct emitter
 
     void update_bounds_only(const emitter_desc& desc, emitter_transform_state& transform)
     {
-        // Frozen: keep last trail/particle AABB and union a cheap emitter region so the
+        // Frozen: keep last particle AABB and union a cheap emitter region so the
         // emitter can re-enter any drawing camera without advancing life/emission.
         const math::vec3 current_pos = transform.current.get_position();
         math::bbox aabb = sim.world_bounds;
@@ -1300,10 +1301,6 @@ struct emitter
             force_vector *= system_scale;
         }
         const float velocity_damping_factor = (1.0f - desc.motion.velocity_damping);
-        const bool expand_world_trail =
-            skip_cpu_properties && desc.motion.space == simulation_space::world;
-        const float gpu_trail_particle_radius =
-            expand_world_trail ? compute_gpu_particle_radius(desc, constants) : 0.0f;
         math::vec3 prev_pos = transform.previous.get_position();
         if(sim.temporal_count >= 2)
         {
@@ -1465,13 +1462,6 @@ struct emitter
                 particles_.end0[index] = particles_.start[index] + velocity * velocity_damping_factor;
             }
             particles_.end1[index] = particles_.end0[index] + gravity_vector + force_vector;
-            if(expand_world_trail)
-            {
-                expand_gpu_trail_bounds_for_particle(particles_.start[index],
-                                                    particles_.end0[index],
-                                                    particles_.end1[index],
-                                                    gpu_trail_particle_radius);
-            }
             const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
             const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
             particles_.scale_start[index] = math::mix(start_scale_range.min, start_scale_range.max, frand01(rng));
