@@ -19,6 +19,8 @@ uniform vec4 u_pack3;
 uniform vec4 u_pack4;
 uniform vec4 u_pack5;
 uniform mat4 u_localToWorld;
+// Emitter world rotation (xyzw). w >= 0 so VS can recover from xyz alone in i_data5.
+uniform vec4 u_emitterQuat;
 
 #define u_opacity           u_pack0.x
 #define u_color_intensity   u_pack0.y
@@ -193,6 +195,15 @@ void main()
         {
             rotation = quat_look_rotation(current_velocity);
         }
+        else
+        {
+            rotation = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+    else
+    {
+        // Ignore any stale sim rotation so disable-align does not keep spinning.
+        rotation = vec4(0.0, 0.0, 0.0, 1.0);
     }
 
     vec4 color = sample_color_lut(life);
@@ -247,5 +258,5 @@ void main()
     s_instances[inst + 2u] = vec4(u_scale3d * scale, u_pivot_y);
     s_instances[inst + 3u] = vec4(uv_offset, uv_scale);
     s_instances[inst + 4u] = color;
-    s_instances[inst + 5u] = vec4(u_render_mode, 0.0, 0.0, 0.0);
+    s_instances[inst + 5u] = vec4(u_render_mode, u_emitterQuat.xyz);
 }

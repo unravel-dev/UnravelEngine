@@ -83,7 +83,6 @@ auto pipeline::init(rtti::context& ctx) -> bool
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
 
-    particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
     particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");

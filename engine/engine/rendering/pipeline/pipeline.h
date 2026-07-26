@@ -250,7 +250,6 @@ protected:
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
 
-    std::unique_ptr<gpu_program> particle_program_{};
     std::unique_ptr<gpu_program> particle_program_instanced_{};
     std::unique_ptr<gpu_program> particle_program_instanced_mask_{};
     std::unique_ptr<gpu_program> world_quad_program_{};

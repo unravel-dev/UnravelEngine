@@ -75,6 +75,9 @@ struct emitter_sim_constants
     float inv_color_by_speed_velocity_span = 0.0f;
     bx::EaseFn ease_pos = nullptr;
     math::mat4 local_to_world{1.0f};
+    /// Emitter world rotation used for constrained billboards in local simulation.
+    /// Stored with non-negative w so xyz can be packed into instance data.
+    math::quat emitter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
 };
 
 } // namespace ps_soa

@@ -3,12 +3,11 @@ $output v_texcoord0, v_color0
 
 #include <bgfx_shader.sh>
 
-// View matrix (glm column-major upload). Billboard uses rows 0–1 of the rotation block via mtxGetRow
-// (same indices as legacy CPU: camRight = m[0,4,8], camUp = m[1,5,9]).
+// View matrix (glm column-major upload). Billboard uses camera axes from the view matrix.
 uniform mat4 u_viewCamera;
 uniform vec4 u_eyePos; // xyz = camera / eye position (w unused)
 
-// Helper function to rotate a vector by a quaternion
+// Helper function to rotate a vector by a quaternion (xyzw)
 vec3 quatRotate(vec4 q, vec3 v)
 {
     vec3 uv = cross(q.xyz, v);
@@ -16,8 +15,19 @@ vec3 quatRotate(vec4 q, vec3 v)
     return v + ((uv * q.w) + uuv) * 2.0;
 }
 
-void billboardBaseAxes(vec3 camRight, vec3 camUp, float renderMode, out vec3 outRight, out vec3 outUp)
+// i_data5.x = renderMode, i_data5.yzw = emitterQuat.xyz with w >= 0 (reconstructed here).
+vec4 decodeEmitterQuat(vec4 facingData)
 {
+    vec3 qv = facingData.yzw;
+    float qw = sqrt(max(0.0, 1.0 - dot(qv, qv)));
+    return vec4(qv, qw);
+}
+
+void billboardBaseAxes(vec3 camRight, vec3 camUp, float renderMode, vec4 emitterQuat, out vec3 outRight, out vec3 outUp)
+{
+    vec3 emitterRight = normalize(quatRotate(emitterQuat, vec3(1.0, 0.0, 0.0)));
+    vec3 emitterUp = normalize(quatRotate(emitterQuat, vec3(0.0, 1.0, 0.0)));
+    vec3 emitterForward = normalize(quatRotate(emitterQuat, vec3(0.0, 0.0, 1.0)));
     if(renderMode < 0.5)
     {
         outRight = normalize(camRight);
@@ -25,15 +35,17 @@ void billboardBaseAxes(vec3 camRight, vec3 camUp, float renderMode, out vec3 out
     }
     else if(renderMode < 1.5)
     {
-        outRight = vec3(1.0, 0.0, 0.0);
-        outUp = vec3(0.0, 0.0, 1.0);
+        // Horizontal: quad lies in emitter local XZ plane.
+        outRight = emitterRight;
+        outUp = emitterForward;
     }
     else
     {
-        vec3 rn = vec3(camRight.x, 0.0, camRight.z);
+        // Vertical: stay upright along emitter local Y, yaw toward camera.
+        vec3 rn = camRight - emitterUp * dot(camRight, emitterUp);
         float len = length(rn);
-        outRight = len > 0.0001 ? rn * (1.0 / len) : vec3(1.0, 0.0, 0.0);
-        outUp = vec3(0.0, 1.0, 0.0);
+        outRight = len > 0.0001 ? rn * (1.0 / len) : emitterRight;
+        outUp = emitterUp;
     }
 }
 
@@ -49,13 +61,14 @@ void main()
     vec4 color = i_data4;
 
     float renderMode = i_data5.x;
+    vec4 emitterQuat = decodeEmitterQuat(i_data5);
 
     vec3 camRight = mtxGetColumn(u_viewCamera, 0).xyz;
     vec3 camUp = mtxGetColumn(u_viewCamera, 1).xyz;
 
     vec3 right;
     vec3 up;
-    billboardBaseAxes(camRight, camUp, renderMode, right, up);
+    billboardBaseAxes(camRight, camUp, renderMode, emitterQuat, right, up);
 
     vec2 pivot = vec2(pivotX, pivotY);
 
@@ -71,8 +84,13 @@ void main()
         float toEyeLen = length(toEye);
         toEye = toEye * (1.0 / max(toEyeLen, 0.0001));
 
-        vec3 rotatedUpBasis = quatRotate(normalizedRot, vec3(0.0, 1.0, 0.0));
-        vec3 rotatedRightBasis = quatRotate(normalizedRot, vec3(1.0, 0.0, 0.0));
+        vec3 emitterRight = normalize(quatRotate(emitterQuat, vec3(1.0, 0.0, 0.0)));
+        vec3 emitterUp = normalize(quatRotate(emitterQuat, vec3(0.0, 1.0, 0.0)));
+
+        // Particle spin is applied relative to the emitter frame so local-space
+        // vertical/horizontal constraints keep following the emitter.
+        vec3 rotatedUpBasis = quatRotate(normalizedRot, emitterUp);
+        vec3 rotatedRightBasis = quatRotate(normalizedRot, emitterRight);
 
         vec3 rotatedRightCPU = quatRotate(normalizedRot, right);
         vec3 rotatedUpCPU = quatRotate(normalizedRot, up);

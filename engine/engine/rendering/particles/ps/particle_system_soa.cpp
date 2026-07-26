@@ -43,8 +43,9 @@ particle_sim_backend g_default_sim_backend = particle_sim_backend::cpu;
 bool g_gpu_sim_available = false;
 std::shared_ptr<gpu_program> g_compact_pack_program;
 std::shared_ptr<gpu_program> g_spawn_scatter_program;
-std::shared_ptr<gpu_program> g_indirect_args_program;
+std::shared_ptr<gpu_program> g_sort_build_keys_program;
 std::shared_ptr<gpu_program> g_sort_program;
+std::shared_ptr<gpu_program> g_sort_gather_program;
 bgfx::UniformHandle g_u_pack0 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack1 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack2 = BGFX_INVALID_HANDLE;
@@ -52,13 +53,20 @@ bgfx::UniformHandle g_u_pack3 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack4 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack5 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_local_to_world = BGFX_INVALID_HANDLE;
-bgfx::UniformHandle g_u_args0 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_emitter_quat = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_spawn0 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_sort0 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_sort1 = BGFX_INVALID_HANDLE;
-bgfx::UniformHandle g_u_spawn0 = BGFX_INVALID_HANDLE;
 bgfx::VertexLayout g_gpu_vec4_layout;
+bgfx::VertexLayout g_gpu_float_layout;
 bgfx::VertexLayout g_gpu_instance_layout;
 bool g_gpu_layouts_ready = false;
+
+auto gpu_depth_sort_programs_ready() -> bool
+{
+    return g_sort_build_keys_program && g_sort_build_keys_program->is_valid() && g_sort_program &&
+           g_sort_program->is_valid() && g_sort_gather_program && g_sort_gather_program->is_valid();
+}
 constexpr uint32_t k_quad_index_count = 6;
 
 auto next_pow2_u32(uint32_t value) -> uint32_t
@@ -83,6 +91,7 @@ void ensure_gpu_layouts()
         return;
     }
     g_gpu_vec4_layout.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
+    g_gpu_float_layout.begin().add(bgfx::Attrib::TexCoord0, 1, bgfx::AttribType::Float).end();
     g_gpu_instance_layout.begin()
         .add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord1, 4, bgfx::AttribType::Float)
@@ -111,8 +120,13 @@ struct emitter_gpu_resources
     float sim_dt = 0.0f;
     bgfx::DynamicVertexBufferHandle sim_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle instance_vb = BGFX_INVALID_HANDLE;
+    // Dense pack output; Normal blend gathers into this after key/index sort.
+    bgfx::DynamicVertexBufferHandle instance_sorted_vb = BGFX_INVALID_HANDLE;
+    bgfx::DynamicVertexBufferHandle sort_keys_vb = BGFX_INVALID_HANDLE;
+    bgfx::DynamicIndexBufferHandle sort_indices_ib = BGFX_INVALID_HANDLE;
+    // Bitonic pads to next pow2; key/index/sorted buffers use this size.
+    uint32_t instance_sort_capacity = 0;
     bgfx::DynamicIndexBufferHandle counter_ib = BGFX_INVALID_HANDLE;
-    bgfx::IndirectBufferHandle indirect_buf = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_speed_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle ease_lut_vb = BGFX_INVALID_HANDLE;
@@ -149,15 +163,26 @@ struct emitter_gpu_resources
             bgfx::destroy(instance_vb);
             instance_vb = BGFX_INVALID_HANDLE;
         }
+        if(bgfx::isValid(instance_sorted_vb))
+        {
+            bgfx::destroy(instance_sorted_vb);
+            instance_sorted_vb = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(sort_keys_vb))
+        {
+            bgfx::destroy(sort_keys_vb);
+            sort_keys_vb = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(sort_indices_ib))
+        {
+            bgfx::destroy(sort_indices_ib);
+            sort_indices_ib = BGFX_INVALID_HANDLE;
+        }
+        instance_sort_capacity = 0;
         if(bgfx::isValid(counter_ib))
         {
             bgfx::destroy(counter_ib);
             counter_ib = BGFX_INVALID_HANDLE;
-        }
-        if(bgfx::isValid(indirect_buf))
-        {
-            bgfx::destroy(indirect_buf);
-            indirect_buf = BGFX_INVALID_HANDLE;
         }
         if(bgfx::isValid(color_lut_vb))
         {
@@ -240,8 +265,7 @@ struct emitter_gpu_resources
     auto ensure_capacity(uint32_t max_particles) -> bool
     {
         ensure_gpu_layouts();
-        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb) && bgfx::isValid(counter_ib) &&
-           bgfx::isValid(indirect_buf))
+        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb) && bgfx::isValid(counter_ib))
         {
             return false;
         }
@@ -250,10 +274,19 @@ struct emitter_gpu_resources
         pending_pack = keep_pending;
         luts_gpu_dirty = true;
         gpu_capacity = max_particles;
+        // Extra padded slots so bitonic depth-sort never writes past the UAV.
+        instance_sort_capacity = next_pow2_u32(max_particles);
         const uint16_t sim_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
                                    BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
         const uint16_t instance_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
                                         BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        const uint16_t sorted_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
+                                      BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        const uint16_t key_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
+                                   BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        const uint16_t index_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
+                                     BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_FORMAT_32X1 |
+                                     BGFX_BUFFER_COMPUTE_TYPE_UINT;
         const uint16_t counter_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32 |
                                        BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
         const uint16_t lut_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
@@ -261,9 +294,12 @@ struct emitter_gpu_resources
         sim_vb = bgfx::createDynamicVertexBuffer(max_particles * k_gpu_sim_vec4s_per_particle,
                                                  g_gpu_vec4_layout,
                                                  sim_flags);
-        instance_vb = bgfx::createDynamicVertexBuffer(max_particles, g_gpu_instance_layout, instance_flags);
+        instance_vb = bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_instance_layout, instance_flags);
+        instance_sorted_vb =
+            bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_instance_layout, sorted_flags);
+        sort_keys_vb = bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_float_layout, key_flags);
+        sort_indices_ib = bgfx::createDynamicIndexBuffer(instance_sort_capacity, index_flags);
         counter_ib = bgfx::createDynamicIndexBuffer(1, counter_flags);
-        indirect_buf = bgfx::createIndirectBuffer(1);
         color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         color_speed_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         ease_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
@@ -456,6 +492,20 @@ void bake_constants(const emitter_desc& desc,
     out_constants.inv_color_by_speed_velocity_span = (color_span > 0.0f) ? (1.0f / color_span) : 0.0f;
     out_constants.ease_pos = bx::getEaseFunc(desc.motion.position_easing);
     out_constants.local_to_world = transform.current;
+    // Constrained billboards (vertical/horizontal) must follow emitter axes in local
+    // space. Pack as a unit quat with w >= 0 so the vertex shader can recover w from xyz.
+    if(desc.motion.space == simulation_space::local)
+    {
+        out_constants.emitter_rotation = transform.current.get_rotation();
+    }
+    else
+    {
+        out_constants.emitter_rotation = math::identity<math::quat>();
+    }
+    if(out_constants.emitter_rotation.w < 0.0f)
+    {
+        out_constants.emitter_rotation = -out_constants.emitter_rotation;
+    }
 }
 
 float calculate_particle_speed(const math::vec3& start,
@@ -572,6 +622,12 @@ void update_particle_full(particle_soa& particles,
         {
             particles.rotation[index] = math::identity<math::quat>();
         }
+    }
+    else
+    {
+        // Must clear: stale look_rotation from a prior align-on frame keeps the VS
+        // "has rotation" path active (e.g. local space still uses the full update).
+        particles.rotation[index] = math::identity<math::quat>();
     }
     if(has_feature(constants.features, emitter_feature::texsheet))
     {
@@ -721,12 +777,8 @@ struct emitter
     {
         const bool need_color_speed = has_feature(constants.features, emitter_feature::color_by_speed);
         const bool need_ease = has_feature(constants.features, emitter_feature::non_linear_ease);
-        if(gpu_.luts_valid && gpu_.cached_ease_pos == constants.ease_pos &&
-           gpu_.cached_need_color_speed == need_color_speed && gpu_.cached_need_ease == need_ease &&
-           gpu_.cached_features == constants.features)
-        {
-            return;
-        }
+        // Color gradients can change without feature-bit changes (inspector edits). Always
+        // resample; 256 entries is cheap vs. a stale LUT that never picks up edits.
         fill_gradient_lut(desc.appearance.color_gradient, gpu_.color_lut);
         if(need_color_speed)
         {
@@ -736,12 +788,17 @@ struct emitter
         {
             gpu_.color_speed_lut.assign(k_gpu_lut_size, math::vec4(1.0f));
         }
-        gpu_.ease_lut.resize(k_gpu_lut_size);
-        for(uint32_t i = 0; i < k_gpu_lut_size; ++i)
+        const bool ease_changed = !gpu_.luts_valid || gpu_.cached_ease_pos != constants.ease_pos ||
+                                  gpu_.cached_need_ease != need_ease;
+        if(ease_changed)
         {
-            const float t = float(i) / float(k_gpu_lut_size - 1);
-            const float eased = (need_ease && constants.ease_pos) ? constants.ease_pos(t) : t;
-            gpu_.ease_lut[i] = math::vec4(eased, 0.0f, 0.0f, 0.0f);
+            gpu_.ease_lut.resize(k_gpu_lut_size);
+            for(uint32_t i = 0; i < k_gpu_lut_size; ++i)
+            {
+                const float t = float(i) / float(k_gpu_lut_size - 1);
+                const float eased = (need_ease && constants.ease_pos) ? constants.ease_pos(t) : t;
+                gpu_.ease_lut[i] = math::vec4(eased, 0.0f, 0.0f, 0.0f);
+            }
         }
         gpu_.cached_ease_pos = constants.ease_pos;
         gpu_.cached_need_color_speed = need_color_speed;
@@ -1566,10 +1623,15 @@ struct particle_system_soa
             bgfx::destroy(g_u_local_to_world);
             g_u_local_to_world = BGFX_INVALID_HANDLE;
         }
-        if(bgfx::isValid(g_u_args0))
+        if(bgfx::isValid(g_u_emitter_quat))
         {
-            bgfx::destroy(g_u_args0);
-            g_u_args0 = BGFX_INVALID_HANDLE;
+            bgfx::destroy(g_u_emitter_quat);
+            g_u_emitter_quat = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(g_u_spawn0))
+        {
+            bgfx::destroy(g_u_spawn0);
+            g_u_spawn0 = BGFX_INVALID_HANDLE;
         }
         if(bgfx::isValid(g_u_sort0))
         {
@@ -1581,15 +1643,11 @@ struct particle_system_soa
             bgfx::destroy(g_u_sort1);
             g_u_sort1 = BGFX_INVALID_HANDLE;
         }
-        if(bgfx::isValid(g_u_spawn0))
-        {
-            bgfx::destroy(g_u_spawn0);
-            g_u_spawn0 = BGFX_INVALID_HANDLE;
-        }
         g_compact_pack_program.reset();
         g_spawn_scatter_program.reset();
-        g_indirect_args_program.reset();
+        g_sort_build_keys_program.reset();
         g_sort_program.reset();
+        g_sort_gather_program.reset();
         g_gpu_sim_available = false;
         g_default_sim_backend = particle_sim_backend::cpu;
         bgfx::destroy(tex_color_);
@@ -1607,8 +1665,9 @@ struct particle_system_soa
         auto& am = ctx.get_cached<asset_manager>();
         auto cs_compact = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_compact_pack.sc");
         auto cs_spawn = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_spawn_scatter.sc");
-        auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_indirect_args.sc");
+        auto cs_sort_keys = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_sort_build_keys.sc");
         auto cs_sort = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_sort_bitonic.sc");
+        auto cs_sort_gather = am.get_asset<gfx::shader>("engine:/data/shaders/particles/cs_particle_sort_gather.sc");
         if(!cs_compact)
         {
             APPLOG_WARNING("Particles: GPU resident compact shader missing; CPU backend only");
@@ -1632,22 +1691,30 @@ struct particle_system_soa
                 g_spawn_scatter_program.reset();
             }
         }
-        if(cs_args)
+        const auto try_load_sort_cs = [](const asset_handle<gfx::shader>& shader,
+                                         std::shared_ptr<gpu_program>& out_program,
+                                         const char* label)
         {
-            g_indirect_args_program = std::make_shared<gpu_program>(cs_args);
-            if(!g_indirect_args_program || !g_indirect_args_program->is_valid())
+            if(!shader)
             {
-                g_indirect_args_program.reset();
+                return;
             }
-        }
-        if(cs_sort)
+            out_program = std::make_shared<gpu_program>(shader);
+            if(!out_program || !out_program->is_valid())
+            {
+                APPLOG_WARNING("Particles: {} invalid; Normal blend will be unsorted on GPU path", label);
+                out_program.reset();
+            }
+        };
+        try_load_sort_cs(cs_sort_keys, g_sort_build_keys_program, "GPU sort build-keys program");
+        try_load_sort_cs(cs_sort, g_sort_program, "GPU sort bitonic program");
+        try_load_sort_cs(cs_sort_gather, g_sort_gather_program, "GPU sort gather program");
+        if(!gpu_depth_sort_programs_ready())
         {
-            g_sort_program = std::make_shared<gpu_program>(cs_sort);
-            if(!g_sort_program || !g_sort_program->is_valid())
-            {
-                APPLOG_WARNING("Particles: GPU sort program invalid; Normal blend will be unsorted on GPU path");
-                g_sort_program.reset();
-            }
+            g_sort_build_keys_program.reset();
+            g_sort_program.reset();
+            g_sort_gather_program.reset();
+            APPLOG_WARNING("Particles: GPU depth-sort program set incomplete; Normal blend unsorted on GPU path");
         }
         g_u_pack0 = bgfx::createUniform("u_pack0", bgfx::UniformType::Vec4);
         g_u_pack1 = bgfx::createUniform("u_pack1", bgfx::UniformType::Vec4);
@@ -1656,10 +1723,10 @@ struct particle_system_soa
         g_u_pack4 = bgfx::createUniform("u_pack4", bgfx::UniformType::Vec4);
         g_u_pack5 = bgfx::createUniform("u_pack5", bgfx::UniformType::Vec4);
         g_u_local_to_world = bgfx::createUniform("u_localToWorld", bgfx::UniformType::Mat4);
-        g_u_args0 = bgfx::createUniform("u_args0", bgfx::UniformType::Vec4);
+        g_u_emitter_quat = bgfx::createUniform("u_emitterQuat", bgfx::UniformType::Vec4);
+        g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
         g_u_sort0 = bgfx::createUniform("u_sort0", bgfx::UniformType::Vec4);
         g_u_sort1 = bgfx::createUniform("u_sort1", bgfx::UniformType::Vec4);
-        g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
         ensure_gpu_layouts();
         g_gpu_sim_available = true;
         APPLOG_INFO("Particles: GPU resident sim available (per-emitter Simulation Backend)");
@@ -1769,11 +1836,87 @@ struct particle_system_soa
         bgfx::setUniform(g_u_pack4, pack4);
         bgfx::setUniform(g_u_pack5, pack5);
         bgfx::setUniform(g_u_local_to_world, &c.local_to_world[0][0]);
+        // xyzw matching VS pack (imaginary + real); w kept >= 0 in bake_constants.
+        const float emitter_quat[4] = {c.emitter_rotation.x,
+                                       c.emitter_rotation.y,
+                                       c.emitter_rotation.z,
+                                       c.emitter_rotation.w};
+        bgfx::setUniform(g_u_emitter_quat, emitter_quat);
         const uint32_t groups = (dispatch_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
         bgfx::dispatch(pack_view, g_compact_pack_program->native_handle(), groups, 1, 1);
         g_compact_pack_program->end();
+        // Consume the pack request. Leaving this set lets a later
+        // sync_gpu_simulation() in the same frame (e.g. scene panel then game
+        // panel both call on_frame_before_render) advance GPU life twice.
+        em.gpu_.pending_pack = false;
         (void)sort_by_depth;
         (void)eye;
+        return true;
+    }
+
+    /// @return true when sorted instance buffer is ready to draw.
+    auto dispatch_gpu_depth_sort(emitter& em, const math::vec3& eye, bgfx::ViewId view) -> bool
+    {
+        if(!gpu_depth_sort_programs_ready() || !bgfx::isValid(em.gpu_.instance_vb) ||
+           !bgfx::isValid(em.gpu_.instance_sorted_vb) || !bgfx::isValid(em.gpu_.sort_keys_vb) ||
+           !bgfx::isValid(em.gpu_.sort_indices_ib))
+        {
+            return false;
+        }
+        const uint32_t alive = em.particles_.count;
+        if(alive < 2)
+        {
+            return false;
+        }
+        const uint32_t padded = next_pow2_u32(alive);
+        if(padded > em.gpu_.instance_sort_capacity)
+        {
+            return false;
+        }
+        APP_SCOPE_PERF("Particles/SOA GPU Depth Sort");
+        const uint32_t groups = (padded + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+        const float sort0_eye[4] = {eye.x, eye.y, eye.z, 0.0f};
+        const float sort1_dims[4] = {0.0f, float(padded), float(alive), 0.0f};
+        if(!g_sort_build_keys_program->begin())
+        {
+            return false;
+        }
+        bgfx::setUniform(g_u_sort0, sort0_eye);
+        bgfx::setUniform(g_u_sort1, sort1_dims);
+        bgfx::setBuffer(0, em.gpu_.instance_vb, bgfx::Access::Read);
+        bgfx::setBuffer(1, em.gpu_.sort_keys_vb, bgfx::Access::Write);
+        bgfx::setBuffer(2, em.gpu_.sort_indices_ib, bgfx::Access::Write);
+        bgfx::dispatch(view, g_sort_build_keys_program->native_handle(), groups, 1, 1);
+        g_sort_build_keys_program->end();
+        if(!g_sort_program->begin())
+        {
+            return false;
+        }
+        for(uint32_t stage = 2u; stage <= padded; stage <<= 1u)
+        {
+            for(uint32_t pass = stage >> 1u; pass > 0u; pass >>= 1u)
+            {
+                const float sort0[4] = {eye.x, eye.y, eye.z, float(stage)};
+                const float sort1[4] = {float(pass), float(padded), float(alive), 0.0f};
+                bgfx::setUniform(g_u_sort0, sort0);
+                bgfx::setUniform(g_u_sort1, sort1);
+                bgfx::setBuffer(0, em.gpu_.sort_keys_vb, bgfx::Access::ReadWrite);
+                bgfx::setBuffer(1, em.gpu_.sort_indices_ib, bgfx::Access::ReadWrite);
+                bgfx::dispatch(view, g_sort_program->native_handle(), groups, 1, 1);
+            }
+        }
+        g_sort_program->end();
+        if(!g_sort_gather_program->begin())
+        {
+            return false;
+        }
+        const uint32_t gather_groups = (alive + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+        bgfx::setUniform(g_u_sort1, sort1_dims);
+        bgfx::setBuffer(0, em.gpu_.instance_vb, bgfx::Access::Read);
+        bgfx::setBuffer(1, em.gpu_.sort_indices_ib, bgfx::Access::Read);
+        bgfx::setBuffer(2, em.gpu_.instance_sorted_vb, bgfx::Access::Write);
+        bgfx::dispatch(view, g_sort_gather_program->native_handle(), gather_groups, 1, 1);
+        g_sort_gather_program->end();
         return true;
     }
 
@@ -1783,11 +1926,19 @@ struct particle_system_soa
                           const float* view_camera,
                           const float* eye_pos_vec4,
                           bgfx::TextureHandle texture,
-                          uint64_t blend_state) -> uint32_t
+                          uint64_t blend_state,
+                          bool use_sorted_instances) -> uint32_t
     {
         APP_SCOPE_PERF("Particles/SOA GPU Draw");
         const uint32_t draw_count = em.particles_.count;
         if(draw_count == 0)
+        {
+            return 0;
+        }
+        const bgfx::DynamicVertexBufferHandle instance_handle =
+            (use_sorted_instances && bgfx::isValid(em.gpu_.instance_sorted_vb)) ? em.gpu_.instance_sorted_vb
+                                                                               : em.gpu_.instance_vb;
+        if(!bgfx::isValid(instance_handle))
         {
             return 0;
         }
@@ -1798,10 +1949,7 @@ struct particle_system_soa
         bgfx::setTexture(0, tex_color_, texture);
         bgfx::setUniform(view_camera_, view_camera);
         bgfx::setUniform(eye_pos_, eye_pos_vec4);
-        // Compact-pack densifies into [0, alive). CPU shadow count matches after reclaim.
-        // Prefer explicit instance count over indirect — writing IndirectBuffer from CS is
-        // not reliable on all backends and previously left instanceCount at 0.
-        bgfx::setInstanceDataBuffer(em.gpu_.instance_vb, 0, draw_count);
+        bgfx::setInstanceDataBuffer(instance_handle, 0, draw_count);
         bgfx::submit(view, program);
         return draw_count;
     }
@@ -1880,8 +2028,8 @@ struct particle_system_soa
             return;
         }
         APP_SCOPE_PERF("Particles/SOA GPU Sync");
-        // Before particle draw so this view id sorts earlier. Renderer-based freeze
-        // clears pending_pack so undrawn emitters are skipped here.
+        // Before particle draw so this view id sorts earlier. pending_pack is set by
+        // prepare_gpu_resident and cleared after a successful dispatch.
         gfx::render_pass pass("Particles/GPU Sim");
         pass.touch();
         const math::vec3 eye(0.0f);
@@ -1961,9 +2109,10 @@ struct particle_system_soa
         color[3] = p.color[particle_idx].value.a;
         float* facing = reinterpret_cast<float*>(row + 80);
         facing[0] = static_cast<float>(static_cast<int>(em.cached_constants_.render_mode));
-        facing[1] = 0.0f;
-        facing[2] = 0.0f;
-        facing[3] = 0.0f;
+        // i_data5.yzw = emitter rotation xyz (w reconstructed in VS, requires w >= 0).
+        facing[1] = em.cached_constants_.emitter_rotation.x;
+        facing[2] = em.cached_constants_.emitter_rotation.y;
+        facing[3] = em.cached_constants_.emitter_rotation.z;
     }
 
     auto build_prefixes(const emitter_handle* handles, uint32_t count) -> uint32_t
@@ -2275,9 +2424,11 @@ struct particle_system_soa
             emitter& em = emitters_[handles[i].idx];
             // GPU-backend emitters must never use the CPU instance path — their SoA
             // render caches are not maintained and produce garbage quads.
+            // Draw when live particles exist; pending_pack only means "needs pack this
+            // frame" and is cleared after sync_gpu_simulation consumes it.
             if(em.wants_gpu_pack())
             {
-                if(em.gpu_.pending_pack)
+                if(em.particles_.count > 0 && bgfx::isValid(em.gpu_.instance_vb))
                 {
                     gpu_emitters_scratch_.push_back(handles[i]);
                 }
@@ -2304,14 +2455,19 @@ struct particle_system_soa
         if(!gpu_emitters_scratch_.empty())
         {
             // Pack/spawn flush already ran in sync_gpu_simulation (before cull).
-            // Draw only — re-packing here would double-advance GPU life.
+            // Sort compute shares the draw view so bgfx runs it before submits.
             for(emitter_handle handle : gpu_emitters_scratch_)
             {
                 emitter& em = emitters_[handle.idx];
-                rendered += draw_gpu_emitter(em, view, program, view_camera, eye_pos_vec4, texture, blend_state);
+                bool use_sorted = false;
+                if(sort_by_depth)
+                {
+                    use_sorted = dispatch_gpu_depth_sort(em, eye, view);
+                }
+                rendered +=
+                    draw_gpu_emitter(em, view, program, view_camera, eye_pos_vec4, texture, blend_state, use_sorted);
             }
         }
-        (void)sort_by_depth;
         return rendered;
     }
 
