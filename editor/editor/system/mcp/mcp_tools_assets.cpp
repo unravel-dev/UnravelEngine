@@ -1141,7 +1141,7 @@ void register_asset_tools(mcp_tool_registry& registry)
                          }
                          const auto absolute = fs::absolute(fs::resolve_protocol(key));
                          fs::create_directories(absolute.parent_path(), ec);
-                         if(!asset_writer::atomic_save_to_file(absolute.string(), entity))
+                         if(!asset_writer::atomic_save_to_file(absolute.string(), entt::const_handle(entity)))
                          {
                              results += fmt::format(R"({{"ok":false,"entity_id":{},"key":{},"error":"Failed to save prefab"}})",
                                                     make_json_string(item.entity_id),
