@@ -2,6 +2,7 @@
 
 #include "mcp_async.h"
 
+#include <engine/meta/ecs/entity.hpp>
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
@@ -13,7 +14,6 @@
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/prefab.h>
-#include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <filesystem/filesystem.h>
