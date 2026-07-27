@@ -64,7 +64,10 @@ auto atomic_save_to_file(const fs::path& key, const asset_handle<T>& obj) -> boo
             absolute_key,
             [&](const fs::path& temp)
             {
-                save_to_file(temp.string(), obj.get());
+                // Qualify so two-phase lookup finds unravel::save_to_file at the
+                // instantiation point. Unqualified calls only use definition-context
+                // lookup + ADL; entt::handle args associate namespace entt, not unravel.
+                ::unravel::save_to_file(temp.string(), obj.get());
             },
             err);
 
@@ -89,7 +92,10 @@ auto atomic_save_to_file(const fs::path& key, const T& obj) -> bool
             absolute_key,
             [&](const fs::path& temp)
             {
-                save_to_file(temp.string(), obj);
+                // Qualify so two-phase lookup finds unravel::save_to_file at the
+                // instantiation point. Unqualified calls only use definition-context
+                // lookup + ADL; entt::handle args associate namespace entt, not unravel.
+                ::unravel::save_to_file(temp.string(), obj);
             },
             err);
 
