@@ -17,6 +17,7 @@
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/surface_cache_gi_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -979,6 +980,8 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     object.emplace<taa_component>();
     object.emplace<ssr_component>();
     object.emplace<ssil_component>().enabled = false;
+    // Off by default: enable on a volume when validating static-room surface-cache GI.
+    object.emplace<surface_cache_gi_component>().enabled = false;
     return object;
 }
 

@@ -19,6 +19,7 @@
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/surface_cache_gi_component.h>
 #include <engine/rendering/pipeline/volume_resolver.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
@@ -72,6 +73,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     ssr_pass_.init(ctx);
     hiz_pass_.init(ctx);
     ssil_pass_.init(ctx);
+    surface_cache_gi_pass_.init(ctx);
 
     auto& am = ctx.get_cached<asset_manager>();
 
@@ -339,6 +341,34 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
 
+    if(auto scache_comp = camera_ent.try_get<surface_cache_gi_component>(); scache_comp && scache_comp->enabled)
+    {
+        // Sticky synthetic volume for camera-entity GI (large deadzone) — prefer a real volume.
+        params.fill_surface_cache_gi_params =
+            [camera_ent, sticky_center = std::make_shared<math::vec3>(), has_sticky = std::make_shared<bool>(false)](
+                surface_cache_gi_pass::run_params& params)
+        {
+            if(auto scache_comp = camera_ent.try_get<surface_cache_gi_component>())
+            {
+                params.settings = scache_comp->settings;
+                if(auto* transform_comp = camera_ent.try_get<transform_component>())
+                {
+                    const math::vec3 cam_pos = transform_comp->get_position_global();
+                    const float he =
+                        std::max(scache_comp->settings.probe_far_extent, scache_comp->settings.max_card_distance);
+                    if(!*has_sticky || math::length(cam_pos - *sticky_center) > he * 0.45f)
+                    {
+                        *sticky_center = cam_pos;
+                        *has_sticky = true;
+                    }
+                    const math::vec3 half(he, he * 0.55f, he);
+                    params.volume_bounds = math::bbox(*sticky_center - half, *sticky_center + half);
+                    params.has_volume_bounds = true;
+                }
+            }
+        };
+    }
+
     return params;
 }
 
@@ -351,7 +381,8 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     }
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
     const bool has_any_volume = resolved.has_auto_exposure || resolved.has_bloom || resolved.has_tonemapping ||
-                                resolved.has_fxaa || resolved.has_taa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil;
+                                resolved.has_fxaa || resolved.has_taa || resolved.has_ssr || resolved.has_assao ||
+                                resolved.has_ssil || resolved.has_surface_cache_gi;
     if(!has_any_volume)
     {
         return params;
@@ -405,6 +436,18 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     {
         ssil_pass::ssil_settings s = resolved.ssil;
         params.fill_ssil_params = [s](ssil_pass::run_params& p) { p.settings = s; };
+    }
+    if(resolved.has_surface_cache_gi)
+    {
+        surface_cache_gi_pass::surface_cache_gi_settings s = resolved.surface_cache_gi;
+        const math::bbox bounds = resolved.surface_cache_gi_bounds;
+        const bool has_bounds = resolved.has_surface_cache_gi_bounds;
+        params.fill_surface_cache_gi_params = [s, bounds, has_bounds](surface_cache_gi_pass::run_params& p)
+        {
+            p.settings = s;
+            p.volume_bounds = bounds;
+            p.has_volume_bounds = has_bounds;
+        };
     }
     if(params.fill_taa_params)
     {

@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/surface_cache_gi_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/taa_component.h>
 #include <algorithm>
@@ -152,6 +153,7 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_assao = true;
     bool first_ssr = true;
     bool first_ssil = true;
+    bool first_surface_cache_gi = true;
     bool first_taa = true;
     enabled_resolver auto_exposure_enabled;
     enabled_resolver bloom_enabled;
@@ -160,6 +162,7 @@ auto resolve_post_process_volumes(scene& scn,
     enabled_resolver ssr_enabled;
     enabled_resolver assao_enabled;
     enabled_resolver ssil_enabled;
+    enabled_resolver surface_cache_gi_enabled;
     enabled_resolver taa_enabled;
 
     for(const auto& c : contributions)
@@ -241,6 +244,41 @@ auto resolve_post_process_volumes(scene& scn,
                 first_ssil = false;
             }
         }
+
+        if(auto* scache = handle.try_get<surface_cache_gi_component>(); scache && contrib > 0.0f)
+        {
+            surface_cache_gi_enabled.accumulate(scache->enabled, contrib);
+            if(scache->enabled)
+            {
+                surface_cache_gi_component::merge_into(result.surface_cache_gi,
+                                                      scache->settings,
+                                                      contrib,
+                                                      first_surface_cache_gi);
+                first_surface_cache_gi = false;
+                // Last applied enabled volume owns the world bounds (same override model).
+                auto* transform_comp = handle.try_get<transform_component>();
+                auto* volume_comp = handle.try_get<volume_component>();
+                if(transform_comp && volume_comp)
+                {
+                    if(volume_comp->mode == volume_mode::local)
+                    {
+                        const math::bbox local_bounds = volume_comp->get_local_bounds();
+                        result.surface_cache_gi_bounds =
+                            math::bbox::mul(local_bounds, transform_comp->get_transform_global());
+                        result.has_surface_cache_gi_bounds = true;
+                    }
+                    else
+                    {
+                        const math::vec3 center = transform_comp->get_position_global();
+                        const float he = std::max(scache->settings.probe_far_extent,
+                                                  scache->settings.max_card_distance);
+                        const math::vec3 half(he, he * 0.55f, he);
+                        result.surface_cache_gi_bounds = math::bbox(center - half, center + half);
+                        result.has_surface_cache_gi_bounds = true;
+                    }
+                }
+            }
+        }
     }
 
     result.has_auto_exposure = auto_exposure_enabled.resolve();
@@ -251,6 +289,7 @@ auto resolve_post_process_volumes(scene& scn,
     result.has_ssr = ssr_enabled.resolve();
     result.has_assao = assao_enabled.resolve();
     result.has_ssil = ssil_enabled.resolve();
+    result.has_surface_cache_gi = surface_cache_gi_enabled.resolve();
 
     return result;
 }

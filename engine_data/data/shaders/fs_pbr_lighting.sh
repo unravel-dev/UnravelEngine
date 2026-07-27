@@ -24,6 +24,10 @@ uniform vec4 u_camera_position;
 #if PBR_INDIRECT
 SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
+SAMPLER2D(s_surface_cache, 9);
+/// x: SSIL near-field mix weight on top of surface-cache/SH base (1 = legacy full SSIL replace).
+uniform vec4 u_gi_compose;
+#define u_ssil_near_field u_gi_compose.x
 #else
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
@@ -520,16 +524,16 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
-    // SSIL is a full (screen-occluded) hemispherical irradiance estimate: its rays
-    // integrate the on-screen bounce where they hit and the environment SH where they miss.
-    // The trace stores it in radiance-mean units; multiply by PI here to put it in the SAME
-    // irradiance units as the SH probe (cosine-importance MC of radiance estimates E/PI).
-    // It REPLACES the SH probe by its alpha rather than adding to it -- adding would
-    // double-count the environment. Alpha is the SSIL blend weight: per-frame trace
-    // coverage when temporal is off, accumulated screen-hit evidence when temporal is on.
-    // When SSIL is disabled the bound fallback has alpha 0 -> pure SH.
+    // Hybrid diffuse GI:
+    //   cache = world surface-cache probes (stable mid-field, carries color bounce)
+    //   SSIL  = near-field only — must NOT replace a healthy cache (that looked like
+    //           screen-space GI and hid red floor bounce).
+    vec4 surface_cache_sample = texture2D(s_surface_cache, texcoord0);
+    float cache_w = saturate(surface_cache_sample.a);
+    vec3 cache_base = mix(irradiance, surface_cache_sample.rgb, cache_w);
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
-    vec3 indirect_diffuse = mix(irradiance, ssil_sample.rgb * PI, ssil_sample.a);
+    float ssil_w = saturate(ssil_sample.a) * u_ssil_near_field * (1.0 - cache_w * 0.85);
+    vec3 indirect_diffuse = mix(cache_base, ssil_sample.rgb * PI, ssil_w);
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));

@@ -21,6 +21,7 @@
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
 #include "passes/ssil_pass.h"
+#include "passes/surface_cache_gi_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
 #include "passes/taa_pass.h"
@@ -143,6 +144,7 @@ public:
         std::function<void(camera&, const usize32_t& viewport_size)> apply_taa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
+        std::function<void(surface_cache_gi_pass::run_params& params)> fill_surface_cache_gi_params;
     };
 
     pipeline() = default;
@@ -249,6 +251,7 @@ protected:
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
+    surface_cache_gi_pass surface_cache_gi_pass_{};
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};
     std::unique_ptr<gpu_program> particle_program_instanced_mask_{};

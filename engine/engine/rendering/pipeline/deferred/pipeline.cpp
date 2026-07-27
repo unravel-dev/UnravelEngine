@@ -12,6 +12,7 @@
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/surface_cache_gi_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
@@ -714,11 +715,14 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
-    // SSIL pass
+    // World surface-cache update + probe final gather (rotation-stable mid-field GI).
+    run_surface_cache_gi_pass(scn, camera, rview, params);
+
+    // SSIL near-field detail on top of probe irradiance (compose mixes by ssil_near_field_weight).
     run_ssil_pass(camera, rview, params);
 
-    // Indirect lighting after SSIL so it can use the result.
-    target = run_indirect_lighting_pass(scn, camera, rview, build_reflection_probes, dt);
+    // Indirect lighting after surface cache / SSIL so it can use both results.
+    target = run_indirect_lighting_pass(scn, camera, rview, build_reflection_probes, dt, params);
 
     if(stages & pipeline_steps::atmospheric)
     {
@@ -1483,7 +1487,8 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
                                           const camera& camera,
                                           gfx::render_view& rview,
                                           bool apply_reflection,
-                                          delta_t dt) -> gfx::frame_buffer::ptr
+                                          delta_t dt,
+                                          const run_params& rparams) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Indirect Lighting Pass");
 
@@ -1508,6 +1513,18 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     gfx::set_uniform(iprogram.u_light_data, light_data);
     gfx::set_uniform(iprogram.u_camera_position, camera_pos);
 
+    // Hybrid GI compose: surface_cache base + near-field SSIL. When the surface cache is
+    // disabled, near-field weight stays 1 so SSIL keeps its previous full-replace behavior.
+    float ssil_near_field_weight = 1.0f;
+    if(rparams.fill_surface_cache_gi_params)
+    {
+        surface_cache_gi_pass::run_params scache_probe{};
+        rparams.fill_surface_cache_gi_params(scache_probe);
+        ssil_near_field_weight = scache_probe.settings.ssil_near_field_weight;
+    }
+    float gi_compose[4] = {ssil_near_field_weight, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(iprogram.u_gi_compose, gi_compose);
+
     size_t i = 0;
     for(; i < gbuffer->get_attachment_count(); ++i)
     {
@@ -1521,10 +1538,13 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     
     const auto& ssil_tex = rview.tex_safe_get("SSIL");
     // Transparent (alpha 0) fallback when SSIL is disabled/absent so the shader's
-    // mix(irradiance, ssil.rgb, ssil.a) collapses to the pure SH probe. The opaque-black
-    // default (alpha 1) would instead force mix() to 0 and wipe out the ambient.
+    // mix(..., ssil.a * near_field) collapses to the SH / surface-cache base.
     gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().transparent_texture());
-    
+
+    const auto& surface_cache_tex = rview.tex_safe_get("SURFACE_CACHE_GI");
+    gfx::set_texture(iprogram.s_surface_cache,
+                     9,
+                     surface_cache_tex ? surface_cache_tex : default_textures::get().transparent_texture());
 
     auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
@@ -1806,6 +1826,37 @@ void deferred::run_ssr_pass(const camera& camera,
     ssr_pass_.run(rview, ssr_params);
 }
 
+void deferred::run_surface_cache_gi_pass(scene& scn,
+                                         const camera& camera,
+                                         gfx::render_view& rview,
+                                         const run_params& rparams)
+{
+    // Kept for probe captures (world-space GI survives where SSIL is stripped).
+    if(!rparams.fill_surface_cache_gi_params)
+    {
+        surface_cache_gi_pass_.release_resources(rview);
+        return;
+    }
+
+    surface_cache_gi_pass::run_params scache_params;
+    scache_params.g_buffer = rview.fbo_get("GBUFFER");
+    scache_params.direct_lighting = rview.fbo_get("LBUFFER")->get_texture(0);
+    scache_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    scache_params.cam = &camera;
+    scache_params.scn = &scn;
+    rparams.fill_surface_cache_gi_params(scache_params);
+
+    auto result = surface_cache_gi_pass_.run(rview, scache_params);
+    if(result)
+    {
+        rview.tex_get_or_emplace("SURFACE_CACHE_GI") = result;
+    }
+    else
+    {
+        rview.tex_remove("SURFACE_CACHE_GI");
+    }
+}
+
 void deferred::run_ssil_pass(const camera& camera,
                              gfx::render_view& rview,
                              const run_params& rparams)
@@ -2017,10 +2068,45 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     ++i;
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, irradiance_tex);
     ++i;
-    const auto& ssil_tex = rview.tex_safe_get("SSIL");
-    if(ssil_tex)
+    if(debug_pass_ == 15 || debug_pass_ == 18)
     {
-        gfx::set_texture(debug_visualization_program_.s_tex[i], i, ssil_tex);
+        const auto& surface_cache_tex = rview.tex_safe_get("SURFACE_CACHE_GI");
+        if(surface_cache_tex)
+        {
+            gfx::set_texture(debug_visualization_program_.s_tex[i], i, surface_cache_tex);
+        }
+    }
+    else if(debug_pass_ == 16)
+    {
+        const auto& probe_tex = rview.tex_safe_get("GI_PROBE_VOLUME");
+        if(probe_tex)
+        {
+            gfx::set_texture(debug_visualization_program_.s_tex[i], i, probe_tex);
+        }
+    }
+    else if(debug_pass_ == 17)
+    {
+        const auto& atlas_tex = rview.tex_safe_get("SURFACE_CACHE_ATLAS");
+        if(atlas_tex)
+        {
+            gfx::set_texture(debug_visualization_program_.s_tex[i], i, atlas_tex);
+        }
+    }
+    else if(debug_pass_ == 19)
+    {
+        const auto& mat_tex = rview.tex_safe_get("SURFACE_CACHE_MATERIAL");
+        if(mat_tex)
+        {
+            gfx::set_texture(debug_visualization_program_.s_tex[i], i, mat_tex);
+        }
+    }
+    else
+    {
+        const auto& ssil_tex = rview.tex_safe_get("SSIL");
+        if(ssil_tex)
+        {
+            gfx::set_texture(debug_visualization_program_.s_tex[i], i, ssil_tex);
+        }
     }
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));

@@ -249,6 +249,11 @@ void game_panel::draw_menubar(rtti::context& ctx)
             ImGui::RadioButton("Subsurface Color", &visualize_passes_, 10);
             ImGui::RadioButton("Depth", &visualize_passes_, 11);
             ImGui::RadioButton("SSIL", &visualize_passes_, 12);
+            ImGui::RadioButton("Surface Cache GI", &visualize_passes_, 15);
+            ImGui::RadioButton("GI Probe Volume", &visualize_passes_, 16);
+            ImGui::RadioButton("Surface Cache Atlas", &visualize_passes_, 17);
+            ImGui::RadioButton("GI Compose Confidence", &visualize_passes_, 18);
+            ImGui::RadioButton("Surface Cache Material", &visualize_passes_, 19);
             ImGui::EndMenu();
         }
         ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");

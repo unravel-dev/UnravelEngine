@@ -73,8 +73,12 @@ public:
     auto run_direct_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
         -> gfx::frame_buffer::ptr;
 
-    auto run_indirect_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_reflection, delta_t dt)
-        -> gfx::frame_buffer::ptr;
+    auto run_indirect_lighting_pass(scene& scn,
+                                    const camera& camera,
+                                    gfx::render_view& rview,
+                                    bool apply_reflection,
+                                    delta_t dt,
+                                    const run_params& rparams) -> gfx::frame_buffer::ptr;
 
     void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt);
 
@@ -88,6 +92,11 @@ public:
                        const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
+
+    void run_surface_cache_gi_pass(scene& scn,
+                                   const camera& camera,
+                                   gfx::render_view& rview,
+                                   const run_params& rparams);
 
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
@@ -291,12 +300,16 @@ private:
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_surface_cache, "s_surface_cache", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_compose, "u_gi_compose", gfx::uniform_type::Vec4);
         }
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
+        gfx::program::uniform_ptr u_gi_compose;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_irradiance;
         gfx::program::uniform_ptr s_ssil;
+        gfx::program::uniform_ptr s_surface_cache;
 
         std::unique_ptr<gpu_program> program;
 

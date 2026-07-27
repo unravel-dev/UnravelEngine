@@ -1783,6 +1783,11 @@ void scene_panel::draw_visualization_menu()
         ImGui::RadioButton("SSIL", &visualize_passes_, 12);
         ImGui::RadioButton("Radiance Alpha", &visualize_passes_, 13);
         ImGui::RadioButton("Specular Occlusion", &visualize_passes_, 14);
+        ImGui::RadioButton("Surface Cache GI", &visualize_passes_, 15);
+        ImGui::RadioButton("GI Probe Volume", &visualize_passes_, 16);
+        ImGui::RadioButton("Surface Cache Atlas", &visualize_passes_, 17);
+        ImGui::RadioButton("GI Compose Confidence", &visualize_passes_, 18);
+        ImGui::RadioButton("Surface Cache Material", &visualize_passes_, 19);
 
         ImGui::EndMenu();
     }

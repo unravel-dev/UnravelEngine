@@ -31,6 +31,11 @@ uniform vec4 u_params;
 #define SSIL 12
 #define RADIANCE_ALPHA 13
 #define SPECULAR_OCCLUSION 14
+#define SURFACE_CACHE_GI 15
+#define GI_PROBE_VOLUME 16
+#define SURFACE_CACHE_ATLAS 17
+#define SURFACE_CACHE_CONFIDENCE 18
+#define SURFACE_CACHE_MATERIAL 19
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -93,6 +98,37 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         vec4 ssil = texture2D(s_tex7, texcoord0);
 		color = ssil.rgb * PI * ssil.a;
+    }
+    else if(u_mode == SURFACE_CACHE_GI)
+    {
+        // Screen-space final gather (what compose reads). Gray = achromatic irradiance.
+        vec4 scache = texture2D(s_tex7, texcoord0);
+        color = scache.rgb * max(scache.a, 0.35);
+        color = color / (color + vec3_splat(0.2));
+    }
+    else if(u_mode == GI_PROBE_VOLUME)
+    {
+        // Packed probe atlas (NOT the scene): columns = X+Z index, rows = Y (+ far cascade below).
+        // Gray columns mean probes store luminance-only irradiance (missing albedo chroma).
+        vec4 probes = texture2D(s_tex7, texcoord0);
+        color = probes.rgb * max(probes.a, 0.2);
+        color = color / (color + vec3_splat(0.15));
+    }
+    else if(u_mode == SURFACE_CACHE_ATLAS)
+    {
+        // Full radiance atlas (page grid). Magenta = empty; colored tiles = lit card pages.
+        vec4 atlas = texture2D(s_tex7, texcoord0);
+        color = atlas.a < 1e-3 ? vec3(1.0, 0.0, 1.0) : (atlas.rgb / (atlas.rgb + vec3_splat(0.25)));
+    }
+    else if(u_mode == SURFACE_CACHE_CONFIDENCE)
+    {
+        color = vec3_splat(texture2D(s_tex7, texcoord0).a);
+    }
+    else if(u_mode == SURFACE_CACHE_MATERIAL)
+    {
+        // Material albedo atlas — should show red for red maps/floors. Magenta = empty.
+        vec4 mat = texture2D(s_tex7, texcoord0);
+        color = mat.a < 1e-3 ? vec3(1.0, 0.0, 1.0) : mat.rgb;
     }
     else if(u_mode == SPECULAR_OCCLUSION)
     {
