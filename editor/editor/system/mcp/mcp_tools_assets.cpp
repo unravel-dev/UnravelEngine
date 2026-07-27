@@ -13,6 +13,7 @@
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/prefab.h>
+#include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <filesystem/filesystem.h>
