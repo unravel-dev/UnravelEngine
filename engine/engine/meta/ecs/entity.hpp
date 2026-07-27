@@ -122,6 +122,16 @@ void save_to_file(const std::string& absolute_path, entt::const_handle obj);
 void save_to_stream_bin(std::ostream& stream, entt::const_handle obj);
 void save_to_file_bin(const std::string& absolute_path, entt::const_handle obj);
 
+// Non-template overloads: asset_writer::atomic_save_to_file is a template that
+// calls unqualified save_to_file. Clang two-phase lookup + ADL only searches
+// namespace entt for handle arguments, so the template cannot see these
+// unravel overloads. Prefer these overloads over the template for handles.
+namespace asset_writer
+{
+auto atomic_save_to_file(const fs::path& key, entt::const_handle obj) -> bool;
+auto atomic_save_to_file(const fs::path& key, entt::handle obj) -> bool;
+} // namespace asset_writer
+
 void load_from_view(std::string_view view, entt::handle& obj);
 void load_from_stream(std::istream& stream, entt::handle& obj);
 void load_from_file(const std::string& absolute_path, entt::handle& obj);
