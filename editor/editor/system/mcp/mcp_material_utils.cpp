@@ -2,8 +2,8 @@
 
 #include <editor/editing/thumbnail_manager.h>
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/asset_writer.h>
 #include <engine/meta/rendering/material.hpp>
+#include <engine/assets/impl/asset_writer.h>
 #include <filesystem/filesystem.h>
 #include <graphics/texture.h>
 #include <logging/logging.h>
