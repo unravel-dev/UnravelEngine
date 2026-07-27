@@ -5210,7 +5210,7 @@ auto wait_until_files_ready(const std::vector<fs::path>& paths,
 
 auto wait_for_mesh_source_dependencies(const fs::path& path) -> bool
 {
-    constexpr auto k_timeout = std::chrono::seconds(60);
+    constexpr auto k_timeout = std::chrono::seconds(3);
     // Always wait for the root source to finish landing (atomic copy / watcher races).
     if(!wait_until_files_ready({path}, k_timeout))
     {
