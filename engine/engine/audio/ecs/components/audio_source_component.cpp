@@ -367,6 +367,8 @@ void audio_source_component::set_clip(const asset_handle<audio_clip>& clip)
 
     sound_ = clip;
 
+    apply_all();
+
     if(was_playing)
     {
         play();
