@@ -7,6 +7,9 @@
 #include <engine/ecs/components/basic_component.h>
 #include <math/math.h>
 
+#include <cstdint>
+#include <memory>
+
 namespace unravel
 {
 
@@ -250,6 +253,18 @@ private:
      */
     auto create_source() -> bool;
 
+    /**
+     * @brief Binds the current clip instance and caches its identity.
+     * @return True if a clip was bound successfully.
+     */
+    auto bind_clip() -> bool;
+
+
+    /**
+     * @brief Clears the retained clip instance and version cache.
+     */
+    void clear_bound_clip();
+
     bool auto_play_ = false;                ///< Indicates if the audio source should autoplay.
     bool loop_ = false;                     ///< Indicates if the audio source should loop.
     bool muted_ = false;                    ///< Indicates if the audio source is muted.
@@ -262,6 +277,7 @@ private:
     frange_t range_ = {1.0f, 20.0f};        ///< The range of the audio source.
     std::shared_ptr<audio::source> source_; ///< The audio source object.
     asset_handle<audio_clip> sound_;        ///< The audio clip bound to the audio source.
+    uintptr_t bound_clip_version_{};        ///< Cached `sound_.version()` at last successful bind.
 
     bool auto_play_consumed_ = true;     ///< Indicates if the audio source should autoplay.
 };

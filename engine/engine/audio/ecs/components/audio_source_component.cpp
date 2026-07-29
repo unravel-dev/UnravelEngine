@@ -25,6 +25,7 @@ auto get_mixer_gain(audio_bus bus) -> float
 void audio_source_component::on_play_begin()
 {
     source_.reset();
+    clear_bound_clip();
     auto_play_consumed_ = false;
 }
 void audio_source_component::on_play_end()
@@ -35,6 +36,7 @@ void audio_source_component::on_play_end()
         source_->stop();
         source_.reset();
     }
+    clear_bound_clip();
 }
 
 void audio_source_component::update(const math::transform& t, delta_t dt)
@@ -51,6 +53,7 @@ void audio_source_component::update(const math::transform& t, delta_t dt)
     {
         return;
     }
+
 
     source_->update(std::chrono::milliseconds(16));
     if(spatial_)
@@ -70,6 +73,7 @@ void audio_source_component::update(const math::transform& t, delta_t dt)
     if(source_->is_stopped())
     {
         source_.reset();
+        clear_bound_clip();
     }
 }
 
@@ -195,24 +199,30 @@ auto audio_source_component::play() -> bool
         }
     }
 
-    if(source_ && sound_)
+    if(!source_ || !sound_)
     {
-        source_->bind(*sound_.get());
-        source_->play();
-        return true;
+        return false;
     }
 
-    return false;
+    if(!bind_clip())
+    {
+        return false;
+    }
+
+    source_->play();
+    return true;
 }
 
 void audio_source_component::stop()
 {
     if(!source_)
     {
+        clear_bound_clip();
         return;
     }
     source_->stop();
     source_.reset();
+    clear_bound_clip();
 }
 
 void audio_source_component::pause()
@@ -330,10 +340,12 @@ void audio_source_component::release_source()
 {
     if(!source_)
     {
+        clear_bound_clip();
         return;
     }
     source_->force_stop();
     source_.reset();
+    clear_bound_clip();
 }
 
 void audio_source_component::apply_mixer_volume()
@@ -348,11 +360,24 @@ void audio_source_component::apply_mixer_volume()
 
 void audio_source_component::set_clip(const asset_handle<audio_clip>& clip)
 {
+    const bool was_playing = is_playing();
+    const bool was_paused = is_paused();
+
     stop();
 
     sound_ = clip;
 
-    apply_all();
+    if(was_playing)
+    {
+        play();
+    }
+    else if(was_paused)
+    {
+        if(play())
+        {
+            pause();
+        }
+    }
 }
 
 auto audio_source_component::get_clip() const -> const asset_handle<audio_clip>&
@@ -422,6 +447,31 @@ auto audio_source_component::create_source() -> bool
         APPLOG_ERROR(e.what());
         return false;
     }
+}
+
+auto audio_source_component::bind_clip() -> bool
+{
+    if(!source_ || !sound_)
+    {
+        return false;
+    }
+
+    auto clip = sound_.get();
+    if(!clip)
+    {
+        clear_bound_clip();
+        return false;
+    }
+
+    bound_clip_version_ = sound_.version();
+    source_->bind(*clip);
+    return true;
+}
+
+
+void audio_source_component::clear_bound_clip()
+{
+    bound_clip_version_ = 0;
 }
 
 } // namespace unravel

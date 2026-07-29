@@ -15,6 +15,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/threading/main_thread_shared.h>
 #include <cstdint>
 #include <filesystem/filesystem.h>
 #include <filesystem/file_istream.h>
@@ -280,10 +281,13 @@ auto load_from_file<audio_clip>(tpp::thread_pool& pool, asset_handle<audio_clip>
             audio::sound_data data;
             load_from_file_bin(path, data);
 
+            // Create + destroy on main: OpenAL buffers are context-thread affine.
+            // Creation already hops here; main_thread_deleter covers reload/demote
+            // when the old shared_ptr is dropped on a watcher/worker thread.
             auto create_job = tpp::async(tpp::main_thread::get_id(),
                                          [data = std::move(data)]() mutable
                                          {
-                                             return std::make_shared<audio_clip>(std::move(data), false);
+                                             return make_shared_main_thread<audio_clip>(std::move(data), false);
                                          });
 
             return create_job.get();
@@ -300,7 +304,7 @@ auto load_from_file<font>(tpp::thread_pool& pool, asset_handle<font>& output,
             auto create_job = tpp::async(tpp::main_thread::get_id(),
                                          [path]()
                                          {
-                                             return std::make_shared<font>(path.c_str(), 0, 86,
+                                             return make_shared_main_thread<font>(path.c_str(), 0, 86,
                                                  FONT_TYPE_DISTANCE_OUTLINE_DROP_SHADOW_IMAGE, 8, 8);
                                          });
 
