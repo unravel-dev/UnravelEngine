@@ -430,6 +430,21 @@ auto get_entity_id_from_user_index(int index) -> entt::entity
     return id;
 }
 
+auto resolve_entity_from_collision_object(const btCollisionObject* obj) -> entt::entity
+{
+    if(!obj)
+    {
+        return entt::null;
+    }
+    // Character controllers use ghost objects, not rigidbodies — always read userIndex.
+    const int user_index = obj->getUserIndex();
+    if(user_index < 0)
+    {
+        return entt::null;
+    }
+    return get_entity_id_from_user_index(user_index);
+}
+
 auto has_scripting(entt::handle a) -> bool
 {
     if(!a)
@@ -992,15 +1007,14 @@ struct world
         dynamics_world->rayTest(ray_origin, ray_end, ray_callback);
         if(ray_callback.hasHit())
         {
-            const btRigidBody* body = btRigidBody::upcast(ray_callback.m_collisionObject);
-            if(body)
+            const entt::entity entity = resolve_entity_from_collision_object(ray_callback.m_collisionObject);
+            if(entity != entt::null)
             {
                 unravel::raycast_hit hit;
-                hit.entity = get_entity_id_from_user_index(body->getUserIndex());
+                hit.entity = entity;
                 hit.point = from_bullet(ray_callback.m_hitPointWorld);
                 hit.normal = from_bullet(ray_callback.m_hitNormalWorld);
                 hit.distance = math::distance(origin, hit.point);
-
                 return hit;
             }
         }
@@ -1038,17 +1052,16 @@ struct world
         for(int i = 0; i < ray_callback.m_hitPointWorld.size(); ++i)
         {
             const btCollisionObject* collision_object = ray_callback.m_collisionObjects[i];
-            const btRigidBody* body = btRigidBody::upcast(collision_object);
-
-            if(body)
+            const entt::entity entity = resolve_entity_from_collision_object(collision_object);
+            if(entity == entt::null)
             {
-                auto& hit = hits.emplace_back();
-
-                hit.entity = get_entity_id_from_user_index(body->getUserIndex());
-                hit.point = from_bullet(ray_callback.m_hitPointWorld[i]);
-                hit.normal = from_bullet(ray_callback.m_hitNormalWorld[i]);
-                hit.distance = math::distance(origin, hit.point);
+                continue;
             }
+            auto& hit = hits.emplace_back();
+            hit.entity = entity;
+            hit.point = from_bullet(ray_callback.m_hitPointWorld[i]);
+            hit.normal = from_bullet(ray_callback.m_hitNormalWorld[i]);
+            hit.distance = math::distance(origin, hit.point);
         }
         return hits;
     }
@@ -1094,30 +1107,14 @@ struct world
 
         // Build a raycast_hit
         unravel::raycast_hit hit;
-        // The collision object
         const btCollisionObject* obj = cb.m_hitCollisionObject;
-        // The fraction
         float fraction = cb.m_closestHitFraction;
         btVector3 hitPoint = btOrigin.lerp(btEnd, fraction);
         btVector3 normal = cb.m_hitNormalWorld;
-
-        // If you store user index as entity, etc.:
-        const btRigidBody* body = btRigidBody::upcast(obj);
-        if(body)
-        {
-            // e.g. get entity id from bullet user pointer or user index
-            hit.entity = get_entity_id_from_user_index(body->getUserIndex());
-        }
-        else
-        {
-            // fallback if needed
-            hit.entity = entt::null;
-        }
-
+        hit.entity = resolve_entity_from_collision_object(obj);
         hit.point = from_bullet(hitPoint);
         hit.normal = from_bullet(normal.normalized());
         hit.distance = fraction * max_distance; // approximate
-
         return hit;
     }
 
@@ -1166,17 +1163,7 @@ struct world
         for(const auto& hi : cb.hits)
         {
             auto& hit = hits.emplace_back();
-
-            const btRigidBody* body = btRigidBody::upcast(hi.object);
-            if(body)
-            {
-                hit.entity = get_entity_id_from_user_index(body->getUserIndex());
-            }
-            else
-            {
-                hit.entity = entt::null;
-            }
-
+            hit.entity = resolve_entity_from_collision_object(hi.object);
             btVector3 hitPoint = btOrigin.lerp(btEnd, hi.fraction);
             hit.point = from_bullet(hitPoint);
             hit.normal = from_bullet(hi.normal.normalized());
@@ -1203,17 +1190,12 @@ struct world
 
         for(const auto& hi : cb.hits)
         {
-            auto& hit = hits.emplace_back();
-
-            const btRigidBody* body = btRigidBody::upcast(hi);
-            if(body)
+            const entt::entity entity = resolve_entity_from_collision_object(hi);
+            if(entity == entt::null)
             {
-                hit = get_entity_id_from_user_index(body->getUserIndex());
+                continue;
             }
-            else
-            {
-                hit = entt::null;
-            }
+            hits.push_back(entity);
         }
 
         return hits;
