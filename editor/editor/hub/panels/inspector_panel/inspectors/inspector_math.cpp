@@ -774,6 +774,55 @@ bool DragVec3(math::vec3& data, const var_info& info, const math::vec3* reset = 
     return result;
 }
 
+/**
+ * Proxy for transform rotation as authored Euler degrees.
+ * Using the reflected quat "rotation" property would call set_rotation and drop the Euler hint.
+ * Setter always writes a by-value transform so the hint survives the meta_any assign chain.
+ */
+auto make_euler_rotation_proxy(const meta_any_proxy& transform_proxy) -> meta_any_proxy
+{
+    meta_any_proxy proxy;
+    proxy.impl->parent = transform_proxy.impl;
+    proxy.impl->type_name = "Rotation";
+    proxy.impl->name = [&]()
+    {
+        const auto& name = transform_proxy.impl->name;
+        if(name.empty())
+        {
+            return std::string("Rotation");
+        }
+        return fmt::format("{}/Rotation", name);
+    }();
+    proxy.impl->getter = [parent_proxy = transform_proxy](entt::meta_any& result)
+    {
+        entt::meta_any var;
+        if(parent_proxy.impl->getter(var) && var)
+        {
+            const auto& transform = var.cast<const math::transform&>();
+            result = transform.get_rotation_euler_degrees();
+            return true;
+        }
+        return false;
+    };
+    proxy.impl->setter = [parent_proxy = transform_proxy](meta_any_proxy& /*proxy*/,
+                                                          const entt::meta_any& value,
+                                                          uint64_t execution_count) mutable
+    {
+        entt::meta_any var;
+        if(!parent_proxy.impl->getter(var) || !var)
+        {
+            return false;
+        }
+        // Force a real copy so we never mutate through a transient meta reference and then
+        // lose the hint when the parent setter re-gets + assign()s.
+        math::transform transform = var.cast<math::transform>();
+        transform.set_rotation_euler_degrees(value.cast<math::vec3>());
+        entt::meta_any written = transform;
+        return parent_proxy.impl->setter(parent_proxy, written, execution_count);
+    };
+    return proxy;
+}
+
 bool DragVec4(math::vec4& data, const var_info& info, const math::vec4* reset = nullptr, const char* format = "%.3f")
 {
     bool result = ImGui::DragVecN("##",
@@ -1197,35 +1246,26 @@ auto inspector_transform::inspect(rtti::context& ctx,
     inspect_result result{};
 
     auto& data = var.cast<math::transform&>();
-    auto position = data.get_translation();
-    auto rotation = data.get_rotation();
-    auto scale = data.get_scale();
-    auto skew = data.get_skew();
-    //    auto perspective = data.get_perspective();
+    const auto position_old = data.get_translation();
+    auto position = position_old;
+    const auto scale_old = data.get_scale();
+    auto scale = scale_old;
+    const auto skew_old = data.get_skew();
+    auto skew = skew_old;
 
     auto type = entt::resolve<math::transform>();
- 
-    static math::vec3 euler_angles(0.0f, 0.0f, 0.0f);
 
-    math::quat old_quat(math::radians(euler_angles));
-
-    float dot_product = math::dot(old_quat, rotation);
-    bool equal = (dot_product > (1.0f - math::epsilon<float>()));
-    if(!equal && (!ImGui::IsMouseDragging(ImGuiMouseButton_Left) || ImGuizmo::IsUsing()))
-    {
-        euler_angles = data.get_rotation_euler_degrees();
-    }
-
-
+    // Euler hint + per-field undo: rotation actions must apply via set_rotation_euler_degrees
+    // (see make_euler_rotation_proxy). Quat set_rotation drops the authored Euler hint.
+    math::vec3 euler_angles = data.get_rotation_euler_degrees();
 
     ImGui::PushID("Position");
     {
         auto prop = type.data("position"_hs);
-        auto prop_name = entt::get_name(prop);
         auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
-        override_ctx.push_segment(prop_name, prop_pretty_name);
+        override_ctx.push_segment(entt::get_name(prop), prop_pretty_name);
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
@@ -1244,9 +1284,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_position();
                     result.changed = true;
                     result.edit_finished = true;
-                    
                     auto prop_proxy = make_property_proxy(var_proxy, prop);
-                    add_property_action(ctx, override_ctx, result, prop_proxy, position, data.get_position(), prop.custom());
+                    add_property_action(ctx, override_ctx, result, prop_proxy, position_old, data.get_position(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::SetItemTooltipEx("Reset %s", prop_pretty_name.c_str());
@@ -1259,10 +1298,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
             if(DragVec3(position, info, &reset))
             {
                 data.set_position(position);
-                result.changed |= true;
-
+                result.changed = true;
                 auto prop_proxy = make_property_proxy(var_proxy, prop);
-                add_property_action(ctx, override_ctx, result, prop_proxy, position, data.get_position(), prop.custom());
+                add_property_action(ctx, override_ctx, result, prop_proxy, position_old, position, prop.custom());
             }
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
         }
@@ -1275,11 +1313,10 @@ auto inspector_transform::inspect(rtti::context& ctx,
     ImGui::PushID("Rotation");
     {
         auto prop = type.data("rotation"_hs);
-        auto prop_name = entt::get_name(prop);
         auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
-        override_ctx.push_segment(prop_name, prop_pretty_name);
+        override_ctx.push_segment(entt::get_name(prop), prop_pretty_name);
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
@@ -1295,12 +1332,14 @@ auto inspector_transform::inspect(rtti::context& ctx,
             {
                 if(ImGui::Button(ICON_MDI_UNDO_VARIANT, ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
                 {
+                    const math::vec3 euler_old = euler_angles;
                     data.reset_rotation();
+                    euler_angles = math::zero<math::vec3>();
                     result.changed = true;
                     result.edit_finished = true;
-                    
-                    auto prop_proxy = make_property_proxy(var_proxy, prop);
-                    add_property_action(ctx, override_ctx, result, prop_proxy, rotation, data.get_rotation(), prop.custom());
+                    ImGui::GetStateStorage()->SetBool(ImGui::GetID("euler_edit_session"), false);
+                    auto euler_proxy = make_euler_rotation_proxy(var_proxy);
+                    add_property_action(ctx, override_ctx, result, euler_proxy, euler_old, euler_angles, prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
@@ -1310,17 +1349,57 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
         {
-            auto old_euler = euler_angles;
+            // While any rotation axis is mid-edit (especially TempInput text entry), keep a
+            // stable authored Euler triple. Re-reading from the quaternion each frame near
+            // gimbal lock (pitch ~ +/-90) feeds equivalent-but-different XYZ back into the
+            // widgets and re-applies them - the cube "constantly rotates" and X/Z jump.
+            ImGuiStorage* storage = ImGui::GetStateStorage();
+            const ImGuiID euler_edit_id = ImGui::GetID("euler_edit_session");
+            const ImGuiID euler_x_id = ImGui::GetID("euler_edit_x");
+            const ImGuiID euler_y_id = ImGui::GetID("euler_edit_y");
+            const ImGuiID euler_z_id = ImGui::GetID("euler_edit_z");
+            const bool was_editing_euler = storage->GetBool(euler_edit_id, false);
+            if(was_editing_euler)
+            {
+                euler_angles.x = storage->GetFloat(euler_x_id, euler_angles.x);
+                euler_angles.y = storage->GetFloat(euler_y_id, euler_angles.y);
+                euler_angles.z = storage->GetFloat(euler_z_id, euler_angles.z);
+            }
+            const math::vec3 euler_old = euler_angles;
             static const auto reset = math::zero<math::vec3>();
+            bool rotation_changed = false;
             if(DragVec3(euler_angles, info, &reset, "%.2f°"))
             {
-                data.rotate_local(math::radians(euler_angles - old_euler));
-                result.changed |= true;
-
-                auto prop_proxy = make_property_proxy(var_proxy, prop);
-                add_property_action(ctx, override_ctx, result, prop_proxy, rotation, data.get_rotation(), prop.custom());
+                data.set_rotation_euler_degrees(euler_angles);
+                rotation_changed = true;
+                result.changed = true;
+                auto euler_proxy = make_euler_rotation_proxy(var_proxy);
+                add_property_action(ctx, override_ctx, result, euler_proxy, euler_old, euler_angles, prop.custom());
             }
-            result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
+            const bool edit_finished_euler = ImGui::IsItemDeactivatedAfterEdit();
+            result.edit_finished |= edit_finished_euler;
+            // Commit the session Euler once more on deactivate so the live transform keeps
+            // the authored triple after the ImGui TempInput ends (not only during edit).
+            if(edit_finished_euler && was_editing_euler)
+            {
+                data.set_rotation_euler_degrees(euler_angles);
+                result.changed = true;
+                auto euler_proxy = make_euler_rotation_proxy(var_proxy);
+                add_property_action(ctx, override_ctx, result, euler_proxy, euler_old, euler_angles, prop.custom());
+            }
+            // DragVecN wraps BeginGroup/EndGroup; IsItemActive covers any axis still engaged.
+            const bool is_editing_euler = ImGui::IsItemActive();
+            if(is_editing_euler || rotation_changed)
+            {
+                storage->SetBool(euler_edit_id, true);
+                storage->SetFloat(euler_x_id, euler_angles.x);
+                storage->SetFloat(euler_y_id, euler_angles.y);
+                storage->SetFloat(euler_z_id, euler_angles.z);
+            }
+            else if(was_editing_euler)
+            {
+                storage->SetBool(euler_edit_id, false);
+            }
         }
 
         ImGui::PopItemWidth();
@@ -1332,11 +1411,10 @@ auto inspector_transform::inspect(rtti::context& ctx,
     ImGui::PushID("Scale");
     {
         auto prop = type.data("scale"_hs);
-        auto prop_name = entt::get_name(prop);
         auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
-        override_ctx.push_segment(prop_name, prop_pretty_name);
+        override_ctx.push_segment(entt::get_name(prop), prop_pretty_name);
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
@@ -1365,9 +1443,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_scale();
                     result.changed = true;
                     result.edit_finished = true;
-                    
                     auto prop_proxy = make_property_proxy(var_proxy, prop);
-                    add_property_action(ctx, override_ctx, result, prop_proxy, scale, data.get_scale(), prop.custom());
+                    add_property_action(ctx, override_ctx, result, prop_proxy, scale_old, data.get_scale(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
 
@@ -1393,10 +1470,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
                 }
 
                 data.set_scale(scale);
-                result.changed |= true;
-
+                result.changed = true;
                 auto prop_proxy = make_property_proxy(var_proxy, prop);
-                add_property_action(ctx, override_ctx, result, prop_proxy, scale, data.get_scale(), prop.custom());
+                add_property_action(ctx, override_ctx, result, prop_proxy, scale_old, scale, prop.custom());
             }
 
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
@@ -1410,12 +1486,11 @@ auto inspector_transform::inspect(rtti::context& ctx,
     ImGui::PushID("Skew");
     {
         auto prop = type.data("skew"_hs);
-        auto prop_name = entt::get_name(prop);
         auto prop_pretty_name = entt::get_pretty_name(prop);
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
-        override_ctx.push_segment(prop_name, prop_pretty_name);
-        
+        override_ctx.push_segment(entt::get_name(prop), prop_pretty_name);
+
         property_layout layout;
         layout.set_data(prop_pretty_name);
         layout.push_layout(false);
@@ -1433,9 +1508,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
                     data.reset_skew();
                     result.changed = true;
                     result.edit_finished = true;
-                    
                     auto prop_proxy = make_property_proxy(var_proxy, prop);
-                    add_property_action(ctx, override_ctx, result, prop_proxy, skew, data.get_skew(), prop.custom());
+                    add_property_action(ctx, override_ctx, result, prop_proxy, skew_old, data.get_skew(), prop.custom());
                 }
                 result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
                 ImGui::SetItemTooltipEx("Reset %s", prop_pretty_name.c_str());
@@ -1448,9 +1522,9 @@ auto inspector_transform::inspect(rtti::context& ctx,
             if(DragVec3(skew, info, &reset))
             {
                 data.set_skew(skew);
-                result.changed |= true;
+                result.changed = true;
                 auto prop_proxy = make_property_proxy(var_proxy, prop);
-                add_property_action(ctx, override_ctx, result, prop_proxy, skew, data.get_skew(), prop.custom());
+                add_property_action(ctx, override_ctx, result, prop_proxy, skew_old, skew, prop.custom());
             }
 
             result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();

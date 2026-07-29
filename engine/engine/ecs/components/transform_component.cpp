@@ -402,12 +402,14 @@ void transform_component::reset_rotation_local() noexcept
 
 auto transform_component::get_rotation_euler_global() const noexcept -> math::vec3
 {
-    return math::degrees(math::eulerAngles(get_rotation_global()));
+    return get_transform_global().get_rotation_euler_degrees();
 }
 
 void transform_component::set_rotation_euler_global(math::vec3 rotation) noexcept
 {
-    set_rotation_global(math::transform::quat_t(math::radians(rotation)));
+    auto m = get_transform_global();
+    m.set_rotation_euler_degrees(rotation);
+    set_transform_global(m);
 }
 
 void transform_component::rotate_by_euler_global(math::vec3 rotation) noexcept
@@ -420,12 +422,14 @@ void transform_component::rotate_by_euler_global(math::vec3 rotation) noexcept
 
 auto transform_component::get_rotation_euler_local() const noexcept -> math::vec3
 {
-    return math::degrees(math::eulerAngles(get_rotation_local()));
+    return get_transform_local().get_rotation_euler_degrees();
 }
 
 void transform_component::set_rotation_euler_local(math::vec3 rotation) noexcept
 {
-    set_rotation_local(math::transform::quat_t(math::radians(rotation)));
+    auto m = get_transform_local();
+    m.set_rotation_euler_degrees(rotation);
+    set_transform_local(m);
 }
 
 void transform_component::rotate_by_euler_local(math::vec3 rotation) noexcept
@@ -717,15 +721,32 @@ auto transform_component::remove_child(const entt::handle& child, transform_comp
 void transform_component::apply_transform(const math::transform& tr) noexcept
 {
     auto parent = get_parent();
-    if(parent)
+    if(!parent)
     {
-        auto inv_parent_transform = inverse_parent_transform(parent);
-        set_transform_local(inv_parent_transform * tr);
-    }
-    else
-    {
+        // World == local; keep any authored Euler carried on tr.
         set_transform_local(tr);
+        return;
     }
+
+    // inv_parent * tr is matrix-built and would otherwise drop the local Euler hint.
+    const math::vec3 previous_local_euler = get_transform_local().get_rotation_euler_degrees();
+    math::transform local = inverse_parent_transform(parent) * tr;
+
+    // Prefer the incoming world Euler when it still describes the new local orientation
+    // (common when the parent has identity rotation). Otherwise keep continuity with the
+    // previous local authored angles so inspector/script XYZ do not jump.
+    if(tr.has_rotation_euler_hint())
+    {
+        const math::vec3 world_euler = tr.get_rotation_euler_degrees();
+        if(local.try_restore_euler_angles_hint_degrees(world_euler))
+        {
+            set_transform_local(local);
+            return;
+        }
+    }
+
+    local.restore_euler_angles_hint_degrees(local.get_rotation_euler_degrees(previous_local_euler));
+    set_transform_local(local);
 }
 
 auto transform_component::inverse_parent_transform(const entt::handle& parent) noexcept -> math::transform

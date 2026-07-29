@@ -992,9 +992,13 @@ void manipulation_gizmos(bool& gizmo_at_center,
         movetype = handle_standard_gizmo_manipulation(*active_sel, center, camera_comp, em, snap);
     }
 
-    // After all manipulations, compute the delta and apply it to all selections
+    // After all manipulations, compute the delta and apply it to all selections.
+    // IMPORTANT: only rewrite locals when the gizmo/bounds actually moved. Reconstructing
+    // from a mat4 every frame (even with an identity delta) drops the authored Euler hint
+    // and makes inspector XYZ jump at gimbal lock after typing e.g. Y=90.
     math::mat4 center_final_global = center_transform_comp.get_transform_global();
     math::mat4 center_delta = center_final_global * glm::inverse(center_initial_global);
+    const bool should_apply_gizmo_delta = (movetype != ImGuizmo::MT_NONE) || bounds_changed;
 
     auto batch_action = std::make_shared<composite_action_t>();
     // Apply transforms and create undoable actions
@@ -1012,6 +1016,11 @@ void manipulation_gizmos(bool& gizmo_at_center,
                 // IK algorithm adjusts parent bones to make the end effector reach the target.
                 // Do NOT apply any direct transform to the selection - let IK handle it.
                 handle_inverse_kinematics(sel, center, em);
+                continue;
+            }
+
+            if(!should_apply_gizmo_delta)
+            {
                 continue;
             }
 

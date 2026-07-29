@@ -128,26 +128,27 @@ public:
     //-------------------------------------------------------------------------
 
     /**
-     * @brief Get the rotation component as Euler angles.
-     * @return The rotation component as Euler angles.
+     * @brief Get the rotation component as Euler angles (radians).
+     * Prefers the stored Euler hint when it still matches the quaternion.
      */
     auto get_rotation_euler() const noexcept -> vec3_t;
 
     /**
      * @brief Get the rotation component as Euler angles in degrees.
-     * @return The rotation component as Euler angles in degrees.
+     *
+     * Uses a Unity-style Euler hint so inspector/script edits keep the typed
+     * axes stable across frames (quaternion decomposition is not unique).
      */
     auto get_rotation_euler_degrees() const noexcept -> vec3_t;
 
     /**
-     * @brief Get the rotation component as Euler angles in degrees with a hint.
-     * @param hint The hint vector for calculating the Euler angles.
-     * @return The rotation component as Euler angles in degrees.
+     * @brief Get Euler degrees closest to @p hint (360-wrap sync only).
+     * @param hint Preferred Euler degrees for continuity.
      */
     auto get_rotation_euler_degrees(vec3_t hint) const noexcept -> vec3_t;
 
     /**
-     * @brief Set the rotation component using Euler angles.
+     * @brief Set the rotation from Euler angles (radians) and update the Euler hint.
      * @param euler_angles The Euler angles to set.
      */
     void set_rotation_euler(const vec3_t& euler_angles) noexcept;
@@ -198,6 +199,23 @@ public:
      * @brief Reset the rotation component to identity.
      */
     void reset_rotation() noexcept;
+
+    /**
+     * @brief True when an authored Euler hint is currently valid.
+     */
+    auto has_rotation_euler_hint() const noexcept -> bool;
+
+    /**
+     * @brief Restores an authoring Euler hint after loading a quaternion.
+     * Always trusts the provided hint (needed near gimbal lock / serialization).
+     */
+    void restore_euler_angles_hint_degrees(const vec3_t& hint) const noexcept;
+
+    /**
+     * @brief Restores @p hint only when it still represents the current orientation.
+     * @return True if the hint was accepted.
+     */
+    auto try_restore_euler_angles_hint_degrees(const vec3_t& hint) const noexcept -> bool;
 
     //-------------------------------------------------------------------------
     // Scale Methods
@@ -723,6 +741,32 @@ private:
     mutable bool is_skew_zero_cached_ = true;
     mutable bool is_perspective_identity_cached_ = true;
     mutable bool is_scale_uniform_cached_ = true;
+
+    /**
+     * @brief Authoring Euler degrees matching the last set_rotation_euler* call.
+     * Valid while euler_hint_dirty_ is false and the hint still maps to rotation_.
+     */
+    mutable vec3_t euler_angles_hint_ = glm::zero<vec3_t>();
+
+    /**
+     * @brief When true, euler_angles_hint_ must be rebuilt from rotation_.
+     */
+    mutable bool euler_hint_dirty_ = true;
+
+    /**
+     * @brief True when @p a and @p b represent the same orientation (including q vs -q).
+     */
+    static auto rotations_equivalent(const quat_t& a, const quat_t& b) noexcept -> bool;
+
+    /**
+     * @brief Wrap @p angles toward @p hint by 360 degrees per axis.
+     */
+    static auto sync_euler_degrees_to_hint(vec3_t angles, const vec3_t& hint) noexcept -> vec3_t;
+
+    /**
+     * @brief Marks the Euler hint invalid so the next get recomputes from the quaternion.
+     */
+    void make_euler_hint_dirty() const noexcept;
 };
 
 template<typename T, precision Q>
@@ -801,41 +845,74 @@ TRANSFORM_INLINE void transform_t<T, Q>::reset_position() noexcept
 }
 
 template<typename T, precision Q>
+TRANSFORM_INLINE auto transform_t<T, Q>::rotations_equivalent(const quat_t& a, const quat_t& b) noexcept -> bool
+{
+    // Orientation equality: q and -q are the same rotation. Tolerance is looser than
+    // machine epsilon so euler->quat->hint validation stays stable while editing.
+    constexpr T k_rotation_dot_tolerance = T(1) - T(1e-4);
+    return abs(dot(a, b)) >= k_rotation_dot_tolerance;
+}
+
+template<typename T, precision Q>
+TRANSFORM_INLINE auto transform_t<T, Q>::sync_euler_degrees_to_hint(vec3_t angles, const vec3_t& hint) noexcept
+    -> vec3_t
+{
+    auto repeat_working = [](T t, T length) -> T
+    {
+        return (t - (floor(t / length) * length));
+    };
+    angles.x = repeat_working(angles.x - hint.x + T(180), T(360)) + hint.x - T(180);
+    angles.y = repeat_working(angles.y - hint.y + T(180), T(360)) + hint.y - T(180);
+    angles.z = repeat_working(angles.z - hint.z + T(180), T(360)) + hint.z - T(180);
+    return angles;
+}
+
+template<typename T, precision Q>
+TRANSFORM_INLINE void transform_t<T, Q>::make_euler_hint_dirty() const noexcept
+{
+    euler_hint_dirty_ = true;
+}
+
+template<typename T, precision Q>
 TRANSFORM_INLINE auto transform_t<T, Q>::get_rotation_euler() const noexcept -> typename transform_t<T, Q>::vec3_t
 {
-    return eulerAngles(get_rotation());
+    return radians(get_rotation_euler_degrees());
 }
 
 template<typename T, precision Q>
 TRANSFORM_INLINE auto transform_t<T, Q>::get_rotation_euler_degrees() const noexcept ->
     typename transform_t<T, Q>::vec3_t
 {
-    auto angles = degrees(get_rotation_euler());
-    return angles;
+    update_components();
+    // Trust the authoring hint until set_rotation / matrix decompose dirties it.
+    // Re-validating hint->quat near gimbal lock (pitch ~ +/-90) is numerically
+    // unstable and causes X/Z to flip between equivalent Euler triples.
+    if(!euler_hint_dirty_)
+    {
+        return euler_angles_hint_;
+    }
+    euler_angles_hint_ = degrees(eulerAngles(rotation_));
+    euler_hint_dirty_ = false;
+    return euler_angles_hint_;
 }
 
 template<typename T, precision Q>
 TRANSFORM_INLINE auto transform_t<T, Q>::get_rotation_euler_degrees(vec3_t hint) const noexcept ->
     typename transform_t<T, Q>::vec3_t
 {
-    auto angles = get_rotation_euler_degrees();
-
-    static auto repeat_working = [](float t, float length)
-    {
-        return (t - (floor(t / length) * length));
-    };
-
-    angles.x = repeat_working(angles.x - hint.x + T(180), T(360)) + hint.x - T(180);
-    angles.y = repeat_working(angles.y - hint.y + T(180), T(360)) + hint.y - T(180);
-    angles.z = repeat_working(angles.z - hint.z + T(180), T(360)) + hint.z - T(180);
-
-    return angles;
+    update_components();
+    vec3_t angles = degrees(eulerAngles(rotation_));
+    return sync_euler_degrees_to_hint(angles, hint);
 }
 
 template<typename T, precision Q>
 TRANSFORM_INLINE void transform_t<T, Q>::set_rotation_euler(const vec3_t& euler_angles) noexcept
 {
-    set_rotation(quat_t(euler_angles));
+    update_components();
+    rotation_ = glm::normalize(quat_t(euler_angles));
+    euler_angles_hint_ = degrees(euler_angles);
+    euler_hint_dirty_ = false;
+    make_matrix_dirty();
 }
 
 template<typename T, precision Q>
@@ -847,7 +924,11 @@ TRANSFORM_INLINE void transform_t<T, Q>::set_rotation_euler(T x, T y, T z) noexc
 template<typename T, precision Q>
 TRANSFORM_INLINE void transform_t<T, Q>::set_rotation_euler_degrees(const vec3_t& euler_angles) noexcept
 {
-    set_rotation_euler(radians(euler_angles));
+    update_components();
+    rotation_ = glm::normalize(quat_t(radians(euler_angles)));
+    euler_angles_hint_ = euler_angles;
+    euler_hint_dirty_ = false;
+    make_matrix_dirty();
 }
 
 template<typename T, precision Q>
@@ -954,7 +1035,14 @@ template<typename T, precision Q>
 TRANSFORM_INLINE void transform_t<T, Q>::set_rotation(const quat_t& rotation) noexcept
 {
     update_components();
-    rotation_ = glm::normalize(rotation);
+    const quat_t normalized = glm::normalize(rotation);
+    // Undo/property actions re-apply the same orientation via set_rotation after
+    // set_rotation_euler*. Keep the typed Euler hint unless orientation actually changed.
+    if(!rotations_equivalent(normalized, rotation_))
+    {
+        make_euler_hint_dirty();
+    }
+    rotation_ = normalized;
     make_matrix_dirty();
 }
 
@@ -968,7 +1056,37 @@ TRANSFORM_INLINE void transform_t<T, Q>::set_rotation(const vec3_t& x, const vec
 template<typename T, precision Q>
 TRANSFORM_INLINE void transform_t<T, Q>::reset_rotation() noexcept
 {
-    set_rotation(glm::identity<quat_t>());
+    set_rotation_euler_degrees(glm::zero<vec3_t>());
+}
+
+template<typename T, precision Q>
+TRANSFORM_INLINE auto transform_t<T, Q>::has_rotation_euler_hint() const noexcept -> bool
+{
+    return !euler_hint_dirty_;
+}
+
+template<typename T, precision Q>
+TRANSFORM_INLINE void transform_t<T, Q>::restore_euler_angles_hint_degrees(const vec3_t& hint) const noexcept
+{
+    // Trust the authored hint. Near gimbal lock, quat(hint) may not compare equal to the
+    // stored quaternion even when it is the intended authoring triple.
+    euler_angles_hint_ = hint;
+    euler_hint_dirty_ = false;
+}
+
+template<typename T, precision Q>
+TRANSFORM_INLINE auto transform_t<T, Q>::try_restore_euler_angles_hint_degrees(const vec3_t& hint) const noexcept
+    -> bool
+{
+    update_components();
+    const quat_t from_hint = glm::normalize(quat_t(radians(hint)));
+    if(!rotations_equivalent(from_hint, rotation_))
+    {
+        return false;
+    }
+    euler_angles_hint_ = hint;
+    euler_hint_dirty_ = false;
+    return true;
 }
 
 template<typename T, precision Q>
@@ -1392,9 +1510,22 @@ TRANSFORM_INLINE void transform_t<T, Q>::update_components() const noexcept
 {
     if(components_need_recompute_)
     {
+        const bool had_euler_hint = !euler_hint_dirty_;
+        const vec3_t saved_euler_hint = euler_angles_hint_;
         glm_decompose(get_matrix(), scale_, rotation_, position_, skew_, perspective_);
 
         components_need_recompute_ = false;
+        // Keep authored Euler across matrix decompose. Re-validating hint->quat near
+        // gimbal lock is unstable and is exactly what makes inspector XYZ jump after edit.
+        if(had_euler_hint)
+        {
+            euler_angles_hint_ = saved_euler_hint;
+            euler_hint_dirty_ = false;
+        }
+        else
+        {
+            make_euler_hint_dirty();
+        }
 
         is_perspective_identity_cached_ = is_perspective_identity();
         is_skew_zero_cached_ = is_skew_zero();
