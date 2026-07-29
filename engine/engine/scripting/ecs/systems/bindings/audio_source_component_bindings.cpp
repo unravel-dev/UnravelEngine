@@ -4,7 +4,10 @@
 #include "../script_interop.h"
 
 #include <engine/assets/asset_manager.h>
+#include <engine/audio/audio_bus.h>
 #include <engine/audio/ecs/components/audio_source_component.h>
+#include <engine/audio/ecs/systems/audio_system.h>
+#include <engine/engine.h>
 
 namespace unravel
 {
@@ -235,6 +238,105 @@ void internal_m2n_audio_source_set_audio_clip(entt::entity id, hpp::uuid uid)
     }
 }
 
+auto internal_m2n_audio_source_get_spatial(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        return comp->is_spatial();
+    }
+    return true;
+}
+
+void internal_m2n_audio_source_set_spatial(entt::entity id, bool spatial)
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        comp->set_spatial(spatial);
+    }
+}
+
+auto internal_m2n_audio_source_get_bus(entt::entity id) -> std::uint8_t
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        return static_cast<std::uint8_t>(comp->get_bus());
+    }
+    return static_cast<std::uint8_t>(audio_bus::sfx);
+}
+
+void internal_m2n_audio_source_set_bus(entt::entity id, std::uint8_t bus)
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        if(bus < audio_bus_count)
+        {
+            comp->set_bus(static_cast<audio_bus>(bus));
+        }
+    }
+}
+
+auto internal_m2n_audio_source_get_priority(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        return comp->get_priority();
+    }
+    return 0;
+}
+
+void internal_m2n_audio_source_set_priority(entt::entity id, int priority)
+{
+    if(auto comp = safe_get_component<audio_source_component>(id))
+    {
+        comp->set_priority(priority);
+    }
+}
+
+auto internal_m2n_audio_get_master_volume() -> float
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<audio_system>())
+    {
+        return 1.0f;
+    }
+    return ctx.get_cached<audio_system>().get_master_volume();
+}
+
+void internal_m2n_audio_set_master_volume(float volume)
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<audio_system>())
+    {
+        return;
+    }
+    ctx.get_cached<audio_system>().set_master_volume(volume);
+}
+
+auto internal_m2n_audio_get_bus_volume(std::uint8_t bus) -> float
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<audio_system>() || bus >= audio_bus_count)
+    {
+        return 1.0f;
+    }
+    return ctx.get_cached<audio_system>().get_bus_volume(static_cast<audio_bus>(bus));
+}
+
+void internal_m2n_audio_set_bus_volume(std::uint8_t bus, float volume)
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<audio_system>() || bus >= audio_bus_count)
+    {
+        return;
+    }
+    ctx.get_cached<audio_system>().set_bus_volume(static_cast<audio_bus>(bus), volume);
+}
+
+auto internal_m2n_audio_get_max_voices() -> int
+{
+    return static_cast<int>(audio_system::max_concurrent_voices);
+}
+
 } // namespace
 
 void register_audio_source_component_script_bindings()
@@ -281,6 +383,30 @@ void register_audio_source_component_script_bindings()
                             dotnet_internal_call(internal_m2n_audio_source_get_audio_clip));
     reg.add_internal_call("internal_m2n_audio_source_set_audio_clip",
                             dotnet_internal_call(internal_m2n_audio_source_set_audio_clip));
+    reg.add_internal_call("internal_m2n_audio_source_get_spatial",
+                            dotnet_internal_call(internal_m2n_audio_source_get_spatial));
+    reg.add_internal_call("internal_m2n_audio_source_set_spatial",
+                            dotnet_internal_call(internal_m2n_audio_source_set_spatial));
+    reg.add_internal_call("internal_m2n_audio_source_get_bus",
+                            dotnet_internal_call(internal_m2n_audio_source_get_bus));
+    reg.add_internal_call("internal_m2n_audio_source_set_bus",
+                            dotnet_internal_call(internal_m2n_audio_source_set_bus));
+    reg.add_internal_call("internal_m2n_audio_source_get_priority",
+                            dotnet_internal_call(internal_m2n_audio_source_get_priority));
+    reg.add_internal_call("internal_m2n_audio_source_set_priority",
+                            dotnet_internal_call(internal_m2n_audio_source_set_priority));
+
+    auto audio_reg = dotnet::internal_call_registry("Unravel.Core.Audio");
+    audio_reg.add_internal_call("internal_m2n_audio_get_master_volume",
+                                dotnet_internal_call(internal_m2n_audio_get_master_volume));
+    audio_reg.add_internal_call("internal_m2n_audio_set_master_volume",
+                                dotnet_internal_call(internal_m2n_audio_set_master_volume));
+    audio_reg.add_internal_call("internal_m2n_audio_get_bus_volume",
+                                dotnet_internal_call(internal_m2n_audio_get_bus_volume));
+    audio_reg.add_internal_call("internal_m2n_audio_set_bus_volume",
+                                dotnet_internal_call(internal_m2n_audio_set_bus_volume));
+    audio_reg.add_internal_call("internal_m2n_audio_get_max_voices",
+                                dotnet_internal_call(internal_m2n_audio_get_max_voices));
 }
 
 } // namespace unravel

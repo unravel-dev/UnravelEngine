@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include <audiopp/source.h>
+#include <engine/audio/audio_bus.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/components/basic_component.h>
 #include <math/math.h>
@@ -117,7 +118,6 @@ public:
      */
     auto get_playback_duration() const -> audio::duration_t;
 
-
     /**
      * @brief Starts playing the audio source.
      */
@@ -169,6 +169,52 @@ public:
     auto is_looping() const -> bool;
 
     /**
+     * @brief Sets whether the source is spatial (3D world) or relative/2D (UI/music).
+     * @param spatial True for world-space attenuation; false for listener-relative.
+     */
+    void set_spatial(bool spatial);
+
+    /**
+     * @brief Gets whether the source is spatial (3D).
+     */
+    auto is_spatial() const -> bool;
+
+    /**
+     * @brief Sets the mixer bus for this source.
+     */
+    void set_bus(audio_bus bus);
+
+    /**
+     * @brief Gets the mixer bus for this source.
+     */
+    auto get_bus() const -> audio_bus;
+
+    /**
+     * @brief Sets voice-steal priority. Higher values are kept when the voice cap is hit.
+     */
+    void set_priority(int priority);
+
+    /**
+     * @brief Gets voice-steal priority.
+     */
+    auto get_priority() const -> int;
+
+    /**
+     * @brief True when an OpenAL source object is currently allocated.
+     */
+    auto has_source() const -> bool;
+
+    /**
+     * @brief Stops and releases the OpenAL source (used by the voice limiter).
+     */
+    void release_source();
+
+    /**
+     * @brief Recomputes OpenAL volume from component volume and mixer gains.
+     */
+    void apply_mixer_volume();
+
+    /**
      * @brief Sets the audio clip for the audio source.
      * @param sound The audio clip to set.
      */
@@ -207,6 +253,9 @@ private:
     bool auto_play_ = false;                ///< Indicates if the audio source should autoplay.
     bool loop_ = false;                     ///< Indicates if the audio source should loop.
     bool muted_ = false;                    ///< Indicates if the audio source is muted.
+    bool spatial_ = false;                   ///< True = 3D world space; false = listener-relative 2D/UI.
+    audio_bus bus_ = audio_bus::sfx;        ///< Mixer bus for this source.
+    int priority_ = 0;                      ///< Voice steal priority (higher is kept).
     float volume_ = 1.0f;                   ///< The volume level of the audio source. Range: [0.0, 1.0].
     float pitch_ = 1.0f;                    ///< The pitch level of the audio source. Range: [0.5, 2.0].
     float volume_rolloff_ = 1.0f;           ///< The volume rolloff factor of the audio source. Range: [0.0, 10.0].

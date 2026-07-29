@@ -152,6 +152,34 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Gets or sets whether the source is spatial (3D world). When false, playback is
+        /// listener-relative (2D / UI / music) and does not distance-attenuate.
+        /// </summary>
+        public bool spatial
+        {
+            get => internal_m2n_audio_source_get_spatial(owner);
+            set => internal_m2n_audio_source_set_spatial(owner, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the mixer bus this source routes through.
+        /// </summary>
+        public AudioBus bus
+        {
+            get => (AudioBus)internal_m2n_audio_source_get_bus(owner);
+            set => internal_m2n_audio_source_set_bus(owner, (byte)value);
+        }
+
+        /// <summary>
+        /// Gets or sets voice-steal priority. Higher values are kept when the voice cap is hit.
+        /// </summary>
+        public int priority
+        {
+            get => internal_m2n_audio_source_get_priority(owner);
+            set => internal_m2n_audio_source_set_priority(owner, value);
+        }
+
+        /// <summary>
         /// Gets a value indicating whether the audio source is currently playing.
         /// </summary>
         /// <value><c>true</c> if the audio source is playing; otherwise, <c>false</c>.</value>
@@ -229,13 +257,35 @@ namespace Unravel.Core
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="position">The world position where the audio will be played.</param>
         /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
-        public static AudioSourceComponent PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f)
+        public static AudioSourceComponent PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f, AudioBus bus = AudioBus.Sfx)
         {
-            var entity = Scene.CreateEntity("One shot audio");
+            var entity = Scene.CreateEntity("One shot audio 3D");
             entity.transform.position = position;
             var audioSource = entity.AddComponent<AudioSourceComponent>();
             audioSource.clip = clip;
             audioSource.volume = volume;
+            audioSource.spatial = true;
+            audioSource.bus = bus;
+            audioSource.priority = 0;
+            audioSource.Play();
+            Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
+            return audioSource;
+        }
+
+        /// <summary>
+        /// Plays a one-shot audio clip as a 2D audio source.
+        /// </summary>
+        /// <param name="clip">The audio clip to play.</param>
+        /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
+        public static AudioSourceComponent PlayClip(AudioClip clip, float volume = 1.0f, AudioBus bus = AudioBus.Sfx)
+        {
+            var entity = Scene.CreateEntity("One shot audio 2D");
+            var audioSource = entity.AddComponent<AudioSourceComponent>();
+            audioSource.clip = clip;
+            audioSource.volume = volume;
+            audioSource.spatial = false;
+            audioSource.bus = bus;
+            audioSource.priority = 0;
             audioSource.Play();
             Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
             return audioSource;
@@ -312,5 +362,23 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_audio_source_set_audio_clip(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_audio_source_get_spatial(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_audio_source_set_spatial(Entity eid, bool spatial);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte internal_m2n_audio_source_get_bus(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_audio_source_set_bus(Entity eid, byte bus);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_audio_source_get_priority(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_audio_source_set_priority(Entity eid, int priority);
     }
 }
