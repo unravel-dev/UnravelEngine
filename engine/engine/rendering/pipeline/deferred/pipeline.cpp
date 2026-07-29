@@ -760,11 +760,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
     }
 
-    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path). TAA also
-    // consumes PREV_DEPTH for its real temporal disocclusion test -- keep the snapshot
-    // alive whenever TAA is enabled even if Hi-Z isn't driving it this frame.
-    const bool taa_active = static_cast<bool>(params.fill_taa_params);
-    if(hiz_active || taa_active)
+    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
+    if(hiz_active)
     {
         snapshot_prev_depth(rview, viewport_size);
     }
