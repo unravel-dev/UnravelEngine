@@ -1,4 +1,7 @@
 #include "mesh.h"
+
+#include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/mesh_sdf_source.h>
 #include "camera.h"
 #include "generator/generator.hpp"
 #include "glm/gtc/epsilon.hpp"
@@ -831,6 +834,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
     default_material_uids_ = std::move(data.default_material_uids);
+    submesh_sdfs_ = std::move(data.submesh_sdfs);
 
     const bool has_skin_data = data.skin_data.has_bones();
     const bool skin_is_prepared = data.skin_is_prepared;
@@ -903,7 +907,7 @@ auto mesh::create_plane(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_heightfield(const gfx::vertex_layout& format,
@@ -965,7 +969,7 @@ auto mesh::create_heightfield(const gfx::vertex_layout& format,
     auto mesh = rotate_mesh(hf_mesh, rot);
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_cube(const gfx::vertex_layout& format,
@@ -988,7 +992,7 @@ auto mesh::create_cube(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 
@@ -1012,7 +1016,7 @@ auto mesh::create_rounded_cube(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_sphere(const gfx::vertex_layout& format,
@@ -1032,7 +1036,7 @@ auto mesh::create_sphere(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_cylinder(const gfx::vertex_layout& format,
@@ -1057,7 +1061,7 @@ auto mesh::create_cylinder(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_capsule(const gfx::vertex_layout& format,
@@ -1078,7 +1082,7 @@ auto mesh::create_capsule(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_cone(const gfx::vertex_layout& format,
@@ -1100,7 +1104,7 @@ auto mesh::create_cone(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_torus(const gfx::vertex_layout& format,
@@ -1121,7 +1125,7 @@ auto mesh::create_torus(const gfx::vertex_layout& format,
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_teapot(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
@@ -1136,7 +1140,7 @@ auto mesh::create_teapot(const gfx::vertex_layout& format, bool hardware_copy /*
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_icosahedron(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
@@ -1151,7 +1155,7 @@ auto mesh::create_icosahedron(const gfx::vertex_layout& format, bool hardware_co
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_dodecahedron(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
@@ -1166,7 +1170,7 @@ auto mesh::create_dodecahedron(const gfx::vertex_layout& format, bool hardware_c
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 auto mesh::create_icosphere(const gfx::vertex_layout& format, int tesselation_level, bool hardware_copy /*= true*/)
@@ -1182,7 +1186,7 @@ auto mesh::create_icosphere(const gfx::vertex_layout& format, int tesselation_le
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
     // Finish up
-    return end_prepare(hardware_copy);
+    return end_prepare_primitive(hardware_copy);
 }
 
 void mesh::check_for_degenerates()
@@ -1597,6 +1601,71 @@ auto mesh::get_vertex_count() const -> uint32_t
     }
 
     return 0;
+}
+
+auto mesh::runtime_sdf_bake_settings() -> mesh_sdf_bake_settings
+{
+    mesh_sdf_bake_settings settings;
+    // Coarser than the asset compiler's default. This bake runs synchronously while the mesh is
+    // being created, and primitives are simple convex-ish shapes that a low resolution already
+    // represents well, so the extra detail would cost load time for no visible gain.
+    settings.resolution = 32;
+    return settings;
+}
+
+auto mesh::generate_sdf(const mesh_sdf_bake_settings& settings) -> bool
+{
+    APP_SCOPE_PERF("GI/Bake/Runtime Mesh SDF");
+    submesh_sdfs_.clear();
+    sdf_source_geometry geometry;
+    if(!extract_sdf_source_geometry(system_vb_, vertex_count_, vertex_format_, system_ib_, face_count_, geometry))
+    {
+        return false;
+    }
+    // One field covering everything. This path serves procedurally created primitives, which are
+    // a single submesh drawn at a single transform -- the per-submesh split exists for imported
+    // models, whose submeshes carry differing node transforms.
+    mesh_sdf field;
+    if(!bake_mesh_sdf(geometry, settings, field))
+    {
+        return false;
+    }
+    submesh_sdfs_.push_back(std::move(field));
+    return true;
+}
+
+auto mesh::end_prepare_primitive(bool hardware_copy) -> bool
+{
+    if(!end_prepare(hardware_copy))
+    {
+        return false;
+    }
+    // Procedurally created meshes never pass through the asset compiler, so this is their only
+    // opportunity to get a distance field. Without one they are invisible to the surface cache:
+    // they neither occlude nor bounce indirect light, which is easy to miss because they still
+    // render perfectly normally.
+    //
+    // A failed bake is not a failed mesh -- degenerate or sub-voxel primitives simply do not
+    // participate in global illumination.
+    generate_sdf();
+    return true;
+}
+
+auto mesh::get_sdf(uint32_t submesh_index) const -> const mesh_sdf&
+{
+    // A shared empty field for out-of-range requests, so callers can rely on a reference and
+    // detect absence with mesh_sdf::is_valid rather than having to bounds check first.
+    static const mesh_sdf empty_field;
+    if(submesh_index >= submesh_sdfs_.size())
+    {
+        return empty_field;
+    }
+    return submesh_sdfs_[submesh_index];
+}
+
+auto mesh::get_sdf_count() const -> uint32_t
+{
+    return uint32_t(submesh_sdfs_.size());
 }
 
 auto mesh::get_system_vb() -> uint8_t*

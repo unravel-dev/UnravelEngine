@@ -1,0 +1,353 @@
+#ifndef __GI_RADIANCE_CACHE_SH__
+#define __GI_RADIANCE_CACHE_SH__
+
+/*
+ * World-anchored spatial hash holding cached radiance.
+ *
+ * MIRROR OF engine/engine/rendering/gi/radiance_cache.{h,cpp}. The hash, the key derivation,
+ * the normal quantisation and the probe policy must match that file exactly -- it is the
+ * reference the gi_tests harness pins down, and a key that differs by one bit between the
+ * writer and the reader simply never finds anything, which looks like an empty cache rather
+ * than like a transcription bug.
+ *
+ * RESERVED RESOURCE STAGES 6 (keys) and 7 (payload).
+ */
+
+#include "../bgfx_compute.sh"
+
+#define GI_CACHE_PROBE_LENGTH 8
+#define GI_CACHE_EMPTY_KEY    0u
+#define GI_CACHE_INVALID_SLOT 0xFFFFFFFFu
+/// vec4 elements of payload per entry. Mirror of radiance_cache_gpu::data_vec4_stride.
+#define GI_CACHE_DATA_STRIDE  5
+
+/// x = capacity mask, y = base cell size, z = base distance, w = max level.
+uniform vec4 u_gi_cache_params;
+#define u_gi_cache_mask          uint(u_gi_cache_params.x)
+#define u_gi_cache_base_cell     u_gi_cache_params.y
+#define u_gi_cache_base_distance u_gi_cache_params.z
+#define u_gi_cache_max_level     u_gi_cache_params.w
+
+/// x = current frame, y = minimum blend weight, z = maximum samples, w = 1 when writable.
+uniform vec4 u_gi_cache_params2;
+#define u_gi_cache_frame       uint(u_gi_cache_params2.x)
+#define u_gi_cache_min_alpha   u_gi_cache_params2.y
+#define u_gi_cache_max_samples u_gi_cache_params2.z
+
+uint GiHashUint(uint value)
+{
+	uint state = value * 747796405u + 2891336453u;
+	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+	return (word >> 22u) ^ word;
+}
+
+uint GiHashCombine(uint seed, uint value)
+{
+	return GiHashUint(seed ^ (value + 0x9e3779b9u + (seed << 6u) + (seed >> 2u)));
+}
+
+/// Cube face of a given axis, sign included.
+uint GiFaceFromAxis(vec3 normal, uint axis)
+{
+	float axis_value = normal.z;
+	if(axis == 0u)
+	{
+		axis_value = normal.x;
+	}
+	else if(axis == 1u)
+	{
+		axis_value = normal.y;
+	}
+	return axis * 2u + (axis_value < 0.0 ? 1u : 0u);
+}
+
+/// Index of the largest component. Ties resolve deterministically, x before y before z.
+uint GiDominantAxis(vec3 magnitude)
+{
+	if(magnitude.y > magnitude.x && magnitude.y >= magnitude.z)
+	{
+		return 1u;
+	}
+	if(magnitude.z > magnitude.x && magnitude.z >= magnitude.y)
+	{
+		return 2u;
+	}
+	return 0u;
+}
+
+/**
+ * Quantises a normal to one of the 6 cube faces.
+ *
+ * Six, not a finer subdivision. A 2x2 split per face puts a bin boundary exactly through the
+ * face CENTRE -- that is, through the axis-aligned directions, which are by far the most common
+ * normals in a built scene. A floor at (0, 1, 0) then has its bin decided by the sign of two
+ * components that are both zero, so the tiniest disagreement between two sources of that normal
+ * yields a different bin, and every large flat surface becomes a permanent cache miss. With six
+ * faces the axis directions sit at bin CENTRES instead, where they are maximally robust.
+ *
+ * Coarse is also sufficient: the facing only has to separate surfaces that face meaningfully
+ * differently -- the two sides of a wall, the floor from the ceiling -- which six faces do.
+ */
+uint GiQuantizeNormal(vec3 normal)
+{
+	return GiFaceFromAxis(normal, GiDominantAxis(abs(normal)));
+}
+
+/// The runner up to GiQuantizeNormal, used to tolerate a facing near a bin boundary.
+uint GiQuantizeNormalSecond(vec3 normal)
+{
+	vec3 magnitude = abs(normal);
+	uint axis = GiDominantAxis(magnitude);
+	// Mask the winner out so the same comparison yields the runner up.
+	if(axis == 0u)
+	{
+		magnitude.x = -1.0;
+	}
+	else if(axis == 1u)
+	{
+		magnitude.y = -1.0;
+	}
+	else
+	{
+		magnitude.z = -1.0;
+	}
+	return GiFaceFromAxis(normal, GiDominantAxis(magnitude));
+}
+
+/// Unit direction of a cube face produced by GiQuantizeNormal.
+vec3 GiFaceDirection(uint face)
+{
+	uint axis = face >> 1u;
+	float face_sign = (face & 1u) != 0u ? -1.0 : 1.0;
+	vec3 direction = vec3_splat(0.0);
+	if(axis == 0u)
+	{
+		direction.x = face_sign;
+	}
+	else if(axis == 1u)
+	{
+		direction.y = face_sign;
+	}
+	else
+	{
+		direction.z = face_sign;
+	}
+	return direction;
+}
+
+float GiCacheCellSize(uint level)
+{
+	return u_gi_cache_base_cell * float(1u << level);
+}
+
+/**
+ * Level of detail from distance to the camera. Cells grow with distance so the cache stays
+ * bounded regardless of world size. A step function on purpose: within a level the cell size is
+ * constant, so a moving camera does not continuously reshape the grid under the cached values.
+ */
+uint GiCacheLevel(vec3 position, vec3 camera_position)
+{
+	float distance = length(position - camera_position);
+	if(distance <= u_gi_cache_base_distance)
+	{
+		return 0u;
+	}
+	float ratio = distance / u_gi_cache_base_distance;
+	float level = floor(log2(ratio)) + 1.0;
+	return uint(clamp(level, 0.0, u_gi_cache_max_level));
+}
+
+/**
+ * The key for a surface point. Depends only on quantised position, level and facing, never on
+ * anything camera-derived, which is what makes a point resolve to the same entry from any
+ * viewpoint. The normal is part of the key so the lit and unlit sides of a wall never share an
+ * entry -- the first line of defence against light leaking through it.
+ */
+uint GiCacheKeyForFace(vec3 position, uint face, uint level)
+{
+	float cell_size = GiCacheCellSize(level);
+	// Lift half a cell along the face direction before snapping. A surface lying exactly on a
+	// cell plane -- a ground plane at y = 0 with 0.25 m cells, say -- otherwise has the grid
+	// boundary running through it, so the sign of a rounding error decides the cell and a writer
+	// and reader that disagree by an epsilon address different entries. Half a cell is far
+	// larger than any such epsilon, and the offset is derived from the QUANTISED face rather
+	// than the raw normal so both sides shift identically.
+	vec3 snapped = position + GiFaceDirection(face) * (cell_size * 0.5);
+	// floor, not truncation: truncation folds the cells either side of zero together, putting
+	// two surfaces a whole cell apart into one entry across every axis plane.
+	vec3 cell = floor(snapped / cell_size);
+	uint key = GiHashUint(uint(int(cell.x)));
+	key = GiHashCombine(key, uint(int(cell.y)));
+	key = GiHashCombine(key, uint(int(cell.z)));
+	key = GiHashCombine(key, level);
+	key = GiHashCombine(key, face);
+	// Never produce the empty sentinel, or an occupied slot would read as free.
+	return key == GI_CACHE_EMPTY_KEY ? 1u : key;
+}
+
+uint GiCacheKey(vec3 position, vec3 normal, uint level)
+{
+	return GiCacheKeyForFace(position, GiQuantizeNormal(normal), level);
+}
+
+#endif // __GI_RADIANCE_CACHE_SH__
+
+#if defined(GI_CACHE_READ_ONLY) || defined(GI_CACHE_READ_WRITE)
+
+#ifndef __GI_RADIANCE_CACHE_ACCESS_SH__
+#define __GI_RADIANCE_CACHE_ACCESS_SH__
+
+/*
+ * Cache storage access.
+ *
+ * Split from the pure key maths above so a read-only consumer -- the indirect lighting pass --
+ * can bind the buffers as read-only. Declaring them read/write everywhere would force every
+ * consumer into a UAV binding, which serialises against anything else touching the resource.
+ *
+ * Define exactly one of GI_CACHE_READ_ONLY or GI_CACHE_READ_WRITE before including.
+ */
+
+#ifdef GI_CACHE_READ_WRITE
+BUFFER_RW(b_gi_cache_keys, uint, 6);
+BUFFER_RW(b_gi_cache_data, vec4, 7);
+#else
+BUFFER_RO(b_gi_cache_keys, uint, 6);
+BUFFER_RO(b_gi_cache_data, vec4, 7);
+#endif
+
+/// Payload slot indices, per radiance_cache_gpu::data_vec4_stride.
+#define GI_CACHE_DATA_RADIANCE 0u
+#define GI_CACHE_DATA_POSITION 1u
+#define GI_CACHE_DATA_NORMAL   2u
+/// Surface properties of the cell, captured where it was discovered.
+///
+/// Without these the cache holds lighting but nothing about what the surface DOES with it, so
+/// bounced light comes back uncoloured -- a red floor cannot tint a wall -- and emitters cannot
+/// contribute at all, because emission is a material property rather than a light in the buffer.
+#define GI_CACHE_DATA_ALBEDO   3u
+#define GI_CACHE_DATA_EMISSIVE 4u
+
+uint GiCacheDataIndex(uint slot, uint field)
+{
+	return slot * uint(GI_CACHE_DATA_STRIDE) + field;
+}
+
+/**
+ * Finds a key's slot without inserting. Returns GI_CACHE_INVALID_SLOT when not resident.
+ */
+uint GiCacheFind(uint key)
+{
+	uint base = key & u_gi_cache_mask;
+	for(uint i = 0u; i < uint(GI_CACHE_PROBE_LENGTH); ++i)
+	{
+		uint slot = (base + i) & u_gi_cache_mask;
+		if(b_gi_cache_keys[slot] == key)
+		{
+			return slot;
+		}
+	}
+	return GI_CACHE_INVALID_SLOT;
+}
+
+/**
+ * Finds the slot for a surface, tolerating a facing that sits on a quantisation boundary.
+ *
+ * A writer and a reader derive the normal from different sources -- the G-buffer on one side,
+ * the field gradient on the other -- so a surface whose normal falls between two cube faces can
+ * be binned differently by each, and would then never be found. When the dominant face misses,
+ * the runner up is tried: near a tie both sides agree on the SET of the top two faces even when
+ * they disagree on the order, so this always covers the writer's choice.
+ */
+uint GiCacheFindSurface(vec3 position, vec3 normal, uint level)
+{
+	uint slot = GiCacheFind(GiCacheKeyForFace(position, GiQuantizeNormal(normal), level));
+	if(slot == GI_CACHE_INVALID_SLOT)
+	{
+		slot = GiCacheFind(GiCacheKeyForFace(position, GiQuantizeNormalSecond(normal), level));
+	}
+	return slot;
+}
+
+#ifdef GI_CACHE_READ_WRITE
+
+/**
+ * Finds a key's slot, claiming a free one or evicting the oldest when the chain is full.
+ *
+ * Only the KEYS contend: many threads may resolve to the same cell, so claiming a slot is done
+ * with compare-exchange. The payload is written by exactly one thread per entry in the update
+ * pass, so it needs no atomics and no fixed-point accumulation.
+ */
+uint GiCacheInsert(uint key, uint frame)
+{
+	uint base = key & u_gi_cache_mask;
+	uint oldest_slot = GI_CACHE_INVALID_SLOT;
+	uint oldest_frame = 0xFFFFFFFFu;
+	uint oldest_key = GI_CACHE_EMPTY_KEY;
+	for(uint i = 0u; i < uint(GI_CACHE_PROBE_LENGTH); ++i)
+	{
+		uint slot = (base + i) & u_gi_cache_mask;
+		uint previous;
+		atomicFetchCompareExchange(b_gi_cache_keys[slot], GI_CACHE_EMPTY_KEY, key, previous);
+		if(previous == GI_CACHE_EMPTY_KEY)
+		{
+			// Freshly claimed. Only the KEYS are ever cleared -- the payload is deliberately left
+			// alone at startup, on the reasoning that an entry is unreachable until its key
+			// matches. Claiming a key is exactly the moment that stops being true, so the payload
+			// has to be initialised here or the first read sees whatever the allocation held.
+			//
+			// This is the one place that can tell a fresh claim from a repeat, so callers cannot
+			// do it: they receive a slot either way and zeroing on every call would reset the
+			// accumulation every frame.
+			b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)] = vec4_splat(0.0);
+			b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_ALBEDO)] = vec4_splat(0.0);
+			b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_EMISSIVE)] = vec4_splat(0.0);
+			return slot;
+		}
+		if(previous == key)
+		{
+			return slot;
+		}
+		uint slot_frame = uint(b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_POSITION)].w);
+		if(slot_frame < oldest_frame)
+		{
+			oldest_frame = slot_frame;
+			oldest_slot = slot;
+			oldest_key = previous;
+		}
+	}
+	// The chain is full. Take the least recently touched entry: a cell being asked for now
+	// matters more than one nothing has looked at in a while. This is what replaces a free
+	// list -- nothing to compact, no fragmentation to accumulate.
+	//
+	// Never take one touched THIS frame, though. Two cells contending for one chain would
+	// otherwise replace each other every frame and neither would ever accumulate.
+	if(oldest_slot == GI_CACHE_INVALID_SLOT || oldest_frame >= frame)
+	{
+		return GI_CACHE_INVALID_SLOT;
+	}
+	// Compare against the key we actually observed: if another thread claimed the victim in
+	// the meantime, its claim stands and this one gives up rather than stamping over it.
+	uint previous;
+	atomicFetchCompareExchange(b_gi_cache_keys[oldest_slot], oldest_key, key, previous);
+	if(previous != oldest_key)
+	{
+		return GI_CACHE_INVALID_SLOT;
+	}
+	// Reset the payload: this slot now represents a different cell entirely, and inheriting the
+	// previous occupant's radiance would bleed one part of the world into another.
+	//
+	// EVERY field, not just the radiance. The surface properties are read back as albedo and
+	// emissive, so a stale emissive left behind by the previous occupant is injected as light
+	// that nothing in the scene emits -- arbitrary coloured blobs wherever a slot was recycled.
+	// The buffer is never cleared wholesale either, so an uninitialised field is not zero, it is
+	// whatever the allocation happened to contain.
+	b_gi_cache_data[GiCacheDataIndex(oldest_slot, GI_CACHE_DATA_RADIANCE)] = vec4_splat(0.0);
+	b_gi_cache_data[GiCacheDataIndex(oldest_slot, GI_CACHE_DATA_ALBEDO)] = vec4_splat(0.0);
+	b_gi_cache_data[GiCacheDataIndex(oldest_slot, GI_CACHE_DATA_EMISSIVE)] = vec4_splat(0.0);
+	return oldest_slot;
+}
+
+#endif // GI_CACHE_READ_WRITE
+
+#endif // __GI_RADIANCE_CACHE_ACCESS_SH__
+#endif // GI_CACHE_READ_ONLY || GI_CACHE_READ_WRITE

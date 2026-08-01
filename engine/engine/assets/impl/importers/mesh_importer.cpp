@@ -1188,7 +1188,7 @@ void process_animation(const aiScene* scene,
                   });
     }
 
-    APPLOG_TRACE("Mesh Importer : Animation {} discarded {} non relevat node keys", anim.name, skipped);
+    APPLOG_TRACE("Mesh Importer: Animation {} discarded {} non relevat node keys", anim.name, skipped);
 }
 void process_animations(const aiScene* scene,
                         const fs::path& filename,

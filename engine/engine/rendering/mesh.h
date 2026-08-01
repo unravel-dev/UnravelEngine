@@ -1,6 +1,8 @@
 #pragma once
 #include <engine/engine_export.h>
 #include <engine/assets/asset_handle.h>
+#include <engine/rendering/gi/mesh_sdf.h>
+#include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/material.h>
 #include <base/basetypes.hpp>
 #include <graphics/graphics.h>
@@ -479,6 +481,18 @@ public:
 
         ///< UIDs of default materials generated during import, indexed by data_group_id.
         std::vector<hpp::uuid> default_material_uids;
+
+        ///< Sparse signed distance fields baked at compile time and used by the GI tracer, ONE
+        ///< PER SUBMESH and in submesh order.
+        ///
+        ///< Per submesh rather than per mesh because submeshes are drawn at their own node
+        ///< transforms, which importers routinely differ between. A single field covering the
+        ///< whole mesh would have to be placed at several transforms at once to be correct, and
+        ///< placing it at each in turn duplicates the entire model once per transform.
+        ///
+        ///< An individual entry may be invalid when that submesh is degenerate or sub-voxel; the
+        ///< vector is empty when the asset opted out entirely.
+        std::vector<mesh_sdf> submesh_sdfs;
     };
 
     /**
@@ -830,6 +844,51 @@ public:
      * @return uint32_t The number of vertices.
      */
     auto get_vertex_count() const -> uint32_t;
+
+    /**
+     * @brief Default bake controls for runtime-generated meshes.
+     */
+    static auto runtime_sdf_bake_settings() -> mesh_sdf_bake_settings;
+
+    /**
+     * @brief Bakes a signed distance field for this mesh from its prepared geometry.
+     *
+     * For meshes built at runtime. Compiled assets carry a field baked by the asset compiler,
+     * which is preferable because it happens once at import rather than on every load; a mesh
+     * created procedurally has no such opportunity, and without a field it is invisible to the
+     * surface cache -- it neither occludes nor bounces indirect light.
+     *
+     * Must be called after @ref end_prepare, which is what populates the system-memory vertex
+     * and index buffers this reads.
+     *
+     * @param settings Bake controls. The default resolution is deliberately lower than the
+     *                 asset compiler's, since this runs synchronously on load and primitives
+     *                 are simple shapes that a coarse field represents well.
+     * @return true when a usable field was produced.
+     */
+    auto generate_sdf(const mesh_sdf_bake_settings& settings = runtime_sdf_bake_settings()) -> bool;
+
+    /**
+     * @brief Finishes a procedurally created mesh: @ref end_prepare, then @ref generate_sdf.
+     *
+     * The single exit point for every create_* primitive, so a new primitive cannot silently
+     * skip its distance field and go missing from global illumination.
+     */
+    auto end_prepare_primitive(bool hardware_copy = true) -> bool;
+
+    /**
+     * @brief Retrieves the signed distance field baked for this mesh.
+     *
+     * Returns an invalid (empty) field when the asset opted out of SDF generation or the
+     * bake could not produce one; callers must check @ref mesh_sdf::is_valid.
+     *
+     * @param submesh_index Index of the submesh, matching the order the renderer draws them in.
+     * @return const mesh_sdf& The baked field, in mesh local space.
+     */
+    auto get_sdf(uint32_t submesh_index = 0) const -> const mesh_sdf&;
+
+    /// @brief Number of baked fields, one per submesh. Zero when the mesh has none.
+    auto get_sdf_count() const -> uint32_t;
 
     /**
      * @brief Retrieves the underlying vertex data from the mesh.
@@ -1309,6 +1368,9 @@ protected:
     bool optimize_mesh_ = false;
     ///< Axis aligned bounding box describing object dimensions in object space.
     math::bbox bbox_;
+    ///< Signed distance field baked at asset compile time, in object space. Consumed by the
+    ///< GI tracer; invalid when the asset has none.
+    std::vector<mesh_sdf> submesh_sdfs_;
     ///< Total number of faces in the prepared mesh.
     uint32_t face_count_ = 0;
     ///< Total number of vertices in the prepared mesh.

@@ -72,6 +72,9 @@ auto pipeline::init(rtti::context& ctx) -> bool
     ssr_pass_.init(ctx);
     hiz_pass_.init(ctx);
     ssil_pass_.init(ctx);
+    gi_cache_pass_.init(ctx);
+    gi_resolve_pass_.init(ctx);
+    sdf_debug_pass_.init(ctx);
 
     auto& am = ctx.get_cached<asset_manager>();
 

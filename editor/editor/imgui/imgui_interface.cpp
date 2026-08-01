@@ -311,6 +311,8 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
         gfx::frame();
     }
 
+    gfx::render_pass::reset();
+
 }
 
 void imgui_interface::draw_loading_overlay(const std::string& stage,

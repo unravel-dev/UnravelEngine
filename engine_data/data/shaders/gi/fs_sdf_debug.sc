@@ -1,0 +1,376 @@
+$input v_texcoord0
+
+/*
+ * Distance field debug view.
+ *
+ * The default modes trace through SdfTraceRay -- the SAME function the GI pass will use -- so
+ * what is on screen is the tracer itself, not a parallel implementation that could drift from
+ * it. The remaining modes are diagnostics that need per-instance internals a clean tracing API
+ * should not expose, so they run their own minimal loop.
+ *
+ * Stages 0-4 are reserved by sdf_common.sh.
+ */
+
+#include "../common.sh"
+#include "gi/sdf_common.sh"
+#include "gi/gpu_lights.sh"
+#include "gi/gi_lighting.sh"
+
+#define GI_CACHE_READ_ONLY
+#include "gi/radiance_cache.sh"
+
+uniform vec4 u_sdf_debug_params;
+#define u_max_steps    int(u_sdf_debug_params.x)
+#define u_max_distance u_sdf_debug_params.y
+#define u_debug_mode   int(u_sdf_debug_params.z)
+/// Hit threshold as a fraction of ONE VOXEL of the field being traced, not a world distance.
+/// See sdf_debug_pass::settings::surface_bias.
+#define u_surface_bias u_sdf_debug_params.w
+
+uniform vec4 u_sdf_debug_params2;
+/// Distance at which the per-instance tier hands over to the global cascade.
+#define u_near_field_distance u_sdf_debug_params2.x
+/// Minimum march step as a fraction of distance travelled. See SdfMinStep.
+#define u_step_relaxation     u_sdf_debug_params2.y
+/// Camera position, needed to pick a cache level for a traced hit.
+uniform vec4 u_gi_debug_camera;
+#define u_gi_debug_max_samples u_gi_debug_camera.w
+
+#define SDF_DEBUG_NORMALS    0
+#define SDF_DEBUG_STEP_COUNT 1
+#define SDF_DEBUG_HEADERS    2
+#define SDF_DEBUG_PROBE      3
+#define SDF_DEBUG_ENTRY      4
+#define SDF_DEBUG_CLIPMAP    5
+#define SDF_DEBUG_DIRECT     6
+#define SDF_DEBUG_CACHE      7
+#define SDF_DEBUG_CACHE_SLOTS 8
+#define SDF_DEBUG_CACHE_AGE   9
+#define SDF_DEBUG_CASCADE_LEVELS 10
+#define SDF_DEBUG_CACHE_ALBEDO 11
+
+/// Shades a traced hit by its normal, with a headlight so shape reads clearly.
+vec4 ShadeNormal(vec3 normal)
+{
+	vec3 view_dir = -normalize(mul(u_invView, vec4(0.0, 0.0, 1.0, 0.0)).xyz);
+	float lambert = saturate(dot(normal, -view_dir)) * 0.7 + 0.3;
+	return vec4((normal * 0.5 + vec3_splat(0.5)) * lambert, 1.0);
+}
+
+/**
+ * Per-instance introspection modes. These report what a specific stage of the residency path
+ * resolved to, which the traced modes cannot show: every failure in that path degrades into
+ * the same per-pixel noise regardless of which stage broke.
+ */
+bool RunDiagnosticMode(vec3 ray_origin, vec3 ray_dir, out vec4 out_color)
+{
+	out_color = vec4(0.0, 0.0, 0.0, 0.0);
+	vec3 inv_dir = 1.0 / max(abs(ray_dir), vec3_splat(1e-8)) * sign(ray_dir + vec3_splat(1e-20));
+	for(int i = 0; i < u_sdf_instance_count; ++i)
+	{
+		SdfInstance inst = SdfLoadInstance(i);
+		float t_near;
+		float t_far;
+		if(!SdfIntersectBounds(ray_origin, inv_dir, inst.world_bounds_min, inst.world_bounds_max,
+		                       u_max_distance, t_near, t_far))
+		{
+			continue;
+		}
+		SdfHeader header = SdfLoadHeader(inst.header_index);
+		if(u_debug_mode == SDF_DEBUG_ENTRY)
+		{
+			// Classifies the FIRST sample of a march, at the point where the ray enters the
+			// bounds. That is the only place the instance scale and the hit threshold are
+			// applied, and the one point the probe mode does not inspect.
+			//   GREEN -> healthy, comfortably above the threshold.
+			//   BLUE  -> positive but under the threshold, so it reads as a hit.
+			//   RED   -> negative, reads as a hit.
+			vec3 entry_local = SdfTransformPoint(inst.world_to_local_rows, ray_origin + ray_dir * t_near);
+			float entry_distance = SdfSampleLocal(header, entry_local) * inst.local_to_world_scale;
+			float entry_threshold = max(u_surface_bias * header.voxel_size * inst.local_to_world_scale, 1e-6);
+			// Explicit branches rather than a chained ternary: HLSL rejects nested ternaries
+			// whose arms it cannot unify, and the error surfaces only on the D3D backend.
+			if(entry_distance < 0.0)
+			{
+				out_color = vec4(1.0, 0.0, 0.0, 1.0);
+			}
+			else if(entry_distance < entry_threshold)
+			{
+				out_color = vec4(0.0, 0.0, 1.0, 1.0);
+			}
+			else
+			{
+				out_color = vec4(0.0, 1.0, 0.0, 1.0);
+			}
+			return true;
+		}
+		if(u_debug_mode == SDF_DEBUG_PROBE)
+		{
+			// What the brick lookup resolved to just inside the bounds, where a correct field
+			// must report an EMPTY brick.
+			//   RED   -> empty brick, as expected. The residency path is working.
+			//   GREEN -> surface brick with a non-zero texel: atlas has data but the
+			//            indirection resolved to the wrong brick.
+			//   BLACK -> surface brick reading a zero texel: the atlas was never written.
+			vec3 probe_local = SdfTransformPoint(inst.world_to_local_rows,
+			                                     ray_origin + ray_dir * (t_near + 0.05));
+			vec4 probe = SdfProbeLocal(header, probe_local);
+			out_color = vec4(probe.x, probe.y, probe.z, 1.0);
+			return true;
+		}
+		if(u_debug_mode == SDF_DEBUG_HEADERS)
+		{
+			// Header contents, so a buffer that never arrived reads as black rather than being
+			// inferred from a wrong-looking trace.
+			//   red = voxel size, green = grid dimension / 256, blue = header present
+			float has_size = header.voxel_size > 0.0 ? 1.0 : 0.0;
+			out_color = vec4(saturate(header.voxel_size * 20.0),
+			                 saturate(header.grid_dim.x / 256.0),
+			                 has_size,
+			                 1.0);
+			return true;
+		}
+	}
+	return false;
+}
+
+void main()
+{
+	vec2 uv = v_texcoord0;
+	// World-space ray through this pixel.
+	//
+	// Built with the engine's own clip helpers and deliberately without assuming which end of
+	// the depth range is near: unprojecting one point at an arbitrary depth and taking the
+	// direction from the camera is correct under either convention, so this cannot break if
+	// the project ever switches to a reversed range.
+	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(0.5)));
+	vec3 world_point = clipToWorld(u_invViewProj, clip);
+	vec3 ray_origin = mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+	vec3 ray_dir = normalize(world_point - ray_origin);
+
+	if(u_debug_mode == SDF_DEBUG_CACHE_SLOTS)
+	{
+		// Cache STORAGE, laid out directly on screen: the viewport is treated as a 256x256 grid
+		// of slots. Deliberately independent of tracing and of key lookup, so it separates "the
+		// cache is empty" from "the reader derives a different key than the writer" -- two
+		// failures that are indistinguishable in the lookup view, where both render as a miss.
+		//
+		//   BLACK -> slot empty. All black means insertion is not running at all.
+		//   RED   -> occupied, radiance still zero. Insertion works, lighting does not.
+		//   GREEN -> occupied and lit. Storage is fine; a miss in the lookup view is then a key
+		//            mismatch between writer and reader.
+		// Grid is derived from the capacity rather than fixed, so the view always covers the
+		// WHOLE table. A fixed grid silently shows a fraction of a larger table, which reads as
+		// healthy headroom that is not there.
+		uint grid_w = 1024u;
+		uint grid_h = max((u_gi_cache_mask + 1u) / grid_w, 1u);
+		uvec2 grid = uvec2(uv * vec2(float(grid_w), float(grid_h)));
+		uint slot = min(grid.y * grid_w + grid.x, u_gi_cache_mask);
+		if(b_gi_cache_keys[slot] == GI_CACHE_EMPTY_KEY)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+			return;
+		}
+		vec4 stored = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)];
+		float lit = dot(stored.xyz, stored.xyz) > 0.0 ? 1.0 : 0.0;
+		gl_FragColor = vec4(1.0 - lit, lit, 0.0, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_HEADERS || u_debug_mode == SDF_DEBUG_PROBE ||
+	   u_debug_mode == SDF_DEBUG_ENTRY)
+	{
+		vec4 diagnostic;
+		if(RunDiagnosticMode(ray_origin, ray_dir, diagnostic))
+		{
+			gl_FragColor = diagnostic;
+			return;
+		}
+		gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+		return;
+	}
+
+	// The cascade in isolation. Worth seeing on its own: a fault in it is invisible in the
+	// combined trace, where the per-instance tier covers the near field and hides it.
+	SdfRayHit hit;
+	// The cascade-level view traces the cascade alone for the same reason the clipmap view does:
+	// a combined trace resolves the near field against per-instance fields, so the hit would not
+	// be on the cascade's isosurface and the level it reports would not be the one under test.
+	if(u_debug_mode == SDF_DEBUG_CLIPMAP || u_debug_mode == SDF_DEBUG_CASCADE_LEVELS)
+	{
+		hit = SdfTraceClipmap(ray_origin, ray_dir, 0.0, u_max_distance, u_max_steps, u_surface_bias,
+		                      u_step_relaxation);
+	}
+	else
+	{
+		hit = SdfTraceRay(ray_origin, ray_dir, u_max_distance, u_near_field_distance, u_max_steps,
+		                  u_surface_bias, u_step_relaxation);
+	}
+
+	if(u_debug_mode == SDF_DEBUG_STEP_COUNT)
+	{
+		// Step-count heat map: green is cheap, red is expensive.
+		//
+		// BLUE marks a ray that used its whole budget without resolving, which is what makes
+		// the traced surface fade out at distance and at shallow angles: sphere tracing
+		// converges slowly along a ray grazing a surface, because every step is limited by a
+		// distance that stays small the whole way. Without this, an exhausted ray and a ray
+		// that genuinely hit nothing look identical.
+		if(!hit.hit)
+		{
+			gl_FragColor = hit.exhausted ? vec4(0.0, 0.0, 1.0, 1.0) : vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		float cost = saturate(float(hit.steps) / float(max(u_max_steps, 1)));
+		gl_FragColor = vec4(cost, 1.0 - cost, 0.0, 1.0);
+		return;
+	}
+
+	if(!hit.hit)
+	{
+		gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_CASCADE_LEVELS)
+	{
+		// WHICH cascade answered at the traced surface, and how far into its cross-fade band it
+		// is. Levels are composed independently at different voxel sizes, so their isosurfaces do
+		// not coincide; where two consumers straddle a boundary they resolve onto points a voxel
+		// apart and stop finding each other's cache entries. That failure is invisible in every
+		// other view -- it looks like a cache that misses, not like a geometry problem -- so
+		// seeing the boundaries directly is what makes it diagnosable.
+		//
+		//   RED / GREEN / BLUE / YELLOW -> levels 0..3, finest first.
+		//   A smooth GRADIENT between two of those is the blend band doing its job.
+		//   A hard edge means the fade is off (blend width 0) and the field steps there.
+		vec3 level_color[4];
+		level_color[0] = vec3(1.0, 0.15, 0.15);
+		level_color[1] = vec3(0.15, 1.0, 0.15);
+		level_color[2] = vec3(0.2, 0.4, 1.0);
+		level_color[3] = vec3(1.0, 0.9, 0.2);
+		float blend;
+		float answered_voxel_size;
+		int level = SdfFindClipmapLevel(ray_origin + ray_dir * hit.t, blend, answered_voxel_size);
+		if(level >= SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			// Outside every cascade, so the per-instance tier is the only thing that answered.
+			gl_FragColor = vec4(0.25, 0.25, 0.25, 1.0);
+			return;
+		}
+		vec3 color = level_color[level];
+		if(level + 1 < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			color = mix(color, level_color[level + 1], blend);
+		}
+		gl_FragColor = vec4(color, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_CACHE)
+	{
+		// Looks the traced hit up in the WORLD-SPACE cache and shows what is stored there.
+		//
+		// The value shown was accumulated over previous frames by the cache update pass, not
+		// computed here, so this is direct evidence of the world-space claim: turn the camera
+		// away and back, and an entry is still populated rather than converging from nothing.
+		//
+		//   MAGENTA -> the surface has no entry yet. Expected briefly for newly seen geometry,
+		//              and permanently for anything insertion never reaches.
+		// Resolved, not raw: the writer and this reader must address the cache from the same
+		// point on the same surface, and neither a raster position nor a traced hit is that.
+		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
+		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
+		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
+		if(slot == GI_CACHE_INVALID_SLOT)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		vec4 stored = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)];
+		gl_FragColor = vec4(stored.xyz, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_CACHE_ALBEDO)
+	{
+		// The MATERIAL each cache entry holds, which is what tints the light it sends onward.
+		//
+		// Worth its own view because the failure it diagnoses is invisible everywhere else: a cell
+		// the camera has never looked at is discovered by a bounce ray, and a distance field carries
+		// geometry only, so without a material it falls back to a neutral grey and bounces colourless
+		// light forever. In the radiance view that is just a slightly wrong shade.
+		//
+		//   MAGENTA -> no entry here yet.
+		//   YELLOW  -> an entry with NO material, still bouncing the neutral fallback. Expected only
+		//              for surfaces reached solely through the cascade, which cannot attribute a
+		//              sample to one field. A yellow patch anywhere the near-field tier reaches is
+		//              the bug this view exists to catch.
+		//   otherwise -> the stored albedo.
+		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
+		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
+		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
+		if(slot == GI_CACHE_INVALID_SLOT)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		vec3 stored_albedo = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_ALBEDO)].xyz;
+		if(dot(stored_albedo, stored_albedo) <= 0.0)
+		{
+			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
+			return;
+		}
+		gl_FragColor = vec4(stored_albedo, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_CACHE_AGE)
+	{
+		// How CONVERGED each entry is, rather than what it holds. An entry accumulates one sample
+		// per frame, so a persistent one saturates within a second and stays there.
+		//
+		// This separates the two reasons a cached value can be unstable, which the radiance view
+		// shows identically. If an entry keeps being evicted or re-keyed, it restarts from zero
+		// samples and re-converges, and no amount of screen-space temporal filtering downstream
+		// can fix a signal that genuinely changes every frame.
+		//
+		//   MAGENTA    -> no entry.
+		//   RED        -> freshly created, near zero samples.
+		//   GREEN      -> fully converged.
+		//   Flickering red on a static camera means entries are churning, not accumulating.
+		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
+		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
+		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
+		if(slot == GI_CACHE_INVALID_SLOT)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		float samples = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].w;
+		float converged = saturate(samples / max(u_gi_debug_max_samples, 1.0));
+		gl_FragColor = vec4(1.0 - converged, converged, 0.0, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_DIRECT)
+	{
+		// Direct lighting evaluated AT THE TRACED HIT, from the resident light buffer. This is
+		// the operation the surface cache is built on: given a point found by a ray, work out
+		// how much light reaches it. Seeing it standalone verifies the whole chain -- fields
+		// resident, ray traced, hit position and normal correct, lights enumerable from a
+		// shader -- before any caching or accumulation is layered on top.
+		//
+		// Shadowing is resolved by tracing the fields toward each light, so it covers
+		// geometry anywhere -- including outside any shadow map's frustum.
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		// Visibility comes from tracing the fields toward each light, not from a shadow map.
+		vec3 irradiance = GiEvalDirectLighting(hit_position, hit.normal);
+		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour,
+		// which the fields do not carry yet (material voxels are a later phase).
+		gl_FragColor = vec4(irradiance * 0.8, 1.0);
+		return;
+	}
+
+	gl_FragColor = ShadeNormal(hit.normal);
+}

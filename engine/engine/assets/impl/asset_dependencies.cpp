@@ -81,6 +81,27 @@ void append_shader_varying_dependency(const fs::path& file_path, std::vector<fs:
     }
 }
 
+/// Directory shaderc treats as the include root, found by walking up to the `shaders` directory.
+///
+/// Shaders in this project include shared headers two ways: relative (`../common.sh`) and
+/// root-relative (`gi/radiance_cache.sh`). Only the first resolves against the including file's
+/// own directory, so the root has to be recovered to see the rest.
+auto find_shader_include_root(const fs::path& file_path) -> fs::path
+{
+    for(fs::path current = file_path.parent_path(); !current.empty(); current = current.parent_path())
+    {
+        if(current.filename() == "shaders")
+        {
+            return current;
+        }
+        if(!current.has_parent_path() || current.parent_path() == current)
+        {
+            break;
+        }
+    }
+    return file_path.parent_path();
+}
+
 void resolve_shader_dependencies(const fs::path& file_path,
                                  std::vector<fs::path>& processed_files,
                                  std::unordered_set<std::string>& visited,
@@ -127,7 +148,25 @@ void resolve_shader_dependencies(const fs::path& file_path,
             continue;
         }
         const std::string include_path = normalize_dependency_path_string(line.substr(start, end - start));
-        const fs::path resolved_path = fs::absolute(file_path.parent_path() / fs::path(include_path));
+        // Resolved against the including file's directory AND against the shared shader include
+        // root, because shaderc searches both. Relative-only resolution silently drops every
+        // root-relative include -- `#include "gi/foo.sh"` from inside `shaders/gi/` becomes
+        // `shaders/gi/gi/foo.sh`, which does not exist.
+        //
+        // A dropped dependency is not a build error, it is a STALE BINARY: editing the shared
+        // header leaves every shader that includes it compiled from the previous version, so
+        // writers and readers of a shared layout silently disagree. That fails as corrupt data
+        // at runtime, with nothing pointing back at the build.
+        fs::path resolved_path = fs::absolute(file_path.parent_path() / fs::path(include_path));
+        fs::error_code exists_err;
+        if(!fs::exists(resolved_path, exists_err) || exists_err)
+        {
+            const fs::path root_relative = fs::absolute(find_shader_include_root(file_path) / fs::path(include_path));
+            if(fs::exists(root_relative, exists_err) && !exists_err)
+            {
+                resolved_path = root_relative;
+            }
+        }
         resolve_shader_dependencies(resolved_path, processed_files, visited, false);
     }
 }

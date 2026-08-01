@@ -1,5 +1,14 @@
 file(GLOB_RECURSE libsrc *.h *.cpp *.hpp *.c *.cc)
 
+# Validation harnesses live in tests/ subdirectories and are built as their own
+# EXCLUDE_FROM_ALL executables, so they must not end up in the engine library (they define
+# their own main). Same arrangement as engine/core/seq.
+set(GI_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rendering/gi/tests")
+file(GLOB_RECURSE gi_tests_src "${GI_TESTS_DIR}/*.cpp" "${GI_TESTS_DIR}/*.h")
+if(gi_tests_src)
+    list(REMOVE_ITEM libsrc ${gi_tests_src})
+endif()
+
 set(target_name engine)
 
 add_library(${target_name} ${libsrc} ${shader_files})
@@ -73,3 +82,20 @@ endif()
 
 
 
+
+###############################################################################################
+# GI bake validation harness. Not built by default; run it explicitly:
+#   cmake --build <build-dir> --target gi_tests
+#   <build-dir>/bin/gi_tests
+if(gi_tests_src)
+    set(target_name gi_tests)
+    add_executable(${target_name} EXCLUDE_FROM_ALL ${gi_tests_src})
+
+    set_target_properties(${target_name} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+
+    target_link_libraries(${target_name} PRIVATE engine)
+endif()

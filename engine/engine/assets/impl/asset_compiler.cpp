@@ -35,9 +35,16 @@
 
 #include <engine/meta/scripting/script.hpp>
 
+#include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
+
+#include <poolstl/poolstl.hpp>
+
 #include <cmath>
+#include <numeric>
+#include <set>
+#include <thread>
 #include <fstream>
 #include <dotnetpp/dotnetpp.h>
 #include <regex>
@@ -659,20 +666,61 @@ auto compile_shader_to_file(const fs::path& input_path,
 
     // Vertex/fragment shaders that reference compute-style read/write buffers
     // (BUFFER_RO / BUFFER_RW / BUFFER_WO) need SSBO support, which requires a
-    // higher GLSL profile. Detect that up-front by scanning the shader source
-    // so the correct OpenGL profile is selected below.
+    // higher GLSL profile. Detect that up-front so the correct OpenGL profile is
+    // selected below.
+    //
+    // The scan follows #include directives: a shader that declares its buffers in a shared
+    // .sh header (as the GI shaders do) would otherwise look buffer-free, compile at the
+    // lower profile, and fail in the driver on OpenGL only -- a backend-specific break that
+    // no other platform reproduces.
     bool needs_compute_buffers = false;
     if(vs || fs)
     {
-        std::ifstream shader_file(str_input);
-        if(shader_file.is_open())
+        std::set<fs::path> visited;
+        std::vector<fs::path> pending{input_path};
+        while(!pending.empty() && !needs_compute_buffers)
         {
+            const fs::path current = pending.back();
+            pending.pop_back();
+            if(!visited.insert(current).second)
+            {
+                continue;
+            }
+            std::ifstream shader_file(current.string());
+            if(!shader_file.is_open())
+            {
+                continue;
+            }
             std::stringstream buffer;
             buffer << shader_file.rdbuf();
             const std::string source = buffer.str();
-            needs_compute_buffers = source.find("BUFFER_RO(") != std::string::npos
-                                 || source.find("BUFFER_RW(") != std::string::npos
-                                 || source.find("BUFFER_WO(") != std::string::npos;
+            if(source.find("BUFFER_RO(") != std::string::npos ||
+               source.find("BUFFER_RW(") != std::string::npos ||
+               source.find("BUFFER_WO(") != std::string::npos)
+            {
+                needs_compute_buffers = true;
+                break;
+            }
+            // Queue every #include "..." resolved against the including file's directory and
+            // against the shared shader include root, which is how shaderc resolves them.
+            size_t search_pos = 0;
+            while((search_pos = source.find("#include", search_pos)) != std::string::npos)
+            {
+                const size_t quote_open = source.find('"', search_pos);
+                if(quote_open == std::string::npos)
+                {
+                    break;
+                }
+                const size_t quote_close = source.find('"', quote_open + 1);
+                if(quote_close == std::string::npos)
+                {
+                    break;
+                }
+                const std::string relative = source.substr(quote_open + 1, quote_close - quote_open - 1);
+                pending.emplace_back(current.parent_path() / relative);
+                pending.emplace_back(include / relative);
+                search_pos = quote_close + 1;
+            }
         }
     }
 
@@ -1096,6 +1144,123 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         {
             APP_SCOPE_PERF("Generate LODs for Load Data");
             mesh::generate_lods_for_load_data(data, lod_configs);
+        }
+    }
+    // Bake the GI distance field from the final LOD0 topology. This runs after skinning and
+    // LOD generation because both can rewrite the vertex and index buffers; baking earlier
+    // would produce a field that no longer matches the geometry that ships.
+    if(importer->sdf.generate_sdf)
+    {
+        APPLOG_INFO("Baking SDF for {0}", str_input);
+        APP_SCOPE_PERF("Bake Mesh SDF");
+        mesh_sdf_bake_settings sdf_settings;
+        sdf_settings.resolution = importer->sdf.resolution;
+        sdf_settings.min_voxel_size = importer->sdf.min_voxel_size;
+        sdf_settings.max_voxel_size = importer->sdf.max_voxel_size;
+        sdf_settings.max_total_voxels = importer->sdf.max_total_voxels;
+        sdf_settings.two_sided = importer->sdf.two_sided;
+        sdf_settings.two_sided_thickness = importer->sdf.two_sided_thickness;
+        // One field PER SUBMESH, in submesh order. Submeshes are drawn at their own node
+        // transforms, so a single field covering the whole mesh could only be placed correctly
+        // for one of them; the GI registration relies on this indexing to match.
+        data.submesh_sdfs.assign(data.submeshes.size(), mesh_sdf{});
+
+        // data.lods holds the GENERATED levels only -- LOD 0 is the base topology in
+        // triangle_data -- so the valid request range is [0, lods.size()] and a mesh that
+        // generated fewer levels than asked for takes the coarsest one it has. Clamping rather
+        // than rejecting matters because the request means "cheaper": answering an unavailable
+        // level with full detail would be the most expensive possible reading of it.
+        const uint32_t lod_index = math::min<uint32_t>(importer->sdf.lod_index, uint32_t(data.lods.size()));
+        // The parallelism goes either outside this loop or inside each bake, never both: a
+        // nested poolstl range would wait on work queued behind its own pool thread and
+        // deadlock (see sdf_bake_threading).
+        //
+        // Which one wins depends on the model. With submeshes enough to fill the pool, running
+        // them in parallel and each bake serially is much better, because one small bake cannot
+        // fill the pool by itself and pays dispatch overhead per submesh. With fewer, that
+        // leaves threads idle, so the split reverses and each bake gets the whole pool -- a
+        // single-submesh prop is the common case and must not lose its parallelism.
+        const size_t worker_count = math::max<size_t>(std::thread::hardware_concurrency(), 1u);
+        const bool parallel_submeshes = data.submeshes.size() >= worker_count;
+        const auto threading =
+            parallel_submeshes ? sdf_bake_threading::serial : sdf_bake_threading::parallel;
+        std::vector<size_t> submesh_indices(data.submeshes.size());
+        std::iota(submesh_indices.begin(), submesh_indices.end(), size_t(0));
+        std::for_each(poolstl::par.par_if(parallel_submeshes),
+                      submesh_indices.begin(),
+                      submesh_indices.end(),
+                      [&](size_t i)
+                      {
+                          sdf_source_geometry sdf_geometry;
+                          if(!extract_sdf_source_geometry(data, lod_index, i, sdf_geometry))
+                          {
+                              return;
+                          }
+                          mesh_sdf field;
+                          if(!bake_mesh_sdf(sdf_geometry, sdf_settings, field, threading))
+                          {
+                              return;
+                          }
+                          data.submesh_sdfs[i] = std::move(field);
+                      });
+        // Totalled after the loop rather than inside it, so the reported numbers do not depend
+        // on thread interleaving and the loop needs no atomics. A bake only succeeds when it
+        // produced at least one surface brick, so that is the test for "this submesh baked".
+        size_t baked_count = 0;
+        size_t surface_bricks = 0;
+        size_t memory_bytes = 0;
+        bool any_two_sided_fallback = false;
+        for(const auto& field : data.submesh_sdfs)
+        {
+            const uint32_t bricks = field.get_surface_brick_count();
+            if(bricks == 0)
+            {
+                continue;
+            }
+            surface_bricks += bricks;
+            memory_bytes += field.get_memory_usage();
+            any_two_sided_fallback = any_two_sided_fallback || (field.is_two_sided && !sdf_settings.two_sided);
+            ++baked_count;
+        }
+        if(baked_count > 0)
+        {
+            APPLOG_INFO("Baked SDF for {0}: {1}/{2} submeshes, {3} surface bricks, {4} KB",
+                        str_input,
+                        baked_count,
+                        data.submeshes.size(),
+                        surface_bricks,
+                        memory_bytes / 1024);
+            // Bricks, not megabytes, are what the runtime is actually short of: they are slots in
+            // a fixed atlas shared by the whole scene. Reporting the per-submesh average alongside
+            // the total makes an over-budget model diagnosable at import time rather than at the
+            // point the atlas silently starts dropping fields, and says which way to move
+            // Max Total Voxels -- bake time moves with it in the same proportion.
+            APPLOG_INFO("  {0} bricks average per submesh, baked from LOD {1}. Lower the mesh's Max "
+                        "Total Voxels if the scene overruns the SDF atlas; both the atlas footprint "
+                        "and the bake time scale with it. Raising Bake From LOD cuts the bake time "
+                        "alone.",
+                        surface_bricks / math::max<size_t>(baked_count, 1u),
+                        lod_index);
+            if(any_two_sided_fallback)
+            {
+                // Reported rather than silent: an unsigned shell has no solid interior, so the
+                // mesh occludes but does not fill. If that is wrong for this asset, the mesh
+                // needs closing rather than a different SDF setting.
+                APPLOG_INFO("  {0} has submeshes that are not closed surfaces, so their SDFs were "
+                            "baked as unsigned shells. The inside/outside test is undefined on an "
+                            "open mesh and would otherwise mark regions outside it as solid.",
+                            str_input);
+            }
+        }
+        else
+        {
+            // A failed bake is not a failed compile: the mesh still renders, it just does not
+            // participate in GI.
+            data.submesh_sdfs.clear();
+            APPLOG_WARNING("Could not bake an SDF for {0}. The mesh will not contribute to "
+                           "global illumination. Sub-voxel or non-closed geometry usually needs "
+                           "a higher SDF resolution or the Two Sided flag.",
+                           str_input);
         }
     }
     // Save materials and register their UIDs before writing the mesh binary

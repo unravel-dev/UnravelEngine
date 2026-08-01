@@ -1,0 +1,449 @@
+#include "surface_cache_service.h"
+
+#include <engine/ecs/components/transform_component.h>
+#include <engine/ecs/ecs.h>
+#include <engine/profiler/profiler.h>
+#include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/mesh.h>
+#include <engine/rendering/model.h>
+
+#include <logging/logging.h>
+
+namespace
+{
+/// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
+auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
+{
+    static const gfx::vertex_layout layout = []()
+    {
+        gfx::vertex_layout decl;
+        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        return decl;
+    }();
+    return layout;
+}
+
+/// Writes row @p row of an affine transform as a vec4. glm stores column-major with
+/// m[column][row], so a row is gathered across columns.
+void write_affine_row(float* dst, const ::math::mat4& m, int row)
+{
+    dst[0] = m[0][row];
+    dst[1] = m[1][row];
+    dst[2] = m[2][row];
+    dst[3] = m[3][row];
+}
+} // namespace
+
+namespace unravel
+{
+
+auto surface_cache_service::init(rtti::context& ctx) -> bool
+{
+    sdf_atlas::settings atlas_settings;
+    if(!atlas_.init(atlas_settings))
+    {
+        APPLOG_WARNING("[SurfaceCache] Atlas initialisation failed. Surface cache GI is unavailable.");
+        return false;
+    }
+    sdf_instance_grid::settings grid_settings;
+    grid_.init(grid_settings);
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_.init(clipmap_settings);
+    if(!clipmap_gpu_.init(clipmap_settings.resolution))
+    {
+        APPLOG_WARNING("[SurfaceCache] Clipmap initialisation failed. Only per-instance field "
+                       "tracing will be available, so distant and offscreen geometry will not "
+                       "contribute.");
+    }
+    if(!light_buffer_.init())
+    {
+        APPLOG_WARNING("[SurfaceCache] Light buffer initialisation failed. Traced hits cannot be lit.");
+    }
+    if(!cache_gpu_.init(radiance_cache::default_capacity))
+    {
+        APPLOG_WARNING("[SurfaceCache] Radiance cache allocation failed. Indirect light will not be cached.");
+    }
+    return true;
+}
+
+auto surface_cache_service::deinit(rtti::context& ctx) -> bool
+{
+    instances_.clear();
+    clipmap_instances_.clear();
+    clipmap_keepalive_.clear();
+    residency_.clear();
+    if(bgfx::isValid(instance_buffer_))
+    {
+        gfx::destroy(instance_buffer_);
+        instance_buffer_ = {bgfx::kInvalidHandle};
+    }
+    instance_buffer_capacity_ = 0;
+    instance_data_.clear();
+    if(bgfx::isValid(grid_offset_buffer_))
+    {
+        gfx::destroy(grid_offset_buffer_);
+        grid_offset_buffer_ = {bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(grid_instance_buffer_))
+    {
+        gfx::destroy(grid_instance_buffer_);
+        grid_instance_buffer_ = {bgfx::kInvalidHandle};
+    }
+    grid_offset_capacity_ = 0;
+    grid_instance_capacity_ = 0;
+    grid_bounds_.clear();
+    grid_params_.fill(0.0f);
+    cache_gpu_.shutdown();
+    light_buffer_.shutdown();
+    clipmap_gpu_.shutdown();
+    atlas_.shutdown();
+    return true;
+}
+
+auto surface_cache_service::acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index)
+    -> uint32_t
+{
+    // Keyed by submesh as well as mesh: each submesh has its own field, and they are uploaded to
+    // the atlas independently.
+    const field_key key{mesh_uid, submesh_index};
+    auto it = residency_.find(key);
+    if(it != residency_.end())
+    {
+        return it->second.is_rejected ? sdf_atlas::invalid_index : it->second.header_index;
+    }
+    mesh_residency record;
+    const auto& sdf = m.get_sdf(submesh_index);
+    if(!sdf.is_valid())
+    {
+        // No baked field: either the asset opted out or the bake could not produce one. Record
+        // the rejection so this is not retried every frame for the rest of the session.
+        record.is_rejected = true;
+        residency_.emplace(key, record);
+        return sdf_atlas::invalid_index;
+    }
+    record.header_index = atlas_.upload(sdf);
+    record.is_rejected = record.header_index == sdf_atlas::invalid_index;
+    residency_.emplace(key, record);
+    return record.header_index;
+}
+
+
+auto surface_cache_service::resolve_submesh_material(const model& mdl,
+                                                     const model_component& model_comp,
+                                                     const mesh& m,
+                                                     uint32_t submesh_index) -> material::sptr
+{
+    // Per-submesh override first, exactly as the renderer does: an overridden submesh is painted
+    // with the override, so that is the colour its bounced light must carry.
+    const auto& overrides = model_comp.get_submesh_material_overrides();
+    if(submesh_index < overrides.size() && overrides[submesh_index])
+    {
+        return overrides[submesh_index];
+    }
+    // Otherwise the material of the submesh's DATA GROUP, which is its material index. Submeshes
+    // sharing a material share this entry, which is correct: they are painted the same.
+    const auto* sub = m.get_submesh(submesh_index, 0);
+    if(sub == nullptr)
+    {
+        return {};
+    }
+    return mdl.get_material_instance(sub->data_group_id);
+}
+
+void surface_cache_service::add_instance(uint32_t header_index,
+                                         const mesh_sdf& sdf,
+                                         const math::mat4& local_to_world,
+                                         const std::shared_ptr<mesh>& owner,
+                                         const material::sptr& mat)
+{
+    instance inst;
+    // Colour lives on pbr_material, not on the material base. A material of some other kind keeps
+    // the neutral default rather than guessing, which is the same answer this had before and is
+    // strictly better than tinting the scene with a colour nothing is painted with.
+    if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
+    {
+        const auto& base_color = pbr->get_base_color();
+        inst.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
+        // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
+        // know that emission is authored as a colour and a separate scale.
+        const auto& emissive_color = pbr->get_emissive_color();
+        inst.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
+                        pbr->get_emissive_intensity();
+    }
+    inst.local_to_world = local_to_world;
+    // glm::inverse explicitly: namespace math declares its own inverse() for math::transform,
+    // which hides the glm overloads from qualified lookup as math::inverse.
+    inst.world_to_local = glm::inverse(local_to_world);
+    inst.header_index = header_index;
+    // Scale is recovered from the matrix rather than from a transform object, because the
+    // renderer hands out plain matrices for submesh nodes.
+    const float scale_x = math::length(math::vec3(local_to_world[0]));
+    const float scale_y = math::length(math::vec3(local_to_world[1]));
+    const float scale_z = math::length(math::vec3(local_to_world[2]));
+    // Smallest axis, not average: a distance measured in local space maps to at least this
+    // much world distance, so using it keeps every step an under-estimate. The largest or the
+    // mean would let a sphere trace overshoot a non-uniformly scaled instance and pass
+    // through it.
+    inst.local_to_world_scale = math::max(math::min(scale_x, math::min(scale_y, scale_z)), 1e-6f);
+    // World-space AABB of the field's local bounds, for the tracer's broad phase. Built from
+    // the transformed corners so a rotated instance still gets a bound that contains it.
+    inst.world_bounds.reset();
+    const auto corners = sdf.bounds.get_corners();
+    for(const auto& corner : corners)
+    {
+        const math::vec4 world_corner = local_to_world * math::vec4(corner, 1.0f);
+        inst.world_bounds.add_point(math::vec3(world_corner));
+    }
+    instances_.push_back(inst);
+    // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
+    // alive for as long as the composition input list references it.
+    clipmap_keepalive_.push_back(owner);
+    global_sdf_instance clipmap_instance;
+    clipmap_instance.sdf = &sdf;
+    clipmap_instance.world_to_local = inst.world_to_local;
+    clipmap_instance.world_bounds = inst.world_bounds;
+    clipmap_instance.local_to_world_scale = inst.local_to_world_scale;
+    clipmap_instances_.push_back(clipmap_instance);
+}
+
+void surface_cache_service::upload_instance_grid()
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Upload Instance Grid");
+    grid_bounds_.clear();
+    grid_bounds_.reserve(instances_.size());
+    for(const auto& inst : instances_)
+    {
+        grid_bounds_.push_back(inst.world_bounds);
+    }
+    grid_.build(grid_bounds_);
+    // w of the second vec4 gates the whole tier. Zeroed first so every early-out below leaves the
+    // grid switched off rather than pointing a tracer at a stale structure -- a tracer that walks
+    // last frame's cells finds last frame's instances, which is worse than not culling at all.
+    grid_params_.fill(0.0f);
+    if(!grid_.is_valid())
+    {
+        return;
+    }
+    const auto& offsets = grid_.get_cell_offsets();
+    const auto& cell_instances = grid_.get_cell_instances();
+    const auto ensure_capacity = [](gfx::dynamic_index_buffer_handle& buffer,
+                                    uint32_t& capacity,
+                                    uint32_t required) -> void
+    {
+        if(bgfx::isValid(buffer) && required <= capacity)
+        {
+            return;
+        }
+        if(bgfx::isValid(buffer))
+        {
+            gfx::destroy(buffer);
+        }
+        // Grow with slack, so a scene gaining a few instances per frame does not recreate the
+        // buffer every frame.
+        capacity = required + required / 2u + 64u;
+        buffer = gfx::create_dynamic_index_buffer(capacity, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+    };
+    ensure_capacity(grid_offset_buffer_, grid_offset_capacity_, math::max(uint32_t(offsets.size()), 1u));
+    ensure_capacity(grid_instance_buffer_,
+                    grid_instance_capacity_,
+                    math::max(uint32_t(cell_instances.size()), 1u));
+    if(!bgfx::isValid(grid_offset_buffer_) || !bgfx::isValid(grid_instance_buffer_))
+    {
+        return;
+    }
+    gfx::update(grid_offset_buffer_, 0, gfx::copy(offsets.data(), uint32_t(offsets.size() * sizeof(uint32_t))));
+    if(!cell_instances.empty())
+    {
+        gfx::update(grid_instance_buffer_,
+                    0,
+                    gfx::copy(cell_instances.data(), uint32_t(cell_instances.size() * sizeof(uint32_t))));
+    }
+    const auto& origin = grid_.get_origin();
+    const auto& dim = grid_.get_dim();
+    grid_params_[0] = origin.x;
+    grid_params_[1] = origin.y;
+    grid_params_[2] = origin.z;
+    grid_params_[3] = grid_.get_cell_size();
+    grid_params_[4] = float(dim.x);
+    grid_params_[5] = float(dim.y);
+    grid_params_[6] = float(dim.z);
+    grid_params_[7] = 1.0f;
+}
+
+void surface_cache_service::upload_instances()
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
+    instance_data_.assign(size_t(instances_.size()) * instance_vec4_stride * 4u, 0.0f);
+    for(size_t i = 0; i < instances_.size(); ++i)
+    {
+        const auto& inst = instances_[i];
+        float* dst = instance_data_.data() + i * instance_vec4_stride * 4u;
+        write_affine_row(dst + 0, inst.world_to_local, 0);
+        write_affine_row(dst + 4, inst.world_to_local, 1);
+        write_affine_row(dst + 8, inst.world_to_local, 2);
+        write_affine_row(dst + 12, inst.local_to_world, 0);
+        write_affine_row(dst + 16, inst.local_to_world, 1);
+        write_affine_row(dst + 20, inst.local_to_world, 2);
+        dst[24] = inst.world_bounds.min.x;
+        dst[25] = inst.world_bounds.min.y;
+        dst[26] = inst.world_bounds.min.z;
+        dst[27] = float(inst.header_index);
+        dst[28] = inst.world_bounds.max.x;
+        dst[29] = inst.world_bounds.max.y;
+        dst[30] = inst.world_bounds.max.z;
+        dst[31] = inst.local_to_world_scale;
+        dst[32] = inst.albedo.x;
+        dst[33] = inst.albedo.y;
+        dst[34] = inst.albedo.z;
+        dst[35] = 0.0f;
+        dst[36] = inst.emissive.x;
+        dst[37] = inst.emissive.y;
+        dst[38] = inst.emissive.z;
+        dst[39] = 0.0f;
+    }
+    const uint32_t required_vec4 = math::max(uint32_t(instances_.size()) * instance_vec4_stride, 1u);
+    if(!bgfx::isValid(instance_buffer_) || required_vec4 > instance_buffer_capacity_)
+    {
+        if(bgfx::isValid(instance_buffer_))
+        {
+            gfx::destroy(instance_buffer_);
+        }
+        // Grow with slack so a scene gaining a few instances per frame does not recreate the
+        // buffer every frame.
+        instance_buffer_capacity_ = required_vec4 + required_vec4 / 2u + 64u;
+        instance_buffer_ = gfx::create_dynamic_vertex_buffer(instance_buffer_capacity_,
+                                                             get_vec4_buffer_layout(),
+                                                             BGFX_BUFFER_COMPUTE_READ);
+    }
+    if(!instance_data_.empty())
+    {
+        gfx::update(instance_buffer_,
+                    0,
+                    gfx::copy(instance_data_.data(), uint32_t(instance_data_.size() * sizeof(float))));
+    }
+}
+
+void surface_cache_service::update(scene& scn, const math::vec3& camera_position)
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Update");
+    instances_.clear();
+    clipmap_instances_.clear();
+    clipmap_keepalive_.clear();
+    if(!is_enabled())
+    {
+        return;
+    }
+    scn.registry->view<transform_component, model_component, active_component>().each(
+        [&](auto entity, auto&& transform_comp, auto&& model_comp, auto&& active)
+        {
+            const auto& mdl = model_comp.get_model();
+            if(!mdl.is_valid())
+            {
+                return;
+            }
+            // LOD0 always. The field is already a coarse approximation of the surface, so
+            // tracing against a simplified LOD would compound two independent approximations
+            // and make occlusion depend on camera distance -- which would break world-space
+            // stability, since the same wall would occlude differently as the camera moves.
+            const auto mesh_handle = mdl.get_lod(0);
+            if(!mesh_handle.is_ready())
+            {
+                return;
+            }
+            const auto mesh_ptr = mesh_handle.get();
+            if(!mesh_ptr)
+            {
+                return;
+            }
+            // Place each submesh's OWN field wherever that submesh is DRAWN, which means making
+            // the same per-submesh decision model::submit makes (see the has_transforms branch
+            // in submit_for_batching):
+            //
+            //   - A submesh with mapped node transforms is drawn once at each of them. A model
+            //     is an entity hierarchy, and the geometry hangs off child entities carrying
+            //     submesh_component; model::submit uses those children's global transforms
+            //     DIRECTLY, without composing them with the root, and importers routinely bake
+            //     an axis convention into that child node. The transforms also differ BETWEEN
+            //     submeshes on a real model, so one whole-mesh field placed at each transform
+            //     in turn would duplicate the entire model once per transform.
+            //   - A submesh with none is drawn at the model's own transform.
+            //
+            // The test has to be on THIS submesh's transform list. Testing whether the outer
+            // list is populated instead reads as "the hierarchy resolved" and is true for a
+            // primitive, whose pose is sized to the submesh count but never mapped, because
+            // nothing carries a submesh_component -- so every primitive silently vanished from
+            // GI while still rendering normally.
+            const auto& submesh_transforms = model_comp.get_submesh_transforms();
+            const math::mat4& world_transform = transform_comp.get_transform_global().get_matrix();
+            const uint32_t sdf_count = mesh_ptr->get_sdf_count();
+            for(uint32_t submesh_index = 0; submesh_index < sdf_count; ++submesh_index)
+            {
+                const uint32_t header_index = acquire_field(mesh_handle.uid(), *mesh_ptr, submesh_index);
+                if(header_index == sdf_atlas::invalid_index)
+                {
+                    continue;
+                }
+                const auto& sdf = mesh_ptr->get_sdf(submesh_index);
+                // Resolved once per submesh rather than per placement: every instance of a
+                // submesh is drawn with the same material.
+                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                if(!submesh_transforms.has_transforms(submesh_index))
+                {
+                    add_instance(header_index, sdf, world_transform, mesh_ptr, mat);
+                    continue;
+                }
+                const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
+                for(size_t instance_index = 0; instance_index < transform_count; ++instance_index)
+                {
+                    // Null for an inactive or out-of-range instance, which is the same accessor
+                    // and therefore the same answer the renderer gets: a submesh switched off is
+                    // not drawn, so it must not occlude or bounce light either.
+                    const math::mat4* transform_ptr =
+                        submesh_transforms.get_transform(submesh_index, instance_index);
+                    if(transform_ptr == nullptr)
+                    {
+                        continue;
+                    }
+                    add_instance(header_index, sdf, *transform_ptr, mesh_ptr, mat);
+                }
+            }
+        });
+    atlas_.flush();
+    light_buffer_.update(scn);
+    upload_instances();
+    upload_instance_grid();
+    // The cascade decides for itself which levels a change reached. A single global "something
+    // moved" flag could only say "all of them", which meant composing four levels in the frame
+    // anything moved -- and composing a level is expensive enough that this was the whole cost of
+    // having animation in the scene.
+    const uint32_t composed = clipmap_.update(clipmap_instances_, camera_position);
+    if(composed > 0 && log_composition_stats_)
+    {
+        // One line per composed level. Composition is the dominant CPU cost of the cascade and
+        // its shape depends entirely on how the scene's instances are distributed, which no
+        // synthetic fixture reliably reproduces -- these are the numbers that say which of the
+        // possible causes is the real one in THIS scene.
+        const auto& stats = clipmap_.get_last_compose_stats();
+        const double mean_candidates =
+            stats.cull_cells > 0 ? double(stats.cull_references) / double(stats.cull_cells) : 0.0;
+        const double sampled_fraction =
+            stats.candidate_tests > 0 ? double(stats.field_samples) / double(stats.candidate_tests) : 0.0;
+        APPLOG_INFO("[SurfaceCache] Composed level {0}: {1} relevant instances, {2} cells, "
+                    "{3} refs ({4:.1f} mean / {5} worst per cell), {6} candidate tests, "
+                    "{7} field samples ({8:.1f}%), {9} level(s) this update, {10} still stale.",
+                    stats.level,
+                    stats.relevant_instances,
+                    stats.cull_cells,
+                    stats.cull_references,
+                    mean_candidates,
+                    stats.max_candidates_in_cell,
+                    stats.candidate_tests,
+                    stats.field_samples,
+                    sampled_fraction * 100.0,
+                    composed,
+                    clipmap_.get_stale_level_count());
+    }
+    clipmap_gpu_.upload(clipmap_);
+}
+
+} // namespace unravel

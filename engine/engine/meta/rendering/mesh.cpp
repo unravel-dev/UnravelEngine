@@ -4,6 +4,7 @@
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
 #include <engine/meta/core/math/bbox.hpp>
+#include <engine/meta/rendering/gi/mesh_sdf.hpp>
 
 #include <fstream>
 #include <filesystem/file_istream.h>
@@ -273,6 +274,7 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
     try_save(ar, ser20::make_nvp("lods", obj.lods));
     try_save(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
+    try_save(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -295,6 +297,7 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("bone_palette_bones", obj.bone_palette_bones));
     try_load(ar, ser20::make_nvp("lods", obj.lods));
     try_load(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
+    try_load(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }

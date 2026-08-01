@@ -15,6 +15,7 @@
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
+#include <engine/rendering/gi/surface_cache_service.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -683,6 +684,18 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         build_shadows(scn, camera, dt, visibility_query::not_specified, render_mask);
     }
 
+    // Surface cache residency is world state shared by every camera, so it is refreshed once
+    // per camera-driven frame and skipped entirely for reflection probe captures, which would
+    // otherwise rebuild the same instance list six more times per probe.
+    if(is_camera_run)
+    {
+        auto& ctx = engine::context();
+        if(ctx.has<surface_cache_service>())
+        {
+            ctx.get<surface_cache_service>().update(scn, camera.get_position());
+        }
+    }
+
     const auto& viewport_size = camera.get_viewport_size();
     create_or_resize_d_buffer(rview, viewport_size, params);
     create_or_resize_g_buffer(rview, viewport_size, params);
@@ -713,6 +726,17 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
+
+    // Surface cache: register visible surfaces and light every resident entry. Runs after
+    // direct lighting so the light buffer for this frame is populated, and before the indirect
+    // pass, which is what will eventually consume the cache.
+    bool gi_resolve_active = false;
+    if(is_camera_run)
+    {
+        run_gi_cache_pass(camera, rview);
+        // Gather the cache into a screen-space buffer while the entries lit above are current.
+        gi_resolve_active = run_gi_resolve_pass(camera, rview);
+    }
 
     // SSIL pass
     run_ssil_pass(camera, rview, params);
@@ -754,16 +778,31 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         run_ui_pass(scn, camera, rview, output);
 
-        if(debug_pass_ >= 0)
+        if(debug_pass_ >= debug_pass_sdf_normals)
+        {
+            run_sdf_debug_pass(camera, rview, output);
+        }
+        else if(debug_pass_ >= 0)
         {
             run_debug_visualization_pass(camera, rview, output);
         }
     }
 
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
-    if(hiz_active)
+    //
+    // The GI resolve is a second, independent consumer: its temporal accumulation validates
+    // reprojected history against this depth, and treats a missing one as "no history" -- so
+    // leaving the snapshot gated purely on the Hi-Z stack made GI accumulation silently depend on
+    // an unrelated feature being enabled, and never converge when it was not.
+    if(hiz_active || gi_resolve_active)
     {
         snapshot_prev_depth(rview, viewport_size);
+    }
+    else
+    {
+        // Sole owner of this resource's lifetime, so it is released here rather than by whichever
+        // consumer happens to run first and notice it does not need it.
+        rview.tex_remove("PREV_DEPTH");
     }
 
     // Clear batch collector for this frame
@@ -1516,11 +1555,21 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     i++;
     gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex ? irradiance_result.irradiance_tex : default_textures::get().black_texture());
     
-    const auto& ssil_tex = rview.tex_safe_get("SSIL");
-    // Transparent (alpha 0) fallback when SSIL is disabled/absent so the shader's
+    // Surface cache GI and SSIL produce the SAME quantity in the same units -- a hemispherical
+    // indirect diffuse estimate plus the weight with which it replaces the environment probe --
+    // so they feed one consumer slot and only one of them is used. The cache wins when present:
+    // it sees geometry off screen and behind the camera, which SSIL cannot at any sample count.
+    auto indirect_diffuse_tex = rview.tex_safe_get("GI_RESOLVE");
+    if(!indirect_diffuse_tex)
+    {
+        indirect_diffuse_tex = rview.tex_safe_get("SSIL");
+    }
+    // Transparent (alpha 0) fallback when both are disabled/absent so the shader's
     // mix(irradiance, ssil.rgb, ssil.a) collapses to the pure SH probe. The opaque-black
     // default (alpha 1) would instead force mix() to 0 and wipe out the ambient.
-    gfx::set_texture(iprogram.s_ssil, 8, ssil_tex ? ssil_tex : default_textures::get().transparent_texture());
+    gfx::set_texture(iprogram.s_ssil,
+                     8,
+                     indirect_diffuse_tex ? indirect_diffuse_tex : default_textures::get().transparent_texture());
     
 
     auto topology = gfx::clip_quad(1.0f);
@@ -1982,6 +2031,114 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     return tonemapping_pass_.run(rview, params);
 }
 
+void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview)
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<surface_cache_service>())
+    {
+        return;
+    }
+    gi_cache_pass::run_params params;
+    params.g_buffer = rview.fbo_safe_get("GBUFFER");
+    params.cam = &camera;
+    params.surface_cache = &ctx.get<surface_cache_service>();
+    gi_cache_pass_.run(rview, params);
+}
+
+auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview) -> bool
+{
+    auto& ctx = engine::context();
+    gfx::texture::ptr result;
+    if(ctx.has<surface_cache_service>())
+    {
+        gi_resolve_pass::run_params params;
+        params.g_buffer = rview.fbo_safe_get("GBUFFER");
+        // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
+        // frame, which is exactly what temporal reprojection needs to validate history.
+        params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+        params.cam = &camera;
+        params.surface_cache = &ctx.get<surface_cache_service>();
+        result = gi_resolve_pass_.run(rview, params);
+    }
+    if(result)
+    {
+        // The accumulated result ping-pongs between two targets, so it is published under a
+        // stable name for the indirect consumer rather than being looked up by its own.
+        rview.tex_get_or_emplace("GI_RESOLVE") = result;
+    }
+    if(!result)
+    {
+        // The consumer picks GI_RESOLVE over SSIL purely by presence, so a buffer left behind
+        // from when the pass last ran would keep overriding SSIL with a frozen image -- and
+        // would look like GI that simply stopped updating rather than like a disabled feature.
+        rview.tex_remove("GI_RESOLVE");
+        rview.fbo_remove("GI_RESOLVE");
+    }
+    return result != nullptr;
+}
+
+void deferred::run_sdf_debug_pass(const camera& camera,
+                                  gfx::render_view& rview,
+                                  const gfx::frame_buffer::ptr& output)
+{
+    auto& ctx = engine::context();
+    if(!ctx.has<surface_cache_service>())
+    {
+        return;
+    }
+    auto& surface_cache = ctx.get<surface_cache_service>();
+    sdf_debug_pass::run_params params;
+    params.output = output;
+    params.cam = &camera;
+    params.surface_cache = &surface_cache;
+    params.settings.mode = sdf_debug_pass::debug_mode::normals;
+    if(debug_pass_ == debug_pass_sdf_step_count)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::step_count;
+    }
+    else if(debug_pass_ == debug_pass_sdf_headers)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::headers;
+    }
+    else if(debug_pass_ == debug_pass_sdf_probe)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::probe;
+    }
+    else if(debug_pass_ == debug_pass_sdf_entry)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::entry;
+    }
+    else if(debug_pass_ == debug_pass_sdf_clipmap)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::clipmap;
+    }
+    else if(debug_pass_ == debug_pass_sdf_direct)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::direct;
+    }
+    else if(debug_pass_ == debug_pass_sdf_cache)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cache;
+    }
+    else if(debug_pass_ == debug_pass_sdf_cache_slots)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cache_slots;
+    }
+    else if(debug_pass_ == debug_pass_sdf_cache_age)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cache_age;
+    }
+    else if(debug_pass_ == debug_pass_sdf_cascade_levels)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cascade_levels;
+    }
+    else if(debug_pass_ == debug_pass_sdf_cache_albedo)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cache_albedo;
+    }
+    sdf_debug_pass_.run(rview, params);
+}
+
 void deferred::run_debug_visualization_pass(const camera& camera,
                                             gfx::render_view& rview,
                                             const gfx::frame_buffer::ptr& output)
@@ -2014,10 +2171,18 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     ++i;
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, irradiance_tex);
     ++i;
-    const auto& ssil_tex = rview.tex_safe_get("SSIL");
-    if(ssil_tex)
+    // Whichever buffer is actually feeding the indirect consumer, so this view shows what is
+    // being used rather than what used to be. Without this the surface cache result has no
+    // isolated view at all, and its noise cannot be told apart from noise arriving from the
+    // cache upstream of it.
+    auto indirect_diffuse_tex = rview.tex_safe_get("GI_RESOLVE");
+    if(!indirect_diffuse_tex)
     {
-        gfx::set_texture(debug_visualization_program_.s_tex[i], i, ssil_tex);
+        indirect_diffuse_tex = rview.tex_safe_get("SSIL");
+    }
+    if(indirect_diffuse_tex)
+    {
+        gfx::set_texture(debug_visualization_program_.s_tex[i], i, indirect_diffuse_tex);
     }
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
@@ -2044,7 +2209,11 @@ auto deferred::run_hiz_pass(const camera& camera,
     if(!want_hiz)
     {
         rview.tex_remove("HIZBUFFER");
-        rview.tex_remove("PREV_DEPTH");
+        // PREV_DEPTH deliberately survives. It is a SHARED history resource with more than one
+        // consumer -- the GI resolve validates reprojected history against it -- and this pass
+        // runs before them, so dropping it here destroyed the next consumer's input before it
+        // ever ran. Its lifetime belongs to the one place that decides whether to produce it,
+        // at the end of the frame.
         return false;
     }
 

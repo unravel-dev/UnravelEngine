@@ -1792,6 +1792,18 @@ void scene_panel::draw_visualization_menu()
         ImGui::RadioButton("SSIL", &visualize_passes_, 12);
         ImGui::RadioButton("Radiance Alpha", &visualize_passes_, 13);
         ImGui::RadioButton("Specular Occlusion", &visualize_passes_, 14);
+        ImGui::RadioButton("SDF (Normals)", &visualize_passes_, 15);
+        ImGui::RadioButton("SDF (Step Count)", &visualize_passes_, 16);
+        ImGui::RadioButton("SDF (Headers)", &visualize_passes_, 17);
+        ImGui::RadioButton("SDF (Probe)", &visualize_passes_, 18);
+        ImGui::RadioButton("SDF (Entry)", &visualize_passes_, 19);
+        ImGui::RadioButton("SDF (Clipmap)", &visualize_passes_, 20);
+        ImGui::RadioButton("SDF (Direct Light)", &visualize_passes_, 21);
+        ImGui::RadioButton("SDF (Cache)", &visualize_passes_, 22);
+        ImGui::RadioButton("SDF (Cache Slots)", &visualize_passes_, 23);
+        ImGui::RadioButton("SDF (Cache Age)", &visualize_passes_, 24);
+        ImGui::RadioButton("SDF (Cascade Levels)", &visualize_passes_, 25);
+        ImGui::RadioButton("SDF (Cache Albedo)", &visualize_passes_, 26);
 
         ImGui::EndMenu();
     }

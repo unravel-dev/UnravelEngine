@@ -723,6 +723,13 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                         ImGui::EndTabItem();
                     }
 
+                    if(ImGui::BeginTabItem("Sdf"))
+                    {
+                        result |= ::unravel::inspect(ctx, importer_->sdf);
+
+                        ImGui::EndTabItem();
+                    }
+
                     if(ImGui::BeginTabItem("Rig"))
                     {
                         result |= ::unravel::inspect(ctx, importer_->rig);

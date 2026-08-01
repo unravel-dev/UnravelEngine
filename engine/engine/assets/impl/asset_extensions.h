@@ -197,7 +197,27 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     // 8: per-submesh stable_id, per-bone bind-space bounds, per-LOD submesh bbox recompute.
     // 9: mesh bounds are bind-pose only (import-time animation sampling removed; runtime
     //    pose bounds handle animation-driven expansion).
-    return 10;
+    // 11: baked sparse signed distance field for GI tracing.
+    // 13: One SDF per SUBMESH instead of one per mesh. Submeshes are drawn at their own node
+    //     transforms, so a single whole-mesh field cannot be placed correctly for a model whose
+    //     submeshes differ -- it duplicated the entire model once per transform.
+    // 12: SDF adjacency computed on position-welded topology, open surfaces fall back to an
+    //     unsigned shell.
+    // 14: A submesh's SDF covers that submesh alone. It was selected by data group, which is the
+    //     MATERIAL index, so every submesh sharing a material baked that whole group -- each one
+    //     carrying its siblings' geometry at its own transform.
+    // 15: fields are bounded by a TOTAL voxel budget, not only by a per-axis resolution cap. The
+    //     per-axis cap alone permitted 16.7M voxels in one field, so a model split into many
+    //     submeshes overran the atlas several times over and the bake cost hours of voxel work.
+    // 16: fields bake from LOD 2 by default rather than the base topology. A DEFAULT counts as a
+    //     bake-algorithm change for every asset that never overrode it -- their .meta files carry
+    //     no value to compare, so nothing else would notice the switch and they would keep the
+    //     field baked from full detail.
+    //
+    // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
+    // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
+    // projects silently keep the field produced by the previous code.
+    return 16;
 }
 
 template<>

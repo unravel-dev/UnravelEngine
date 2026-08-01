@@ -115,6 +115,35 @@ public:
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output);
 
+    /// Debug pass ids at or above this one are handled by the distance field visualiser
+    /// rather than by the G-buffer visualiser, whose shader only knows modes 0..14.
+    static constexpr int debug_pass_sdf_normals = 15;
+    static constexpr int debug_pass_sdf_step_count = 16;
+    static constexpr int debug_pass_sdf_headers = 17;
+    static constexpr int debug_pass_sdf_probe = 18;
+    static constexpr int debug_pass_sdf_entry = 19;
+    static constexpr int debug_pass_sdf_clipmap = 20;
+    static constexpr int debug_pass_sdf_direct = 21;
+    static constexpr int debug_pass_sdf_cache = 22;
+    static constexpr int debug_pass_sdf_cache_slots = 23;
+    static constexpr int debug_pass_sdf_cache_age = 24;
+    static constexpr int debug_pass_sdf_cascade_levels = 25;
+    static constexpr int debug_pass_sdf_cache_albedo = 26;
+
+    void run_sdf_debug_pass(const camera& camera,
+                            gfx::render_view& rview,
+                            const gfx::frame_buffer::ptr& output);
+
+    /// Registers visible surfaces into the world-space radiance cache and lights every
+    /// resident entry. See gi_cache_pass.
+    void run_gi_cache_pass(const camera& camera, gfx::render_view& rview);
+
+    /// Gathers the world-space cache into a screen-space indirect diffuse buffer.
+    /// See gi_resolve_pass.
+    /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
+    ///         snapshotted this frame for its temporal accumulation.
+    auto run_gi_resolve_pass(const camera& camera, gfx::render_view& rview) -> bool;
+
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
     void build_shadows(scene& scn, const camera& camera, delta_t dt, visibility_flags query = visibility_query::not_specified, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});

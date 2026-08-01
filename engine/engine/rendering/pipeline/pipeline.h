@@ -21,6 +21,9 @@
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
 #include "passes/ssil_pass.h"
+#include "passes/gi_cache_pass.h"
+#include "passes/gi_resolve_pass.h"
+#include "passes/sdf_debug_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
 #include "passes/taa_pass.h"
@@ -249,6 +252,9 @@ protected:
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
+    gi_cache_pass gi_cache_pass_{};
+    gi_resolve_pass gi_resolve_pass_{};
+    sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};
     std::unique_ptr<gpu_program> particle_program_instanced_mask_{};

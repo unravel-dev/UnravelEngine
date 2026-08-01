@@ -93,6 +93,97 @@ REFLECT(mesh_importer_meta)
             entt::attribute{"step", 0.001f},
         });
 
+    // Register mesh_importer_meta::sdf_meta with entt
+    entt::meta_factory<mesh_importer_meta::sdf_meta>{}
+        .type("sdf_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sdf_meta"},
+            entt::attribute{"pretty_name", "Distance Field"},
+        })
+        .data<&mesh_importer_meta::sdf_meta::generate_sdf>("generate_sdf"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "generate_sdf"},
+            entt::attribute{"pretty_name", "Generate Distance Field"},
+            entt::attribute{"tooltip",
+                            "Bake a signed distance field for this mesh at compile time.\n"
+                            "The surface cache GI tracer needs it to see this mesh; without one the\n"
+                            "mesh neither occludes nor bounces indirect light."},
+        })
+        .data<&mesh_importer_meta::sdf_meta::resolution>("resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Resolution"},
+            entt::attribute{"tooltip",
+                            "Target voxel count along the longest bounds axis. Higher resolves finer\n"
+                            "detail and occludes thinner geometry, at a proportional memory cost."},
+            entt::attribute{"min", 8},
+            entt::attribute{"max", 256},
+        })
+        .data<&mesh_importer_meta::sdf_meta::min_voxel_size>("min_voxel_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_voxel_size"},
+            entt::attribute{"pretty_name", "Min Voxel Size"},
+            entt::attribute{"tooltip", "Lower clamp on the derived voxel size, in local units."},
+            entt::attribute{"min", 0.001f},
+            entt::attribute{"step", 0.001f},
+        })
+        .data<&mesh_importer_meta::sdf_meta::max_voxel_size>("max_voxel_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_voxel_size"},
+            entt::attribute{"pretty_name", "Max Voxel Size"},
+            entt::attribute{"tooltip", "Upper clamp on the derived voxel size, in local units."},
+            entt::attribute{"min", 0.001f},
+            entt::attribute{"step", 0.01f},
+        })
+        .data<&mesh_importer_meta::sdf_meta::max_total_voxels>("max_total_voxels"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_total_voxels"},
+            entt::attribute{"pretty_name", "Max Total Voxels"},
+            entt::attribute{"tooltip",
+                            "Ceiling on total grid voxels in ONE field.\n"
+                            "The dominant control on both bake time and atlas footprint: each scales\n"
+                            "with voxel count, and voxel count is cubic in resolution, so a per-axis\n"
+                            "limit alone still permits millions of voxels in a single field.\n"
+                            "Enforced by coarsening the voxel, so a field always covers its whole mesh.\n"
+                            "Lower this on models split into very many submeshes."},
+            entt::attribute{"min", 4096.0f},
+            entt::attribute{"step", 4096.0f},
+        })
+        .data<&mesh_importer_meta::sdf_meta::lod_index>("lod_index"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_index"},
+            entt::attribute{"pretty_name", "Bake From LOD"},
+            entt::attribute{"tooltip",
+                            "LOD the distance field is baked from. 0 is full detail.\n"
+                            "A closest-point query costs roughly the SQUARE ROOT of the triangle\n"
+                            "count, so simplified geometry is a real saving: 16x the triangles was\n"
+                            "measured at 3.8x the bake time. The field is coarse enough that the\n"
+                            "lost detail is usually below its own voxel size.\n"
+                            "Raise this on dense models. Levels that were not generated fall back to 0.\n"
+                            "Watch for a mesh becoming non-closed at higher levels: an open mesh bakes\n"
+                            "as an unsigned shell, which loses interior solidity."},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 5},
+        })
+        .data<&mesh_importer_meta::sdf_meta::two_sided>("two_sided"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "two_sided"},
+            entt::attribute{"pretty_name", "Two Sided"},
+            entt::attribute{"tooltip",
+                            "Bake an unsigned shell instead of a signed field.\n"
+                            "Required for foliage cards and any other mesh that is not a closed\n"
+                            "surface: inside/outside is undefined there, and a signed bake produces\n"
+                            "randomly signed voxels that make the mesh flicker between solid and open."},
+        })
+        .data<&mesh_importer_meta::sdf_meta::two_sided_thickness>("two_sided_thickness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "two_sided_thickness"},
+            entt::attribute{"pretty_name", "Two Sided Thickness"},
+            entt::attribute{"tooltip", "Local-space half thickness given to the shell when Two Sided is set."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.005f},
+        });
+
     // Register mesh_importer_meta::rig_meta with entt
     entt::meta_factory<mesh_importer_meta::rig_meta>{}
         .type("rig_meta"_hs)
@@ -187,6 +278,34 @@ LOAD(mesh_importer_meta::model_meta)
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_binary_t);
 
+SAVE(mesh_importer_meta::sdf_meta)
+{
+    try_save(ar, ser20::make_nvp("generate_sdf", obj.generate_sdf));
+    try_save(ar, ser20::make_nvp("resolution", obj.resolution));
+    try_save(ar, ser20::make_nvp("min_voxel_size", obj.min_voxel_size));
+    try_save(ar, ser20::make_nvp("max_voxel_size", obj.max_voxel_size));
+    try_save(ar, ser20::make_nvp("max_total_voxels", obj.max_total_voxels));
+    try_save(ar, ser20::make_nvp("lod_index", obj.lod_index));
+    try_save(ar, ser20::make_nvp("two_sided", obj.two_sided));
+    try_save(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
+}
+SAVE_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::oarchive_binary_t);
+
+LOAD(mesh_importer_meta::sdf_meta)
+{
+    try_load(ar, ser20::make_nvp("generate_sdf", obj.generate_sdf));
+    try_load(ar, ser20::make_nvp("resolution", obj.resolution));
+    try_load(ar, ser20::make_nvp("min_voxel_size", obj.min_voxel_size));
+    try_load(ar, ser20::make_nvp("max_voxel_size", obj.max_voxel_size));
+    try_load(ar, ser20::make_nvp("max_total_voxels", obj.max_total_voxels));
+    try_load(ar, ser20::make_nvp("lod_index", obj.lod_index));
+    try_load(ar, ser20::make_nvp("two_sided", obj.two_sided));
+    try_load(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
+}
+LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_binary_t);
+
 SAVE(mesh_importer_meta::rig_meta)
 {
 }
@@ -233,6 +352,7 @@ SAVE(mesh_importer_meta)
 {
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("model", obj.model));
+    try_save(ar, ser20::make_nvp("sdf", obj.sdf));
     try_save(ar, ser20::make_nvp("rig", obj.rig));
     try_save(ar, ser20::make_nvp("animations", obj.animations));
     try_save(ar, ser20::make_nvp("materials", obj.materials));
@@ -244,6 +364,7 @@ LOAD(mesh_importer_meta)
 {
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("model", obj.model));
+    try_load(ar, ser20::make_nvp("sdf", obj.sdf));
     try_load(ar, ser20::make_nvp("rig", obj.rig));
     try_load(ar, ser20::make_nvp("animations", obj.animations));
     try_load(ar, ser20::make_nvp("materials", obj.materials));
