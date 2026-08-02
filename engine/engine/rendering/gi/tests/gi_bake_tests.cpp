@@ -21,7 +21,10 @@
 // submesh, so the two read the same pose structure.
 #include <engine/rendering/model.h>
 
+#include <logging/logging.h>
 #include <serialization/binary_archive.h>
+
+#include <spdlog/sinks/stdout_sinks.h>
 
 #include <poolstl/poolstl.hpp>
 
@@ -301,6 +304,226 @@ void test_sign_correctness()
     }
     std::printf("  wrong-sign samples = %d\n", wrong_sign);
     check(wrong_sign == 0, "no wrongly signed samples on a closed box");
+}
+
+/**
+ * @brief Exact distance from a point to a triangle.
+ *
+ * Ground truth for an arbitrary soup, which an OPEN mesh needs: the closed-box formula stops being
+ * the answer anywhere near the missing face, and that region is precisely where a shell's
+ * behaviour differs from a signed field's.
+ */
+auto point_triangle_distance(const math::vec3& p,
+                             const math::vec3& a,
+                             const math::vec3& b,
+                             const math::vec3& c) -> float
+{
+    const math::vec3 ab = b - a;
+    const math::vec3 ac = c - a;
+    const math::vec3 ap = p - a;
+    const float d1 = math::dot(ab, ap);
+    const float d2 = math::dot(ac, ap);
+    if(d1 <= 0.0f && d2 <= 0.0f)
+    {
+        return math::length(p - a);
+    }
+    const math::vec3 bp = p - b;
+    const float d3 = math::dot(ab, bp);
+    const float d4 = math::dot(ac, bp);
+    if(d3 >= 0.0f && d4 <= d3)
+    {
+        return math::length(p - b);
+    }
+    const float vc = d1 * d4 - d3 * d2;
+    if(vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f)
+    {
+        return math::length(p - (a + ab * (d1 / (d1 - d3))));
+    }
+    const math::vec3 cp = p - c;
+    const float d5 = math::dot(ab, cp);
+    const float d6 = math::dot(ac, cp);
+    if(d6 >= 0.0f && d5 <= d6)
+    {
+        return math::length(p - c);
+    }
+    const float vb = d5 * d2 - d1 * d6;
+    if(vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f)
+    {
+        return math::length(p - (a + ac * (d2 / (d2 - d6))));
+    }
+    const float va = d3 * d6 - d5 * d4;
+    if(va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
+    {
+        const float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return math::length(p - (b + (c - b) * w));
+    }
+    const float denom = 1.0f / (va + vb + vc);
+    return math::length(p - (a + ab * (vb * denom) + ac * (vc * denom)));
+}
+
+/// Unsigned distance from a point to a triangle soup, by brute force. Exact, and fast enough for a
+/// fixture of a handful of triangles.
+auto soup_distance(const sdf_source_geometry& geometry, const math::vec3& p) -> float
+{
+    float best = std::numeric_limits<float>::max();
+    for(size_t i = 0; i + 2 < geometry.indices.size(); i += 3)
+    {
+        best = math::min(best,
+                         point_triangle_distance(p,
+                                                 geometry.positions[geometry.indices[i + 0]],
+                                                 geometry.positions[geometry.indices[i + 1]],
+                                                 geometry.positions[geometry.indices[i + 2]]));
+    }
+    return best;
+}
+
+/**
+ * @brief An unsigned SHELL's empty bricks must under-estimate, exactly as a signed field's do.
+ *
+ * The same tracing safety invariant as test_conservative_empty_bricks, on the case that test cannot
+ * reach. A shell stores `unsigned - thickness`, so brick classification and the empty-brick distance
+ * have to work in that space too. They did not: they used the raw unsigned distance, and every empty
+ * entry therefore over-reported by exactly the thickness -- enough for a trace to step through the
+ * shell, which is thin open geometry silently ceasing to occlude.
+ *
+ * It hid because the thickness is ZERO for a signed field, so the two spaces coincide and a fixture
+ * of closed meshes agrees perfectly. `lessons.md` records that shape from the last shell bug and
+ * says the parity test has to cover a case where the quantity is non-zero; that was done for
+ * CPU/GPU parity and not for this.
+ */
+void test_conservative_empty_bricks_in_a_shell()
+{
+    std::printf("test_conservative_empty_bricks_in_a_shell\n");
+    const math::vec3 half(0.4f, 0.4f, 0.4f);
+    const auto geometry = make_open_box(half);
+    mesh_sdf_bake_settings settings;
+    // Coarse on purpose, with a thickness several voxels wide. The defect over-reports by exactly
+    // the thickness, so a fixture where the thickness is a small fraction of a brick cannot see it:
+    // every empty brick sits far enough from the surface that the loose centre-minus-half-diagonal
+    // bound absorbs the error. Written first with a fine voxel, it passed with the fix reverted --
+    // which is the whole reason for checking that a regression test actually fails.
+    settings.resolution = 12;
+    settings.min_voxel_size = 0.001f;
+    settings.two_sided = true;
+    settings.two_sided_thickness = 0.15f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, settings, sdf), "open box bake succeeds");
+    check(sdf.is_two_sided, "an open surface bakes as a shell");
+    check(sdf.two_sided_thickness > sdf.voxel_size,
+          "the shell is several voxels thick, or the error is too small to detect");
+    const float brick_world_size = float(mesh_sdf::brick_size) * sdf.voxel_size;
+    int violations = 0;
+    int empty_bricks = 0;
+    float worst_excess = 0.0f;
+    for(uint32_t bz = 0; bz < sdf.brick_dim.z; ++bz)
+    {
+        for(uint32_t by = 0; by < sdf.brick_dim.y; ++by)
+        {
+            for(uint32_t bx = 0; bx < sdf.brick_dim.x; ++bx)
+            {
+                const uint32_t index = bx + by * sdf.brick_dim.x + bz * sdf.brick_dim.x * sdf.brick_dim.y;
+                const uint32_t entry = sdf.indirection[index];
+                if(!is_sdf_empty_entry(entry))
+                {
+                    continue;
+                }
+                ++empty_bricks;
+                const float stored = float(entry & mesh_sdf::indirection_distance_mask) * sdf.voxel_size;
+                const math::vec3 origin =
+                    sdf.bounds.min + math::vec3(float(bx), float(by), float(bz)) * brick_world_size;
+                // A GRID through the brick, not just its corners. The point of a brick closest to
+                // the surface is generally on a face or in the interior, and the corners can all
+                // sit far enough away for the bound to look safe while the real minimum violates
+                // it. Corners alone is a sample of size eight aimed at the wrong place.
+                constexpr int samples_per_axis = 5;
+                for(int sz = 0; sz < samples_per_axis; ++sz)
+                {
+                    for(int sy = 0; sy < samples_per_axis; ++sy)
+                    {
+                        for(int sx = 0; sx < samples_per_axis; ++sx)
+                        {
+                            // Braces, not parentheses: with float(sx) as the arguments the
+                            // parenthesised form is a function declaration, not a variable.
+                            const math::vec3 offset{float(sx), float(sy), float(sz)};
+                            const math::vec3 p =
+                                origin + offset * (brick_world_size / float(samples_per_axis - 1));
+                            // The field a shell actually stores, which is what a trace steps against.
+                            const float truth =
+                                std::fabs(soup_distance(geometry, p) - sdf.two_sided_thickness);
+                            if(stored > truth + 1e-4f)
+                            {
+                                ++violations;
+                                worst_excess = math::max(worst_excess, stored - truth);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  shell thickness = %.4f, empty bricks = %d, violations = %d, worst excess = %.4f\n",
+                sdf.two_sided_thickness,
+                empty_bricks,
+                violations,
+                worst_excess);
+    check(empty_bricks > 0, "the shell produced empty bricks (sparsity actually happens)");
+    check(violations == 0, "no empty brick of a shell over-estimates its distance to the surface");
+}
+
+/**
+ * @brief Pins which bake setting actually controls the shell thickness on a large open submesh.
+ *
+ * An unsigned shell is floored at one voxel because a thinner one cannot be represented, so the
+ * shell's WORLD thickness is set by the voxel size. The voxel is Resolution divisions of the
+ * submesh's own longest axis, which means a large submesh gets a coarse voxel and therefore a
+ * shell metres thick -- and everything within it reads solid, so the submesh traces as a block.
+ *
+ * The trap this guards is that the two caps below Resolution only ever make the voxel COARSER.
+ * Raising Max Total Voxels alone looks like the obvious fix and cannot work, which is exactly the
+ * experiment that made a phantom block look like a tracing bug rather than a sizing one.
+ */
+void test_large_open_submesh_shell_is_governed_by_resolution()
+{
+    std::printf("test_large_open_submesh_shell_is_governed_by_resolution\n");
+    // Building-sized, and open so the bake takes the unsigned path on its own.
+    const auto geometry = make_open_box(math::vec3(15.0f));
+    constexpr float authored_thickness = 0.05f;
+    const auto bake_with = [&](uint32_t resolution, uint64_t budget, mesh_sdf& out) -> bool
+    {
+        mesh_sdf_bake_settings settings;
+        settings.resolution = resolution;
+        settings.max_total_voxels = budget;
+        settings.two_sided_thickness = authored_thickness;
+        return bake_mesh_sdf(geometry, settings, out);
+    };
+    constexpr uint64_t default_budget = 262144ull;
+    constexpr uint64_t raised_budget = default_budget * 8ull;
+    mesh_sdf base;
+    mesh_sdf budget_only;
+    mesh_sdf both;
+    check(bake_with(64, default_budget, base), "large open box bakes at the defaults");
+    check(bake_with(64, raised_budget, budget_only), "large open box bakes with a raised budget");
+    check(bake_with(256, raised_budget, both), "large open box bakes with both raised");
+    std::printf("  authored = %.3f | defaults: voxel %.3f shell %.3f | budget only: voxel %.3f "
+                "shell %.3f | both: voxel %.3f shell %.3f\n",
+                authored_thickness,
+                base.voxel_size,
+                base.two_sided_thickness,
+                budget_only.voxel_size,
+                budget_only.two_sided_thickness,
+                both.voxel_size,
+                both.two_sided_thickness);
+    check(base.is_two_sided, "an open submesh bakes as a shell without being asked");
+    check(base.two_sided_thickness > authored_thickness * 5.0f,
+          "at the defaults a building-sized shell is floored far above the authored thickness");
+    // The point of the test. A raised budget cannot reach a finer voxel than Resolution asked for,
+    // so the shell stays thick enough to swallow any detail finer than it.
+    check(budget_only.voxel_size > base.voxel_size * 0.6f,
+          "raising Max Total Voxels alone barely moves the voxel size");
+    check(budget_only.two_sided_thickness > authored_thickness * 5.0f,
+          "raising Max Total Voxels alone leaves the shell far above the authored thickness");
+    check(both.voxel_size < budget_only.voxel_size * 0.7f,
+          "raising Resolution together with the budget is what makes the voxel finer");
 }
 
 void test_conservative_empty_bricks()
@@ -2102,6 +2325,87 @@ void test_surface_resolve_reports_failure_outside_the_cascade()
     check(near_valid, "a point just off a surface inside the cascade resolves");
 }
 
+/**
+ * @brief A surface stays REACHABLE while the camera crosses a cache level boundary.
+ *
+ * The level is a step function of distance to the camera, so crossing a boundary changes the cell
+ * size and therefore every key for that surface. The entries built at the old level are not wrong,
+ * they are unreachable -- and a miss lowers the resolve weight, so the consumer falls back to the
+ * environment probe. The visible symptom is GI getting DARKER as the camera approaches, which is
+ * backwards and was the most obvious artefact left in the system.
+ *
+ * Inside the cross-fade band a surface is written at BOTH levels, so it stays addressable from
+ * either side of the handover. This walks a camera through a boundary and asserts that a fixed
+ * world-space surface is always reachable by at least one of the levels a writer would have used at
+ * some point during the walk -- and that WITHOUT the band it is not, so the test is not vacuous.
+ */
+void test_cache_level_handover_keeps_a_surface_reachable()
+{
+    std::printf("test_cache_level_handover_keeps_a_surface_reachable\n");
+    radiance_cache cache;
+    radiance_cache::settings settings;
+    cache.init(settings);
+    const math::vec3 surface(0.0f, 0.0f, 0.0f);
+    const math::vec3 normal(0.0f, 1.0f, 0.0f);
+    // A walk that crosses the level 0 -> 1 handover at base_distance, and the 1 -> 2 one beyond it.
+    const int steps = 400;
+    const float near_d = settings.base_distance * 0.6f;
+    const float far_d = settings.base_distance * 2.4f;
+
+    // The set of keys a WRITER would have produced anywhere along the walk. With the band, a point
+    // inside it is written at two levels, so this set carries both.
+    const auto keys_written_at = [&](float distance, bool use_band) -> std::vector<uint32_t>
+    {
+        const math::vec3 camera = surface + math::vec3(0.0f, 0.0f, distance);
+        std::vector<uint32_t> keys;
+        float blend = 0.0f;
+        const uint32_t level = use_band ? cache.compute_level_ex(surface, camera, blend)
+                                        : cache.compute_level(surface, camera);
+        keys.push_back(cache.compute_key(surface, normal, level));
+        if(use_band && blend > 0.0f)
+        {
+            keys.push_back(cache.compute_key(surface, normal, level + 1u));
+        }
+        return keys;
+    };
+
+    // For each pair of adjacent camera positions, does what the writer left at the first still
+    // overlap what the reader looks for at the second? That overlap is exactly what keeps the
+    // surface lit across the step.
+    const auto count_breaks = [&](bool use_band) -> int
+    {
+        int breaks = 0;
+        for(int i = 1; i < steps; ++i)
+        {
+            const float previous = math::lerp(near_d, far_d, float(i - 1) / float(steps - 1));
+            const float current = math::lerp(near_d, far_d, float(i) / float(steps - 1));
+            const std::vector<uint32_t> written = keys_written_at(previous, use_band);
+            const std::vector<uint32_t> wanted = keys_written_at(current, use_band);
+            bool overlaps = false;
+            for(uint32_t w : wanted)
+            {
+                if(std::find(written.begin(), written.end(), w) != written.end())
+                {
+                    overlaps = true;
+                    break;
+                }
+            }
+            breaks += overlaps ? 0 : 1;
+        }
+        return breaks;
+    };
+
+    const int hard_switch_breaks = count_breaks(false);
+    const int blended_breaks = count_breaks(true);
+    std::printf("  %d camera steps: hard switch loses the surface %d times, cross-faded %d\n",
+                steps - 1,
+                hard_switch_breaks,
+                blended_breaks);
+    // The old behaviour must actually fail, or this test describes the code instead of testing it.
+    check(hard_switch_breaks > 0, "a hard level switch does lose the surface at a boundary");
+    check(blended_breaks == 0, "the cross-fade keeps the surface reachable across every handover");
+}
+
 void test_instance_grid_handles_degenerate_input()
 {
     std::printf("test_instance_grid_handles_degenerate_input\n");
@@ -3016,6 +3320,399 @@ void test_lod_extraction_clamps_rather_than_failing()
                 from_clamped.get_triangle_count());
 }
 
+/**
+ * @brief The surface test must not eat ordinary tessellation.
+ *
+ * `carries_no_surface` rejects triangles by how thin they are, and the threshold is the whole
+ * design: too low and near-degenerate junk survives to size the field, too high and legitimate
+ * geometry silently disappears from GI. The second failure is much harder to notice than the first --
+ * a missing occluder leaks light somewhere across the project rather than drawing a block in front of
+ * the camera -- so it needs a test rather than a judgement.
+ *
+ * A UV sphere is the honest fixture: its polar rows are genuinely thin triangles, thin enough that an
+ * aggressive threshold removes the caps and leaves holes an SDF traces straight through.
+ */
+void test_surface_test_keeps_ordinary_tessellation()
+{
+    std::printf("test_surface_test_keeps_ordinary_tessellation\n");
+    gfx::vertex_layout format;
+    format.begin(bgfx::RendererType::Noop).add(gfx::attribute::Position, 3, gfx::attribute_type::Float).end();
+    const auto measure = [&](const char* label, const sdf_source_geometry& geometry) -> uint32_t
+    {
+        std::vector<uint8_t> vertex_data(geometry.positions.size() * format.getStride(), 0u);
+        for(size_t v = 0; v < geometry.positions.size(); ++v)
+        {
+            const float packed[4] = {geometry.positions[v].x,
+                                     geometry.positions[v].y,
+                                     geometry.positions[v].z,
+                                     0.0f};
+            gfx::vertex_pack(packed, false, gfx::attribute::Position, format, vertex_data.data(), uint32_t(v));
+        }
+        sdf_source_geometry extracted;
+        const bool ok = extract_sdf_source_geometry(vertex_data.data(),
+                                                    uint32_t(geometry.positions.size()),
+                                                    format,
+                                                    geometry.indices.data(),
+                                                    geometry.get_triangle_count(),
+                                                    extracted);
+        check(ok, "ordinary geometry extracts");
+        std::printf("  %-28s %5u triangles, %4u discarded (%.1f%%)\n",
+                    label,
+                    geometry.get_triangle_count(),
+                    extracted.discarded_triangles,
+                    100.0f * float(extracted.discarded_triangles) /
+                        float(math::max(geometry.get_triangle_count(), 1u)));
+        return extracted.discarded_triangles;
+    };
+    // Mirrors min_height_ratio in mesh_sdf_source.cpp. Duplicated deliberately: the point of the
+    // test is to pin that value, so reading it from the implementation would make it unfalsifiable.
+    constexpr float expected_min_height_ratio = 0.0001f;
+    // Triangles the RULE says should go, computed independently of the code under test. Comparing
+    // against this rather than against zero is what makes the test meaningful on real tessellation:
+    // a UV sphere's pole fan is genuinely degenerate, so discarding it is correct, and asserting
+    // zero would only prove the fixture had no junk in it.
+    const auto count_below_threshold = [&](const sdf_source_geometry& geometry) -> uint32_t
+    {
+        uint32_t below = 0;
+        for(uint32_t t = 0; t < geometry.get_triangle_count(); ++t)
+        {
+            const math::vec3& a = geometry.positions[geometry.indices[t * 3 + 0]];
+            const math::vec3& b = geometry.positions[geometry.indices[t * 3 + 1]];
+            const math::vec3& c = geometry.positions[geometry.indices[t * 3 + 2]];
+            const float longest =
+                math::max(math::length(b - a), math::max(math::length(c - a), math::length(c - b)));
+            if(longest <= 0.0f ||
+               math::length(math::cross(b - a, c - a)) <= longest * longest * expected_min_height_ratio)
+            {
+                ++below;
+            }
+        }
+        return below;
+    };
+    bool discards_exactly_the_rule = true;
+    const auto check_fixture = [&](const char* label, const sdf_source_geometry& geometry)
+    {
+        const uint32_t expected = count_below_threshold(geometry);
+        const uint32_t actual = measure(label, geometry);
+        discards_exactly_the_rule = discards_exactly_the_rule && actual == expected;
+    };
+    check_fixture("box", make_box(math::vec3(0.5f)));
+    check_fixture("sphere 16x24", make_sphere(1.0f, 16, 24));
+    check_fixture("sphere 64x96 (fine)", make_sphere(1.0f, 64, 96));
+    // A long thin wall panel: one quad, 40:1. Trim, mullions and floor strips are routinely this
+    // shape, and every one of them is a real occluder.
+    sdf_source_geometry panel;
+    panel.positions = {math::vec3(0.0f, 0.0f, 0.0f),
+                       math::vec3(4.0f, 0.0f, 0.0f),
+                       math::vec3(4.0f, 0.1f, 0.0f),
+                       math::vec3(0.0f, 0.1f, 0.0f)};
+    for(const auto& p : panel.positions)
+    {
+        panel.bounds.add_point(p);
+    }
+    panel.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+    const uint32_t panel_discarded = measure("thin panel (40:1)", panel);
+    check(discards_exactly_the_rule, "the filter discards exactly what the threshold defines");
+    // The assertion the threshold exists for. A 40:1 panel measures 0.025, so anything from about
+    // 0.02 upward deletes it outright -- and with both its triangles gone the geometry produces NO
+    // FIELD AT ALL, silently removing a real occluder from GI. Trim, mullions and floor strips are
+    // routinely this shape, so this is the bound that must not be crossed.
+    check(panel_discarded == 0, "a 40:1 panel is real occlusion and must survive");
+    check(expected_min_height_ratio < 0.02f, "the threshold stays clear of ordinary thin geometry");
+}
+
+/**
+ * @brief A submesh of scattered parts is detectable, and its field is not.
+ *
+ * The failure this measures produced the worst artefact in the scene while looking correct at every
+ * step: the submesh renders fine, the field is sized exactly to the submesh, and every bake setting
+ * is honoured. What is wrong is the RELATIONSHIP between the two -- the voxel comes from the spread
+ * of the parts rather than from the parts, so each part falls below one voxel and the field cannot
+ * represent it.
+ *
+ * Shaped from the real asset that prompted it: 384 faces over a 3804-unit bbox, in three pieces.
+ */
+void test_scattered_parts_are_detected_and_cannot_be_resolved()
+{
+    std::printf("test_scattered_parts_are_detected_and_cannot_be_resolved\n");
+    constexpr uint32_t part_count = 3;
+    constexpr float part_size = 1.0f;
+    constexpr float part_spacing = 1200.0f;
+    sdf_source_geometry geometry;
+    for(uint32_t part = 0; part < part_count; ++part)
+    {
+        const auto box = make_box(math::vec3(part_size * 0.5f));
+        const uint32_t base = uint32_t(geometry.positions.size());
+        const math::vec3 offset(float(part) * part_spacing, 0.0f, 0.0f);
+        for(const auto& position : box.positions)
+        {
+            geometry.positions.push_back(position + offset);
+            geometry.bounds.add_point(geometry.positions.back());
+        }
+        for(const uint32_t index : box.indices)
+        {
+            geometry.indices.push_back(index + base);
+        }
+    }
+    const auto summary = summarize_connected_components(geometry);
+    std::printf("  %u pieces, largest %.2f, bounds %.2f, sparsity %.0fx\n",
+                summary.component_count,
+                summary.largest_component_extent,
+                summary.bounds_extent,
+                summary.get_sparsity());
+    check(summary.component_count == part_count, "each disconnected part is found");
+    check(std::fabs(summary.largest_component_extent - part_size) < 1e-3f,
+          "the largest piece is measured, not the spread");
+    check(summary.get_sparsity() > 100.0f, "a scatter of small parts reads as extremely sparse");
+    // The bake REFUSES it. Producing a field here is worse than producing none: the voxel would be
+    // sized to the spread, every part would sit below one voxel, and what came out would trace as a
+    // solid block the size of the whole scatter.
+    mesh_sdf_bake_settings settings;
+    mesh_sdf sdf;
+    check(!bake_mesh_sdf(geometry, settings, sdf), "a scatter too sparse to resolve is refused");
+    // ... and the refusal is specifically about the SPREAD, not about the geometry. The identical
+    // parts bake fine once the check is off, which is what proves the rule is the thing rejecting
+    // them rather than anything wrong with the triangles.
+    mesh_sdf_bake_settings unchecked = settings;
+    unchecked.max_component_spread = 0.0f;
+    mesh_sdf unchecked_sdf;
+    check(bake_mesh_sdf(geometry, unchecked, unchecked_sdf), "the same geometry bakes with the check off");
+    std::printf("  unchecked voxel %.3f for parts %.2f across -- %.2f voxels per part\n",
+                unchecked_sdf.voxel_size,
+                part_size,
+                part_size / unchecked_sdf.voxel_size);
+    check(unchecked_sdf.voxel_size > part_size,
+          "and that field's voxel is coarser than the parts, which is why it is refused");
+    // A solid submesh of the same triangle budget stays resolvable, which is what makes the metric
+    // discriminating rather than merely a proxy for "large".
+    const auto solid = make_box(math::vec3(part_size * 0.5f));
+    const auto solid_summary = summarize_connected_components(solid);
+    check(solid_summary.component_count == 1, "a solid part is one piece");
+    check(solid_summary.get_sparsity() < 2.0f, "and reads as dense");
+    mesh_sdf solid_sdf;
+    check(bake_mesh_sdf(solid, settings, solid_sdf), "the solid submesh bakes, with the check ON");
+    check(solid_sdf.voxel_size < part_size, "whose voxel does resolve it");
+    std::printf("  solid comparison: sparsity %.2fx, voxel %.4f\n",
+                solid_summary.get_sparsity(),
+                solid_sdf.voxel_size);
+}
+
+/**
+ * @brief An invisible sliver must not size the field.
+ *
+ * A triangle whose vertices are collinear has zero area: the renderer draws nothing, so the submesh
+ * looks empty in the viewport and changing its material does nothing. The bake used to take its
+ * corners into the bounds anyway, and the bounds are what pick the voxel size -- so one sliver
+ * spanning a model produced a field thousands of units across with a voxel to match. An unsigned
+ * shell is floored at one voxel, so that field then traced as a solid block big enough to swallow a
+ * street, sourced from geometry nobody can see.
+ *
+ * Measured on the asset that prompted this: submeshes reporting extents of 7,000 to 10,000 units in
+ * a scene whose buildings are a few tens across.
+ */
+void test_degenerate_triangles_do_not_size_the_field()
+{
+    std::printf("test_degenerate_triangles_do_not_size_the_field\n");
+    auto geometry = make_box(math::vec3(0.5f));
+    const math::bbox clean_bounds = geometry.bounds;
+    const uint32_t clean_triangles = geometry.get_triangle_count();
+    // Three corners on one line, reaching far outside the box. Collinear rather than merely thin,
+    // so it is unambiguously a sliver rather than a judgement about how thin is too thin.
+    const uint32_t base = uint32_t(geometry.positions.size());
+    geometry.positions.emplace_back(0.0f, 0.0f, 0.0f);
+    geometry.positions.emplace_back(5000.0f, 0.0f, 0.0f);
+    geometry.positions.emplace_back(10000.0f, 0.0f, 0.0f);
+    geometry.indices.insert(geometry.indices.end(), {base, base + 1u, base + 2u});
+    // A NaN triangle too: it never compares true, so a pure area test lets it through and one
+    // corner poisons the bounds of the whole field.
+    const float nan_value = std::numeric_limits<float>::quiet_NaN();
+    const uint32_t nan_base = uint32_t(geometry.positions.size());
+    geometry.positions.emplace_back(nan_value, 0.0f, 0.0f);
+    geometry.positions.emplace_back(0.0f, nan_value, 1.0f);
+    geometry.positions.emplace_back(1.0f, 1.0f, nan_value);
+    geometry.indices.insert(geometry.indices.end(), {nan_base, nan_base + 1u, nan_base + 2u});
+    // Round-trip through the raw-buffer extractor, which is the path a runtime primitive takes.
+    gfx::vertex_layout format;
+    format.begin(bgfx::RendererType::Noop).add(gfx::attribute::Position, 3, gfx::attribute_type::Float).end();
+    std::vector<uint8_t> vertex_data(geometry.positions.size() * format.getStride(), 0u);
+    for(size_t v = 0; v < geometry.positions.size(); ++v)
+    {
+        const float packed[4] = {geometry.positions[v].x, geometry.positions[v].y, geometry.positions[v].z, 0.0f};
+        gfx::vertex_pack(packed, false, gfx::attribute::Position, format, vertex_data.data(), uint32_t(v));
+    }
+    sdf_source_geometry extracted;
+    check(extract_sdf_source_geometry(vertex_data.data(),
+                                      uint32_t(geometry.positions.size()),
+                                      format,
+                                      geometry.indices.data(),
+                                      geometry.get_triangle_count(),
+                                      extracted),
+          "geometry with junk triangles still extracts its real surface");
+    const math::vec3 dimensions = extracted.bounds.get_dimensions();
+    const float extent = math::max(dimensions.x, math::max(dimensions.y, dimensions.z));
+    const math::vec3 clean_dimensions = clean_bounds.get_dimensions();
+    const float clean_extent = math::max(clean_dimensions.x, math::max(clean_dimensions.y, clean_dimensions.z));
+    std::printf("  %u triangles in, %u kept, %u discarded, extent %.3f (clean box is %.3f)\n",
+                geometry.get_triangle_count(),
+                extracted.get_triangle_count(),
+                extracted.discarded_triangles,
+                extent,
+                clean_extent);
+    check(extracted.discarded_triangles == 2, "both junk triangles are discarded");
+    check(extracted.get_triangle_count() == clean_triangles, "every real triangle survives");
+    check(std::isfinite(extent), "the bounds stay finite despite a NaN triangle");
+    check(extent < clean_extent * 1.01f, "the bounds are the real surface's, not the sliver's");
+    // The consequence the fix exists for: bounds set the voxel, so a sane field falls out.
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 16;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(extracted, settings, sdf), "the cleaned geometry bakes");
+    check(sdf.voxel_size < clean_extent, "the voxel is sized to the real surface");
+    std::printf("  baked voxel %.4f, shell %.4f\n", sdf.voxel_size, sdf.two_sided_thickness);
+}
+
+/**
+ * @brief Spheres spread along x, one per submesh, shaped like a real import.
+ *
+ * Separate from @ref make_multi_submesh_load_data because the LOD simplifier needs two things that
+ * fixture cannot give it: enough triangles to actually simplify (a 12-triangle box reports "not
+ * enough triangles" and produces no levels at all, so a test built on it silently falls back to the
+ * base topology and asserts nothing about LODs), and vertex ATTRIBUTES, since the simplifier takes a
+ * different code path when normals and UVs are present -- the path every shipped asset takes.
+ */
+auto make_spread_submesh_load_data(uint32_t submesh_count) -> mesh::load_data
+{
+    mesh::load_data data;
+    data.vertex_format.begin(bgfx::RendererType::Noop)
+        .add(gfx::attribute::Position, 3, gfx::attribute_type::Float)
+        .add(gfx::attribute::Normal, 3, gfx::attribute_type::Float)
+        .add(gfx::attribute::TexCoord0, 2, gfx::attribute_type::Float)
+        .end();
+    const auto sphere = make_sphere(0.5f, 12, 16);
+    const uint32_t sphere_vertices = uint32_t(sphere.positions.size());
+    const uint32_t sphere_triangles = sphere.get_triangle_count();
+    data.vertex_count = submesh_count * sphere_vertices;
+    data.vertex_data.assign(size_t(data.vertex_count) * data.vertex_format.getStride(), 0u);
+    data.triangle_data.reserve(size_t(submesh_count) * sphere_triangles);
+    data.submeshes.reserve(submesh_count);
+    data.bbox.reset();
+    for(uint32_t s = 0; s < submesh_count; ++s)
+    {
+        const uint32_t vertex_offset = s * sphere_vertices;
+        const math::vec3 offset(float(s) * submesh_spacing, 0.0f, 0.0f);
+        for(uint32_t v = 0; v < sphere_vertices; ++v)
+        {
+            const math::vec3 local = sphere.positions[v];
+            const math::vec3 p = local + offset;
+            const float packed_position[4] = {p.x, p.y, p.z, 0.0f};
+            gfx::vertex_pack(packed_position,
+                             false,
+                             gfx::attribute::Position,
+                             data.vertex_format,
+                             data.vertex_data.data(),
+                             vertex_offset + v);
+            // Radial normals and a crude planar UV. Exact shading values are irrelevant; the
+            // simplifier only needs a real gradient to weigh collapses against.
+            const math::vec3 n = math::normalize(local);
+            const float packed_normal[4] = {n.x, n.y, n.z, 0.0f};
+            gfx::vertex_pack(packed_normal,
+                             false,
+                             gfx::attribute::Normal,
+                             data.vertex_format,
+                             data.vertex_data.data(),
+                             vertex_offset + v);
+            const float packed_uv[4] = {local.x, local.y, 0.0f, 0.0f};
+            gfx::vertex_pack(packed_uv,
+                             false,
+                             gfx::attribute::TexCoord0,
+                             data.vertex_format,
+                             data.vertex_data.data(),
+                             vertex_offset + v);
+            data.bbox.add_point(p);
+        }
+        auto& submesh = data.submeshes.emplace_back();
+        submesh.data_group_id = s;
+        submesh.vertex_start = int32_t(vertex_offset);
+        submesh.vertex_count = sphere_vertices;
+        submesh.face_start = int32_t(data.triangle_data.size());
+        submesh.face_count = sphere_triangles;
+        for(uint32_t t = 0; t < sphere_triangles; ++t)
+        {
+            auto& tri = data.triangle_data.emplace_back();
+            tri.data_group_id = submesh.data_group_id;
+            tri.indices[0] = sphere.indices[t * 3 + 0] + vertex_offset;
+            tri.indices[1] = sphere.indices[t * 3 + 1] + vertex_offset;
+            tri.indices[2] = sphere.indices[t * 3 + 2] + vertex_offset;
+        }
+    }
+    data.triangle_count = uint32_t(data.triangle_data.size());
+    return data;
+}
+
+/**
+ * @brief Each submesh's LOD-extracted geometry must stay its own, through the REAL LOD generator.
+ *
+ * `test_submesh_extraction_selects_only_its_own_submesh` pins this for the base topology, and
+ * `test_lod_extraction_clamps_rather_than_failing` pins level selection -- but that one builds its
+ * LOD by hand, so the face ranges are correct by construction and it asserts nothing about bounds.
+ * Neither covers the path the asset compiler actually uses: `generate_lods_for_load_data` writes the
+ * ranges, and the SDF bakes from LOD 2 BY DEFAULT, so a mistake there reaches every imported model
+ * while every existing test stays green.
+ *
+ * The symptom it guards is specific and severe. Bounds are what size a field: a submesh handed a
+ * sibling's triangles gets bounds spanning the gap between them, and since the voxel is that extent
+ * divided by a fixed count, the field becomes coarse enough that its geometry dilates into one solid
+ * block. Compact parts scattered across a model -- street lamps, bolts, signage -- are the worst case.
+ */
+void test_lod_extraction_keeps_each_submesh_to_its_own_bounds()
+{
+    std::printf("test_lod_extraction_keeps_each_submesh_to_its_own_bounds\n");
+    constexpr uint32_t submesh_count = 4;
+    auto data = make_spread_submesh_load_data(submesh_count);
+    // The production call, not a hand-built level.
+    const auto lod_configs = mesh::generate_default_lod_configs(data, 0.01f);
+    if(!lod_configs.empty())
+    {
+        mesh::generate_lods_for_load_data(data, lod_configs);
+    }
+    std::printf("  generated %zu LOD levels for %u submeshes spaced %.1f apart\n",
+                data.lods.size(),
+                submesh_count,
+                submesh_spacing);
+    // Every level the compiler could ask for, including LOD 0 and one past the last generated one,
+    // since sdf.lod_index defaults to 2 and clamps.
+    bool all_own_bounds = true;
+    float worst_center_error = 0.0f;
+    float worst_extent = 0.0f;
+    for(uint32_t lod = 0; lod <= uint32_t(data.lods.size()) + 1u; ++lod)
+    {
+        for(uint32_t s = 0; s < submesh_count; ++s)
+        {
+            sdf_source_geometry g;
+            if(!extract_sdf_source_geometry(data, lod, s, g))
+            {
+                all_own_bounds = false;
+                continue;
+            }
+            const math::vec3 center = (g.bounds.min + g.bounds.max) * 0.5f;
+            const math::vec3 dimensions = g.bounds.get_dimensions();
+            const float extent = math::max(dimensions.x, math::max(dimensions.y, dimensions.z));
+            const float center_error = std::fabs(center.x - float(s) * submesh_spacing);
+            worst_center_error = math::max(worst_center_error, center_error);
+            worst_extent = math::max(worst_extent, extent);
+            // Sited at its own submesh, and no wider than one sphere. Either check alone can pass
+            // while the geometry is wrong: bounds spanning two submeshes still centre correctly on
+            // the middle one, and a correctly sized sphere can sit at the wrong place.
+            all_own_bounds = all_own_bounds && center_error < 1e-3f && extent < submesh_spacing;
+        }
+    }
+    std::printf("  worst centre error %.4f, worst extent %.3f (one submesh is 1.0, spacing %.1f)\n",
+                worst_center_error,
+                worst_extent,
+                submesh_spacing);
+    check(all_own_bounds, "every LOD of every submesh keeps its own bounds, not a sibling's");
+}
+
 void test_bake_cost_is_dominated_by_voxels_not_triangles()
 {
     std::printf("test_bake_cost_is_dominated_by_voxels_not_triangles\n");
@@ -3138,10 +3835,22 @@ void test_degenerate_inputs()
 
 int main()
 {
+    // APPLOG_* expands to spdlog::get("Log")->log(...), and spdlog::get returns a NULL shared_ptr
+    // when nothing registered that name. Engine code that logs therefore null-dereferences the
+    // moment a test calls it -- a hard crash mid-suite with no failing assertion, which reads as a
+    // bug in the code under test rather than a missing harness dependency. Registering a real sink
+    // keeps that output visible too, since a warning is often exactly what a test wants to observe.
+    // create() registers the logger itself; registering the result again throws for a duplicate name.
+    if(!spdlog::get(APPLOG))
+    {
+        spdlog::create<spdlog::sinks::stdout_sink_mt>(APPLOG);
+    }
     test_sphere_accuracy();
     test_field_is_conservative();
     test_sign_correctness();
     test_conservative_empty_bricks();
+    test_conservative_empty_bricks_in_a_shell();
+    test_large_open_submesh_shell_is_governed_by_resolution();
     test_brick_seam_continuity();
     test_two_sided_shell();
     test_thin_wall();
@@ -3160,6 +3869,7 @@ int main()
     test_instance_grid_walk_stops_past_the_nearest_hit();
     test_surface_resolve_addresses_one_cell_from_both_sides();
     test_surface_resolve_reports_failure_outside_the_cascade();
+    test_cache_level_handover_keeps_a_surface_reachable();
     test_instance_grid_handles_degenerate_input();
     test_clipmap_recomposes_moved_geometry_within_budget();
     test_clipmap_culled_composition_matches_brute_force();
@@ -3174,6 +3884,10 @@ int main()
     test_bake_grid_scales_with_world_size();
     test_total_voxel_budget_bounds_a_field();
     test_lod_extraction_clamps_rather_than_failing();
+    test_lod_extraction_keeps_each_submesh_to_its_own_bounds();
+    test_degenerate_triangles_do_not_size_the_field();
+    test_scattered_parts_are_detected_and_cannot_be_resolved();
+    test_surface_test_keeps_ordinary_tessellation();
     test_bake_cost_is_dominated_by_voxels_not_triangles();
     test_parallel_submesh_bake_matches_serial();
     test_cache_keys_are_camera_independent();

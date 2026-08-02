@@ -157,7 +157,9 @@ void main()
 		{
 			continue;
 		}
-		uint level = GiCacheLevel(surface.position, u_gi_resolve_camera.xyz);
+		// Level and its cross-fade weight together: crossing a level boundary re-keys the surface,
+		// so a reader that consults only one level loses every entry built at the other one and
+		// falls back to the environment probe -- GI dimming as the camera closes in.
 		// Interpolated across the four cells bracketing the hit in its tangent plane, not point
 		// sampled from one. A cell is metres across where a pixel is millimetres, so a point lookup
 		// makes this gather piecewise constant at cell scale -- blocks that shift as the cascade
@@ -171,10 +173,12 @@ void main()
 		bool found;
 		if(u_gi_cache_interpolate > 0.0)
 		{
-			found = GiCacheGatherSurface(surface.position, surface.normal, level, cached);
+			found = GiCacheGatherLevels(surface.position, surface.normal, u_gi_resolve_camera.xyz, cached);
 		}
 		else
 		{
+			float ignored_blend;
+			uint level = GiCacheLevelEx(surface.position, u_gi_resolve_camera.xyz, ignored_blend);
 			found = GiCacheGatherPoint(surface.position, surface.normal, level, cached);
 		}
 		// A miss contributes NOTHING rather than black. It means this cell has not been lit yet,

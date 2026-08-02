@@ -4,10 +4,66 @@
 
 #include <graphics/graphics.h>
 
+#include <array>
+#include <numeric>
 #include <unordered_map>
 
 namespace unravel
 {
+namespace
+{
+
+/**
+ * @brief True when a triangle carries no surface and must not reach the bake.
+ *
+ * Two kinds of junk, both of which the RENDERER quietly discards while the bake would not:
+ *
+ *   - Non-finite positions. A NaN never compares true, so a degeneracy test alone lets it through,
+ *     and one NaN corner poisons the bounds of the whole field.
+ *   - Slivers. A triangle whose vertices are collinear has zero area, draws nothing, and cannot
+ *     occlude or bounce light -- but its CORNERS still expand the bounds, and the bounds are what
+ *     size the field. One sliver spanning a model turns a compact submesh into a field thousands of
+ *     units across, whose voxel is correspondingly enormous; since an unsigned shell is floored at
+ *     one voxel, that field then renders as a solid block the size of the sliver. An invisible
+ *     triangle producing the single most visible artefact in the scene.
+ *
+ * The sliver test is the triangle's height over its longest edge, expressed as a ratio, so it is
+ * scale independent: an absolute area threshold would either miss slivers on a large mesh or reject
+ * genuine small triangles on a fine one.
+ */
+auto carries_no_surface(const math::vec3& a, const math::vec3& b, const math::vec3& c) -> bool
+{
+    // Slivers are a matter of degree, so the threshold is a judgement, and it is bounded on BOTH
+    // sides. The ratio is the reciprocal of the aspect ratio, so this rejects anything thinner than
+    // 10000:1 -- comfortably past any tessellation an artist authors, while leaving the 10:1 to 100:1
+    // trim, mullions and floor strips that make up much of a building's occlusion.
+    //
+    // Measured by test_surface_test_keeps_ordinary_tessellation: a 40:1 panel measures 0.025, so a
+    // threshold anywhere near 0.1 discards it outright and the geometry produces no field at all.
+    // That failure is near-invisible -- a missing occluder leaks light somewhere across the project
+    // rather than drawing a block in front of the camera -- which is why the value has a test.
+    //
+    // This CANNOT be used to suppress an unrepresentable field. A submesh whose parts are scattered
+    // is not thin, so no threshold separates it from real geometry; that is what the sparsity check
+    // in bake_mesh_sdf is for.
+    constexpr float min_height_ratio = 0.0001f;
+    if(!math::all(math::isfinite(a)) || !math::all(math::isfinite(b)) || !math::all(math::isfinite(c)))
+    {
+        return true;
+    }
+    const math::vec3 ab = b - a;
+    const math::vec3 ac = c - a;
+    const float longest_edge =
+        math::max(math::length(ab), math::max(math::length(ac), math::length(c - b)));
+    if(longest_edge <= 0.0f)
+    {
+        return true;
+    }
+    // |ab x ac| is twice the area, so dividing by the longest edge gives the height over it.
+    return math::length(math::cross(ab, ac)) <= longest_edge * longest_edge * min_height_ratio;
+}
+
+} // namespace
 
 auto extract_sdf_source_geometry(const uint8_t* vertex_data,
                                  uint32_t vertex_count,
@@ -27,15 +83,34 @@ auto extract_sdf_source_geometry(const uint8_t* vertex_data,
         return false;
     }
     out.positions.resize(vertex_count);
-    out.bounds.reset();
     for(uint32_t i = 0; i < vertex_count; ++i)
     {
         float unpacked[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         gfx::vertex_unpack(unpacked, gfx::attribute::Position, format, vertex_data, i);
         out.positions[i] = math::vec3(unpacked[0], unpacked[1], unpacked[2]);
-        out.bounds.add_point(out.positions[i]);
     }
-    out.indices.assign(indices, indices + size_t(triangle_count) * 3);
+    // Same surface test as the submesh path, and for the same reason -- but the bounds are
+    // accumulated from the surviving TRIANGLES rather than from every position, because this buffer
+    // may carry vertices no triangle references and those must not size the field either.
+    out.indices.clear();
+    out.indices.reserve(size_t(triangle_count) * 3);
+    out.bounds.reset();
+    for(uint32_t t = 0; t < triangle_count; ++t)
+    {
+        const uint32_t i0 = indices[t * 3 + 0];
+        const uint32_t i1 = indices[t * 3 + 1];
+        const uint32_t i2 = indices[t * 3 + 2];
+        if(i0 >= vertex_count || i1 >= vertex_count || i2 >= vertex_count ||
+           carries_no_surface(out.positions[i0], out.positions[i1], out.positions[i2]))
+        {
+            ++out.discarded_triangles;
+            continue;
+        }
+        out.indices.insert(out.indices.end(), {i0, i1, i2});
+        out.bounds.add_point(out.positions[i0]);
+        out.bounds.add_point(out.positions[i1]);
+        out.bounds.add_point(out.positions[i2]);
+    }
     return out.is_valid();
 }
 
@@ -78,24 +153,45 @@ auto compact_submesh_geometry(const mesh::load_data& data,
     out.bounds.reset();
     for(size_t face = face_begin; face < face_begin + face_count; ++face)
     {
-        for(uint32_t corner = 0; corner < 3; ++corner)
+        // Resolved as a whole triangle before anything is emitted, because whether a corner may
+        // contribute to the bounds depends on the other two: a corner of a sliver must not widen
+        // the field even though the corner itself is a perfectly ordinary position.
+        //
+        // This unpacks a shared vertex once per incident face rather than once overall. The bake is
+        // dominated by voxel work by a wide margin (test_bake_cost_is_dominated_by_voxels_not_triangles),
+        // and test_submesh_bake_pass_cost_is_linear guards the pass staying O(model).
+        std::array<uint32_t, 3> source{0u, 0u, 0u};
+        std::array<math::vec3, 3> corners{};
+        bool addressable = true;
+        for(uint32_t corner = 0; corner < 3 && addressable; ++corner)
         {
             const uint32_t source_index = get_corner(face, corner);
             if(source_index >= data.vertex_count)
             {
-                continue;
+                addressable = false;
+                break;
             }
-            const auto inserted = remap.emplace(source_index, uint32_t(out.positions.size()));
+            source[corner] = source_index;
+            float unpacked[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            gfx::vertex_unpack(unpacked,
+                               gfx::attribute::Position,
+                               data.vertex_format,
+                               data.vertex_data.data(),
+                               source_index);
+            corners[corner] = math::vec3(unpacked[0], unpacked[1], unpacked[2]);
+        }
+        if(!addressable || carries_no_surface(corners[0], corners[1], corners[2]))
+        {
+            ++out.discarded_triangles;
+            continue;
+        }
+        for(uint32_t corner = 0; corner < 3; ++corner)
+        {
+            const auto inserted = remap.emplace(source[corner], uint32_t(out.positions.size()));
             if(inserted.second)
             {
-                float unpacked[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-                gfx::vertex_unpack(unpacked,
-                                   gfx::attribute::Position,
-                                   data.vertex_format,
-                                   data.vertex_data.data(),
-                                   source_index);
-                out.positions.emplace_back(unpacked[0], unpacked[1], unpacked[2]);
-                out.bounds.add_point(out.positions.back());
+                out.positions.push_back(corners[corner]);
+                out.bounds.add_point(corners[corner]);
             }
             out.indices.push_back(inserted.first->second);
         }

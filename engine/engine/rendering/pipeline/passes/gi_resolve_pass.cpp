@@ -180,6 +180,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                    cache_settings.base_distance,
                                    float(cache_settings.max_level)};
     gfx::set_uniform(resolve_program_.u_gi_cache_params, cache_params);
+    // Only w matters to a reader -- the level cross-fade band, which decides whether a surface
+    // near a boundary is looked up at one level or blended across two. It has to be the same value
+    // the insert pass wrote with, so it comes from the cache and not from this pass's settings.
+    const float cache_params2[4] = {0.0f, 0.0f, 0.0f, cache_settings.level_blend};
+    gfx::set_uniform(resolve_program_.u_gi_cache_params2, cache_params2);
 
     const float resolve_params[4] = {float(s.ray_count),
                                      s.max_distance,

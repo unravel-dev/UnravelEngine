@@ -883,3 +883,87 @@ just stops. Exercise both pairings and compare the fields (`test_parallel_submes
 which costs milliseconds and fails loudly instead of hanging the editor on a model with thousands
 of parts.
 
+
+## A failed user experiment is evidence about the KNOB, not about the hypothesis
+
+"I raised Max Total Voxels and Min Voxel Size and the phantom geometry is still there" was read as
+ruling out the bake and pointing at the tracer. It did neither. The sizing loop in `mesh_sdf_baker`
+only ever GROWS the voxel: both caps are satisfied by coarsening, never by refining. So
+`max_total_voxels` is a CEILING rather than a target -- raising it can only stop coarsening, never
+reach a finer field than `resolution` already asked for -- and `min_voxel_size` is a FLOOR, so raising
+that makes the field coarser still. Neither knob could ever have moved the result in the direction
+being tested, and both are named as though they control detail.
+
+Acting on that misreading cost a wrong diagnosis (blaming a cone-radius regression), a shader change
+shipped against the wrong cause, and a round trip through the user.
+
+Before treating "I changed X and nothing happened" as evidence against a subsystem, read what X does
+and confirm it can move the result in the direction tested. A knob that is a ceiling, a floor, an
+unexposed default, or dead code produces exactly the same null result as a correct hypothesis being
+wrong -- and the names do not distinguish them. `max_resolution` in the same struct is documented as
+a per-axis cap and is never assigned from the importer at all, so it can never fire.
+
+The general form, which the `is_valid()` and `poolstl::par` entries above are also instances of: a
+measurement only constrains a hypothesis once you have checked that the thing measured is connected
+to the thing hypothesised. Verify the mechanism of the instrument before trusting its null result.
+
+Corollary for diagnostics: the atlas warning pointed at Max Total Voxels, the one setting that cannot
+help. A log line that names a knob is an instruction, and naming the wrong one sends every future
+reader down the same path. The bake now names Resolution, and says the two must be raised together.
+
+## A harness that cannot call logging code silently excludes it from coverage
+
+`APPLOG_*` expands to `spdlog::get("Log")->log(...)`, and `spdlog::get` returns a NULL shared_ptr
+when nothing registered that name. `gi_tests` had a bare `main()` with no logger, so ANY engine
+function that logs null-dereferenced the moment a test called it -- a segfault mid-suite with no
+failing assertion, which reads as a bug in the code under test.
+
+The consequence is worse than the crash. `bake_mesh_sdf` happens not to log, so the whole GI suite
+passed while `mesh::generate_lods_for_load_data` -- which the SDF bake depends on, since fields bake
+from LOD 2 by default -- was effectively untestable. A test written against it died instead of
+failing, so the coverage gap looked like a deliberate boundary rather than an accident.
+
+Registering a real sink in `main()` fixes it and makes the warnings visible, which is often the thing
+a test wants to observe anyway.
+
+Generalisation: when a subsystem has suspiciously little test coverage, check whether the harness is
+CAPABLE of calling it before concluding the coverage was a choice. Missing infrastructure and
+deliberate scoping look identical from the test list.
+
+## The renderer silently discards geometry the bake takes seriously
+
+A zero-area triangle draws nothing. The GPU rejects it, so a submesh made of slivers looks empty in
+the viewport and stays empty when you change its material -- there is no visual evidence it exists.
+The SDF bake had no such filter, and a triangle's corners widen the BOUNDS whether or not it has any
+surface between them. Bounds pick the voxel size, so one invisible sliver spanning a model produced a
+field 10,000 units across with an 86-unit voxel; the unsigned shell floor then made that field a
+solid block swallowing a street.
+
+The general trap: "invisible" is a property of the RENDERER, not of the data. Any consumer of mesh
+data that is not the rasteriser -- distance fields, collision, lightmap UVs, bounds -- has to state
+its own validity rule, because the one the artist and the viewport agreed on was never written down
+and does not transfer. Geometry that looks absent is not absent.
+
+Corollary for diagnosis: when an artefact's SIZE has no relationship to anything visible, stop looking
+at the visible geometry. The number that was wrong here (extent 10115 in a scene of tens) was never
+on screen, and three rounds of hypotheses about content -- material grouping, sparse submeshes,
+connected components -- were all attempts to explain it with things that were. Print the numeric
+inputs of the pipeline before theorising about its content.
+
+## Do not abandon a hypothesis because the user pushes back on the reasoning for it
+
+The "scattered parts in one submesh" explanation was raised first, dropped when the user said the
+parts were separate submeshes, and turned out to be right: the submeshes ARE separate, and submesh 99
+is ITSELF a scatter of three lamps over 3804 units. Both statements were true at once. Two further
+rounds were spent on theories that were not.
+
+The user was correcting a detail of the reasoning (how the parts are grouped in the inspector), not
+the conclusion (the field is sized to a spread rather than to geometry). Treating the correction as
+refuting the whole hypothesis threw away the one that fit. When a correction lands, re-check whether
+it actually contradicts the conclusion or only the path taken to it -- and say which, out loud, rather
+than silently switching tracks.
+
+The measurement that would have settled it in one step was never taken: extent of the geometry versus
+extent of the space it occupies. Reach for the number that DISCRIMINATES between the live hypotheses
+instead of arguing about which is more plausible. `summarize_connected_components` exists now for
+exactly that, and reports 2401x on a scatter versus 1.00x on a solid part.

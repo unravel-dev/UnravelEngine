@@ -158,8 +158,24 @@ being laundered into a confident answer.
 
 ### A1d. GI gets DARKER as the camera approaches a surface
 
-**CONFIRMED by observation, not yet fixed.** Severity: high -- it is backwards, and it is the most
-visible remaining defect.
+**CONFIRMED, fixed** by cross-fading the cache level (D7). Severity was high -- it is backwards, and
+it was the most visible remaining defect.
+
+The fix mirrors Phase 2b's cascade cross-fade exactly, because it is the same defect one layer up:
+inside a band below each handover distance a surface is written at BOTH levels and read from both,
+blended by distance, so it stays addressable while the camera crosses. Owned by
+`radiance_cache::settings::level_blend` rather than by either pass, for the reason the cell size and
+base distance are: a writer and a reader that disagree on the band insert and look up at different
+levels near a boundary and never meet.
+
+`test_cache_level_handover_keeps_a_surface_reachable` walks a camera through two boundaries and
+asserts a fixed surface stays reachable throughout. Measured: the hard switch loses it at both
+handovers, the cross-fade at none -- so the test fails on the old behaviour rather than describing
+the new one.
+
+Not extended to bounce-created entries, deliberately. Those are one ray per entry per frame, and the
+reader already falls back to whichever level is populated, so a bounce-discovered cell is found from
+either side without doubling that work.
 
 Walking toward a wall that is well lit at cascade 2 makes it darken as it enters cascade 1 and again
 at cascade 0. Approaching a surface should improve its GI, never degrade it.
@@ -194,6 +210,232 @@ cover. It fires whenever the camera moves far enough to re-snap a level.
 ~4.4 ms total, so a 4.56 ms CPU hitch on camera motion is comparable to the entire rest of the
 system, and it lands as a stutter rather than as steady cost. Moving composition to compute also
 removes the per-level upload and is what unblocks resolution 128.
+
+### A1f. Cone relaxation made whole instances render as solid boxes -- REGRESSION, introduced here
+
+**CONFIRMED, fixed.** Severity: high. Introduced by enabling relaxation (A1c) and not noticed for
+several iterations, because the artefact appears only at distance.
+
+`SdfConeRadius` returns `max(base, t * relaxation)`, so the acceptance radius grows without bound
+along the ray: at 20 m with relaxation 0.1 it is 2 m. A mesh field SATURATES at
+`encode_range * voxel` -- four voxels, centimetres for a typical submesh. Every sample inside that
+instance's bounds therefore satisfied `distance < accept`, and the whole BOUNDING BOX rendered
+solid: a smooth box floating where the mesh is, occluding everything behind it and filling the
+radiance cache with entries for geometry that is not there.
+
+This is the failure `lessons.md` already records under "Thresholds must be expressed in the units of
+the thing they judge" -- *"an absolute threshold larger than an instance's voxel makes even the
+saturated far-field value read as a hit, and the field's bounding box renders solid"*. The
+`surface_bias` term was converted to voxels for exactly this reason; `relaxation` then reintroduced
+an absolute term that outgrows the field.
+
+Two properties made it point away from itself. It appears only beyond the distance where
+`t * relaxation` overtakes four voxels, so it reads as a far-field asset problem. And it gets WORSE
+as bake resolution rises, because finer voxels mean a smaller saturation distance -- so the obvious
+experiment (raise Max Total Voxels) makes it worse and appears to rule the bake out.
+
+Fixed by capping the acceptance at the saturation distance in both tiers. The hit comparison is
+strict, so capping exactly at the saturated value is enough to stop a saturated sample ever reading
+as a hit while leaving every in-band distance usable.
+
+**Carry forward:** a cone radius is only meaningful within the range the field can represent. Any
+term added to a hit threshold must be checked against the field's saturation, not just against the
+voxel.
+
+### A1g. Unsigned shells classified bricks in the wrong space
+
+**CONFIRMED, fixed.** Mesh format version 16 -> 17.
+
+A shell stores `unsigned - thickness`, but brick classification and the empty-brick distance used
+the RAW unsigned value. Every empty entry therefore over-reported by exactly the thickness, which is
+an over-estimate -- the one direction a conservative field may never err in -- so a trace could step
+that far too much and pass through the shell. Thin open geometry silently ceasing to occlude.
+
+It hid for the reason `lessons.md` predicts of this whole family: the thickness is ZERO for a signed
+field, so the two spaces coincide and a fixture of closed meshes agrees perfectly.
+`test_conservative_empty_bricks` used a closed box and could not see it.
+
+The fix also stops the interior of a thick shell being stored as SURFACE bricks -- those voxels are
+uniformly deep inside the slab and are now empty-inside entries costing no atlas storage, which
+matters because a scene of open meshes is what overruns the atlas.
+
+**Test note worth keeping.** The first version of `test_conservative_empty_bricks_in_a_shell` passed
+with the fix reverted. It used a fine voxel, so every empty brick sat far enough from the surface
+that the loose centre-minus-half-diagonal bound absorbed the error, and it sampled only the 8 corners
+when the closest point of a brick is generally on a face. Coarsening the voxel and sampling a 5x5x5
+grid made it discriminate: 4 violations at 0.086 worst excess on the old code, 0 on the new. Another
+instance of "a regression test must be shown to FAIL on the old behaviour".
+
+### A1h. A large open submesh gets a metre-thick shell, and no exposed setting can fix it
+
+**CONFIRMED by measurement.** This is the actual cause of Bistro's phantom blocks -- not A1f, and not
+the open surfaces themselves.
+
+`mesh_sdf_baker.cpp:588` floors an unsigned shell's half-thickness at one voxel, which is *correct*:
+a shell thinner than the voxel storing it cannot be represented and would not occlude. The
+consequence is that the shell's WORLD thickness is set by the voxel size.
+
+The voxel size is `longest_axis / resolution` (`mesh_sdf_baker.cpp:577`) with `resolution` defaulting
+to **64** (`asset_storage.h:99`). It is a fixed subdivision COUNT, so it ignores world scale entirely:
+a 0.5 m prop gets 8 mm voxels while a 30 m facade gets 0.5 m voxels. On an open submesh that becomes a
+half-metre shell, so everything within ~1.2 m of any triangle reads solid -- window mullions,
+railings, balconies all fill in, and the submesh traces as one block the size of its bounds, with the
+real geometry only faintly imprinted. That is exactly what the SDF Normals view showed.
+
+`test_large_open_submesh_shell_is_governed_by_resolution` measures it on a 30 m open box against an
+authored 0.05 m thickness:
+
+| Settings | Voxel | Shell half-thickness |
+|---|---|---|
+| Defaults (res 64, budget 262144) | 0.586 | 0.586 (**11.7x** authored) |
+| Max Total Voxels x8 only | 0.469 | 0.469 (still 9.4x) |
+| Resolution 256 **and** budget x8 | 0.265 | 0.265 |
+
+**Why the obvious fix cannot work, and why that misdirected the whole investigation.** The sizing loop
+at `mesh_sdf_baker.cpp:628-649` only ever GROWS the voxel -- both caps are satisfied by coarsening,
+never by refining. So `max_total_voxels` is a ceiling, not a target: raising it can only stop the
+coarsening, never reach a finer field than `resolution` already asked for. Raising it 8x buys 20%.
+`min_voxel_size` is a floor, so raising *that* makes things worse. Those are the only two knobs whose
+names suggest they control detail, and neither can. The measurement above is the user's own experiment
+run in the test suite.
+
+Two further facts worth recording:
+
+- `mesh_sdf_baker.h:55` documents a per-axis cap `max_resolution = 256`, but it is never assigned from
+  the importer (absent from `asset_storage.h`, from `mesh_importer_meta.cpp`, and from
+  `asset_compiler.cpp:1156-1162`). Since `resolution = 64` always binds first, that cap is dead code
+  and its explanatory comment describes a limit that cannot fire.
+- `max_voxel_size` is clamped BEFORE the sizing loop, and the loop can push the voxel past it. The
+  documented clamp does not hold.
+
+**Shipped so far: the diagnostic.** `asset_compiler.cpp` now reports, per mesh, how many unsigned
+submeshes had their shell floored above the authored thickness, the worst one with its voxel size, and
+the feature size that will fill in -- and names Resolution as the control, because the log previously
+pointed at Max Total Voxels, which is the knob that cannot help.
+
+**CONFIRMED: the worst case is a SPARSE submesh. See A1j.** Inspector data for the offending submesh
+settled it: 315 vertices and 384 faces spread over a 3804 x 1647 x 518 unit bbox, in three small
+pieces separated by enormous gaps. The field is sized correctly to the submesh and every setting is
+honoured; the submesh is simply mostly air, so the voxel is set by the SPREAD while the content is the
+parts.
+
+Ruled out along the way, each by measurement rather than argument: extraction compacts to the
+referenced vertices and takes bounds from those (`mesh_sdf_source.cpp`); the LOD path's `face_start`
+bookkeeping accumulates correctly (`mesh.cpp:2494-2607`), now pinned through the REAL generator by
+`test_lod_extraction_keeps_each_submesh_to_its_own_bounds` (5 generated levels, worst centre error
+0.0000, worst extent exactly one sphere). Four submeshes do produce four correctly-sited fields.
+
+**Not yet fixed, and it is a design call rather than a bug fix.** Making the voxel size track world
+scale means a large submesh costs proportionally more voxels, which runs straight into the atlas
+budget that Bistro already overruns. The three real options -- drive the voxel from a target world
+size and pay for it; keep the authored thickness and accept a sub-voxel shell that leaks rather than
+phantoms; or split oversized submeshes at import -- trade memory against leaking against phantom
+occluders, scene-wide. Worth deciding deliberately, not as a side effect of this fix.
+
+### A1i. Invisible triangles sized the field -- the actual cause of Bistro's phantom blocks
+
+**CONFIRMED by measurement, fixed.** Mesh format version 17 -> 18.
+
+A triangle whose vertices are collinear has zero area. The renderer draws nothing, so the submesh
+looks empty in the viewport and changing its material does nothing -- which is exactly how the user
+found it, by disabling submesh 99 and watching the block disappear. The bake took its corners into the
+bounds anyway, and the bounds are what pick the voxel size.
+
+Measured on the offending asset, straight from the new import diagnostic:
+
+```
+submesh 324: submesh extent 10115.56, field extent 11118.78, voxel 86.865, shell 86.865
+submesh  31: submesh extent  7867.78, field extent  8529.78, voxel 62.719, shell 62.719
+```
+
+A voxel of 86 units in a scene whose buildings are tens across. Since an unsigned shell is floored at
+one voxel (A1h), the shell became 86 units thick and the field traced as a solid block big enough to
+swallow a street -- sourced entirely from geometry nobody can see.
+
+**Fix.** `carries_no_surface` in `mesh_sdf_source.cpp` rejects, on both extraction paths, triangles
+that are non-finite or that collapse to a line. The sliver test is the triangle's height over its
+longest edge as a RATIO, so it is scale independent; an absolute area threshold would either miss
+slivers on a large mesh or reject genuine small triangles on a fine one. NaN is tested separately
+because a NaN never compares true, so an area test alone lets it straight through.
+
+`test_degenerate_triangles_do_not_size_the_field` was verified to fail on the old code before being
+accepted: extent 10000.500 and **voxel 40.35** with the fix reverted, extent 1.000 and voxel 0.0625
+with it in place. That reproduces the field artefact end to end from one invisible sliver.
+
+**Why this outranks A1h.** A1h is real and still worth addressing, but it is a proportionality problem
+-- a large submesh gets a coarse field. This was a correctness problem: geometry with no surface
+determining the size of a field. Once it is excluded, the extents that made A1h look catastrophic on
+this asset collapse to sane values on their own.
+
+**Diagnostic kept.** The import log now reports how many triangles were excluded, because a submesh
+made ENTIRELY of slivers now bakes nothing and would otherwise be silently absent from GI.
+
+### A1j. A submesh of scattered parts gets a voxel sized to the gaps between them
+
+**CONFIRMED by measurement. Detection shipped; the fix is a design decision, see below.**
+
+The failure looks correct at every step, which is why it survived three rounds of hypotheses. The
+submesh renders fine. The field is sized exactly to the submesh. Every bake setting is honoured. What
+is wrong is the RELATIONSHIP between the two: the voxel is the bounds divided by a fixed count, so a
+submesh whose parts are scattered gets a voxel sized to the SPREAD, and each part then falls below one
+voxel.
+
+The real asset: submesh 99, `vertex_count` 315, `face_count` 384, bbox
+`{-2565.99, 869.52, -861.47}` to `{1238.66, 2516.92, -343.71}`. Three small lamps over 3804 units.
+
+`test_scattered_parts_are_detected_and_cannot_be_resolved` reproduces the shape:
+
+```
+3 pieces, largest 1.00, bounds 2401.00, sparsity 2401x
+baked voxel 9.732 for parts 1.00 across -- 0.10 voxels per part
+solid comparison:  sparsity 1.00x, voxel 0.0198
+```
+
+**0.10 voxels per part.** An identical part on its own resolves at 0.0198. The metric is
+discriminating rather than a proxy for "large": the solid box reads 1.00x, the scatter reads 2401x.
+
+**Why the earlier diagnostics missed it.** Both tested the wrong thing. The dilated-shell report is
+gated on `is_two_sided`, and these lamps are closed, so they have no shell to dilate. The oversized
+check compares field extent to submesh extent, and those agree perfectly here -- the field IS sized to
+the submesh. A correctly sized field over a sparse submesh trips neither.
+
+**Shipped.** `summarize_connected_components` (union-find over welded positions, so seams do not read
+as breaks) reports piece count, largest piece and sparsity. The import log now flags any submesh above
+4x spread, ranked by sparsity, since that number is very nearly how many times too coarse the voxel is.
+
+**FIXED by refusal.** Mesh format version 18 -> 19. `bake_mesh_sdf` now rejects geometry spread over
+more than `max_component_spread` (32x) its largest connected piece, and the import log names every
+refused submesh with its piece count and spread.
+
+Refusing is the right answer rather than a stopgap: a skipped field costs the GI contribution of
+parts that were too small to contribute usefully, while the field it replaces occludes a whole
+neighbourhood. `test_scattered_parts_are_detected_and_cannot_be_resolved` pins both halves -- the
+scatter is refused, and the SAME geometry bakes with the check disabled at 0.10 voxels per part,
+which is what proves the rule rejects the spread rather than anything wrong with the triangles.
+
+**Rejected approach: a thinness threshold.** Raising `min_height_ratio` to 0.1 does make the artefact
+disappear, and it was tried. It works by deleting geometry until the submesh produces no field at all,
+and `test_surface_test_keeps_ordinary_tessellation` measures the collateral: a 40:1 wall panel
+(ratio 0.025) is 100% discarded and yields NO FIELD, while UV spheres lose 5-6% of their triangles.
+Trim, mullions and floor strips are routinely 10:1 to 100:1, so this silently removes real occluders
+project-wide and shows up later as light leaking through thin walls. The threshold now sits at 1e-3
+(1000:1) with that test guarding both bounds. Thinness cannot express this problem in any case: the
+scattered parts are ordinary geometry, so no threshold separates them from a real thin panel.
+
+**Still open: splitting.** Refusal removes the phantom but does not make the parts contribute. One
+field per connected component would, in one of two ways:
+
+1. **Multiple fields per submesh (GI only).** `submesh_sdfs` becomes a list per submesh; GI
+   registration emits one instance per field, all at the same submesh transform. Submesh identity is
+   untouched, so saved scenes keep working. Costs a serialization change and a format bump.
+2. **Split the submesh itself at import.** Reuses all existing machinery -- one field per submesh
+   still -- but it RENUMBERS submeshes, which breaks every scene referencing them by index. A
+   `submesh_component` stores explicit indices, so this would silently repoint them.
+
+Option 1 is the safe one. Both increase atlas usage substantially: brick count scales as
+`area / brick_size^2`, and splitting shrinks brick size in proportion to the extent, so a scatter that
+currently costs a handful of bricks would cost hundreds. That argues for pairing this with a
+world-space voxel target (A1h) rather than shipping it alone.
 
 ### A2. `SdfResolveSurfacePoint` has no CPU reference and no parity test
 

@@ -33,6 +33,7 @@ auto extract_sdf_source_geometry(const uint8_t* vertex_data,
                                  uint32_t triangle_count,
                                  sdf_source_geometry& out) -> bool;
 
+
 /**
  * @brief Extracts the geometry of ONE submesh.
  *

@@ -1186,16 +1186,25 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             parallel_submeshes ? sdf_bake_threading::serial : sdf_bake_threading::parallel;
         std::vector<size_t> submesh_indices(data.submeshes.size());
         std::iota(submesh_indices.begin(), submesh_indices.end(), size_t(0));
+        // Junk geometry is worth a number rather than silence: a submesh made ENTIRELY of slivers
+        // renders nothing and now bakes nothing, so without this it would simply be absent from GI
+        // with no trace of why.
+        std::atomic<uint64_t> discarded_triangles{0};
+        // One slot per submesh, each written by exactly one task, so this needs no synchronisation.
+        std::vector<sdf_component_summary> component_summaries(data.submeshes.size());
         std::for_each(poolstl::par.par_if(parallel_submeshes),
                       submesh_indices.begin(),
                       submesh_indices.end(),
                       [&](size_t i)
                       {
                           sdf_source_geometry sdf_geometry;
-                          if(!extract_sdf_source_geometry(data, lod_index, i, sdf_geometry))
+                          const bool extracted = extract_sdf_source_geometry(data, lod_index, i, sdf_geometry);
+                          discarded_triangles += sdf_geometry.discarded_triangles;
+                          if(!extracted)
                           {
                               return;
                           }
+                          component_summaries[i] = summarize_connected_components(sdf_geometry);
                           mesh_sdf field;
                           if(!bake_mesh_sdf(sdf_geometry, sdf_settings, field, threading))
                           {
@@ -1210,17 +1219,147 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         size_t surface_bricks = 0;
         size_t memory_bytes = 0;
         bool any_two_sided_fallback = false;
-        for(const auto& field : data.submesh_sdfs)
+        // An unsigned shell cannot be thinner than the voxel that stores it, so the bake floors it
+        // at one voxel. On a large submesh that floor lands far above the authored thickness and
+        // the shell stops being a surface skin, which is the failure worth naming: see the warning
+        // below.
+        struct dilated_shell_report
         {
+            size_t submesh_index = 0;
+            float extent = 0.0f;
+            float field_extent = 0.0f;
+            float voxel_size = 0.0f;
+            float thickness = 0.0f;
+            bool is_oversized = false;
+            uint32_t component_count = 0;
+            float largest_component_extent = 0.0f;
+            float sparsity = 0.0f;
+        };
+        std::vector<dilated_shell_report> dilated_shells;
+        // A field is padded outward from its submesh by a few voxels on every side, so it is always
+        // somewhat larger than the geometry. Several TIMES larger means the field is not sized to the
+        // submesh at all, which is a different failure from a coarse voxel and has to be told apart
+        // from it -- a compact submesh cannot legitimately produce a field spanning its whole model.
+        constexpr float oversized_field_ratio = 4.0f;
+        // A submesh spread over more than this many times its largest connected piece cannot get a
+        // voxel fine enough to resolve that piece, since the voxel is the SPREAD divided by a fixed
+        // count. Four is deliberately permissive: a couple of parts side by side is normal authoring,
+        // while the cases that break tracing measure in the hundreds or thousands.
+        constexpr float sparse_submesh_ratio = 4.0f;
+        // Submeshes the bake REFUSED for being unresolvable. They have no field, so the loop below
+        // skips them, and without their own list a refusal would look exactly like a submesh that
+        // simply has no geometry -- silence being the one outcome worse than the phantom it replaced.
+        std::vector<dilated_shell_report> refused_sparse;
+        for(size_t i = 0; i < data.submesh_sdfs.size(); ++i)
+        {
+            const auto& field = data.submesh_sdfs[i];
             const uint32_t bricks = field.get_surface_brick_count();
             if(bricks == 0)
             {
+                const auto& refused = component_summaries[i];
+                if(refused.get_sparsity() > sdf_settings.max_component_spread &&
+                   sdf_settings.max_component_spread > 0.0f)
+                {
+                    refused_sparse.push_back({i,
+                                              refused.bounds_extent,
+                                              0.0f,
+                                              0.0f,
+                                              0.0f,
+                                              false,
+                                              refused.component_count,
+                                              refused.largest_component_extent,
+                                              refused.get_sparsity()});
+                }
                 continue;
             }
             surface_bricks += bricks;
             memory_bytes += field.get_memory_usage();
             any_two_sided_fallback = any_two_sided_fallback || (field.is_two_sided && !sdf_settings.two_sided);
+            const math::vec3 field_dimensions = field.bounds.get_dimensions();
+            const float field_extent =
+                math::max(field_dimensions.x, math::max(field_dimensions.y, field_dimensions.z));
+            const math::vec3 submesh_dimensions = (i < data.submeshes.size() && data.submeshes[i].bbox.is_populated())
+                                                      ? data.submeshes[i].bbox.get_dimensions()
+                                                      : field_dimensions;
+            const float submesh_extent =
+                math::max(submesh_dimensions.x, math::max(submesh_dimensions.y, submesh_dimensions.z));
+            const bool is_oversized =
+                submesh_extent > 0.0f && field_extent > submesh_extent * oversized_field_ratio;
+            const bool is_dilated =
+                field.is_two_sided && field.two_sided_thickness > sdf_settings.two_sided_thickness;
+            // Sparsity is tested independently of the other two because it produces an unusable
+            // field WITHOUT tripping either: the field is sized correctly to its submesh, so the
+            // oversized check sees nothing wrong, and a closed submesh has no shell to dilate. A
+            // scatter of small closed parts is exactly that case, and it is a common way for an
+            // artist to group geometry.
+            const auto& summary = component_summaries[i];
+            const bool is_sparse = summary.get_sparsity() > sparse_submesh_ratio;
+            if(is_dilated || is_oversized || is_sparse)
+            {
+                // The submesh's own extent, the field's extent and the voxel are reported together
+                // because they separate three failures that look identical in the viewport and have
+                // completely different fixes: a field far larger than its submesh is not sized to it
+                // at all; a submesh far larger than the geometry it draws groups scattered parts and
+                // must be split; and a submesh whose extents all agree is merely under-resolved.
+                dilated_shells.push_back({i,
+                                          submesh_extent,
+                                          field_extent,
+                                          field.voxel_size,
+                                          field.two_sided_thickness,
+                                          is_oversized,
+                                          summary.component_count,
+                                          summary.largest_component_extent,
+                                          summary.get_sparsity()});
+            }
             ++baked_count;
+        }
+        std::sort(dilated_shells.begin(),
+                  dilated_shells.end(),
+                  [](const dilated_shell_report& lhs, const dilated_shell_report& rhs)
+                  {
+                      // Oversized fields first regardless of shell: a field not sized to its submesh
+                      // is a defect, while a thick shell is usually just a coarse setting.
+                      if(lhs.is_oversized != rhs.is_oversized)
+                      {
+                          return lhs.is_oversized;
+                      }
+                      // Then by sparsity, which is very nearly how many times too coarse the voxel
+                      // is, and therefore ranks by how unusable the field is rather than by size.
+                      if(lhs.sparsity != rhs.sparsity)
+                      {
+                          return lhs.sparsity > rhs.sparsity;
+                      }
+                      return lhs.thickness > rhs.thickness;
+                  });
+        if(!refused_sparse.empty())
+        {
+            std::sort(refused_sparse.begin(),
+                      refused_sparse.end(),
+                      [](const dilated_shell_report& lhs, const dilated_shell_report& rhs)
+                      {
+                          return lhs.sparsity > rhs.sparsity;
+                      });
+            APPLOG_WARNING("  {0}: {1} submeshes were NOT given a distance field. Their geometry "
+                           "is scattered so widely that the voxel -- which comes from the bounds, "
+                           "not from the parts -- cannot resolve the parts at all, and the field "
+                           "would have traced as a solid block the size of the spread. They do not "
+                           "occlude or bounce light. Split them by location rather than by "
+                           "material to get them back.",
+                           str_input,
+                           refused_sparse.size());
+            constexpr size_t max_reported_refusals = 5;
+            const size_t reported = math::min(refused_sparse.size(), max_reported_refusals);
+            for(size_t i = 0; i < reported; ++i)
+            {
+                const auto& entry = refused_sparse[i];
+                APPLOG_WARNING("    submesh {0}: {1} piece(s), largest {2:.2f}, spread over {3:.2f} "
+                               "({4:.0f}x)",
+                               entry.submesh_index,
+                               entry.component_count,
+                               entry.largest_component_extent,
+                               entry.extent,
+                               entry.sparsity);
+            }
         }
         if(baked_count > 0)
         {
@@ -1251,6 +1390,67 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                             "open mesh and would otherwise mark regions outside it as solid.",
                             str_input);
             }
+            if(discarded_triangles.load() > 0)
+            {
+                APPLOG_INFO("  {0} triangles carried no surface (zero-area slivers or non-finite "
+                            "positions) and were excluded. They draw nothing, so including them only "
+                            "widened the field bounds -- which is what sets the voxel size.",
+                            discarded_triangles.load());
+            }
+            if(!dilated_shells.empty())
+            {
+                // The phantom-geometry case, and the reason it needs its own line: everything
+                // within the shell of ANY triangle reads solid, so once the shell is thicker than
+                // the gaps in a submesh (window mullions, railings, foliage cards) those gaps fill
+                // in and the submesh traces as one solid block the size of its bounds.
+                //
+                // Naming Resolution specifically matters. The voxel is Resolution divisions of the
+                // submesh's OWN longest axis, so a large submesh gets a coarse voxel however small
+                // its detail is -- and the two caps below it only ever make the voxel COARSER, so
+                // raising Max Total Voxels on its own can never reach a finer field. It has to go
+                // up together with Resolution, or the submesh has to be split.
+                APPLOG_WARNING("  {0}: {1} unsigned submeshes have a shell floored at their voxel "
+                               "size rather than the authored {2:.3f}, so detail finer than twice "
+                               "that fills in and traces as one solid block. Raise Resolution AND "
+                               "Max Total Voxels together -- Max Total Voxels alone only coarsens. "
+                               "If a submesh's extent is far larger than the geometry it draws, it "
+                               "groups scattered parts and has to be split instead.",
+                               str_input,
+                               dilated_shells.size(),
+                               sdf_settings.two_sided_thickness);
+                // Capped: a model can dilate hundreds of submeshes, and the tail is all the same
+                // story. The worst few are what identify the block a viewer is actually looking at.
+                constexpr size_t max_reported_shells = 5;
+                const size_t reported = math::min(dilated_shells.size(), max_reported_shells);
+                for(size_t i = 0; i < reported; ++i)
+                {
+                    const auto& entry = dilated_shells[i];
+                    APPLOG_WARNING("    submesh {0}: extent {1:.2f}, field {2:.2f}, voxel {3:.3f}, "
+                                   "shell {4:.3f} | {5} piece(s), largest {6:.2f}, spread {7:.0f}x{8}",
+                                   entry.submesh_index,
+                                   entry.extent,
+                                   entry.field_extent,
+                                   entry.voxel_size,
+                                   entry.thickness,
+                                   entry.component_count,
+                                   entry.largest_component_extent,
+                                   entry.sparsity,
+                                   entry.is_oversized ? "  <-- FIELD IS NOT SIZED TO THIS SUBMESH"
+                                                      : (entry.sparsity > sparse_submesh_ratio
+                                                             ? "  <-- SCATTERED PARTS, VOXEL CANNOT RESOLVE THEM"
+                                                             : ""));
+                }
+            }
+        }
+        else if(!refused_sparse.empty())
+        {
+            // Every submesh was refused for the same specific reason, so say THAT rather than the
+            // generic advice below, which would send the reader to settings that cannot help.
+            data.submesh_sdfs.clear();
+            APPLOG_WARNING("No SDF for {0}: all {1} submeshes are too scattered to resolve. See the "
+                           "detail above; the fix is splitting them by location, not a bake setting.",
+                           str_input,
+                           refused_sparse.size());
         }
         else
         {

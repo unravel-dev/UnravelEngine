@@ -70,6 +70,22 @@ public:
         /// averaged away to nothing. Capping at 3 keeps the coarsest cell to 2 m, which is under
         /// the spacing of typical wall geometry.
         uint32_t max_level = 3;
+        ///< Width of the cross-fade into the next level, as a fraction of the handover distance.
+        ///
+        /// Levels are a step function of distance to the camera, so crossing a boundary changes the
+        /// cell size and therefore every KEY for that surface. The entries built at the previous
+        /// level are not wrong, they are unreachable -- and a miss lowers the resolve weight, so the
+        /// consumer falls back to the environment probe. The visible result is GI getting DARKER as
+        /// the camera approaches a surface, which is backwards.
+        ///
+        /// Inside the band a surface is written at BOTH levels and read from both, blended by
+        /// distance, so it stays reachable across the handover. Exactly the fix Phase 2b applied to
+        /// the cascade for the same reason: a step in a function that two consumers have to agree on
+        /// makes them resolve different answers either side of it.
+        ///
+        /// Zero restores the hard switch. Costs a second insert and a second lookup, but only for
+        /// surfaces inside the band.
+        float level_blend = 0.25f;
     };
 
     /// One cached surface element.
@@ -97,6 +113,22 @@ public:
      * continuously reshape the grid underneath the cached values.
      */
     auto compute_level(const math::vec3& position, const math::vec3& camera_position) const -> uint32_t;
+
+    /**
+     * @brief As @ref compute_level, also reporting how far into the cross-fade band the point lies.
+     *
+     * @param out_blend 0 where the level answers alone, rising to 1 at the handover distance where
+     *        the next level has fully taken over. Callers inside the band must address BOTH levels:
+     *        a writer inserts into each, a reader blends them. Otherwise the key changes discretely
+     *        as the camera moves and every entry built at the old level becomes unreachable.
+     *
+     * The outermost level never fades -- there is no next level to fade into.
+     *
+     * Reference implementation of GiCacheLevelEx in `gi/radiance_cache.sh`.
+     */
+    auto compute_level_ex(const math::vec3& position,
+                          const math::vec3& camera_position,
+                          float& out_blend) const -> uint32_t;
 
     auto get_cell_size(uint32_t level) const -> float;
 

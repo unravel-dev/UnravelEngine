@@ -538,6 +538,45 @@ auto sdf_triangle_accelerator::signed_distance(const math::vec3& p, bool unsigne
     return side < 0.0f ? -distance : distance;
 }
 
+/// Exact-position key for welding. Seams duplicate a position for a different normal or UV, so
+/// connectivity has to be judged on the position rather than on the vertex index -- otherwise one
+/// solid part reads as several pieces and a sparse submesh looks the same as a normal one.
+struct welded_position_key
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+
+    auto operator==(const welded_position_key& other) const -> bool
+    {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct welded_position_hash
+{
+    auto operator()(const welded_position_key& key) const -> size_t
+    {
+        // Hash the bit patterns, so the key matches exactly what operator== compares.
+        size_t seed = std::hash<float>{}(key.x);
+        seed ^= std::hash<float>{}(key.y) + 0x9e3779b9u + (seed << 6u) + (seed >> 2u);
+        seed ^= std::hash<float>{}(key.z) + 0x9e3779b9u + (seed << 6u) + (seed >> 2u);
+        return seed;
+    }
+};
+
+/// Union-find with path halving. Rank is not tracked: the trees here are built from mesh adjacency
+/// and stay shallow, and halving alone keeps this effectively linear.
+auto find_root(std::vector<uint32_t>& parent, uint32_t node) -> uint32_t
+{
+    while(parent[node] != node)
+    {
+        parent[node] = parent[parent[node]];
+        node = parent[node];
+    }
+    return node;
+}
+
 } // namespace
 
 auto bake_mesh_sdf(const sdf_source_geometry& geometry,
@@ -554,6 +593,25 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     if(!geometry.is_valid() || !geometry.bounds.is_populated() || geometry.bounds.is_degenerate())
     {
         return false;
+    }
+    // Refuse geometry this representation cannot carry, rather than producing a field that lies.
+    //
+    // The voxel size is the bounds divided by a fixed count, so a soup of small parts scattered far
+    // apart gets a voxel sized to the GAPS between them. Past a point each part is a fraction of one
+    // voxel and no field can represent it -- what comes out instead is a blob the size of the spread,
+    // which traces as solid geometry that is not there and can black out a whole neighbourhood.
+    //
+    // Not detectable by any test on the triangles themselves: the parts are ordinary geometry, and
+    // this same submesh baked alone would be fine. It is the relationship between the geometry and
+    // the space it occupies that is unrepresentable, so the check has to be here, where both the
+    // bounds and the geometry are in hand.
+    if(settings.max_component_spread > 0.0f)
+    {
+        const auto summary = summarize_connected_components(geometry);
+        if(summary.get_sparsity() > settings.max_component_spread)
+        {
+            return false;
+        }
     }
     sdf_triangle_accelerator accelerator;
     if(!accelerator.build(geometry))
@@ -673,8 +731,11 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     // storage when the surface can reach any voxel it stores, including its filter border.
     const float brick_world_size = float(mesh_sdf::brick_size) * voxel_size;
     const float brick_half_diagonal = 0.5f * brick_world_size * std::sqrt(3.0f);
-    const float shell_reach = (mesh_sdf::encode_range + float(mesh_sdf::brick_border)) * voxel_size +
-                              out.two_sided_thickness;
+    // Measured in the space the VOXELS are stored in. For a shell that is the unsigned distance
+    // minus the thickness, so the thickness does not appear here -- it is folded into the centre
+    // distance below instead, which is the same single transformation applied to the same quantity
+    // rather than a second application of it.
+    const float shell_reach = (mesh_sdf::encode_range + float(mesh_sdf::brick_border)) * voxel_size;
     const float surface_brick_radius = brick_half_diagonal + shell_reach;
     std::vector<float> brick_center_distance(brick_count, 0.0f);
     std::vector<uint32_t> brick_scan(brick_count);
@@ -698,7 +759,18 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     surface_bricks.reserve(brick_count / 4);
     for(uint32_t brick_index = 0; brick_index < brick_count; ++brick_index)
     {
-        const float signed_center = brick_center_distance[brick_index];
+        // Into the field's own space before anything is decided from it. A shell stores
+        // `unsigned - thickness`, so classifying and measuring from the raw unsigned distance
+        // compares against a quantity the field does not hold: the empty-brick distance then
+        // OVER-estimates by exactly the thickness, and an over-estimate is the one direction a
+        // conservative field may never err in -- a trace steps that much too far and passes through
+        // the shell. Thin open geometry silently stopping occluding is the visible result.
+        //
+        // It also stops the interior of a thick shell being stored as surface bricks. Those voxels
+        // are uniformly deep inside the slab; as empty-inside entries they cost no atlas storage,
+        // which matters because a scene of shells is exactly what overruns the atlas.
+        const float raw_center = brick_center_distance[brick_index];
+        const float signed_center = use_unsigned ? raw_center - out.two_sided_thickness : raw_center;
         if(std::abs(signed_center) <= surface_brick_radius)
         {
             out.indirection[brick_index] = make_sdf_surface_entry(uint32_t(surface_bricks.size()));
@@ -848,6 +920,79 @@ auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> f
     const float c0 = math::mix(c00, c10, frac.y);
     const float c1 = math::mix(c01, c11, frac.y);
     return math::mix(c0, c1, frac.z) * sdf.voxel_size;
+}
+
+auto summarize_connected_components(const sdf_source_geometry& geometry) -> sdf_component_summary
+{
+    APP_SCOPE_PERF("GI/Bake/Summarize Components");
+    sdf_component_summary summary;
+    if(!geometry.is_valid())
+    {
+        return summary;
+    }
+    const math::vec3 bounds_dimensions = geometry.bounds.get_dimensions();
+    summary.bounds_extent =
+        math::max(bounds_dimensions.x, math::max(bounds_dimensions.y, bounds_dimensions.z));
+    // Weld first, so a seam does not read as a break between two pieces.
+    const uint32_t vertex_count = uint32_t(geometry.positions.size());
+    std::unordered_map<welded_position_key, uint32_t, welded_position_hash> welded;
+    welded.reserve(vertex_count);
+    std::vector<uint32_t> representative(vertex_count, 0u);
+    for(uint32_t v = 0; v < vertex_count; ++v)
+    {
+        const auto& p = geometry.positions[v];
+        const auto inserted = welded.emplace(welded_position_key{p.x, p.y, p.z}, v);
+        representative[v] = inserted.first->second;
+    }
+    std::vector<uint32_t> parent(vertex_count);
+    std::iota(parent.begin(), parent.end(), 0u);
+    // A vertex joins its welded representative, then every triangle joins its three corners.
+    for(uint32_t v = 0; v < vertex_count; ++v)
+    {
+        const uint32_t a = find_root(parent, v);
+        const uint32_t b = find_root(parent, representative[v]);
+        if(a != b)
+        {
+            parent[a] = b;
+        }
+    }
+    const uint32_t triangle_count = geometry.get_triangle_count();
+    for(uint32_t t = 0; t < triangle_count; ++t)
+    {
+        const uint32_t i0 = geometry.indices[t * 3 + 0];
+        const uint32_t i1 = geometry.indices[t * 3 + 1];
+        const uint32_t i2 = geometry.indices[t * 3 + 2];
+        for(const uint32_t other : {i1, i2})
+        {
+            const uint32_t a = find_root(parent, i0);
+            const uint32_t b = find_root(parent, other);
+            if(a != b)
+            {
+                parent[a] = b;
+            }
+        }
+    }
+    // One bbox per surviving root. Only vertices a triangle actually references are counted, so
+    // stray unreferenced positions cannot invent a component.
+    std::unordered_map<uint32_t, math::bbox> components;
+    components.reserve(16);
+    for(uint32_t t = 0; t < triangle_count; ++t)
+    {
+        for(uint32_t corner = 0; corner < 3; ++corner)
+        {
+            const uint32_t index = geometry.indices[t * 3 + corner];
+            components[find_root(parent, index)].add_point(geometry.positions[index]);
+        }
+    }
+    summary.component_count = uint32_t(components.size());
+    for(const auto& entry : components)
+    {
+        const math::vec3 dimensions = entry.second.get_dimensions();
+        summary.largest_component_extent =
+            math::max(summary.largest_component_extent,
+                      math::max(dimensions.x, math::max(dimensions.y, dimensions.z)));
+    }
+    return summary;
 }
 
 } // namespace unravel

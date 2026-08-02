@@ -90,29 +90,6 @@ void main()
 	{
 		return;
 	}
-	uint level = GiCacheLevel(surface.position, u_gi_camera_position.xyz);
-	uint key = GiCacheKey(surface.position, surface.normal, level);
-	uint slot = GiCacheInsert(key, u_gi_cache_frame);
-	if(slot == GI_CACHE_INVALID_SLOT)
-	{
-		return;
-	}
-	// Record where this cell is, so the update pass can light it without the G-buffer. The
-	// position is snapped to the cell centre rather than kept as the exact sampled point: every
-	// pixel resolving to this cell would otherwise fight over it, and the resulting position
-	// would jitter with the camera -- reintroducing the view dependence the world-space key was
-	// chosen to avoid.
-	float cell_size = GiCacheCellSize(level);
-	vec3 face_direction = GiFaceDirection(GiQuantizeNormal(surface.normal));
-	vec3 snapped = surface.position + face_direction * (cell_size * 0.5);
-	vec3 cell_center = (floor(snapped / cell_size) + vec3_splat(0.5)) * cell_size;
-	// Undo the half-cell lift the key applies. That lift exists only to keep the surface off a
-	// cell boundary; leaving it in would record a point floating half a cell above the surface,
-	// and the update pass would light empty air there.
-	vec3 surface_point = cell_center - face_direction * (cell_size * 0.5);
-	b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_POSITION)] =
-	    vec4(surface_point, float(u_gi_cache_frame));
-	b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_NORMAL)] = vec4(surface.normal, float(level));
 	// Surface properties, captured here because this is the ONE place the cache touches a surface
 	// whose material is known. The fields carry geometry only, so a cell discovered by a bounce
 	// ray has to fall back to a neutral guess; a cell discovered on screen can have the real
@@ -122,7 +99,46 @@ void main()
 	// Metals have no diffuse albedo, so their diffuse bounce is scaled away by the same factor
 	// the shading pass uses.
 	vec3 albedo = color_data.base_color * (1.0 - nd.metalness);
-	b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_ALBEDO)] = vec4(albedo, 0.0);
-	b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_EMISSIVE)] =
-	    vec4(emissive_data.emissive_color, 0.0);
+	vec3 emissive = emissive_data.emissive_color;
+
+	float level_blend;
+	uint level = GiCacheLevelEx(surface.position, u_gi_camera_position.xyz, level_blend);
+	// Registered at BOTH levels inside the cross-fade band. The level is a step function of distance
+	// to the camera, so a surface near a boundary is keyed differently the moment the camera moves
+	// across it -- and every entry built at the old level becomes unreachable rather than wrong. The
+	// reader blends the two, so both have to exist for the handover to be invisible.
+	//
+	// Written as a loop over one or two levels rather than duplicated, because the two writes must
+	// stay identical: they place the point by the same snapping and record the same material, and a
+	// second copy is somewhere for those to drift apart.
+	int level_count = level_blend > 0.0 ? 2 : 1;
+	for(int i = 0; i < level_count; ++i)
+	{
+		uint write_level = level + uint(i);
+		uint key = GiCacheKey(surface.position, surface.normal, write_level);
+		uint slot = GiCacheInsert(key, u_gi_cache_frame);
+		if(slot == GI_CACHE_INVALID_SLOT)
+		{
+			continue;
+		}
+		// Record where this cell is, so the update pass can light it without the G-buffer. The
+		// position is snapped to the cell centre rather than kept as the exact sampled point: every
+		// pixel resolving to this cell would otherwise fight over it, and the resulting position
+		// would jitter with the camera -- reintroducing the view dependence the world-space key was
+		// chosen to avoid.
+		float cell_size = GiCacheCellSize(write_level);
+		vec3 face_direction = GiFaceDirection(GiQuantizeNormal(surface.normal));
+		vec3 snapped = surface.position + face_direction * (cell_size * 0.5);
+		vec3 cell_center = (floor(snapped / cell_size) + vec3_splat(0.5)) * cell_size;
+		// Undo the half-cell lift the key applies. That lift exists only to keep the surface off a
+		// cell boundary; leaving it in would record a point floating half a cell above the surface,
+		// and the update pass would light empty air there.
+		vec3 surface_point = cell_center - face_direction * (cell_size * 0.5);
+		b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_POSITION)] =
+		    vec4(surface_point, float(u_gi_cache_frame));
+		b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_NORMAL)] =
+		    vec4(surface.normal, float(write_level));
+		b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_ALBEDO)] = vec4(albedo, 0.0);
+		b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_EMISSIVE)] = vec4(emissive, 0.0);
+	}
 }

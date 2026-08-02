@@ -659,6 +659,20 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	// resolves nothing finer than a voxel, and a voxel's world size varies with both bake
 	// resolution and instance scale.
 	float hit_threshold = max(surface_bias * header.voxel_size * inst.local_to_world_scale, 1e-6);
+	// Ceiling on the acceptance radius: the field SATURATES at SDF_ENCODE_RANGE voxels, so a reading
+	// at that value means "at least this far" and carries no proximity information at all.
+	//
+	// Without this the cone radius outgrows what the field can represent. It rises as t * relaxation,
+	// so at 20 m with relaxation 0.1 it is 2 m, while a typical instance saturates at four voxels --
+	// centimetres. Every sample inside that instance's bounds then satisfies the hit test and the
+	// whole BOUNDING BOX renders solid, as a smooth box floating where the mesh is. Because the
+	// radius grows with distance the artefact appears only far away, and because it scales with the
+	// voxel it gets WORSE as the bake resolution is raised, which points the investigation at the
+	// asset rather than at the threshold.
+	//
+	// The comparison below is strict, so capping exactly at the saturation value is enough to stop a
+	// saturated sample ever reading as a hit while leaving every in-band distance usable.
+	float saturation = SDF_ENCODE_RANGE * header.voxel_size * inst.local_to_world_scale;
 	float t = t_near;
 	bool resolved = false;
 	for(int step_index = 0; step_index < max_steps; ++step_index)
@@ -671,7 +685,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 		vec3 local_position = local_origin + local_dir * t;
 		float world_distance = SdfSampleLocal(header, local_position) * inst.local_to_world_scale;
 		++result.steps;
-		float accept = SdfConeRadius(t, hit_threshold, relaxation);
+		float accept = min(SdfConeRadius(t, hit_threshold, relaxation), saturation);
 		if(world_distance < accept)
 		{
 			if(t < result.t || !result.hit)
@@ -833,7 +847,11 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		float d = SdfSampleClipmapEx(p, voxel);
 		++result.steps;
 		float base_threshold = max(surface_bias * voxel, 1e-6);
-		float accept = SdfConeRadius(t, base_threshold, relaxation);
+		// Capped at what the cascade can represent, for the same reason the per-instance tier is:
+		// the levels saturate at encode_range voxels, so a cone radius grown past that makes every
+		// saturated sample read as a hit and the cascade reads solid everywhere beyond the distance
+		// at which t * relaxation overtakes it.
+		float accept = min(SdfConeRadius(t, base_threshold, relaxation), u_sdf_clipmap_encode_range * voxel);
 		if(d < accept)
 		{
 			result.hit = true;

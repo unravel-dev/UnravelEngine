@@ -53,7 +53,7 @@ public:
         ///
         /// Raising it costs contact detail -- the lift carries rays over the small-scale occlusion
         /// they exist to find -- so prefer the smallest value that removes the acne.
-        float normal_bias_voxels = 1.0f;
+        float normal_bias_voxels = 3.0f;
         /// Gain on the cached bounce. The environment fallback is deliberately left at probe
         /// intensity, so this scales the scene's own contribution only.
         float intensity = 1.0f;
@@ -66,12 +66,12 @@ public:
         /// through walls, and the result is surface acne that dances as the cascade re-snaps.
         /// Prefer bounding the cost with @ref step_relaxation, which errs toward over-occluding
         /// rather than under-occluding, before shortening this.
-        float near_field_distance = 30.0f;
+        float near_field_distance = 0.0f;
         int max_steps = 96;
         /// Hit acceptance, as a FRACTION OF A VOXEL of whichever field answered. An absolute
         /// distance is meaningless here because voxel size varies with bake resolution, instance
         /// scale and cascade.
-        float surface_bias = 0.5f;
+        float surface_bias = 0.1f;
         /// Cone half-angle tangent: hit acceptance grows by this fraction of distance travelled.
         ///
         /// This is the lever on the dominant cost in the whole system. Measured on Bistro, removing
@@ -163,13 +163,13 @@ public:
         bool enable_spatial_denoise = true;
         /// Tap spacing DOUBLES each pass, so reach grows exponentially while cost stays linear.
         /// That is the entire point of the a-trous formulation.
-        int denoise_passes = 3;
+        int denoise_passes = 4;
         /// Exponent on normal agreement. Higher keeps light from turning corners.
         float denoise_normal_power = 32.0f;
         /// Multiplier on the measured luminance standard deviation, forming the luminance
         /// edge-stop tolerance. Low values preserve more detail and filter less; the variance
         /// term already widens the tolerance wherever the estimate has not settled.
-        float denoise_luma_phi = 4.0f;
+        float denoise_luma_phi = 32.0f;
         /// How far off the centre pixel's PLANE a tap may sit before being rejected, as a
         /// fraction of view distance so one value works at every depth.
         float denoise_plane_tolerance = 0.02f;
@@ -248,6 +248,7 @@ private:
         gfx::program::uniform_ptr u_gi_resolve_camera;
         gfx::program::uniform_ptr u_gi_resolve_filter;
         gfx::program::uniform_ptr u_gi_cache_params;
+        gfx::program::uniform_ptr u_gi_cache_params2;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
@@ -264,6 +265,7 @@ private:
             cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
             cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,

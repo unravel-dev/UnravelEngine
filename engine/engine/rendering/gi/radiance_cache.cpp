@@ -130,6 +130,34 @@ auto radiance_cache::compute_level(const math::vec3& position, const math::vec3&
     return uint32_t(math::clamp(level, 0, int(settings_.max_level)));
 }
 
+auto radiance_cache::compute_level_ex(const math::vec3& position,
+                                      const math::vec3& camera_position,
+                                      float& out_blend) const -> uint32_t
+{
+    out_blend = 0.0f;
+    const uint32_t level = compute_level(position, camera_position);
+    // The outermost level has nothing to fade into.
+    if(level >= settings_.max_level || !(settings_.level_blend > 0.0f))
+    {
+        return level;
+    }
+    // Distance at which this level hands over to the next. Level 0 covers up to base_distance and
+    // each level after it doubles, so the handover for level k sits at base_distance * 2^k.
+    const float handover = settings_.base_distance * std::pow(2.0f, float(level));
+    const float band = handover * math::clamp(settings_.level_blend, 0.0f, 1.0f);
+    if(!(band > 0.0f))
+    {
+        return level;
+    }
+    const float distance = math::length(position - camera_position);
+    const float band_start = handover - band;
+    if(distance > band_start)
+    {
+        out_blend = math::clamp((distance - band_start) / band, 0.0f, 1.0f);
+    }
+    return level;
+}
+
 auto radiance_cache::compute_key(const math::vec3& position, const math::vec3& normal, uint32_t level) const
     -> uint32_t
 {

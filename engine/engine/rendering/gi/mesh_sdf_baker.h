@@ -25,6 +25,10 @@ struct sdf_source_geometry
     std::vector<uint32_t> indices;
     ///< Local-space bounds of @ref positions.
     math::bbox bounds{};
+    ///< Triangles dropped during extraction for carrying no surface: zero-area slivers and
+    ///< non-finite positions. Reported so an asset whose bounds were being set by junk geometry
+    ///< is diagnosable at import time rather than by looking at the field it produced.
+    uint32_t discarded_triangles = 0;
 
     auto get_triangle_count() const -> uint32_t
     {
@@ -36,6 +40,49 @@ struct sdf_source_geometry
         return !positions.empty() && indices.size() >= 3 && (indices.size() % 3) == 0;
     }
 };
+
+/**
+ * @brief How a triangle soup is distributed inside its own bounds.
+ *
+ * A field's voxel size comes from its BOUNDS while its useful content is the geometry, and those two
+ * only agree when the geometry fills the bounds. A submesh holding several small parts scattered far
+ * apart -- street lamps, signage, bolts, anything an artist grouped by material rather than by
+ * location -- is mostly empty space, so it gets a voxel sized to the SPREAD rather than to the parts.
+ * The parts then fall below one voxel and the field cannot represent them at all.
+ *
+ * Nothing about that is visible in the viewport: the submesh renders perfectly, the field is sized
+ * correctly to the submesh, and every bake setting is being honoured. It is only detectable by
+ * comparing the extent of the geometry to the extent of the space it is spread over.
+ */
+struct sdf_component_summary
+{
+    ///< Connected pieces, where two triangles are connected when they share a welded position.
+    uint32_t component_count = 0;
+    ///< Longest axis of the largest single piece -- the scale the field actually has to resolve.
+    float largest_component_extent = 0.0f;
+    ///< Longest axis of the whole soup -- the scale that picks the voxel size.
+    float bounds_extent = 0.0f;
+
+    /**
+     * @brief Ratio of the space spread over to the largest piece in it. 1 means solid, high is sparse.
+     *
+     * This is the number that predicts an unusable field: it is very nearly how many times too coarse
+     * the voxel is, since the voxel is the bounds divided by a fixed count.
+     */
+    auto get_sparsity() const -> float
+    {
+        return largest_component_extent > 0.0f ? bounds_extent / largest_component_extent : 0.0f;
+    }
+};
+
+/**
+ * @brief Measures how a triangle soup is distributed across its bounds.
+ *
+ * Connectivity is judged on WELDED positions rather than on vertex indices, because a seam duplicates
+ * a position for a different normal or UV -- keyed by index, one solid part reads as several pieces
+ * and a scattered submesh looks exactly like a normal one.
+ */
+auto summarize_connected_components(const sdf_source_geometry& geometry) -> sdf_component_summary;
 
 /**
  * @brief Controls for a single SDF bake. Mirrored per asset in the mesh importer meta.
@@ -69,6 +116,22 @@ struct mesh_sdf_bake_settings
     bool two_sided = false;
     ///< Local-space half-thickness given to the shell when @ref two_sided is set.
     float two_sided_thickness = 0.05f;
+    ///< Refuse to bake when the geometry is spread over more than this many times its largest
+    ///< connected piece.
+    ///<
+    ///< The voxel size comes from the BOUNDS while the content is the geometry, so a submesh holding
+    ///< small parts scattered far apart -- lamps, signage, bolts, anything grouped by material rather
+    ///< than by location -- gets a voxel sized to the gaps. Past a point the parts fall below one
+    ///< voxel and the field cannot represent them at all; what it produces instead is a blob the size
+    ///< of the spread, which traces as solid geometry that is not there.
+    ///<
+    ///< Refusing is strictly better than that. A skipped field means the parts do not contribute to
+    ///< GI, and they were too small to contribute usefully anyway; a phantom field occludes a whole
+    ///< neighbourhood. Set to 0 to disable the check.
+    ///<
+    ///< Deliberately far above normal authoring: a handful of parts side by side measures a few x,
+    ///< while the cases that break tracing measure in the hundreds or thousands.
+    float max_component_spread = 32.0f;
 };
 
 /**

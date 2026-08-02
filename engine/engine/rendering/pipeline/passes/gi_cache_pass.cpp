@@ -56,7 +56,13 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
                                    key_settings.base_cell_size,
                                    key_settings.base_distance,
                                    float(key_settings.max_level)};
-    const float cache_params2[4] = {float(gfx::get_render_frame()), s.min_alpha, s.max_samples, 1.0f};
+    // w carries the level cross-fade band, which is a KEY parameter and so comes from the cache
+    // rather than from this pass -- a writer and a reader that disagree on it insert and look up at
+    // different levels near a boundary and never meet.
+    const float cache_params2[4] = {float(gfx::get_render_frame()),
+                                    s.min_alpha,
+                                    s.max_samples,
+                                    key_settings.level_blend};
     // Shared by BOTH dispatches. Insertion resolves the G-buffer surface onto the field before
     // deriving a key, so it needs the field exactly as the update pass does.
     const bool clipmap_ready = clipmap_gpu.is_valid();

@@ -28,11 +28,17 @@ uniform vec4 u_gi_cache_params;
 #define u_gi_cache_base_distance u_gi_cache_params.z
 #define u_gi_cache_max_level     u_gi_cache_params.w
 
-/// x = current frame, y = minimum blend weight, z = maximum samples, w = 1 when writable.
+/// x = current frame, y = minimum blend weight, z = maximum samples,
+/// w = level cross-fade band as a fraction of the handover distance.
+///
+/// The band belongs with the other KEY parameters, on the cache, for the reason the comment on
+/// radiance_cache_gpu::get_settings gives: a writer and a reader that disagree on it insert and
+/// look up at different levels near a boundary and never find each other's entries.
 uniform vec4 u_gi_cache_params2;
 #define u_gi_cache_frame       uint(u_gi_cache_params2.x)
 #define u_gi_cache_min_alpha   u_gi_cache_params2.y
 #define u_gi_cache_max_samples u_gi_cache_params2.z
+#define u_gi_cache_level_blend u_gi_cache_params2.w
 
 uint GiHashUint(uint value)
 {
@@ -155,6 +161,48 @@ uint GiCacheLevel(vec3 position, vec3 camera_position)
 	float ratio = distance / u_gi_cache_base_distance;
 	float level = floor(log2(ratio)) + 1.0;
 	return uint(clamp(level, 0.0, u_gi_cache_max_level));
+}
+
+/**
+ * As GiCacheLevel, also reporting how far into the cross-fade band the point lies: 0 where the
+ * level answers alone, rising to 1 at the handover distance.
+ *
+ * Levels are a step function of distance to the camera, so crossing a boundary changes the cell
+ * size and therefore every KEY for that surface. The entries built at the previous level are not
+ * wrong, they are UNREACHABLE, and a miss lowers the resolve weight so the consumer falls back to
+ * the environment probe. That reads as GI getting darker as the camera approaches a surface.
+ *
+ * A caller inside the band must address BOTH levels -- a writer inserts into each, a reader blends
+ * them -- so the surface stays reachable across the handover. Same fix, and the same reason, as the
+ * cascade cross-fade: a step in a function that two consumers must agree on makes them resolve
+ * different answers either side of it.
+ *
+ * Transcription of radiance_cache::compute_level_ex.
+ */
+uint GiCacheLevelEx(vec3 position, vec3 camera_position, out float out_blend)
+{
+	out_blend = 0.0;
+	uint level = GiCacheLevel(position, camera_position);
+	// The outermost level has nothing to fade into.
+	if(float(level) >= u_gi_cache_max_level || u_gi_cache_level_blend <= 0.0)
+	{
+		return level;
+	}
+	// Level 0 covers up to base_distance and each level after it doubles, so the handover for level
+	// k sits at base_distance * 2^k.
+	float handover = u_gi_cache_base_distance * exp2(float(level));
+	float band = handover * clamp(u_gi_cache_level_blend, 0.0, 1.0);
+	if(band <= 0.0)
+	{
+		return level;
+	}
+	float distance = length(position - camera_position);
+	float band_start = handover - band;
+	if(distance > band_start)
+	{
+		out_blend = clamp((distance - band_start) / band, 0.0, 1.0);
+	}
+	return level;
 }
 
 /**
@@ -364,6 +412,41 @@ bool GiCacheGatherSurface(vec3 position, vec3 normal, uint level, out vec3 out_r
 		return true;
 	}
 	return GiCacheGatherForFace(position, GiQuantizeNormalSecond(normal), level, out_radiance);
+}
+
+/**
+ * Gathers a surface at its level, cross-fading into the next level inside the transition band.
+ *
+ * This is what a reader should call. Without the fade, crossing a level boundary re-keys the
+ * surface, every entry built at the old level becomes unreachable, and the weight collapses to the
+ * environment probe -- which looks like GI dimming as the camera approaches.
+ *
+ * Falls back cleanly when only one side is populated: the band is entered from one direction, so
+ * for a few frames after a boundary crossing the far level may be the only one with entries. Taking
+ * whichever resolved, rather than blending a miss in as black, keeps that transient invisible.
+ */
+bool GiCacheGatherLevels(vec3 position, vec3 normal, vec3 camera_position, out vec3 out_radiance)
+{
+	float blend;
+	uint level = GiCacheLevelEx(position, camera_position, blend);
+	vec3 near_radiance;
+	bool near_found = GiCacheGatherSurface(position, normal, level, near_radiance);
+	if(blend <= 0.0)
+	{
+		out_radiance = near_radiance;
+		return near_found;
+	}
+	vec3 far_radiance;
+	bool far_found = GiCacheGatherSurface(position, normal, level + 1u, far_radiance);
+	if(near_found && far_found)
+	{
+		out_radiance = mix(near_radiance, far_radiance, blend);
+		return true;
+	}
+	// Only one side has entries yet. Blending toward a miss would darken the band, which is the
+	// artefact this exists to remove, so the populated side answers alone.
+	out_radiance = near_found ? near_radiance : far_radiance;
+	return near_found || far_found;
 }
 
 /// Single-cell lookup, the un-interpolated counterpart of @ref GiCacheGatherSurface. Kept so the

@@ -67,10 +67,10 @@ public:
         /// How far a bounce ray travels. Shorter than a gather ray on purpose: this runs for every
         /// resident entry, and the near field is where the bounce actually matters.
         float bounce_distance = 40.0f;
-        float bounce_near_field = 30.0f;
+        float bounce_near_field = 0.0f;
         float bounce_max_steps = 48.0f;
         /// Hit acceptance as a fraction of a voxel of whichever field answered.
-        float bounce_surface_bias = 0.5f;
+        float bounce_surface_bias = 0.35f;
 
         // --- Shadow rays ---
         //
@@ -99,7 +99,7 @@ public:
         /// The same lever as the resolve pass's near field, and it applies to far more rays. A
         /// shadow ray only has to answer hit or miss, so it can usually afford a shorter near
         /// field than a gather ray that has to land somewhere addressable.
-        float shadow_near_field = 30.0f;
+        float shadow_near_field = 0.0f;
         /// Steps per shadow ray. Tighter than a gather ray's budget on purpose.
         ///
         /// An exhausted ray counts as LIT, so running out here does not look like a missing shadow
@@ -107,7 +107,7 @@ public:
         /// raising this: relaxation bounds the step count instead of paying for it.
         float shadow_max_steps = 48.0f;
         /// Hit acceptance for a shadow ray, as a fraction of a voxel of whichever field answered.
-        float shadow_surface_bias = 0.5f;
+        float shadow_surface_bias = 0.35f;
         /// Cone relaxation for shadow rays: acceptance grows by this fraction of distance travelled.
         ///
         /// Matters more here than on any other ray in the system. A shadow ray toward a low sun runs

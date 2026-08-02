@@ -455,6 +455,7 @@ auto engine::destroy() -> bool
     ctx.remove<reflection_probe_system>();
     ctx.remove<camera_system>();
     ctx.remove<transform_system>();
+    ctx.remove<surface_cache_service>();
     ctx.remove<rendering_system>();
     ctx.remove<ecs>();
 
