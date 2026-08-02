@@ -52,8 +52,6 @@ uniform vec4 u_gi_update_camera;
 /// Defined locally rather than taken from lighting.sh, which this shader does not include. The
 /// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
 #define GI_PI 3.1415926535897932
-/// Distance the cascade sampler reports when no level covers a point.
-#define GI_SDF_NO_COVERAGE 1e5
 
 /// Orthonormal basis around a normal, branch-free at the degenerate axis.
 void GiBounceBasis(vec3 n, out vec3 t, out vec3 b)
@@ -111,12 +109,17 @@ void main()
 	float surface_distance = SdfSampleClipmapEx(position_data.xyz, validate_voxel_size);
 	// A saturated reading means no cascade covers this point, so nothing can be concluded and the
 	// entry must be left alone. Treating "unknown" as "gone" would delete the entire far field.
-	if(surface_distance < GI_SDF_NO_COVERAGE)
+	//
+	// Compared against the sampler's OWN give-up value rather than a local threshold of the same
+	// intent. A second constant here would be one edit away from disagreeing with the sampler, and
+	// the direction that disagreement fails in is deleting the whole far field.
+	uint entry_level = uint(max(normal_data.w, 0.0));
+	float entry_cell_size = GiCacheCellSize(entry_level);
+	if(surface_distance < SDF_CLIPMAP_OUTSIDE)
 	{
-		uint entry_level = uint(max(normal_data.w, 0.0));
 		// Tolerant on purpose: the cascade is rebuilt a level per frame, so it lags a moving
 		// object by a few frames, and a false positive here costs only a re-created entry.
-		float tolerance = max(GiCacheCellSize(entry_level), validate_voxel_size * 2.0);
+		float tolerance = max(entry_cell_size, validate_voxel_size * 2.0);
 		if(abs(surface_distance) > tolerance)
 		{
 			b_gi_cache_keys[slot] = GI_CACHE_EMPTY_KEY;
@@ -124,13 +127,25 @@ void main()
 		}
 	}
 
-	// Lift off the recorded surface before lighting. The stored point is a cell CENTRE, which
-	// can sit slightly inside the geometry it represents; shading from inside makes every
-	// shadow ray start occluded and the entry converges to black.
-	vec3 position = position_data.xyz + normal * u_gi_update_surface_offset;
+	// Lift off the recorded surface before lighting, in fractions of THIS ENTRY'S CELL.
+	//
+	// The stored point is not the sampled surface: insertion snaps it to the cell grid, so it can
+	// sit up to a cell inside the geometry it represents. That error is therefore a function of the
+	// CELL, which is 0.25 m at level 0 and 2 m at the level cap -- an eightfold range that a fixed
+	// world distance cannot cover. At 0.05 world it cleared a fifth of a near cell and a fortieth of
+	// a far one, so distant entries shaded from inside their own surface, every shadow ray started
+	// occluded, and they converged to black.
+	//
+	// Getting this wrong is expensive in both directions and neither announces itself: too small
+	// and the far field goes black, too large and the entry floats off its surface so shadow rays
+	// sail over nearby occluders and everything reads over-lit. Scaling by the cell is what makes
+	// one value work at every level instead of trading one end against the other.
+	vec3 position = position_data.xyz + normal * (u_gi_update_surface_offset * entry_cell_size);
 
 	// Direct IRRADIANCE arriving at the cell.
-	vec3 irradiance = GiEvalDirectLighting(position, normal);
+	// The voxel size is already in hand from the retirement check above, so the shadow rays' own
+	// normal offset costs nothing extra to make resolution-relative.
+	vec3 irradiance = GiEvalDirectLighting(position, normal, max(validate_voxel_size, 0.01));
 
 	// --- Bounce: gather from the cache itself, and populate wherever it is still empty ---
 	//
@@ -154,7 +169,7 @@ void main()
 			vec3 direction = GiBounceDirection(normal, u1, u2);
 			SdfRayHit hit = SdfTraceRay(position, direction, u_gi_bounce_distance,
 			                            u_gi_bounce_near_field, u_gi_bounce_max_steps,
-			                            u_gi_bounce_bias, 0.0);
+			                            u_gi_bounce_bias, 0.0, false);
 			if(!hit.hit)
 			{
 				continue;
@@ -163,6 +178,13 @@ void main()
 			// hit addresses a neighbouring cell and would both miss the lookup and insert a
 			// duplicate entry a cell away from the one that already exists.
 			SdfSurfacePoint surface = SdfResolveSurfacePoint(position + direction * hit.t);
+			// Outside every cascade level, so this hit has no address. Creating an entry for it
+			// anyway is what filled the table with cells keyed to a fabricated facing that no
+			// reader could ever find again.
+			if(!surface.valid)
+			{
+				continue;
+			}
 			uint hit_level = GiCacheLevel(surface.position, u_gi_update_camera.xyz);
 			uint hit_slot = GiCacheFindSurface(surface.position, surface.normal, hit_level);
 			if(hit_slot == GI_CACHE_INVALID_SLOT)

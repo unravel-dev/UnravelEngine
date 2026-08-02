@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -75,27 +76,29 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
     /**
-     * @brief Rebuilds the instance list for this frame and flushes pending atlas uploads.
+     * @brief Rebuilds the world-space state for this frame and flushes pending atlas uploads.
      *
      * Walks every model in the scene, not just the visible set: geometry behind the camera
      * still bounces light, and excluding it would reintroduce exactly the offscreen blindness
      * the screen-space path suffers from.
+     *
+     * Takes no camera, and that is the point of the split. Everything here is a function of the
+     * WORLD, so it is identical for every camera and is skipped after the first call in a frame --
+     * with two cameras it used to rebuild the same instance list and re-upload the same grid twice.
+     * The camera-dependent half is @ref surface_cache_view.
      */
-    void update(scene& scn, const math::vec3& camera_position);
+    void update_world(scene& scn);
+
+    /// Placements the cascade composes from. Rebuilt by @ref update_world; borrowed by each
+    /// camera's @ref surface_cache_view, which must therefore compose within the same frame.
+    auto get_clipmap_instances() const -> const std::vector<global_sdf_instance>&
+    {
+        return clipmap_instances_;
+    }
 
     auto get_atlas() -> sdf_atlas&
     {
         return atlas_;
-    }
-
-    auto get_clipmap() const -> const global_sdf_clipmap&
-    {
-        return clipmap_;
-    }
-
-    auto get_clipmap_gpu() const -> const global_sdf_clipmap_gpu&
-    {
-        return clipmap_gpu_;
     }
 
     auto get_light_buffer() const -> const gpu_light_buffer&
@@ -166,36 +169,50 @@ public:
         enabled_ = enabled;
     }
 
-    /**
-     * @brief Logs a line per composed cascade level: instance counts, cull occupancy, and how
-     *        many candidates survive to a field sample.
-     *
-     * Off by default -- composition runs several times a second while the camera moves, so this
-     * is far too noisy to leave on. Kept because the shape of composition work depends entirely
-     * on how a particular scene's instances are distributed, which no synthetic fixture
-     * reproduces reliably; these numbers are what distinguish "too many candidates per cell"
-     * from "the cheap reject is failing" from "the per-sample cost is wrong", and guessing
-     * between those cost several rounds.
-     */
-    void set_log_composition_stats(bool enabled)
-    {
-        log_composition_stats_ = enabled;
-    }
-
 private:
+    /// Generation value no atlas ever reports, marking a field that has never been attempted so the
+    /// first try always happens regardless of what the atlas has released.
+    static constexpr uint32_t never_attempted = 0xFFFFFFFFu;
+
     /// Residency record for one mesh asset.
     struct mesh_residency
     {
         uint32_t header_index = sdf_atlas::invalid_index;
-        ///< Set when the mesh has no usable field, or the atlas refused it. Prevents
-        ///< retrying a hopeless upload once per frame forever.
-        bool is_rejected = false;
+        ///< Set when the mesh has no baked field at all. PERMANENT, and deliberately distinct from
+        ///< the atlas refusing an upload for want of room: that is a statement about the atlas at
+        ///< one moment, not about the mesh, and it stops being true as soon as anything is
+        ///< released. Conflating the two is what left a scene's meshes excluded from GI forever
+        ///< after a busier scene had filled the atlas once.
+        bool has_no_field = false;
+        ///< World frame this was last asked for. Anything not asked for in the current frame is
+        ///< released, which is the only thing that ever returns bricks to the atlas.
+        uint64_t last_used_frame = 0;
+        ///< Atlas release generation at the last upload attempt, or @ref never_attempted.
+        ///
+        ///< A refusal for want of room is retried only once the atlas has actually freed something,
+        ///< because nothing else can change the answer. Retrying every frame instead is not merely
+        ///< wasteful: a scene that overruns the atlas refuses thousands of meshes, so it re-attempts
+        ///< thousands of doomed uploads per frame, and the refusal counters climb into the billions.
+        uint32_t attempt_generation = never_attempted;
     };
 
     /**
      * @brief Returns the header index for a mesh, uploading its field on first use.
+     *
+     * Also marks the record as used this frame, which is what keeps it out of the sweep at the end
+     * of @ref update_world.
      */
     auto acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index) -> uint32_t;
+
+    /**
+     * @brief Releases every field nothing referenced this frame.
+     *
+     * The atlas is keyed by mesh ASSET and has no other reclamation path, so without this it only
+     * ever grows: loading a second scene keeps the first scene's bricks resident, the new scene's
+     * meshes are refused for want of room, and GI silently does not run at all -- every field is
+     * refused, so the instance list comes out empty and every pass early-outs.
+     */
+    void release_unused_fields();
 
     /**
      * @brief Appends one placement of a resident field to this frame's instance list.
@@ -232,8 +249,6 @@ private:
     void upload_instances();
 
     sdf_atlas atlas_;
-    global_sdf_clipmap clipmap_;
-    global_sdf_clipmap_gpu clipmap_gpu_;
     gpu_light_buffer light_buffer_;
     radiance_cache_gpu cache_gpu_;
     /// Identifies one submesh's field. Residency is per SUBMESH, not per mesh: each submesh has
@@ -288,7 +303,9 @@ private:
     uint32_t grid_instance_capacity_ = 0;
     std::array<float, 8> grid_params_{};
     bool enabled_ = true;
-    bool log_composition_stats_ = false;
+    /// Frame the world state was last rebuilt in, so several cameras in one frame share one
+    /// rebuild. Starts at a value no frame counter produces, so the first call always runs.
+    uint64_t world_frame_ = std::numeric_limits<uint64_t>::max();
 };
 
 } // namespace unravel

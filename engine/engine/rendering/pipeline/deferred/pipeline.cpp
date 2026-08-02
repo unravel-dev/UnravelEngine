@@ -16,6 +16,7 @@
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
 #include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -687,12 +688,30 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Surface cache residency is world state shared by every camera, so it is refreshed once
     // per camera-driven frame and skipped entirely for reflection probe captures, which would
     // otherwise rebuild the same instance list six more times per probe.
-    if(is_camera_run)
+    //
+    // Gated on GI actually being asked for. This is not a token early-out: the update rebuilds the
+    // instance list for every model in the scene, flushes atlas uploads and composes a cascade
+    // level, which measured 2.75 ms of CPU on Bistro. Paying that for a camera with no
+    // gi_component would make the feature cost most of its price while switched off.
+    //
+    // Also kept alive for the SDF debug views, which inspect this very state: requiring a
+    // gi_component before they show anything would mean the tooling for diagnosing GI is only
+    // available once GI already works.
+    const bool wants_sdf_debug = debug_pass_ >= debug_pass_sdf_normals;
+    if(is_camera_run && (params.fill_gi_params || wants_sdf_debug))
     {
         auto& ctx = engine::context();
         if(ctx.has<surface_cache_service>())
         {
-            ctx.get<surface_cache_service>().update(scn, camera.get_position());
+            auto& surface_cache = ctx.get<surface_cache_service>();
+            // World half: identical for every camera, so it self-limits to once per frame.
+            surface_cache.update_world(scn);
+            // Camera half: the cascade is snapped around THIS viewer, so it belongs to the render
+            // view. Two cameras sharing one cascade re-snapped it to each other's position every
+            // frame and it never settled.
+            auto& view_cache =
+                rview.data().get_or_emplace<surface_cache_view>(surface_cache_view::view_key);
+            view_cache.update(surface_cache.get_clipmap_instances(), camera.get_position());
         }
     }
 
@@ -733,9 +752,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     bool gi_resolve_active = false;
     if(is_camera_run)
     {
-        run_gi_cache_pass(camera, rview);
+        run_gi_cache_pass(camera, rview, params);
         // Gather the cache into a screen-space buffer while the entries lit above are current.
-        gi_resolve_active = run_gi_resolve_pass(camera, rview);
+        gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
     }
 
     // SSIL pass
@@ -2031,7 +2050,21 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     return tonemapping_pass_.run(rview, params);
 }
 
-void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview)
+auto deferred::resolve_gi_settings(const run_params& rparams,
+                                   gi_cache_pass::settings& cache,
+                                   gi_resolve_pass::settings& resolve) -> bool
+{
+    // Off unless a gi_component asks for it, the same contract every other pass here follows. The
+    // settings left in `cache` and `resolve` are meaningless when this returns false.
+    if(!rparams.fill_gi_params)
+    {
+        return false;
+    }
+    rparams.fill_gi_params(cache, resolve);
+    return true;
+}
+
+void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
 {
     auto& ctx = engine::context();
     if(!ctx.has<surface_cache_service>())
@@ -2039,25 +2072,37 @@ void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview)
         return;
     }
     gi_cache_pass::run_params params;
+    gi_resolve_pass::settings ignored_resolve;
+    if(!resolve_gi_settings(rparams, params.settings, ignored_resolve))
+    {
+        return;
+    }
     params.g_buffer = rview.fbo_safe_get("GBUFFER");
     params.cam = &camera;
     params.surface_cache = &ctx.get<surface_cache_service>();
+    params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     gi_cache_pass_.run(rview, params);
 }
 
-auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview) -> bool
+auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
+    -> bool
 {
     auto& ctx = engine::context();
     gfx::texture::ptr result;
-    if(ctx.has<surface_cache_service>())
+    gi_cache_pass::settings ignored_cache;
+    gi_resolve_pass::settings resolve_settings;
+    const bool enabled = resolve_gi_settings(rparams, ignored_cache, resolve_settings);
+    if(enabled && ctx.has<surface_cache_service>())
     {
         gi_resolve_pass::run_params params;
+        params.settings = resolve_settings;
         params.g_buffer = rview.fbo_safe_get("GBUFFER");
         // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
         // frame, which is exactly what temporal reprojection needs to validate history.
         params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
         params.cam = &camera;
         params.surface_cache = &ctx.get<surface_cache_service>();
+        params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
         result = gi_resolve_pass_.run(rview, params);
     }
     if(result)
@@ -2091,6 +2136,7 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     params.output = output;
     params.cam = &camera;
     params.surface_cache = &surface_cache;
+    params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     params.settings.mode = sdf_debug_pass::debug_mode::normals;
     if(debug_pass_ == debug_pass_sdf_step_count)
     {

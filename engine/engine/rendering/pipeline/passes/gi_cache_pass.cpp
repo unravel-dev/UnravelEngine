@@ -24,7 +24,7 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
 {
     APP_SCOPE_PERF("Rendering/GI/Cache Pass");
     if(!insert_program_.is_valid() || !update_program_.is_valid() || !params.g_buffer || !params.cam ||
-       !params.surface_cache)
+       !params.surface_cache || !params.view_cache)
     {
         return false;
     }
@@ -44,8 +44,8 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
         return false;
     }
     auto& atlas = surface_cache.get_atlas();
-    const auto& clipmap = surface_cache.get_clipmap();
-    const auto& clipmap_gpu = surface_cache.get_clipmap_gpu();
+    const auto& clipmap = params.view_cache->get_clipmap();
+    const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& light_buffer = surface_cache.get_light_buffer();
     const auto& s = params.settings;
 
@@ -88,10 +88,21 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
         gfx::set_buffer(7, cache.get_data_buffer(), gfx::access::ReadWrite);
         gfx::set_uniform(insert_program_.u_gi_cache_params, cache_params);
         gfx::set_uniform(insert_program_.u_gi_cache_params2, cache_params2);
+        // Capped by what the cascade can actually address. A surface is registered by resolving it
+        // onto the field's isosurface, and beyond the outermost level there is no isosurface to
+        // resolve onto -- the shader now detects that and skips, but only after paying a full
+        // resolve (four iterations of seven cascade samples each) per sampled pixel. The G-buffer
+        // routinely sees several times further than the cascade reaches, so rejecting those on
+        // distance first is the difference between one length() and 28 texture fetches.
+        //
+        // Derived rather than configured: a setting larger than the cascade cannot mean anything,
+        // and this one used to read 200 m against a cascade covering 64.
+        const float clipmap_reach =
+            clipmap.get_level_extent(global_sdf_clipmap::level_count - 1u) * 0.5f;
         const float insert_params[4] = {float(size.width),
                                         float(size.height),
                                         s.insert_stride,
-                                        s.insert_max_distance};
+                                        math::min(s.insert_max_distance, clipmap_reach)};
         gfx::set_uniform(insert_program_.u_gi_insert_params, insert_params);
         const auto camera_position = params.cam->get_position();
         const float camera[4] = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
@@ -144,12 +155,17 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
         gfx::set_uniform(update_program_.u_gpu_light_params, light_params);
         // Shadow rays are budgeted tightly: there is one per light per entry, and they only
         // need to answer hit or miss.
-        const float shadow_params[4] = {80.0f, 0.15f, 30.0f, 48.0f};
+        const float shadow_params[4] = {s.shadow_distance,
+                                        s.shadow_normal_bias_voxels,
+                                        s.shadow_near_field,
+                                        s.shadow_max_steps};
         gfx::set_uniform(update_program_.u_gi_shadow_params, shadow_params);
+        const float shadow_params2[4] = {s.shadow_surface_bias, s.shadow_step_relaxation, 0.0f, 0.0f};
+        gfx::set_uniform(update_program_.u_gi_shadow_params2, shadow_params2);
         gfx::set_uniform(update_program_.u_gi_cache_params, cache_params);
         gfx::set_uniform(update_program_.u_gi_cache_params2, cache_params2);
         const float update_params[4] = {float(cache.get_capacity()),
-                                        s.surface_offset,
+                                        s.surface_offset_cells,
                                         s.bounce_rays,
                                         s.default_albedo};
         gfx::set_uniform(update_program_.u_gi_update_params, update_params);

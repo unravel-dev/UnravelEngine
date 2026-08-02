@@ -86,24 +86,13 @@ void render_view::fbo_remove(const hpp::string_view& id)
 
 auto render_view::data_get_or_emplace(const hpp::string_view& id, uint32_t default_val) -> uint32_t&
 {
-    auto it = data_.find(id);
-    if(it != data_.end())
-    {
-        return it->second;
-    }
-
-    return data_.emplace(std::string(id), default_val).first->second;
+    return data_.get_or_emplace<uint32_t>(id, default_val);
 }
 
 auto render_view::data_get(const hpp::string_view& id, uint32_t default_val) const -> uint32_t
 {
-    auto it = data_.find(id);
-    if(it != data_.end())
-    {
-        return it->second;
-    }
-
-    return default_val;
+    const auto* value = data_.try_get<uint32_t>(id);
+    return value != nullptr ? *value : default_val;
 }
 
 } // namespace gfx

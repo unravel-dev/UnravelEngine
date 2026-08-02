@@ -25,7 +25,8 @@ auto sdf_debug_pass::init(rtti::context& ctx) -> bool
 auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
     APP_SCOPE_PERF("Rendering/GI/SDF Debug Pass");
-    if(!debug_program_.is_valid() || !params.output || !params.cam || !params.surface_cache)
+    if(!debug_program_.is_valid() || !params.output || !params.cam || !params.surface_cache ||
+       !params.view_cache)
     {
         return false;
     }
@@ -54,8 +55,8 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
 
     // Global cascade. Bound even when unavailable so the sampler always has a valid texture;
     // u_sdf_clipmap_params.w tells the shader whether to consult it.
-    const auto& clipmap = surface_cache.get_clipmap();
-    const auto& clipmap_gpu = surface_cache.get_clipmap_gpu();
+    const auto& clipmap = params.view_cache->get_clipmap();
+    const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const bool clipmap_ready = clipmap_gpu.is_valid();
     gfx::set_texture(debug_program_.s_sdf_clipmap,
                      4,

@@ -20,6 +20,8 @@
 #include "passes/hiz_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
+#include "passes/gi_cache_pass.h"
+#include "passes/gi_resolve_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/gi_cache_pass.h"
 #include "passes/gi_resolve_pass.h"
@@ -146,6 +148,12 @@ public:
         std::function<void(camera&, const usize32_t& viewport_size)> apply_taa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
+        /// Surface cache GI. Both halves travel together because they are one feature: the cache
+        /// pass populates the world-space entries and the resolve pass gathers them, so settings
+        /// resolved from different sources would describe two different configurations.
+        /// Surface cache GI. Unset means off, exactly like the hooks above -- the feature runs only
+        /// where a gi_component asks for it.
+        std::function<void(gi_cache_pass::settings&, gi_resolve_pass::settings&)> fill_gi_params;
     };
 
     pipeline() = default;

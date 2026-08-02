@@ -466,6 +466,78 @@ auto global_sdf_clipmap::find_level(const math::vec3& world_position, float& out
     return level_count;
 }
 
+auto global_sdf_clipmap::sample_ex(const math::vec3& world_position, float& out_voxel_size) const -> float
+{
+    out_voxel_size = math::max(levels_[0].voxel_size, 1e-6f);
+    float blend = 0.0f;
+    const uint32_t index = find_level(world_position, blend);
+    if(index >= level_count)
+    {
+        return outside_distance;
+    }
+    out_voxel_size = levels_[index].voxel_size;
+    const float fine = sample_level(index, world_position);
+    if(blend <= 0.0f)
+    {
+        return fine;
+    }
+    const float coarse = sample_level(index + 1u, world_position);
+    if(coarse >= outside_distance)
+    {
+        return fine;
+    }
+    // The reported size follows the blend for the same reason it is reported at all: inside the
+    // band the value is a mixture of two levels, so anything scaled to "a voxel" has to be scaled
+    // to the same mixture or it jumps at the boundary.
+    out_voxel_size = math::mix(out_voxel_size, levels_[index + 1u].voxel_size, blend);
+    return math::mix(fine, coarse, blend);
+}
+
+auto global_sdf_clipmap::resolve_surface_point(const math::vec3& world_position,
+                                               math::vec3& out_position,
+                                               math::vec3& out_normal,
+                                               uint32_t steps) const -> bool
+{
+    out_position = world_position;
+    out_normal = math::vec3(0.0f, 1.0f, 0.0f);
+    bool valid = false;
+    for(uint32_t i = 0; i < steps; ++i)
+    {
+        float voxel_size = 0.0f;
+        const float distance = sample_ex(out_position, voxel_size);
+        // No cascade covers this point, so there is no isosurface to converge onto. Reporting the
+        // input decorated with an up vector -- which falling through on a zero gradient would do --
+        // reads as a perfectly good answer to every caller.
+        if(distance >= outside_distance)
+        {
+            valid = false;
+            break;
+        }
+        // Differencing over the ANSWERING level's voxel. A fixed epsilon samples far inside one
+        // coarse voxel, where the field is flat and the normal collapses into quantisation noise.
+        const float e = voxel_size;
+        const math::vec3 gradient(sample(out_position + math::vec3(e, 0.0f, 0.0f)) -
+                                      sample(out_position - math::vec3(e, 0.0f, 0.0f)),
+                                  sample(out_position + math::vec3(0.0f, e, 0.0f)) -
+                                      sample(out_position - math::vec3(0.0f, e, 0.0f)),
+                                  sample(out_position + math::vec3(0.0f, 0.0f, e)) -
+                                      sample(out_position - math::vec3(0.0f, 0.0f, e)));
+        const float gradient_length = math::length(gradient);
+        if(gradient_length < 1e-8f)
+        {
+            valid = false;
+            break;
+        }
+        out_normal = gradient / gradient_length;
+        valid = true;
+        // Capped, or a start point that happens to sit in the saturated far field is thrown across
+        // the scene by its first step.
+        const float step_limit = voxel_size * surface_resolve_max_step;
+        out_position -= out_normal * math::clamp(distance, -step_limit, step_limit);
+    }
+    return valid;
+}
+
 auto global_sdf_clipmap::sample(const math::vec3& world_position) const -> float
 {
     float blend = 0.0f;

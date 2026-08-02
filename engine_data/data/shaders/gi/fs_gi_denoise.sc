@@ -79,25 +79,32 @@ void main()
 	float view_distance = max(length(center_position - u_gi_denoise_camera.xyz), 1e-4);
 	float plane_tolerance = max(u_gi_denoise_plane_tol * view_distance, 1e-4);
 	// Variance-driven luminance stop. This is what stops a converged pixel from being blurred at
-	// all: where the temporal estimate has settled the variance is tiny, the tolerance collapses,
-	// and only genuinely similar neighbours contribute -- so detail survives and, crucially, the
-	// filter stops re-mixing a stable value with its neighbours every frame, which is itself a
-	// source of shimmer. Where the estimate is still noisy the tolerance is wide and it filters
-	// hard. A fixed tolerance can only trade one of those against the other.
+	// all: where the temporal estimate has settled the tolerance collapses, and only genuinely
+	// similar neighbours contribute -- so detail survives and, crucially, the filter stops
+	// re-mixing a stable value with its neighbours every frame, which is itself a source of
+	// shimmer. Where the estimate is still noisy the tolerance is wide and it filters hard. A
+	// fixed tolerance can only trade one of those against the other.
 	// A non-positive phi disables the stop outright, which is what happens when temporal
 	// accumulation is off and no variance estimate exists. Falling back to a tiny sigma instead
 	// would reject every tap and turn the filter into an expensive copy.
 	bool use_luma_stop = u_gi_denoise_luma_phi > 0.0;
 	vec4 moments = texture2DLod(s_gi_moments, uv, 0.0);
+	float count = max(moments.z, 1.0);
+	// DIVIDED BY THE COUNT, and that is the whole reason the stop tightens over time. The moments
+	// accumulate the RAW per-frame gather, so this variance is that of a SINGLE sample -- a
+	// constant of the scene and the ray count, which does not decay however long the camera is
+	// held still. What is being filtered is the MEAN of `count` such samples, and the standard
+	// error of a mean is smaller by sqrt(count). Without the division the tolerance floors at the
+	// single-sample noise level forever, so a fully converged image goes on being blurred at full
+	// strength and the "stops touching the pixel" property above is never actually delivered.
 	float variance = max(moments.y - moments.x * moments.x, 0.0);
-	float luma_sigma = u_gi_denoise_luma_phi * sqrt(variance) + 1e-4;
+	float luma_sigma = u_gi_denoise_luma_phi * sqrt(variance / count) + 1e-4;
 	// Filter HARDER where little history has accumulated. Silhouettes are the worst case in the
 	// whole pipeline: reprojection fails there so the count resets to one, and the depth and
 	// normal stops reject most taps, so those pixels receive neither temporal nor spatial
 	// averaging and show as fireflies along edges -- worst just after the camera moves, fading as
 	// the count recovers. A temporal variance built from one sample is also meaningless, so
 	// widening the tolerance there is the only estimate available.
-	float count = max(moments.z, 1.0);
 	luma_sigma *= max(u_gi_denoise_low_count_boost / count, 1.0);
 	float center_luma = Luminance(center.xyz);
 	// B3 spline weights, the standard a-trous kernel.

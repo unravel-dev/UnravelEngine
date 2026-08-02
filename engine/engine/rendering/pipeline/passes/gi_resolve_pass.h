@@ -2,6 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
 #include <graphics/render_pass.h>
@@ -36,21 +37,76 @@ public:
         int ray_count = 4;
         /// How far a gather ray travels before giving up and taking the environment instead.
         float max_distance = 200.0f;
-        /// Lift off the surface before tracing. A ray starting exactly on the isosurface reads a
-        /// distance of zero and stops immediately, reporting its own origin as an occluder.
-        float normal_bias = 0.05f;
+        /// Lift off the surface before tracing, as a FRACTION OF A VOXEL of the field answering at
+        /// the shading point.
+        ///
+        /// A ray starting on the isosurface reads a distance of zero and stops immediately,
+        /// reporting its own origin as an occluder -- surface acne. What the lift has to clear is
+        /// the trace's hit acceptance, which is @ref surface_bias voxels, so this is measured in
+        /// the same units and wants to be comfortably larger than it.
+        ///
+        /// Deliberately NOT a world distance, which is what it used to be. The cascade's voxel runs
+        /// from 0.25 m at level 0 to 2 m at the outer level, so the world distance needed varies
+        /// eightfold across a single view: measured, 0.1 cleared the acne in a scene contained
+        /// inside level 0 while a view spanning levels 1-3 still needed 1.0. In voxels one value
+        /// covers both.
+        ///
+        /// Raising it costs contact detail -- the lift carries rays over the small-scale occlusion
+        /// they exist to find -- so prefer the smallest value that removes the acne.
+        float normal_bias_voxels = 1.0f;
         /// Gain on the cached bounce. The environment fallback is deliberately left at probe
         /// intensity, so this scales the scene's own contribution only.
         float intensity = 1.0f;
         /// Range in which per-instance fields are traced. Beyond it the global cascade answers,
         /// which cannot represent anything thinner than its voxels but costs one lookup.
+        ///
+        /// This tier is where the frame time is: setting it to 0 as a diagnostic took the pass from
+        /// 8.9 ms to 1.0 ms on Bistro, so it is ~89% of the gather. It is not a free saving though
+        /// -- with the cascade answering alone, thin geometry stops occluding, shadow rays punch
+        /// through walls, and the result is surface acne that dances as the cascade re-snaps.
+        /// Prefer bounding the cost with @ref step_relaxation, which errs toward over-occluding
+        /// rather than under-occluding, before shortening this.
         float near_field_distance = 30.0f;
         int max_steps = 96;
         /// Hit acceptance, as a FRACTION OF A VOXEL of whichever field answered. An absolute
         /// distance is meaningless here because voxel size varies with bake resolution, instance
         /// scale and cascade.
         float surface_bias = 0.5f;
-        float step_relaxation = 0.0f;
+        /// Cone half-angle tangent: hit acceptance grows by this fraction of distance travelled.
+        ///
+        /// This is the lever on the dominant cost in the whole system. Measured on Bistro, removing
+        /// the per-instance tier drops this pass from 8.9 ms to 1.0 ms, and the step-count view puts
+        /// that cost where a ray runs nearly parallel to a large surface -- a grazing sphere trace
+        /// advances by a distance that stays small for its entire length. A growing acceptance
+        /// radius is what bounds it.
+        ///
+        /// Safe in one direction and not the other, which is worth knowing before tuning it. It
+        /// widens what counts as a HIT and never the step, so it can only ever stop a ray early --
+        /// it cannot carry one through a wall, and so cannot leak light. What it does cost is
+        /// over-occlusion at range, and a hit that sits further short of the surface for the cache
+        /// to address from.
+        ///
+        /// Try 0.01 to 0.05. Watch the Resolve pass time, contact darkening at range, and the
+        /// agreement rates in test_surface_resolve_addresses_one_cell_from_both_sides.
+        float step_relaxation = 0.05f;
+        /// Interpolate cached radiance across the four cells bracketing a hit in its tangent plane,
+        /// rather than point sampling the one cell it lands in.
+        ///
+        /// A cell is metres across and a pixel is millimetres, so a point lookup makes the gather
+        /// piecewise constant at cell scale -- blocks that shift as the cascade re-snaps or the
+        /// level steps. That is bias rather than noise, so temporal accumulation converges to it
+        /// instead of averaging it away, and the spatial filter cannot remove it without removing
+        /// real detail too, because a cell boundary and a lighting edge look identical to a
+        /// luminance edge stop.
+        ///
+        /// Costs four cache lookups per ray instead of one. The cheaper alternative -- jitter the
+        /// lookup within the cell and let the temporal filter integrate it -- adds no lookups but
+        /// turns the blocks into shimmer, which is worse exactly when the camera is moving, because
+        /// that is when disocclusion has reset the accumulation count and there are no frames to
+        /// integrate over.
+        ///
+        /// Off restores the point lookup, for comparison without a rebuild.
+        bool interpolate_cache = true;
         /// Indirect diffuse is low frequency, so tracing below full resolution costs little.
         trace_resolution resolution = trace_resolution::half;
 
@@ -67,7 +123,24 @@ public:
         float max_accum_frames = 48.0f;
         /// Reprojection tolerance as a FRACTION of view distance, so one value works near and
         /// far -- reprojection error and depth precision both grow with distance.
-        float reprojection_tolerance = 0.03f;
+        ///
+        /// Measured: raising this to 1.0 removes essentially all fireflies, which is high enough
+        /// that the world-position test never rejects and is effectively off. That reads alarming
+        /// and is defensible, because rejection is what CAUSES the fireflies: a rejected pixel
+        /// falls back to a single frame of a four-ray gather, and a single frame of a four-ray
+        /// gather IS a firefly. Under sub-pixel TAA jitter the previous depth buffer was rasterised
+        /// at a different offset again, so on high-frequency geometry -- foliage, railings, ivy --
+        /// the reconstructed previous position disagrees constantly with nothing actually moving.
+        ///
+        /// What guards history instead is the neighbourhood clamp (@ref history_clamp_sigma), which
+        /// bounds both failure modes at once rather than choosing between them. `lessons.md` records
+        /// this: the reprojection test is a coarse guard, not a cliff, and no longer has to be
+        /// exact. The offscreen and sky tests still reject outright.
+        ///
+        /// Lower it if ghosting appears behind fast-moving geometry -- that is the one thing the
+        /// clamp cannot catch, because a smoothly moving object's history agrees with its
+        /// neighbourhood.
+        float reprojection_tolerance = 1.0f;
         /// Width of the history clamp, in standard deviations of the current frame's 3x3
         /// neighbourhood. Zero disables clamping and restores accept-or-reject.
         ///
@@ -121,6 +194,9 @@ public:
         gfx::texture::ptr prev_depth;
         const camera* cam{};
         surface_cache_service* surface_cache{};
+        /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
+        /// the service without two cameras fighting over one set of levels.
+        surface_cache_view* view_cache{};
         settings settings;
     };
 
@@ -170,6 +246,7 @@ private:
         gfx::program::uniform_ptr u_gi_resolve_params;
         gfx::program::uniform_ptr u_gi_resolve_trace;
         gfx::program::uniform_ptr u_gi_resolve_camera;
+        gfx::program::uniform_ptr u_gi_resolve_filter;
         gfx::program::uniform_ptr u_gi_cache_params;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -185,6 +262,7 @@ private:
             cache_uniform(program.get(), u_gi_resolve_params, "u_gi_resolve_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);

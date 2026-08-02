@@ -4,6 +4,7 @@
 #include <engine/rendering/pipeline/passes/assao_pass.h>
 #include <engine/rendering/pipeline/passes/auto_exposure_pass.h>
 #include <engine/rendering/pipeline/passes/bloom_pass.h>
+#include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
 #include <engine/rendering/pipeline/passes/ssil_pass.h>
@@ -37,6 +38,8 @@ struct resolved_post_process_settings
     assao_pass::settings assao{};
     bool has_ssil = false;
     ssil_pass::ssil_settings ssil{};
+    bool has_gi = false;
+    gi_settings gi{};
 };
 
 /**

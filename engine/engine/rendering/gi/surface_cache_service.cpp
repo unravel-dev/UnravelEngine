@@ -47,14 +47,6 @@ auto surface_cache_service::init(rtti::context& ctx) -> bool
     }
     sdf_instance_grid::settings grid_settings;
     grid_.init(grid_settings);
-    global_sdf_clipmap::settings clipmap_settings;
-    clipmap_.init(clipmap_settings);
-    if(!clipmap_gpu_.init(clipmap_settings.resolution))
-    {
-        APPLOG_WARNING("[SurfaceCache] Clipmap initialisation failed. Only per-instance field "
-                       "tracing will be available, so distant and offscreen geometry will not "
-                       "contribute.");
-    }
     if(!light_buffer_.init())
     {
         APPLOG_WARNING("[SurfaceCache] Light buffer initialisation failed. Traced hits cannot be lit.");
@@ -95,7 +87,6 @@ auto surface_cache_service::deinit(rtti::context& ctx) -> bool
     grid_params_.fill(0.0f);
     cache_gpu_.shutdown();
     light_buffer_.shutdown();
-    clipmap_gpu_.shutdown();
     atlas_.shutdown();
     return true;
 }
@@ -106,25 +97,60 @@ auto surface_cache_service::acquire_field(const hpp::uuid& mesh_uid, const mesh&
     // Keyed by submesh as well as mesh: each submesh has its own field, and they are uploaded to
     // the atlas independently.
     const field_key key{mesh_uid, submesh_index};
-    auto it = residency_.find(key);
-    if(it != residency_.end())
+    auto& record = residency_[key];
+    // Stamped before any early return, including the failures. The sweep releases whatever was not
+    // asked for this frame, and a mesh that is present but currently unuploadable is still asked
+    // for -- forgetting to stamp it would make the sweep drop the record and lose the fact that it
+    // has no field, so the whole check would run again from scratch next frame.
+    record.last_used_frame = world_frame_;
+    if(record.has_no_field)
     {
-        return it->second.is_rejected ? sdf_atlas::invalid_index : it->second.header_index;
+        return sdf_atlas::invalid_index;
     }
-    mesh_residency record;
+    if(record.header_index != sdf_atlas::invalid_index)
+    {
+        return record.header_index;
+    }
     const auto& sdf = m.get_sdf(submesh_index);
     if(!sdf.is_valid())
     {
-        // No baked field: either the asset opted out or the bake could not produce one. Record
-        // the rejection so this is not retried every frame for the rest of the session.
-        record.is_rejected = true;
-        residency_.emplace(key, record);
+        // No baked field: either the asset opted out or the bake could not produce one. That is a
+        // property of the mesh and can never change while it is loaded, so it is recorded and not
+        // retried for the rest of the session.
+        record.has_no_field = true;
         return sdf_atlas::invalid_index;
     }
+    // Reached on first use, or after a previous attempt was refused for want of atlas room. A
+    // refusal describes the atlas at a moment rather than the mesh, so it must be retried once the
+    // sweep frees the previous scene's fields -- but ONLY then. Nothing else can change the answer,
+    // and retrying unconditionally is what a scene that overruns the atlas turns into thousands of
+    // doomed uploads per frame, climbing the refusal counters into the billions.
+    const uint32_t generation = atlas_.get_release_generation();
+    if(record.attempt_generation == generation)
+    {
+        return sdf_atlas::invalid_index;
+    }
+    record.attempt_generation = generation;
     record.header_index = atlas_.upload(sdf);
-    record.is_rejected = record.header_index == sdf_atlas::invalid_index;
-    residency_.emplace(key, record);
     return record.header_index;
+}
+
+void surface_cache_service::release_unused_fields()
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Release Unused Fields");
+    for(auto it = residency_.begin(); it != residency_.end();)
+    {
+        if(it->second.last_used_frame == world_frame_)
+        {
+            ++it;
+            continue;
+        }
+        if(it->second.header_index != sdf_atlas::invalid_index)
+        {
+            atlas_.release(it->second.header_index);
+        }
+        it = residency_.erase(it);
+    }
 }
 
 
@@ -323,9 +349,17 @@ void surface_cache_service::upload_instances()
     }
 }
 
-void surface_cache_service::update(scene& scn, const math::vec3& camera_position)
+void surface_cache_service::update_world(scene& scn)
 {
-    APP_SCOPE_PERF("GI/SurfaceCache/Update");
+    APP_SCOPE_PERF("GI/SurfaceCache/Update World");
+    // Once per frame, however many cameras ask. All of this is a function of the scene, so a second
+    // camera would rebuild an identical instance list and re-upload an identical grid.
+    const uint64_t frame = uint64_t(gfx::get_render_frame());
+    if(world_frame_ == frame)
+    {
+        return;
+    }
+    world_frame_ = frame;
     instances_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
@@ -408,42 +442,17 @@ void surface_cache_service::update(scene& scn, const math::vec3& camera_position
                 }
             }
         });
+    // Swept AFTER the walk, so the set of what is still wanted is complete. The cost is that a
+    // scene change takes one extra frame to show GI: the incoming meshes are refused while the
+    // outgoing ones still hold their bricks, and succeed on the retry once this has run. Sweeping
+    // first would need the whole scene walked twice to know what to keep.
+    release_unused_fields();
     atlas_.flush();
     light_buffer_.update(scn);
     upload_instances();
     upload_instance_grid();
-    // The cascade decides for itself which levels a change reached. A single global "something
-    // moved" flag could only say "all of them", which meant composing four levels in the frame
-    // anything moved -- and composing a level is expensive enough that this was the whole cost of
-    // having animation in the scene.
-    const uint32_t composed = clipmap_.update(clipmap_instances_, camera_position);
-    if(composed > 0 && log_composition_stats_)
-    {
-        // One line per composed level. Composition is the dominant CPU cost of the cascade and
-        // its shape depends entirely on how the scene's instances are distributed, which no
-        // synthetic fixture reliably reproduces -- these are the numbers that say which of the
-        // possible causes is the real one in THIS scene.
-        const auto& stats = clipmap_.get_last_compose_stats();
-        const double mean_candidates =
-            stats.cull_cells > 0 ? double(stats.cull_references) / double(stats.cull_cells) : 0.0;
-        const double sampled_fraction =
-            stats.candidate_tests > 0 ? double(stats.field_samples) / double(stats.candidate_tests) : 0.0;
-        APPLOG_INFO("[SurfaceCache] Composed level {0}: {1} relevant instances, {2} cells, "
-                    "{3} refs ({4:.1f} mean / {5} worst per cell), {6} candidate tests, "
-                    "{7} field samples ({8:.1f}%), {9} level(s) this update, {10} still stale.",
-                    stats.level,
-                    stats.relevant_instances,
-                    stats.cull_cells,
-                    stats.cull_references,
-                    mean_candidates,
-                    stats.max_candidates_in_cell,
-                    stats.candidate_tests,
-                    stats.field_samples,
-                    sampled_fraction * 100.0,
-                    composed,
-                    clipmap_.get_stale_level_count());
-    }
-    clipmap_gpu_.upload(clipmap_);
+    // The cascade is deliberately NOT composed here. It is centred on a viewer, so it belongs to
+    // the camera rather than to the world -- see surface_cache_view.
 }
 
 } // namespace unravel

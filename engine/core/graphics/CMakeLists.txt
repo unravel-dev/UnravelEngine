@@ -22,7 +22,7 @@ target_include_directories(${target_name}
         ${MESHOPTIMIZER_INCLUDE_DIR}
 )
 
-target_link_libraries(${target_name} PUBLIC bgfx bimg bimg_decode bimg_encode base hpp ${MESHOPTIMIZER_LIBRARIES})
+target_link_libraries(${target_name} PUBLIC bgfx bimg bimg_decode bimg_encode base hpp context ${MESHOPTIMIZER_LIBRARIES})
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

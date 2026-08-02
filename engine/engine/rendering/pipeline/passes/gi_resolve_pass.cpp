@@ -108,7 +108,8 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/GI/Resolve Pass");
-    if(!resolve_program_.is_valid() || !params.g_buffer || !params.cam || !params.surface_cache)
+    if(!resolve_program_.is_valid() || !params.g_buffer || !params.cam || !params.surface_cache ||
+       !params.view_cache)
     {
         return {};
     }
@@ -128,8 +129,8 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         return {};
     }
     auto& atlas = surface_cache.get_atlas();
-    const auto& clipmap = surface_cache.get_clipmap();
-    const auto& clipmap_gpu = surface_cache.get_clipmap_gpu();
+    const auto& clipmap = params.view_cache->get_clipmap();
+    const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& s = params.settings;
 
     const auto target_size = compute_trace_size(params.g_buffer->get_size(), s.resolution);
@@ -182,7 +183,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
 
     const float resolve_params[4] = {float(s.ray_count),
                                      s.max_distance,
-                                     s.normal_bias,
+                                     s.normal_bias_voxels,
                                      float(gfx::get_render_frame())};
     gfx::set_uniform(resolve_program_.u_gi_resolve_params, resolve_params);
     const float trace_params[4] = {s.near_field_distance,
@@ -193,6 +194,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     const auto camera_position = params.cam->get_position();
     const float camera[4] = {camera_position.x, camera_position.y, camera_position.z, s.intensity};
     gfx::set_uniform(resolve_program_.u_gi_resolve_camera, camera);
+    // Independent of temporal accumulation, deliberately: the interpolation is deterministic, so
+    // unlike a stochastic lookup it needs nothing downstream to average it back out and is just as
+    // correct on a single frame.
+    const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
 
     auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);

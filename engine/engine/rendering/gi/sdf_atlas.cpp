@@ -142,6 +142,34 @@ void sdf_atlas::upload_brick(uint32_t slot, const uint8_t* voxels)
 
 auto sdf_atlas::allocate_indirection(uint32_t count) -> uint32_t
 {
+    // First fit over the regions release() gave back, before growing. Reuse is what keeps this
+    // bounded: abandoning a released field's region was harmless while fields only died with the
+    // asset, but they are now released as soon as nothing references them, so without this a scene
+    // reload would grow the table by the whole scene's worth every time.
+    for(size_t i = 0; i < free_indirection_ranges_.size(); ++i)
+    {
+        auto& range = free_indirection_ranges_[i];
+        if(range.count < count)
+        {
+            continue;
+        }
+        const uint32_t offset = range.offset;
+        if(range.count == count)
+        {
+            free_indirection_ranges_.erase(free_indirection_ranges_.begin() + std::ptrdiff_t(i));
+        }
+        else
+        {
+            range.offset += count;
+            range.count -= count;
+        }
+        // Cleared to match what the growing path below hands back, so a caller that writes fewer
+        // entries than it asked for cannot read a previous field's slots.
+        std::fill(indirection_data_.begin() + std::ptrdiff_t(offset),
+                  indirection_data_.begin() + std::ptrdiff_t(offset + count),
+                  0u);
+        return offset;
+    }
     const uint32_t offset = uint32_t(indirection_data_.size());
     indirection_data_.resize(size_t(offset) + count, 0u);
     return offset;
@@ -178,7 +206,13 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
             rejected_brick_total_ += surface_bricks;
             if(rejected_brick_total_ >= next_rejection_report_)
             {
-                next_rejection_report_ = rejected_brick_total_ * 2u;
+                // Doubling, so a scene that overruns by thousands of meshes reports a handful of
+                // times rather than once per mesh. Saturating rather than wrapping: this used to be
+                // 32-bit, and once the total passed two billion the doubling wrapped to a small
+                // number, which made the throttle fire on every refusal instead of suppressing it.
+                next_rejection_report_ = rejected_brick_total_ > (UINT64_MAX / 2u)
+                                             ? UINT64_MAX
+                                             : rejected_brick_total_ * 2u;
                 APPLOG_WARNING("[SurfaceCache] SDF atlas is full ({0} bricks). {1} meshes refused so "
                                "far, needing {2} bricks in total, so they do not contribute to global "
                                "illumination. Raise sdf_atlas::settings::atlas_brick_dim past {3} "
@@ -263,14 +297,30 @@ void sdf_atlas::release(uint32_t header_index)
     }
     field.brick_slots.clear();
     field.is_alive = false;
-    // The indirection region is intentionally NOT reclaimed. Compacting it would shift every
-    // later field's offset and require rewriting their headers; fields are released only when
-    // an asset is unloaded, so the leak is bounded by asset churn rather than by frame count.
-    // Revisit if streaming ever makes that assumption false.
+    // Returned for reuse IN PLACE, never compacted: moving it would shift every later field's
+    // offset and require rewriting all their headers. Reuse used to be skipped entirely on the
+    // grounds that fields only died when an asset unloaded, so the waste was bounded by asset
+    // churn -- that stopped being true once fields are released as soon as nothing references
+    // them, which happens on every scene change.
+    if(field.indirection_count > 0)
+    {
+        free_indirection_ranges_.push_back({field.indirection_offset, field.indirection_count});
+    }
+    field.indirection_count = 0;
     free_field_indices_.push_back(header_index);
     float* header = header_data_.data() + size_t(header_index) * 4u * header_vec4_count;
     std::fill(header, header + 4u * header_vec4_count, 0.0f);
     headers_dirty_ = true;
+    // The refusal tally describes a MOMENT, not the session. Freeing bricks changes what will fit,
+    // so a total accumulated before that says nothing about what is short now -- and leaving the
+    // doubling schedule where it was would silence the report right through the next genuine
+    // shortfall, which is when it is worth reading.
+    rejected_mesh_count_ = 0;
+    rejected_brick_total_ = 0;
+    next_rejection_report_ = 1;
+    // Freeing room is the ONLY thing that can turn a previous refusal into a success, so this is
+    // what tells a refused caller that retrying is worth anything. See get_release_generation.
+    ++release_generation_;
 }
 
 void sdf_atlas::ensure_buffer_capacity()

@@ -447,9 +447,16 @@ float SdfSampleClipmap(vec3 world_position)
 	return SdfSampleClipmapEx(world_position, ignored_voxel_size);
 }
 
-/// Iterations used to converge onto the isosurface. Several, not one: a single Newton step lands
-/// somewhere that still depends on where it started, and the callers start up to a voxel apart.
-#define SDF_SURFACE_RESOLVE_STEPS 4
+/// Iterations used to converge onto the isosurface. More than one, because a single Newton step
+/// lands somewhere that still depends on where it started, and the callers start up to a voxel
+/// apart -- but TWO, not more, and that is measured rather than assumed.
+///
+/// Mirror of global_sdf_clipmap::surface_resolve_steps. Each iteration is 7 cascade samples per
+/// ray, in the pass that dominates GI cost, so the count is worth money. Swept against
+/// writer/reader addressing agreement it gives 48.9% / 53.3% / 52.9% / 52.8% for 1 / 2 / 3 / 4:
+/// the quality plateaus at two, and the four this used to be paid twice the samples for nothing.
+/// `test_surface_resolve_addresses_one_cell_from_both_sides` pins it in both directions.
+#define SDF_SURFACE_RESOLVE_STEPS 2
 /// Cap on a single Newton step, in voxels of the answering level. A start point that happens to
 /// sit in the saturated far field would otherwise be thrown across the scene by its first step.
 #define SDF_SURFACE_RESOLVE_MAX_STEP 4.0
@@ -458,6 +465,14 @@ struct SdfSurfacePoint
 {
 	vec3 position;
 	vec3 normal;
+	/// False when there was no isosurface to converge onto, so `position` and `normal` are the
+	/// untouched inputs rather than an answer. Callers MUST check it.
+	///
+	/// Without this the function cannot say "I do not know": outside every cascade level every
+	/// sample saturates, the gradient is exactly zero, the loop breaks on its first iteration and
+	/// the initialised up vector is returned as though it were the surface's facing. A caller then
+	/// derives a cache key from a fabricated normal at an address no ray can ever resolve to.
+	bool valid;
 };
 
 /**
@@ -484,10 +499,20 @@ SdfSurfacePoint SdfResolveSurfacePoint(vec3 world_position)
 	SdfSurfacePoint result;
 	result.position = world_position;
 	result.normal = vec3(0.0, 1.0, 0.0);
+	result.valid = false;
 	for(int i = 0; i < SDF_SURFACE_RESOLVE_STEPS; ++i)
 	{
 		float voxel_size;
 		float distance = SdfSampleClipmapEx(result.position, voxel_size);
+		// No cascade covers this point, so there is no isosurface here to converge onto. Giving up
+		// with valid = false is the whole reason that flag exists: the alternative is to fall out
+		// of the loop below on a zero gradient and hand back the caller's own input decorated with
+		// an up vector, which reads as a perfectly good answer.
+		if(distance >= SDF_CLIPMAP_OUTSIDE)
+		{
+			result.valid = false;
+			break;
+		}
 		// Differencing over the answering level's voxel. Using a fixed epsilon samples far
 		// inside a single coarse voxel, where the field is flat and the normal is noise.
 		float e = voxel_size;
@@ -498,11 +523,16 @@ SdfSurfacePoint SdfResolveSurfacePoint(vec3 world_position)
 		                     SdfSampleClipmap(result.position + vec3(0.0, 0.0, e)) -
 		                         SdfSampleClipmap(result.position - vec3(0.0, 0.0, e)));
 		float gradient_length = length(gradient);
+		// A flat field has no direction to step in. Inside coverage this means the point sits in a
+		// saturated region the cascade does not represent -- geometry thinner than its voxel, or a
+		// level not composed yet -- which is equally unusable as an address.
 		if(gradient_length < 1e-8)
 		{
+			result.valid = false;
 			break;
 		}
 		result.normal = gradient / gradient_length;
+		result.valid = true;
 		float step_limit = voxel_size * SDF_SURFACE_RESOLVE_MAX_STEP;
 		result.position -= result.normal * clamp(distance, -step_limit, step_limit);
 	}
@@ -600,7 +630,8 @@ SdfRayHit SdfMakeMiss()
  * the transform convention to drift apart.
  */
 void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float t_min, float t_max,
-                     int max_steps, float surface_bias, float relaxation, inout SdfRayHit result)
+                     int max_steps, float surface_bias, float relaxation, bool want_normal,
+                     inout SdfRayHit result)
 {
 	SdfInstance inst = SdfLoadInstance(index);
 	float t_near;
@@ -647,8 +678,19 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 			{
 				result.hit = true;
 				result.t = t;
-				vec3 local_normal = SdfGradientLocal(header, local_position);
-				result.normal = normalize(SdfTransformDirection(inst.local_to_world_rows, local_normal));
+				if(want_normal)
+				{
+					vec3 local_normal = SdfGradientLocal(header, local_position);
+					result.normal =
+					    normalize(SdfTransformDirection(inst.local_to_world_rows, local_normal));
+				}
+				else
+				{
+					// Zero, not a plausible up vector, so a caller that reads this without having
+					// asked for it fails the dot(n, n) test every consumer here already applies
+					// rather than silently accepting a fabricated facing.
+					result.normal = vec3_splat(0.0);
+				}
 				result.instance_index = index;
 			}
 			resolved = true;
@@ -674,7 +716,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
  * stops occluding, which is the one failure this tier must not have.
  */
 SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                            float surface_bias, float relaxation)
+                            float surface_bias, float relaxation, bool want_normal)
 {
 	SdfRayHit result = SdfMakeMiss();
 	result.t = t_max;
@@ -687,7 +729,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		for(int i = 0; i < u_sdf_instance_count; ++i)
 		{
 			SdfTestInstance(i, origin, direction, inv_dir, t_min, t_max, max_steps, surface_bias,
-			                relaxation, result);
+			                relaxation, want_normal, result);
 		}
 		return result;
 	}
@@ -733,10 +775,24 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		for(uint entry_index = begin; entry_index < end; ++entry_index)
 		{
 			SdfTestInstance(int(b_sdf_grid_instances[entry_index]), origin, direction, inv_dir,
-			                t_min, t_max, max_steps, surface_bias, relaxation, result);
+			                t_min, t_max, max_steps, surface_bias, relaxation, want_normal, result);
 		}
 		float t_step = min(t_next.x, min(t_next.y, t_next.z));
 		if(t_step > t_exit)
+		{
+			break;
+		}
+		// Nothing beyond here can be nearer than the hit already found, so stop walking.
+		//
+		// Safe despite an instance being able to span many cells: it is listed in EVERY cell its
+		// bounds touch, so one whose bounds reach back before t_step was already tested in the
+		// cells covering that range. Only instances that begin further along the ray than the
+		// current hit are skipped, and those could never have won.
+		//
+		// Worth doing even though the per-instance broad phase already caps itself by the nearest
+		// hit and rejects them cheaply: without this the walk still steps through every remaining
+		// cell to the far side of the grid, at two buffer reads each, for a ray that is finished.
+		if(result.hit && t_step > result.t)
 		{
 			break;
 		}
@@ -754,7 +810,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 }
 
 SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation)
+                          float surface_bias, float relaxation, bool want_normal)
 {
 	SdfRayHit result = SdfMakeMiss();
 	if(!u_sdf_clipmap_enabled || t_min >= t_max)
@@ -782,17 +838,24 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		{
 			result.hit = true;
 			result.t = t;
-			// Central differences over one voxel OF THE ANSWERING LEVEL.
-			float e = voxel;
-			float ignored;
-			vec3 n = vec3(SdfSampleClipmapEx(p + vec3(e, 0.0, 0.0), ignored) -
-			                  SdfSampleClipmapEx(p - vec3(e, 0.0, 0.0), ignored),
-			              SdfSampleClipmapEx(p + vec3(0.0, e, 0.0), ignored) -
-			                  SdfSampleClipmapEx(p - vec3(0.0, e, 0.0), ignored),
-			              SdfSampleClipmapEx(p + vec3(0.0, 0.0, e), ignored) -
-			                  SdfSampleClipmapEx(p - vec3(0.0, 0.0, e), ignored));
-			float len = length(n);
-			result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
+			if(want_normal)
+			{
+				// Central differences over one voxel OF THE ANSWERING LEVEL.
+				float e = voxel;
+				float ignored;
+				vec3 n = vec3(SdfSampleClipmapEx(p + vec3(e, 0.0, 0.0), ignored) -
+				                  SdfSampleClipmapEx(p - vec3(e, 0.0, 0.0), ignored),
+				              SdfSampleClipmapEx(p + vec3(0.0, e, 0.0), ignored) -
+				                  SdfSampleClipmapEx(p - vec3(0.0, e, 0.0), ignored),
+				              SdfSampleClipmapEx(p + vec3(0.0, 0.0, e), ignored) -
+				                  SdfSampleClipmapEx(p - vec3(0.0, 0.0, e), ignored));
+				float len = length(n);
+				result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
+			}
+			else
+			{
+				result.normal = vec3_splat(0.0);
+			}
 			return result;
 		}
 		t += max(d, base_threshold);
@@ -815,19 +878,34 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
  * sphere tracing is at its worst.
  */
 SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field_distance,
-                      int max_steps, float surface_bias, float relaxation)
+                      int max_steps, float surface_bias, float relaxation, bool want_normal)
 {
-	// Relaxation is zero in the near field: this is the range where thin geometry has to occlude
-	// exactly, and where stepping past a wall would leak light through it. The cost is affordable
-	// because the range is bounded.
+	// Relaxation applies to the near field too, and used to be forced to zero here on the grounds
+	// that "stepping past a wall would leak light through it". That reasoning does not hold: the
+	// relaxation term feeds SdfConeRadius, which is consulted ONLY by the hit test
+	// (`world_distance < accept`), while the advance is `t += max(world_distance, hit_threshold)`
+	// and uses the base threshold. So it widens what counts as a hit and never the step -- it can
+	// only stop a ray EARLY, never carry it past a surface, which is the whole reason the cone
+	// formulation was chosen over a forced minimum step.
+	//
+	// This matters because the near field is where the cost is. Measured on Bistro, taking the
+	// per-instance tier out entirely drops the gather from 8.9 ms to 1.0 ms, and the step-count
+	// view shows that cost concentrated exactly where a ray runs nearly parallel to a large
+	// surface -- the grazing case a growing acceptance radius exists to bound.
+	//
+	// What it does cost is over-occlusion at range (distant geometry is effectively fattened by the
+	// cone radius) and a hit that sits further short of the surface, which the cache addressing has
+	// to absorb. Both are measurable rather than arguable: the first by eye, the second by the
+	// agreement rates in test_surface_resolve_addresses_one_cell_from_both_sides. The default stays
+	// zero so this changes nothing until it is deliberately dialled up.
 	SdfRayHit near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field_distance, t_max),
-	                                       max_steps, surface_bias, 0.0);
+	                                       max_steps, surface_bias, relaxation, want_normal);
 	if(near_hit.hit)
 	{
 		return near_hit;
 	}
 	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field_distance, t_max, max_steps,
-	                                    surface_bias, relaxation);
+	                                    surface_bias, relaxation, want_normal);
 	// Carry the near-field cost and exhaustion forward, so the caller sees the whole ray's
 	// expense rather than only the tier that happened to answer.
 	far_hit.steps += near_hit.steps;

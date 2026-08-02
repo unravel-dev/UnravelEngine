@@ -115,6 +115,18 @@ public:
 
     auto get_stats() const -> stats;
 
+    /**
+     * @brief Bumped every time @ref release returns bricks to the free list.
+     *
+     * Lets a caller that was refused for want of room know whether retrying could possibly help.
+     * Retrying unconditionally is not viable: a scene that overruns the atlas refuses thousands of
+     * meshes, and re-attempting all of them every frame costs real CPU and produces nothing.
+     */
+    auto get_release_generation() const -> uint32_t
+    {
+        return release_generation_;
+    }
+
 private:
     /// Bookkeeping for one resident field.
     struct resident_field
@@ -147,17 +159,36 @@ private:
     /// Allocated GPU capacity, in elements (vec4 for headers, uint32 for indirection).
     /// Running totals for the atlas-full report, so the warning can name the shortfall rather
     /// than repeat itself once per refused mesh.
-    uint32_t rejected_mesh_count_ = 0;
-    uint32_t rejected_brick_total_ = 0;
-    uint32_t next_rejection_report_ = 1;
+    /// 64-bit, and that is not paranoia: as 32-bit values these reached 3.4 billion in a scene that
+    /// overruns the atlas, and the `total * 2` that schedules the next report then overflowed and
+    /// wrapped to a small number -- so the condition was true again immediately and the warning
+    /// printed on EVERY refusal, thousands per frame. A counter that only ever grows needs a type
+    /// that cannot wrap, or the throttle built on it silently becomes the opposite of a throttle.
+    uint64_t rejected_mesh_count_ = 0;
+    uint64_t rejected_brick_total_ = 0;
+    uint64_t next_rejection_report_ = 1;
+    /// Incremented by @ref release. See @ref get_release_generation.
+    uint32_t release_generation_ = 0;
     uint32_t header_capacity_vec4_ = 0;
     uint32_t indirection_capacity_ = 0;
     bool headers_dirty_ = false;
     bool indirection_dirty_ = false;
 
+    /// A released field's indirection region, available for reuse.
+    struct indirection_range
+    {
+        uint32_t offset = 0;
+        uint32_t count = 0;
+    };
+
     std::vector<resident_field> fields_;
     std::vector<uint32_t> free_field_indices_;
     std::vector<uint32_t> free_brick_slots_;
+    /// Deliberately not coalesced. A field released and re-uploaded asks for the same count, which
+    /// is the case that matters (reloading a scene), and that hits an exact fit every time. Merging
+    /// adjacent ranges would only help a workload that churns fields of many different sizes, which
+    /// this does not have.
+    std::vector<indirection_range> free_indirection_ranges_;
     uint32_t next_brick_slot_ = 0;
     uint32_t total_brick_slots_ = 0;
 };

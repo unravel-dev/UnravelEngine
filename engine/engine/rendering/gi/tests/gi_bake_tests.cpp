@@ -1584,12 +1584,16 @@ void test_instance_grid_never_misses_an_instance()
  * here does not fail loudly: it is an instance the GPU never tests, which renders as geometry
  * that quietly stops occluding.
  */
+/// Passed as @p hit_t to model "no hit found yet", so the walk never takes its early exit.
+constexpr float walk_no_hit = 1e30f;
+
 auto simulate_shader_grid_walk(const sdf_instance_grid& grid,
                                const math::vec3& origin,
                                const math::vec3& direction,
                                float t_min,
                                float t_max,
-                               std::vector<uint32_t>& out) -> bool
+                               std::vector<uint32_t>& out,
+                               float hit_t = walk_no_hit) -> bool
 {
     out.clear();
     const auto splat = [](float v) -> math::vec3 { return math::vec3(v, v, v); };
@@ -1642,6 +1646,13 @@ auto simulate_shader_grid_walk(const sdf_instance_grid& grid,
         }
         const float t_step = math::min(t_next.x, math::min(t_next.y, t_next.z));
         if(t_step > t_exit)
+        {
+            break;
+        }
+        // Mirrors the early exit in SdfTraceInstances: once a hit is known, a cell that only begins
+        // beyond it cannot hold anything nearer. With walk_no_hit this can never fire, so the
+        // set-equality test above still exercises the full traversal.
+        if(t_step > hit_t)
         {
             break;
         }
@@ -1722,6 +1733,373 @@ void test_instance_grid_shader_walk_matches_cpu()
     }
     std::printf("  %d rays compared, %d mismatches\n", compared, mismatches);
     check(mismatches == 0, "the shader's grid walk reaches the same instances as the CPU reference");
+}
+
+/**
+ * @brief The walk may stop once a hit is found, but only past that hit.
+ *
+ * The early exit is a pure optimisation, and the failure mode of getting it wrong is the one this
+ * whole structure must not have: an instance the ray never tests is geometry that silently stops
+ * occluding. So this asserts BOTH halves. Nothing that could have been nearer than the hit may be
+ * dropped -- checked against the instances the full walk reaches, filtered by their own slab
+ * intersection -- and the work must actually fall, or the exit is a no-op dressed up as a saving.
+ */
+void test_instance_grid_walk_stops_past_the_nearest_hit()
+{
+    std::printf("test_instance_grid_walk_stops_past_the_nearest_hit\n");
+    std::vector<math::bbox> bounds;
+    for(int i = 0; i < 300; ++i)
+    {
+        const float t = float(i);
+        const math::vec3 center(8.0f * std::sin(t * 1.7f) + 0.4f * t,
+                                6.0f * std::cos(t * 2.3f),
+                                7.0f * std::sin(t * 0.9f));
+        const float half = 0.4f + 1.8f * std::fabs(std::sin(t * 0.37f));
+        math::bbox b;
+        b.reset();
+        b.add_point(center - math::vec3(half));
+        b.add_point(center + math::vec3(half));
+        bounds.push_back(b);
+    }
+    sdf_instance_grid grid;
+    sdf_instance_grid::settings grid_settings;
+    grid_settings.resolution = 20;
+    grid.init(grid_settings);
+    grid.build(bounds);
+    check(grid.is_valid(), "the grid builds");
+    // Ray parameter at which a ray enters an instance's bounds, or a negative value when it misses.
+    // Same slab test the tracer's broad phase uses, so "could have been nearer" is decided the way
+    // the tracer would decide it.
+    const auto entry_parameter = [](const math::vec3& origin,
+                                    const math::vec3& direction,
+                                    const math::bbox& box) -> float
+    {
+        const math::vec3 inv = math::vec3(1.0f) / math::max(math::abs(direction), math::vec3(1e-8f)) *
+                               math::sign(direction + math::vec3(1e-20f));
+        const math::vec3 t0 = (box.min - origin) * inv;
+        const math::vec3 t1 = (box.max - origin) * inv;
+        const math::vec3 lo = math::min(t0, t1);
+        const math::vec3 hi = math::max(t0, t1);
+        const float t_near = math::max(math::max(lo.x, lo.y), math::max(lo.z, 0.0f));
+        const float t_far = math::min(math::min(hi.x, hi.y), hi.z);
+        return t_near <= t_far ? t_near : -1.0f;
+    };
+    const float hit_distances[3] = {3.0f, 8.0f, 15.0f};
+    int missed = 0;
+    int compared = 0;
+    size_t full_candidates = 0;
+    size_t early_candidates = 0;
+    std::vector<uint32_t> full_walk;
+    std::vector<uint32_t> early_walk;
+    for(int i = 0; i < 3000; ++i)
+    {
+        const float t = float(i) * 0.437f;
+        const math::vec3 origin(22.0f * std::sin(t), 12.0f * std::cos(t * 1.31f), 18.0f * std::sin(t * 0.77f));
+        const math::vec3 direction = math::normalize(
+            math::vec3(std::sin(t * 2.1f), std::cos(t * 1.3f), std::sin(t * 0.5f)));
+        if(!simulate_shader_grid_walk(grid, origin, direction, 0.0f, 30.0f, full_walk))
+        {
+            continue;
+        }
+        const float hit_t = hit_distances[i % 3];
+        simulate_shader_grid_walk(grid, origin, direction, 0.0f, 30.0f, early_walk, hit_t);
+        ++compared;
+        full_candidates += full_walk.size();
+        early_candidates += early_walk.size();
+        std::sort(early_walk.begin(), early_walk.end());
+        for(uint32_t instance : full_walk)
+        {
+            const float t_near = entry_parameter(origin, direction, bounds[instance]);
+            // Only instances the ray actually enters at or before the hit could have won.
+            if(t_near < 0.0f || t_near > hit_t)
+            {
+                continue;
+            }
+            if(!std::binary_search(early_walk.begin(), early_walk.end(), instance))
+            {
+                ++missed;
+            }
+        }
+    }
+    std::printf("  %d rays, %zu candidates -> %zu with the early exit (%.2fx fewer), %d missed\n",
+                compared,
+                full_candidates,
+                early_candidates,
+                double(full_candidates) / math::max(double(early_candidates), 1.0),
+                missed);
+    check(missed == 0, "the early exit never drops an instance nearer than the hit");
+    // Measured at 1.99x fewer candidates (12868 -> 6455) when this was written. The bound sits
+    // between that and 1.0, so removing the exit makes the two walks identical and fails this
+    // outright, while normal drift in the fixture cannot.
+    check(double(early_candidates) < double(full_candidates) * 0.75,
+          "the early exit actually removes work");
+}
+
+/**
+ * @brief A writer and a reader starting a voxel apart must address the SAME cache cell.
+ *
+ * This is the contract the whole radiance cache rests on, and the reason `resolve_surface_point`
+ * exists. Its two callers arrive from different directions: insertion starts from the rasterised
+ * G-buffer position, which sits on the triangle, while every gather and bounce starts from a sphere
+ * trace that stopped SHORT of the isosurface by its acceptance radius. Those are two different
+ * surfaces about a voxel apart -- the same order as a cache cell -- so keyed off either raw
+ * position the two sides simply never see each other's entries. That failure reads as an empty
+ * cache rather than as an error, which is what makes it expensive to diagnose.
+ *
+ * The test therefore asserts BOTH halves: that the raw positions really do disagree (otherwise it
+ * is testing nothing), and that resolving collapses them onto one cell.
+ */
+void test_surface_resolve_addresses_one_cell_from_both_sides()
+{
+    std::printf("test_surface_resolve_addresses_one_cell_from_both_sides\n");
+    // A box, not a sphere: large FLAT faces are where the field deviates most from the geometry and
+    // where the addressing failure was originally worst.
+    const math::vec3 half(2.0f, 1.5f, 2.5f);
+    const auto geometry = make_box(half);
+    mesh_sdf_bake_settings bake_settings;
+    bake_settings.resolution = 48;
+    bake_settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, bake_settings, sdf), "bake succeeds");
+    // Two placements, and the second one carries the test. Level 0 covers +/- 8 m here and
+    // cross-fades into level 1 over its outermost 4 voxels, so a box at 7.2 m has its surface INSIDE
+    // that band -- where the sampled field is a convex blend of two independently composed levels
+    // and therefore not a true distance function at all. A box sitting comfortably inside level 0 is
+    // very nearly an exact SDF, where a single Newton step lands on the surface by definition, so a
+    // fixture made only of those cannot tell any iteration count from any other.
+    const math::vec3 box_centres[2] = {math::vec3(0.0f), math::vec3(7.2f, 0.0f, 0.0f)};
+    std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, box_centres[0]),
+                                               make_clipmap_instance(sdf, box_centres[1])};
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 64;
+    clipmap_settings.base_extent = 16.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    const math::vec3 camera(0.0f);
+    check(clipmap.update(instances, camera) == global_sdf_clipmap::level_count, "levels compose");
+    const float voxel = clipmap.get_level(0).voxel_size;
+    radiance_cache cache;
+    radiance_cache::settings cache_settings;
+    cache.init(cache_settings);
+
+    // Transcription of GiCacheGatherForFace's 2x2 bracket in gi/radiance_cache.sh. The gather does
+    // not point sample one cell; it interpolates across the four bracketing it in the tangent
+    // plane, so the question that decides whether a ray finds the writer's entry is not "same cell"
+    // but "is the writer's cell in the reader's bracket".
+    const auto bracket_keys = [&cache](const math::vec3& position, uint32_t face, uint32_t level)
+        -> std::array<uint32_t, 4>
+    {
+        const uint32_t axis = face >> 1u;
+        math::vec3 tu(0.0f);
+        math::vec3 tv(0.0f);
+        if(axis == 0u)
+        {
+            tu = math::vec3(0.0f, 1.0f, 0.0f);
+            tv = math::vec3(0.0f, 0.0f, 1.0f);
+        }
+        else if(axis == 1u)
+        {
+            tu = math::vec3(1.0f, 0.0f, 0.0f);
+            tv = math::vec3(0.0f, 0.0f, 1.0f);
+        }
+        else
+        {
+            tu = math::vec3(1.0f, 0.0f, 0.0f);
+            tv = math::vec3(0.0f, 1.0f, 0.0f);
+        }
+        const float cell_size = cache.get_cell_size(level);
+        const float gu = math::dot(position, tu) / cell_size;
+        const float gv = math::dot(position, tv) / cell_size;
+        const float base_u = std::floor(gu - 0.5f);
+        const float base_v = std::floor(gv - 0.5f);
+        const math::vec3 corner = position + tu * ((base_u + 0.5f - gu) * cell_size) +
+                                  tv * ((base_v + 0.5f - gv) * cell_size);
+        std::array<uint32_t, 4> keys{};
+        size_t written = 0;
+        for(int j = 0; j < 2; ++j)
+        {
+            for(int i = 0; i < 2; ++i)
+            {
+                const math::vec3 tap = corner + (tu * float(i) + tv * float(j)) * cell_size;
+                keys[written++] = cache.compute_key_for_face(tap, face, level);
+            }
+        }
+        return keys;
+    };
+
+    struct resolve_quality
+    {
+        int pairs = 0;
+        double raw_rate = 0.0;
+        double resolved_rate = 0.0;
+        double bracket_rate = 0.0;
+        int off_surface = 0;
+    };
+
+    // Parameterised by iteration count so the shipping value can be shown to be the right one
+    // instead of asserted. Each iteration costs 7 cascade samples in the shader, and the gather
+    // spends more time here than anywhere else, so the question "would fewer do" is worth money.
+    const auto measure = [&](uint32_t steps) -> resolve_quality
+    {
+    int pairs = 0;
+    int raw_agree = 0;
+    int resolved_agree = 0;
+    int bracket_covers = 0;
+    int off_surface = 0;
+    for(int i = 0; i < 4000; ++i)
+    {
+        const float t = float(i) * 0.211f;
+        // A point on one of the six faces, with the other two coordinates swept across the face.
+        const int axis = i % 3;
+        const float face_sign = ((i / 3) % 2) == 0 ? 1.0f : -1.0f;
+        const math::vec3& centre = box_centres[(i / 6) % 2];
+        math::vec3 surface_point(0.9f * half.x * std::sin(t * 1.7f),
+                                 0.9f * half.y * std::cos(t * 2.3f),
+                                 0.9f * half.z * std::sin(t * 0.9f));
+        surface_point[axis] = half[axis] * face_sign;
+        surface_point += centre;
+        math::vec3 normal(0.0f);
+        normal[axis] = face_sign;
+        // The two callers, modelled. The writer sits on the rendered triangle; the reader stops
+        // short of the isosurface along its ray, which at grazing incidence displaces it ACROSS the
+        // surface as well as along the normal. Up to two voxels out, because insertion starts from
+        // the rasterised position rather than from a trace and can be further off than a trace is.
+        const float along = voxel * (0.25f + 1.75f * std::fabs(std::sin(t * 3.1f)));
+        const float across = voxel * 0.6f * std::sin(t * 5.7f);
+        math::vec3 tangent(0.0f);
+        tangent[(axis + 1) % 3] = 1.0f;
+        const math::vec3 writer_start = surface_point;
+        const math::vec3 reader_start = surface_point - normal * along + tangent * across;
+
+        math::vec3 writer_position;
+        math::vec3 writer_normal;
+        math::vec3 reader_position;
+        math::vec3 reader_normal;
+        if(!clipmap.resolve_surface_point(writer_start, writer_position, writer_normal, steps) ||
+           !clipmap.resolve_surface_point(reader_start, reader_position, reader_normal, steps))
+        {
+            continue;
+        }
+        ++pairs;
+        // The resolved point must actually be ON the isosurface, or "they agree" could just mean
+        // both drifted to the same wrong place.
+        if(std::fabs(clipmap.sample(writer_position)) > voxel)
+        {
+            ++off_surface;
+        }
+        // Raw: what the keys would be without resolving, which is the behaviour this replaced.
+        const uint32_t raw_level = cache.compute_level(writer_start, camera);
+        if(cache.compute_key(writer_start, normal, raw_level) ==
+           cache.compute_key(reader_start, normal, raw_level))
+        {
+            ++raw_agree;
+        }
+        const uint32_t writer_level = cache.compute_level(writer_position, camera);
+        const uint32_t reader_level = cache.compute_level(reader_position, camera);
+        const uint32_t writer_key = cache.compute_key(writer_position, writer_normal, writer_level);
+        if(writer_key == cache.compute_key(reader_position, reader_normal, reader_level))
+        {
+            ++resolved_agree;
+        }
+        // What the GATHER actually does. A tangential miss still finds the writer's radiance as
+        // long as its cell is one of the four the reader interpolates over.
+        const std::array<uint32_t, 4> reader_bracket =
+            bracket_keys(reader_position, quantize_normal(reader_normal), reader_level);
+        if(writer_level == reader_level &&
+           std::find(reader_bracket.begin(), reader_bracket.end(), writer_key) != reader_bracket.end())
+        {
+            ++bracket_covers;
+        }
+    }
+    resolve_quality result;
+    result.pairs = pairs;
+    result.raw_rate = pairs > 0 ? double(raw_agree) / double(pairs) : 0.0;
+    result.resolved_rate = pairs > 0 ? double(resolved_agree) / double(pairs) : 0.0;
+    result.bracket_rate = pairs > 0 ? double(bracket_covers) / double(pairs) : 0.0;
+    result.off_surface = off_surface;
+    return result;
+    };
+
+    // The sweep. Each row is what the gather would deliver at that iteration count, and the cost is
+    // linear in it -- 7 cascade samples per iteration, per ray.
+    std::printf("  steps | pairs | raw     resolved  bracket | off surface\n");
+    resolve_quality by_steps[5];
+    for(uint32_t steps = 1; steps <= 4; ++steps)
+    {
+        by_steps[steps] = measure(steps);
+        std::printf("  %5u | %5d | %5.1f%%  %6.1f%%  %6.1f%% | %d\n",
+                    steps,
+                    by_steps[steps].pairs,
+                    by_steps[steps].raw_rate * 100.0,
+                    by_steps[steps].resolved_rate * 100.0,
+                    by_steps[steps].bracket_rate * 100.0,
+                    by_steps[steps].off_surface);
+    }
+    const resolve_quality shipping = by_steps[global_sdf_clipmap::surface_resolve_steps];
+    const int pairs = shipping.pairs;
+    const double raw_rate = shipping.raw_rate;
+    const double resolved_rate = shipping.resolved_rate;
+    const double bracket_rate = shipping.bracket_rate;
+    const int off_surface = shipping.off_surface;
+    check(pairs > 2000, "enough pairs resolve to be meaningful");
+    check(off_surface == 0, "a resolved point lies on the field's isosurface");
+    // Measured 5.2% raw against 28.5% resolved on this fixture. The bound sits between them, so
+    // removing the resolve -- which makes both figures the raw one -- fails outright.
+    check(raw_rate < 0.15, "the raw positions really do disagree, so this test exercises something");
+    check(resolved_rate > 0.20, "resolving onto the isosurface multiplies cell agreement");
+    // The single-cell figure is NOT the miss rate the gather sees, and this is the number that
+    // matters. A Newton step travels along the gradient, so it removes the disagreement NORMAL to
+    // the surface but none of the tangential displacement a grazing trace accumulates -- which is
+    // why single-cell agreement stalls near half however good the resolve is. Interpolating over
+    // the bracket is what recovers those, and this pins that it does.
+    check(bracket_rate > resolved_rate + 0.15,
+          "the gather's 2x2 bracket recovers substantially more than a single-cell lookup");
+    // The iteration count is pinned as MINIMAL AND SUFFICIENT, in both directions, because it is
+    // pure cost: every iteration is 7 cascade samples per ray in the shader, in the pass that
+    // dominates GI. Measured on this fixture, bracket coverage runs 48.9% / 53.3% / 52.9% / 52.8%
+    // for 1 / 2 / 3 / 4 iterations -- so it plateaus at two and more buys nothing at all.
+    //
+    // Lowering the constant fails the first check; raising it "to be safe" fails the second, which
+    // is the one that stops the cost creeping back up on a hunch.
+    const resolve_quality one_fewer = by_steps[global_sdf_clipmap::surface_resolve_steps - 1u];
+    const resolve_quality most = by_steps[4];
+    check(bracket_rate > one_fewer.bracket_rate + 0.02,
+          "one iteration fewer than the shipping count is measurably worse");
+    check(bracket_rate > most.bracket_rate - 0.01,
+          "the shipping count already reaches the plateau, so more iterations are wasted cost");
+}
+
+void test_surface_resolve_reports_failure_outside_the_cascade()
+{
+    std::printf("test_surface_resolve_reports_failure_outside_the_cascade\n");
+    const auto geometry = make_box(math::vec3(1.0f));
+    mesh_sdf_bake_settings bake_settings;
+    bake_settings.resolution = 32;
+    bake_settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, bake_settings, sdf), "bake succeeds");
+    std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, math::vec3(0.0f))};
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 32;
+    clipmap_settings.base_extent = 8.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    check(clipmap.update(instances, math::vec3(0.0f)) == global_sdf_clipmap::level_count, "levels compose");
+    // Outer level covers base_extent * level_scale^(level_count - 1), centred on the camera.
+    const float reach = clipmap.get_level_extent(global_sdf_clipmap::level_count - 1u) * 0.5f;
+    math::vec3 position;
+    math::vec3 normal;
+    // Well beyond every level: there is no isosurface to converge onto, and saying so is the whole
+    // point. Reporting success here keys entries to a fabricated up vector at an address no ray can
+    // ever resolve to, which is unreachable by construction and never retired.
+    const bool far_valid = clipmap.resolve_surface_point(math::vec3(reach * 4.0f, 0.0f, 0.0f), position, normal);
+    check(!far_valid, "a point outside every cascade level reports failure");
+    // And the outputs are the untouched inputs rather than a plausible-looking answer.
+    check(position == math::vec3(reach * 4.0f, 0.0f, 0.0f), "a failed resolve leaves the position alone");
+    const bool near_valid = clipmap.resolve_surface_point(math::vec3(1.05f, 0.0f, 0.0f), position, normal);
+    check(near_valid, "a point just off a surface inside the cascade resolves");
 }
 
 void test_instance_grid_handles_degenerate_input()
@@ -2779,6 +3157,9 @@ int main()
     test_clipmap_is_conservative();
     test_instance_grid_never_misses_an_instance();
     test_instance_grid_shader_walk_matches_cpu();
+    test_instance_grid_walk_stops_past_the_nearest_hit();
+    test_surface_resolve_addresses_one_cell_from_both_sides();
+    test_surface_resolve_reports_failure_outside_the_cascade();
     test_instance_grid_handles_degenerate_input();
     test_clipmap_recomposes_moved_geometry_within_budget();
     test_clipmap_culled_composition_matches_brute_force();

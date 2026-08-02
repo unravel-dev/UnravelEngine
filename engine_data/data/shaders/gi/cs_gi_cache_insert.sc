@@ -73,8 +73,19 @@ void main()
 	// key entries to cells that no ray query can ever address. Resolve onto the field first, and
 	// take the facing from the field too, so both sides derive the key from the same function.
 	SdfSurfacePoint surface = SdfResolveSurfacePoint(world_position);
-	// A field with no coverage here reports a saturated distance and resolves to nothing usable;
-	// registering that would place an entry at an arbitrary point.
+	// No cascade covers this pixel, so there is no address to register it under. This is the
+	// common case well beyond the outermost level -- the G-buffer sees far further than the
+	// cascade reaches -- and the entries it used to produce were unreachable by construction:
+	// keyed on the raster position rather than the field, and binned to +Y whatever the surface
+	// actually faced, because that is the vector the resolve initialises its normal to. Nothing
+	// could ever look them up, nothing retired them (a saturated reading reads as "unknown", not
+	// "gone"), and every one of them cost a shadow ray per light per frame.
+	if(!surface.valid)
+	{
+		return;
+	}
+	// The resolve landed on a surface facing away from the one the G-buffer sees, so it converged
+	// onto different geometry -- the far side of a thin wall, typically.
 	if(dot(surface.normal, world_normal) < 0.0)
 	{
 		return;

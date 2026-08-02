@@ -198,13 +198,16 @@ void main()
 	// be on the cascade's isosurface and the level it reports would not be the one under test.
 	if(u_debug_mode == SDF_DEBUG_CLIPMAP || u_debug_mode == SDF_DEBUG_CASCADE_LEVELS)
 	{
+		// This is the one consumer that wants the hit normal -- the normals view shades by it. The
+		// GI passes all re-derive the facing from SdfResolveSurfacePoint instead and never read
+		// this field, so they ask the tracer to skip the gradient entirely.
 		hit = SdfTraceClipmap(ray_origin, ray_dir, 0.0, u_max_distance, u_max_steps, u_surface_bias,
-		                      u_step_relaxation);
+		                      u_step_relaxation, true);
 	}
 	else
 	{
 		hit = SdfTraceRay(ray_origin, ray_dir, u_max_distance, u_near_field_distance, u_max_steps,
-		                  u_surface_bias, u_step_relaxation);
+		                  u_surface_bias, u_step_relaxation, true);
 	}
 
 	if(u_debug_mode == SDF_DEBUG_STEP_COUNT)
@@ -365,7 +368,9 @@ void main()
 		// geometry anywhere -- including outside any shadow map's frustum.
 		vec3 hit_position = ray_origin + ray_dir * hit.t;
 		// Visibility comes from tracing the fields toward each light, not from a shadow map.
-		vec3 irradiance = GiEvalDirectLighting(hit_position, hit.normal);
+		float direct_voxel;
+		SdfSampleClipmapEx(hit_position, direct_voxel);
+		vec3 irradiance = GiEvalDirectLighting(hit_position, hit.normal, max(direct_voxel, 0.01));
 		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour,
 		// which the fields do not carry yet (material voxels are a later phase).
 		gl_FragColor = vec4(irradiance * 0.8, 1.0);

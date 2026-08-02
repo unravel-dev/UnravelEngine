@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -33,6 +35,10 @@ struct render_pass_entry
     std::string display_name;
     float cpu_ms = 0.0f;
     float gpu_ms = 0.0f;
+    /// Worst GPU frame in the retained history, so a pass that spikes is not hidden by its mean.
+    float peak_gpu_ms = 0.0f;
+    /// Frames the mean is over. Until this is large the reading is not yet trustworthy.
+    size_t sample_count = 0;
 };
 
 struct render_pass_node_item
@@ -131,6 +137,98 @@ auto split_render_pass_path(const std::string& pass_name, bool group_by_prefix) 
         parts.push_back(pass_name);
     }
     return parts;
+}
+
+/**
+ * @brief Rolling per-pass history, so a reading is a mean rather than one frame.
+ *
+ * A single frame's GPU time is far too noisy to compare builds with. Measured on this project, two
+ * consecutive readings of one pass differed by 0.49 ms while nothing that could affect it had
+ * changed -- larger than the 0.28 ms difference the comparison was trying to resolve. Reading the
+ * instantaneous value therefore cannot answer "did that optimisation help", which is the only
+ * question this panel exists to answer.
+ *
+ * Keyed by NAME, not by view id: ids are handed out per frame and shift as passes come and go,
+ * while the name is stable.
+ */
+struct rolling_pass_history
+{
+    static constexpr size_t capacity = 120;
+    std::array<float, capacity> cpu_samples{};
+    std::array<float, capacity> gpu_samples{};
+    size_t next = 0;
+    size_t count = 0;
+    uint64_t last_seen = 0;
+
+    void push(float cpu_ms, float gpu_ms)
+    {
+        cpu_samples[next] = cpu_ms;
+        gpu_samples[next] = gpu_ms;
+        next = (next + 1) % capacity;
+        count = std::min(count + 1, capacity);
+    }
+
+    auto mean(const std::array<float, capacity>& samples) const -> float
+    {
+        if(count == 0)
+        {
+            return 0.0f;
+        }
+        float total = 0.0f;
+        for(size_t i = 0; i < count; ++i)
+        {
+            total += samples[i];
+        }
+        return total / static_cast<float>(count);
+    }
+
+    auto peak_gpu() const -> float
+    {
+        float peak = 0.0f;
+        for(size_t i = 0; i < count; ++i)
+        {
+            peak = std::max(peak, gpu_samples[i]);
+        }
+        return peak;
+    }
+};
+
+struct smoothing_state
+{
+    std::unordered_map<std::string, rolling_pass_history> passes;
+    uint64_t frame = 0;
+};
+
+auto get_smoothing_state() -> smoothing_state&
+{
+    static smoothing_state state;
+    return state;
+}
+
+/**
+ * @brief Replaces each entry's instantaneous timings with the mean over its recent history.
+ *
+ * Entries not seen this frame are dropped, so a pass that stops running does not linger with a
+ * stale average that reads as live cost.
+ */
+void apply_pass_smoothing(std::vector<render_pass_entry>& entries)
+{
+    smoothing_state& state = get_smoothing_state();
+    ++state.frame;
+    for(render_pass_entry& entry : entries)
+    {
+        rolling_pass_history& history = state.passes[entry.name];
+        history.push(entry.cpu_ms, entry.gpu_ms);
+        history.last_seen = state.frame;
+        entry.cpu_ms = history.mean(history.cpu_samples);
+        entry.gpu_ms = history.mean(history.gpu_samples);
+        entry.peak_gpu_ms = history.peak_gpu();
+        entry.sample_count = history.count;
+    }
+    for(auto it = state.passes.begin(); it != state.passes.end();)
+    {
+        it = it->second.last_seen != state.frame ? state.passes.erase(it) : std::next(it);
+    }
 }
 
 auto make_render_pass_entries(const gfx::stats* stats, const timer_scale& scale, bool group_by_prefix)
@@ -275,7 +373,18 @@ void draw_pass_row(const render_pass_entry& entry, const render_pass_totals& tot
     ImGui::TreeNodeEx("pass", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
                                   ImGuiTreeNodeFlags_Bullet | ImGuiTreeNodeFlags_SpanFullWidth,
                       "%3u. %s", entry.view, entry.display_name.c_str());
-    ImGui::SetItemTooltipEx("View %u\n%s", entry.view, entry.name.c_str());
+    // Peak alongside the mean: a pass whose average is comfortable but which spikes every few
+    // frames is a stutter, and the mean on its own hides exactly that.
+    if(entry.sample_count > 0)
+    {
+        ImGui::SetItemTooltipEx("View %u\n%s\nGPU mean %.3f ms, worst %.3f ms over %zu frames",
+                                entry.view, entry.name.c_str(), entry.gpu_ms, entry.peak_gpu_ms,
+                                entry.sample_count);
+    }
+    else
+    {
+        ImGui::SetItemTooltipEx("View %u\n%s", entry.view, entry.name.c_str());
+    }
     ImGui::TableNextColumn();
     ImGui::Text("%.3f ms", entry.cpu_ms);
     ImGui::TableNextColumn();
@@ -374,6 +483,7 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
     (void)layout;
     static std::array<char, 128> filter = {};
     static bool group_by_prefix = true;
+    static bool average_frames = true;
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Render Passes");
     ImGui::SameLine();
@@ -381,7 +491,33 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
     ImGui::InputTextWithHint("##render_pass_filter", "Filter pass or group", filter.data(), filter.size());
     ImGui::SameLine();
     ImGui::Checkbox("Group by prefix", &group_by_prefix);
-    const std::vector<render_pass_entry> entries = make_render_pass_entries(stats, scale, group_by_prefix);
+    ImGui::SameLine();
+    // On by default, because a single frame's GPU time cannot answer whether a change helped: the
+    // frame-to-frame spread here is larger than the differences worth chasing.
+    ImGui::Checkbox("Average", &average_frames);
+    ImGui::SetItemTooltipEx("%s",
+                            "Mean over the last 120 frames per pass.\n"
+                            "A single frame's GPU time is far too noisy to compare builds with -- "
+                            "consecutive readings of one pass have differed by 0.5 ms here with "
+                            "nothing changed.\nHold the camera still and let the sample count fill "
+                            "before trusting a number.");
+    ImGui::SameLine();
+    if(ImGui::Button("Reset##pass_history"))
+    {
+        get_smoothing_state().passes.clear();
+    }
+    ImGui::SetItemTooltipEx("%s", "Clear the history. Do this after changing camera position or "
+                                  "settings, or the mean still contains the old configuration.");
+    std::vector<render_pass_entry> entries = make_render_pass_entries(stats, scale, group_by_prefix);
+    if(average_frames)
+    {
+        apply_pass_smoothing(entries);
+    }
+    size_t min_samples = entries.empty() ? 0 : rolling_pass_history::capacity;
+    for(const render_pass_entry& entry : entries)
+    {
+        min_samples = std::min(min_samples, entry.sample_count);
+    }
     std::vector<render_pass_node> groups = make_filtered_render_pass_groups(entries, filter.data(), group_by_prefix);
     render_pass_totals totals;
     float max_bar_ms = 0.0001f;
@@ -398,6 +534,21 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
                         totals.gpu_ms,
                         visible_pass_count,
                         groups.size());
+    if(average_frames)
+    {
+        ImGui::SameLine();
+        // Says outright when the mean is not yet settled. Without this the panel shows a confident
+        // number one frame after a reset, which is exactly when it is least trustworthy.
+        if(min_samples < rolling_pass_history::capacity)
+        {
+            ImGui::TextColored(warning_color, "| averaging %zu/%zu frames", min_samples,
+                               rolling_pass_history::capacity);
+        }
+        else
+        {
+            ImGui::TextDisabled("| mean of %zu frames", rolling_pass_history::capacity);
+        }
+    }
     ImGui::SameLine();
     ImGui::TextColored(cpu_color, "CPU submit");
     ImGui::SameLine();

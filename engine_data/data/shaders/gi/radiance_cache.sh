@@ -268,6 +268,119 @@ uint GiCacheFindSurface(vec3 position, vec3 normal, uint level)
 	return slot;
 }
 
+/**
+ * Bilinearly interpolates cached radiance over the four cells bracketing a point in its TANGENT
+ * plane. Returns false when none of them holds an entry.
+ *
+ * A cell is metres across where a pixel is millimetres, so a point lookup makes any gather
+ * piecewise constant at cell scale -- blocks that shift whenever the cascade re-snaps or the level
+ * steps. That is BIAS, not noise: temporal accumulation converges to it rather than averaging it
+ * away, and a luminance edge stop cannot tell a cell boundary from a real lighting edge, so no
+ * filter setting removes the blocks without removing genuine detail along with them.
+ *
+ * Interpolating removes the steps at their source, and does it DETERMINISTICALLY. The tempting
+ * alternative -- jitter the lookup within the cell and let the temporal filter integrate the
+ * result -- costs no extra lookups but converts the blocks into shimmer, which is strictly worse
+ * while anything is moving, because motion is precisely when there are no frames to integrate over
+ * and when the accumulation count has been reset by disocclusion.
+ *
+ * The cell grid is world-axis aligned, so the tangent axes are simply the two world axes other than
+ * the one the quantised face points along. No arbitrary basis is needed and the interpolation lines
+ * up with the cells exactly.
+ *
+ * Interpolating ONLY in the tangent plane is load bearing. Blending along the normal would mix the
+ * two sides of a thin wall, which is the leak that putting the normal in the key exists to prevent.
+ */
+bool GiCacheGatherForFace(vec3 position, uint face, uint level, out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	uint axis = face >> 1u;
+	vec3 tu;
+	vec3 tv;
+	if(axis == 0u)
+	{
+		tu = vec3(0.0, 1.0, 0.0);
+		tv = vec3(0.0, 0.0, 1.0);
+	}
+	else if(axis == 1u)
+	{
+		tu = vec3(1.0, 0.0, 0.0);
+		tv = vec3(0.0, 0.0, 1.0);
+	}
+	else
+	{
+		tu = vec3(1.0, 0.0, 0.0);
+		tv = vec3(0.0, 1.0, 0.0);
+	}
+	float cell_size = GiCacheCellSize(level);
+	// Continuous cell coordinates along the tangent axes. The key's half-cell lift is along the face
+	// NORMAL, so it does not move these and does not need applying here.
+	float gu = dot(position, tu) / cell_size;
+	float gv = dot(position, tv) / cell_size;
+	// Bracket by cell CENTRES, which sit at index + 0.5. Bracketing by cell boundaries instead would
+	// step the weights as floor() ticks over, which is the discontinuity this exists to remove.
+	float base_u = floor(gu - 0.5);
+	float base_v = floor(gv - 0.5);
+	float fu = (gu - 0.5) - base_u;
+	float fv = (gv - 0.5) - base_v;
+	// Displacement from the sample point to the centre of the bracket's lower cell on each axis.
+	vec3 corner = position + tu * ((base_u + 0.5 - gu) * cell_size) +
+	              tv * ((base_v + 0.5 - gv) * cell_size);
+	float weight_sum = 0.0;
+	for(int j = 0; j < 2; ++j)
+	{
+		for(int i = 0; i < 2; ++i)
+		{
+			vec3 tap = corner + (tu * float(i) + tv * float(j)) * cell_size;
+			uint slot = GiCacheFind(GiCacheKeyForFace(tap, face, level));
+			if(slot == GI_CACHE_INVALID_SLOT)
+			{
+				continue;
+			}
+			float weight_u = i == 0 ? 1.0 - fu : fu;
+			float weight_v = j == 0 ? 1.0 - fv : fv;
+			float weight = weight_u * weight_v;
+			out_radiance += b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz * weight;
+			weight_sum += weight;
+		}
+	}
+	if(weight_sum <= 1e-6)
+	{
+		return false;
+	}
+	// Renormalised over the taps that resolved, so a neighbour the cache has not reached yet -- the
+	// edge of a surface, or a cell nothing has registered -- hands its weight to the ones that did
+	// rather than dragging the result toward black.
+	out_radiance /= weight_sum;
+	return true;
+}
+
+/// As @ref GiCacheGatherForFace, tolerating a facing on a quantisation boundary exactly as
+/// GiCacheFindSurface does: near a tie both sides agree on the SET of the top two faces.
+bool GiCacheGatherSurface(vec3 position, vec3 normal, uint level, out vec3 out_radiance)
+{
+	if(GiCacheGatherForFace(position, GiQuantizeNormal(normal), level, out_radiance))
+	{
+		return true;
+	}
+	return GiCacheGatherForFace(position, GiQuantizeNormalSecond(normal), level, out_radiance);
+}
+
+/// Single-cell lookup, the un-interpolated counterpart of @ref GiCacheGatherSurface. Kept so the
+/// interpolation can be switched off and compared against, rather than being the kind of change
+/// that can only be evaluated by rebuilding without it.
+bool GiCacheGatherPoint(vec3 position, vec3 normal, uint level, out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	uint slot = GiCacheFindSurface(position, normal, level);
+	if(slot == GI_CACHE_INVALID_SLOT)
+	{
+		return false;
+	}
+	out_radiance = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz;
+	return true;
+}
+
 #ifdef GI_CACHE_READ_WRITE
 
 /**

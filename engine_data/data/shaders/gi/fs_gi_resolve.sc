@@ -29,7 +29,8 @@ $input v_texcoord0
 SAMPLER2D(s_gi_depth, 8);
 SAMPLER2D(s_gi_normal, 9);
 
-/// x = ray count, y = max trace distance, z = normal bias in world units, w = frame index.
+/// x = ray count, y = max trace distance, z = normal bias in VOXELS of the answering field,
+/// w = frame index.
 uniform vec4 u_gi_resolve_params;
 #define u_gi_ray_count    int(u_gi_resolve_params.x)
 #define u_gi_max_distance u_gi_resolve_params.y
@@ -46,6 +47,10 @@ uniform vec4 u_gi_resolve_trace;
 /// xyz = camera position, w = intensity applied to the cached bounce.
 uniform vec4 u_gi_resolve_camera;
 #define u_gi_intensity u_gi_resolve_camera.w
+
+/// x = non-zero to interpolate the cache across neighbouring cells instead of point sampling one.
+uniform vec4 u_gi_resolve_filter;
+#define u_gi_cache_interpolate u_gi_resolve_filter.x
 
 /// Builds an arbitrary orthonormal basis around a normal without a branch on the degenerate axis.
 void GiBuildBasis(vec3 n, out vec3 t, out vec3 b)
@@ -88,9 +93,34 @@ void main()
 		return;
 	}
 	world_normal = normalize(world_normal);
-	// Lift off the surface before tracing. A ray starting exactly on the isosurface reads a
-	// distance of zero and terminates immediately, reporting the origin as its own occluder.
-	vec3 origin = world_position + world_normal * u_gi_normal_bias;
+	// Lift off the surface before tracing, in VOXELS of the field that answers here rather than in
+	// world units. A ray starting on the isosurface reads a distance of zero and stops immediately,
+	// reporting its own origin as an occluder -- which is what surface acne is.
+	//
+	// How far out is far enough is set by the field's own resolution, not by any world scale: the
+	// trace accepts a hit within `surface_bias` voxels, so the lift has to clear that. The cascade's
+	// voxel runs from 0.25 m at level 0 to 2 m at the outer level, an eightfold range across one
+	// view, so a single world distance cannot work everywhere. It is either too small far away,
+	// where the acne survives, or far too large near by, where it lifts rays clean over the contact
+	// detail they exist to find. Measured on two scenes before this changed: 0.1 sufficed where
+	// everything sat inside level 0, while a view spanning levels 1-3 still needed 1.0.
+	float origin_voxel;
+	SdfSampleClipmapEx(world_position, origin_voxel);
+	// Floored: with no cascade resident the reported size collapses to an epsilon, and a zero lift
+	// puts every ray back on the surface it started from.
+	origin_voxel = max(origin_voxel, 0.01);
+	// Probed again a lift-length outward, taking the COARSER of the two. A shading point just
+	// inside a fine cascade level has rays that immediately cross into the next one, and both of
+	// the things the lift must clear grow with that level's voxel: the acceptance radius, which is
+	// surface_bias voxels, and -- larger -- the displacement between the cascade's isosurface and
+	// the rendered triangle, since a coarse level represents the wall a whole voxel or more away
+	// from where it actually is. Sizing the lift from the fine level alone leaves the ray starting
+	// inside the coarse level's solid, which is the acne that reappears on crossing a cascade
+	// boundary rather than uniformly across the view.
+	float outward_voxel;
+	SdfSampleClipmapEx(world_position + world_normal * (u_gi_normal_bias * origin_voxel), outward_voxel);
+	origin_voxel = max(origin_voxel, outward_voxel);
+	vec3 origin = world_position + world_normal * (u_gi_normal_bias * origin_voxel);
 	// Decorrelate the sample pattern per pixel AND per frame, so the residual error is noise
 	// that temporal accumulation can average away rather than a fixed pattern that it cannot.
 	uint pixel_seed = GiHashCombine(GiHashUint(uint(gl_FragCoord.x)), uint(gl_FragCoord.y));
@@ -106,7 +136,8 @@ void main()
 		float u2 = float(seed & 0xFFFFu) / 65535.0;
 		vec3 direction = GiCosineDirection(world_normal, u1, u2);
 		SdfRayHit hit = SdfTraceRay(origin, direction, u_gi_max_distance, u_gi_trace_near_field,
-		                            u_gi_trace_max_steps, u_gi_trace_bias, u_gi_trace_relaxation);
+		                            u_gi_trace_max_steps, u_gi_trace_bias, u_gi_trace_relaxation,
+		                            false);
 		// Escaped the scene. Deliberately contributes nothing and does NOT count toward the
 		// weight, which leaves the consumer's own environment probe covering that fraction of
 		// the hemisphere. Sampling the environment here instead would compute the same quantity
@@ -118,17 +149,43 @@ void main()
 		// Same resolve the writer used. Addressing the cache from a raw hit misses, because the
 		// hit sits short of an isosurface that is itself offset from the rendered geometry.
 		SdfSurfacePoint surface = SdfResolveSurfacePoint(origin + direction * hit.t);
+		// Nothing to look up: the hit is outside every cascade level, so no address can be derived
+		// for it. Treated as an unresolved ray rather than as darkness -- it lowers the weight and
+		// leaves the consumer's environment probe covering that part of the hemisphere, which is
+		// the same conservative choice a cache miss makes below.
+		if(!surface.valid)
+		{
+			continue;
+		}
 		uint level = GiCacheLevel(surface.position, u_gi_resolve_camera.xyz);
-		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
+		// Interpolated across the four cells bracketing the hit in its tangent plane, not point
+		// sampled from one. A cell is metres across where a pixel is millimetres, so a point lookup
+		// makes this gather piecewise constant at cell scale -- blocks that shift as the cascade
+		// re-snaps or the level steps. Those are bias rather than noise, so no amount of temporal
+		// accumulation averages them out and no luminance edge stop can remove them without
+		// removing real lighting detail too.
+		//
+		// Explicit if/else rather than a ternary: both arms write through an out parameter, and a
+		// ternary whose arms have side effects is not guaranteed to evaluate only one of them.
+		vec3 cached;
+		bool found;
+		if(u_gi_cache_interpolate > 0.0)
+		{
+			found = GiCacheGatherSurface(surface.position, surface.normal, level, cached);
+		}
+		else
+		{
+			found = GiCacheGatherPoint(surface.position, surface.normal, level, cached);
+		}
 		// A miss contributes NOTHING rather than black. It means this cell has not been lit yet,
 		// not that it is dark, and averaging in a zero would darken exactly the places the cache
 		// has yet to reach. Leaving it out of both sums lowers the weight instead, so the
 		// consumer falls back toward its environment probe there -- the conservative direction.
-		if(slot == GI_CACHE_INVALID_SLOT)
+		if(!found)
 		{
 			continue;
 		}
-		sum += b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz * u_gi_intensity;
+		sum += cached * u_gi_intensity;
 		resolved += 1.0;
 	}
 	if(resolved <= 0.0)

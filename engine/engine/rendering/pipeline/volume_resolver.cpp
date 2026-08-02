@@ -6,6 +6,7 @@
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
+#include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/taa_component.h>
@@ -152,6 +153,7 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_assao = true;
     bool first_ssr = true;
     bool first_ssil = true;
+    bool first_gi = true;
     bool first_taa = true;
     enabled_resolver auto_exposure_enabled;
     enabled_resolver bloom_enabled;
@@ -160,6 +162,7 @@ auto resolve_post_process_volumes(scene& scn,
     enabled_resolver ssr_enabled;
     enabled_resolver assao_enabled;
     enabled_resolver ssil_enabled;
+    enabled_resolver gi_enabled;
     enabled_resolver taa_enabled;
 
     for(const auto& c : contributions)
@@ -241,6 +244,16 @@ auto resolve_post_process_volumes(scene& scn,
                 first_ssil = false;
             }
         }
+
+        if(auto* gi = handle.try_get<gi_component>(); gi && contrib > 0.0f)
+        {
+            gi_enabled.accumulate(gi->enabled, contrib);
+            if(gi->enabled)
+            {
+                gi_component::merge_into(result.gi, gi->settings, contrib, first_gi);
+                first_gi = false;
+            }
+        }
     }
 
     result.has_auto_exposure = auto_exposure_enabled.resolve();
@@ -251,6 +264,7 @@ auto resolve_post_process_volumes(scene& scn,
     result.has_ssr = ssr_enabled.resolve();
     result.has_assao = assao_enabled.resolve();
     result.has_ssil = ssil_enabled.resolve();
+    result.has_gi = gi_enabled.resolve();
 
     return result;
 }

@@ -136,13 +136,20 @@ public:
 
     /// Registers visible surfaces into the world-space radiance cache and lights every
     /// resident entry. See gi_cache_pass.
-    void run_gi_cache_pass(const camera& camera, gfx::render_view& rview);
+    /// Resolves GI settings for this frame. Returns false when a gi_component disabled the
+    /// feature; an absent component leaves the compiled defaults in place and returns true.
+    static auto resolve_gi_settings(const run_params& rparams,
+                                    gi_cache_pass::settings& cache,
+                                    gi_resolve_pass::settings& resolve) -> bool;
+
+    void run_gi_cache_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     /// Gathers the world-space cache into a screen-space indirect diffuse buffer.
     /// See gi_resolve_pass.
     /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
-    auto run_gi_resolve_pass(const camera& camera, gfx::render_view& rview) -> bool;
+    auto run_gi_resolve_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
+        -> bool;
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 

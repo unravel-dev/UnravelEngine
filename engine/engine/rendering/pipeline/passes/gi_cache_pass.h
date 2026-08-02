@@ -2,6 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
 #include <graphics/render_pass.h>
@@ -33,10 +34,20 @@ public:
         /// Surfaces beyond this distance are not registered. Their cells would be enormous and
         /// contribute almost nothing, while still costing an entry each.
         float insert_max_distance = 200.0f;
-        /// How far a cell centre is lifted along its normal before lighting. The centre can sit
-        /// inside the geometry it represents, and shading from inside makes every shadow ray
-        /// start occluded, converging the entry to black.
-        float surface_offset = 0.05f;
+        /// How far the recorded point is lifted along its normal before lighting, as a FRACTION OF
+        /// THIS ENTRY'S CELL.
+        ///
+        /// The stored point is not the sampled surface: insertion snaps it to the cell grid, so it
+        /// can sit up to a cell inside the geometry it represents. That error scales with the cell,
+        /// which runs 0.25 m at level 0 to 2 m at the level cap, so a fixed world distance cannot
+        /// cover both -- at the 0.05 world this used to be, distant entries shaded from inside their
+        /// own surface and converged to black.
+        ///
+        /// Wrong in either direction and neither announces itself. Too small and the far field goes
+        /// black, which is indistinguishable from correct shadowing in the lit image. Too large and
+        /// the entry floats off its surface, shadow rays sail over nearby occluders, and everything
+        /// reads over-lit. Check it in the cache debug view, not the lit one.
+        float surface_offset_cells = 0.5f;
         /// Floor on the accumulation blend weight, so a mature entry keeps following change.
         float min_alpha = 0.05f;
         /// Cap on accumulated samples, which sets how fast a converged entry can still move.
@@ -60,6 +71,58 @@ public:
         float bounce_max_steps = 48.0f;
         /// Hit acceptance as a fraction of a voxel of whichever field answered.
         float bounce_surface_bias = 0.5f;
+
+        // --- Shadow rays ---
+        //
+        // One per light per resident entry, which makes them the densest ray population in the
+        // whole system and usually the reason the update pass costs what it does. They were
+        // hardcoded until they turned out to dominate.
+
+        /// How far a shadow ray travels before giving up and treating the point as lit.
+        float shadow_distance = 80.0f;
+        /// How far along the normal a shadow ray starts, as a FRACTION OF A VOXEL of the level
+        /// covering the point.
+        ///
+        /// Not a world distance, for the same reason @ref gi_resolve_pass::settings::
+        /// normal_bias_voxels is not: what it has to clear is the field's own resolution, and the
+        /// cascade's voxel spans 0.25 m to 2 m. Too small and every shadow ray starts occluded,
+        /// which converges the entry to black -- and a black entry is indistinguishable from a
+        /// correctly shadowed one in the final image, so this fails quietly.
+        ///
+        /// Measured on Bistro. Worth knowing that this only became tunable at all once
+        /// @ref shadow_step_relaxation was non-zero: while grazing rays were exhausting and being
+        /// counted as lit, no value worked -- low blacked the cache and high whitened the image,
+        /// because raising it made exhaustion MORE likely rather than less.
+        float shadow_normal_bias_voxels = 0.35f;
+        /// Range in which a shadow ray traces per-instance fields before the cascade takes over.
+        ///
+        /// The same lever as the resolve pass's near field, and it applies to far more rays. A
+        /// shadow ray only has to answer hit or miss, so it can usually afford a shorter near
+        /// field than a gather ray that has to land somewhere addressable.
+        float shadow_near_field = 30.0f;
+        /// Steps per shadow ray. Tighter than a gather ray's budget on purpose.
+        ///
+        /// An exhausted ray counts as LIT, so running out here does not look like a missing shadow
+        /// -- it looks like a surface that is too bright. Prefer @ref shadow_step_relaxation over
+        /// raising this: relaxation bounds the step count instead of paying for it.
+        float shadow_max_steps = 48.0f;
+        /// Hit acceptance for a shadow ray, as a fraction of a voxel of whichever field answered.
+        float shadow_surface_bias = 0.5f;
+        /// Cone relaxation for shadow rays: acceptance grows by this fraction of distance travelled.
+        ///
+        /// Matters more here than on any other ray in the system. A shadow ray toward a low sun runs
+        /// nearly parallel to the ground, and a grazing sphere trace advances by a distance that
+        /// stays small for its whole length, so it burns the whole budget without resolving -- and
+        /// an exhausted ray is counted as lit. The result is over-bright ground under a low sun,
+        /// with nothing in the image to say a ray gave up.
+        ///
+        /// Both effects point the same way here: it terminates grazing rays sooner (cheaper) and it
+        /// can only ever stop a ray EARLY, never carry it past an occluder, so it errs toward
+        /// finding the shadow rather than missing it.
+        ///
+        /// Measured on Bistro: at zero the ground under a low sun washes out and no normal bias
+        /// fixes it; 0.1 removes the wash and lets the bias drop from 2.0 to 0.35.
+        float shadow_step_relaxation = 0.1f;
         // The cell size, base distance and level cap that KEYS are derived from deliberately do
         // not live here. Every pass touching the cache has to agree on them exactly, so they are
         // owned by the cache itself (radiance_cache_gpu::get_settings).
@@ -70,6 +133,9 @@ public:
         gfx::frame_buffer::ptr g_buffer;
         const camera* cam{};
         surface_cache_service* surface_cache{};
+        /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
+        /// the service without two cameras fighting over one set of levels.
+        surface_cache_view* view_cache{};
         settings settings;
     };
 
@@ -135,6 +201,7 @@ private:
         gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr u_gpu_light_params;
         gfx::program::uniform_ptr u_gi_shadow_params;
+        gfx::program::uniform_ptr u_gi_shadow_params2;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
 
@@ -152,6 +219,7 @@ private:
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gpu_light_params, "u_gpu_light_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_shadow_params, "u_gi_shadow_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_shadow_params2, "u_gi_shadow_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
         }
