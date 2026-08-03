@@ -45,6 +45,14 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
     }
     auto& atlas = surface_cache.get_atlas();
     const auto& clipmap = params.view_cache->get_clipmap();
+    // The finest cascade voxel. Every voxel- or cell-relative bias is held to this rather than
+    // to the level that answered, so a bias stays constant in world units across the cascade
+    // instead of growing eightfold from the inner level to the outer one. Anchored to the
+    // finest level rather than to a world constant so the near field is preserved exactly.
+    const float finest_voxel = clipmap.get_level(0).voxel_size > 0.0f
+                                   ? clipmap.get_level(0).voxel_size
+                                   : clipmap.get_settings().base_extent /
+                                         float(math::max(clipmap.get_settings().resolution, 1u));
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& light_buffer = surface_cache.get_light_buffer();
     const auto& s = params.settings;
@@ -166,7 +174,10 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
                                         s.shadow_near_field,
                                         s.shadow_max_steps};
         gfx::set_uniform(update_program_.u_gi_shadow_params, shadow_params);
-        const float shadow_params2[4] = {s.shadow_surface_bias, s.shadow_step_relaxation, 0.0f, 0.0f};
+        const float shadow_params2[4] = {s.shadow_surface_bias,
+                                        s.shadow_step_relaxation,
+                                        finest_voxel,
+                                        s.shadow_ray_start_voxels};
         gfx::set_uniform(update_program_.u_gi_shadow_params2, shadow_params2);
         gfx::set_uniform(update_program_.u_gi_cache_params, cache_params);
         gfx::set_uniform(update_program_.u_gi_cache_params2, cache_params2);

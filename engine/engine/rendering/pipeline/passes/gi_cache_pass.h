@@ -120,6 +120,22 @@ public:
         /// -- it looks like a surface that is too bright. Prefer @ref shadow_step_relaxation over
         /// raising this: relaxation bounds the step count instead of paying for it.
         float shadow_max_steps = 48.0f;
+        /// How far along its OWN DIRECTION a SHADOW ray starts, in voxels of the level covering the
+        /// point.
+        ///
+        /// This does the job a large normal bias was doing, without its cost. Both skip the
+        /// region where a ray would hit the surface it started on -- unavoidable, because the
+        /// ray originates on the RASTER surface while it is traced against the SDF, and those
+        /// disagree by up to a voxel.
+        ///
+        /// The difference is what they do to the shading point. A normal offset MOVES it, so it
+        /// sees past nearby geometry and everything reads over-lit -- and since the offset has
+        /// to be large enough for the worst ray, that over-lighting is paid by every ray. This
+        /// leaves the point exactly where it is and skips only along the ray, so occlusion
+        /// stays correct.
+        ///
+        /// Raise this and lower the normal bias, not the other way round.
+        float shadow_ray_start_voxels = 1.0f;
         /// Hit acceptance for a shadow ray, as a fraction of a voxel of whichever field answered.
         float shadow_surface_bias = 0.35f;
         /// Cone relaxation for shadow rays: acceptance grows by this fraction of distance travelled.

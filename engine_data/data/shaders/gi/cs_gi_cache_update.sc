@@ -150,7 +150,39 @@ void main()
 	// and the far field goes black, too large and the entry floats off its surface so shadow rays
 	// sail over nearby occluders and everything reads over-lit. Scaling by the cell is what makes
 	// one value work at every level instead of trading one end against the other.
-	vec3 position = position_data.xyz + normal * (u_gi_update_surface_offset * entry_cell_size);
+	// Cell-relative so it scales with the entry's own quantisation error, then clamped so it
+	// cannot reach the metre it would at the outer cascade, where it lifts the entry clear of
+	// its own surface and every shadow ray sails over nearby occluders.
+	// Scales with THIS entry's cell and is deliberately NOT clamped to the finest one, unlike
+	// every other bias here.
+	//
+	// The others clear the FIELD's error -- how far the isosurface sits from the real surface --
+	// which is a property of the level that answered and can be held to the finest level at the
+	// cost of some acne. This clears the entry's own QUANTISATION error: insertion snaps the
+	// position to the cell grid, so the entry can genuinely BE up to a cell inside its geometry,
+	// and at the coarsest level that is metres. Clamping it does not move the entry back out --
+	// it just leaves it buried, so every shadow ray starts occluded and the far field converges
+	// to black. That was measured: clamping this produced pure black patches at distance while
+	// clamping the others only produced acne.
+	float lift_target = u_gi_update_surface_offset * entry_cell_size;
+	// MEASURED, not guessed -- and the measurement is free: surface_distance was already sampled
+	// above for the retirement test.
+	//
+	// A fixed fraction of the cell has to assume the worst case for every entry, and near the camera
+	// the cell is SMALL, so that fraction is a small world distance. It cannot clear a surface with
+	// relief of its own: on rusticated stone the entry snaps to a cell centre inside the groove,
+	// every shadow ray starts occluded, and the entry converges to black. Neighbouring cells that
+	// happen to snap outside stay lit, which is the checkerboard the cache view shows near a wall.
+	//
+	// Using the distance the cascade reports at the entry pushes out by exactly what is needed:
+	// nothing where the entry already sits clear, and target + depth where it is buried. Guarded on
+	// coverage, since outside every level the reading carries no information.
+	float surface_offset = lift_target;
+	if(surface_distance < SDF_CLIPMAP_OUTSIDE)
+	{
+		surface_offset = max(lift_target, lift_target - surface_distance);
+	}
+	vec3 position = position_data.xyz + normal * surface_offset;
 
 	// Direct IRRADIANCE arriving at the cell.
 	// The voxel size is already in hand from the retirement check above, so the shadow rays' own
@@ -170,6 +202,16 @@ void main()
 		// in the same frame instead of all sampling the same one and correlating their error.
 		uint seed = GiHashCombine(GiHashUint(slot), u_gi_cache_frame);
 		vec3 bounce = vec3_splat(0.0);
+		// Rays that actually MEASURED something, which is not the same as rays cast.
+		//
+		// A ray that escapes measured "no light from that direction" and must count: with no sky
+		// term that is a real zero. A ray discarded for landing back on its OWN cell measured
+		// nothing at all -- it is a failure to sample, not a sample of darkness -- and counting it
+		// scales the surviving rays down by the self-hit fraction. In a shadowed recess, where
+		// direct is legitimately zero and most rays graze their own surface, that drives the cell
+		// to black and holds it there: converged, stable, and wrong. Adding bounce rays cannot
+		// help, because every extra ray is discarded and divided by too.
+		float bounce_samples = 0.0;
 		for(int i = 0; i < bounce_rays; ++i)
 		{
 			seed = GiHashUint(seed);
@@ -182,6 +224,8 @@ void main()
 			                            u_gi_bounce_bias, 0.0, false);
 			if(!hit.hit)
 			{
+				// Escaped: a genuine measurement of zero, so it counts.
+				bounce_samples += 1.0;
 				continue;
 			}
 			// Resolved onto the field, exactly as the writer and every other reader does. A raw
@@ -266,11 +310,12 @@ void main()
 				}
 			}
 			bounce += b_gi_cache_data[GiCacheDataIndex(hit_slot, GI_CACHE_DATA_RADIANCE)].xyz;
+			bounce_samples += 1.0;
 		}
 		// Cosine-weighted directions make the plain mean an estimate of radiance, so multiplying
 		// by PI converts it to the irradiance the direct term is already in. Keeping both in one
 		// unit is what lets a single albedo multiply apply to the whole sum below.
-		irradiance += bounce * (GI_PI / float(bounce_rays));
+		irradiance += bounce * (GI_PI / max(bounce_samples, 1.0));
 	}
 
 	// Convert arriving irradiance into the radiance this surface EMITS back into the scene. This

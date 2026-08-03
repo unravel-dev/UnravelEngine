@@ -208,6 +208,25 @@ REFLECT_INLINE(gi_cache_pass::settings)
                                        "onto a region.\nPrefer Shadow Step Relaxation over raising this "
                                        "-- relaxation bounds the step count rather than paying for it."},
         })
+        .data<&settings::shadow_ray_start_voxels>("shadow_ray_start_voxels"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_ray_start_voxels"},
+            entt::attribute{"pretty_name", "Shadow Ray Start (voxels)"},
+            entt::attribute{"group", "Shadow"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 8.0f},
+            entt::attribute{"tooltip",
+                            "How far along its OWN direction a ray starts, in voxels of the "
+                            "level covering the point. This does the job a large normal bias "
+                            "was doing, without its cost. Both skip the region where a ray "
+                            "would hit the surface it started on, which is unavoidable: the ray "
+                            "originates on the RASTER surface but is traced against the SDF, "
+                            "and those disagree by up to a voxel. The difference is that a "
+                            "normal offset MOVES the shading point, so it sees past nearby "
+                            "geometry and everything reads over-lit, while this leaves the "
+                            "point where it is. Raise this and lower the normal bias, not the "
+                            "other way round."},
+        })
         .data<&settings::shadow_surface_bias>("shadow_surface_bias"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_surface_bias"},
@@ -346,6 +365,42 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "direction only: it widens what counts as a HIT and never the "
                                        "step, so it can stop a ray early but never carry it through a "
                                        "wall. It cannot leak light. It CAN over-occlude at range."},
+        })
+        .data<&settings::ray_start_voxels>("ray_start_voxels"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ray_start_voxels"},
+            entt::attribute{"pretty_name", "Ray Start (voxels)"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 8.0f},
+            entt::attribute{"tooltip",
+                            "How far along its OWN direction a ray starts, in voxels of the "
+                            "level covering the point. This does the job a large normal bias "
+                            "was doing, without its cost. Both skip the region where a ray "
+                            "would hit the surface it started on, which is unavoidable: the ray "
+                            "originates on the RASTER surface but is traced against the SDF, "
+                            "and those disagree by up to a voxel. The difference is that a "
+                            "normal offset MOVES the shading point, so it sees past nearby "
+                            "geometry and everything reads over-lit, while this leaves the "
+                            "point where it is. Raise this and lower the normal bias, not the "
+                            "other way round."},
+        })
+        .data<&settings::debug_ray_diagnostics>("debug_ray_diagnostics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "debug_ray_diagnostics"},
+            entt::attribute{"pretty_name", "Debug: Ray Diagnostics"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 2},
+            entt::attribute{"tooltip",
+                            "Replace the GI output with a per-ray diagnostic. 1 = which STAGE "
+                            "fails: a ray contributes light only if it HITS geometry (red), its "
+                            "hit can be ADDRESSED (green), and a cache entry is FOUND there "
+                            "(blue); the dark channel names the stage, white is a working pixel. "
+                            "2 = where the rays LANDED: red is the fraction hitting within four "
+                            "voxels of their own origin, which means the gather is reading the "
+                            "surface it is shading and feeding it back. Mode 1 cannot see that, "
+                            "because a self-hit succeeds at every stage."},
         })
         .data<&settings::interpolate_cache>("interpolate_cache"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -676,6 +731,7 @@ SAVE_INLINE(gi_cache_pass::settings)
     try_save(ar, ser20::make_nvp("shadow_near_field", obj.shadow_near_field));
     try_save(ar, ser20::make_nvp("shadow_max_steps", obj.shadow_max_steps));
     try_save(ar, ser20::make_nvp("shadow_surface_bias", obj.shadow_surface_bias));
+    try_save(ar, ser20::make_nvp("shadow_ray_start_voxels", obj.shadow_ray_start_voxels));
     try_save(ar, ser20::make_nvp("shadow_step_relaxation", obj.shadow_step_relaxation));
 }
 SAVE_INSTANTIATE(gi_cache_pass::settings, ser20::oarchive_associative_t);
@@ -702,6 +758,7 @@ LOAD_INLINE(gi_cache_pass::settings)
     try_load(ar, ser20::make_nvp("shadow_near_field", obj.shadow_near_field));
     try_load(ar, ser20::make_nvp("shadow_max_steps", obj.shadow_max_steps));
     try_load(ar, ser20::make_nvp("shadow_surface_bias", obj.shadow_surface_bias));
+    try_load(ar, ser20::make_nvp("shadow_ray_start_voxels", obj.shadow_ray_start_voxels));
     try_load(ar, ser20::make_nvp("shadow_step_relaxation", obj.shadow_step_relaxation));
 }
 LOAD_INSTANTIATE(gi_cache_pass::settings, ser20::iarchive_associative_t);
@@ -718,6 +775,8 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_save(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));
     try_save(ar, ser20::make_nvp("interpolate_cache", obj.interpolate_cache));
+    try_save(ar, ser20::make_nvp("debug_ray_diagnostics", obj.debug_ray_diagnostics));
+    try_save(ar, ser20::make_nvp("ray_start_voxels", obj.ray_start_voxels));
     try_save(ar, ser20::make_nvp("occlude_on_cache_miss", obj.occlude_on_cache_miss));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
@@ -752,6 +811,8 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_load(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));
     try_load(ar, ser20::make_nvp("interpolate_cache", obj.interpolate_cache));
+    try_load(ar, ser20::make_nvp("debug_ray_diagnostics", obj.debug_ray_diagnostics));
+    try_load(ar, ser20::make_nvp("ray_start_voxels", obj.ray_start_voxels));
     try_load(ar, ser20::make_nvp("occlude_on_cache_miss", obj.occlude_on_cache_miss));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));

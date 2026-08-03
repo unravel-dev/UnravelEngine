@@ -106,6 +106,36 @@ public:
         /// integrate over.
         ///
         /// Off restores the point lookup, for comparison without a rebuild.
+        /// How far along its OWN DIRECTION a ray starts, in voxels of the level covering the
+        /// point.
+        ///
+        /// This does the job a large normal bias was doing, without its cost. Both skip the
+        /// region where a ray would hit the surface it started on -- unavoidable, because the
+        /// ray originates on the RASTER surface while it is traced against the SDF, and those
+        /// disagree by up to a voxel.
+        ///
+        /// The difference is what they do to the shading point. A normal offset MOVES it, so it
+        /// sees past nearby geometry and everything reads over-lit -- and since the offset has
+        /// to be large enough for the worst ray, that over-lighting is paid by every ray. This
+        /// leaves the point exactly where it is and skips only along the ray, so occlusion
+        /// stays correct.
+        ///
+        /// Raise this and lower the normal bias, not the other way round.
+        float ray_start_voxels = 1.0f;
+        /// Replace the radiance output with a per-ray failure diagnostic.
+        ///
+        /// A gather ray contributes light only if it HITS geometry, its hit can be ADDRESSED,
+        /// and a cache entry is FOUND there. Those three fail for completely different
+        /// reasons and are indistinguishable in the lit image -- all three read as "dark".
+        /// This shows them as R, G and B, so whichever channel is dark names the stage at
+        /// fault instead of leaving it to be inferred.
+        /// 0 = off. 1 = per-ray STAGE diagnostic (hit / addressed / found as R / G / B).
+        /// 2 = per-ray DISTANCE diagnostic: R is the fraction of rays hitting within four
+        /// voxels of their origin -- a self-hit, where the gather reads the radiance of the
+        /// very surface it is shading and feeds it back. Mode 1 cannot see that, because a
+        /// self-hit succeeds at every stage; it is the difference every origin-offset knob
+        /// actually moves.
+        int debug_ray_diagnostics = 0;
         bool interpolate_cache = true;
         /// Treat a ray that HIT geometry but found no cache entry as occluded rather than as
         /// unknown.
@@ -260,6 +290,7 @@ private:
         gfx::program::uniform_ptr u_gi_resolve_trace;
         gfx::program::uniform_ptr u_gi_resolve_camera;
         gfx::program::uniform_ptr u_gi_resolve_filter;
+        gfx::program::uniform_ptr u_gi_resolve_debug;
         gfx::program::uniform_ptr u_gi_cache_params;
         gfx::program::uniform_ptr u_gi_cache_params2;
         gfx::program::uniform_ptr u_sdf_params;
@@ -277,6 +308,7 @@ private:
             cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_debug, "u_gi_resolve_debug", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);

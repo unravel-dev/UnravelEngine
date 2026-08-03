@@ -872,11 +872,21 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		float d = SdfSampleClipmapEx(p, voxel);
 		++result.steps;
 		float base_threshold = max(surface_bias * voxel, 1e-6);
-		// Capped at what the cascade can represent, for the same reason the per-instance tier is:
-		// the levels saturate at encode_range voxels, so a cone radius grown past that makes every
-		// saturated sample read as a hit and the cascade reads solid everywhere beyond the distance
-		// at which t * relaxation overtakes it.
-		float accept = min(SdfConeRadius(t, base_threshold, relaxation), u_sdf_clipmap_encode_range * voxel);
+		// Capped at ONE voxel, not at the encode range.
+		//
+		// The correctness bound is the encode range: the levels saturate at that many voxels, so a
+		// cone grown past it makes every saturated sample read as a hit and the cascade reads solid.
+		// But the useful bound is far tighter. A cone radius is over-occlusion by construction -- it
+		// accepts a hit the ray never actually reached -- and the ray most affected is one grazing
+		// along the surface it STARTED on, which is every gather ray on a flat wall.
+		//
+		// That ray sits `lift` above its own surface and is caught once the radius reaches it, at
+		// t = lift / relaxation. With the radius free to grow to four voxels it keeps being caught
+		// however far it travels; capping at one voxel bounds the damage to geometry the cascade
+		// genuinely cannot resolve anyway. The visible symptom of the loose cap was darkening that
+		// appeared as the camera APPROACHED a wall -- closer means a finer level, a smaller voxel,
+		// and so a smaller lift, while the cone kept growing at the same rate.
+		float accept = min(SdfConeRadius(t, base_threshold, relaxation), voxel);
 		if(d < accept)
 		{
 			result.hit = true;

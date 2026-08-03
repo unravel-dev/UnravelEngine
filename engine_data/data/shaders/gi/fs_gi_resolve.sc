@@ -52,6 +52,25 @@ uniform vec4 u_gi_resolve_camera;
 uniform vec4 u_gi_resolve_filter;
 #define u_gi_cache_interpolate     u_gi_resolve_filter.x
 #define u_gi_occlude_on_cache_miss (u_gi_resolve_filter.y > 0.0)
+/// The FINEST cascade voxel, which the voxel-relative normal bias is held to. Cascade voxels
+/// span 0.25 m to 2 m, so an unbounded bias lifts distant shading points METRES off their
+/// surfaces and the far field reads brighter than the near one.
+#define u_gi_finest_voxel          u_gi_resolve_filter.z
+/// How far along its OWN DIRECTION a gather ray starts, in voxels. See
+/// gi_resolve_pass::settings::ray_start_voxels: this does the self-intersection job a normal
+/// offset was doing, without moving the shading point off its surface.
+#define u_gi_ray_start             u_gi_resolve_filter.w
+
+/// x != 0 replaces the radiance output with a per-ray DIAGNOSTIC, so the three ways a gather
+/// ray can fail are separable in one view instead of inferred from the lit image:
+///   R = fraction of rays that HIT geometry at all (low means rays escape to sky)
+///   G = fraction whose hit could be ADDRESSED (low means SdfResolveSurfacePoint failed)
+///   B = fraction that FOUND a cache entry there (low means the lookup misses)
+/// A ray contributes light only when all three succeed, so whichever channel is dark is the
+/// stage at fault. Every hypothesis about darkening is a claim about one of these numbers.
+uniform vec4 u_gi_resolve_debug;
+#define u_gi_debug_mode    int(u_gi_resolve_debug.x)
+#define u_gi_debug_enabled (u_gi_debug_mode > 0)
 
 /// Builds an arbitrary orthonormal basis around a normal without a branch on the degenerate axis.
 void GiBuildBasis(vec3 n, out vec3 t, out vec3 b)
@@ -106,7 +125,10 @@ void main()
 	// detail they exist to find. Measured on two scenes before this changed: 0.1 sufficed where
 	// everything sat inside level 0, while a view spanning levels 1-3 still needed 1.0.
 	float origin_voxel;
-	SdfSampleClipmapEx(world_position, origin_voxel);
+	// The DISTANCE matters here, not only the voxel size. It says how far the cascade thinks this
+	// point is from its own isosurface, which is exactly the quantity a lift has to clear -- and it
+	// was already being computed and discarded.
+	float origin_distance = SdfSampleClipmapEx(world_position, origin_voxel);
 	// Floored: with no cascade resident the reported size collapses to an epsilon, and a zero lift
 	// puts every ray back on the surface it started from.
 	origin_voxel = max(origin_voxel, 0.01);
@@ -121,13 +143,36 @@ void main()
 	float outward_voxel;
 	SdfSampleClipmapEx(world_position + world_normal * (u_gi_normal_bias * origin_voxel), outward_voxel);
 	origin_voxel = max(origin_voxel, outward_voxel);
-	vec3 origin = world_position + world_normal * (u_gi_normal_bias * origin_voxel);
+	// MEASURED, not guessed. The lift needed is however far this point is from where the cascade
+	// thinks the surface is, plus the margin a trace needs to not re-hit it -- and the field just
+	// reported the first term. A fixed multiple of the voxel has to assume the worst case for every
+	// pixel, because it cannot tell a point the cascade already agrees with from one displaced a
+	// whole voxel; that worst case is what forced the bias up to metres and lifted every ray clean
+	// over the contact detail it exists to find.
+	//
+	// Where the cascade already places the surface correctly this is ZERO and the shading point is
+	// not moved at all. Where a coarse level puts the wall a voxel away it pushes exactly that far
+	// and no further, so the cost is paid only by the pixels that need it.
+	//
+	// A ray-start offset cannot replace this: it clears a perpendicular distance of t * cos(theta),
+	// so a grazing ray needs an unbounded start to clear the same gap. The normal direction is the
+	// only one where a bounded push works for every ray at once.
+	float lift_target = u_gi_normal_bias * origin_voxel;
+	float lift = max(0.0, lift_target - origin_distance);
+	vec3 origin = world_position + world_normal * lift;
 	// Decorrelate the sample pattern per pixel AND per frame, so the residual error is noise
 	// that temporal accumulation can average away rather than a fixed pattern that it cannot.
 	uint pixel_seed = GiHashCombine(GiHashUint(uint(gl_FragCoord.x)), uint(gl_FragCoord.y));
 	uint seed = GiHashCombine(pixel_seed, u_gi_frame_index);
 	vec3 sum = vec3_splat(0.0);
 	float resolved = 0.0;
+	float debug_hit = 0.0;
+	float debug_addressed = 0.0;
+	// Where the hit LANDED, not merely that there was one. A ray that re-hits the surface it
+	// started on looks identical to one that travelled twenty metres in every stage counter, and
+	// that is the difference every bias knob actually moves.
+	float debug_near_hits = 0.0;
+	float debug_total_t = 0.0;
 	int ray_count = max(u_gi_ray_count, 1);
 	for(int i = 0; i < ray_count; ++i)
 	{
@@ -136,7 +181,17 @@ void main()
 		seed = GiHashUint(seed);
 		float u2 = float(seed & 0xFFFFu) / 65535.0;
 		vec3 direction = GiCosineDirection(world_normal, u1, u2);
-		SdfRayHit hit = SdfTraceRay(origin, direction, u_gi_max_distance, u_gi_trace_near_field,
+		// Start the ray along its OWN direction rather than pushing the origin further out along the
+		// normal. Both skip the region where the ray would hit the surface it started on, but a
+		// normal offset MOVES THE SHADING POINT: the point then sees past nearby geometry, which is
+		// over-lighting that no amount of tuning removes because it is what the offset does. Starting
+		// along the ray leaves the point exactly on its surface, so occlusion stays correct.
+		//
+		// It is also cheaper for the same immunity. What has to be cleared is a perpendicular
+		// distance -- the gap between the cascade isosurface and the rendered triangle -- and a
+		// normal offset pays it in full for every ray, including the grazing ones that need it least.
+		vec3 ray_origin = origin + direction * (u_gi_ray_start * origin_voxel);
+		SdfRayHit hit = SdfTraceRay(ray_origin, direction, u_gi_max_distance, u_gi_trace_near_field,
 		                            u_gi_trace_max_steps, u_gi_trace_bias, u_gi_trace_relaxation,
 		                            false);
 		// Escaped the scene. Deliberately contributes nothing and does NOT count toward the
@@ -147,9 +202,17 @@ void main()
 		{
 			continue;
 		}
+		debug_hit += 1.0;
+		debug_total_t += hit.t;
+		// "Near" measured in VOXELS of the field that answered, because that is the scale the
+		// isosurface can be displaced by, and so the scale a self-hit happens at.
+		if(hit.t < 4.0 * origin_voxel)
+		{
+			debug_near_hits += 1.0;
+		}
 		// Same resolve the writer used. Addressing the cache from a raw hit misses, because the
 		// hit sits short of an isosurface that is itself offset from the rendered geometry.
-		SdfSurfacePoint surface = SdfResolveSurfacePoint(origin + direction * hit.t);
+		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + direction * hit.t);
 		// Nothing to look up: the hit is outside every cascade level, so no address can be derived
 		// for it. Treated as an unresolved ray rather than as darkness -- it lowers the weight and
 		// leaves the consumer's environment probe covering that part of the hemisphere, which is
@@ -158,6 +221,7 @@ void main()
 		{
 			continue;
 		}
+		debug_addressed += 1.0;
 		// Level and its cross-fade weight together: crossing a level boundary re-keys the surface,
 		// so a reader that consults only one level loses every entry built at the other one and
 		// falls back to the environment probe -- GI dimming as the camera closes in.
@@ -206,6 +270,28 @@ void main()
 		}
 		sum += cached * u_gi_intensity;
 		resolved += 1.0;
+	}
+	if(u_gi_debug_enabled)
+	{
+		float inv_rays = 1.0 / float(ray_count);
+		if(u_gi_debug_mode >= 2)
+		{
+			// Mode 2: WHERE the rays landed.
+			//   R = fraction that hit within 4 voxels of the origin -- a self-hit on the surface
+			//       being shaded, which returns that surface's OWN radiance as its incoming light.
+			//   G = mean hit distance, scaled so mid grey is a tenth of the ray budget.
+			//   B = fraction that resolved at all, for reference.
+			// Red means the gather is reading itself; that is a feedback loop no ray count can fix
+			// and it is what a larger origin offset papers over.
+			float mean_t = debug_hit > 0.0 ? debug_total_t / debug_hit : 0.0;
+			gl_FragColor = vec4(debug_near_hits * inv_rays,
+			                    saturate(mean_t / max(u_gi_max_distance * 0.1, 1e-3)),
+			                    resolved * inv_rays,
+			                    1.0);
+			return;
+		}
+		gl_FragColor = vec4(debug_hit * inv_rays, debug_addressed * inv_rays, resolved * inv_rays, 1.0);
+		return;
 	}
 	if(resolved <= 0.0)
 	{

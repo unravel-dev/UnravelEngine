@@ -90,6 +90,9 @@ public:
         result.cache.shadow_near_field =
             std::lerp(result.cache.shadow_near_field, from.cache.shadow_near_field, contribution);
         result.cache.shadow_max_steps = dominant ? from.cache.shadow_max_steps : result.cache.shadow_max_steps;
+        result.cache.shadow_ray_start_voxels = std::lerp(result.cache.shadow_ray_start_voxels,
+                                                         from.cache.shadow_ray_start_voxels,
+                                                         contribution);
         result.cache.shadow_surface_bias =
             std::lerp(result.cache.shadow_surface_bias, from.cache.shadow_surface_bias, contribution);
         result.cache.shadow_step_relaxation =
@@ -108,6 +111,10 @@ public:
         result.resolve.surface_bias = std::lerp(result.resolve.surface_bias, from.resolve.surface_bias, contribution);
         result.resolve.step_relaxation =
             std::lerp(result.resolve.step_relaxation, from.resolve.step_relaxation, contribution);
+        result.resolve.ray_start_voxels =
+            std::lerp(result.resolve.ray_start_voxels, from.resolve.ray_start_voxels, contribution);
+        result.resolve.debug_ray_diagnostics =
+            dominant ? from.resolve.debug_ray_diagnostics : result.resolve.debug_ray_diagnostics;
         result.resolve.interpolate_cache = dominant ? from.resolve.interpolate_cache : result.resolve.interpolate_cache;
         result.resolve.occlude_on_cache_miss =
             dominant ? from.resolve.occlude_on_cache_miss : result.resolve.occlude_on_cache_miss;

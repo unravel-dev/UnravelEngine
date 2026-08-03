@@ -40,6 +40,11 @@ uniform vec4 u_gi_shadow_params;
 uniform vec4 u_gi_shadow_params2;
 #define u_gi_shadow_surface_bias u_gi_shadow_params2.x
 #define u_gi_shadow_relaxation   u_gi_shadow_params2.y
+/// The FINEST cascade voxel, which the voxel-relative normal bias below is held to.
+#define u_gi_shadow_finest_voxel u_gi_shadow_params2.z
+/// How far along the ray a shadow ray starts, in voxels. Same reasoning as the gather ray:
+/// see gi_resolve_pass::settings::ray_start_voxels.
+#define u_gi_shadow_ray_start    u_gi_shadow_params2.w
 
 /**
  * Visibility from a surface point toward a light. 1 is fully lit, 0 fully occluded.
@@ -59,13 +64,17 @@ uniform vec4 u_gi_shadow_params2;
 float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float light_distance,
                     float voxel_size)
 {
-	float offset = u_gi_shadow_normal_bias * voxel_size;
+	float offset = u_gi_shadow_normal_bias * min(voxel_size, u_gi_shadow_finest_voxel);
 	vec3 origin = world_position + world_normal * offset;
 	float max_distance = min(light_distance, u_gi_shadow_distance);
 	if(max_distance <= offset)
 	{
 		return 1.0;
 	}
+	// Along the ray rather than further along the normal, for the reason the gather ray gives:
+	// a normal offset moves the shaded point and lets it see past nearby occluders, which reads as
+	// a surface that is simply too bright with nothing to say why.
+	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
 	SdfRayHit hit = SdfTraceRay(origin, to_light, max_distance, u_gi_shadow_near_field,
 	                            u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
 	                            u_gi_shadow_relaxation, false);

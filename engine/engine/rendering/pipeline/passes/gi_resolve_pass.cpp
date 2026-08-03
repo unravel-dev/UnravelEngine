@@ -130,6 +130,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     }
     auto& atlas = surface_cache.get_atlas();
     const auto& clipmap = params.view_cache->get_clipmap();
+    // The finest cascade voxel. Every voxel- or cell-relative bias is held to this rather than
+    // to the level that answered, so a bias stays constant in world units across the cascade
+    // instead of growing eightfold from the inner level to the outer one. Anchored to the
+    // finest level rather than to a world constant so the near field is preserved exactly.
+    const float finest_voxel = clipmap.get_level(0).voxel_size > 0.0f
+                                   ? clipmap.get_level(0).voxel_size
+                                   : clipmap.get_settings().base_extent /
+                                         float(math::max(clipmap.get_settings().resolution, 1u));
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& s = params.settings;
 
@@ -204,9 +212,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     // correct on a single frame.
     const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f,
                                     s.occlude_on_cache_miss ? 1.0f : 0.0f,
-                                    0.0f,
-                                    0.0f};
+                                    finest_voxel,
+                                    s.ray_start_voxels};
     gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
+    const float debug_params[4] = {float(s.debug_ray_diagnostics), 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(resolve_program_.u_gi_resolve_debug, debug_params);
 
     auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
