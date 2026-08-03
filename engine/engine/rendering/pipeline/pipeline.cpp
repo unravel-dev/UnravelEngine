@@ -73,6 +73,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     ssr_pass_.init(ctx);
     hiz_pass_.init(ctx);
     ssil_pass_.init(ctx);
+    gi_clipmap_compose_pass_.init(ctx);
     gi_cache_pass_.init(ctx);
     gi_resolve_pass_.init(ctx);
     sdf_debug_pass_.init(ctx);
@@ -345,13 +346,11 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
 
     if(auto gi_comp = camera_ent.try_get<gi_component>(); gi_comp && gi_comp->enabled)
     {
-        params.fill_gi_params = [camera_ent](gi_cache_pass::settings& cache,
-                                             gi_resolve_pass::settings& resolve)
+        params.fill_gi_params = [camera_ent](gi_settings& gi)
         {
             if(auto gi_comp = camera_ent.try_get<gi_component>())
             {
-                cache = gi_comp->settings.cache;
-                resolve = gi_comp->settings.resolve;
+                gi = gi_comp->settings;
             }
         };
     }
@@ -427,10 +426,9 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     if(resolved.has_gi)
     {
         gi_settings s = resolved.gi;
-        params.fill_gi_params = [s](gi_cache_pass::settings& cache, gi_resolve_pass::settings& resolve)
+        params.fill_gi_params = [s](gi_settings& gi)
         {
-            cache = s.cache;
-            resolve = s.resolve;
+            gi = s;
         };
     }
     if(params.fill_taa_params)

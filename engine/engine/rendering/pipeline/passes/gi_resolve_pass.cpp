@@ -202,7 +202,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     // Independent of temporal accumulation, deliberately: the interpolation is deterministic, so
     // unlike a stochastic lookup it needs nothing downstream to average it back out and is just as
     // correct on a single frame.
-    const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f,
+                                    s.occlude_on_cache_miss ? 1.0f : 0.0f,
+                                    0.0f,
+                                    0.0f};
     gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
 
     auto topology = gfx::clip_quad(1.0f);

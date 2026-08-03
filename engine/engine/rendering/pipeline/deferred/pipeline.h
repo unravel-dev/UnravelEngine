@@ -138,9 +138,7 @@ public:
     /// resident entry. See gi_cache_pass.
     /// Resolves GI settings for this frame. Returns false when a gi_component disabled the
     /// feature; an absent component leaves the compiled defaults in place and returns true.
-    static auto resolve_gi_settings(const run_params& rparams,
-                                    gi_cache_pass::settings& cache,
-                                    gi_resolve_pass::settings& resolve) -> bool;
+    static auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
 
     void run_gi_cache_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 

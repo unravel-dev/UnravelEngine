@@ -21,9 +21,11 @@
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
 #include "passes/gi_cache_pass.h"
+#include "passes/gi_clipmap_compose_pass.h"
 #include "passes/gi_resolve_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/gi_cache_pass.h"
+#include "passes/gi_clipmap_compose_pass.h"
 #include "passes/gi_resolve_pass.h"
 #include "passes/sdf_debug_pass.h"
 #include "passes/bloom_pass.h"
@@ -153,7 +155,7 @@ public:
         /// resolved from different sources would describe two different configurations.
         /// Surface cache GI. Unset means off, exactly like the hooks above -- the feature runs only
         /// where a gi_component asks for it.
-        std::function<void(gi_cache_pass::settings&, gi_resolve_pass::settings&)> fill_gi_params;
+        std::function<void(gi_settings&)> fill_gi_params;
     };
 
     pipeline() = default;
@@ -260,6 +262,7 @@ protected:
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
+    gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
     gi_cache_pass gi_cache_pass_{};
     gi_resolve_pass gi_resolve_pass_{};
     sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h

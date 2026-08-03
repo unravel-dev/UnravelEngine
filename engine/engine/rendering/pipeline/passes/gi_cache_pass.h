@@ -64,10 +64,24 @@ public:
         /// looks at the surface. Below one either way, which is what keeps the bounce feedback
         /// loop convergent -- each bounce carries less energy than the last.
         float default_albedo = 0.5f;
+        /// Ceiling on any cell's albedo, whatever its material says.
+        ///
+        /// A bounce ray reads other entries' radiance and the update writes this one's, so the
+        /// recursion is L = albedo * mean(L_in) and the loop gain PER CHANNEL is exactly the albedo.
+        /// At 1.0 a sealed room conserves light forever -- it neither converges nor diverges, which
+        /// presents as a cache that never invalidates rather than as anything obviously wrong. Above
+        /// 1.0 indirect climbs without bound.
+        ///
+        /// sRGB 255 is linear 1.0, so a pure authored colour lands exactly on that unstable point.
+        /// @ref default_albedo cannot prevent it: that supplies a value where none exists, and an
+        /// entry stops using it the moment an on-screen pixel registers a real material.
+        ///
+        /// Set to 1 to restore the unclamped behaviour for comparison.
+        float max_albedo = 0.9f;
         /// How far a bounce ray travels. Shorter than a gather ray on purpose: this runs for every
         /// resident entry, and the near field is where the bounce actually matters.
         float bounce_distance = 40.0f;
-        float bounce_near_field = 0.0f;
+        float bounce_near_field = 5.0f;
         float bounce_max_steps = 48.0f;
         /// Hit acceptance as a fraction of a voxel of whichever field answered.
         float bounce_surface_bias = 0.35f;
@@ -99,7 +113,7 @@ public:
         /// The same lever as the resolve pass's near field, and it applies to far more rays. A
         /// shadow ray only has to answer hit or miss, so it can usually afford a shorter near
         /// field than a gather ray that has to land somewhere addressable.
-        float shadow_near_field = 0.0f;
+        float shadow_near_field = 10.0f;
         /// Steps per shadow ray. Tighter than a gather ray's budget on purpose.
         ///
         /// An exhausted ray counts as LIT, so running out here does not look like a missing shadow
@@ -194,6 +208,7 @@ private:
         gfx::program::uniform_ptr u_gi_cache_params2;
         gfx::program::uniform_ptr u_gi_update_params;
         gfx::program::uniform_ptr u_gi_update_bounce;
+        gfx::program::uniform_ptr u_gi_update_material;
         gfx::program::uniform_ptr u_gi_update_camera;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -211,6 +226,7 @@ private:
             cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_update_params, "u_gi_update_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_update_bounce, "u_gi_update_bounce", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_update_material, "u_gi_update_material", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_update_camera, "u_gi_update_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);

@@ -22,7 +22,12 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
     }
     // Trilinear, clamped. The sampler is only ever addressed with a half-voxel margin inside a
     // level, so filtering cannot reach across the slab boundary into the next cascade.
-    const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP;
+    //
+    // COMPUTE_WRITE so cs_gi_clipmap_compose can write the voxels in place. It costs nothing when
+    // composition runs on the CPU -- the texture is still updated by update_texture_3d -- and
+    // without it the image binding silently produces no writes rather than an error.
+    const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP |
+                           BGFX_TEXTURE_COMPUTE_WRITE;
     texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(depth),
@@ -83,6 +88,17 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
     sampling_params_[1] = clipmap_settings.blend_voxels;
     sampling_params_[2] = clipmap_settings.encode_range;
     sampling_params_[3] = 1.0f;
+    // When the voxels are composed by a dispatch there is nothing to send, and the dirty mask is
+    // NOT ours to clear -- gi_clipmap_compose_pass consumes it to decide which levels to compose.
+    // Clearing it here would leave the levels marked clean and never composed at all: a cascade
+    // frozen at whatever it last held, which traces perfectly and is simply wrong.
+    //
+    // The parameter refresh above still has to happen, because origins move whether or not the
+    // voxels are rewritten here.
+    if(clipmap.get_settings().compose_on_gpu)
+    {
+        return;
+    }
     const uint32_t dirty = clipmap.get_dirty_levels();
     if(dirty == 0)
     {

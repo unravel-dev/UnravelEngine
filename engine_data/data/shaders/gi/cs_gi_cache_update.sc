@@ -39,6 +39,16 @@ uniform vec4 u_gi_update_params;
 /// Albedo used for cells no on-screen pixel ever registered, whose material is unknown.
 #define u_gi_update_default_albedo u_gi_update_params.w
 
+/// x = ceiling on any cell's albedo. yzw reserved.
+///
+/// Separate from the default above because the two answer different questions: the default supplies
+/// a value where there is none, while this BOUNDS a value that already exists. Only the second can
+/// constrain a material an artist authored, and the material path is the one that matters -- an
+/// entry takes the default only until an on-screen pixel registers the real albedo, which is
+/// immediately for anything visible.
+uniform vec4 u_gi_update_material;
+#define u_gi_update_max_albedo u_gi_update_material.x
+
 /// x = bounce ray length, y = near field distance, z = max steps, w = surface bias in voxels.
 uniform vec4 u_gi_update_bounce;
 #define u_gi_bounce_distance   u_gi_update_bounce.x
@@ -283,6 +293,16 @@ void main()
 	{
 		albedo = vec3_splat(u_gi_update_default_albedo);
 	}
+	// Bound the loop gain. Bounce reads other entries' radiance and this line writes this entry's,
+	// so the recursion is L = albedo * mean(L_in) and the gain PER CHANNEL is exactly the albedo.
+	// At 1.0 a sealed room conserves light forever -- it neither converges nor diverges, it simply
+	// holds whatever it had, which reads as a cache that never invalidates. Above 1.0 it climbs.
+	//
+	// sRGB 255 is linear 1.0, so a pure authored colour lands exactly on the unstable point rather
+	// than near it: a 255,0,0 room stays red indefinitely with the green and blue channels gone in
+	// a frame. Clamping here rather than at insertion keeps ONE place responsible for the gain, and
+	// it is the place the recursion is actually closed.
+	albedo = min(albedo, vec3_splat(u_gi_update_max_albedo));
 	vec3 radiance = albedo * irradiance / GI_PI + emissive_data.xyz;
 
 	vec4 stored = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)];

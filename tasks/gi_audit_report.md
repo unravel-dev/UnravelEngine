@@ -205,6 +205,62 @@ on the main thread -- the exact shape `lessons.md` warns about, where a scope wr
 `poolstl::par` measures the caller BLOCKING and the real work is on pool threads the scope does not
 cover. It fires whenever the camera moves far enough to re-snap a level.
 
+**Reference baseline, Bistro, measured before any work on this item.** Recorded first so the result
+is a comparison rather than a claim -- three predictions in this system have already been optimistic
+by large factors.
+
+GPU, 120-frame means, GI group total **4.377 ms**:
+
+| Pass | GPU | Share |
+|---|---|---|
+| 27. Cache Update | 1.886 ms | 43.1% |
+| 28. Resolve Pass | 1.968 ms | 45.0% |
+| 30-33. Denoise x4 | 0.098 ms each | 8.8% total |
+| 29. Temporal | 0.056 ms | 1.3% |
+| 26. Cache Insert | 0.039 ms | 0.9% |
+| 34. Upsample | 0.036 ms | 0.8% |
+
+CPU, `GI/SurfaceCache/Update View` on the main thread: **wall 4.20 ms, busy 541 us (13%), idle
+3.65 ms (87%)**, depth 5, with `GI/Clipmap/Compose*` slices filling pool threads underneath. The
+87% idle is the main thread BLOCKED on the pool -- it is not free time, and it is the number this
+item exists to remove.
+
+Note the shape: the CPU stall (4.20 ms) is very nearly the entire GI GPU cost (4.377 ms), but it
+fires only on level re-snap, so it is a stutter rather than steady cost. Success here is measured as
+the disappearance of that wall time and unchanged clipmap output -- NOT as a change in the GPU table
+above, which should stay flat.
+
+**RESULT, measured against that baseline.** The main-thread stall is gone:
+
+| | Before | After |
+|---|---|---|
+| `GI/SurfaceCache` CPU wall | 4.20 ms (87% idle, blocked on the pool) | **417 us, 100% busy** |
+| Clipmap compose, GPU | n/a | ~0.5 ms worst case |
+| Visual output | -- | unchanged |
+
+A ~4.2 ms main-thread stall on camera motion became ~0.4 ms of real CPU work plus half a millisecond
+of GPU. The 100% busy is the point as much as the number: what remains is work rather than waiting.
+
+**Two bugs the parity test caught before this shipped**, both of which would have been invisible in
+the image until they were expensive to find:
+
+1. *Introduced here.* The dispatch reuses the tracer's world grid, which is binned from RAW instance
+   bounds, while the CPU composer inflates by the reach before binning. Walking only the containing
+   cell missed every instance within reach of a voxel without containing it, leaving the saturated
+   seed -- an OVER-estimate, which is the one direction a conservative field may never err in.
+   Fixed by walking the cell range covering `[position - reach, position + reach]`, which is exactly
+   the set the inflated binning produces.
+2. *Pre-existing, in the CPU composer.* The cheap reject `to_bounds >= nearest` is only valid while
+   `nearest` is non-negative: `to_bounds` is zero inside any bounds and never negative, so once a
+   voxel is inside an instance every remaining candidate was skipped. The interior was "first
+   negative wins" -- dependent on binning order, so two correct traversals of one scene produced
+   different voxels. Guarding on `nearest >= 0` makes it deterministic and the interior more accurate.
+
+The second was diagnosed from the SHAPE of the disagreement rather than by reading code: mismatches
+ran in BOTH directions and only 46 of 275 sat on a level face, which rules out a boundary fault and
+rules out either side being a superset of the other. Both are now pinned at 0 mismatches over 131,072
+voxels by `test_clipmap_compose_shader_transcription_matches_cpu`.
+
 `todo.md` item 5 already proposed moving this to compute and deprioritised it on the grounds that
 "the whole surface cache update is 2.75 ms". That reasoning no longer holds: the GPU passes are now
 ~4.4 ms total, so a 4.56 ms CPU hitch on camera motion is comparable to the entire rest of the
@@ -436,6 +492,58 @@ Option 1 is the safe one. Both increase atlas usage substantially: brick count s
 `area / brick_size^2`, and splitting shrinks brick size in proportion to the extent, so a scatter that
 currently costs a handful of bricks would cost hundreds. That argues for pairing this with a
 world-space voxel target (A1h) rather than shipping it alone.
+
+### A1l. The near-field tier re-traced every instance once per grid cell
+
+**CONFIRMED, fixed.** No format bump -- runtime tracing only, bake output unchanged.
+
+`SdfTraceInstances` handed each `SdfTestInstance` the whole ray's `[t_min, t_max]`. An instance is
+listed in EVERY cell its bounds touch, so a submesh spanning ten cells was sphere-traced ten times
+over the identical range from the identical start. The per-instance broad phase caps itself by
+`min(result.t, t_max)`, so it only rejects the repeats once a hit exists -- meaning the duplication
+was worst for rays that do NOT hit early, which is the grazing case that already dominated this tier.
+The two pathologies multiplied.
+
+Fixed by clamping each test to the cell's own segment. Safe on the invariant the existing early-exit
+already relies on: cells are visited in increasing `t` with disjoint contiguous segments, and an
+instance appears in every cell its bounds touch, so the union of its per-cell segments still covers
+its whole overlap with the ray. A trace that runs out of cell resumes in the next one.
+
+It also bounds per-instance cost without a separate budget scheme: a visit can only cover one cell's
+worth of distance, so the "max_steps PER INSTANCE" blowup that made this tier superlinear in scene
+density largely disappears on its own.
+
+`test_instance_grid_cell_clamping_covers_every_instance` measures both halves on 800 rays through
+240 multi-cell instances: **0 coverage gaps**, and traced range **598050 -> 12091, a 49.5x
+reduction**. That is an upper bound on the saving rather than a predicted frame time -- the broad
+phase and the early exit already avoided some of it, and sphere-trace cost is not linear in range.
+
+**Confirmed in engine: a performance gain with no visual difference**, which is the correct signature
+for this change. The hits and their distances are identical by construction; only the redundant
+re-tracing of them is gone.
+
+This is why the near-field settings were so expensive relative to their visual payoff: the cost was
+proportional to how many cells an instance spanned, which is a property of the GRID, not of anything
+a person tuning `near_field_distance` could see.
+
+### A1k. Still compiled in, ranked by how often it has cost time in this work
+
+The cascade knobs are now authored through `gi_component` (`compose_on_gpu`, resolution, base extent,
+level scale, blend band, levels per update, cull composition). What remains hardcoded, worst first:
+
+| Value | Where | Why it matters |
+|---|---|---|
+| `sdf_atlas::settings::atlas_brick_dim` | `sdf_atlas.h` | **The atlas-full warning names it and nothing can set it.** Bistro overran it repeatedly during this work and the only available response was lowering per-mesh quality. |
+| `radiance_cache::settings::capacity` (2^19) | `radiance_cache.h` | Caps how much world the cache can hold at once. Silent when exceeded -- entries evict and the far field simply stops converging. |
+| `max_component_spread` (32) | `mesh_sdf_baker.h` | Decides which submeshes get NO field (A1j). Reachable only by editing the header, yet it is a content-dependent judgement. |
+| `min_height_ratio` (1e-4) | `mesh_sdf_source.cpp` | Which triangles count as surface. Deliberately not exposed -- a wrong value silently deletes occluders -- but it is a threshold with a test, so it belongs in one place a person can find. |
+| `max_resolution` (256) | `mesh_sdf_baker.h` | DEAD: never assigned from the importer, and `resolution` always binds first. Either wire it or delete it; today its comment describes a cap that cannot fire. |
+| `level_count` (4) | `global_sdf_clipmap.h` | Compile-time, sizes a `std::array` and the shader's uniform array. Genuinely structural rather than merely unexposed. |
+| `encode_range` (4) | `mesh_sdf.h` | Must match between mesh fields and the cascade or the two decode differently. Correctly not exposed. |
+| `SDF_GRID_MAX_STEPS` (256) | `sdf_common.sh` | A guard against denormal directions spinning, not a budget. Correctly not exposed. |
+
+The first three are the ones that have actually cost time. `surface_resolve_steps` is deliberately
+pinned by a test in BOTH directions and should stay compiled in.
 
 ### A2. `SdfResolveSurfacePoint` has no CPU reference and no parity test
 

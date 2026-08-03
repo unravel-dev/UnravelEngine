@@ -180,6 +180,8 @@ auto gi_cache_pass::run(gfx::render_view& rview, const run_params& params) -> bo
                                         s.bounce_max_steps,
                                         s.bounce_surface_bias};
         gfx::set_uniform(update_program_.u_gi_update_bounce, bounce_params);
+        const float material_params[4] = {s.max_albedo, 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(update_program_.u_gi_update_material, material_params);
         const auto update_camera_position = params.cam->get_position();
         const float update_camera[4] = {update_camera_position.x,
                                         update_camera_position.y,

@@ -153,6 +153,22 @@ auto global_sdf_clipmap::get_stale_level_count() const -> uint32_t
     return stale;
 }
 
+auto global_sdf_clipmap::apply_settings(const settings& new_settings) -> bool
+{
+    // Only these three change what a voxel MEANS. Everything else is read afresh by the next
+    // composition, so assigning it is enough and costs nothing.
+    const bool layout_changed = new_settings.resolution != settings_.resolution ||
+                                new_settings.base_extent != settings_.base_extent ||
+                                new_settings.level_scale != settings_.level_scale;
+    if(layout_changed)
+    {
+        init(new_settings);
+        return true;
+    }
+    settings_ = new_settings;
+    return false;
+}
+
 auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instances,
                                 const math::vec3& camera_position) -> uint32_t
 {
@@ -218,7 +234,14 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         lvl.origin = target_origin[best];
         lvl.content_fingerprint = target_fingerprint[best];
         lvl.stale_updates = 0;
-        compose_level(best, instances);
+        // The dirty bit is set either way -- it means "this level's contents are now stale on the
+        // GPU", which is exactly as true when a dispatch is about to write them as when this
+        // function just did. Keeping one meaning for the bit is what lets the two paths share all
+        // the budget and staleness logic above.
+        if(!settings_.compose_on_gpu)
+        {
+            compose_level(best, instances);
+        }
         dirty_levels_ |= 1u << best;
         ++composed;
     }
@@ -362,7 +385,21 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
                                                                          instance->world_bounds.max);
                                   const float to_bounds = math::length(world_position - clamped);
                                   ++slice_tests;
-                                  if(to_bounds >= nearest)
+                                  // The reject is only valid while `nearest` is a distance to a
+                                  // surface the voxel is OUTSIDE of. Once it goes negative the
+                                  // voxel is inside some instance, and `to_bounds` -- which is
+                                  // zero inside any bounds and never negative -- compares greater
+                                  // than every negative value, so this would skip every remaining
+                                  // candidate. That makes the interior "first negative wins",
+                                  // which depends on the order candidates happen to be visited in
+                                  // and therefore on how they were binned: two correct traversals
+                                  // of the same scene produce different voxels.
+                                  //
+                                  // Found by test_clipmap_compose_shader_transcription_matches_cpu,
+                                  // which compared this against a differently ordered gather and
+                                  // disagreed in BOTH directions -- the signature of order
+                                  // dependence rather than of a missing instance.
+                                  if(nearest >= 0.0f && to_bounds >= nearest)
                                   {
                                       continue;
                                   }

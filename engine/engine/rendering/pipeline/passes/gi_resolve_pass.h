@@ -107,6 +107,19 @@ public:
         ///
         /// Off restores the point lookup, for comparison without a rebuild.
         bool interpolate_cache = true;
+        /// Treat a ray that HIT geometry but found no cache entry as occluded rather than as
+        /// unknown.
+        ///
+        /// A miss says the cell has not been lit yet; it does not say the cell is dark. But the ray
+        /// did hit something, so it does say the environment is blocked in that direction. Off, that
+        /// fraction of the hemisphere falls back to the consumer's SH irradiance probe -- and in a
+        /// sealed room every ray misses, so the room stays lit by the sky through solid walls and
+        /// never converges.
+        ///
+        /// On, such a ray contributes zero radiance at full weight, so an unlit room goes black.
+        /// The cost is that a cache still filling in reads dark rather than probe-coloured. That is
+        /// transient and self-correcting where the leak is permanent, which is why this defaults on.
+        bool occlude_on_cache_miss = true;
         /// Indirect diffuse is low frequency, so tracing below full resolution costs little.
         trace_resolution resolution = trace_resolution::half;
 

@@ -781,17 +781,39 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 	t_next = mix(vec3_splat(SDF_CLIPMAP_OUTSIDE), t_next, moving);
 	t_delta = mix(vec3_splat(SDF_CLIPMAP_OUTSIDE), t_delta, moving);
 	vec3 dim = u_sdf_grid_dim;
+	// Where the ray enters the CURRENT cell. Each instance test is clamped to this cell's segment
+	// rather than given the whole ray.
+	//
+	// An instance is listed in every cell its bounds touch, so handing it [t_min, t_max] in each of
+	// them re-traced the identical range once per cell: a building-sized submesh spanning ten cells
+	// paid ten full sphere traces from the same starting point. The per-instance broad phase only
+	// rejects the repeats once a hit exists, so the duplication was worst for rays that do NOT hit
+	// early -- the grazing case that already dominates this tier's cost. The two multiplied.
+	//
+	// Clamping is safe on the same invariant the break below already relies on: cells are visited in
+	// increasing t with disjoint, contiguous segments, and an instance appears in every cell its
+	// bounds touch, so the union of its per-cell segments still covers its whole overlap with the
+	// ray. A trace that runs out of cell resumes in the next one, so no gap opens at a boundary.
+	//
+	// It also bounds per-instance cost without a separate budget: a visit can only cover one cell's
+	// worth of distance, so the "max_steps PER INSTANCE" blowup largely disappears on its own.
+	float t_cell_enter = t_enter;
 	for(int visited = 0; visited < SDF_GRID_MAX_STEPS; ++visited)
 	{
+		float t_step = min(t_next.x, min(t_next.y, t_next.z));
+		// The segment this cell owns, clipped to the ray. Computed BEFORE the instance loop, which
+		// is the only reason the tests can be bounded by it.
+		float t_cell_min = max(t_min, t_cell_enter);
+		float t_cell_max = min(t_max, min(t_step, t_exit));
 		int cell_index = int(cell_f.x + cell_f.y * dim.x + cell_f.z * dim.x * dim.y);
 		uint begin = b_sdf_grid_offsets[cell_index];
 		uint end = b_sdf_grid_offsets[cell_index + 1];
 		for(uint entry_index = begin; entry_index < end; ++entry_index)
 		{
 			SdfTestInstance(int(b_sdf_grid_instances[entry_index]), origin, direction, inv_dir,
-			                t_min, t_max, max_steps, surface_bias, relaxation, want_normal, result);
+			                t_cell_min, t_cell_max, max_steps, surface_bias, relaxation, want_normal,
+			                result);
 		}
-		float t_step = min(t_next.x, min(t_next.y, t_next.z));
 		if(t_step > t_exit)
 		{
 			break;
@@ -815,6 +837,9 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		vec3 mask = step(t_next, vec3_splat(t_step));
 		cell_f += mask * dir_sign;
 		t_next += mask * t_delta;
+		// The cell just left ended here, so the next one begins here. Contiguous by construction,
+		// which is what makes the per-cell clamping above lossless.
+		t_cell_enter = t_step;
 		if(any(lessThan(cell_f, vec3_splat(0.0))) || any(greaterThan(cell_f, dim - vec3_splat(1.0))))
 		{
 			break;

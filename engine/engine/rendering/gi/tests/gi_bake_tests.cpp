@@ -1393,6 +1393,193 @@ void test_clipmap_recomposes_moved_geometry_within_budget()
     check(at_old_position > 0.5f * radius, "and no longer occupies the old one");
 }
 
+/**
+ * @brief The compose DISPATCH must produce the same voxels as the CPU composer.
+ *
+ * Transcription of cs_gi_clipmap_compose.sc, in the same style as
+ * `test_cache_shader_transcription_matches_cpu`: the shader cannot be run here, so its algorithm is
+ * reimplemented against the same data and the two are compared byte for byte.
+ *
+ * Byte equality rather than a tolerance, for the reason the brute-force test already gives: a
+ * composition bug does not corrupt a voxel, it OMITS an instance from one, so the voxel reports a
+ * larger distance than the truth. That is an over-estimate, which a sphere trace turns into stepping
+ * straight through a wall, and a tolerance would hide exactly it.
+ *
+ * The difference that makes this worth testing is the CANDIDATE SET. The CPU composer bins instances
+ * into a private per-level grid with their bounds INFLATED by the reach; the dispatch reuses the
+ * tracer's world grid, which is binned from RAW bounds. Walking only the containing cell there misses
+ * every instance that is within reach of a voxel without containing it -- which is what this pins.
+ */
+void test_clipmap_compose_shader_transcription_matches_cpu()
+{
+    std::printf("test_clipmap_compose_shader_transcription_matches_cpu\n");
+    const auto geometry = make_sphere(0.8f, 20, 28);
+    mesh_sdf_bake_settings bake_settings;
+    bake_settings.resolution = 24;
+    bake_settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, bake_settings, sdf), "bake succeeds");
+    // Spread widely and at mixed scales, so plenty of voxels sit NEAR an instance without being
+    // inside its bounds. Those are the only voxels the two candidate sets can disagree on, so a
+    // fixture of overlapping instances would pass whatever the gather did.
+    std::vector<global_sdf_instance> instances;
+    instances.reserve(120);
+    for(int i = 0; i < 120; ++i)
+    {
+        const float t = float(i);
+        const float scale = 1.0f + 3.0f * std::fabs(std::sin(t * 0.41f));
+        instances.push_back(make_scaled_clipmap_instance(
+            sdf,
+            math::vec3(18.0f * std::sin(t * 1.7f), 6.0f * std::cos(t * 2.3f), 18.0f * std::sin(t * 0.9f)),
+            scale));
+    }
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 32;
+    clipmap_settings.base_extent = 12.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    clipmap.update(instances, math::vec3(0.0f));
+    // The tracer's grid, built exactly as surface_cache_service::upload_instance_grid builds it:
+    // from RAW world bounds, over the instances' own extent. Reproducing that is the whole point --
+    // the dispatch reads this grid, not one sized for composition.
+    std::vector<math::bbox> raw_bounds;
+    raw_bounds.reserve(instances.size());
+    for(const auto& inst : instances)
+    {
+        raw_bounds.push_back(inst.world_bounds);
+    }
+    sdf_instance_grid tracer_grid;
+    tracer_grid.init({});
+    tracer_grid.build(raw_bounds);
+    check(tracer_grid.is_valid(), "the tracer grid builds");
+    const auto& offsets = tracer_grid.get_cell_offsets();
+    const auto& cell_instances = tracer_grid.get_cell_instances();
+    const math::vec3 grid_origin = tracer_grid.get_origin();
+    const float cell_size = tracer_grid.get_cell_size();
+    const math::uvec3 grid_dim = tracer_grid.get_dim();
+    size_t compared = 0;
+    size_t mismatches = 0;
+    size_t transcription_closer = 0;
+    size_t on_level_face = 0;
+    size_t cpu_closer = 0;
+    float worst_difference = 0.0f;
+    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+    {
+        const auto& lvl = clipmap.get_level(level);
+        if(!lvl.is_valid())
+        {
+            continue;
+        }
+        const uint32_t resolution = clipmap_settings.resolution;
+        const float reach = clipmap_settings.encode_range * lvl.voxel_size;
+        for(uint32_t z = 0; z < resolution; ++z)
+        {
+            for(uint32_t y = 0; y < resolution; ++y)
+            {
+                for(uint32_t x = 0; x < resolution; ++x)
+                {
+                    const math::vec3 world_position =
+                        lvl.origin +
+                        (math::vec3(float(x), float(y), float(z)) + math::vec3(0.5f)) * lvl.voxel_size;
+                    float nearest = reach;
+                    // The shader's cell-range gather, transcribed.
+                    const auto to_cell = [&](const math::vec3& p) -> math::ivec3
+                    {
+                        const math::vec3 f = math::floor((p - grid_origin) / cell_size);
+                        return math::ivec3(
+                            int(math::clamp(f.x, 0.0f, float(grid_dim.x) - 1.0f)),
+                            int(math::clamp(f.y, 0.0f, float(grid_dim.y) - 1.0f)),
+                            int(math::clamp(f.z, 0.0f, float(grid_dim.z) - 1.0f)));
+                    };
+                    const math::ivec3 lo = to_cell(world_position - math::vec3(reach));
+                    const math::ivec3 hi = to_cell(world_position + math::vec3(reach));
+                    for(int cz = lo.z; cz <= hi.z; ++cz)
+                    {
+                        for(int cy = lo.y; cy <= hi.y; ++cy)
+                        {
+                            for(int cx = lo.x; cx <= hi.x; ++cx)
+                            {
+                                const size_t cell = size_t(cx) + size_t(cy) * grid_dim.x +
+                                                    size_t(cz) * size_t(grid_dim.x) * grid_dim.y;
+                                for(size_t c = offsets[cell]; c < offsets[cell + 1]; ++c)
+                                {
+                                    const auto& inst = instances[cell_instances[c]];
+                                    const math::vec3 clamped = math::clamp(world_position,
+                                                                           inst.world_bounds.min,
+                                                                           inst.world_bounds.max);
+                                    if(nearest >= 0.0f && math::length(world_position - clamped) >= nearest)
+                                    {
+                                        continue;
+                                    }
+                                    const math::vec4 local =
+                                        inst.world_to_local * math::vec4(world_position, 1.0f);
+                                    const float local_distance = sample_mesh_sdf(*inst.sdf, math::vec3(local));
+                                    nearest = math::min(nearest, local_distance * inst.local_to_world_scale);
+                                }
+                            }
+                        }
+                    }
+                    const float normalized =
+                        nearest / lvl.voxel_size / (2.0f * clipmap_settings.encode_range) + 0.5f;
+                    const auto encoded =
+                        uint8_t(math::clamp(normalized, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    const size_t offset = x + size_t(y) * resolution + size_t(z) * resolution * resolution;
+                    ++compared;
+                    if(encoded != lvl.voxels[offset])
+                    {
+                        ++mismatches;
+                        // The SIGN identifies which side missed an instance, which is the only way
+                        // the two can differ: a smaller value means the transcription found geometry
+                        // the CPU did not, a larger one the reverse. Reporting only a count leaves
+                        // the two indistinguishable.
+                        if(encoded < lvl.voxels[offset])
+                        {
+                            ++transcription_closer;
+                        }
+                        else
+                        {
+                            ++cpu_closer;
+                        }
+                        // Whether the disagreement lives on a level's outer shell separates a
+                        // boundary/clamping fault from one affecting the whole volume.
+                        const uint32_t last = resolution - 1u;
+                        if(x == 0u || y == 0u || z == 0u || x == last || y == last || z == last)
+                        {
+                            ++on_level_face;
+                        }
+                        if(mismatches == 1)
+                        {
+                            std::printf("  first mismatch: level %u voxel (%u,%u,%u) transcription %u "
+                                        "cpu %u, voxel size %.3f reach %.3f\n",
+                                        level,
+                                        x,
+                                        y,
+                                        z,
+                                        uint32_t(encoded),
+                                        uint32_t(lvl.voxels[offset]),
+                                        lvl.voxel_size,
+                                        reach);
+                        }
+                        worst_difference = math::max(worst_difference,
+                                                     std::fabs(float(encoded) - float(lvl.voxels[offset])));
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  %zu voxels compared, %zu mismatches (%zu transcription closer, %zu cpu closer, "
+                "%zu on a level face), worst byte difference %.0f\n",
+                compared,
+                mismatches,
+                transcription_closer,
+                cpu_closer,
+                on_level_face,
+                worst_difference);
+    check(compared > 0, "the fixture actually composed voxels");
+    check(mismatches == 0, "the dispatch transcription composes byte-identical voxels to the CPU");
+}
+
 void test_clipmap_culled_composition_matches_brute_force()
 {
     std::printf("test_clipmap_culled_composition_matches_brute_force\n");
@@ -1967,6 +2154,228 @@ void test_instance_grid_shader_walk_matches_cpu()
  * dropped -- checked against the instances the full walk reaches, filtered by their own slab
  * intersection -- and the work must actually fall, or the exit is a no-op dressed up as a saving.
  */
+/// One (instance, cell) visit and the ray segment that visit is allowed to trace.
+struct walk_segment
+{
+    uint32_t instance = 0;
+    float t_min = 0.0f;
+    float t_max = 0.0f;
+};
+
+/**
+ * @brief The grid walk, recording the CLAMPED segment handed to each instance test.
+ *
+ * Transcribes the same traversal as @ref simulate_shader_grid_walk; it records the per-cell range
+ * rather than only which instances are reached, because that range is the thing under test.
+ */
+auto simulate_shader_grid_walk_segments(const sdf_instance_grid& grid,
+                                        const math::vec3& origin,
+                                        const math::vec3& direction,
+                                        float t_min,
+                                        float t_max,
+                                        std::vector<walk_segment>& out) -> bool
+{
+    out.clear();
+    const auto splat = [](float v) -> math::vec3 { return math::vec3(v, v, v); };
+    const math::vec3 inv_dir =
+        math::vec3(1.0f) / math::max(math::abs(direction), splat(1e-8f)) * math::sign(direction + splat(1e-20f));
+    const math::vec3 dim(float(grid.get_dim().x), float(grid.get_dim().y), float(grid.get_dim().z));
+    const math::vec3 grid_min = grid.get_origin();
+    const math::vec3 grid_max = grid_min + dim * grid.get_cell_size();
+    const math::vec3 t0 = (grid_min - origin) * inv_dir;
+    const math::vec3 t1 = (grid_max - origin) * inv_dir;
+    const math::vec3 t_small = math::min(t0, t1);
+    const math::vec3 t_big = math::max(t0, t1);
+    float t_enter = math::max(math::max(t_small.x, t_small.y), math::max(t_small.z, 0.0f));
+    const float t_exit = math::min(math::min(t_big.x, t_big.y), math::min(t_big.z, t_max));
+    if(t_enter > t_exit)
+    {
+        return false;
+    }
+    t_enter = math::max(t_enter, t_min);
+    if(t_enter > t_exit)
+    {
+        return false;
+    }
+    const math::vec3 entry = origin + direction * t_enter;
+    math::vec3 cell_f = math::floor((entry - grid_min) / grid.get_cell_size());
+    cell_f = math::clamp(cell_f, splat(0.0f), dim - splat(1.0f));
+    const math::vec3 dir_sign = math::sign(direction);
+    const math::vec3 abs_dir = math::max(math::abs(direction), splat(1e-8f));
+    math::vec3 t_delta = splat(grid.get_cell_size()) / abs_dir;
+    const math::vec3 next_plane =
+        grid_min + (cell_f + math::max(dir_sign, splat(0.0f))) * grid.get_cell_size();
+    math::vec3 t_next = (next_plane - origin) * inv_dir;
+    const math::vec3 moving(float(std::fabs(direction.x) >= 1e-7f),
+                            float(std::fabs(direction.y) >= 1e-7f),
+                            float(std::fabs(direction.z) >= 1e-7f));
+    const float outside = 1e6f;
+    t_next = math::mix(splat(outside), t_next, moving);
+    t_delta = math::mix(splat(outside), t_delta, moving);
+    const auto& offsets = grid.get_cell_offsets();
+    const auto& cell_instances = grid.get_cell_instances();
+    float t_cell_enter = t_enter;
+    for(int visited = 0; visited < 256; ++visited)
+    {
+        const float t_step = math::min(t_next.x, math::min(t_next.y, t_next.z));
+        const float cell_min = math::max(t_min, t_cell_enter);
+        const float cell_max = math::min(t_max, math::min(t_step, t_exit));
+        const int index = int(cell_f.x + cell_f.y * dim.x + cell_f.z * dim.x * dim.y);
+        for(uint32_t entry_index = offsets[size_t(index)]; entry_index < offsets[size_t(index) + 1u];
+            ++entry_index)
+        {
+            out.push_back({cell_instances[entry_index], cell_min, cell_max});
+        }
+        if(t_step > t_exit)
+        {
+            break;
+        }
+        const math::vec3 mask(float(t_next.x <= t_step), float(t_next.y <= t_step), float(t_next.z <= t_step));
+        cell_f += mask * dir_sign;
+        t_next += mask * t_delta;
+        t_cell_enter = t_step;
+        if(math::any(math::lessThan(cell_f, splat(0.0f))) ||
+           math::any(math::greaterThan(cell_f, dim - splat(1.0f))))
+        {
+            break;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Clamping each instance test to its cell must lose no coverage, and must remove duplication.
+ *
+ * `SdfTraceInstances` used to hand every instance the WHOLE ray's [t_min, t_max] in every cell it
+ * appears in. An instance is listed in each cell its bounds touch, so a submesh spanning ten cells
+ * was sphere-traced ten times over the identical range from the identical start -- and the
+ * per-instance broad phase only rejects the repeats once a hit exists, so the waste was worst for
+ * rays that do NOT hit early, which is the grazing case that already dominated this tier.
+ *
+ * Clamping each test to the cell's own segment fixes that, and rests on one invariant: the segments
+ * are disjoint, contiguous and visited in increasing t, so their union still covers the instance's
+ * whole overlap with the ray. This asserts exactly that -- a GAP would let a surface fall between
+ * two cells and go unhit, which in a shadow ray reads as light through a wall.
+ */
+void test_instance_grid_cell_clamping_covers_every_instance()
+{
+    std::printf("test_instance_grid_cell_clamping_covers_every_instance\n");
+    std::vector<math::bbox> bounds;
+    for(int i = 0; i < 240; ++i)
+    {
+        const float t = float(i);
+        const math::vec3 center(9.0f * std::sin(t * 1.7f) + 0.3f * t,
+                                5.0f * std::cos(t * 2.3f),
+                                8.0f * std::sin(t * 0.9f));
+        // Deliberately spanning many cells: a small instance sits in one cell and cannot show
+        // either the duplication or a coverage gap.
+        const float half = 1.0f + 3.0f * std::fabs(std::sin(t * 0.37f));
+        math::bbox b;
+        b.reset();
+        b.add_point(center - math::vec3(half));
+        b.add_point(center + math::vec3(half));
+        bounds.push_back(b);
+    }
+    sdf_instance_grid grid;
+    sdf_instance_grid::settings grid_settings;
+    grid_settings.resolution = 20;
+    grid.init(grid_settings);
+    grid.build(bounds);
+    check(grid.is_valid(), "the grid builds");
+    constexpr float ray_t_min = 0.0f;
+    constexpr float ray_t_max = 30.0f;
+    size_t rays = 0;
+    size_t gaps = 0;
+    double clamped_length = 0.0;
+    double unclamped_length = 0.0;
+    float worst_gap = 0.0f;
+    for(int i = 0; i < 1500; ++i)
+    {
+        const float t = float(i) * 0.437f;
+        const math::vec3 origin(20.0f * std::sin(t), 11.0f * std::cos(t * 1.31f), 16.0f * std::sin(t * 0.77f));
+        const math::vec3 direction =
+            math::normalize(math::vec3(std::sin(t * 2.1f), std::cos(t * 1.3f), std::sin(t * 0.5f)));
+        std::vector<walk_segment> segments;
+        if(!simulate_shader_grid_walk_segments(grid, origin, direction, ray_t_min, ray_t_max, segments))
+        {
+            continue;
+        }
+        ++rays;
+        // Group each instance's clamped segments and merge them.
+        std::sort(segments.begin(),
+                  segments.end(),
+                  [](const walk_segment& lhs, const walk_segment& rhs)
+                  {
+                      return lhs.instance != rhs.instance ? lhs.instance < rhs.instance
+                                                          : lhs.t_min < rhs.t_min;
+                  });
+        for(size_t begin = 0; begin < segments.size();)
+        {
+            size_t end = begin;
+            while(end < segments.size() && segments[end].instance == segments[begin].instance)
+            {
+                ++end;
+            }
+            const uint32_t instance = segments[begin].instance;
+            // What the OLD code traced on every one of these visits: the whole ray, once per cell.
+            unclamped_length += double(end - begin) * double(ray_t_max - ray_t_min);
+            // The instance's true overlap with the ray, which the union must cover.
+            const math::vec3 inv = math::vec3(1.0f) /
+                                   math::max(math::abs(direction), math::vec3(1e-8f)) *
+                                   math::sign(direction + math::vec3(1e-20f));
+            const math::vec3 b0 = (bounds[instance].min - origin) * inv;
+            const math::vec3 b1 = (bounds[instance].max - origin) * inv;
+            const math::vec3 lo = math::min(b0, b1);
+            const math::vec3 hi = math::max(b0, b1);
+            const float overlap_min =
+                math::max(math::max(lo.x, lo.y), math::max(lo.z, ray_t_min));
+            const float overlap_max = math::min(math::min(hi.x, hi.y), math::min(hi.z, ray_t_max));
+            if(overlap_min < overlap_max)
+            {
+                // Walk the merged segments and look for a hole inside the overlap. A tolerance of a
+                // float epsilon scaled to the range, since the boundaries are computed two ways.
+                const float tolerance = 1e-3f;
+                float covered_to = overlap_min;
+                for(size_t s = begin; s < end; ++s)
+                {
+                    const float seg_min = math::max(segments[s].t_min, overlap_min);
+                    const float seg_max = math::min(segments[s].t_max, overlap_max);
+                    if(seg_max <= seg_min)
+                    {
+                        continue;
+                    }
+                    if(seg_min > covered_to + tolerance)
+                    {
+                        ++gaps;
+                        worst_gap = math::max(worst_gap, seg_min - covered_to);
+                    }
+                    covered_to = math::max(covered_to, seg_max);
+                }
+                if(covered_to + tolerance < overlap_max)
+                {
+                    ++gaps;
+                    worst_gap = math::max(worst_gap, overlap_max - covered_to);
+                }
+                clamped_length += double(overlap_max - overlap_min);
+            }
+            begin = end;
+        }
+    }
+    std::printf("  %zu rays, %zu coverage gaps (worst %.4f), traced length %.0f -> %.0f (%.2fx less)\n",
+                rays,
+                gaps,
+                worst_gap,
+                unclamped_length,
+                clamped_length,
+                unclamped_length / math::max(clamped_length, 1.0));
+    check(rays > 0, "the fixture actually produced walks");
+    check(gaps == 0, "the per-cell segments cover every instance's whole overlap with the ray");
+    // The point of the change. Stated as a ratio rather than a timing so it holds on any machine:
+    // this is the sphere-trace range the old code covered versus what the clamped one does.
+    check(unclamped_length > clamped_length * 2.0,
+          "clamping removes a large majority of the duplicated trace range");
+}
+
 void test_instance_grid_walk_stops_past_the_nearest_hit()
 {
     std::printf("test_instance_grid_walk_stops_past_the_nearest_hit\n");
@@ -3866,12 +4275,14 @@ int main()
     test_clipmap_is_conservative();
     test_instance_grid_never_misses_an_instance();
     test_instance_grid_shader_walk_matches_cpu();
+    test_instance_grid_cell_clamping_covers_every_instance();
     test_instance_grid_walk_stops_past_the_nearest_hit();
     test_surface_resolve_addresses_one_cell_from_both_sides();
     test_surface_resolve_reports_failure_outside_the_cascade();
     test_cache_level_handover_keeps_a_surface_reachable();
     test_instance_grid_handles_degenerate_input();
     test_clipmap_recomposes_moved_geometry_within_budget();
+    test_clipmap_compose_shader_transcription_matches_cpu();
     test_clipmap_culled_composition_matches_brute_force();
     test_clipmap_transition_is_continuous();
     test_clipmap_blend_stays_conservative();

@@ -50,7 +50,8 @@ uniform vec4 u_gi_resolve_camera;
 
 /// x = non-zero to interpolate the cache across neighbouring cells instead of point sampling one.
 uniform vec4 u_gi_resolve_filter;
-#define u_gi_cache_interpolate u_gi_resolve_filter.x
+#define u_gi_cache_interpolate     u_gi_resolve_filter.x
+#define u_gi_occlude_on_cache_miss (u_gi_resolve_filter.y > 0.0)
 
 /// Builds an arbitrary orthonormal basis around a normal without a branch on the degenerate axis.
 void GiBuildBasis(vec3 n, out vec3 t, out vec3 b)
@@ -181,12 +182,26 @@ void main()
 			uint level = GiCacheLevelEx(surface.position, u_gi_resolve_camera.xyz, ignored_blend);
 			found = GiCacheGatherPoint(surface.position, surface.normal, level, cached);
 		}
-		// A miss contributes NOTHING rather than black. It means this cell has not been lit yet,
-		// not that it is dark, and averaging in a zero would darken exactly the places the cache
-		// has yet to reach. Leaving it out of both sums lowers the weight instead, so the
-		// consumer falls back toward its environment probe there -- the conservative direction.
+		// A miss means this cell has not been LIT yet. It does not mean the cell is dark -- but
+		// the ray did hit geometry, so it does mean the environment is occluded in this direction,
+		// and the two are not the same claim.
+		//
+		// Skipping the ray hands that fraction of the hemisphere back to the consumer's SH probe,
+		// which is a light leak that never resolves: a sealed room with no light in it keeps every
+		// ray missing, keeps the weight at zero, and stays lit by the sky through solid walls.
+		// Counting the miss as resolved-with-zero instead says what the trace actually established
+		// -- something is there -- and lets such a room converge to black.
+		//
+		// The cost is that a cache which has not filled in yet reads dark rather than
+		// probe-coloured, which is why this is a switch and not a rewrite: warm-up is transient and
+		// self-correcting, while the leak is permanent, so occluding is the better DEFAULT rather
+		// than the only choice.
 		if(!found)
 		{
+			if(u_gi_occlude_on_cache_miss)
+			{
+				resolved += 1.0;
+			}
 			continue;
 		}
 		sum += cached * u_gi_intensity;

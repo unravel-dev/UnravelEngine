@@ -8,12 +8,12 @@ namespace unravel
 {
 
 void surface_cache_view::update(const std::vector<global_sdf_instance>& instances,
-                                const math::vec3& camera_position)
+                                const math::vec3& camera_position,
+                                const global_sdf_clipmap::settings& clipmap_settings)
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Update View");
     if(!initialized_)
     {
-        global_sdf_clipmap::settings clipmap_settings;
         clipmap_.init(clipmap_settings);
         if(!clipmap_gpu_.init(clipmap_settings.resolution))
         {
@@ -22,6 +22,18 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
                            "geometry will not contribute.");
         }
         initialized_ = true;
+    }
+    // Re-applied every update so an inspector change takes effect immediately. The GPU mirror has to
+    // follow a layout change, since its texture is sized to the resolution -- and it is re-created
+    // BEFORE the cascade is used, so a frame never samples a texture sized for the old one.
+    else if(clipmap_.apply_settings(clipmap_settings))
+    {
+        if(!clipmap_gpu_.init(clipmap_settings.resolution))
+        {
+            APPLOG_WARNING("[SurfaceCache] Clipmap resize to {} failed; the cascade is now unavailable "
+                           "for this view.",
+                           clipmap_settings.resolution);
+        }
     }
     // The cascade decides for itself which levels a change reached. A single global "something
     // moved" flag could only say "all of them", which meant composing four levels in the frame

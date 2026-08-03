@@ -22,6 +22,10 @@ struct gi_settings
 {
     gi_cache_pass::settings cache{};
     gi_resolve_pass::settings resolve{};
+    /// The cascade the two passes trace against. Authored here rather than compiled in because its
+    /// cost and its reach are the same trade the other two make: resolution is cubic in memory and
+    /// in composition work, while base extent and level scale set how far GI sees at all.
+    global_sdf_clipmap::settings clipmap{};
 };
 
 /**
@@ -70,6 +74,7 @@ public:
         result.cache.max_samples = std::lerp(result.cache.max_samples, from.cache.max_samples, contribution);
         result.cache.bounce_rays = dominant ? from.cache.bounce_rays : result.cache.bounce_rays;
         result.cache.default_albedo = std::lerp(result.cache.default_albedo, from.cache.default_albedo, contribution);
+        result.cache.max_albedo = std::lerp(result.cache.max_albedo, from.cache.max_albedo, contribution);
         result.cache.bounce_distance =
             std::lerp(result.cache.bounce_distance, from.cache.bounce_distance, contribution);
         result.cache.bounce_near_field =
@@ -104,6 +109,8 @@ public:
         result.resolve.step_relaxation =
             std::lerp(result.resolve.step_relaxation, from.resolve.step_relaxation, contribution);
         result.resolve.interpolate_cache = dominant ? from.resolve.interpolate_cache : result.resolve.interpolate_cache;
+        result.resolve.occlude_on_cache_miss =
+            dominant ? from.resolve.occlude_on_cache_miss : result.resolve.occlude_on_cache_miss;
         result.resolve.resolution = dominant ? from.resolve.resolution : result.resolve.resolution;
 
         result.resolve.enable_temporal = dominant ? from.resolve.enable_temporal : result.resolve.enable_temporal;
@@ -125,6 +132,21 @@ public:
             std::lerp(result.resolve.denoise_plane_tolerance, from.resolve.denoise_plane_tolerance, contribution);
         result.resolve.denoise_low_count_boost =
             std::lerp(result.resolve.denoise_low_count_boost, from.resolve.denoise_low_count_boost, contribution);
+
+        // --- clipmap ---
+        // Every one of these is discrete: a cascade resolution or a level count between two volumes'
+        // values is not either volume's intent, and the layout ones additionally force a rebuild, so
+        // interpolating them would rebuild the cascade on every step of a blend.
+        result.clipmap.compose_on_gpu = dominant ? from.clipmap.compose_on_gpu : result.clipmap.compose_on_gpu;
+        result.clipmap.resolution = dominant ? from.clipmap.resolution : result.clipmap.resolution;
+        result.clipmap.base_extent = dominant ? from.clipmap.base_extent : result.clipmap.base_extent;
+        result.clipmap.level_scale = dominant ? from.clipmap.level_scale : result.clipmap.level_scale;
+        result.clipmap.blend_voxels =
+            std::lerp(result.clipmap.blend_voxels, from.clipmap.blend_voxels, contribution);
+        result.clipmap.max_levels_per_update =
+            dominant ? from.clipmap.max_levels_per_update : result.clipmap.max_levels_per_update;
+        result.clipmap.cull_composition =
+            dominant ? from.clipmap.cull_composition : result.clipmap.cull_composition;
 
         result.resolve.enable_bilateral_upsample =
             dominant ? from.resolve.enable_bilateral_upsample : result.resolve.enable_bilateral_upsample;

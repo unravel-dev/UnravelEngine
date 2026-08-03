@@ -95,6 +95,17 @@ public:
         /// what `test_clipmap_culled_composition_matches_brute_force` asserts. Present as a
         /// setting so that comparison can be made without a second code path to drift.
         bool cull_composition = true;
+        ///< Leave the VOXELS to a compute dispatch, doing only the bookkeeping here.
+        ///
+        /// Everything that decides WHICH levels to rebuild -- snapping, fingerprinting, staleness
+        /// ageing, the budget -- is subtle, tested, and identical either way, so it stays on the CPU
+        /// and only the per-voxel loop moves. `update` then reports the same dirty mask and the
+        /// dispatch composes exactly those levels.
+        ///
+        /// The CPU composer remains the REFERENCE: `sample`, `sample_ex` and `resolve_surface_point`
+        /// read `level::voxels`, and the bake tests are their only consumers, so they keep working
+        /// against a CPU-composed cascade while the runtime uses the GPU one.
+        bool compose_on_gpu = false;
         ///< Levels recomposed per update, at most. Composition touches every voxel of a level,
         ///< so recomposing all of them in the frame the camera crosses a voxel boundary would
         ///< hitch. Levels are considered finest first, which is also the order they go stale in
@@ -158,6 +169,20 @@ public:
     };
 
     void init(const settings& settings);
+
+    /**
+     * @brief Applies settings that may change while running.
+     *
+     * Re-initialises when the change alters the STORAGE or the geometry of the cascade -- resolution,
+     * base extent, level scale -- because those change what a voxel means, so the composed contents
+     * are not reinterpretable and every level has to be rebuilt. That discards the cascade for a few
+     * frames, which is why it is conditional rather than unconditional: the knobs a person actually
+     * sweeps while looking at a scene (the blend band, the per-update budget, CPU versus GPU
+     * composition) all take effect on the next composition without throwing anything away.
+     *
+     * @return true when the cascade was re-initialised and its contents discarded.
+     */
+    auto apply_settings(const settings& new_settings) -> bool;
 
     /**
      * @brief Recomposes the levels whose snapped origin moved or whose contents changed.

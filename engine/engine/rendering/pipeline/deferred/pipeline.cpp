@@ -711,7 +711,26 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             // frame and it never settled.
             auto& view_cache =
                 rview.data().get_or_emplace<surface_cache_view>(surface_cache_view::view_key);
-            view_cache.update(surface_cache.get_clipmap_instances(), camera.get_position());
+            // Composing the voxels on the GPU is conditional on the compute program having loaded.
+            // Asked once here and threaded through, so the cascade and the dispatch cannot disagree
+            // about who owns the voxels -- if both believed they did, the dispatch would overwrite
+            // the CPU's work every frame; if neither did, the cascade would never be composed at all.
+            // Authored per volume, but GPU composition is additionally gated on the compute program
+            // having loaded: a scene that asks for it on a backend that cannot provide it must still
+            // compose, on the CPU, rather than leave the cascade permanently empty.
+            gi_settings gi;
+            resolve_gi_settings(params, gi);
+            auto clipmap_settings = gi.clipmap;
+            clipmap_settings.compose_on_gpu =
+                clipmap_settings.compose_on_gpu && gi_clipmap_compose_pass_.is_valid();
+            view_cache.update(surface_cache.get_clipmap_instances(), camera.get_position(), clipmap_settings);
+            if(clipmap_settings.compose_on_gpu)
+            {
+                gi_clipmap_compose_pass::run_params compose_params;
+                compose_params.surface_cache = &surface_cache;
+                compose_params.view_cache = &view_cache;
+                gi_clipmap_compose_pass_.run(rview, compose_params);
+            }
         }
     }
 
@@ -2050,17 +2069,15 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     return tonemapping_pass_.run(rview, params);
 }
 
-auto deferred::resolve_gi_settings(const run_params& rparams,
-                                   gi_cache_pass::settings& cache,
-                                   gi_resolve_pass::settings& resolve) -> bool
+auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool
 {
     // Off unless a gi_component asks for it, the same contract every other pass here follows. The
-    // settings left in `cache` and `resolve` are meaningless when this returns false.
+    // settings left in `gi` are meaningless when this returns false.
     if(!rparams.fill_gi_params)
     {
         return false;
     }
-    rparams.fill_gi_params(cache, resolve);
+    rparams.fill_gi_params(gi);
     return true;
 }
 
@@ -2072,11 +2089,12 @@ void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview, 
         return;
     }
     gi_cache_pass::run_params params;
-    gi_resolve_pass::settings ignored_resolve;
-    if(!resolve_gi_settings(rparams, params.settings, ignored_resolve))
+    gi_settings gi;
+    if(!resolve_gi_settings(rparams, gi))
     {
         return;
     }
+    params.settings = gi.cache;
     params.g_buffer = rview.fbo_safe_get("GBUFFER");
     params.cam = &camera;
     params.surface_cache = &ctx.get<surface_cache_service>();
@@ -2089,9 +2107,9 @@ auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview
 {
     auto& ctx = engine::context();
     gfx::texture::ptr result;
-    gi_cache_pass::settings ignored_cache;
-    gi_resolve_pass::settings resolve_settings;
-    const bool enabled = resolve_gi_settings(rparams, ignored_cache, resolve_settings);
+    gi_settings gi;
+    const bool enabled = resolve_gi_settings(rparams, gi);
+    const auto& resolve_settings = gi.resolve;
     if(enabled && ctx.has<surface_cache_service>())
     {
         gi_resolve_pass::run_params params;

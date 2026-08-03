@@ -23,6 +23,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "insert_stride"},
             entt::attribute{"pretty_name", "Insert Stride"},
+            entt::attribute{"group", "Insertion"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 16.0f},
             entt::attribute{"tooltip", "Pixel stride for registering visible surfaces.\nCells are far "
@@ -33,6 +34,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "insert_max_distance"},
             entt::attribute{"pretty_name", "Insert Max Distance"},
+            entt::attribute{"group", "Insertion"},
             entt::attribute{"min", 10.0f},
             entt::attribute{"max", 500.0f},
             entt::attribute{"tooltip", "Surfaces beyond this are not registered.\nClamped internally to "
@@ -43,6 +45,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "surface_offset_cells"},
             entt::attribute{"pretty_name", "Surface Offset (cells)"},
+            entt::attribute{"group", "Insertion"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "How far the recorded point is lifted before lighting, as a "
@@ -58,6 +61,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "min_alpha"},
             entt::attribute{"pretty_name", "Min Alpha"},
+            entt::attribute{"group", "Accumulation"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.5f},
             entt::attribute{"tooltip", "Floor on the accumulation blend weight.\nWithout it a mature "
@@ -67,6 +71,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_samples"},
             entt::attribute{"pretty_name", "Max Samples"},
+            entt::attribute{"group", "Accumulation"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip", "Cap on accumulated samples per entry.\nHigher is smoother and "
@@ -76,6 +81,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce_rays"},
             entt::attribute{"pretty_name", "Bounce Rays"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 8.0f},
             entt::attribute{"tooltip", "Bounce rays cast per entry per frame.\nOne is usually enough: "
@@ -87,15 +93,37 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "default_albedo"},
             entt::attribute{"pretty_name", "Default Albedo"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Albedo assumed for cells whose material is unknown.\nMust stay "
-                                       "below one, which is what keeps the bounce feedback convergent."},
+            entt::attribute{"tooltip", "Albedo assumed for cells NO on-screen pixel has registered, "
+                                       "whose material is unknown because the fields carry geometry "
+                                       "only.\nReplaced by the real material the moment the camera "
+                                       "looks at the surface, so this does not bound an authored "
+                                       "material -- see Max Albedo for that."},
+        })
+        .data<&settings::max_albedo>("max_albedo"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_albedo"},
+            entt::attribute{"pretty_name", "Max Albedo"},
+            entt::attribute{"group", "Bounce"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "Ceiling on any cell's albedo, whatever its material says.\nA "
+                                       "bounce ray reads other entries' radiance and the update writes "
+                                       "this one's, so the loop gain PER CHANNEL is exactly the "
+                                       "albedo.\nAt 1.0 a sealed room conserves light forever -- it "
+                                       "neither converges nor diverges, which looks like a cache that "
+                                       "never invalidates. sRGB 255 is linear 1.0, so a pure authored "
+                                       "colour lands exactly on that unstable point: a 255,0,0 room "
+                                       "stays red indefinitely.\nSet to 1 to restore the old "
+                                       "behaviour for comparison."},
         })
         .data<&settings::bounce_distance>("bounce_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce_distance"},
             entt::attribute{"pretty_name", "Bounce Distance"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 200.0f},
             entt::attribute{"tooltip", "How far a bounce ray travels."},
@@ -104,6 +132,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce_near_field"},
             entt::attribute{"pretty_name", "Bounce Near Field"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 100.0f},
             entt::attribute{"tooltip", "Range in which a bounce ray traces per-instance fields.\nThe "
@@ -114,6 +143,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce_max_steps"},
             entt::attribute{"pretty_name", "Bounce Max Steps"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip", "Sphere-trace steps per instance for a bounce ray."},
@@ -122,6 +152,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bounce_surface_bias"},
             entt::attribute{"pretty_name", "Bounce Surface Bias"},
+            entt::attribute{"group", "Bounce"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "Hit acceptance as a fraction of a voxel of whichever field "
@@ -132,6 +163,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_distance"},
             entt::attribute{"pretty_name", "Shadow Distance"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 200.0f},
             entt::attribute{"tooltip", "How far a shadow ray travels before giving up and treating the "
@@ -141,6 +173,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_normal_bias_voxels"},
             entt::attribute{"pretty_name", "Shadow Normal Bias (voxels)"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 8.0f},
             entt::attribute{"tooltip", "How far along the normal a shadow ray starts, in VOXELS of the "
@@ -153,6 +186,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_near_field"},
             entt::attribute{"pretty_name", "Shadow Near Field"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 100.0f},
             entt::attribute{"tooltip", "Range in which a shadow ray traces per-instance fields.\nThe "
@@ -166,6 +200,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_max_steps"},
             entt::attribute{"pretty_name", "Shadow Max Steps"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip", "Steps per shadow ray. An exhausted ray counts as LIT, because "
@@ -177,6 +212,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_surface_bias"},
             entt::attribute{"pretty_name", "Shadow Surface Bias"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "Hit acceptance for a shadow ray, as a fraction of a voxel of "
@@ -186,6 +222,7 @@ REFLECT_INLINE(gi_cache_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_step_relaxation"},
             entt::attribute{"pretty_name", "Shadow Step Relaxation"},
+            entt::attribute{"group", "Shadow"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip", "Cone relaxation for shadow rays.\nMatters more here than on any "
@@ -213,6 +250,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "ray_count"},
             entt::attribute{"pretty_name", "Ray Count"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 16.0f},
             entt::attribute{"tooltip", "Rays per pixel. The bluntest lever on this pass -- cost is very "
@@ -224,6 +262,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_distance"},
             entt::attribute{"pretty_name", "Max Distance"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 10.0f},
             entt::attribute{"max", 500.0f},
             entt::attribute{"tooltip", "How far a gather ray travels before giving up and leaving the "
@@ -233,6 +272,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "normal_bias_voxels"},
             entt::attribute{"pretty_name", "Normal Bias (voxels)"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 8.0f},
             entt::attribute{"tooltip", "Lift off the surface before tracing, in VOXELS of the field "
@@ -249,6 +289,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "intensity"},
             entt::attribute{"pretty_name", "Intensity"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 4.0f},
             entt::attribute{"tooltip", "Artistic gain on the cached bounce. The environment fallback is "
@@ -259,6 +300,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "near_field_distance"},
             entt::attribute{"pretty_name", "Near Field Distance"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 100.0f},
             entt::attribute{"tooltip", "Range in which per-instance fields are traced; beyond it the "
@@ -272,6 +314,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_steps"},
             entt::attribute{"pretty_name", "Max Steps"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip", "Sphere-trace steps, per instance in the near field and per ray "
@@ -281,6 +324,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "surface_bias"},
             entt::attribute{"pretty_name", "Surface Bias"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "Hit acceptance as a fraction of a voxel of whichever field "
@@ -292,6 +336,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "step_relaxation"},
             entt::attribute{"pretty_name", "Step Relaxation"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip", "Cone half-angle tangent: hit acceptance grows by this fraction "
@@ -306,15 +351,32 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "interpolate_cache"},
             entt::attribute{"pretty_name", "Interpolate Cache"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip", "Interpolate across the four cells bracketing a hit instead of "
                                        "point sampling one.\nCosts ~10% of this pass and roughly halves "
                                        "the cache miss rate (measured 49% -> 87% agreement), as well as "
                                        "removing the cell-sized blocks a point lookup produces."},
         })
+        .data<&settings::occlude_on_cache_miss>("occlude_on_cache_miss"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "occlude_on_cache_miss"},
+            entt::attribute{"pretty_name", "Occlude On Cache Miss"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Treat a ray that HIT geometry but found no cache entry as occluded "
+                            "rather than as unknown.\nA miss says the cell is not lit YET; it does "
+                            "not say the cell is dark. But the ray did hit something, so it does say "
+                            "the sky is blocked in that direction.\nOff, that part of the hemisphere "
+                            "falls back to the SH irradiance probe -- and in a sealed room every ray "
+                            "misses, so the room stays lit through solid walls and never converges to "
+                            "black.\nOn, a cache that is still filling in reads dark rather than "
+                            "probe-coloured. That is transient; the leak is permanent."},
+        })
         .data<&settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolution"},
             entt::attribute{"pretty_name", "Trace Resolution"},
+            entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip", "Indirect diffuse is low frequency, so tracing below full "
                                        "resolution costs little quality and scales this pass directly."},
         })
@@ -322,6 +384,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal"},
             entt::attribute{"pretty_name", "Enable Temporal"},
+            entt::attribute{"group", "Temporal"},
             entt::attribute{"tooltip", "Averaging across frames is what turns a handful of rays into an "
                                        "effective sample count in the hundreds."},
         })
@@ -329,6 +392,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_accum_frames"},
             entt::attribute{"pretty_name", "Max Accum Frames"},
+            entt::attribute{"group", "Temporal"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip", "Frames the running mean may reach.\nThe weight is 1/n while n "
@@ -340,6 +404,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reprojection_tolerance"},
             entt::attribute{"pretty_name", "Reprojection Tolerance"},
+            entt::attribute{"group", "Temporal"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip", "History validation tolerance, as a fraction of view distance so "
@@ -355,6 +420,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "history_clamp_sigma"},
             entt::attribute{"pretty_name", "History Clamp Sigma"},
+            entt::attribute{"group", "Temporal"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 8.0f},
             entt::attribute{"tooltip", "Width of the history clamp in neighbourhood standard "
@@ -367,12 +433,14 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_spatial_denoise"},
             entt::attribute{"pretty_name", "Enable Spatial Denoise"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"tooltip", "Edge-preserving a-trous filter over the accumulated result."},
         })
         .data<&settings::denoise_passes>("denoise_passes"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_passes"},
             entt::attribute{"pretty_name", "Denoise Passes"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 6.0f},
             entt::attribute{"tooltip", "Tap spacing doubles each pass, so reach grows exponentially "
@@ -382,6 +450,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_normal_power"},
             entt::attribute{"pretty_name", "Denoise Normal Power"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip", "Exponent on normal agreement. Higher keeps light from turning "
@@ -391,6 +460,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_luma_phi"},
             entt::attribute{"pretty_name", "Denoise Luma Phi"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 32.0f},
             entt::attribute{"tooltip", "Multiplier on the measured luminance standard error.\nThe "
@@ -402,6 +472,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_plane_tolerance"},
             entt::attribute{"pretty_name", "Denoise Plane Tolerance"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip", "How far off the centre pixel's plane a tap may sit, as a "
@@ -411,6 +482,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_low_count_boost"},
             entt::attribute{"pretty_name", "Denoise Low Count Boost"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 64.0f},
             entt::attribute{"tooltip", "Tolerance multiplier at one accumulated sample, decaying to 1 as "
@@ -421,6 +493,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_bilateral_upsample"},
             entt::attribute{"pretty_name", "Enable Bilateral Upsample"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"tooltip", "Surface-aware reconstruction to full resolution.\nA plain "
                                        "bilinear tap blends across silhouettes, which is where the "
                                        "gather is noisiest, so it spreads exactly what should not "
@@ -430,6 +503,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "upsample_normal_power"},
             entt::attribute{"pretty_name", "Upsample Normal Power"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip", "Exponent on normal agreement between a low-resolution tap and "
@@ -439,9 +513,116 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "upsample_plane_tolerance"},
             entt::attribute{"pretty_name", "Upsample Plane Tolerance"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip", "How far off the pixel's plane a low-resolution tap may sit."},
+        });
+}
+
+REFLECT_INLINE(global_sdf_clipmap::settings)
+{
+    using settings = global_sdf_clipmap::settings;
+
+    entt::meta_factory<settings>{}
+        .type("global_sdf_clipmap::settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_sdf_clipmap::settings"},
+            entt::attribute{"pretty_name", "Cascade"},
+        })
+        .data<&settings::compose_on_gpu>("compose_on_gpu"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "compose_on_gpu"},
+            entt::attribute{"pretty_name", "Compose On GPU"},
+            entt::attribute{"group", "Composition"},
+            entt::attribute{"tooltip",
+                            "Build the cascade voxels in a compute dispatch instead of on the CPU. "
+                            "The CPU composer blocks the main thread for milliseconds whenever the "
+                            "camera moves far enough to re-snap a level, which lands as a stutter; "
+                            "measured at 4.20 ms wall against 0.42 ms plus ~0.5 ms of GPU. Output is "
+                            "identical -- pinned byte for byte by a parity test -- so this is a cost "
+                            "switch, not a quality one. Turn it off to compare, or if a backend "
+                            "misbehaves."},
+        })
+        .data<&settings::resolution>("resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution"},
+            entt::attribute{"pretty_name", "Resolution"},
+            entt::attribute{"min", 16},
+            entt::attribute{"max", 128},
+            entt::attribute{"group", "Composition"},
+            entt::attribute{"tooltip",
+                            "Voxels per axis in every cascade level. Memory and composition work are "
+                            "both CUBIC in this: 128 is four times the spatial detail and eight times "
+                            "the cost of 64. It was held at 64 because the CPU composer could not "
+                            "afford more; on the GPU 128 is reachable. Changing it rebuilds the "
+                            "cascade, so it flickers for a few frames."},
+        })
+        .data<&settings::base_extent>("base_extent"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "base_extent"},
+            entt::attribute{"pretty_name", "Base Extent"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"group", "Coverage"},
+            entt::attribute{"tooltip",
+                            "World-space size of the finest level. With Level Scale this sets both "
+                            "how fine the near field is and how far GI sees at all: total coverage is "
+                            "base extent times level scale cubed. Rebuilds the cascade."},
+        })
+        .data<&settings::level_scale>("level_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "level_scale"},
+            entt::attribute{"pretty_name", "Level Scale"},
+            entt::attribute{"min", 1.5f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"step", 0.1f},
+            entt::attribute{"group", "Coverage"},
+            entt::attribute{"tooltip",
+                            "Size multiplier between consecutive levels. Doubling keeps the far "
+                            "cascades fine enough that a floor does not appear to float -- a tracer "
+                            "stops within a fraction of a VOXEL, so at 8 m voxels that error is "
+                            "metres. Quadrupling buys range and costs exactly that. Rebuilds the "
+                            "cascade."},
+        })
+        .data<&settings::blend_voxels>("blend_voxels"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "blend_voxels"},
+            entt::attribute{"pretty_name", "Level Blend Band"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 16.0f},
+            entt::attribute{"step", 0.5f},
+            entt::attribute{"group", "Coverage"},
+            entt::attribute{"tooltip",
+                            "Width of the cross-fade into the next level, in voxels of the level "
+                            "fading out. Levels are composed independently so their isosurfaces sit "
+                            "about a coarse voxel apart; the band has to be wider than that to hide "
+                            "it. Zero restores a hard switch, which pops as the camera moves."},
+        })
+        .data<&settings::max_levels_per_update>("max_levels_per_update"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_levels_per_update"},
+            entt::attribute{"pretty_name", "Levels Per Update"},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", global_sdf_clipmap::level_count},
+            entt::attribute{"group", "Budget"},
+            entt::attribute{"tooltip",
+                            "Cascade levels recomposed per frame at most. Composing touches every "
+                            "voxel of a level, so rebuilding all four in the frame something moved is "
+                            "a visible hitch. The cost of budgeting is that a moved object keeps "
+                            "occluding from its old position for a few frames. Raise it now that "
+                            "composition is on the GPU and cheaper."},
+        })
+        .data<&settings::cull_composition>("cull_composition"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cull_composition"},
+            entt::attribute{"pretty_name", "Cull Composition"},
+            entt::attribute{"group", "Budget"},
+            entt::attribute{"tooltip",
+                            "Bin instances so a voxel tests only the ones that can reach it, instead "
+                            "of every instance the level overlaps. Pure acceleration -- composing with "
+                            "it off produces byte-identical voxels, which a test asserts. Present so "
+                            "that comparison can be made; leave it on."},
         });
 }
 
@@ -465,6 +646,14 @@ REFLECT_INLINE(gi_settings)
             entt::attribute{"pretty_name", "Resolve"},
             entt::attribute{"tooltip", "Gathering those entries into the screen. Usually the more "
                                        "expensive of the two."},
+        })
+        .data<&gi_settings::clipmap>("clipmap"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "clipmap"},
+            entt::attribute{"pretty_name", "Cascade"},
+            entt::attribute{"tooltip", "The coarse world distance field both passes trace against. "
+                                       "This is what lets offscreen and distant geometry contribute "
+                                       "at all."},
         });
 }
 
@@ -477,6 +666,7 @@ SAVE_INLINE(gi_cache_pass::settings)
     try_save(ar, ser20::make_nvp("max_samples", obj.max_samples));
     try_save(ar, ser20::make_nvp("bounce_rays", obj.bounce_rays));
     try_save(ar, ser20::make_nvp("default_albedo", obj.default_albedo));
+    try_save(ar, ser20::make_nvp("max_albedo", obj.max_albedo));
     try_save(ar, ser20::make_nvp("bounce_distance", obj.bounce_distance));
     try_save(ar, ser20::make_nvp("bounce_near_field", obj.bounce_near_field));
     try_save(ar, ser20::make_nvp("bounce_max_steps", obj.bounce_max_steps));
@@ -502,6 +692,7 @@ LOAD_INLINE(gi_cache_pass::settings)
     try_load(ar, ser20::make_nvp("max_samples", obj.max_samples));
     try_load(ar, ser20::make_nvp("bounce_rays", obj.bounce_rays));
     try_load(ar, ser20::make_nvp("default_albedo", obj.default_albedo));
+    try_load(ar, ser20::make_nvp("max_albedo", obj.max_albedo));
     try_load(ar, ser20::make_nvp("bounce_distance", obj.bounce_distance));
     try_load(ar, ser20::make_nvp("bounce_near_field", obj.bounce_near_field));
     try_load(ar, ser20::make_nvp("bounce_max_steps", obj.bounce_max_steps));
@@ -527,6 +718,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_save(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));
     try_save(ar, ser20::make_nvp("interpolate_cache", obj.interpolate_cache));
+    try_save(ar, ser20::make_nvp("occlude_on_cache_miss", obj.occlude_on_cache_miss));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
@@ -560,6 +752,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_load(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));
     try_load(ar, ser20::make_nvp("interpolate_cache", obj.interpolate_cache));
+    try_load(ar, ser20::make_nvp("occlude_on_cache_miss", obj.occlude_on_cache_miss));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
@@ -578,10 +771,37 @@ LOAD_INLINE(gi_resolve_pass::settings)
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_binary_t);
 
+SAVE_INLINE(global_sdf_clipmap::settings)
+{
+    try_save(ar, ser20::make_nvp("compose_on_gpu", obj.compose_on_gpu));
+    try_save(ar, ser20::make_nvp("resolution", obj.resolution));
+    try_save(ar, ser20::make_nvp("base_extent", obj.base_extent));
+    try_save(ar, ser20::make_nvp("level_scale", obj.level_scale));
+    try_save(ar, ser20::make_nvp("blend_voxels", obj.blend_voxels));
+    try_save(ar, ser20::make_nvp("max_levels_per_update", obj.max_levels_per_update));
+    try_save(ar, ser20::make_nvp("cull_composition", obj.cull_composition));
+}
+SAVE_INSTANTIATE(global_sdf_clipmap::settings, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(global_sdf_clipmap::settings, ser20::oarchive_binary_t);
+
+LOAD_INLINE(global_sdf_clipmap::settings)
+{
+    try_load(ar, ser20::make_nvp("compose_on_gpu", obj.compose_on_gpu));
+    try_load(ar, ser20::make_nvp("resolution", obj.resolution));
+    try_load(ar, ser20::make_nvp("base_extent", obj.base_extent));
+    try_load(ar, ser20::make_nvp("level_scale", obj.level_scale));
+    try_load(ar, ser20::make_nvp("blend_voxels", obj.blend_voxels));
+    try_load(ar, ser20::make_nvp("max_levels_per_update", obj.max_levels_per_update));
+    try_load(ar, ser20::make_nvp("cull_composition", obj.cull_composition));
+}
+LOAD_INSTANTIATE(global_sdf_clipmap::settings, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(global_sdf_clipmap::settings, ser20::iarchive_binary_t);
+
 SAVE_INLINE(gi_settings)
 {
     try_save(ar, ser20::make_nvp("cache", obj.cache));
     try_save(ar, ser20::make_nvp("resolve", obj.resolve));
+    try_save(ar, ser20::make_nvp("clipmap", obj.clipmap));
 }
 SAVE_INSTANTIATE(gi_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(gi_settings, ser20::oarchive_binary_t);
@@ -590,6 +810,7 @@ LOAD_INLINE(gi_settings)
 {
     try_load(ar, ser20::make_nvp("cache", obj.cache));
     try_load(ar, ser20::make_nvp("resolve", obj.resolve));
+    try_load(ar, ser20::make_nvp("clipmap", obj.clipmap));
 }
 LOAD_INSTANTIATE(gi_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gi_settings, ser20::iarchive_binary_t);

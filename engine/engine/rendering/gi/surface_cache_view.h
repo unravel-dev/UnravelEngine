@@ -40,9 +40,22 @@ public:
      * @param instances Every resident field placement in the world, NOT only the visible ones --
      *        geometry behind the camera still bounces light.
      */
-    void update(const std::vector<global_sdf_instance>& instances, const math::vec3& camera_position);
+    /// @param clipmap_settings Authored per volume through gi_component, and applied every update so
+    ///        a knob moved in the inspector takes effect without a restart. Passed rather than stored
+    ///        because the cascade is downstream of the volume blend, which only the pipeline sees.
+    ///        @c compose_on_gpu is additionally gated on the compute program having loaded, so a
+    ///        scene asking for GPU composition on a backend that cannot provide it still composes.
+    void update(const std::vector<global_sdf_instance>& instances,
+                const math::vec3& camera_position,
+                const global_sdf_clipmap::settings& clipmap_settings);
 
     auto get_clipmap() const -> const global_sdf_clipmap&
+    {
+        return clipmap_;
+    }
+
+    /// Non-const access for the compose pass, which consumes the dirty mask it composed.
+    auto get_clipmap_mutable() -> global_sdf_clipmap&
     {
         return clipmap_;
     }
