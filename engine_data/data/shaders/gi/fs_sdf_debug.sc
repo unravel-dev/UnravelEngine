@@ -370,7 +370,10 @@ void main()
 		// Visibility comes from tracing the fields toward each light, not from a shadow map.
 		float direct_voxel;
 		SdfSampleClipmapEx(hit_position, direct_voxel);
-		vec3 irradiance = GiEvalDirectLighting(hit_position, hit.normal, max(direct_voxel, 0.01));
+		vec3 irradiance = GiEvalDirectLighting(hit_position,
+		                                       hit.normal,
+		                                       max(direct_voxel, 0.01),
+		                                       u_gi_shadow_near_field);
 		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour,
 		// which the fields do not carry yet (material voxels are a later phase).
 		gl_FragColor = vec4(irradiance * 0.8, 1.0);

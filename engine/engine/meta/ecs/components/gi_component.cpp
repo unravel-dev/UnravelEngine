@@ -159,6 +159,18 @@ REFLECT_INLINE(gi_cache_pass::settings)
                                        "answered.\nNot a world distance: voxel size varies with bake "
                                        "resolution, instance scale and cascade level."},
         })
+        .data<&settings::update_interval>("update_interval"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "update_interval"},
+            entt::attribute{"pretty_name", "Update Interval (frames)"},
+            entt::attribute{"group", "Cache"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 8.0f},
+            entt::attribute{"tooltip", "Light each entry every Nth frame. The cache is a running "
+                                       "mean, so a lower cadence only slows convergence and reaction, "
+                                       "not what it converges to -- and it divides the Cache Update "
+                                       "pass cost (shadow + bounce rays) almost exactly by N."},
+        })
         .data<&settings::shadow_distance>("shadow_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "shadow_distance"},
@@ -328,6 +340,19 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "represent thin geometry, so occlusion degrades into surface acne "
                                        "that dances as the cascade re-snaps. Prefer Step Relaxation "
                                        "first, which errs toward over-occluding instead."},
+        })
+        .data<&settings::near_field_fade_distance>("near_field_fade_distance"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "near_field_fade_distance"},
+            entt::attribute{"pretty_name", "Near Field Fade Distance"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 200.0f},
+            entt::attribute{"tooltip", "View distance at which the near field has faded out entirely "
+                                       "(fading starts at half this). 0 disables the fade.\nContact "
+                                       "detail is only visible near the camera, so this concentrates "
+                                       "the near field's cost -- the most expensive thing in the GI "
+                                       "frame -- on the pixels that can display it."},
         })
         .data<&settings::max_steps>("max_steps"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -738,6 +763,7 @@ SAVE_INLINE(gi_cache_pass::settings)
     try_save(ar, ser20::make_nvp("shadow_surface_bias", obj.shadow_surface_bias));
     try_save(ar, ser20::make_nvp("shadow_ray_start_voxels", obj.shadow_ray_start_voxels));
     try_save(ar, ser20::make_nvp("shadow_step_relaxation", obj.shadow_step_relaxation));
+    try_save(ar, ser20::make_nvp("update_interval", obj.update_interval));
 }
 SAVE_INSTANTIATE(gi_cache_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(gi_cache_pass::settings, ser20::oarchive_binary_t);
@@ -765,6 +791,7 @@ LOAD_INLINE(gi_cache_pass::settings)
     try_load(ar, ser20::make_nvp("shadow_surface_bias", obj.shadow_surface_bias));
     try_load(ar, ser20::make_nvp("shadow_ray_start_voxels", obj.shadow_ray_start_voxels));
     try_load(ar, ser20::make_nvp("shadow_step_relaxation", obj.shadow_step_relaxation));
+    try_load(ar, ser20::make_nvp("update_interval", obj.update_interval));
 }
 LOAD_INSTANTIATE(gi_cache_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gi_cache_pass::settings, ser20::iarchive_binary_t);
@@ -776,6 +803,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("normal_bias_voxels", obj.normal_bias_voxels));
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
     try_save(ar, ser20::make_nvp("near_field_distance", obj.near_field_distance));
+    try_save(ar, ser20::make_nvp("near_field_fade_distance", obj.near_field_fade_distance));
     try_save(ar, ser20::make_nvp("max_steps", obj.max_steps));
     try_save(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_save(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));
@@ -812,6 +840,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("normal_bias_voxels", obj.normal_bias_voxels));
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
     try_load(ar, ser20::make_nvp("near_field_distance", obj.near_field_distance));
+    try_load(ar, ser20::make_nvp("near_field_fade_distance", obj.near_field_fade_distance));
     try_load(ar, ser20::make_nvp("max_steps", obj.max_steps));
     try_load(ar, ser20::make_nvp("surface_bias", obj.surface_bias));
     try_load(ar, ser20::make_nvp("step_relaxation", obj.step_relaxation));

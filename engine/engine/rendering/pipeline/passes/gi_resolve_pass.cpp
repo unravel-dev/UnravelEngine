@@ -129,15 +129,6 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         return {};
     }
     auto& atlas = surface_cache.get_atlas();
-    const auto& clipmap = params.view_cache->get_clipmap();
-    // The finest cascade voxel. Every voxel- or cell-relative bias is held to this rather than
-    // to the level that answered, so a bias stays constant in world units across the cascade
-    // instead of growing eightfold from the inner level to the outer one. Anchored to the
-    // finest level rather than to a world constant so the near field is preserved exactly.
-    const float finest_voxel = clipmap.get_level(0).voxel_size > 0.0f
-                                   ? clipmap.get_level(0).voxel_size
-                                   : clipmap.get_settings().base_extent /
-                                         float(math::max(clipmap.get_settings().resolution, 1u));
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& s = params.settings;
 
@@ -167,6 +158,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     gfx::set_buffer(7, cache.get_data_buffer(), gfx::access::Read);
     gfx::set_texture(resolve_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
     gfx::set_texture(resolve_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+    // Read only by the debug branch, to cancel the albedo the consumer multiplies the output by.
+    // Bound unconditionally because an unbound sampler is undefined on some backends even when the
+    // branch that reads it is not taken.
+    gfx::set_texture(resolve_program_.s_gi_base_color, 10, params.g_buffer->get_texture(0));
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(instances.size()),
@@ -212,7 +207,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     // correct on a single frame.
     const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f,
                                     s.occlude_on_cache_miss ? 1.0f : 0.0f,
-                                    finest_voxel,
+                                    s.near_field_fade_distance,
                                     s.ray_start_voxels};
     gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
     const float debug_params[4] = {float(s.debug_ray_diagnostics), 0.0f, 0.0f, 0.0f};

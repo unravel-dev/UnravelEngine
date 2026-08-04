@@ -97,6 +97,7 @@ public:
             std::lerp(result.cache.shadow_surface_bias, from.cache.shadow_surface_bias, contribution);
         result.cache.shadow_step_relaxation =
             std::lerp(result.cache.shadow_step_relaxation, from.cache.shadow_step_relaxation, contribution);
+        result.cache.update_interval = dominant ? from.cache.update_interval : result.cache.update_interval;
 
         // --- resolve pass ---
         result.resolve.ray_count = dominant ? from.resolve.ray_count : result.resolve.ray_count;
@@ -107,6 +108,9 @@ public:
         result.resolve.intensity = std::lerp(result.resolve.intensity, from.resolve.intensity, contribution);
         result.resolve.near_field_distance =
             std::lerp(result.resolve.near_field_distance, from.resolve.near_field_distance, contribution);
+        result.resolve.near_field_fade_distance = std::lerp(result.resolve.near_field_fade_distance,
+                                                            from.resolve.near_field_fade_distance,
+                                                            contribution);
         result.resolve.max_steps = dominant ? from.resolve.max_steps : result.resolve.max_steps;
         result.resolve.surface_bias = std::lerp(result.resolve.surface_bias, from.resolve.surface_bias, contribution);
         result.resolve.step_relaxation =

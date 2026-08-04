@@ -81,8 +81,8 @@ public:
         /// How far a bounce ray travels. Shorter than a gather ray on purpose: this runs for every
         /// resident entry, and the near field is where the bounce actually matters.
         float bounce_distance = 40.0f;
-        float bounce_near_field = 5.0f;
-        float bounce_max_steps = 48.0f;
+        float bounce_near_field = 2.0f;
+        float bounce_max_steps = 24.0f;
         /// Hit acceptance as a fraction of a voxel of whichever field answered.
         float bounce_surface_bias = 0.35f;
 
@@ -119,7 +119,16 @@ public:
         /// An exhausted ray counts as LIT, so running out here does not look like a missing shadow
         /// -- it looks like a surface that is too bright. Prefer @ref shadow_step_relaxation over
         /// raising this: relaxation bounds the step count instead of paying for it.
-        float shadow_max_steps = 48.0f;
+        float shadow_max_steps = 32.0f;
+        /// Light each entry every Nth frame instead of every frame. 1 lights everything always.
+        ///
+        /// The update pass carries the densest ray populations in the system -- one shadow ray per
+        /// light plus a bounce ray, per RESIDENT entry, whether or not anything looks at it -- and
+        /// the cache is a running mean, so lighting an entry at half rate merely halves how fast it
+        /// converges and reacts, not what it converges to. Entries are interleaved by slot, so the
+        /// work spreads evenly across frames rather than pulsing. 2 halves the Cache Update pass
+        /// for a barely visible latency cost; raise it further on scenes with many lights.
+        float update_interval = 2.0f;
         /// How far along its OWN DIRECTION a SHADOW ray starts, in voxels of the level covering the
         /// point.
         ///

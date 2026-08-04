@@ -188,15 +188,23 @@ public:
     auto signed_distance(const math::vec3& p, bool unsigned_only) const -> float;
 
     /**
-     * @brief Whether the surface is closed, i.e. every edge is shared by two triangles.
+     * @brief Whether the surface has a meaningful signed interior: closed, manifold, AND
+     *        enclosing actual volume.
      *
-     * The inside/outside test is only meaningful on a closed surface. On an open one the
-     * pseudonormal reports "inside" for regions that are plainly outside, which the tracer
-     * then reads as solid geometry.
+     * The inside/outside test is only meaningful when all three hold. On an open surface the
+     * pseudonormal reports "inside" for regions that are plainly outside. And a surface can be
+     * combinatorially a PERFECT closed manifold while enclosing nothing: the engine's plane
+     * primitive is two coincident, oppositely wound sheets whose rotations mirror their
+     * triangulations, so every welded edge is shared by exactly two faces, each traversed once
+     * per direction -- a zero-volume "pillow" that no edge counting can distinguish from a real
+     * solid. Its cancelling pseudonormals make every voxel's sign floating-point noise, which
+     * bakes as phantom brick-quantised walls. The enclosed-volume test is what catches it: the
+     * volume terms of coincident opposite sheets cancel to rounding error, while any genuine
+     * solid -- however thin its slab -- keeps a volume orders of magnitude above that.
      */
     auto is_closed() const -> bool
     {
-        return boundary_edge_count_ == 0;
+        return boundary_edge_count_ == 0 && encloses_volume_;
     }
 
     auto get_boundary_edge_count() const -> uint32_t
@@ -230,6 +238,9 @@ private:
     std::vector<uint32_t> welded_;
     ///< Edges adjacent to exactly one triangle, counted on the welded topology.
     uint32_t boundary_edge_count_ = 0;
+    ///< False when the closed surface encloses no volume beyond rounding error -- a doubled
+    ///< sheet, whose sign is meaningless. See @ref is_closed.
+    bool encloses_volume_ = false;
     ///< Per triangle geometric normal, normalized. Degenerate triangles are dropped before
     ///< this is built, so every entry is finite.
     std::vector<math::vec3> face_normals_;
@@ -307,6 +318,17 @@ auto sdf_triangle_accelerator::build(const sdf_source_geometry& geometry) -> boo
             normal = -normal;
         }
     }
+    // Does the surface enclose volume AT ALL? The doubled-sheet case cancels this sum to pure
+    // rounding error while a genuine solid, however thin, keeps it orders of magnitude above --
+    // so the threshold is a tight relative one against the bounds' largest extent cubed, not a
+    // judgement call. `signed_volume` is six times the enclosed volume (the /6 of the divergence
+    // formula is omitted throughout since only ratios matter here), which only widens the margin.
+    // Meaningless for open surfaces, but those are already routed to the unsigned path by the
+    // boundary edge count, so this flag is consulted only when the surface is closed.
+    const math::vec3 volume_extent = geometry.bounds.get_dimensions();
+    const double volume_span =
+        double(math::max(volume_extent.x, math::max(volume_extent.y, volume_extent.z)));
+    encloses_volume_ = std::abs(signed_volume) > volume_span * volume_span * volume_span * 1e-9;
     // Weld vertices by position before computing any adjacency. Exporters split vertices at
     // UV and normal seams, so two triangles meeting along a seam reference different indices
     // for the same point. Index-keyed adjacency would then see every seam edge as a boundary
@@ -331,9 +353,31 @@ auto sdf_triangle_accelerator::build(const sdf_source_geometry& geometry) -> boo
     }
     // Vertex pseudonormals: angle-weighted sum of incident face normals, accumulated onto the
     // welded representative so both sides of a seam contribute.
+    //
+    // Triangles whose corners WELD together are excluded from every topology pass below. Such a
+    // triangle is thinner than the weld epsilon, so it survived the area test while its topology
+    // has collapsed -- a UV sphere is the canonical producer: float sin(pi) is ~1e-7 rather than
+    // zero, so the pole ring is a fan of slivers whose two pole corners weld into one vertex.
+    // Counting a collapsed triangle's edges double-counts the surviving edge (the pole edges of
+    // that sphere read four faces each, which would flunk the manifold test on a perfectly good
+    // closed mesh), and its corner angles at the welded pair are the angle between a real edge
+    // and pure rounding noise -- a large random weight on an unstable sliver normal, fed straight
+    // into the pole vertex's pseudonormal. The triangle itself stays in the BVH: as geometry it
+    // is a legitimate (if negligible) part of the surface; it is only as TOPOLOGY that it lies.
+    const auto is_welded_degenerate = [&](uint32_t t) -> bool
+    {
+        const uint32_t w0 = welded_[indices_[t * 3 + 0]];
+        const uint32_t w1 = welded_[indices_[t * 3 + 1]];
+        const uint32_t w2 = welded_[indices_[t * 3 + 2]];
+        return w0 == w1 || w1 == w2 || w2 == w0;
+    };
     vertex_pseudonormals_.assign(positions_.size(), math::vec3(0.0f));
     for(uint32_t t = 0; t < triangle_count; ++t)
     {
+        if(is_welded_degenerate(t))
+        {
+            continue;
+        }
         const uint32_t i0 = indices_[t * 3 + 0];
         const uint32_t i1 = indices_[t * 3 + 1];
         const uint32_t i2 = indices_[t * 3 + 2];
@@ -356,6 +400,10 @@ auto sdf_triangle_accelerator::build(const sdf_source_geometry& geometry) -> boo
     edges.reserve(triangle_count * 3);
     for(uint32_t t = 0; t < triangle_count; ++t)
     {
+        if(is_welded_degenerate(t))
+        {
+            continue;
+        }
         const uint32_t i0 = welded_[indices_[t * 3 + 0]];
         const uint32_t i1 = welded_[indices_[t * 3 + 1]];
         const uint32_t i2 = welded_[indices_[t * 3 + 2]];
@@ -370,7 +418,18 @@ auto sdf_triangle_accelerator::build(const sdf_source_geometry& geometry) -> boo
     boundary_edge_count_ = 0;
     for(const auto& entry : edges)
     {
-        if(entry.second.face_count < 2)
+        // EXACTLY two, not at least two. A closed 2-manifold has every edge shared by two faces;
+        // anything else makes the pseudonormal sign test undefined, and the failure mode of the
+        // ">= 2 counts as closed" reading is not hypothetical: the engine's own plane primitive
+        // (mesh::create_plane) is TWO coincident, oppositely wound sheets merged, so after welding
+        // every edge carries an even face count and no boundary edge exists -- yet the coincident
+        // opposite faces cancel every vertex and edge pseudonormal to numerical zero, and the sign
+        // of each voxel degenerates to floating-point noise. That bakes as random inside/outside
+        // regions quantised at brick granularity, which renders as phantom walls and staircases
+        // around a perfectly flat mesh. Counting non-manifold edges as open sends such geometry
+        // down the unsigned-shell path, where the sign is never consulted; a genuinely closed but
+        // non-manifold union loses only its interior solidity, which is the safe direction.
+        if(entry.second.face_count != 2)
         {
             ++boundary_edge_count_;
         }

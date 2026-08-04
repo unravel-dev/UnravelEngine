@@ -28,6 +28,30 @@ $input v_texcoord0
 
 SAMPLER2D(s_gi_depth, 8);
 SAMPLER2D(s_gi_normal, 9);
+/// Diagnostic only. See GiDebugUnshade.
+SAMPLER2D(s_gi_base_color, 10);
+
+/// Cancels what the CONSUMER will multiply this pass's output by, so a diagnostic written here
+/// arrives on screen as the number it is.
+///
+/// The output of this pass is indirect diffuse, and fs_pbr_lighting.sh spends it as
+/// `mix(irradiance, rgb * PI, a)` and then `DiffuseColor * AO * that` (StandardShadingIndirect).
+/// For LIGHTING that is exactly right. For a DIAGNOSTIC it is fatal: every debug view was really
+/// showing stage fractions times the surface's own albedo, so black wrought iron read black
+/// whatever the rays did, a red awning tinted a cyan reading to dark teal, and only near-white
+/// stone reported anything close to the truth. Three separate investigations were run off colours
+/// that were mostly paint.
+///
+/// Dividing by the same factors here makes the modulation cancel. The floor keeps a near-black
+/// albedo from exploding rather than merely being unreadable, so a dark channel on dark paint
+/// stays honest about being unmeasurable there. Exposure and tonemapping still apply and are
+/// monotonic, so compare channels against each other, not against an absolute value.
+vec3 GiDebugUnshade(vec3 value, vec2 uv)
+{
+	GBufferDataColorAndAO color_data = DecodeGBufferColorAndAOLod(uv, s_gi_base_color, 0.0);
+	vec3 modulation = color_data.base_color * max(color_data.ambient_occlusion, 1e-3);
+	return value / max(modulation * PI, vec3_splat(1e-3));
+}
 
 /// x = ray count, y = max trace distance, z = normal bias in VOXELS of the answering field,
 /// w = frame index.
@@ -52,10 +76,8 @@ uniform vec4 u_gi_resolve_camera;
 uniform vec4 u_gi_resolve_filter;
 #define u_gi_cache_interpolate     u_gi_resolve_filter.x
 #define u_gi_occlude_on_cache_miss (u_gi_resolve_filter.y > 0.0)
-/// The FINEST cascade voxel, which the voxel-relative normal bias is held to. Cascade voxels
-/// span 0.25 m to 2 m, so an unbounded bias lifts distant shading points METRES off their
-/// surfaces and the far field reads brighter than the near one.
-#define u_gi_finest_voxel          u_gi_resolve_filter.z
+/// z = view distance at which the near field has fully faded out; 0 disables the fade.
+#define u_gi_near_field_fade       u_gi_resolve_filter.z
 /// How far along its OWN DIRECTION a gather ray starts, in voxels. See
 /// gi_resolve_pass::settings::ray_start_voxels: this does the self-intersection job a normal
 /// offset was doing, without moving the shading point off its surface.
@@ -174,32 +196,85 @@ void main()
 	float margin = u_gi_normal_bias * origin_voxel;
 	float lift = max(0.0, -origin_distance) + margin;
 	vec3 origin = world_position + world_normal * lift;
-	// Decorrelate the sample pattern per pixel AND per frame, so the residual error is noise
-	// that temporal accumulation can average away rather than a fixed pattern that it cannot.
-	// The shading point's OWN cache key, for the self-read test in debug mode 3.
+	// The shading point's OWN surface resolve. It serves two consumers below: the self-read
+	// rejection keys, and -- when the point reads INSIDE the cascade -- the ray origin itself.
+	//
+	// Computed for every pixel rather than only under the diagnostic, because what it feeds is
+	// production behaviour and not a readout. The cost is one surface resolve per PIXEL against
+	// u_gi_ray_count full traces per pixel, so it does not register beside the gather itself.
+	SdfSurfacePoint own_surface = SdfResolveSurfacePoint(world_position);
+	// A point INSIDE the isosurface cannot always be freed by a lift along the G-buffer normal.
+	// The lift assumes the phantom solid lies along -normal, but on relief at voxel scale -- a
+	// cornice, a window reveal -- the cascade's bulge overhangs LATERALLY: the wall normal points
+	// out of the facade while the solid extends down from the ledge above, so however far the
+	// point is pushed it stays buried, every ray registers a hit at t ~ 0, and the pixel reads
+	// black. That is the acne that gets WORSE as the camera approaches: close in, level 0 answers,
+	// and detail that a coarse level flattened away becomes exactly this kind of bulge.
+	//
+	// The surface resolve already solves this: its Newton steps move along the GRADIENT, which by
+	// definition is the direction out of the solid, wherever the solid lies. So when the cascade
+	// says the point is inside, start rays from the resolved isosurface point instead -- which is
+	// also the point every writer and reader keys the cache by, so it is the most consistent
+	// origin available, not merely an escape hatch. Guarded on the resolved facing agreeing with
+	// the G-buffer, so converging through thin geometry onto its far side falls back to the lift.
+	if(origin_distance < 0.0 && own_surface.valid && dot(own_surface.normal, world_normal) > 0.0)
+	{
+		origin = own_surface.position + own_surface.normal * margin;
+		lift = length(origin - world_position);
+	}
+	// The shading point's OWN cache keys, for the self-read rejection in the ray loop.
 	//
 	// Mode 2 asks "did the ray hit close by", which is a proxy with an arbitrary threshold. This is
 	// the actual question: did the ray come back and read the very entry that is being shaded? Keys
 	// are exact, so there is nothing to tune and no threshold to argue about. Resolved the same way
 	// the writer resolves, or the two would disagree for reasons unrelated to self-reading.
+	//
+	// BOTH levels when the point sits in the level cross-fade band. The writer inserts the surface
+	// at both levels there, so the entry being shaded exists twice under two keys; a ray whose hit
+	// lands a whisker further out re-keys to the next level and would read the coarser copy of this
+	// very surface with the primary key none the wiser.
 	uint own_key = GI_CACHE_EMPTY_KEY;
-	if(u_gi_debug_mode >= 3)
+	uint own_key_far = GI_CACHE_EMPTY_KEY;
+	if(own_surface.valid)
 	{
-		SdfSurfacePoint own_surface = SdfResolveSurfacePoint(world_position);
-		if(own_surface.valid)
+		float own_blend;
+		uint own_level = GiCacheLevelEx(own_surface.position, u_gi_resolve_camera.xyz, own_blend);
+		uint own_face = GiQuantizeNormal(own_surface.normal);
+		own_key = GiCacheKeyForFace(own_surface.position, own_face, own_level);
+		if(own_blend > 0.0)
 		{
-			float own_blend;
-			uint own_level = GiCacheLevelEx(own_surface.position, u_gi_resolve_camera.xyz, own_blend);
-			own_key = GiCacheKeyForFace(own_surface.position, GiQuantizeNormal(own_surface.normal), own_level);
+			own_key_far = GiCacheKeyForFace(own_surface.position, own_face, own_level + 1u);
 		}
 	}
+	// The per-instance tier faded out with VIEW distance. It exists for contact fidelity, and
+	// contact detail is only visible near the camera: a distant pixel renders a cascade-scale
+	// area, so tracing its first metres against exact mesh fields buys nothing the half-res
+	// gather can display -- while remaining the single most expensive thing in the GI frame.
+	// The fade starts at half the fade distance and reaches zero at it, so the handover is a
+	// gradient rather than a line across the ground.
+	float near_field = u_gi_trace_near_field;
+	if(u_gi_near_field_fade > 0.0)
+	{
+		float view_distance = length(world_position - u_gi_resolve_camera.xyz);
+		float fade_start = 0.5 * u_gi_near_field_fade;
+		near_field *= saturate((u_gi_near_field_fade - view_distance) /
+		                       max(u_gi_near_field_fade - fade_start, 1e-3));
+	}
 	float debug_self_reads = 0.0;
+	// Decorrelate the sample pattern per pixel AND per frame, so the residual error is noise
+	// that temporal accumulation can average away rather than a fixed pattern that it cannot.
 	uint pixel_seed = GiHashCombine(GiHashUint(uint(gl_FragCoord.x)), uint(gl_FragCoord.y));
 	uint seed = GiHashCombine(pixel_seed, u_gi_frame_index);
 	vec3 sum = vec3_splat(0.0);
 	float resolved = 0.0;
 	float debug_hit = 0.0;
 	float debug_addressed = 0.0;
+	// Rays that read an actual cache ENTRY, which is NOT the same as `resolved`. With
+	// u_gi_occlude_on_cache_miss on, a miss increments `resolved` too -- deliberately, since the trace
+	// did establish that something is there -- so the two differ by exactly the misses. Reporting
+	// `resolved` as though it were "found" hid the one stage that can produce pure black at full
+	// weight, and hid it precisely when the switch that causes it is on.
+	float debug_found = 0.0;
 	// Where the hit LANDED, not merely that there was one. A ray that re-hits the surface it
 	// started on looks identical to one that travelled twenty metres in every stage counter, and
 	// that is the difference every bias knob actually moves.
@@ -223,7 +298,7 @@ void main()
 		// distance -- the gap between the cascade isosurface and the rendered triangle -- and a
 		// normal offset pays it in full for every ray, including the grazing ones that need it least.
 		vec3 ray_origin = origin + direction * (u_gi_ray_start * origin_voxel);
-		SdfRayHit hit = SdfTraceRay(ray_origin, direction, u_gi_max_distance, u_gi_trace_near_field,
+		SdfRayHit hit = SdfTraceRay(ray_origin, direction, u_gi_max_distance, near_field,
 		                            u_gi_trace_max_steps, u_gi_trace_bias, u_gi_trace_relaxation,
 		                            false);
 		// Escaped the scene. Deliberately contributes nothing and does NOT count toward the
@@ -254,13 +329,53 @@ void main()
 			continue;
 		}
 		debug_addressed += 1.0;
-		if(u_gi_debug_mode >= 3 && own_key != GI_CACHE_EMPTY_KEY)
+		// A ray that resolves back to the entry being shaded measured nothing: it is the shading
+		// point reading itself. cs_gi_cache_update.sc rejects exactly this case for the bounce -- see
+		// the note on `hit_slot == slot` there -- and the gather needs it for that reason and one
+		// more.
+		//
+		// Counting such a ray is WORSE than losing it. It contributes this surface's own radiance,
+		// which is near black on anything not directly lit, AND it takes full weight, so the
+		// consumer's mix(probe, rgb * PI, a) drives a toward 1 and replaces the environment probe
+		// with that darkness. The symptom is black patches on flat surfaces, worst near the camera:
+		// every bias here is a count of cascade VOXELS, so a finer level -- closer camera, or a
+		// higher clipmap resolution -- shrinks the world-space clearance while the near field's own
+		// hit acceptance, which is a count of MESH voxels, does not move at all.
+		//
+		// Skipped without counting toward `resolved`, matching the bounce's `bounce_samples`: a
+		// failure to sample, not a sample of darkness. That fraction of the hemisphere goes back to
+		// the consumer's probe, which is what an unmeasured direction is worth.
+		// A hit whose resolved surface lies in the PLANE of the surface being shaded, facing the
+		// same way, is the shading surface reading itself -- whichever cell it lands in. On a flat
+		// surface no ray in the upper hemisphere can geometrically hit that surface again, so such
+		// a hit exists only because the ray grazed the cascade's displaced isosurface and the cone
+		// acceptance caught it. The key test below can only reject the ONE cell the shading point
+		// occupies, while a grazing ray lands one or two cells away laterally: diagnostics mode 2
+		// showed those as near hits, mode 1 showed them FOUND, and what they found was a
+		// neighbouring cell of this very floor -- which in shadow is near black, and it entered at
+		// full weight. That is the black patch that survived the exact-key rejection.
+		//
+		// The plane tolerance is in voxels of the level answering at the ORIGIN, because the
+		// displacement that manufactures these hits is that level's. The facing gate keeps every
+		// genuine perpendicular occluder: a wall scores ~0 against a floor. An opposite-facing
+		// surface (a ceiling seen from the floor) scores negative and is kept as the occluder it
+		// is. Skipped WITHOUT counting, like the key rejection: it is a failure to measure, and
+		// that fraction of the hemisphere belongs to the consumer's probe.
+		float self_plane = dot(surface.position - world_position, world_normal);
+		if(abs(self_plane) < 2.0 * origin_voxel && dot(surface.normal, world_normal) > 0.7)
+		{
+			debug_self_reads += 1.0;
+			continue;
+		}
+		if(own_key != GI_CACHE_EMPTY_KEY)
 		{
 			float hit_blend;
 			uint hit_level = GiCacheLevelEx(surface.position, u_gi_resolve_camera.xyz, hit_blend);
-			if(GiCacheKeyForFace(surface.position, GiQuantizeNormal(surface.normal), hit_level) == own_key)
+			uint hit_key = GiCacheKeyForFace(surface.position, GiQuantizeNormal(surface.normal), hit_level);
+			if(hit_key == own_key || (own_key_far != GI_CACHE_EMPTY_KEY && hit_key == own_key_far))
 			{
 				debug_self_reads += 1.0;
+				continue;
 			}
 		}
 		// Level and its cross-fade weight together: crossing a level boundary re-keys the surface,
@@ -303,7 +418,17 @@ void main()
 		// than the only choice.
 		if(!found)
 		{
-			if(u_gi_occlude_on_cache_miss)
+			// Occlude-on-miss is gated on the hit being FURTHER than the scale the field can
+			// actually resolve. At contact range a hit is the least trustworthy thing this trace
+			// produces -- it may be the displaced isosurface, a cone-acceptance catch, or an edge
+			// cell insertion never reaches -- and the stage diagnostic shows exactly where those
+			// live: yellow fringes hugging curbs and crevices, each one black at full weight in
+			// the lit image. Handing that fraction back to the probe costs a transient of light
+			// where a genuine contact occluder has no entry yet, which insertion repairs within
+			// frames; the occlusion stamp made a PERMANENT black rim out of cells that can never
+			// be inserted at all. The sealed-room guarantee is untouched: room-scale hits are far
+			// beyond two voxels, so they still occlude.
+			if(u_gi_occlude_on_cache_miss && hit.t >= 2.0 * origin_voxel)
 			{
 				resolved += 1.0;
 			}
@@ -311,6 +436,7 @@ void main()
 		}
 		sum += cached * u_gi_intensity;
 		resolved += 1.0;
+		debug_found += 1.0;
 	}
 	if(u_gi_debug_enabled)
 	{
@@ -318,16 +444,19 @@ void main()
 		if(u_gi_debug_mode >= 3)
 		{
 			// Mode 3: the three numbers every remaining theory is about.
-			//   R = fraction of rays that read the entry being shaded -- EXACT, by key, no threshold.
+			//   R = fraction of rays REJECTED as reading the entry being shaded -- EXACT, by key, no
+			//       threshold. These no longer reach the output, so this is now how much of the
+			//       hemisphere the gather failed to measure and handed back to the probe, not how
+			//       much darkness it wrote.
 			//   G = the lift actually applied, in voxels. Near zero here means the adaptive term is
 			//       not firing; large here with red bright means the lift is not the mechanism.
 			//   B = the cascade's signed distance at the shading point, in voxels, mid grey = exactly
 			//       on the isosurface. This is the INPUT the adaptive lift is derived from, so if it
 			//       reads positive where the surface is visibly displaced, that input is wrong.
-			gl_FragColor = vec4(debug_self_reads * inv_rays,
-			                    saturate(lift / max(origin_voxel, 1e-4)),
-			                    saturate(0.5 + origin_distance / max(2.0 * origin_voxel, 1e-4)),
-			                    1.0);
+			vec3 debug_rgb = vec3(debug_self_reads * inv_rays,
+			                      saturate(lift / max(origin_voxel, 1e-4)),
+			                      saturate(0.5 + origin_distance / max(2.0 * origin_voxel, 1e-4)));
+			gl_FragColor = vec4(GiDebugUnshade(debug_rgb, uv), 1.0);
 			return;
 		}
 		if(u_gi_debug_mode >= 2)
@@ -339,14 +468,29 @@ void main()
 			//   B = fraction that resolved at all, for reference.
 			// Red means the gather is reading itself; that is a feedback loop no ray count can fix
 			// and it is what a larger origin offset papers over.
+			//
+			// R is SCALE RELATIVE and reads very differently near and far. Four voxels is 1 m at
+			// cascade level 0 but 8 m at the coarsest, so on distant ground in a narrow street almost
+			// every ray qualifies as a "near" hit without anything being wrong. Trust this channel
+			// where the surface is close enough to sit in level 0; treat it as noise beyond that.
 			float mean_t = debug_hit > 0.0 ? debug_total_t / debug_hit : 0.0;
-			gl_FragColor = vec4(debug_near_hits * inv_rays,
-			                    saturate(mean_t / max(u_gi_max_distance * 0.1, 1e-3)),
-			                    resolved * inv_rays,
-			                    1.0);
+			vec3 debug_rgb = vec3(debug_near_hits * inv_rays,
+			                      saturate(mean_t / max(u_gi_max_distance * 0.1, 1e-3)),
+			                      resolved * inv_rays);
+			gl_FragColor = vec4(GiDebugUnshade(debug_rgb, uv), 1.0);
 			return;
 		}
-		gl_FragColor = vec4(debug_hit * inv_rays, debug_addressed * inv_rays, resolved * inv_rays, 1.0);
+		// Mode 1: the three stages, and B is FOUND rather than `resolved`.
+		//
+		// It reported `resolved` until this was noticed, which with u_gi_occlude_on_cache_miss on
+		// counts a miss as a success -- so the stage that writes black at full weight was
+		// indistinguishable from the stage that writes light. White here now means the rays really did
+		// read cached radiance and any darkness is IN the cache; yellow (R and G high, B low) means
+		// they hit addressable geometry the cache has never lit, and every one of those contributed
+		// zero radiance at full weight. No lift, bias or ray-start value moves the second case, since
+		// nothing about it is a question of where the ray started.
+		vec3 debug_rgb = vec3(debug_hit * inv_rays, debug_addressed * inv_rays, debug_found * inv_rays);
+		gl_FragColor = vec4(GiDebugUnshade(debug_rgb, uv), 1.0);
 		return;
 	}
 	if(resolved <= 0.0)

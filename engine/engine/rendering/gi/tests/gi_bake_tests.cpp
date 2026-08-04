@@ -17,6 +17,9 @@
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/radiance_cache.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
+// The generator templates mesh::create_plane builds primitives from, so the plane test bakes the
+// exact geometry the embedded plane asset carries.
+#include <engine/rendering/generator/generator.hpp>
 // For submesh_pose_mat4: the surface cache places a field wherever model::submit draws the
 // submesh, so the two read the same pose structure.
 #include <engine/rendering/model.h>
@@ -1152,6 +1155,287 @@ void test_open_mesh_does_not_produce_inside_regions()
                 negative_outside);
     check(inside_bricks == 0, "no brick of an open mesh is flagged inside");
     check(negative_outside == 0, "no point outside an open mesh reads as solid");
+}
+
+void test_doubled_sheet_bakes_unsigned()
+{
+    std::printf("test_doubled_sheet_bakes_unsigned\n");
+    // The engine's plane primitive (mesh::create_plane) is a sheet merged with a coincident,
+    // oppositely wound copy of itself so it renders from both sides. After welding, every edge of
+    // that geometry carries an EVEN face count -- interior edges four, rim edges two -- so a
+    // closedness test of "at least two faces per edge" reports it closed and bakes it SIGNED. The
+    // coincident opposite faces then cancel every vertex and edge pseudonormal to numerical zero,
+    // the sign of each voxel degenerates to floating-point noise, and the field renders as random
+    // phantom walls and staircases quantised at brick granularity where a flat slab should be.
+    //
+    // A doubled sheet is non-manifold, not closed. It must take the unsigned-shell path, where the
+    // sign is never consulted and the plane occludes as a thin slab.
+    sdf_source_geometry g;
+    const float half = 2.0f;
+    constexpr int segments = 4;
+    const float step = (2.0f * half) / float(segments);
+    for(int row = 0; row < segments; ++row)
+    {
+        for(int col = 0; col < segments; ++col)
+        {
+            const float x0 = -half + float(col) * step;
+            const float z0 = -half + float(row) * step;
+            const float x1 = x0 + step;
+            const float z1 = z0 + step;
+            // Up-facing sheet, then the same quad wound the other way, with its own vertices --
+            // exactly what merge_mesh produces for the two rotated copies.
+            add_quad(g, {x0, 0.0f, z0}, {x0, 0.0f, z1}, {x1, 0.0f, z1}, {x1, 0.0f, z0});
+            add_quad(g, {x0, 0.0f, z0}, {x1, 0.0f, z0}, {x1, 0.0f, z1}, {x0, 0.0f, z1});
+        }
+    }
+    recompute_bounds(g);
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 32;
+    settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(g, settings, sdf), "doubled sheet bake succeeds");
+    check(sdf.is_two_sided, "a doubled sheet bakes as an unsigned shell, not a signed field");
+    int inside_bricks = 0;
+    for(uint32_t entry : sdf.indirection)
+    {
+        if(is_sdf_empty_entry(entry) && (entry & mesh_sdf::indirection_inside_flag) != 0u)
+        {
+            ++inside_bricks;
+        }
+    }
+    check(inside_bricks == 0, "no brick of a doubled sheet is flagged inside");
+    // The field must read as a thin slab: clearly positive away from the plane, on both sides.
+    int negative_off_plane = 0;
+    for(int i = 0; i < 4000; ++i)
+    {
+        const float t = float(i) / 4000.0f;
+        const float x = (t * 2.0f - 1.0f) * half * 0.9f;
+        const float z = (std::sin(t * 113.0f)) * half * 0.9f;
+        const float y = (i % 2 == 0 ? 1.0f : -1.0f) *
+                        (sdf.two_sided_thickness + 4.0f * sdf.voxel_size);
+        if(sample_mesh_sdf(sdf, math::vec3(x, y, z)) < 0.0f)
+        {
+            ++negative_off_plane;
+        }
+    }
+    std::printf("  inside-flagged bricks = %d, negative samples off the plane = %d\n",
+                inside_bricks,
+                negative_off_plane);
+    check(negative_off_plane == 0, "no point clear of the slab reads as solid");
+}
+
+void test_engine_plane_primitive_bakes_flat()
+{
+    std::printf("test_engine_plane_primitive_bakes_flat\n");
+    // The EXACT geometry mesh::create_plane produces for the embedded "engine:/embedded/plane"
+    // asset (defaults::init_assets): a generator plane rotated -90 and +90 degrees about X and
+    // merged, i.e. two coincident, oppositely wound sheets. The doubled-sheet fixture above is a
+    // hand-built analog; this one goes through the same generator templates, the same float trig
+    // and the same merge, so a divergence between the two names the fixture as unfaithful rather
+    // than leaving it to be inferred from a screenshot.
+    using namespace generator;
+    plane_mesh_t plane({5.0f, 5.0f}, {1, 1});
+    math::quat rot1(math::vec3(math::radians(-90.0f), 0.f, 0.0f));
+    math::quat rot2(math::vec3(math::radians(90.0f), 0.f, 0.0f));
+    auto plane1 = rotate_mesh(plane, rot1);
+    auto plane2 = rotate_mesh(plane, rot2);
+    auto merged = merge_mesh(plane1, plane2);
+    sdf_source_geometry g;
+    const generator::any_mesh soup(merged);
+    for(const auto& v : soup.vertices())
+    {
+        const math::vec3 position = v.position;
+        g.positions.push_back(position);
+    }
+    for(const auto& triangle : soup.triangles())
+    {
+        g.indices.push_back(uint32_t(triangle.vertices[0]));
+        g.indices.push_back(uint32_t(triangle.vertices[1]));
+        g.indices.push_back(uint32_t(triangle.vertices[2]));
+    }
+    recompute_bounds(g);
+    std::printf("  %zu vertices, %zu triangles, bounds y [%.6f, %.6f]\n",
+                g.positions.size(),
+                g.indices.size() / 3,
+                g.bounds.min.y,
+                g.bounds.max.y);
+    // The runtime bake settings primitives actually use (mesh::runtime_sdf_bake_settings).
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 32;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(g, settings, sdf), "embedded plane bake succeeds");
+    check(sdf.is_two_sided, "the embedded plane bakes as an unsigned shell");
+    int inside_bricks = 0;
+    for(uint32_t entry : sdf.indirection)
+    {
+        if(is_sdf_empty_entry(entry) && (entry & mesh_sdf::indirection_inside_flag) != 0u)
+        {
+            ++inside_bricks;
+        }
+    }
+    check(inside_bricks == 0, "no brick of the embedded plane is flagged inside");
+    // Sweep the WHOLE padded field volume above and below the slab. The reported artefact is
+    // phantom walls and stairs standing inside the field bounds, so the sweep has to cover the
+    // bounds, not just a line of probes: any point clear of the slab that samples negative would
+    // trace as exactly such a wall.
+    int negative_off_plane = 0;
+    float worst = 0.0f;
+    const float clear = sdf.two_sided_thickness + 2.0f * sdf.voxel_size;
+    const math::vec3 span = sdf.bounds.get_dimensions();
+    constexpr int samples_per_axis = 24;
+    for(int sz = 0; sz < samples_per_axis; ++sz)
+    {
+        for(int sy = 0; sy < samples_per_axis; ++sy)
+        {
+            for(int sx = 0; sx < samples_per_axis; ++sx)
+            {
+                const math::vec3 unit(float(sx) / float(samples_per_axis - 1),
+                                      float(sy) / float(samples_per_axis - 1),
+                                      float(sz) / float(samples_per_axis - 1));
+                const math::vec3 p = sdf.bounds.min + unit * span;
+                if(std::fabs(p.y) < clear)
+                {
+                    continue;
+                }
+                const float sampled = sample_mesh_sdf(sdf, p);
+                if(sampled < 0.0f)
+                {
+                    ++negative_off_plane;
+                    worst = math::min(worst, sampled);
+                }
+            }
+        }
+    }
+    std::printf("  inside bricks = %d, negative off-plane samples = %d (worst %.4f), shell = %.4f\n",
+                inside_bricks,
+                negative_off_plane,
+                worst,
+                sdf.two_sided_thickness);
+    check(negative_off_plane == 0, "no point clear of the embedded plane's slab reads as solid");
+}
+
+namespace
+{
+/// CPU transcription of the shader's per-instance sphere trace (SdfTestInstance), with the
+/// launch-surface suppression switchable so the test can demonstrate the failure it fixes.
+/// Identity transform, unit scale: the fixture geometry is authored in world space.
+struct instance_trace_result
+{
+    bool hit = false;
+    float t = 0.0f;
+};
+
+auto trace_instance_field(const mesh_sdf& sdf,
+                          const math::vec3& origin,
+                          const math::vec3& direction,
+                          float t_max,
+                          float surface_bias,
+                          bool suppress_launch_surface) -> instance_trace_result
+{
+    instance_trace_result result;
+    const float hit_threshold = math::max(surface_bias * sdf.voxel_size, 1e-6f);
+    const bool two_sided = sdf.is_two_sided;
+    // Suppression decision from the RAY ORIGIN, exactly as the shader derives it.
+    bool suppressed = false;
+    if(suppress_launch_surface)
+    {
+        const float origin_distance = sample_mesh_sdf(sdf, origin);
+        suppressed = origin_distance < hit_threshold && (two_sided || origin_distance > -hit_threshold);
+    }
+    float t = 0.0f;
+    for(int step = 0; step < 256; ++step)
+    {
+        if(t > t_max)
+        {
+            return result;
+        }
+        const float distance = sample_mesh_sdf(sdf, origin + direction * t);
+        const float accept = hit_threshold;
+        if(suppressed)
+        {
+            if(distance >= accept)
+            {
+                suppressed = false;
+            }
+            else if(two_sided || distance > -hit_threshold)
+            {
+                t += math::max(std::fabs(distance), hit_threshold);
+                continue;
+            }
+            // Signed and clearly negative: genuinely buried in solid geometry, fall through.
+        }
+        if(distance < accept)
+        {
+            result.hit = true;
+            result.t = t;
+            return result;
+        }
+        t += math::max(distance, hit_threshold);
+    }
+    return result;
+}
+} // namespace
+
+void test_ray_from_open_sheet_escapes_its_own_shell()
+{
+    std::printf("test_ray_from_open_sheet_escapes_its_own_shell\n");
+    // A street-sized open sheet baked with the ASSET IMPORTER'S defaults. The shell of an open
+    // mesh is floored at one voxel, and a large submesh's voxel sits at the max_voxel_size clamp,
+    // so the field is a slab on the order of A METRE thick around the walkable surface. Every
+    // gather, bounce and shadow ray is born ON that surface -- deep inside its own field's
+    // "solid" -- and the per-instance tier accepted the first sample as a hit at t = 0. No
+    // cascade-derived bias can clear it, because the acceptance is measured in MESH voxels while
+    // every origin bias is measured in CASCADE voxels (see lessons.md). The visible result: the
+    // whole submesh's GI goes black wherever those biases are smaller than the shell, which is
+    // near the camera, with blob edges following submesh seams.
+    sdf_source_geometry g;
+    const float half = 30.0f;
+    add_quad(g, {-half, 0.0f, -half}, {-half, 0.0f, half}, {half, 0.0f, half}, {half, 0.0f, -half});
+    recompute_bounds(g);
+    mesh_sdf_bake_settings settings; // Importer defaults: resolution 64, max_voxel_size 1.
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(g, settings, sdf), "street-sized sheet bake succeeds");
+    check(sdf.is_two_sided, "an open sheet bakes as a shell");
+    std::printf("  voxel = %.3f, shell half-thickness = %.3f\n", sdf.voxel_size, sdf.two_sided_thickness);
+    check(sdf.two_sided_thickness > 0.5f,
+          "the shell is thick enough to bury a surface ray (the premise being tested)");
+    // A gather ray as the resolve pass launches it: lifted a fraction of a CASCADE voxel
+    // (0.25 m at level 0), heading 45 degrees up.
+    const float cascade_lift = 0.256f * 0.25f;
+    const math::vec3 ray_origin(3.0f, cascade_lift, 2.0f);
+    const math::vec3 ray_dir = math::normalize(math::vec3(1.0f, 1.0f, 0.0f));
+    const auto buried = trace_instance_field(sdf, ray_origin, ray_dir, 40.0f, 0.1f, false);
+    check(buried.hit && buried.t < sdf.voxel_size,
+          "WITHOUT suppression the ray instantly hits its own launch shell (the bug)");
+    const auto freed = trace_instance_field(sdf, ray_origin, ray_dir, 40.0f, 0.1f, true);
+    check(!freed.hit, "with suppression the ray escapes its own launch shell");
+    // Occlusion must survive: a DIFFERENT field (a wall ahead) still stops the ray, because the
+    // suppression is per instance and the ray does not start inside the wall's shell.
+    sdf_source_geometry wall_geometry;
+    add_quad(wall_geometry,
+             {6.0f, 0.0f, -half},
+             {6.0f, 0.0f, half},
+             {6.0f, 8.0f, half},
+             {6.0f, 8.0f, -half});
+    recompute_bounds(wall_geometry);
+    mesh_sdf_bake_settings wall_settings;
+    wall_settings.resolution = 64;
+    mesh_sdf wall;
+    check(bake_mesh_sdf(wall_geometry, wall_settings, wall), "wall bake succeeds");
+    const auto occluded = trace_instance_field(wall, ray_origin, ray_dir, 40.0f, 0.1f, true);
+    check(occluded.hit, "a wall the ray does NOT start inside still occludes");
+    // And a ray genuinely inside a SIGNED solid still reports the burial as a hit: that case is
+    // real occlusion, not a launch artefact, and the suppression must not free it.
+    const auto solid_geometry = make_box(math::vec3(2.0f));
+    mesh_sdf solid;
+    mesh_sdf_bake_settings solid_settings;
+    solid_settings.resolution = 32;
+    solid_settings.min_voxel_size = 0.001f;
+    check(bake_mesh_sdf(solid_geometry, solid_settings, solid), "solid bake succeeds");
+    const auto inside_solid =
+        trace_instance_field(solid, math::vec3(0.0f, 0.0f, 0.0f), ray_dir, 40.0f, 0.1f, true);
+    check(inside_solid.hit && inside_solid.t < solid.voxel_size,
+          "a ray buried in a signed solid still hits immediately");
 }
 
 void test_determinism()
@@ -4268,6 +4552,9 @@ int main()
     test_bounds_entry_is_not_a_hit();
     test_trace_from_outside_hits_the_surface_not_the_bounds();
     test_open_mesh_does_not_produce_inside_regions();
+    test_doubled_sheet_bakes_unsigned();
+    test_engine_plane_primitive_bakes_flat();
+    test_ray_from_open_sheet_escapes_its_own_shell();
     test_serialization_round_trip();
     test_invalid_field_is_rejected();
     test_determinism();

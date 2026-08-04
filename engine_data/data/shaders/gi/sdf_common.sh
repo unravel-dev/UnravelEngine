@@ -633,13 +633,21 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
                      int max_steps, float surface_bias, float relaxation, bool want_normal,
                      inout SdfRayHit result)
 {
-	SdfInstance inst = SdfLoadInstance(index);
+	// Bounds FIRST, and only the bounds. The full instance record is ten vec4s and most
+	// candidates in a dense cell are rejected right here -- the grid deliberately over-reports,
+	// and the per-cell walk revisits instances that span cells -- so loading everything up front
+	// paid five times the buffer traffic the reject needed. This loop is the single hottest
+	// thing in the GI frame; the two redundant reads the accepted path repeats inside
+	// SdfLoadInstance are noise beside what the rejected paths stop reading.
+	uint bounds_base = uint(index) * uint(SDF_INSTANCE_STRIDE);
+	vec4 bounds0 = b_sdf_instances[bounds_base + 6u];
+	vec4 bounds1 = b_sdf_instances[bounds_base + 7u];
 	float t_near;
 	float t_far;
 	// Broad phase against the instance bounds, capped by the best hit so far so a nearer result
 	// short-circuits everything behind it. This is also what makes the duplicate visits the grid
 	// allows cheap: the second visit to an instance already behind a hit rejects immediately.
-	if(!SdfIntersectBounds(origin, inv_dir, inst.world_bounds_min, inst.world_bounds_max,
+	if(!SdfIntersectBounds(origin, inv_dir, bounds0.xyz, bounds1.xyz,
 	                       min(result.t, t_max), t_near, t_far))
 	{
 		return;
@@ -649,6 +657,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	{
 		return;
 	}
+	SdfInstance inst = SdfLoadInstance(index);
 	SdfHeader header = SdfLoadHeader(inst.header_index);
 	vec3 local_origin = SdfTransformPoint(inst.world_to_local_rows, origin);
 	// Deliberately not normalised: the linear part of world_to_local already maps a world
@@ -673,6 +682,38 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	// The comparison below is strict, so capping exactly at the saturation value is enough to stop a
 	// saturated sample ever reading as a hit while leaving every in-band distance usable.
 	float saturation = SDF_ENCODE_RANGE * header.voxel_size * inst.local_to_world_scale;
+	// Launch-surface suppression: a ray that STARTS inside this field's hit-acceptance band must
+	// see clear space before this instance may claim a hit.
+	//
+	// Every gather, bounce and shadow ray is born ON a surface, and when that surface's own field
+	// answers here, the first sample is a hit BY CONSTRUCTION -- nothing occludes the ray; the
+	// launch surface occludes itself. For large open submeshes the effect is total: the unsigned
+	// shell is floored at one voxel and a street-sized sheet's voxel sits at the max_voxel_size
+	// clamp, so the field is a slab about A METRE thick around the walkable surface and every ray
+	// on it dies at t = 0. The origin biases cannot clear this, because they are measured in
+	// CASCADE voxels while this acceptance is measured in MESH voxels -- two unrelated units (see
+	// lessons.md). The symptom set was: GI black pools with edges following SUBMESH seams, worse
+	// near the camera (the biases grow with the answering cascade level and eventually clear the
+	// shell at range), cells converging black (their shadow rays die the same way), and immunity
+	// to every origin-side knob.
+	//
+	// Derived from the RAY ORIGIN, not the segment start, so the duplicated per-cell visits the
+	// grid walk makes re-derive it identically, and an instance entered further along the ray --
+	// a genuine occluder -- is never suppressed. A SIGNED field reading clearly negative is real
+	// burial in solid geometry and hits immediately; only the on-surface band (and a shell's
+	// interior, which has no inside) walks out. test_ray_from_open_sheet_escapes_its_own_shell
+	// pins all four cases.
+	bool suppressed = false;
+	// Highest reading seen while suppressed, for the re-descent test below.
+	float suppress_best = -1e8;
+	if(all(greaterThanEqual(origin, inst.world_bounds_min)) &&
+	   all(lessThanEqual(origin, inst.world_bounds_max)))
+	{
+		float origin_distance = SdfSampleLocal(header, local_origin) * inst.local_to_world_scale;
+		bool two_sided = header.two_sided_thickness > 0.0;
+		suppressed = origin_distance < hit_threshold &&
+		             (two_sided || origin_distance > -hit_threshold);
+	}
 	float t = t_near;
 	bool resolved = false;
 	for(int step_index = 0; step_index < max_steps; ++step_index)
@@ -686,6 +727,34 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 		float world_distance = SdfSampleLocal(header, local_position) * inst.local_to_world_scale;
 		++result.steps;
 		float accept = min(SdfConeRadius(t, hit_threshold, relaxation), saturation);
+		if(suppressed)
+		{
+			if(world_distance >= accept)
+			{
+				suppressed = false;
+			}
+			// RE-DESCENT while escaping means a NEW surface, not the launch one. The walk out of
+			// the launch band sees a monotonically rising distance; if the reading rose and then
+			// drops by more than a voxel, the ray has crossed into a different fold of this field
+			// -- an L-shaped submesh's other wing, a wall of the same merged sheet -- and walking
+			// on would TUNNEL through it. Falling through to the hit test occludes instead, which
+			// errs dark rather than leaking light through geometry.
+			else if(world_distance < suppress_best - header.voxel_size * inst.local_to_world_scale)
+			{
+				suppressed = false;
+			}
+			else if(header.two_sided_thickness > 0.0 || world_distance > -hit_threshold)
+			{
+				// Still in the launch band. |distance| is the distance to the shell boundary, so
+				// stepping by it converges on the exit without ever crossing it -- the same
+				// Lipschitz argument the ordinary march rests on, pointed outward.
+				suppress_best = max(suppress_best, world_distance);
+				t += max(abs(world_distance), hit_threshold);
+				continue;
+			}
+			// Signed and clearly negative: genuinely inside solid geometry. Fall through to the
+			// hit test, which accepts it -- that burial is real occlusion, not a launch artefact.
+		}
 		if(world_distance < accept)
 		{
 			if(t < result.t || !result.hit)
@@ -857,6 +926,26 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		return result;
 	}
 	float t = t_min;
+	// Launch-surface suppression, mirroring the per-instance tier: a gather, bounce or shadow ray
+	// is born ON a surface, and the cascade represents that surface as a slab inflated by the
+	// composed shells' thickness -- so the first sample is routinely a "hit" that is nothing but
+	// the launch surface occluding itself, and the ray must see clear space before a hit counts.
+	//
+	// The arming condition differs by where this tier starts. When the cascade traces from the
+	// ray's true origin (t_min == 0, near field off) the whole acceptance band is the launch
+	// surface, exactly as in the instance tier. When it takes over FROM a near field (t_min > 0)
+	// a first sample within the acceptance may be a genuine occluder sitting just past the
+	// handover, so only a NEGATIVE reading -- strictly inside composed solid, which the near
+	// tier would have hit if it were real geometry in range -- is treated as launch overhang.
+	bool suppressed = false;
+	// Highest reading seen while suppressed. The walk out of the launch slab must see a
+	// monotonically rising distance; a drop of more than a voxel after rising means the walk
+	// crossed into a DIFFERENT surface's slab -- in a corridor the floor's and the wall's merge
+	// into one negative region, and without this test the escape tunnels through the wall and
+	// exits into the light on the far side. Occluding on re-descent errs dark, never leaks.
+	float suppress_best = -1e8;
+	bool first_sample = true;
+	bool from_origin = t_min <= 0.0;
 	for(int step = 0; step < max_steps; ++step)
 	{
 		if(t > t_max)
@@ -887,6 +976,33 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		// appeared as the camera APPROACHED a wall -- closer means a finer level, a smaller voxel,
 		// and so a smaller lift, while the cone kept growing at the same rate.
 		float accept = min(SdfConeRadius(t, base_threshold, relaxation), voxel);
+		if(first_sample)
+		{
+			first_sample = false;
+			suppressed = d < (from_origin ? accept : 0.0);
+		}
+		if(suppressed)
+		{
+			if(d >= accept)
+			{
+				suppressed = false;
+			}
+			else if(d < suppress_best - voxel)
+			{
+				// Re-descent: the walk rose toward its exit and dropped again -- a new occluder's
+				// slab, not the launch surface. Fall through to the hit test and occlude.
+				suppressed = false;
+			}
+			else
+			{
+				// Walking out of the launch band. |d| is the distance to the slab boundary, so
+				// stepping by it converges on the exit without crossing it (1-Lipschitz), and the
+				// floor keeps a zero reading from stalling.
+				suppress_best = max(suppress_best, d);
+				t += max(abs(d), base_threshold);
+				continue;
+			}
+		}
 		if(d < accept)
 		{
 			result.hit = true;
@@ -951,11 +1067,22 @@ SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field
 	// to absorb. Both are measurable rather than arguable: the first by eye, the second by the
 	// agreement rates in test_surface_resolve_addresses_one_cell_from_both_sides. The default stays
 	// zero so this changes nothing until it is deliberately dialled up.
-	SdfRayHit near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field_distance, t_max),
-	                                       max_steps, surface_bias, relaxation, want_normal);
-	if(near_hit.hit)
+	// Guarded rather than left to a zero-length segment, because that segment is NOT empty.
+	// SdfIntersectBounds clamps t_near to zero and t_far to t_max, so [0, 0] passes its `t_near <=
+	// t_far` test for any ray starting inside an instance's bounds; the march's own guard is
+	// `t > t_far`, which 0 > 0 fails; and the first sample is therefore taken AT THE ORIGIN and can
+	// return a hit at t = 0. A tier switched off by setting its range to zero would still stamp a
+	// zero-distance hit on every ray that begins within surface_bias mesh-voxels of a surface --
+	// which for a gather or shadow ray is every ray, since they begin on one by construction.
+	SdfRayHit near_hit = SdfMakeMiss();
+	if(near_field_distance > 0.0)
 	{
-		return near_hit;
+		near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field_distance, t_max),
+		                             max_steps, surface_bias, relaxation, want_normal);
+		if(near_hit.hit)
+		{
+			return near_hit;
+		}
 	}
 	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field_distance, t_max, max_steps,
 	                                    surface_bias, relaxation, want_normal);

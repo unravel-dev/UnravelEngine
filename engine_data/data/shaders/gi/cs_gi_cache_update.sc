@@ -39,7 +39,7 @@ uniform vec4 u_gi_update_params;
 /// Albedo used for cells no on-screen pixel ever registered, whose material is unknown.
 #define u_gi_update_default_albedo u_gi_update_params.w
 
-/// x = ceiling on any cell's albedo. yzw reserved.
+/// x = ceiling on any cell's albedo, y = update interval in frames. zw reserved.
 ///
 /// Separate from the default above because the two answer different questions: the default supplies
 /// a value where there is none, while this BOUNDS a value that already exists. Only the second can
@@ -48,6 +48,7 @@ uniform vec4 u_gi_update_params;
 /// immediately for anything visible.
 uniform vec4 u_gi_update_material;
 #define u_gi_update_max_albedo u_gi_update_material.x
+#define u_gi_update_interval   u_gi_update_material.y
 
 /// x = bounce ray length, y = near field distance, z = max steps, w = surface bias in voxels.
 uniform vec4 u_gi_update_bounce;
@@ -95,6 +96,16 @@ void main()
 	{
 		return;
 	}
+	// Interleaved update: light each entry every Nth frame. The pass carries the densest ray
+	// populations in the whole system (one shadow ray per light plus a bounce, per resident
+	// entry), and the accumulation is a running mean, so a lower cadence changes how FAST an
+	// entry converges and reacts -- not what it converges to. Keyed by slot + frame so the
+	// work spreads evenly across frames instead of pulsing.
+	uint interval = uint(max(u_gi_update_interval, 1.0));
+	if(interval > 1u && ((slot + u_gi_cache_frame) % interval) != 0u)
+	{
+		return;
+	}
 	vec4 position_data = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_POSITION)];
 	vec4 normal_data = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_NORMAL)];
 	vec3 normal = normal_data.xyz;
@@ -129,7 +140,27 @@ void main()
 	{
 		// Tolerant on purpose: the cascade is rebuilt a level per frame, so it lags a moving
 		// object by a few frames, and a false positive here costs only a re-created entry.
-		float tolerance = max(entry_cell_size, validate_voxel_size * 2.0);
+		//
+		// SUMMED rather than maxed, because the two errors are independent and both are present at
+		// once. This was `max(cell, 2 * voxel)`, which left no headroom over the error the stored
+		// point has BY CONSTRUCTION: insertion snaps it to the cell grid, so along the face axis it
+		// lands on the cell boundary nearest the surface -- up to half a cell out -- and along the
+		// tangent axes it is pulled to the cell centre, which on any relief inside the cell samples a
+		// different depth again. On top of that sits the cascade's own displacement from the real
+		// geometry, which is what the voxel term is for.
+		//
+		// A false retirement is not the cheap event the note above assumes. The entry is on screen,
+		// so the insert pass re-creates it the very next frame, and the update pass retires it again
+		// -- forever. The entry is therefore always FOUND, always with sample_count zero, so it reads
+		// as black radiance rather than as a miss, and no cache-miss diagnostic can see it.
+		//
+		// The old form was also resolution dependent in the wrong direction: at cascade level 0 the
+		// tolerance was max(0.25, 0.50) = 0.50 m at clipmap resolution 64 but max(0.25, 0.25) = 0.25 m
+		// at 128, so doubling the clipmap resolution HALVED it and retired entries that had survived
+		// before. Raise this further if black persists on high-relief geometry; the cost of erring
+		// loose is a stale entry lingering, which the insert pass overwrites as soon as its surface
+		// is seen again.
+		float tolerance = entry_cell_size + validate_voxel_size * 2.0;
 		if(abs(surface_distance) > tolerance)
 		{
 			b_gi_cache_keys[slot] = GI_CACHE_EMPTY_KEY;
@@ -177,17 +208,33 @@ void main()
 	// Using the distance the cascade reports at the entry pushes out by exactly what is needed:
 	// nothing where the entry already sits clear, and target + depth where it is buried. Guarded on
 	// coverage, since outside every level the reading carries no information.
+	// The lift tops the entry up to `lift_target` of clearance rather than ADDING the target on
+	// top of whatever clearance it already has. `max(lift_target, lift_target - surface_distance)`
+	// -- the previous form -- pushed an entry that already sat `d` clear out to `d + target`,
+	// doubling up exactly where no lift was needed; the visible cost of over-lifting is shadow
+	// rays sailing over nearby occluders, which reads as an over-lit far field.
 	float surface_offset = lift_target;
 	if(surface_distance < SDF_CLIPMAP_OUTSIDE)
 	{
-		surface_offset = max(lift_target, lift_target - surface_distance);
+		surface_offset = max(lift_target - surface_distance, 0.0);
 	}
 	vec3 position = position_data.xyz + normal * surface_offset;
 
+	// Per-instance tracing fades out with the entry's LEVEL. Levels are already a step function
+	// of distance to the camera, so they are exactly the "does mesh-exact detail still matter
+	// here" signal: a level-0 entry sits within base_distance and its contact shadowing is on
+	// screen at full detail, while a level-2 entry is tens of metres out where the cascade's
+	// answer is indistinguishable in the lit image. The near field is the dominant cost of this
+	// pass, so paying it only where it can be seen is most of this pass's optimisation.
+	uint entry_level_for_near = uint(max(normal_data.w, 0.0));
+	float near_scale = entry_level_for_near == 0u ? 1.0 : (entry_level_for_near == 1u ? 0.5 : 0.0);
 	// Direct IRRADIANCE arriving at the cell.
 	// The voxel size is already in hand from the retirement check above, so the shadow rays' own
 	// normal offset costs nothing extra to make resolution-relative.
-	vec3 irradiance = GiEvalDirectLighting(position, normal, max(validate_voxel_size, 0.01));
+	vec3 irradiance = GiEvalDirectLighting(position,
+	                                       normal,
+	                                       max(validate_voxel_size, 0.01),
+	                                       u_gi_shadow_near_field * near_scale);
 
 	// --- Bounce: gather from the cache itself, and populate wherever it is still empty ---
 	//
@@ -219,8 +266,10 @@ void main()
 			seed = GiHashUint(seed);
 			float u2 = float(seed & 0xFFFFu) / 65535.0;
 			vec3 direction = GiBounceDirection(normal, u1, u2);
+			// The bounce near field fades with the entry's level for the same reason the shadow
+			// one does above: the exactness it buys is only visible near the camera.
 			SdfRayHit hit = SdfTraceRay(position, direction, u_gi_bounce_distance,
-			                            u_gi_bounce_near_field, u_gi_bounce_max_steps,
+			                            u_gi_bounce_near_field * near_scale, u_gi_bounce_max_steps,
 			                            u_gi_bounce_bias, 0.0, false);
 			if(!hit.hit)
 			{
@@ -236,6 +285,20 @@ void main()
 			// anyway is what filled the table with cells keyed to a fabricated facing that no
 			// reader could ever find again.
 			if(!surface.valid)
+			{
+				continue;
+			}
+			// Same-plane rejection, mirroring the gather (see fs_gi_resolve.sc). A bounce ray that
+			// resolves back onto the plane of its own entry, facing the same way, is this surface
+			// reading itself: geometrically impossible on flat geometry, manufactured entirely by
+			// the displaced isosurface plus the hit acceptance. The slot test below only catches
+			// the one cell this thread owns, while a grazing ray lands a cell or two away and
+			// feeds the NEIGHBOUR's radiance back along the floor -- and because this pass also
+			// writes what the next frame reads, that is a feedback loop: a shadowed floor
+			// converges toward black and holds there. Skipped without counting, like every other
+			// failure to measure.
+			float self_plane = dot(surface.position - position_data.xyz, normal);
+			if(abs(self_plane) < 2.0 * validate_voxel_size && dot(surface.normal, normal) > 0.7)
 			{
 				continue;
 			}

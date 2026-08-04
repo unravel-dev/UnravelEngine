@@ -232,11 +232,18 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     size of the spread, tracing as solid geometry that is not there. Refusing costs the GI
     //     contribution of parts too small to have contributed usefully; the field cost a
     //     neighbourhood. The sliver threshold also moved from 1e-6 to 1e-3 in the same pass.
+    // 20: the closedness test now requires every welded edge to be shared by EXACTLY two faces,
+    //     and triangles whose corners weld together no longer contribute topology. Double-sided
+    //     sheet geometry (the engine's own plane primitive is two coincident, oppositely wound
+    //     sheets) previously counted as closed, its cancelling pseudonormals made every voxel's
+    //     sign floating-point noise, and the field baked as random brick-quantised walls and
+    //     stairs. Such geometry now takes the unsigned-shell path. UV-sphere pole slivers also
+    //     stop poisoning the pole pseudonormals.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code.
-    return 19;
+    return 20;
 }
 
 template<>

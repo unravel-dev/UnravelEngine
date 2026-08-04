@@ -52,22 +52,41 @@ public:
         /// covers both.
         ///
         /// Raising it costs contact detail -- the lift carries rays over the small-scale occlusion
-        /// they exist to find -- so prefer the smallest value that removes the acne.
-        float normal_bias_voxels = 3.0f;
+        /// they exist to find -- so prefer the smallest value that removes the acne. The launch
+        /// suppression in the tracer now does the heavy lifting, which is what lets this sit at a
+        /// fraction of a voxel instead of the 3.0 it needed before.
+        float normal_bias_voxels = 0.2f;
         /// Gain on the cached bounce. The environment fallback is deliberately left at probe
         /// intensity, so this scales the scene's own contribution only.
         float intensity = 1.0f;
         /// Range in which per-instance fields are traced. Beyond it the global cascade answers,
         /// which cannot represent anything thinner than its voxels but costs one lookup.
         ///
-        /// This tier is where the frame time is: setting it to 0 as a diagnostic took the pass from
-        /// 8.9 ms to 1.0 ms on Bistro, so it is ~89% of the gather. It is not a free saving though
-        /// -- with the cascade answering alone, thin geometry stops occluding, shadow rays punch
-        /// through walls, and the result is surface acne that dances as the cascade re-snaps.
-        /// Prefer bounding the cost with @ref step_relaxation, which errs toward over-occluding
-        /// rather than under-occluding, before shortening this.
-        float near_field_distance = 0.0f;
-        int max_steps = 96;
+        /// NON-ZERO is load bearing for contact range, not merely nicer. Inside this range the
+        /// cascade is not consulted at all (the clipmap tier starts at this distance), and that is
+        /// the only real defence against its dilation: a hedge or a cluster of furniture composes
+        /// into a solid blob a voxel or more fatter than the geometry, and with the cascade
+        /// answering from t = 0 every ray leaving the pavement beside it hits that phantom at
+        /// point-blank range and reads the neighbour's dark cells at full weight -- a black pool
+        /// hugging the geometry that no origin bias can remove, because the obstacle is not where
+        /// the rays start but what they are traced against. The per-instance fields resolve the
+        /// same geometry at mesh-voxel accuracy.
+        ///
+        /// On cost: the oft-quoted 8.9 ms for this tier on Bistro was measured while the near
+        /// field forced its cone relaxation to zero, so every grazing ray burned its full step
+        /// budget. The relaxation now applies here too and bounds exactly that case; re-measure
+        /// before trading this range away, and prefer shortening it over zeroing it.
+        float near_field_distance = 5.0f;
+        /// View distance at which the near field has faded out entirely, 0 to disable fading.
+        ///
+        /// The per-instance tier exists for CONTACT fidelity, and contact detail is only visible
+        /// near the camera: a pixel thirty metres away renders a cascade-scale area, so tracing
+        /// its first few metres against exact mesh fields buys nothing the half-res gather and
+        /// the denoiser can show. Fading the near field with view distance concentrates its cost
+        /// -- the single most expensive thing in the GI frame -- on the pixels that can display
+        /// what it pays for. The fade starts at half this distance and reaches zero here.
+        float near_field_fade_distance = 24.0f;
+        int max_steps = 32;
         /// Hit acceptance, as a FRACTION OF A VOXEL of whichever field answered. An absolute
         /// distance is meaningless here because voxel size varies with bake resolution, instance
         /// scale and cascade.
@@ -89,23 +108,6 @@ public:
         /// Try 0.01 to 0.05. Watch the Resolve pass time, contact darkening at range, and the
         /// agreement rates in test_surface_resolve_addresses_one_cell_from_both_sides.
         float step_relaxation = 0.05f;
-        /// Interpolate cached radiance across the four cells bracketing a hit in its tangent plane,
-        /// rather than point sampling the one cell it lands in.
-        ///
-        /// A cell is metres across and a pixel is millimetres, so a point lookup makes the gather
-        /// piecewise constant at cell scale -- blocks that shift as the cascade re-snaps or the
-        /// level steps. That is bias rather than noise, so temporal accumulation converges to it
-        /// instead of averaging it away, and the spatial filter cannot remove it without removing
-        /// real detail too, because a cell boundary and a lighting edge look identical to a
-        /// luminance edge stop.
-        ///
-        /// Costs four cache lookups per ray instead of one. The cheaper alternative -- jitter the
-        /// lookup within the cell and let the temporal filter integrate it -- adds no lookups but
-        /// turns the blocks into shimmer, which is worse exactly when the camera is moving, because
-        /// that is when disocclusion has reset the accumulation count and there are no frames to
-        /// integrate over.
-        ///
-        /// Off restores the point lookup, for comparison without a rebuild.
         /// How far along its OWN DIRECTION a ray starts, in voxels of the level covering the
         /// point.
         ///
@@ -136,6 +138,23 @@ public:
         /// self-hit succeeds at every stage; it is the difference every origin-offset knob
         /// actually moves.
         int debug_ray_diagnostics = 0;
+        /// Interpolate cached radiance across the four cells bracketing a hit in its tangent plane,
+        /// rather than point sampling the one cell it lands in.
+        ///
+        /// A cell is metres across and a pixel is millimetres, so a point lookup makes the gather
+        /// piecewise constant at cell scale -- blocks that shift as the cascade re-snaps or the
+        /// level steps. That is bias rather than noise, so temporal accumulation converges to it
+        /// instead of averaging it away, and the spatial filter cannot remove it without removing
+        /// real detail too, because a cell boundary and a lighting edge look identical to a
+        /// luminance edge stop.
+        ///
+        /// Costs four cache lookups per ray instead of one. The cheaper alternative -- jitter the
+        /// lookup within the cell and let the temporal filter integrate it -- adds no lookups but
+        /// turns the blocks into shimmer, which is worse exactly when the camera is moving, because
+        /// that is when disocclusion has reset the accumulation count and there are no frames to
+        /// integrate over.
+        ///
+        /// Off restores the point lookup, for comparison without a rebuild.
         bool interpolate_cache = true;
         /// Treat a ray that HIT geometry but found no cache entry as occluded rather than as
         /// unknown.
@@ -299,6 +318,10 @@ private:
         gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr s_gi_depth;
         gfx::program::uniform_ptr s_gi_normal;
+        /// Diagnostic only: the shader divides a debug readout by the albedo the CONSUMER will
+        /// multiply it back by, so the value on screen is the number the shader wrote rather than
+        /// the number times the surface's paint. See GiDebugUnshade in fs_gi_resolve.sc.
+        gfx::program::uniform_ptr s_gi_base_color;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
 
@@ -318,6 +341,7 @@ private:
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_base_color, "s_gi_base_color", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
         }

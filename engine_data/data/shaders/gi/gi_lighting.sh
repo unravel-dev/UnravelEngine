@@ -40,8 +40,8 @@ uniform vec4 u_gi_shadow_params;
 uniform vec4 u_gi_shadow_params2;
 #define u_gi_shadow_surface_bias u_gi_shadow_params2.x
 #define u_gi_shadow_relaxation   u_gi_shadow_params2.y
-/// The FINEST cascade voxel, which the voxel-relative normal bias below is held to.
-#define u_gi_shadow_finest_voxel u_gi_shadow_params2.z
+/// z is reserved. It carried the finest cascade voxel while the normal bias was clamped to it;
+/// the bias now scales by the level that answers and nothing reads it any more.
 /// How far along the ray a shadow ray starts, in voxels. Same reasoning as the gather ray:
 /// see gi_resolve_pass::settings::ray_start_voxels.
 #define u_gi_shadow_ray_start    u_gi_shadow_params2.w
@@ -61,8 +61,12 @@ uniform vec4 u_gi_shadow_params2;
  *        small and every shadow ray starts occluded, which converges the entry to black -- and
  *        black entries are indistinguishable from correctly shadowed ones in the final image.
  */
+/// @param near_field Range in which per-instance fields are traced for this ray. A parameter
+///        rather than the raw uniform so the caller can scale it per point: the cache update
+///        fades it out for far-from-camera entries, where mesh-exact shadowing is invisible and
+///        the cost is not.
 float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float light_distance,
-                    float voxel_size)
+                    float voxel_size, float near_field)
 {
 	// Scaled by the level that ANSWERS, not held to the finest one: this has to clear that
 	// level's own hit acceptance, which is surface_bias voxels of it. See the gather.
@@ -77,7 +81,7 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// a normal offset moves the shaded point and lets it see past nearby occluders, which reads as
 	// a surface that is simply too bright with nothing to say why.
 	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
-	SdfRayHit hit = SdfTraceRay(origin, to_light, max_distance, u_gi_shadow_near_field,
+	SdfRayHit hit = SdfTraceRay(origin, to_light, max_distance, near_field,
 	                            u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
 	                            u_gi_shadow_relaxation, false);
 	// A ray that ran out of budget without resolving is treated as LIT. The alternative, treating
@@ -96,7 +100,8 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
  * Irradiance arriving at a world point from one light, with traced visibility.
  * Lambertian: multiply by albedo / PI for outgoing radiance.
  */
-vec3 GiEvalLight(GpuLight light, vec3 world_position, vec3 world_normal, float voxel_size)
+vec3 GiEvalLight(GpuLight light, vec3 world_position, vec3 world_normal, float voxel_size,
+                 float near_field)
 {
 	vec3 unshadowed = GpuEvalLightUnshadowed(light, world_position, world_normal);
 	// Nothing to occlude, so skip the ray entirely. This is the common case for a point far
@@ -118,18 +123,20 @@ vec3 GiEvalLight(GpuLight light, vec3 world_position, vec3 world_normal, float v
 		light_distance = length(delta);
 		to_light = light_distance > 1e-6 ? delta / light_distance : world_normal;
 	}
-	return unshadowed * GiTraceShadow(world_position, world_normal, to_light, light_distance, voxel_size);
+	return unshadowed *
+	       GiTraceShadow(world_position, world_normal, to_light, light_distance, voxel_size, near_field);
 }
 
 /**
  * Total irradiance at a world point from every resident light, with traced visibility.
+ * @param near_field See GiTraceShadow: the per-instance range for this point's shadow rays.
  */
-vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_size)
+vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_size, float near_field)
 {
 	vec3 total = vec3_splat(0.0);
 	for(int i = 0; i < u_gpu_light_count; ++i)
 	{
-		total += GiEvalLight(GpuLoadLight(i), world_position, world_normal, voxel_size);
+		total += GiEvalLight(GpuLoadLight(i), world_position, world_normal, voxel_size, near_field);
 	}
 	return total;
 }

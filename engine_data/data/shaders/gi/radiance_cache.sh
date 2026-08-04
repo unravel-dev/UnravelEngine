@@ -422,10 +422,19 @@ bool GiCacheGatherForFace(vec3 position, vec3 query_normal, uint face, uint leve
 			weight *= plane_weight * facing * facing;
 			out_radiance += b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz * weight;
 			weight_sum += weight;
-			// The nearest tap, kept as a fallback. If every tap is rejected -- a lone cell on a
-			// sliver of geometry, say -- falling back to a point lookup is right, while returning a
-			// miss would hand the pixel to the consumer's fallback and read as a hole.
-			if(weight_u * weight_v > fallback_weight)
+			// The nearest tap, kept as a fallback. If every tap is DOWN-WEIGHTED to nothing -- a
+			// lone cell on a sliver of geometry, say -- falling back to a point lookup is right,
+			// while returning a miss would hand the pixel to the consumer's fallback and read as a
+			// hole.
+			//
+			// Gated on the consistency tests being merely NON-ZERO, though. A tap whose plane or
+			// facing weight is exactly zero was positively identified as a DIFFERENT surface -- the
+			// far side of a floor slab shares the same face bin and cell column, and an opposite
+			// facing zeroes the facing term -- and "every consistent tap is empty" must not degrade
+			// into reading the one tap the tests just proved is behind a wall. That was the last
+			// remaining leak in this gather: the fallback ignored the very rejection that had just
+			// been computed.
+			if(plane_weight * facing > 0.0 && weight_u * weight_v > fallback_weight)
 			{
 				fallback_weight = weight_u * weight_v;
 				fallback_radiance = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz;

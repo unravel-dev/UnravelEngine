@@ -967,3 +967,89 @@ The measurement that would have settled it in one step was never taken: extent o
 extent of the space it occupies. Reach for the number that DISCRIMINATES between the live hypotheses
 instead of arguing about which is more plausible. `summarize_connected_components` exists now for
 exactly that, and reports 2401x on a scatter versus 1.00x on a solid part.
+
+## Build and check inside the tree that is already configured
+
+Shader changes were syntax-checked with `shaderc` writing binaries into the session scratchpad. The
+correction: compile in the tree the current build lives in, per skill `unravel-build-verify`. The
+build dirs here are `build/Debug` and `build/RelWithDebInfo`, both single-config Ninja -- there is no
+CMakeCache at `build/` itself, so `cmake --build build ...` from the skill's generic example does not
+apply verbatim. Locate the configured trees first, then run `--target engine_data` in each.
+
+Also worth knowing for this repo: `engine_data` only COPIES `.sc`/`.sh` into
+`build/<Config>/bin/data/engine/`. Nothing compiles them -- the editor's asset importer invokes
+`shaderc` at import time. So a green `engine_data` build proves the files were copied, NOT that they
+parse. Run `shaderc` explicitly (the in-tree `build/<Config>/bin/shaderc.exe`, against the COPIED
+tree, output inside the build tree) for both `s_5_0` and `spirv`, or a syntax error only surfaces as
+a runtime import failure.
+
+## A "measured, not guessed" bias is only as good as the field it measured
+
+`fs_gi_resolve.sc` sized its ray lift from `SdfSampleClipmapEx` -- clipmap distance, clipmap voxel --
+while `SdfTraceRay` tries the PER-INSTANCE tier first, whose hit acceptance is
+`surface_bias * mesh_voxel * instance_scale`. Two unrelated units. Every knob in the resolve pass
+scales with the clipmap voxel, so raising the clipmap resolution halved the clearance while the
+obstacle did not move, and the darkening got worse the closer the camera came (finer level, smaller
+voxel, smaller lift).
+
+When a bias is expressed in "voxels", say WHOSE voxels, and check that the field being measured is
+the field that will answer the query. A bias derived from one representation cannot protect a trace
+against another.
+
+## A degenerate range is not a disabled feature
+
+`near_field_distance = 0` was meant to switch the per-instance tier off. It did not: `[0, 0]` passes
+`SdfIntersectBounds` (t_near clamps up to 0, t_far clamps down to t_max = 0), and the march's guard is
+`t > t_far`, which `0 > 0` fails -- so it still took one sample AT THE ORIGIN and could return
+`hit = true, t = 0`. Turning something off by shrinking its range to zero leaves the code path live at
+its degenerate endpoint. Guard the call instead.
+
+## Use the project's own pipeline even for throwaway diagnostics
+
+A standalone repro of the baker's weld/edge-count logic was compiled with a scratch g++ instead of
+the configured CMake trees. It found the bug, but the user's standing preference is to build from
+source with the current pipelines (see skill `unravel-build-verify`): a scratch toolchain can
+disagree with the tree on flags, headers and float behaviour, and its results then need re-proving
+in-tree anyway. Prefer a temporary test in `gi_bake_tests.cpp` (or a debug printf in the real code)
+built via the existing `gi_tests` target.
+
+## "At least two faces per edge" is not "closed"
+
+`mesh_sdf_baker` counted an edge as interior when `face_count >= 2`, so the plane primitive -- which
+`mesh::create_plane` builds as TWO coincident, oppositely wound sheets -- read as closed and baked
+SIGNED. The coincident opposite faces cancel every pseudonormal to numerical zero, the voxel sign
+degenerates to floating-point noise, and the field renders as phantom brick-quantised walls and
+stairs. Closed 2-manifold means EXACTLY two faces per edge; anything else must take the unsigned
+path. And when tightening that test, exclude triangles whose corners WELD together (UV-sphere poles:
+float sin(pi) is ~1e-7, so pole caps are slivers that survive the area epsilon and then collapse in
+the weld) or a genuinely closed sphere reads non-manifold.
+
+## A closed manifold can enclose nothing -- and a hand-built fixture proves the fixture
+
+The "exactly two faces per edge" fix for doubled sheets passed its regression test and still failed
+on the real plane primitive. The rotations mesh::create_plane applies MIRROR the two sheets'
+triangulations (opposite quad diagonals), so the merged mesh is combinatorially a perfect closed
+manifold -- every welded edge two faces, each direction traversed once -- enclosing zero volume. No
+edge counting can reject it. The discriminator is the enclosed signed volume the baker already
+computes: coincident opposite sheets cancel it to rounding error, while any genuine solid, however
+thin, keeps it orders of magnitude above (threshold 1e-9 x largest_extent^3).
+
+Two lessons. When a bake bug is reported against engine-GENERATED geometry, the regression test must
+run the VERBATIM production path (the generator templates, the same rotations, the same merge), not
+a hand-built analog -- the analog validated a fix the real geometry defeated. And when the user says
+"still broken", believe the report over the passing test: the test was measuring the wrong geometry.
+
+## The launch surface's own field is an occluder unless something says otherwise
+
+The persistent close-range GI black pools were the per-instance tier hitting the LAUNCH surface's
+own shell at t = 0. An open street-sized submesh bakes an unsigned shell floored at one voxel, and
+with importer defaults (resolution 64, max_voxel_size 1.0) a 60 m sheet measures voxel = 0.938 m and
+shell half-thickness = 0.938 m -- every gather, bounce and shadow ray born on that pavement starts
+~0.9 m inside its own field's solid. No cascade-derived bias can clear it: the acceptance is in MESH
+voxels, the biases in CASCADE voxels (the units-mismatch lesson above, striking again). Symptom
+signature to remember: black pools whose edges follow SUBMESH seams, worse near the camera, cells
+converging black (shadow rays die identically), and immunity to every origin-side knob and every
+cache/cascade fix. Fix: suppression in SdfTestInstance -- a ray starting inside a field's acceptance
+band must see clear space before that instance may claim a hit; signed fields reading clearly
+negative still hit (real burial). Proven end to end by
+test_ray_from_open_sheet_escapes_its_own_shell before the shader was touched.
