@@ -11,6 +11,8 @@
 
 namespace
 {
+namespace ANONYMOUS
+{
 /// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
 auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
 {
@@ -32,6 +34,7 @@ void write_affine_row(float* dst, const ::math::mat4& m, int row)
     dst[2] = m[2][row];
     dst[3] = m[3][row];
 }
+} // namespace ANONYMOUS
 } // namespace
 
 namespace unravel
@@ -304,12 +307,12 @@ void surface_cache_service::upload_instances()
     {
         const auto& inst = instances_[i];
         float* dst = instance_data_.data() + i * instance_vec4_stride * 4u;
-        write_affine_row(dst + 0, inst.world_to_local, 0);
-        write_affine_row(dst + 4, inst.world_to_local, 1);
-        write_affine_row(dst + 8, inst.world_to_local, 2);
-        write_affine_row(dst + 12, inst.local_to_world, 0);
-        write_affine_row(dst + 16, inst.local_to_world, 1);
-        write_affine_row(dst + 20, inst.local_to_world, 2);
+        ANONYMOUS::write_affine_row(dst + 0, inst.world_to_local, 0);
+        ANONYMOUS::write_affine_row(dst + 4, inst.world_to_local, 1);
+        ANONYMOUS::write_affine_row(dst + 8, inst.world_to_local, 2);
+        ANONYMOUS::write_affine_row(dst + 12, inst.local_to_world, 0);
+        ANONYMOUS::write_affine_row(dst + 16, inst.local_to_world, 1);
+        ANONYMOUS::write_affine_row(dst + 20, inst.local_to_world, 2);
         dst[24] = inst.world_bounds.min.x;
         dst[25] = inst.world_bounds.min.y;
         dst[26] = inst.world_bounds.min.z;
@@ -338,7 +341,7 @@ void surface_cache_service::upload_instances()
         // buffer every frame.
         instance_buffer_capacity_ = required_vec4 + required_vec4 / 2u + 64u;
         instance_buffer_ = gfx::create_dynamic_vertex_buffer(instance_buffer_capacity_,
-                                                             get_vec4_buffer_layout(),
+                                                             ANONYMOUS::get_vec4_buffer_layout(),
                                                              BGFX_BUFFER_COMPUTE_READ);
     }
     if(!instance_data_.empty())

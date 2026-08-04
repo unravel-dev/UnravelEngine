@@ -9,7 +9,8 @@ namespace unravel
 {
 namespace
 {
-
+namespace ANONYMOUS
+{
 /// Layout of the light buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
 auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
 {
@@ -20,6 +21,7 @@ auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
         return decl;
     }();
     return layout;
+}
 }
 
 auto to_gpu_light_type(light_type type) -> gpu_light_buffer::gpu_light_type
@@ -72,7 +74,7 @@ void gpu_light_buffer::ensure_capacity(uint32_t required_vec4)
     // silently dropped and the shader reads zeros -- so capacity is tracked and the buffer
     // recreated, with slack so a scene gaining lights does not recreate it every frame.
     capacity_vec4_ = required_vec4 + required_vec4 / 2u + light_vec4_stride * 16u;
-    buffer_ = gfx::create_dynamic_vertex_buffer(capacity_vec4_, get_vec4_buffer_layout(),
+    buffer_ = gfx::create_dynamic_vertex_buffer(capacity_vec4_, ANONYMOUS::get_vec4_buffer_layout(),
                                                 BGFX_BUFFER_COMPUTE_READ);
 }
 

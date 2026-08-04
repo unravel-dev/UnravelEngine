@@ -11,6 +11,8 @@ namespace unravel
 namespace
 {
 
+namespace ANONYMOUS
+{
 /// Layout of the payload buffer: a flat array of vec4, matching BUFFER_RW(_, vec4, _).
 auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
 {
@@ -23,6 +25,7 @@ auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
     return layout;
 }
 
+} // namespace ANONYMOUS
 } // namespace
 
 auto radiance_cache_gpu::init(uint32_t capacity) -> bool
@@ -35,7 +38,7 @@ auto radiance_cache_gpu::init(uint32_t capacity) -> bool
     keys_ = gfx::create_dynamic_index_buffer(capacity_,
                                              BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     data_ = gfx::create_dynamic_vertex_buffer(capacity_ * data_vec4_stride,
-                                              get_vec4_buffer_layout(),
+                                              ANONYMOUS::get_vec4_buffer_layout(),
                                               BGFX_BUFFER_COMPUTE_READ_WRITE);
     if(!is_valid())
     {

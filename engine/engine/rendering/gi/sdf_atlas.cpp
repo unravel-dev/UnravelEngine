@@ -13,12 +13,13 @@ namespace unravel
 namespace
 {
 
+namespace ANONYMOUS
+{
 /// Voxels along one atlas axis for a given brick count, border included.
 auto compute_atlas_voxel_dim(uint32_t atlas_brick_dim) -> uint32_t
 {
     return atlas_brick_dim * mesh_sdf::brick_stride;
 }
-
 /// Layout of the header buffer: a flat array of vec4, which is what BUFFER_RO(_, vec4, _)
 /// expects on every backend (a typed Buffer<float4> on D3D, a StructuredBuffer elsewhere).
 auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
@@ -32,6 +33,9 @@ auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
     return layout;
 }
 
+
+} // namespace ANONYMOUS
+
 } // namespace
 
 auto sdf_atlas::init(const settings& settings) -> bool
@@ -40,7 +44,7 @@ auto sdf_atlas::init(const settings& settings) -> bool
     settings_ = settings;
     const uint32_t brick_dim = std::max(settings_.atlas_brick_dim, 1u);
     settings_.atlas_brick_dim = brick_dim;
-    const uint32_t voxel_dim = compute_atlas_voxel_dim(brick_dim);
+    const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(brick_dim);
     if(voxel_dim > 2048u)
     {
         APPLOG_ERROR("[SurfaceCache] Atlas brick dimension {} needs a {}^3 texture, which exceeds the "
@@ -336,7 +340,7 @@ void sdf_atlas::ensure_buffer_capacity()
         // buffer once per mesh.
         header_capacity_vec4_ = required_headers + required_headers / 2u + 64u;
         header_buffer_ = gfx::create_dynamic_vertex_buffer(header_capacity_vec4_,
-                                                           get_vec4_buffer_layout(),
+                                                           ANONYMOUS::get_vec4_buffer_layout(),
                                                            BGFX_BUFFER_COMPUTE_READ);
         headers_dirty_ = true;
     }
@@ -391,7 +395,7 @@ auto sdf_atlas::get_stats() const -> stats
             ++result.resident_fields;
         }
     }
-    const uint32_t voxel_dim = compute_atlas_voxel_dim(settings_.atlas_brick_dim);
+    const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(settings_.atlas_brick_dim);
     result.atlas_bytes = size_t(voxel_dim) * voxel_dim * voxel_dim;
     return result;
 }
