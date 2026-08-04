@@ -30,6 +30,10 @@ SAMPLER2D(s_gi_depth, 8);
 SAMPLER2D(s_gi_normal, 9);
 /// Diagnostic only. See GiDebugUnshade.
 SAMPLER2D(s_gi_base_color, 10);
+/// PREVIOUS frame's accumulated luminance moments (mean, mean-square, sample count), for the
+/// variance-guided ray budget. Written by the temporal pass, so it lags this pass by one frame;
+/// that is exactly what makes it usable here without a feedback hazard.
+SAMPLER2D(s_gi_prev_moments, 11);
 
 /// Cancels what the CONSUMER will multiply this pass's output by, so a diagnostic written here
 /// arrives on screen as the number it is.
@@ -93,6 +97,10 @@ uniform vec4 u_gi_resolve_filter;
 uniform vec4 u_gi_resolve_debug;
 #define u_gi_debug_mode    int(u_gi_resolve_debug.x)
 #define u_gi_debug_enabled (u_gi_debug_mode > 0)
+/// y = ray count for SETTLED pixels (0 disables the adaptive budget),
+/// z = relative-sigma threshold below which a pixel counts as settled.
+#define u_gi_adaptive_min_rays int(u_gi_resolve_debug.y)
+#define u_gi_adaptive_sigma    u_gi_resolve_debug.z
 
 /// Builds an arbitrary orthonormal basis around a normal without a branch on the degenerate axis.
 void GiBuildBasis(vec3 n, out vec3 t, out vec3 b)
@@ -196,13 +204,19 @@ void main()
 	float margin = u_gi_normal_bias * origin_voxel;
 	float lift = max(0.0, -origin_distance) + margin;
 	vec3 origin = world_position + world_normal * lift;
-	// The shading point's OWN surface resolve. It serves two consumers below: the self-read
-	// rejection keys, and -- when the point reads INSIDE the cascade -- the ray origin itself.
-	//
-	// Computed for every pixel rather than only under the diagnostic, because what it feeds is
-	// production behaviour and not a readout. The cost is one surface resolve per PIXEL against
-	// u_gi_ray_count full traces per pixel, so it does not register beside the gather itself.
-	SdfSurfacePoint own_surface = SdfResolveSurfacePoint(world_position);
+	// The shading point's OWN surface resolve -- computed LAZILY, only where the cascade says the
+	// point sits inside its isosurface. That is the one case the resolve is load bearing for: the
+	// buried-origin escape below, and the exact-key self-read rejection that guards it. For the
+	// majority of pixels, which read on or outside the isosurface, the geometric same-plane
+	// rejection in the ray loop already covers self-reads, and the resolve's fourteen cascade
+	// samples bought nothing measurable. Verify with debug mode 3's R channel if in doubt: the
+	// self-read fraction should not move when this laziness is toggled.
+	SdfSurfacePoint own_surface;
+	own_surface.valid = false;
+	if(origin_distance < 0.0)
+	{
+		own_surface = SdfResolveSurfacePoint(world_position);
+	}
 	// A point INSIDE the isosurface cannot always be freed by a lift along the G-buffer normal.
 	// The lift assumes the phantom solid lies along -normal, but on relief at voxel scale -- a
 	// cornice, a window reveal -- the cascade's bulge overhangs LATERALLY: the wall normal points
@@ -281,6 +295,28 @@ void main()
 	float debug_near_hits = 0.0;
 	float debug_total_t = 0.0;
 	int ray_count = max(u_gi_ray_count, 1);
+	// Variance-guided ray budget: spend rays where the estimate is still noisy, not where it has
+	// already settled. The temporal pass accumulates per-pixel luminance moments and a sample
+	// count; a pixel whose history is deep and whose relative deviation is small has converged,
+	// and tracing four rays into it re-measures a number that is already known. Most pixels of a
+	// mostly-static view are in that state, so this is a large saving that costs quality nowhere:
+	// disocclusions reset the count and lighting changes raise the variance, and both immediately
+	// restore the full budget exactly where it is needed.
+	//
+	// The absolute-variance clause keeps DARK settled pixels settled: relative sigma divides by
+	// the mean, so near-black pixels would otherwise read as "noisy" forever and keep full rays.
+	if(u_gi_adaptive_min_rays > 0)
+	{
+		vec4 prev_moments = texture2DLod(s_gi_prev_moments, uv, 0.0);
+		float accumulated = prev_moments.z;
+		float mean = prev_moments.x;
+		float variance = max(prev_moments.y - mean * mean, 0.0);
+		float relative_sigma = sqrt(variance) / max(mean, 1e-3);
+		if(accumulated >= 8.0 && (relative_sigma < u_gi_adaptive_sigma || variance < 1e-6))
+		{
+			ray_count = min(ray_count, u_gi_adaptive_min_rays);
+		}
+	}
 	for(int i = 0; i < ray_count; ++i)
 	{
 		seed = GiHashUint(seed);

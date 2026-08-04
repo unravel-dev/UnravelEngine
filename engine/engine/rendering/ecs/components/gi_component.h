@@ -25,7 +25,14 @@ struct gi_settings
     /// The cascade the two passes trace against. Authored here rather than compiled in because its
     /// cost and its reach are the same trade the other two make: resolution is cubic in memory and
     /// in composition work, while base extent and level scale set how far GI sees at all.
-    global_sdf_clipmap::settings clipmap{};
+    ///
+    /// The RUNTIME defaults deliberately differ from the struct's: 128 voxels per axis, composed on
+    /// the GPU. The struct default stays at 64 with CPU composition because it also serves the
+    /// tests and any headless consumer, where composition work is cubic in the resolution and no
+    /// GPU exists; here a GPU is guaranteed, the dispatch makes 128 affordable, and the finer voxel
+    /// halves the scale of everything the cascade gets wrong -- thin-geometry leaks, isosurface
+    /// displacement, and the acne both produce.
+    global_sdf_clipmap::settings clipmap{.resolution = 128, .compose_on_gpu = true};
 };
 
 /**
@@ -101,6 +108,9 @@ public:
 
         // --- resolve pass ---
         result.resolve.ray_count = dominant ? from.resolve.ray_count : result.resolve.ray_count;
+        result.resolve.adaptive_ray_count =
+            dominant ? from.resolve.adaptive_ray_count : result.resolve.adaptive_ray_count;
+        result.resolve.min_ray_count = dominant ? from.resolve.min_ray_count : result.resolve.min_ray_count;
         result.resolve.max_distance =
             std::lerp(result.resolve.max_distance, from.resolve.max_distance, contribution);
         result.resolve.normal_bias_voxels =

@@ -552,13 +552,23 @@ auto global_sdf_clipmap::resolve_surface_point(const math::vec3& world_position,
         }
         // Differencing over the ANSWERING level's voxel. A fixed epsilon samples far inside one
         // coarse voxel, where the field is flat and the normal collapses into quantisation noise.
+        //
+        // FOUR tetrahedral taps rather than six central differences: the four corner directions
+        // sum to zero, so the reconstruction is unbiased, and it matches central differences to
+        // within the cascade's own R8 quantisation. Gradients are most of every surface resolve
+        // and the resolve runs per gather ray, so the two fewer taps are two fewer taps in the
+        // most-run code in GI. REFERENCE for SdfResolveSurfacePoint in sdf_common.sh -- the
+        // shader transcribes these exact offsets; a mismatch makes writers and readers resolve
+        // to different cells.
         const float e = voxel_size;
-        const math::vec3 gradient(sample(out_position + math::vec3(e, 0.0f, 0.0f)) -
-                                      sample(out_position - math::vec3(e, 0.0f, 0.0f)),
-                                  sample(out_position + math::vec3(0.0f, e, 0.0f)) -
-                                      sample(out_position - math::vec3(0.0f, e, 0.0f)),
-                                  sample(out_position + math::vec3(0.0f, 0.0f, e)) -
-                                      sample(out_position - math::vec3(0.0f, 0.0f, e)));
+        const math::vec3 k0(1.0f, -1.0f, -1.0f);
+        const math::vec3 k1(-1.0f, -1.0f, 1.0f);
+        const math::vec3 k2(-1.0f, 1.0f, -1.0f);
+        const math::vec3 k3(1.0f, 1.0f, 1.0f);
+        const math::vec3 gradient = k0 * sample(out_position + k0 * e) +
+                                    k1 * sample(out_position + k1 * e) +
+                                    k2 * sample(out_position + k2 * e) +
+                                    k3 * sample(out_position + k3 * e);
         const float gradient_length = math::length(gradient);
         if(gradient_length < 1e-8f)
         {

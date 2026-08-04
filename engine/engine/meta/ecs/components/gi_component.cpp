@@ -289,6 +289,28 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "prefiltered cell rather than a point sample, so the variance a "
                                        "path tracer fights here has already been paid down."},
         })
+        .data<&settings::adaptive_ray_count>("adaptive_ray_count"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "adaptive_ray_count"},
+            entt::attribute{"pretty_name", "Adaptive Ray Count"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip", "Drop settled pixels to Min Ray Count using the temporal "
+                                       "pass's per-pixel variance.\nDisocclusion and lighting changes "
+                                       "restore the full budget exactly where it is needed, so on a "
+                                       "mostly static view this recovers a large share of the trace "
+                                       "cost with nowhere for quality to hide. Requires temporal."},
+        })
+        .data<&settings::min_ray_count>("min_ray_count"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_ray_count"},
+            entt::attribute{"pretty_name", "Min Ray Count"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 8.0f},
+            entt::attribute{"tooltip", "Rays a settled pixel still traces. Two keeps a little "
+                                       "exploration so slow lighting drift is noticed quickly; one is "
+                                       "cheapest."},
+        })
         .data<&settings::max_distance>("max_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_distance"},
@@ -799,6 +821,8 @@ LOAD_INSTANTIATE(gi_cache_pass::settings, ser20::iarchive_binary_t);
 SAVE_INLINE(gi_resolve_pass::settings)
 {
     try_save(ar, ser20::make_nvp("ray_count", obj.ray_count));
+    try_save(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));
+    try_save(ar, ser20::make_nvp("min_ray_count", obj.min_ray_count));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
     try_save(ar, ser20::make_nvp("normal_bias_voxels", obj.normal_bias_voxels));
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
@@ -832,6 +856,8 @@ SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_binary_t);
 LOAD_INLINE(gi_resolve_pass::settings)
 {
     try_load(ar, ser20::make_nvp("ray_count", obj.ray_count));
+    try_load(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));
+    try_load(ar, ser20::make_nvp("min_ray_count", obj.min_ray_count));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
     // Renamed rather than reinterpreted: this used to be a world distance and is now a voxel
     // count, so an old scene's 0.05 would silently become a twentieth of a voxel -- far too small,

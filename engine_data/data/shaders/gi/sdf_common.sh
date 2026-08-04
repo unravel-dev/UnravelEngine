@@ -293,18 +293,24 @@ vec4 SdfProbeLocal(SdfHeader header, vec3 local_position)
 
 /**
  * Gradient of the field at a local-space position, giving the surface normal.
- * Central differences over one voxel; the field is smooth inside the band so this is stable.
+ *
+ * FOUR tetrahedral taps rather than six central differences. The four corners of a tetrahedron
+ * sample the directional derivative along four directions whose sum cancels every axis bias, so
+ * the reconstructed gradient matches central differences to well within the field's own R8
+ * quantisation -- and gradients are the bulk of every surface resolve, which is the bulk of the
+ * pass's fixed cost, so a third fewer taps here is a third off the most-run code in GI.
  */
 vec3 SdfGradientLocal(SdfHeader header, vec3 local_position)
 {
 	float e = header.voxel_size;
-	vec3 gradient;
-	gradient.x = SdfSampleLocal(header, local_position + vec3(e, 0.0, 0.0)) -
-	             SdfSampleLocal(header, local_position - vec3(e, 0.0, 0.0));
-	gradient.y = SdfSampleLocal(header, local_position + vec3(0.0, e, 0.0)) -
-	             SdfSampleLocal(header, local_position - vec3(0.0, e, 0.0));
-	gradient.z = SdfSampleLocal(header, local_position + vec3(0.0, 0.0, e)) -
-	             SdfSampleLocal(header, local_position - vec3(0.0, 0.0, e));
+	vec3 k0 = vec3(1.0, -1.0, -1.0);
+	vec3 k1 = vec3(-1.0, -1.0, 1.0);
+	vec3 k2 = vec3(-1.0, 1.0, -1.0);
+	vec3 k3 = vec3(1.0, 1.0, 1.0);
+	vec3 gradient = k0 * SdfSampleLocal(header, local_position + k0 * e) +
+	                k1 * SdfSampleLocal(header, local_position + k1 * e) +
+	                k2 * SdfSampleLocal(header, local_position + k2 * e) +
+	                k3 * SdfSampleLocal(header, local_position + k3 * e);
 	float len = length(gradient);
 	return len > 1e-8 ? gradient / len : vec3(0.0, 1.0, 0.0);
 }
@@ -515,13 +521,18 @@ SdfSurfacePoint SdfResolveSurfacePoint(vec3 world_position)
 		}
 		// Differencing over the answering level's voxel. Using a fixed epsilon samples far
 		// inside a single coarse voxel, where the field is flat and the normal is noise.
+		// Tetrahedral taps: four samples instead of six, matching central differences to within
+		// the cascade's own quantisation. TRANSCRIPTION of the CPU reference -- the two must use
+		// the same offsets or writers and readers resolve to different cells.
 		float e = voxel_size;
-		vec3 gradient = vec3(SdfSampleClipmap(result.position + vec3(e, 0.0, 0.0)) -
-		                         SdfSampleClipmap(result.position - vec3(e, 0.0, 0.0)),
-		                     SdfSampleClipmap(result.position + vec3(0.0, e, 0.0)) -
-		                         SdfSampleClipmap(result.position - vec3(0.0, e, 0.0)),
-		                     SdfSampleClipmap(result.position + vec3(0.0, 0.0, e)) -
-		                         SdfSampleClipmap(result.position - vec3(0.0, 0.0, e)));
+		vec3 k0 = vec3(1.0, -1.0, -1.0);
+		vec3 k1 = vec3(-1.0, -1.0, 1.0);
+		vec3 k2 = vec3(-1.0, 1.0, -1.0);
+		vec3 k3 = vec3(1.0, 1.0, 1.0);
+		vec3 gradient = k0 * SdfSampleClipmap(result.position + k0 * e) +
+		                k1 * SdfSampleClipmap(result.position + k1 * e) +
+		                k2 * SdfSampleClipmap(result.position + k2 * e) +
+		                k3 * SdfSampleClipmap(result.position + k3 * e);
 		float gradient_length = length(gradient);
 		// A flat field has no direction to step in. Inside coverage this means the point sits in a
 		// saturated region the cascade does not represent -- geometry thinner than its voxel, or a
@@ -1009,15 +1020,14 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 			result.t = t;
 			if(want_normal)
 			{
-				// Central differences over one voxel OF THE ANSWERING LEVEL.
+				// Tetrahedral taps over one voxel OF THE ANSWERING LEVEL.
 				float e = voxel;
-				float ignored;
-				vec3 n = vec3(SdfSampleClipmapEx(p + vec3(e, 0.0, 0.0), ignored) -
-				                  SdfSampleClipmapEx(p - vec3(e, 0.0, 0.0), ignored),
-				              SdfSampleClipmapEx(p + vec3(0.0, e, 0.0), ignored) -
-				                  SdfSampleClipmapEx(p - vec3(0.0, e, 0.0), ignored),
-				              SdfSampleClipmapEx(p + vec3(0.0, 0.0, e), ignored) -
-				                  SdfSampleClipmapEx(p - vec3(0.0, 0.0, e), ignored));
+				vec3 k0 = vec3(1.0, -1.0, -1.0);
+				vec3 k1 = vec3(-1.0, -1.0, 1.0);
+				vec3 k2 = vec3(-1.0, 1.0, -1.0);
+				vec3 k3 = vec3(1.0, 1.0, 1.0);
+				vec3 n = k0 * SdfSampleClipmap(p + k0 * e) + k1 * SdfSampleClipmap(p + k1 * e) +
+				         k2 * SdfSampleClipmap(p + k2 * e) + k3 * SdfSampleClipmap(p + k3 * e);
 				float len = length(n);
 				result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
 			}

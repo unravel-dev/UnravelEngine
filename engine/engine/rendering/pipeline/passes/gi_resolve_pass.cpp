@@ -162,6 +162,20 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     // Bound unconditionally because an unbound sampler is undefined on some backends even when the
     // branch that reads it is not taken.
     gfx::set_texture(resolve_program_.s_gi_base_color, 10, params.g_buffer->get_texture(0));
+    // The moments the temporal pass will READ this frame -- i.e. what it WROTE last frame --
+    // located by peeking the same parity run_temporal derives its targets from, WITHOUT
+    // incrementing it. One frame of lag is what makes this safe to read while the current
+    // frame's moments are still being produced.
+    const uint32_t history_parity = rview.data_get_or_emplace("GI_HISTORY_PARITY", 0u);
+    const char* prev_moments_name =
+        (history_parity & 1u) == 0u ? "GI_HISTORY_B_MOMENTS" : "GI_HISTORY_A_MOMENTS";
+    auto prev_moments = rview.tex_safe_get(prev_moments_name);
+    const bool adaptive_rays = s.adaptive_ray_count && s.enable_temporal && prev_moments &&
+                               prev_moments->get_size().width == target_size.width &&
+                               prev_moments->get_size().height == target_size.height;
+    gfx::set_texture(resolve_program_.s_gi_prev_moments,
+                     11,
+                     adaptive_rays ? prev_moments : params.g_buffer->get_texture(0));
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(instances.size()),
@@ -210,7 +224,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                     s.near_field_fade_distance,
                                     s.ray_start_voxels};
     gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
-    const float debug_params[4] = {float(s.debug_ray_diagnostics), 0.0f, 0.0f, 0.0f};
+    // The settled threshold is a relative luminance sigma. 0.25 was chosen as comfortably above
+    // the residual flicker of a converged history and comfortably below the deviation a genuine
+    // lighting change produces; it is a constant rather than a setting because the mechanism is
+    // self-correcting in both directions (see settings::adaptive_ray_count).
+    constexpr float adaptive_sigma_threshold = 0.25f;
+    const float debug_params[4] = {float(s.debug_ray_diagnostics),
+                                   adaptive_rays ? float(math::max(s.min_ray_count, 1)) : 0.0f,
+                                   adaptive_sigma_threshold,
+                                   0.0f};
     gfx::set_uniform(resolve_program_.u_gi_resolve_debug, debug_params);
 
     auto topology = gfx::clip_quad(1.0f);

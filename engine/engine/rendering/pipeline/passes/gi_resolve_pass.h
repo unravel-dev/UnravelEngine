@@ -35,6 +35,18 @@ public:
         /// point sample of the incoming radiance, so the variance a path tracer would fight here
         /// has already been paid down by the cache.
         int ray_count = 4;
+        /// Drop settled pixels to @ref min_ray_count using the temporal pass's per-pixel variance.
+        ///
+        /// A pixel with deep history and low luminance deviation has converged; tracing the full
+        /// budget into it re-measures a known number. Disocclusion resets the history count and a
+        /// lighting change raises the variance, and either restores the full budget exactly where
+        /// it is needed -- so on a mostly static view this recovers a large share of the trace
+        /// cost with no place for quality to hide: any pixel that could show the difference is by
+        /// definition not settled. Requires temporal accumulation.
+        bool adaptive_ray_count = true;
+        /// Rays a settled pixel still traces. One is cheapest; two keeps a little exploration so
+        /// a slow lighting drift is noticed within a few frames rather than only via the clamp.
+        int min_ray_count = 2;
         /// How far a gather ray travels before giving up and taking the environment instead.
         float max_distance = 200.0f;
         /// Lift off the surface before tracing, as a FRACTION OF A VOXEL of the field answering at
@@ -322,6 +334,8 @@ private:
         /// multiply it back by, so the value on screen is the number the shader wrote rather than
         /// the number times the surface's paint. See GiDebugUnshade in fs_gi_resolve.sc.
         gfx::program::uniform_ptr s_gi_base_color;
+        /// Previous frame's accumulated moments, for the variance-guided ray budget.
+        gfx::program::uniform_ptr s_gi_prev_moments;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
 
@@ -342,6 +356,7 @@ private:
             cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_base_color, "s_gi_base_color", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_prev_moments, "s_gi_prev_moments", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
         }

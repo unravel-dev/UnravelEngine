@@ -60,9 +60,11 @@ public:
     {
         ///< Voxels per axis in every level. Memory is level_count * resolution^3 bytes.
         ///
-        /// Held at 64 by the CPU composer: a level is 262k voxels and composition samples every
-        /// one of them against every overlapping field. 128 would be four times better spatially
-        /// and eight times the work, which is only affordable once composition moves to compute.
+        /// The STRUCT default stays 64 -- the value the CPU composer, the tests and any headless
+        /// consumer can afford, since composition work is cubic in it. The RUNTIME defaults to
+        /// 128 with GPU composition instead (see gi_settings), which halves the level-0 voxel and
+        /// with it the scale of everything the cascade gets wrong: thin-geometry leaks, isosurface
+        /// displacement, and the acne both produce.
         uint32_t resolution = 64;
         ///< World-space extent covered by level 0.
         float base_extent = 16.0f;
@@ -105,6 +107,10 @@ public:
         /// The CPU composer remains the REFERENCE: `sample`, `sample_ex` and `resolve_surface_point`
         /// read `level::voxels`, and the bake tests are their only consumers, so they keep working
         /// against a CPU-composed cascade while the runtime uses the GPU one.
+        ///
+        /// False HERE because a true default silently leaves every headless consumer -- the tests
+        /// above all -- with a cascade nothing composes. The RUNTIME opts in through gi_settings,
+        /// where a GPU is guaranteed; that is also what makes its 128 resolution affordable.
         bool compose_on_gpu = false;
         ///< Levels recomposed per update, at most. Composition touches every voxel of a level,
         ///< so recomposing all of them in the frame the camera crosses a voxel boundary would
