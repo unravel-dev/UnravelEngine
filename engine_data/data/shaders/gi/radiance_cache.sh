@@ -339,7 +339,17 @@ uint GiCacheFindSurface(vec3 position, vec3 normal, uint level)
  * Interpolating ONLY in the tangent plane is load bearing. Blending along the normal would mix the
  * two sides of a thin wall, which is the leak that putting the normal in the key exists to prevent.
  */
-bool GiCacheGatherForFace(vec3 position, uint face, uint level, out vec3 out_radiance)
+/// How far off the shading point's plane an interpolation tap may sit before it stops counting,
+/// in CELLS of the level being gathered.
+///
+/// Half a cell is the natural bound: the key already quantises a surface to its cell, so a tap
+/// on the same flat surface lands within that, while one on a perpendicular face or through a
+/// wall thinner than a cell lands a whole cell or more away. Expressed in cells rather than in
+/// world units because cells double per level -- a fixed world tolerance would reject genuine
+/// neighbours at level 0 and accept geometry from across a room at the coarsest level.
+#define GI_CACHE_PLANE_TOLERANCE 0.5
+
+bool GiCacheGatherForFace(vec3 position, vec3 query_normal, uint face, uint level, out vec3 out_radiance)
 {
 	out_radiance = vec3_splat(0.0);
 	uint axis = face >> 1u;
@@ -375,6 +385,9 @@ bool GiCacheGatherForFace(vec3 position, uint face, uint level, out vec3 out_rad
 	vec3 corner = position + tu * ((base_u + 0.5 - gu) * cell_size) +
 	              tv * ((base_v + 0.5 - gv) * cell_size);
 	float weight_sum = 0.0;
+	float fallback_weight = 0.0;
+	vec3 fallback_radiance = vec3_splat(0.0);
+	bool fallback_found = false;
 	for(int j = 0; j < 2; ++j)
 	{
 		for(int i = 0; i < 2; ++i)
@@ -388,12 +401,48 @@ bool GiCacheGatherForFace(vec3 position, uint face, uint level, out vec3 out_rad
 			float weight_u = i == 0 ? 1.0 - fu : fu;
 			float weight_v = j == 0 ? 1.0 - fv : fv;
 			float weight = weight_u * weight_v;
+			// The bilinear weight says how CLOSE a tap is; it does not say whether the tap is on the
+			// same surface. Matching the key only proves the tap lies in this cell of this face at
+			// this level -- a cell across a corner, or on the far side of a wall thinner than a cell,
+			// matches all three and then contributes at full weight. That is the one leak a traced
+			// gather still has: the trace establishes visibility for the point it landed on, and
+			// then this interpolation mixes in three neighbours it never traced to.
+			//
+			// Both tests are scaled by the CELL, so they mean the same thing at every level.
+			vec4 tap_position = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_POSITION)];
+			vec4 tap_normal = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_NORMAL)];
+			// How far the tap sits off the plane through the shading point. A neighbour on the same
+			// flat surface is ~0; one on a perpendicular face or through a wall is a cell or more.
+			float plane_offset = abs(dot(tap_position.xyz - position, query_normal));
+			float plane_weight = saturate(1.0 - plane_offset / (cell_size * GI_CACHE_PLANE_TOLERANCE));
+			// Facing agreement. Squared rather than raised high: the stored normal is the real
+			// surface normal, so a genuine neighbour on a curved wall must not be rejected for a few
+			// degrees of difference.
+			float facing = saturate(dot(tap_normal.xyz, query_normal));
+			weight *= plane_weight * facing * facing;
 			out_radiance += b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz * weight;
 			weight_sum += weight;
+			// The nearest tap, kept as a fallback. If every tap is rejected -- a lone cell on a
+			// sliver of geometry, say -- falling back to a point lookup is right, while returning a
+			// miss would hand the pixel to the consumer's fallback and read as a hole.
+			if(weight_u * weight_v > fallback_weight)
+			{
+				fallback_weight = weight_u * weight_v;
+				fallback_radiance = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].xyz;
+				fallback_found = true;
+			}
 		}
 	}
 	if(weight_sum <= 1e-6)
 	{
+		// Every tap was rejected as inconsistent. The cell the point actually sits in is still the
+		// right answer -- it is the one the trace reached -- so degrade to a point lookup rather
+		// than reporting a miss.
+		if(fallback_found)
+		{
+			out_radiance = fallback_radiance;
+			return true;
+		}
 		return false;
 	}
 	// Renormalised over the taps that resolved, so a neighbour the cache has not reached yet -- the
@@ -407,11 +456,11 @@ bool GiCacheGatherForFace(vec3 position, uint face, uint level, out vec3 out_rad
 /// GiCacheFindSurface does: near a tie both sides agree on the SET of the top two faces.
 bool GiCacheGatherSurface(vec3 position, vec3 normal, uint level, out vec3 out_radiance)
 {
-	if(GiCacheGatherForFace(position, GiQuantizeNormal(normal), level, out_radiance))
+	if(GiCacheGatherForFace(position, normal, GiQuantizeNormal(normal), level, out_radiance))
 	{
 		return true;
 	}
-	return GiCacheGatherForFace(position, GiQuantizeNormalSecond(normal), level, out_radiance);
+	return GiCacheGatherForFace(position, normal, GiQuantizeNormalSecond(normal), level, out_radiance);
 }
 
 /**

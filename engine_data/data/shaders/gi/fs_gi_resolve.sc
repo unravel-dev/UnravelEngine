@@ -157,11 +157,43 @@ void main()
 	// A ray-start offset cannot replace this: it clears a perpendicular distance of t * cos(theta),
 	// so a grazing ray needs an unbounded start to clear the same gap. The normal direction is the
 	// only one where a bounded push works for every ray at once.
-	float lift_target = u_gi_normal_bias * origin_voxel;
-	float lift = max(0.0, lift_target - origin_distance);
+	// The lift does two jobs and only ONE of them may be held to the finest level.
+	//
+	//  - The MARGIN has to clear this trace's own hit acceptance, which is surface_bias voxels OF
+	//    THE LEVEL THAT ANSWERS -- 0.025 m at level 0 but 0.2 m at the coarsest. Clamping it to the
+	//    finest voxel makes it smaller than the acceptance radius out there, so the ray registers a
+	//    hit immediately however much the displacement term contributes. That presents as darkening
+	//    that clears on near surfaces first as the bias is raised and holds out on far ones.
+	//  - The DISPLACEMENT between the rendered triangle and the cascade isosurface is measured, not
+	//    guessed, so it needs no allowance at all: -origin_distance is exactly how far inside the
+	//    point sits, and zero when it is already clear.
+	//
+	// Splitting them is what lets the bias stay SMALL. It no longer has to cover the worst-case
+	// displacement for every pixel, so a value around half a voxel is enough -- which is why the
+	// finest-voxel clamp is gone from here.
+	float margin = u_gi_normal_bias * origin_voxel;
+	float lift = max(0.0, -origin_distance) + margin;
 	vec3 origin = world_position + world_normal * lift;
 	// Decorrelate the sample pattern per pixel AND per frame, so the residual error is noise
 	// that temporal accumulation can average away rather than a fixed pattern that it cannot.
+	// The shading point's OWN cache key, for the self-read test in debug mode 3.
+	//
+	// Mode 2 asks "did the ray hit close by", which is a proxy with an arbitrary threshold. This is
+	// the actual question: did the ray come back and read the very entry that is being shaded? Keys
+	// are exact, so there is nothing to tune and no threshold to argue about. Resolved the same way
+	// the writer resolves, or the two would disagree for reasons unrelated to self-reading.
+	uint own_key = GI_CACHE_EMPTY_KEY;
+	if(u_gi_debug_mode >= 3)
+	{
+		SdfSurfacePoint own_surface = SdfResolveSurfacePoint(world_position);
+		if(own_surface.valid)
+		{
+			float own_blend;
+			uint own_level = GiCacheLevelEx(own_surface.position, u_gi_resolve_camera.xyz, own_blend);
+			own_key = GiCacheKeyForFace(own_surface.position, GiQuantizeNormal(own_surface.normal), own_level);
+		}
+	}
+	float debug_self_reads = 0.0;
 	uint pixel_seed = GiHashCombine(GiHashUint(uint(gl_FragCoord.x)), uint(gl_FragCoord.y));
 	uint seed = GiHashCombine(pixel_seed, u_gi_frame_index);
 	vec3 sum = vec3_splat(0.0);
@@ -222,6 +254,15 @@ void main()
 			continue;
 		}
 		debug_addressed += 1.0;
+		if(u_gi_debug_mode >= 3 && own_key != GI_CACHE_EMPTY_KEY)
+		{
+			float hit_blend;
+			uint hit_level = GiCacheLevelEx(surface.position, u_gi_resolve_camera.xyz, hit_blend);
+			if(GiCacheKeyForFace(surface.position, GiQuantizeNormal(surface.normal), hit_level) == own_key)
+			{
+				debug_self_reads += 1.0;
+			}
+		}
 		// Level and its cross-fade weight together: crossing a level boundary re-keys the surface,
 		// so a reader that consults only one level loses every entry built at the other one and
 		// falls back to the environment probe -- GI dimming as the camera closes in.
@@ -274,6 +315,21 @@ void main()
 	if(u_gi_debug_enabled)
 	{
 		float inv_rays = 1.0 / float(ray_count);
+		if(u_gi_debug_mode >= 3)
+		{
+			// Mode 3: the three numbers every remaining theory is about.
+			//   R = fraction of rays that read the entry being shaded -- EXACT, by key, no threshold.
+			//   G = the lift actually applied, in voxels. Near zero here means the adaptive term is
+			//       not firing; large here with red bright means the lift is not the mechanism.
+			//   B = the cascade's signed distance at the shading point, in voxels, mid grey = exactly
+			//       on the isosurface. This is the INPUT the adaptive lift is derived from, so if it
+			//       reads positive where the surface is visibly displaced, that input is wrong.
+			gl_FragColor = vec4(debug_self_reads * inv_rays,
+			                    saturate(lift / max(origin_voxel, 1e-4)),
+			                    saturate(0.5 + origin_distance / max(2.0 * origin_voxel, 1e-4)),
+			                    1.0);
+			return;
+		}
 		if(u_gi_debug_mode >= 2)
 		{
 			// Mode 2: WHERE the rays landed.

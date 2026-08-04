@@ -391,7 +391,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Debug: Ray Diagnostics"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"min", 0},
-            entt::attribute{"max", 2},
+            entt::attribute{"max", 3},
             entt::attribute{"tooltip",
                             "Replace the GI output with a per-ray diagnostic. 1 = which STAGE "
                             "fails: a ray contributes light only if it HITS geometry (red), its "
@@ -400,7 +400,12 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "2 = where the rays LANDED: red is the fraction hitting within four "
                             "voxels of their own origin, which means the gather is reading the "
                             "surface it is shading and feeding it back. Mode 1 cannot see that, "
-                            "because a self-hit succeeds at every stage."},
+                            "because a self-hit succeeds at every stage."
+                            " 3 = the three numbers behind the remaining theories: red is the "
+                            "fraction of rays that read the very entry being shaded, by EXACT key "
+                            "rather than by distance; green is the lift actually applied in "
+                            "voxels; blue is the cascade distance at the shading point in voxels, "
+                            "mid grey meaning exactly on the isosurface."},
         })
         .data<&settings::interpolate_cache>("interpolate_cache"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -64,7 +64,9 @@ uniform vec4 u_gi_shadow_params2;
 float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float light_distance,
                     float voxel_size)
 {
-	float offset = u_gi_shadow_normal_bias * min(voxel_size, u_gi_shadow_finest_voxel);
+	// Scaled by the level that ANSWERS, not held to the finest one: this has to clear that
+	// level's own hit acceptance, which is surface_bias voxels of it. See the gather.
+	float offset = u_gi_shadow_normal_bias * voxel_size;
 	vec3 origin = world_position + world_normal * offset;
 	float max_distance = min(light_distance, u_gi_shadow_distance);
 	if(max_distance <= offset)
