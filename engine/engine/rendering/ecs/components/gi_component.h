@@ -133,6 +133,11 @@ public:
         result.resolve.occlude_on_cache_miss =
             dominant ? from.resolve.occlude_on_cache_miss : result.resolve.occlude_on_cache_miss;
         result.resolve.resolution = dominant ? from.resolve.resolution : result.resolve.resolution;
+        result.resolve.use_probe_gather =
+            dominant ? from.resolve.use_probe_gather : result.resolve.use_probe_gather;
+        result.resolve.probe_spacing = dominant ? from.resolve.probe_spacing : result.resolve.probe_spacing;
+        result.resolve.probe_history_frames =
+            std::lerp(result.resolve.probe_history_frames, from.resolve.probe_history_frames, contribution);
 
         result.resolve.enable_temporal = dominant ? from.resolve.enable_temporal : result.resolve.enable_temporal;
         result.resolve.max_accum_frames =

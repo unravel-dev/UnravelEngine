@@ -289,6 +289,42 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "prefiltered cell rather than a point sample, so the variance a "
                                        "path tracer fights here has already been paid down."},
         })
+        .data<&settings::use_probe_gather>("use_probe_gather"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "use_probe_gather"},
+            entt::attribute{"pretty_name", "Probe Gather"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip", "Gather through screen-space radiance probes instead of "
+                                       "per-pixel ray bundles: one probe per tile traces 64 octahedral "
+                                       "directions once, pixels integrate the four probes around them. "
+                                       "Rays stop scaling with resolution and traces become coherent.\n"
+                                       "Off compares against the per-pixel reference; a non-zero Debug "
+                                       "mode forces the per-pixel path regardless."},
+        })
+        .data<&settings::probe_spacing>("probe_spacing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_spacing"},
+            entt::attribute{"pretty_name", "Probe Spacing (pixels)"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 8.0f},
+            entt::attribute{"max", 32.0f},
+            entt::attribute{"tooltip", "Probe tile edge in full-resolution pixels. Smaller is denser, "
+                                       "sharper and costlier; cost scales inversely with its square."},
+        })
+        .data<&settings::probe_history_frames>("probe_history_frames"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_history_frames"},
+            entt::attribute{"pretty_name", "Probe History (frames)"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 32.0f},
+            entt::attribute{"tooltip", "Frames of per-texel history a probe accumulates; 1 disables.\n"
+                                       "The probe path's PRIMARY stabiliser: probe error moves a whole "
+                                       "tile of pixels in unison, which the screen temporal cannot "
+                                       "suppress, so each direction accumulates its own history in "
+                                       "probe space instead. Cuts on disocclusion, so raising it costs "
+                                       "lag only where lighting actually changes."},
+        })
         .data<&settings::adaptive_ray_count>("adaptive_ray_count"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "adaptive_ray_count"},
@@ -821,6 +857,9 @@ LOAD_INSTANTIATE(gi_cache_pass::settings, ser20::iarchive_binary_t);
 SAVE_INLINE(gi_resolve_pass::settings)
 {
     try_save(ar, ser20::make_nvp("ray_count", obj.ray_count));
+    try_save(ar, ser20::make_nvp("use_probe_gather", obj.use_probe_gather));
+    try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
+    try_save(ar, ser20::make_nvp("probe_history_frames", obj.probe_history_frames));
     try_save(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));
     try_save(ar, ser20::make_nvp("min_ray_count", obj.min_ray_count));
     try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
@@ -856,6 +895,9 @@ SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_binary_t);
 LOAD_INLINE(gi_resolve_pass::settings)
 {
     try_load(ar, ser20::make_nvp("ray_count", obj.ray_count));
+    try_load(ar, ser20::make_nvp("use_probe_gather", obj.use_probe_gather));
+    try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
+    try_load(ar, ser20::make_nvp("probe_history_frames", obj.probe_history_frames));
     try_load(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));
     try_load(ar, ser20::make_nvp("min_ray_count", obj.min_ray_count));
     try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));

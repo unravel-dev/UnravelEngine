@@ -17,6 +17,9 @@ public:
     {
         gfx::frame_buffer::ptr input;   ///< Source framebuffer (must have a color texture).
         gfx::frame_buffer::ptr output;  ///< Optional destination framebuffer. If null, will be created to match input.
+        /// Blend the source over the destination using the source's alpha instead of overwriting
+        /// it. Lets a debug readout sit on top of the lit frame with the scene readable beneath.
+        bool alpha_blend = false;
     };
 
            /// Must be called once (after bgfx::init() and after `asset_manager` is registered in context).

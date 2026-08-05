@@ -129,6 +129,12 @@ public:
     static constexpr int debug_pass_sdf_cache_age = 24;
     static constexpr int debug_pass_sdf_cascade_levels = 25;
     static constexpr int debug_pass_sdf_cache_albedo = 26;
+    /// Probe-gather debug views. Rendered by the GI RESOLVE pass itself (they read the probe
+    /// buffers, which only it owns) into the GI trace target; presenting is a stretch blit of
+    /// that target rather than a run of the distance-field visualiser.
+    static constexpr int debug_pass_gi_probe_atlas = 27;
+    static constexpr int debug_pass_gi_probe_health = 28;
+    static constexpr int debug_pass_gi_probe_history = 29;
 
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,

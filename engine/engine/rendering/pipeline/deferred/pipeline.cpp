@@ -816,7 +816,23 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         run_ui_pass(scn, camera, rview, output);
 
-        if(debug_pass_ >= debug_pass_sdf_normals)
+        if(debug_pass_ >= debug_pass_gi_probe_atlas)
+        {
+            // Probe debug views were already rendered by the resolve pass into the GI trace
+            // target -- they need the probe buffers only that pass owns -- so presenting them is
+            // a stretch of that target over the output.
+            blit_pass::run_params probe_debug_params;
+            probe_debug_params.input = rview.fbo_safe_get("GI_TRACE");
+            probe_debug_params.output = output;
+            // Blended, not opaque: the debug shaders emit alpha below one exactly so the lit
+            // frame stays readable underneath the readout.
+            probe_debug_params.alpha_blend = true;
+            if(probe_debug_params.input)
+            {
+                blit_pass_.run(rview, probe_debug_params);
+            }
+        }
+        else if(debug_pass_ >= debug_pass_sdf_normals)
         {
             run_sdf_debug_pass(camera, rview, output);
         }
@@ -2121,6 +2137,11 @@ auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview
         params.cam = &camera;
         params.surface_cache = &ctx.get<surface_cache_service>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+        // Debug-view selection, not a scene setting: the probe views live beside the other GI
+        // visualisers in the editor's debug list and are threaded through per run.
+        params.probe_debug = debug_pass_ >= debug_pass_gi_probe_atlas
+                                 ? debug_pass_ - debug_pass_gi_probe_atlas + 1
+                                 : 0;
         result = gi_resolve_pass_.run(rview, params);
     }
     if(result)

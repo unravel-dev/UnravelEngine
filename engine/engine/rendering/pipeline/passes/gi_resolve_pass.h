@@ -184,6 +184,36 @@ public:
         /// Indirect diffuse is low frequency, so tracing below full resolution costs little.
         trace_resolution resolution = trace_resolution::half;
 
+        /// Gather through screen-space radiance probes instead of per-pixel ray bundles.
+        ///
+        /// One probe per @ref probe_spacing pixel tile traces 64 octahedral directions once;
+        /// pixels integrate the four probes around them. Rays stop scaling with resolution,
+        /// origins are shared so traces are coherent, and radiance is filtered in probe space
+        /// before any pixel sees it -- the structure Lumen's final gather converged on, and the
+        /// reason its quality-per-ray is unreachable for a per-pixel gather. The per-ray
+        /// pipeline itself is shared (gi_gather_common.sh), so toggling this compares the
+        /// gather ARCHITECTURE and nothing else.
+        ///
+        /// The per-pixel path remains the diagnostic surface: a non-zero
+        /// @ref debug_ray_diagnostics forces it, because its modes read individual rays that
+        /// the probe path deliberately aggregates away.
+        bool use_probe_gather = true;
+        /// Probe tile edge in FULL-RESOLUTION pixels. 16 puts ~8k probes on a 1080p frame --
+        /// about half a million rays against the per-pixel path's two million -- and the
+        /// spacing halves in trace-target pixels at half resolution, so probe density in the
+        /// trace target follows the trace resolution automatically.
+        int probe_spacing = 16;
+        /// Frames of per-texel history a probe accumulates; 1 or less disables probe history.
+        ///
+        /// This is the probe path's PRIMARY stabiliser, and it works where the screen temporal
+        /// cannot: probe error is spatially correlated -- one texel feeds a whole tile of pixels
+        /// -- so the screen filter's neighbourhood clamp sees the neighbourhood move in unison
+        /// and lets it through. Accumulating per DIRECTION in probe space happens before that
+        /// correlation is created: each texel converges to the mean of its jittered cone over
+        /// about this many frames. History cuts on disocclusion (anchor leaves its surface), so
+        /// raising it costs lag only where lighting actually changes.
+        float probe_history_frames = 16.0f;
+
         /// Averaging across frames is what turns a handful of rays into an effective sample count
         /// in the hundreds. Without it the estimate is re-rolled every frame and the noise MOVES,
         /// which reads far worse than a fixed pattern of the same magnitude.
@@ -271,8 +301,21 @@ public:
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
         /// the service without two cameras fighting over one set of levels.
         surface_cache_view* view_cache{};
+        /// Probe DEBUG view, selected in the editor's debug-view list beside the other GI
+        /// visualisers -- a per-run pipeline input, not a scene setting. 0 = off. 1 = the raw
+        /// radiance atlas in place, every tile showing its probe's 64 octahedral texels (a texel
+        /// blinking here is trace-side variance; a still atlas under a dancing image means the
+        /// fault is downstream). 2 = integration health (R = weight sum, dark = probe
+        /// starvation; G = resolved fraction). 3 = history state (R = this frame's blend weight,
+        /// red = history cut; G = sample count over 32). Flickering red in mode 3 on a STATIC
+        /// camera means the history validity test cuts where it should hold. While active the
+        /// pass returns the raw trace target, skipping temporal, denoise and upsample, so the
+        /// view is crisp.
+        int probe_debug = 0;
         settings settings;
     };
+
+    ~gi_resolve_pass();
 
     auto init(rtti::context& ctx) -> bool;
 
@@ -366,6 +409,123 @@ private:
             return program && program->is_valid();
         }
     } resolve_program_;
+
+    struct probe_trace_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_resolve_params;
+        gfx::program::uniform_ptr u_gi_resolve_trace;
+        gfx::program::uniform_ptr u_gi_resolve_camera;
+        gfx::program::uniform_ptr u_gi_resolve_filter;
+        gfx::program::uniform_ptr u_gi_cache_params;
+        gfx::program::uniform_ptr u_gi_cache_params2;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        gfx::program::uniform_ptr s_gi_depth;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_probe_history;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_resolve_params, "u_gi_resolve_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_probe_history, "s_probe_history", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } probe_trace_program_;
+
+    /// False until the probe atlases and buffer hold a frame of real data; forces a full-weight
+    /// write for one frame after any recreate so garbage never blends into the history.
+    bool probe_history_valid_ = false;
+    /// Probe lattice of the last traced frame. Reprojection indexes the READ half by the same
+    /// layout, so a lattice change makes the whole history unaddressable and must reset it.
+    uint32_t probe_grid_x_ = 0;
+    uint32_t probe_grid_y_ = 0;
+
+    struct probe_filter_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr s_probe_radiance;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } probe_filter_program_;
+
+    struct probe_integrate_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_integrate_camera;
+        gfx::program::uniform_ptr s_gi_depth;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_probe_radiance;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_integrate_camera, "u_gi_integrate_camera",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } probe_integrate_program_;
+
+    /// Probe SH + meta storage. A member rather than a render-view resource because it is a
+    /// buffer, and its capacity only ever grows.
+    gfx::dynamic_vertex_buffer_handle probe_buffer_{bgfx::kInvalidHandle};
+    uint32_t probe_buffer_capacity_ = 0;
 
     struct temporal_program : uniforms_cache
     {

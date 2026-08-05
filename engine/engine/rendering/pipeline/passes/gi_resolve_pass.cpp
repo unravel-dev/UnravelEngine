@@ -8,6 +8,24 @@
 
 namespace unravel
 {
+namespace
+{
+/// Mirror of GI_PROBE_DIR_EDGE / GI_PROBE_STRIDE in gi/gi_probe_common.sh.
+constexpr uint32_t probe_dir_edge = 8;
+constexpr uint32_t probe_vec4_stride = 12;
+
+/// Layout of the probe buffer: a flat array of vec4, matching BUFFER_RW(_, vec4, _).
+auto get_probe_vec4_layout() -> const gfx::vertex_layout&
+{
+    static const gfx::vertex_layout layout = []()
+    {
+        gfx::vertex_layout decl;
+        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        return decl;
+    }();
+    return layout;
+}
+} // namespace
 
 auto gi_resolve_pass::create_or_update_target(gfx::render_view& rview,
                                               const std::string& name,
@@ -69,6 +87,15 @@ auto gi_resolve_pass::create_or_update_target_mrt(gfx::render_view& rview,
     return fbo;
 }
 
+gi_resolve_pass::~gi_resolve_pass()
+{
+    if(bgfx::isValid(probe_buffer_))
+    {
+        gfx::destroy(probe_buffer_);
+        probe_buffer_ = {bgfx::kInvalidHandle};
+    }
+}
+
 auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -76,6 +103,24 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto fs_gi_resolve = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_resolve.sc");
     resolve_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_resolve);
     resolve_program_.cache_uniforms();
+    auto cs_probe_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_probe_trace.sc");
+    probe_trace_program_.program = std::make_unique<gpu_program>(cs_probe_trace);
+    probe_trace_program_.cache_uniforms();
+    auto cs_probe_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_probe_filter.sc");
+    probe_filter_program_.program = std::make_unique<gpu_program>(cs_probe_filter);
+    probe_filter_program_.cache_uniforms();
+    auto fs_probe_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_probe_integrate.sc");
+    probe_integrate_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_probe_integrate);
+    probe_integrate_program_.cache_uniforms();
+    if(!probe_trace_program_.is_valid() || !probe_filter_program_.is_valid() ||
+       !probe_integrate_program_.is_valid())
+    {
+        // Not fatal: run() falls back to the per-pixel gather, which is correct and merely
+        // costs more -- but it must be stated, because the fallback is visually identical.
+        APPLOG_WARNING("[SurfaceCache] GI probe gather programs failed to load. Falling back to "
+                       "the per-pixel gather, which traces several times more rays for the same "
+                       "result.");
+    }
     auto fs_gi_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_temporal.sc");
     temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_temporal);
     temporal_program_.cache_uniforms();
@@ -136,111 +181,282 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     gfx::texture::ptr trace_tex;
     auto trace_fbo = create_or_update_target(rview, "GI_TRACE", target_size, trace_tex);
 
-    gfx::render_pass pass("GI/Resolve Pass");
-    pass.bind(trace_fbo.get());
-    // The shader reconstructs world positions from depth via u_invViewProj, which bgfx supplies
-    // per view.
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-
-    resolve_program_.program->begin();
-
-    gfx::set_texture(resolve_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-    // Bound even when unavailable so the sampler always has a valid texture;
-    // u_sdf_clipmap_params.w tells the shader whether to consult it.
+    // Everything both gather architectures share: the trace and cache uniforms. Must match what
+    // the cache pass wrote with, or the key derived here addresses a different cell than the one
+    // the update pass filled and every lookup misses.
     const bool clipmap_ready = clipmap_gpu.is_valid();
-    gfx::set_texture(resolve_program_.s_sdf_clipmap,
-                     4,
-                     clipmap_ready ? clipmap_gpu.get_texture() : atlas.get_atlas_texture());
-    gfx::set_buffer(6, cache.get_keys_buffer(), gfx::access::Read);
-    gfx::set_buffer(7, cache.get_data_buffer(), gfx::access::Read);
-    gfx::set_texture(resolve_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
-    gfx::set_texture(resolve_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
-    // Read only by the debug branch, to cancel the albedo the consumer multiplies the output by.
-    // Bound unconditionally because an unbound sampler is undefined on some backends even when the
-    // branch that reads it is not taken.
-    gfx::set_texture(resolve_program_.s_gi_base_color, 10, params.g_buffer->get_texture(0));
-    // The moments the temporal pass will READ this frame -- i.e. what it WROTE last frame --
-    // located by peeking the same parity run_temporal derives its targets from, WITHOUT
-    // incrementing it. One frame of lag is what makes this safe to read while the current
-    // frame's moments are still being produced.
-    const uint32_t history_parity = rview.data_get_or_emplace("GI_HISTORY_PARITY", 0u);
-    const char* prev_moments_name =
-        (history_parity & 1u) == 0u ? "GI_HISTORY_B_MOMENTS" : "GI_HISTORY_A_MOMENTS";
-    auto prev_moments = rview.tex_safe_get(prev_moments_name);
-    const bool adaptive_rays = s.adaptive_ray_count && s.enable_temporal && prev_moments &&
-                               prev_moments->get_size().width == target_size.width &&
-                               prev_moments->get_size().height == target_size.height;
-    gfx::set_texture(resolve_program_.s_gi_prev_moments,
-                     11,
-                     adaptive_rays ? prev_moments : params.g_buffer->get_texture(0));
-    const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
-                                 float(atlas.get_atlas_voxel_dim()),
-                                 float(instances.size()),
-                                 0.0f};
-    gfx::set_uniform(resolve_program_.u_sdf_params, sdf_params);
-    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-    gfx::set_uniform(resolve_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
-    gfx::set_uniform(resolve_program_.u_sdf_clipmap_levels,
-                     clipmap_gpu.get_level_params(),
-                     global_sdf_clipmap::level_count);
-    gfx::set_uniform(resolve_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-
-    // Must match what the cache pass wrote with, or the key derived here addresses a different
-    // cell than the one the update pass filled and every lookup misses.
     const auto& cache_settings = cache.get_settings();
     const float cache_params[4] = {float(cache.get_capacity() - 1u),
                                    cache_settings.base_cell_size,
                                    cache_settings.base_distance,
                                    float(cache_settings.max_level)};
-    gfx::set_uniform(resolve_program_.u_gi_cache_params, cache_params);
-    // Only w matters to a reader -- the level cross-fade band, which decides whether a surface
-    // near a boundary is looked up at one level or blended across two. It has to be the same value
-    // the insert pass wrote with, so it comes from the cache and not from this pass's settings.
+    // Only w matters to a reader -- the level cross-fade band. It has to be the same value the
+    // insert pass wrote with, so it comes from the cache and not from this pass's settings.
     const float cache_params2[4] = {0.0f, 0.0f, 0.0f, cache_settings.level_blend};
-    gfx::set_uniform(resolve_program_.u_gi_cache_params2, cache_params2);
-
+    const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
+                                 float(atlas.get_atlas_voxel_dim()),
+                                 float(instances.size()),
+                                 0.0f};
     const float resolve_params[4] = {float(s.ray_count),
                                      s.max_distance,
                                      s.normal_bias_voxels,
                                      float(gfx::get_render_frame())};
-    gfx::set_uniform(resolve_program_.u_gi_resolve_params, resolve_params);
     const float trace_params[4] = {s.near_field_distance,
                                    float(s.max_steps),
                                    s.surface_bias,
                                    s.step_relaxation};
-    gfx::set_uniform(resolve_program_.u_gi_resolve_trace, trace_params);
     const auto camera_position = params.cam->get_position();
     const float camera[4] = {camera_position.x, camera_position.y, camera_position.z, s.intensity};
-    gfx::set_uniform(resolve_program_.u_gi_resolve_camera, camera);
-    // Independent of temporal accumulation, deliberately: the interpolation is deterministic, so
-    // unlike a stochastic lookup it needs nothing downstream to average it back out and is just as
-    // correct on a single frame.
     const float filter_params[4] = {s.interpolate_cache ? 1.0f : 0.0f,
                                     s.occlude_on_cache_miss ? 1.0f : 0.0f,
                                     s.near_field_fade_distance,
                                     s.ray_start_voxels};
-    gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
-    // The settled threshold is a relative luminance sigma. 0.25 was chosen as comfortably above
-    // the residual flicker of a converged history and comfortably below the deviation a genuine
-    // lighting change produces; it is a constant rather than a setting because the mechanism is
-    // self-correcting in both directions (see settings::adaptive_ray_count).
-    constexpr float adaptive_sigma_threshold = 0.25f;
-    const float debug_params[4] = {float(s.debug_ray_diagnostics),
-                                   adaptive_rays ? float(math::max(s.min_ray_count, 1)) : 0.0f,
-                                   adaptive_sigma_threshold,
-                                   0.0f};
-    gfx::set_uniform(resolve_program_.u_gi_resolve_debug, debug_params);
 
-    auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, resolve_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
-    resolve_program_.program->end();
-    gfx::discard();
+    // The probe gather is the production path; the per-pixel gather remains the reference and
+    // the diagnostic surface. A non-zero debug mode forces the per-pixel path, because its
+    // modes read individual rays that the probe path deliberately aggregates away.
+    const bool probe_path = s.use_probe_gather &&
+                            (s.debug_ray_diagnostics == 0 || params.probe_debug != 0) &&
+                            probe_trace_program_.is_valid() && probe_filter_program_.is_valid() &&
+                            probe_integrate_program_.is_valid();
+    if(probe_path)
+    {
+        // Probe lattice, sized in TRACE-target pixels so probe density follows trace resolution.
+        const uint32_t divisor = get_divisor(s.resolution);
+        const uint32_t spacing = math::max(uint32_t(math::max(s.probe_spacing, 4)) / math::max(divisor, 1u), 2u);
+        const uint32_t probes_x = (target_size.width + spacing - 1u) / spacing;
+        const uint32_t probes_y = (target_size.height + spacing - 1u) / spacing;
+        const float probe_params[4] = {float(probes_x),
+                                       float(probes_y),
+                                       float(spacing),
+                                       float(gfx::get_render_frame())};
+        const float probe_screen[4] = {float(target_size.width),
+                                       float(target_size.height),
+                                       1.0f / float(target_size.width),
+                                       1.0f / float(target_size.height)};
+        // Radiance atlases: one 8x8 octahedral tile per probe, PING-PONGED so this frame's trace
+        // can blend each texel into last frame's -- the probe-space history that stabilises the
+        // whole architecture (see cs_gi_probe_trace.sc).
+        const usize32_t atlas_size{probes_x * probe_dir_edge, probes_y * probe_dir_edge};
+        const auto ensure_atlas = [&](const char* name) -> gfx::texture::ptr
+        {
+            auto& tex = rview.tex_get_or_emplace(name);
+            if(gfx::needs_recreate(tex, atlas_size))
+            {
+                tex.reset();
+                tex = std::make_shared<gfx::texture>(atlas_size.width,
+                                                     atlas_size.height,
+                                                     false,
+                                                     1,
+                                                     gfx::texture_format::RGBA16F,
+                                                     BGFX_TEXTURE_COMPUTE_WRITE |
+                                                         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                                         BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
+                // A fresh texture holds garbage; the next blend must not read it as history.
+                probe_history_valid_ = false;
+            }
+            return tex;
+        };
+        auto atlas_a = ensure_atlas("GI_PROBE_ATLAS_A");
+        auto atlas_b = ensure_atlas("GI_PROBE_ATLAS_B");
+        auto& probe_parity = rview.data_get_or_emplace("GI_PROBE_PARITY", 0u);
+        const bool even_probe_frame = (probe_parity & 1u) == 0u;
+        ++probe_parity;
+        auto write_atlas = even_probe_frame ? atlas_a : atlas_b;
+        auto read_atlas = even_probe_frame ? atlas_b : atlas_a;
+        // DOUBLE buffered: reprojection needs last frame's meta and counts resident alongside
+        // this frame's, and the halves swap with the atlas parity.
+        const uint32_t probe_count = probes_x * probes_y;
+        const uint32_t required_probe_vec4 = 2u * probe_count * probe_vec4_stride;
+        if(!bgfx::isValid(probe_buffer_) || required_probe_vec4 > probe_buffer_capacity_)
+        {
+            if(bgfx::isValid(probe_buffer_))
+            {
+                gfx::destroy(probe_buffer_);
+            }
+            probe_buffer_capacity_ = required_probe_vec4 + required_probe_vec4 / 2u;
+            probe_buffer_ = gfx::create_dynamic_vertex_buffer(probe_buffer_capacity_,
+                                                              get_probe_vec4_layout(),
+                                                              BGFX_BUFFER_COMPUTE_READ_WRITE);
+            // Fresh meta is garbage too, and the validity test reads it before the overwrite.
+            probe_history_valid_ = false;
+        }
+        // Reprojection addresses the READ half by the previous frame's lattice; a lattice change
+        // makes every such address wrong, which is worse than one fresh frame.
+        if(probes_x != probe_grid_x_ || probes_y != probe_grid_y_)
+        {
+            probe_grid_x_ = probes_x;
+            probe_grid_y_ = probes_y;
+            probe_history_valid_ = false;
+        }
+        const uint32_t write_probe_offset = even_probe_frame ? 0u : probe_count;
+        const uint32_t read_probe_offset = even_probe_frame ? probe_count : 0u;
+        // x = the history CAP (the shader grows a per-probe count toward it and blends at
+        // 1/count -- a true mean, which settles, never a fixed-weight EMA, which shimmers
+        // forever). Forced to 1 while the buffers are untrusted so garbage cannot blend in.
+        // y = the probe debug view mode, consumed by the integrate pass.
+        const float probe_temporal[4] = {probe_history_valid_ ? math::max(s.probe_history_frames, 1.0f)
+                                                              : 1.0f,
+                                         float(params.probe_debug),
+                                         float(write_probe_offset),
+                                         float(read_probe_offset)};
+        {
+            gfx::render_pass pass("GI/Probe Trace");
+            // u_invViewProj for depth reconstruction, exactly as the cache insert dispatch.
+            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            probe_trace_program_.program->begin();
+            gfx::set_texture(probe_trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+            gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+            gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+            gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+            gfx::set_texture(probe_trace_program_.s_sdf_clipmap,
+                             4,
+                             clipmap_ready ? clipmap_gpu.get_texture() : atlas.get_atlas_texture());
+            gfx::set_image(5, write_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            gfx::set_buffer(6, cache.get_keys_buffer(), gfx::access::Read);
+            gfx::set_buffer(7, cache.get_data_buffer(), gfx::access::Read);
+            gfx::set_texture(probe_trace_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
+            gfx::set_texture(probe_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+            gfx::set_buffer(10, probe_buffer_, gfx::access::ReadWrite);
+            // Safe to bind even while untrusted: alpha 1 makes the blend ignore what it reads.
+            gfx::set_texture(probe_trace_program_.s_probe_history, 11, read_atlas);
+            gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+            gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+            gfx::set_uniform(probe_trace_program_.u_sdf_params, sdf_params);
+            gfx::set_uniform(probe_trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+            gfx::set_uniform(probe_trace_program_.u_sdf_clipmap_levels,
+                             clipmap_gpu.get_level_params(),
+                             global_sdf_clipmap::level_count);
+            gfx::set_uniform(probe_trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+            gfx::set_uniform(probe_trace_program_.u_gi_cache_params, cache_params);
+            gfx::set_uniform(probe_trace_program_.u_gi_cache_params2, cache_params2);
+            gfx::set_uniform(probe_trace_program_.u_gi_resolve_params, resolve_params);
+            gfx::set_uniform(probe_trace_program_.u_gi_resolve_trace, trace_params);
+            gfx::set_uniform(probe_trace_program_.u_gi_resolve_camera, camera);
+            gfx::set_uniform(probe_trace_program_.u_gi_resolve_filter, filter_params);
+            gfx::set_uniform(probe_trace_program_.u_gi_probe_params, probe_params);
+            gfx::set_uniform(probe_trace_program_.u_gi_probe_screen, probe_screen);
+            gfx::set_uniform(probe_trace_program_.u_gi_probe_temporal, probe_temporal);
+            // The previous frame's matrices, exactly as the screen temporal uses them: history
+            // reprojection projects this frame's anchors into last frame's probe lattice.
+            const auto prev_view_proj = params.cam->get_prev_view_projection();
+            gfx::set_uniform(probe_trace_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
+            gfx::dispatch(pass.id, probe_trace_program_.program->native_handle(), probes_x, probes_y, 1);
+            probe_trace_program_.program->end();
+            probe_history_valid_ = true;
+        }
+        {
+            gfx::render_pass pass("GI/Probe Filter");
+            probe_filter_program_.program->begin();
+            gfx::set_texture(probe_filter_program_.s_probe_radiance, 0, write_atlas);
+            gfx::set_buffer(1, probe_buffer_, gfx::access::ReadWrite);
+            gfx::set_uniform(probe_filter_program_.u_gi_probe_params, probe_params);
+            gfx::set_uniform(probe_filter_program_.u_gi_probe_screen, probe_screen);
+            gfx::set_uniform(probe_filter_program_.u_gi_probe_temporal, probe_temporal);
+            gfx::dispatch(pass.id, probe_filter_program_.program->native_handle(), probes_x, probes_y, 1);
+            probe_filter_program_.program->end();
+        }
+        {
+            gfx::render_pass pass("GI/Probe Integrate");
+            pass.bind(trace_fbo.get());
+            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            probe_integrate_program_.program->begin();
+            gfx::set_buffer(0, probe_buffer_, gfx::access::Read);
+            gfx::set_texture(probe_integrate_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
+            gfx::set_texture(probe_integrate_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+            // Read only by the debug views; bound always because an unbound sampler is undefined
+            // on some backends.
+            gfx::set_texture(probe_integrate_program_.s_probe_radiance, 3, write_atlas);
+            gfx::set_uniform(probe_integrate_program_.u_gi_probe_params, probe_params);
+            gfx::set_uniform(probe_integrate_program_.u_gi_probe_screen, probe_screen);
+            gfx::set_uniform(probe_integrate_program_.u_gi_probe_temporal, probe_temporal);
+            gfx::set_uniform(probe_integrate_program_.u_gi_integrate_camera, camera);
+            auto topology = gfx::clip_quad(1.0f);
+            gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
+                           BGFX_STATE_WRITE_A);
+            gfx::submit(pass.id, probe_integrate_program_.program->native_handle());
+            gfx::set_state(BGFX_STATE_DEFAULT);
+            probe_integrate_program_.program->end();
+        }
+        gfx::discard();
+    }
+    else
+    {
+        gfx::render_pass pass("GI/Resolve Pass");
+        pass.bind(trace_fbo.get());
+        // The shader reconstructs world positions from depth via u_invViewProj, which bgfx
+        // supplies per view.
+        pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+        resolve_program_.program->begin();
+        gfx::set_texture(resolve_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+        // Bound even when unavailable so the sampler always has a valid texture;
+        // u_sdf_clipmap_params.w tells the shader whether to consult it.
+        gfx::set_texture(resolve_program_.s_sdf_clipmap,
+                         4,
+                         clipmap_ready ? clipmap_gpu.get_texture() : atlas.get_atlas_texture());
+        gfx::set_buffer(6, cache.get_keys_buffer(), gfx::access::Read);
+        gfx::set_buffer(7, cache.get_data_buffer(), gfx::access::Read);
+        gfx::set_texture(resolve_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
+        gfx::set_texture(resolve_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+        // Read only by the debug branch, to cancel the albedo the consumer multiplies the output
+        // by. Bound unconditionally because an unbound sampler is undefined on some backends even
+        // when the branch that reads it is not taken.
+        gfx::set_texture(resolve_program_.s_gi_base_color, 10, params.g_buffer->get_texture(0));
+        // The moments the temporal pass will READ this frame -- i.e. what it WROTE last frame --
+        // located by peeking the same parity run_temporal derives its targets from, WITHOUT
+        // incrementing it. One frame of lag is what makes this safe to read while the current
+        // frame's moments are still being produced.
+        const uint32_t history_parity = rview.data_get_or_emplace("GI_HISTORY_PARITY", 0u);
+        const char* prev_moments_name =
+            (history_parity & 1u) == 0u ? "GI_HISTORY_B_MOMENTS" : "GI_HISTORY_A_MOMENTS";
+        auto prev_moments = rview.tex_safe_get(prev_moments_name);
+        const bool adaptive_rays = s.adaptive_ray_count && s.enable_temporal && prev_moments &&
+                                   prev_moments->get_size().width == target_size.width &&
+                                   prev_moments->get_size().height == target_size.height;
+        gfx::set_texture(resolve_program_.s_gi_prev_moments,
+                         11,
+                         adaptive_rays ? prev_moments : params.g_buffer->get_texture(0));
+        gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+        gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+        gfx::set_uniform(resolve_program_.u_sdf_params, sdf_params);
+        gfx::set_uniform(resolve_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+        gfx::set_uniform(resolve_program_.u_sdf_clipmap_levels,
+                         clipmap_gpu.get_level_params(),
+                         global_sdf_clipmap::level_count);
+        gfx::set_uniform(resolve_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+        gfx::set_uniform(resolve_program_.u_gi_cache_params, cache_params);
+        gfx::set_uniform(resolve_program_.u_gi_cache_params2, cache_params2);
+        gfx::set_uniform(resolve_program_.u_gi_resolve_params, resolve_params);
+        gfx::set_uniform(resolve_program_.u_gi_resolve_trace, trace_params);
+        gfx::set_uniform(resolve_program_.u_gi_resolve_camera, camera);
+        gfx::set_uniform(resolve_program_.u_gi_resolve_filter, filter_params);
+        // The settled threshold is a relative luminance sigma. 0.25 was chosen as comfortably
+        // above the residual flicker of a converged history and comfortably below the deviation a
+        // genuine lighting change produces; a constant rather than a setting because the
+        // mechanism is self-correcting in both directions (see settings::adaptive_ray_count).
+        constexpr float adaptive_sigma_threshold = 0.25f;
+        const float debug_params[4] = {float(s.debug_ray_diagnostics),
+                                       adaptive_rays ? float(math::max(s.min_ray_count, 1)) : 0.0f,
+                                       adaptive_sigma_threshold,
+                                       0.0f};
+        gfx::set_uniform(resolve_program_.u_gi_resolve_debug, debug_params);
+        auto topology = gfx::clip_quad(1.0f);
+        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
+                       BGFX_STATE_WRITE_A);
+        gfx::submit(pass.id, resolve_program_.program->native_handle());
+        gfx::set_state(BGFX_STATE_DEFAULT);
+        resolve_program_.program->end();
+        gfx::discard();
+    }
+    // A probe debug view IS the deliverable: return it crisp, before temporal and the filters
+    // smear a diagnostic readout as though it were lighting.
+    if(probe_path && params.probe_debug != 0)
+    {
+        return trace_tex;
+    }
     // Falling back to the un-accumulated gather is correct here: it is noisy but valid, whereas
     // dispatching an invalid program would leave the history target holding whatever it held two
     // frames ago and publish that as the result.

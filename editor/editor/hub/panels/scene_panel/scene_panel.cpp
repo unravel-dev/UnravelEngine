@@ -1804,6 +1804,9 @@ void scene_panel::draw_visualization_menu()
         ImGui::RadioButton("SDF (Cache Age)", &visualize_passes_, 24);
         ImGui::RadioButton("SDF (Cascade Levels)", &visualize_passes_, 25);
         ImGui::RadioButton("SDF (Cache Albedo)", &visualize_passes_, 26);
+        ImGui::RadioButton("GI (Probe Atlas)", &visualize_passes_, 27);
+        ImGui::RadioButton("GI (Probe Health)", &visualize_passes_, 28);
+        ImGui::RadioButton("GI (Probe History)", &visualize_passes_, 29);
 
         ImGui::EndMenu();
     }
