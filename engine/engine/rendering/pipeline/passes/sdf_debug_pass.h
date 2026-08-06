@@ -27,55 +27,24 @@ public:
         normals = 0,
         ///< Heat map of sphere-trace steps, for spotting fields that will not let rays skip.
         step_count = 1,
-        ///< Paints each field's bounds with its header contents. Black means the header
-        ///< buffer never reached the shader, which every other mode would only hint at.
+        ///< Paints each field's bounds with its header contents.
         headers = 2,
-        ///< Reports what the brick lookup actually resolved to at a point just inside each
-        ///< field's bounds. Distinguishes a broken indirection buffer from an unwritten atlas,
-        ///< which the traced modes render identically (as noise).
+        ///< What the brick lookup resolves to just inside each field's bounds.
         probe = 3,
-        ///< Classifies the FIRST sample of the trace, at the bounds entry point. The only
-        ///< place the instance scale and the hit threshold are applied, and the one point
-        ///< the probe mode does not inspect.
+        ///< Classifies the FIRST sample of the trace, at the bounds entry point.
         entry = 4,
-        ///< Traces the global cascade alone, with no per-instance fields. A fault in the
-        ///< cascade is invisible in a combined trace, where the per-instance fields cover the
-        ///< near field and hide it.
+        ///< Traces the global cascade alone, with no per-instance fields.
         clipmap = 5,
-        ///< Direct lighting evaluated at the traced hit, from the resident light buffer. The
-        ///< operation the surface cache is built on, shown standalone.
+        ///< Direct lighting evaluated at the traced hit, from the resident light buffer.
         direct = 6,
-        ///< The traced hit looked up in the world-space cache. Shows values accumulated over
-        ///< previous frames rather than computed now, so it is direct evidence that entries
-        ///< persist when their surface leaves the screen.
-        cache = 7,
-        ///< Cache STORAGE laid out on screen, independent of tracing and key lookup. Separates
-        ///< an empty cache from a key mismatch, which the lookup view renders identically.
-        cache_slots = 8,
-        ///< How CONVERGED each entry is. Separates an entry that is stable but wrong from one
-        ///< that keeps being recreated, which the radiance view renders identically.
-        cache_age = 9,
-        ///< Which cascade answers at the traced surface, and how far into its cross-fade band.
-        ///< Level boundaries are where two consumers can resolve onto surfaces a voxel apart and
-        ///< stop finding each other's cache entries; that reads as a cache miss in every other
-        ///< view, so the boundaries have to be visible on their own to be attributable.
-        cascade_levels = 10,
-        ///< The MATERIAL each cache entry holds, which is what tints the light it sends onward.
-        ///< A cell the camera never looks at is discovered by a bounce ray, and a distance field
-        ///< carries geometry only -- so a missing material shows here as a flat marker rather
-        ///< than as a slightly wrong shade in the radiance view.
-        cache_albedo = 11,
-        ///< GI v2: the ATTRIBUTE voxel albedo at the traced hit - what the compose pass
-        ///< attributed to the winning instance. Yellow marks a hit whose voxel is not SURFACE,
-        ///< magenta a hit outside every cascade.
-        attr_albedo = 12,
-        ///< GI v2: the LIGHT VOXELS at the traced hit - the three face slabs facing the hit
-        ///< normal, exposure-weighted. This is exactly what a gather ray will read at a cascade
-        ///< hit, shown before any gather exists.
-        light_voxels = 13,
-        ///< GI v2: world probe irradiance interpolated at the traced hit through the DDGI
-        ///< weight chain - the bounce/completion signal, shown standalone.
-        world_probes = 14,
+        ///< Which cascade answers at the traced surface, and its cross-fade band.
+        cascade_levels = 7,
+        ///< GI v2: the attribute voxel albedo at the traced hit (yellow = unattributed).
+        attr_albedo = 8,
+        ///< GI v2: the light voxels at the traced hit - what a gather ray reads.
+        light_voxels = 9,
+        ///< GI v2: world probe irradiance interpolated at the traced hit.
+        world_probes = 10,
     };
 
     struct settings
@@ -112,9 +81,6 @@ public:
         /// Steps per shadow ray. Much tighter than the primary trace: there is one of these per
         /// light per shaded point, and a shadow ray only needs to answer hit or miss.
         int shadow_max_steps = 64;
-        /// Sample count treated as fully converged by @ref debug_mode::cache_age. Display
-        /// normalisation only -- it scales a colour ramp and never takes part in a key.
-        float cache_max_samples = 32.0f;
         /// Cone half-angle tangent: the hit acceptance radius grows by this fraction of the
         /// distance travelled, in the FAR field only. Bounds a grazing ray's step count, which
         /// is otherwise unbounded and makes distant surfaces fade out as the march runs out of
@@ -176,8 +142,6 @@ private:
         gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr u_gpu_light_params;
         gfx::program::uniform_ptr u_gi_shadow_params;
-        gfx::program::uniform_ptr u_gi_cache_params;
-        gfx::program::uniform_ptr u_gi_cache_params2;
         gfx::program::uniform_ptr u_gi_debug_camera;
 
         void cache_uniforms()
@@ -203,8 +167,6 @@ private:
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gpu_light_params, "u_gpu_light_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_shadow_params, "u_gi_shadow_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_debug_camera, "u_gi_debug_camera", gfx::uniform_type::Vec4);
         }
 

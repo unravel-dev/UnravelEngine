@@ -44,7 +44,6 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     }
     auto& atlas = surface_cache.get_atlas();
     const auto& instances = surface_cache.get_instances();
-    const auto& s = params.config;
     gfx::render_pass pass("GI/Light Voxels");
     program_.program->begin();
     gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
@@ -82,15 +81,16 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                    0.0f,
                                    0.0f};
     gfx::set_uniform(program_.u_gpu_light_params, light_params);
-    const float shadow_params[4] = {s.shadow_distance,
-                                    s.shadow_normal_bias_voxels,
-                                    s.shadow_near_field,
-                                    s.shadow_max_steps};
+    // Shadow tracing wholly owned by gi_constants (Phase 8): no settings, one source.
+    const float shadow_params[4] = {float(gi::GI_SHADOW_DISTANCE),
+                                    float(gi::GI_SHADOW_NORMAL_BIAS_VOXELS),
+                                    float(gi::GI_MESH_SDF_TRACE_RANGE),
+                                    float(gi::GI_TRACE_MAX_STEPS)};
     gfx::set_uniform(program_.u_gi_shadow_params, shadow_params);
-    const float shadow_params2[4] = {s.shadow_surface_bias,
-                                     s.shadow_step_relaxation,
+    const float shadow_params2[4] = {float(gi::GI_SHADOW_SURFACE_BIAS),
+                                     float(gi::GI_SHADOW_RELAXATION),
                                      0.0f,
-                                     s.shadow_ray_start_voxels};
+                                     float(gi::GI_SHADOW_RAY_START_VOXELS)};
     gfx::set_uniform(program_.u_gi_shadow_params2, shadow_params2);
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
     const float voxel_params[4] = {float(attr_resolution),

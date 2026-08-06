@@ -131,6 +131,20 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
             entry = (entry ^ uint64_t(words[i])) * 0x100000001b3ull;
         }
         entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
+        // Material too: albedo and emissive are BAKED into the attribute voxels at composition,
+        // so a change nothing rehashes would keep bouncing the old colour forever. This is also
+        // what publishes a lazily resolved texture-mean albedo (surface_cache_service) and any
+        // material edit into the volume: the fingerprint moves, the level recomposes.
+        const auto hash_vec3 = [&entry](const math::vec3& v)
+        {
+            const auto* vec_words = reinterpret_cast<const uint32_t*>(&v);
+            for(size_t i = 0; i < 3; ++i)
+            {
+                entry = (entry ^ uint64_t(vec_words[i])) * 0x100000001b3ull;
+            }
+        };
+        hash_vec3(instance.albedo);
+        hash_vec3(instance.emissive);
         // Summed rather than chained, so the result does not depend on iteration order -- the
         // scene traversal that produced this list has no guaranteed order and a reshuffle is
         // not a change.
@@ -640,61 +654,6 @@ auto global_sdf_clipmap::sample_ex(const math::vec3& world_position, float& out_
     // to the same mixture or it jumps at the boundary.
     out_voxel_size = math::mix(out_voxel_size, levels_[index + 1u].voxel_size, blend);
     return math::mix(fine, coarse, blend);
-}
-
-auto global_sdf_clipmap::resolve_surface_point(const math::vec3& world_position,
-                                               math::vec3& out_position,
-                                               math::vec3& out_normal,
-                                               uint32_t steps) const -> bool
-{
-    out_position = world_position;
-    out_normal = math::vec3(0.0f, 1.0f, 0.0f);
-    bool valid = false;
-    for(uint32_t i = 0; i < steps; ++i)
-    {
-        float voxel_size = 0.0f;
-        const float distance = sample_ex(out_position, voxel_size);
-        // No cascade covers this point, so there is no isosurface to converge onto. Reporting the
-        // input decorated with an up vector -- which falling through on a zero gradient would do --
-        // reads as a perfectly good answer to every caller.
-        if(distance >= outside_distance)
-        {
-            valid = false;
-            break;
-        }
-        // Differencing over the ANSWERING level's voxel. A fixed epsilon samples far inside one
-        // coarse voxel, where the field is flat and the normal collapses into quantisation noise.
-        //
-        // FOUR tetrahedral taps rather than six central differences: the four corner directions
-        // sum to zero, so the reconstruction is unbiased, and it matches central differences to
-        // within the cascade's own R8 quantisation. Gradients are most of every surface resolve
-        // and the resolve runs per gather ray, so the two fewer taps are two fewer taps in the
-        // most-run code in GI. REFERENCE for SdfResolveSurfacePoint in sdf_common.sh -- the
-        // shader transcribes these exact offsets; a mismatch makes writers and readers resolve
-        // to different cells.
-        const float e = voxel_size;
-        const math::vec3 k0(1.0f, -1.0f, -1.0f);
-        const math::vec3 k1(-1.0f, -1.0f, 1.0f);
-        const math::vec3 k2(-1.0f, 1.0f, -1.0f);
-        const math::vec3 k3(1.0f, 1.0f, 1.0f);
-        const math::vec3 gradient = k0 * sample(out_position + k0 * e) +
-                                    k1 * sample(out_position + k1 * e) +
-                                    k2 * sample(out_position + k2 * e) +
-                                    k3 * sample(out_position + k3 * e);
-        const float gradient_length = math::length(gradient);
-        if(gradient_length < 1e-8f)
-        {
-            valid = false;
-            break;
-        }
-        out_normal = gradient / gradient_length;
-        valid = true;
-        // Capped, or a start point that happens to sit in the saturated far field is thrown across
-        // the scene by its first step.
-        const float step_limit = voxel_size * surface_resolve_max_step;
-        out_position -= out_normal * math::clamp(distance, -step_limit, step_limit);
-    }
-    return valid;
 }
 
 auto global_sdf_clipmap::sample(const math::vec3& world_position) const -> float

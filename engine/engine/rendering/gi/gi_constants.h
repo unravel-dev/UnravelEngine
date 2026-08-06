@@ -48,9 +48,6 @@
     X(GI_LIGHT_VOXEL_UPDATE_DENOM, 4,                                                              \
       "frames", "published: [SDFGI] frames_to_update_light default - dynamic light re-injection"   \
       " amortised over 4 frames")                                                                  \
-    X(GI_LIGHT_VOXEL_MIN_ALPHA, 0.25f,                                                             \
-      "blend weight", "derived: 1 / GI_LIGHT_VOXEL_UPDATE_DENOM, so a change is fully absorbed"    \
-      " within one rotation of the update list")                                                   \
     X(GI_LIGHT_VOXEL_EXPOSURE_MIN, 0.25f,                                                          \
       "field rise per attribute voxel", "derived: a face is exposed when the field RISES along"    \
       " it; 1-Lipschitz bounds the rise over one voxel at 1.0 and plateaus/parallel surfaces"      \
@@ -60,6 +57,21 @@
       "unitless", "derived: bounce feedback has per-channel gain exactly equal to albedo; 1.0 is"  \
       " the neutral-stability point of L = a*L + c, so the gain is held strictly below it")        \
     /* --- world probes (plan 3.3) --- */                                                          \
+    X(GI_SHADOW_DISTANCE, 100.0f,                                                                  \
+      "m", "derived: beyond the outermost cascade's reach a shadow ray has nothing to test"        \
+      " against; 100 m covers the 64 m cascade with margin for lights outside it")                 \
+    X(GI_SHADOW_NORMAL_BIAS_VOXELS, 1.0f,                                                          \
+      "voxels of the answering level", "published-from-v1-measurement: one voxel clears the"       \
+      " level's own hit acceptance without lifting the point past nearby occluders")               \
+    X(GI_SHADOW_SURFACE_BIAS, 0.35f,                                                               \
+      "voxels of the answering field", "published-from-v1-measurement: the acceptance that"        \
+      " removed shadow acne once the relaxation stopped grazing exhaustion (audit A1c)")           \
+    X(GI_SHADOW_RELAXATION, 0.1f,                                                                  \
+      "acceptance growth per unit t", "published-from-v1-measurement: bounds grazing sun rays"     \
+      " (audit A1c - at zero they exhausted and read as washed-out ground)")                       \
+    X(GI_SHADOW_RAY_START_VOXELS, 1.0f,                                                            \
+      "voxels of the answering level", "published-from-v1-measurement: skip along the ray's own"   \
+      " direction rather than lifting the point (see the gather's identical rule)")                \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \
@@ -112,11 +124,8 @@
       "unitless", "published: [DDGI21 Eq.2] user scalar default")                                  \
     /* --- screen probe gather (plan 3.4) --- */                                                   \
     X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
-      "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor")  \
-    X(GI_SCREEN_PROBE_OCT, 8,                                                                      \
-      "texels per edge", "published: [S21 s33][CVar] TracingOctahedronResolution = 8 (64 rays)")   \
-    X(GI_ADAPTIVE_PROBE_FRACTION, 0.5f,                                                            \
-      "of uniform probe count", "published: [CVar] AdaptiveProbeAllocationFraction = 0.5")         \
+      "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \
+      " the gi_resolve_pass::settings::probe_spacing default")                                     \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
       "pre-exposed radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly"   \
       " clamp at trace time")                                                                      \
@@ -137,12 +146,13 @@
       " fraction of the sphere")                                                                   \
     X(GI_TEMPORAL_MAX_FRAMES, 10,                                                                  \
       "frames", "published: [CVar] Temporal.MaxFramesAccumulated = 10; depth rejection only, no"   \
-      " neighbourhood clamp [S21 s98]")                                                            \
-    X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.005f,                                                         \
-      "relative depth", "published: [CVar] Temporal.DistanceThreshold = 0.005")                    \
-    X(GI_FAST_UPDATE_MOVING_FRACTION, 0.1f,                                                        \
-      "of interpolated lighting", "published: [S21 s99][CVar] FractionOfLightingMovingForFast"     \
-      "UpdateMode = 0.1")
+      " neighbourhood clamp [S21 s98]; the gi_resolve_pass::settings::max_accum_frames default")   \
+    X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.25f,                                                          \
+      "relative depth per unit view distance", "measured: Lumen's Temporal.DistanceThreshold"      \
+      " = 0.005 assumes motion-vector reprojection; ours reconstructs the previous position"       \
+      " from the depth buffer alone, whose error at edges and grazing angles rejects history"      \
+      " constantly at 0.005 (visible jitter, Bistro). 0.25 measured stable with acceptable"        \
+      " ghosting; the gi_resolve_pass::settings::reprojection_tolerance default")
 // clang-format on
 
 namespace unravel::gi

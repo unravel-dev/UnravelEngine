@@ -114,6 +114,8 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 	{
 		return false;
 	}
+	int res = u_light_voxel_resolution;
+	float depth_texels = float(res * SDF_CLIPMAP_LEVEL_COUNT * 6);
 	for(int level = finest; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
 		vec4 level_data = u_sdf_clipmap_levels[level];
@@ -122,7 +124,28 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 			continue;
 		}
 		float attr_voxel_size = level_data.w * 2.0;
-		ivec3 slot = GiLightVoxelSlot(GiLightVoxelCell(position, attr_voxel_size));
+		// TRILINEAR over the 2x2x2 cell neighbourhood: a nearest read hands neighbouring rays
+		// voxel-quantised radiance, which the gather turns into probe-tile blotches around any
+		// strong local emitter. The volume stores premultiplied measurements (rgb = 0 wherever
+		// a = 0), so interpolating (rgb, a) and normalising by the filtered alpha afterwards is
+		// the weight-correct mean over measured cells - empty neighbours cost weight, never
+		// energy. Hardware REPEAT in xy lands the continuous cell coordinate on the toroidal
+		// slot space (slot = cell mod res) including across the wrap seam; z is packed in face
+		// slabs, so its two taps are fetched at texel centres and lerped manually. The
+		// window-edge clamp keeps the neighbourhood inside this level's resident cells - past
+		// it the wrap would answer with cells from the far side of the window. The level origin
+		// is snapped to attribute-voxel multiples, so base_cell is exact.
+		vec3 base_cell = floor(level_data.xyz / attr_voxel_size + vec3_splat(0.5));
+		vec3 cell = clamp(position / attr_voxel_size,
+		                  base_cell + vec3_splat(0.5),
+		                  base_cell + vec3_splat(float(res) - 0.5));
+		vec2 uv = cell.xy / float(res);
+		float z_cell = cell.z - 0.5;
+		float z_base = floor(z_cell);
+		float z_frac = z_cell - z_base;
+		int z_biased = int(z_base) + 1048576;
+		int z0 = z_biased % res;
+		int z1 = (z_biased + 1) % res;
 		vec3 radiance = vec3_splat(0.0);
 		float weight_sum = 0.0;
 		for(int face = 0; face < 6; ++face)
@@ -133,9 +156,14 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 			{
 				continue;
 			}
-			vec4 stored = texelFetch(s_light_voxels, GiLightVoxelTexel(slot, level, face), 0);
-			radiance += stored.xyz * (facing * stored.a);
-			weight_sum += facing * stored.a;
+			int slab = (level * 6 + face) * res;
+			vec4 s0 =
+			    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);
+			vec4 s1 =
+			    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z1) + 0.5) / depth_texels), 0.0);
+			vec4 filtered = mix(s0, s1, z_frac);
+			radiance += filtered.xyz * facing;
+			weight_sum += filtered.a * facing;
 		}
 		if(weight_sum > 1e-4)
 		{

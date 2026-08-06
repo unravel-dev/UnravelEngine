@@ -277,45 +277,6 @@ public:
     /// so the reported size is the same mixture.
     auto sample_ex(const math::vec3& world_position, float& out_voxel_size) const -> float;
 
-    /// Newton iterations used to converge onto the isosurface, and the cap on one step in voxels of
-    /// the answering level. Must equal SDF_SURFACE_RESOLVE_STEPS and SDF_SURFACE_RESOLVE_MAX_STEP in
-    /// `gi/sdf_common.sh`; the shader is a transcription of @ref resolve_surface_point.
-    ///
-    /// TWO, measured, not assumed. Each iteration costs 7 cascade samples per ray in the pass that
-    /// dominates GI cost, so this constant is worth money. Sweeping it against writer/reader
-    /// addressing agreement gives 48.9% / 53.3% / 52.9% / 52.8% for 1 / 2 / 3 / 4 -- it plateaus at
-    /// two, and the four it used to be spent twice the samples for nothing.
-    /// `test_surface_resolve_addresses_one_cell_from_both_sides` pins it in both directions, so
-    /// neither lowering it nor raising it on a hunch passes silently.
-    static constexpr uint32_t surface_resolve_steps = 2;
-    static constexpr float surface_resolve_max_step = 4.0f;
-
-    /**
-     * @brief Resolves a point NEAR a surface onto the field's own isosurface, with the field's
-     *        normal there.
-     *
-     * REFERENCE IMPLEMENTATION of SdfResolveSurfacePoint in `gi/sdf_common.sh`.
-     *
-     * This function defines the ADDRESS of every radiance cache entry, and it is the only reason a
-     * writer and a reader can find each other at all. They arrive from different directions -- one
-     * from the rasterised G-buffer, the other from a traced ray -- and those are two different
-     * surfaces, displaced from each other by roughly a voxel, which is the same order as a cache
-     * cell. Converging both onto the field's own zero level set is what makes them quote one
-     * function instead of two approximations of it.
-     *
-     * @return false when no cascade covers the point, or the field is flat there, in which case
-     *         there is no isosurface to converge onto. The outputs are then the untouched inputs
-     *         and must not be used -- returning them as though they were an answer keys entries to
-     *         a fabricated facing at an address no ray can reach.
-     */
-    /// @param steps Newton iterations. Defaults to @ref surface_resolve_steps, which is the value
-    ///        the shader uses; exposed so a test can sweep it and show what the default buys,
-    ///        rather than leaving the constant justified only by a comment.
-    auto resolve_surface_point(const math::vec3& world_position,
-                               math::vec3& out_position,
-                               math::vec3& out_normal,
-                               uint32_t steps = surface_resolve_steps) const -> bool;
-
     auto get_level(uint32_t index) const -> const level&
     {
         return levels_[index];

@@ -1,11 +1,14 @@
 #include "surface_cache_service.h"
 
+#include <engine/assets/impl/asset_reader.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
+
+#include <graphics/utils/bgfx_utils.h>
 
 #include <logging/logging.h>
 
@@ -54,10 +57,6 @@ auto surface_cache_service::init(rtti::context& ctx) -> bool
     {
         APPLOG_WARNING("[SurfaceCache] Light buffer initialisation failed. Traced hits cannot be lit.");
     }
-    if(!cache_gpu_.init(radiance_cache::default_capacity))
-    {
-        APPLOG_WARNING("[SurfaceCache] Radiance cache allocation failed. Indirect light will not be cached.");
-    }
     return true;
 }
 
@@ -88,7 +87,6 @@ auto surface_cache_service::deinit(rtti::context& ctx) -> bool
     grid_instance_capacity_ = 0;
     grid_bounds_.clear();
     grid_params_.fill(0.0f);
-    cache_gpu_.shutdown();
     light_buffer_.shutdown();
     atlas_.shutdown();
     return true;
@@ -179,6 +177,37 @@ auto surface_cache_service::resolve_submesh_material(const model& mdl,
     return mdl.get_material_instance(sub->data_group_id);
 }
 
+auto surface_cache_service::resolve_albedo(const pbr_material& pbr) -> math::vec3
+{
+    const auto& base_color = pbr.get_base_color();
+    const math::vec3 factor(base_color.value.r, base_color.value.g, base_color.value.b);
+    const auto& color_map = pbr.get_color_map();
+    if(!color_map.is_valid())
+    {
+        return factor;
+    }
+    const auto uid = color_map.uid();
+    auto it = texture_mean_albedo_.find(uid);
+    if(it != texture_mean_albedo_.end())
+    {
+        return factor * it->second;
+    }
+    if(texture_mean_decodes_left_ == 0)
+    {
+        return factor;
+    }
+    --texture_mean_decodes_left_;
+    math::vec3 mean(1.0f);
+    float rgb[3] = {1.0f, 1.0f, 1.0f};
+    const auto compiled = asset_reader::resolve_compiled_path(color_map.id());
+    if(imageMeanColorLinear(bx::FilePath(compiled.string().c_str()), rgb))
+    {
+        mean = math::vec3(rgb[0], rgb[1], rgb[2]);
+    }
+    texture_mean_albedo_.emplace(uid, mean);
+    return factor * mean;
+}
+
 void surface_cache_service::add_instance(uint32_t header_index,
                                          const mesh_sdf& sdf,
                                          const math::mat4& local_to_world,
@@ -191,8 +220,7 @@ void surface_cache_service::add_instance(uint32_t header_index,
     // strictly better than tinting the scene with a colour nothing is painted with.
     if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
     {
-        const auto& base_color = pbr->get_base_color();
-        inst.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
+        inst.albedo = resolve_albedo(*pbr);
         // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
         // know that emission is authored as a colour and a separate scale.
         const auto& emissive_color = pbr->get_emissive_color();
@@ -368,6 +396,7 @@ void surface_cache_service::update_world(scene& scn)
         return;
     }
     world_frame_ = frame;
+    texture_mean_decodes_left_ = max_texture_mean_decodes_per_frame;
     instances_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();

@@ -59,3 +59,15 @@ Versus the 8.35 ms v1 baseline: the hash cache passes are gone (v2 skips them), 
 Integrate fell from 3.39 to 0.06 (no per-pixel fallback rays), and the whole world-side
 stack (light voxels + both world-probe passes) costs 1.25 ms. Already under the 4.5 ms
 R6 budget with Phase 6 quality features still to come.
+
+## Phase 8 close-out (2026-08-06)
+
+Teardown complete: radiance hash + gi_cache_pass + both v1 gathers deleted, 13 GI shaders
+remain, settings collapsed to the 15-field v2 surface, orphaned constants removed and the
+temporal defaults wired to gi_constants (max_accum_frames 48 -> GI_TEMPORAL_MAX_FRAMES = 10,
+reprojection_tolerance 1.0 -> GI_TEMPORAL_DEPTH_TOLERANCE = 0.005; the old 1.0 disabled
+depth rejection entirely). Gates: shaderc-all s_5_0 green, editor + gi_tests build clean,
+suite 365 checks / 0 failures.
+
+PENDING (user capture): final Bistro timing at resolution 128 on the torn-down build for
+the R6 <= 4.5 ms check - the Phase 5 table above predicts ~3.7 ms but was provisional.

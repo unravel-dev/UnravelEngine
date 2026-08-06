@@ -124,34 +124,18 @@ public:
     static constexpr int debug_pass_sdf_entry = 19;
     static constexpr int debug_pass_sdf_clipmap = 20;
     static constexpr int debug_pass_sdf_direct = 21;
-    static constexpr int debug_pass_sdf_cache = 22;
-    static constexpr int debug_pass_sdf_cache_slots = 23;
-    static constexpr int debug_pass_sdf_cache_age = 24;
-    static constexpr int debug_pass_sdf_cascade_levels = 25;
-    static constexpr int debug_pass_sdf_cache_albedo = 26;
-    static constexpr int debug_pass_sdf_attr_albedo = 27;
-    static constexpr int debug_pass_sdf_light_voxels = 28;
-    static constexpr int debug_pass_sdf_world_probes = 29;
-    /// Probe-gather debug views. Rendered by the GI RESOLVE pass itself (they read the probe
-    /// buffers, which only it owns) into the GI trace target; presenting is a stretch blit of
-    /// that target rather than a run of the distance-field visualiser.
-    static constexpr int debug_pass_gi_probe_atlas = 30;
-    static constexpr int debug_pass_gi_probe_health = 28;
-    static constexpr int debug_pass_gi_probe_history = 29;
-
+    static constexpr int debug_pass_sdf_cascade_levels = 22;
+    static constexpr int debug_pass_sdf_attr_albedo = 23;
+    static constexpr int debug_pass_sdf_light_voxels = 24;
+    static constexpr int debug_pass_sdf_world_probes = 25;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const gfx::frame_buffer::ptr& output);
 
-    /// Registers visible surfaces into the world-space radiance cache and lights every
-    /// resident entry. See gi_cache_pass.
-    /// Resolves GI settings for this frame. Returns false when a gi_component disabled the
-    /// feature; an absent component leaves the compiled defaults in place and returns true.
-    static auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
+    /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.
+    auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
 
-    void run_gi_cache_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
-
-    /// Gathers the world-space cache into a screen-space indirect diffuse buffer.
+    /// Gathers the world structures into a screen-space indirect diffuse buffer.
     /// See gi_resolve_pass.
     /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.

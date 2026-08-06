@@ -16,8 +16,6 @@ $input v_texcoord0
 #include "gi/gpu_lights.sh"
 #include "gi/gi_lighting.sh"
 
-#define GI_CACHE_READ_ONLY
-#include "gi/radiance_cache.sh"
 
 uniform vec4 u_sdf_debug_params;
 #define u_max_steps    int(u_sdf_debug_params.x)
@@ -43,14 +41,10 @@ uniform vec4 u_gi_debug_camera;
 #define SDF_DEBUG_ENTRY      4
 #define SDF_DEBUG_CLIPMAP    5
 #define SDF_DEBUG_DIRECT     6
-#define SDF_DEBUG_CACHE      7
-#define SDF_DEBUG_CACHE_SLOTS 8
-#define SDF_DEBUG_CACHE_AGE   9
-#define SDF_DEBUG_CASCADE_LEVELS 10
-#define SDF_DEBUG_CACHE_ALBEDO 11
-#define SDF_DEBUG_ATTR_ALBEDO 12
-#define SDF_DEBUG_LIGHT_VOXELS 13
-#define SDF_DEBUG_WORLD_PROBES 14
+#define SDF_DEBUG_CASCADE_LEVELS 7
+#define SDF_DEBUG_ATTR_ALBEDO 8
+#define SDF_DEBUG_LIGHT_VOXELS 9
+#define SDF_DEBUG_WORLD_PROBES 10
 
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
@@ -160,35 +154,6 @@ void main()
 	vec3 ray_origin = mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 	vec3 ray_dir = normalize(world_point - ray_origin);
 
-	if(u_debug_mode == SDF_DEBUG_CACHE_SLOTS)
-	{
-		// Cache STORAGE, laid out directly on screen: the viewport is treated as a 256x256 grid
-		// of slots. Deliberately independent of tracing and of key lookup, so it separates "the
-		// cache is empty" from "the reader derives a different key than the writer" -- two
-		// failures that are indistinguishable in the lookup view, where both render as a miss.
-		//
-		//   BLACK -> slot empty. All black means insertion is not running at all.
-		//   RED   -> occupied, radiance still zero. Insertion works, lighting does not.
-		//   GREEN -> occupied and lit. Storage is fine; a miss in the lookup view is then a key
-		//            mismatch between writer and reader.
-		// Grid is derived from the capacity rather than fixed, so the view always covers the
-		// WHOLE table. A fixed grid silently shows a fraction of a larger table, which reads as
-		// healthy headroom that is not there.
-		uint grid_w = 1024u;
-		uint grid_h = max((u_gi_cache_mask + 1u) / grid_w, 1u);
-		uvec2 grid = uvec2(uv * vec2(float(grid_w), float(grid_h)));
-		uint slot = min(grid.y * grid_w + grid.x, u_gi_cache_mask);
-		if(b_gi_cache_keys[slot] == GI_CACHE_EMPTY_KEY)
-		{
-			gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-			return;
-		}
-		vec4 stored = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)];
-		float lit = dot(stored.xyz, stored.xyz) > 0.0 ? 1.0 : 0.0;
-		gl_FragColor = vec4(1.0 - lit, lit, 0.0, 1.0);
-		return;
-	}
-
 	if(u_debug_mode == SDF_DEBUG_HEADERS || u_debug_mode == SDF_DEBUG_PROBE ||
 	   u_debug_mode == SDF_DEBUG_ENTRY)
 	{
@@ -279,92 +244,6 @@ void main()
 			color = mix(color, level_color[level + 1], blend);
 		}
 		gl_FragColor = vec4(color, 1.0);
-		return;
-	}
-
-	if(u_debug_mode == SDF_DEBUG_CACHE)
-	{
-		// Looks the traced hit up in the WORLD-SPACE cache and shows what is stored there.
-		//
-		// The value shown was accumulated over previous frames by the cache update pass, not
-		// computed here, so this is direct evidence of the world-space claim: turn the camera
-		// away and back, and an entry is still populated rather than converging from nothing.
-		//
-		//   MAGENTA -> the surface has no entry yet. Expected briefly for newly seen geometry,
-		//              and permanently for anything insertion never reaches.
-		// Resolved, not raw: the writer and this reader must address the cache from the same
-		// point on the same surface, and neither a raster position nor a traced hit is that.
-		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
-		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
-		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
-		if(slot == GI_CACHE_INVALID_SLOT)
-		{
-			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-			return;
-		}
-		vec4 stored = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)];
-		gl_FragColor = vec4(stored.xyz, 1.0);
-		return;
-	}
-
-	if(u_debug_mode == SDF_DEBUG_CACHE_ALBEDO)
-	{
-		// The MATERIAL each cache entry holds, which is what tints the light it sends onward.
-		//
-		// Worth its own view because the failure it diagnoses is invisible everywhere else: a cell
-		// the camera has never looked at is discovered by a bounce ray, and a distance field carries
-		// geometry only, so without a material it falls back to a neutral grey and bounces colourless
-		// light forever. In the radiance view that is just a slightly wrong shade.
-		//
-		//   MAGENTA -> no entry here yet.
-		//   YELLOW  -> an entry with NO material, still bouncing the neutral fallback. Expected only
-		//              for surfaces reached solely through the cascade, which cannot attribute a
-		//              sample to one field. A yellow patch anywhere the near-field tier reaches is
-		//              the bug this view exists to catch.
-		//   otherwise -> the stored albedo.
-		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
-		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
-		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
-		if(slot == GI_CACHE_INVALID_SLOT)
-		{
-			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-			return;
-		}
-		vec3 stored_albedo = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_ALBEDO)].xyz;
-		if(dot(stored_albedo, stored_albedo) <= 0.0)
-		{
-			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
-			return;
-		}
-		gl_FragColor = vec4(stored_albedo, 1.0);
-		return;
-	}
-
-	if(u_debug_mode == SDF_DEBUG_CACHE_AGE)
-	{
-		// How CONVERGED each entry is, rather than what it holds. An entry accumulates one sample
-		// per frame, so a persistent one saturates within a second and stays there.
-		//
-		// This separates the two reasons a cached value can be unstable, which the radiance view
-		// shows identically. If an entry keeps being evicted or re-keyed, it restarts from zero
-		// samples and re-converges, and no amount of screen-space temporal filtering downstream
-		// can fix a signal that genuinely changes every frame.
-		//
-		//   MAGENTA    -> no entry.
-		//   RED        -> freshly created, near zero samples.
-		//   GREEN      -> fully converged.
-		//   Flickering red on a static camera means entries are churning, not accumulating.
-		SdfSurfacePoint surface = SdfResolveSurfacePoint(ray_origin + ray_dir * hit.t);
-		uint level = GiCacheLevel(surface.position, u_gi_debug_camera.xyz);
-		uint slot = GiCacheFindSurface(surface.position, surface.normal, level);
-		if(slot == GI_CACHE_INVALID_SLOT)
-		{
-			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-			return;
-		}
-		float samples = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].w;
-		float converged = saturate(samples / max(u_gi_debug_max_samples, 1.0));
-		gl_FragColor = vec4(1.0 - converged, converged, 0.0, 1.0);
 		return;
 	}
 

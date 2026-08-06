@@ -75,12 +75,17 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
         shutdown();
         return false;
     }
+    // REPEAT in u/v (bgfx default, so no clamp flags): the volume is TOROIDAL in xy and the
+    // filtered read relies on hardware wrap to interpolate across the seam onto the far edge,
+    // which holds the world-adjacent cells. W stays clamped - z packs (level, face) slabs and
+    // the reader lerps its two z taps manually at texel centres.
+    const uint64_t light_flags = BGFX_SAMPLER_W_CLAMP | BGFX_TEXTURE_COMPUTE_WRITE;
     light_voxel_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
                                                           static_cast<uint16_t>(attr_resolution),
                                                           static_cast<uint16_t>(light_depth),
                                                           false,
                                                           gfx::texture_format::RGBA16F,
-                                                          flags);
+                                                          light_flags);
     const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
     surface_list_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
                                                      BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);

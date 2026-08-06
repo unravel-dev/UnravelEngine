@@ -27,24 +27,9 @@
 #define GI_PROBE_STRIDE     12
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
-/// Atlas alpha: encoded proximity of what a cone saw, 1 / (1 + hit distance), floored at this
-/// value for a ray that escaped to the sky. 0 means the texel measured NOTHING (untraced cap,
-/// self-read, unaddressable hit) -- distinct from sky, which IS a measurement. The encoding
-/// exists for the probe-space filter: a cone that hit an occluder half a metre away must not
-/// average with a neighbour's cone that saw open sky, even though both probes sit on the same
-/// wall plane -- that averaging is what erased contact occlusion under overhangs. The floor
-/// doubles as the far-hit limit: a hit fifty metres out is proximity-indistinguishable from sky,
-/// which is exactly how the filter should treat it.
-#define GI_PROBE_PROXIMITY_SKY 0.02
-/// Probe LAYERS per tile -- fixed-budget adaptive placement. Layer 0 anchors on the tile's
-/// MAJORITY surface (median depth); layer 1 anchors on the surface most rejected by layer 0's
-/// plane, and only exists where the tile actually spans two surfaces -- a planar tile marks it
-/// invalid and traces nothing. One probe per tile cannot represent a tile containing a window
-/// reveal AND its wall, and whichever surface lost the anchor flipped to the integration
-/// fallback; at distance, where a tile covers metres of facade, that flipping is most of the
-/// aliasing. Two layers cover the dominant two-surface case with deterministic indexing and no
-/// lists; the full Lumen scheme (variable count, hierarchical) remains the eventual extension.
-#define GI_PROBE_LAYERS     2
+/// Single layer: the v2 gather anchors one probe per tile (Phase 8 removed the v1
+/// two-layer machinery); the record indexing keeps the parameter for layout stability.
+#define GI_PROBE_LAYERS     1
 
 /// x = probe count x, y = probe count y, z = probe spacing in TRACE-RESOLUTION pixels,
 /// w = frame index.

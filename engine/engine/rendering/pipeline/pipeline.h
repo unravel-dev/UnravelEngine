@@ -20,7 +20,6 @@
 #include "passes/hiz_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
-#include "passes/gi_cache_pass.h"
 #include "passes/gi_clipmap_compose_pass.h"
 #include "passes/gi_light_voxel_pass.h"
 #include "passes/gi_world_probe_pass.h"
@@ -264,7 +263,6 @@ protected:
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
     gi_light_voxel_pass gi_light_voxel_pass_{};
     gi_world_probe_pass gi_world_probe_pass_{};
-    gi_cache_pass gi_cache_pass_{};
     gi_resolve_pass gi_resolve_pass_{};
     sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h
 

@@ -600,6 +600,70 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
     return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
 }
 
+bool imageMeanColorLinear(const bx::FilePath& _filePath, float _outRgb[3])
+{
+    // Largest smallest-mip this will decode. A mipped texture's last mip is tiny; only a
+    // mipless source can exceed this, and decoding megapixels for one mean is not worth it.
+    constexpr uint32_t kMaxMeanPixels = 256u * 256u;
+    entry::FileReader reader;
+    uint32_t size = 0;
+    bx::AllocatorI* allocator = entry::getAllocator();
+    void* data = loadMem(&reader, allocator, _filePath, &size);
+    if(NULL == data)
+    {
+        return false;
+    }
+    // imageParse copies into its own allocation (imageParseT -> imageAlloc), so the file
+    // buffer can be released as soon as parsing returns.
+    bimg::ImageContainer* image = bimg::imageParse(allocator, data, size, bimg::TextureFormat::Count);
+    bx::free(allocator, data);
+    if(NULL == image)
+    {
+        return false;
+    }
+    bool ok = false;
+    bimg::ImageMip mip;
+    const uint8_t lod = uint8_t(image->m_numMips > 0 ? image->m_numMips - 1 : 0);
+    if(bimg::imageGetRawData(*image, 0, lod, image->m_data, image->m_size, mip))
+    {
+        const uint32_t count = uint32_t(mip.m_width) * uint32_t(mip.m_height);
+        if(count > 0 && count <= kMaxMeanPixels)
+        {
+            void* rgba = bx::alloc(allocator, size_t(count) * 4u);
+            bimg::imageDecodeToRgba8(allocator,
+                                     rgba,
+                                     mip.m_data,
+                                     mip.m_width,
+                                     mip.m_height,
+                                     mip.m_width * 4,
+                                     mip.m_format);
+            // Average in LINEAR space: averaging gamma-encoded bytes would skew dark. 8-bit
+            // colour content is sRGB-encoded (base colour maps always are), so apply the
+            // sRGB EOTF per texel before summing.
+            double sum[3] = {0.0, 0.0, 0.0};
+            const uint8_t* px = reinterpret_cast<const uint8_t*>(rgba);
+            for(uint32_t i = 0; i < count; ++i)
+            {
+                for(uint32_t c = 0; c < 3; ++c)
+                {
+                    const float encoded = float(px[i * 4u + c]) / 255.0f;
+                    const float linear = encoded <= 0.04045f ? encoded / 12.92f
+                                                             : bx::pow((encoded + 0.055f) / 1.055f, 2.4f);
+                    sum[c] += double(linear);
+                }
+            }
+            bx::free(allocator, rgba);
+            for(uint32_t c = 0; c < 3; ++c)
+            {
+                _outRgb[c] = float(sum[c] / double(count));
+            }
+            ok = true;
+        }
+    }
+    bimg::imageFree(image);
+    return ok;
+}
+
 bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _info, bx::Error* _err)
 {
     if(_data == nullptr || _size == 0)

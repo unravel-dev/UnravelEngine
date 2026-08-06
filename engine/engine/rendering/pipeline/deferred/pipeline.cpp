@@ -739,13 +739,6 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                 gi_light_voxel_pass::run_params light_params;
                 light_params.surface_cache = &surface_cache;
                 light_params.view_cache = &view_cache;
-                light_params.config.shadow_distance = gi.cache.shadow_distance;
-                light_params.config.shadow_normal_bias_voxels = gi.cache.shadow_normal_bias_voxels;
-                light_params.config.shadow_near_field = gi.cache.shadow_near_field;
-                light_params.config.shadow_max_steps = gi.cache.shadow_max_steps;
-                light_params.config.shadow_surface_bias = gi.cache.shadow_surface_bias;
-                light_params.config.shadow_step_relaxation = gi.cache.shadow_step_relaxation;
-                light_params.config.shadow_ray_start_voxels = gi.cache.shadow_ray_start_voxels;
                 light_params.frame = light_voxel_frame_;
                 light_params.camera_position = camera.get_position();
                 gi_light_voxel_pass_.run(rview, light_params);
@@ -801,28 +794,6 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     bool gi_resolve_active = false;
     if(is_camera_run)
     {
-        // The legacy hash cache only feeds the v1 gather. When the v2 gather will run - its
-        // programs loaded and the world structures resident - populating and lighting the hash
-        // is pure cost, so it is skipped outright (the A/B toggle restores it along with v1).
-        bool v2_will_run = false;
-        if(params.fill_gi_params)
-        {
-            gi_settings gi;
-            if(resolve_gi_settings(params, gi) && gi.resolve.use_v2_gather &&
-               gi.resolve.use_probe_gather && gi_resolve_pass_.has_v2_programs())
-            {
-                auto& view_cache =
-                    rview.data().get_or_emplace<surface_cache_view>(surface_cache_view::view_key);
-                const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
-                v2_will_run = clipmap_gpu.is_valid() && clipmap_gpu.has_world_probes() &&
-                              static_cast<bool>(clipmap_gpu.get_light_voxel_texture());
-            }
-        }
-        if(!v2_will_run)
-        {
-            run_gi_cache_pass(camera, rview, params);
-        }
-        // Gather the cache into a screen-space buffer while the entries lit above are current.
         gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
     }
 
@@ -866,23 +837,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         run_ui_pass(scn, camera, rview, output);
 
-        if(debug_pass_ >= debug_pass_gi_probe_atlas)
-        {
-            // Probe debug views were already rendered by the resolve pass into the GI trace
-            // target -- they need the probe buffers only that pass owns -- so presenting them is
-            // a stretch of that target over the output.
-            blit_pass::run_params probe_debug_params;
-            probe_debug_params.input = rview.fbo_safe_get("GI_TRACE");
-            probe_debug_params.output = output;
-            // Blended, not opaque: the debug shaders emit alpha below one exactly so the lit
-            // frame stays readable underneath the readout.
-            probe_debug_params.alpha_blend = true;
-            if(probe_debug_params.input)
-            {
-                blit_pass_.run(rview, probe_debug_params);
-            }
-        }
-        else if(debug_pass_ >= debug_pass_sdf_normals)
+        if(debug_pass_ >= debug_pass_sdf_normals)
         {
             run_sdf_debug_pass(camera, rview, output);
         }
@@ -2147,27 +2102,6 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
     return true;
 }
 
-void deferred::run_gi_cache_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
-{
-    auto& ctx = engine::context();
-    if(!ctx.has<surface_cache_service>())
-    {
-        return;
-    }
-    gi_cache_pass::run_params params;
-    gi_settings gi;
-    if(!resolve_gi_settings(rparams, gi))
-    {
-        return;
-    }
-    params.settings = gi.cache;
-    params.g_buffer = rview.fbo_safe_get("GBUFFER");
-    params.cam = &camera;
-    params.surface_cache = &ctx.get<surface_cache_service>();
-    params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    gi_cache_pass_.run(rview, params);
-}
-
 auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
     -> bool
 {
@@ -2190,11 +2124,6 @@ auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview
         params.cam = &camera;
         params.surface_cache = &ctx.get<surface_cache_service>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-        // Debug-view selection, not a scene setting: the probe views live beside the other GI
-        // visualisers in the editor's debug list and are threaded through per run.
-        params.probe_debug = debug_pass_ >= debug_pass_gi_probe_atlas
-                                 ? debug_pass_ - debug_pass_gi_probe_atlas + 1
-                                 : 0;
         result = gi_resolve_pass_.run(rview, params);
     }
     if(result)
@@ -2254,25 +2183,9 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     {
         params.settings.mode = sdf_debug_pass::debug_mode::direct;
     }
-    else if(debug_pass_ == debug_pass_sdf_cache)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cache;
-    }
-    else if(debug_pass_ == debug_pass_sdf_cache_slots)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cache_slots;
-    }
-    else if(debug_pass_ == debug_pass_sdf_cache_age)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cache_age;
-    }
     else if(debug_pass_ == debug_pass_sdf_cascade_levels)
     {
         params.settings.mode = sdf_debug_pass::debug_mode::cascade_levels;
-    }
-    else if(debug_pass_ == debug_pass_sdf_cache_albedo)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cache_albedo;
     }
     else if(debug_pass_ == debug_pass_sdf_attr_albedo)
     {

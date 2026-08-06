@@ -24,24 +24,10 @@ namespace unravel
 class gi_light_voxel_pass
 {
 public:
-    struct settings
-    {
-        /// See gi_lighting.sh; carried from gi_cache_pass::settings until Phase 8 collapses the
-        /// settings surface - the two passes must trace shadows identically meanwhile.
-        float shadow_distance = 100.0f;
-        float shadow_normal_bias_voxels = 1.0f;
-        float shadow_near_field = 5.0f;
-        float shadow_max_steps = 48.0f;
-        float shadow_surface_bias = 0.35f;
-        float shadow_step_relaxation = 0.1f;
-        float shadow_ray_start_voxels = 1.0f;
-    };
-
     struct run_params
     {
         surface_cache_service* surface_cache = nullptr;
         surface_cache_view* view_cache = nullptr;
-        settings config{};
         uint32_t frame = 0;
         /// The world-probe windows are centred here; the bounce term must agree with the trace.
         math::vec3 camera_position{0.0f};

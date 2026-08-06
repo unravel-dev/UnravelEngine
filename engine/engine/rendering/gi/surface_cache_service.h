@@ -3,7 +3,6 @@
 #include <engine/engine_export.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
-#include <engine/rendering/gi/radiance_cache_gpu.h>
 #include <engine/rendering/gi/sdf_atlas.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 // For material::sptr, which is a nested typedef and so needs the complete type.
@@ -106,10 +105,6 @@ public:
         return light_buffer_;
     }
 
-    auto get_radiance_cache() -> radiance_cache_gpu&
-    {
-        return cache_gpu_;
-    }
 
     /// Per-frame instance list packed for the tracer. Owned here rather than by a pass, since
     /// every pass that traces needs the same one and packing it twice would be wasted work.
@@ -241,6 +236,17 @@ private:
                                          uint32_t submesh_index) -> material::sptr;
 
     /**
+     * @brief The albedo GI bounces off a material: base colour factor x its texture's mean.
+     *
+     * The factor alone is white on every textured material, which drives the bounce gain to the
+     * GI_MAX_ALBEDO cap instead of the surface's true reflectance and over-brightens every
+     * bounce. The texture mean resolves lazily (budgeted per frame) from the compiled file's
+     * smallest mip; until it lands the factor stands in, and the clipmap content fingerprint
+     * hashes albedo, so the level recomposes when the mean arrives.
+     */
+    auto resolve_albedo(const pbr_material& pbr) -> math::vec3;
+
+    /**
      * @brief Packs the instance list into the layout SdfLoadInstance expects and uploads it.
      *
      * Transforms are written as the three rows of an affine 3x4 rather than as a mat4, so the
@@ -250,7 +256,6 @@ private:
 
     sdf_atlas atlas_;
     gpu_light_buffer light_buffer_;
-    radiance_cache_gpu cache_gpu_;
     /// Identifies one submesh's field. Residency is per SUBMESH, not per mesh: each submesh has
     /// its own field and is uploaded to the atlas independently.
     struct field_key
@@ -274,6 +279,14 @@ private:
     };
 
     std::unordered_map<field_key, mesh_residency, field_key_hash> residency_;
+    /// Mean LINEAR colour of each base colour texture, keyed by asset uid. Failures cache as
+    /// white so a bad file is probed once, not every frame.
+    std::unordered_map<hpp::uuid, math::vec3> texture_mean_albedo_;
+    /// Texture-mean file decodes still allowed this frame; reset in @ref update_world.
+    uint32_t texture_mean_decodes_left_ = 0;
+    /// File reads per frame for texture means: sweeps a scene's materials within a couple of
+    /// seconds without a first-frame hitch.
+    static constexpr uint32_t max_texture_mean_decodes_per_frame = 2;
     std::vector<instance> instances_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;

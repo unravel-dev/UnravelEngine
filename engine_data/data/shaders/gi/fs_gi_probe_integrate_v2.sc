@@ -28,6 +28,11 @@ SAMPLER2D(s_probe_irradiance, 2);
 /// xyz = camera position, w = frame index.
 uniform vec4 u_gi_v2_camera;
 
+/// x = settings.intensity, the artistic multiplier on the gathered bounce. Applied to the
+/// output rgb only: alpha keeps the measured weight that replaces the environment term
+/// downstream, so the knob scales the scene's bounce without eating the sky fallback.
+uniform vec4 u_gi_v2_intensity;
+
 #define GI_V2_INTEGRATE_PLANE_TOLERANCE 0.05
 
 /// Accumulates the 2x2 probe bracket at @p base: bilinear x plane weights, irradiance sampled
@@ -135,7 +140,7 @@ void main()
 	if(weight_sum > 1e-4 && measured > 1e-4)
 	{
 		// Normalised over the measured fraction, weighted out over what the probes vouch for.
-		gl_FragColor = vec4(irradiance / measured, saturate(measured / weight_sum));
+		gl_FragColor = vec4(irradiance / measured * u_gi_v2_intensity.x, saturate(measured / weight_sum));
 		return;
 	}
 	// No screen probe serves this pixel: the world probes answer - positional, stable, leak
@@ -149,7 +154,7 @@ void main()
 	                                 world_irradiance,
 	                                 sky_fraction))
 	{
-		gl_FragColor = vec4(world_irradiance, 1.0);
+		gl_FragColor = vec4(world_irradiance * u_gi_v2_intensity.x, 1.0);
 		return;
 	}
 	gl_FragColor = vec4_splat(0.0);

@@ -70,6 +70,13 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
 bool imageParseInfo(const bx::FilePath& _filePath, bimg::ImageContainer& _info, bx::Error* _err = NULL);
 bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _info, bx::Error* _err = NULL);
 
+/// Mean colour of an image file in LINEAR space, from its smallest stored mip (the mip chain is
+/// already a box-filtered mean, so for a mipped texture this decodes as little as one texel).
+/// Assumes 8-bit content is sRGB-encoded, which base colour maps are. Returns false when the
+/// file cannot be read, the format cannot be decoded, or the smallest mip is unreasonably large
+/// (a mipless huge texture - decoding it wholesale is not worth a constant).
+bool imageMeanColorLinear(const bx::FilePath& _filePath, float _outRgb[3]);
+
 /// Write `image` to `saveAs`. Format is detected from `format_hint` when non-null
 /// (e.g. the final ".dds" destination path while writing a ".temp" file); otherwise
 /// from `saveAs`.

@@ -105,35 +105,11 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
                                     float(params.settings.shadow_max_steps)};
     gfx::set_uniform(debug_program_.u_gi_shadow_params, shadow_params);
 
-    // Radiance cache, bound read-only: this view reports what is stored, it does not write.
-    auto& radiance_cache = surface_cache.get_radiance_cache();
-    if(radiance_cache.is_valid())
-    {
-        gfx::set_buffer(6, radiance_cache.get_keys_buffer(), gfx::access::Read);
-        gfx::set_buffer(7, radiance_cache.get_data_buffer(), gfx::access::Read);
-    }
-    // Must match gi_cache_pass::settings, or a lookup derives a different key from the same
-    // surface and never finds the entry the update pass wrote.
-    // From the cache, never hardcoded. These were literals matching the defaults, which is the
-    // most dangerous form of duplication: it agrees today and diverges silently the moment a
-    // default changes, and the failure it produces -- a lookup deriving a different key than the
-    // writer -- shows up as an empty cache rather than as an error.
-    const auto& key_settings = radiance_cache.get_settings();
-    const float cache_params[4] = {float(radiance_cache.get_capacity() - 1u),
-                                   key_settings.base_cell_size,
-                                   key_settings.base_distance,
-                                   float(key_settings.max_level)};
-    gfx::set_uniform(debug_program_.u_gi_cache_params, cache_params);
-    const float cache_params2[4] = {float(gfx::get_render_frame()),
-                                    0.05f,
-                                    params.settings.cache_max_samples,
-                                    0.0f};
-    gfx::set_uniform(debug_program_.u_gi_cache_params2, cache_params2);
     const auto camera_position = params.cam->get_position();
     const float debug_camera[4] = {camera_position.x,
                                    camera_position.y,
                                    camera_position.z,
-                                   params.settings.cache_max_samples};
+                                   0.0f};
     gfx::set_uniform(debug_program_.u_gi_debug_camera, debug_camera);
 
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
