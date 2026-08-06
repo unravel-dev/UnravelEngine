@@ -138,9 +138,12 @@ struct SdfInstance
 	/// Smallest scale axis: converts a local-space distance to a conservative world distance.
 	float local_to_world_scale;
 	/// Material of the submesh this placement draws, so a bounce ray can colour a cell it
-	/// discovers. Emission is already scaled by its intensity.
+	/// discovers. Albedo is the base colour FACTOR; the attribute composer multiplies it by
+	/// the texture mean at mean_slot. Emission is already scaled by its intensity.
 	vec3 albedo;
 	vec3 emissive;
+	/// Slot in the texture-mean buffer (cs_gi_texture_mean.sc); 0 is reserved white.
+	uint mean_slot;
 };
 
 SdfInstance SdfLoadInstance(int index)
@@ -159,7 +162,9 @@ SdfInstance SdfLoadInstance(int index)
 	inst.header_index = uint(b0.w);
 	inst.world_bounds_max = b1.xyz;
 	inst.local_to_world_scale = b1.w;
-	inst.albedo = b_sdf_instances[base + 8u].xyz;
+	vec4 material0 = b_sdf_instances[base + 8u];
+	inst.albedo = material0.xyz;
+	inst.mean_slot = uint(material0.w);
 	inst.emissive = b_sdf_instances[base + 9u].xyz;
 	return inst;
 }

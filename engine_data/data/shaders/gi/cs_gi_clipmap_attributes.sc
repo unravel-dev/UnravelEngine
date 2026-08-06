@@ -7,13 +7,12 @@
  * test_clipmap_attribute_transcription_matches_cpu.
  *
  * A voxel is SURFACE when the composed field at its centre lies within GI_SURFACE_VOXEL_BAND
- * attribute voxels of zero AND the field gradient there is steep enough to be a real surface
- * rather than a saturated plateau (GI_SURFACE_GRADIENT_MIN - see gi_constants.h for both
- * derivations). Surface voxels take the albedo/emissive of the instance with the smallest
- * |distance| at the centre - ties broken by the smaller instance INDEX, which is what keeps
- * this walk and the CPU composer's differently-ordered walk in exact agreement - and append
- * their packed coordinate to the level's segment of the surface-voxel list, which drives the
- * light-voxel update's indirect dispatch.
+ * attribute voxels of zero (band gate alone - see gi_constants.h). Surface voxels take the
+ * albedo/emissive of the instance with the smallest |distance| at the centre - ties broken by
+ * the smaller instance INDEX, which is what keeps this walk and the CPU composer's
+ * differently-ordered walk in exact agreement - and append their packed coordinate to the
+ * level's segment of the surface-voxel list, which drives the light-voxel update's indirect
+ * dispatch.
  *
  * Non-surface voxels write zeros: a level that scrolled must not keep serving the previous
  * region's materials.
@@ -40,6 +39,11 @@ BUFFER_RW(b_surface_count, uint, 8);
 IMAGE3D_WO(s_light_voxels_out, rgba16f, 9);
 /// One packed cell id per attribute slot per level (GiLightVoxelPackCell).
 BUFFER_RW(b_attr_cells, uint, 11);
+/// Per-texture mean colours (cs_gi_texture_mean.sc); an instance's albedo is its base colour
+/// FACTOR times means[mean_slot]. Slot 0 means "no mean": no texture, capture not yet landed,
+/// or the CPU reference composer (which has no mean buffer) - the multiply is skipped rather
+/// than read, so the buffer never needs a seeded value.
+BUFFER_RO(b_gi_texture_means, vec4, 10);
 
 /// x = level index, y = attribute voxels per axis, z = attribute voxel size (world),
 /// w = candidate reach in world units (band + one attribute voxel; see the CPU reference).
@@ -162,7 +166,12 @@ void main()
 		return;
 	}
 	SdfInstance winner = SdfLoadInstance(best_index);
-	imageStore(s_attr_albedo_out, texel, vec4(winner.albedo, 1.0));
+	vec3 winner_albedo = winner.albedo;
+	if(winner.mean_slot != 0u)
+	{
+		winner_albedo *= b_gi_texture_means[winner.mean_slot].xyz;
+	}
+	imageStore(s_attr_albedo_out, texel, vec4(winner_albedo, 1.0));
 	imageStore(s_attr_emissive_out, texel, vec4(winner.emissive, 0.0));
 	uint cursor;
 	atomicFetchAndAdd(b_surface_count[uint(u_attr_level)], 1u, cursor);

@@ -93,15 +93,10 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
                                                       BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     attr_cells_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
                                                    BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
-    if(bgfx::isValid(attr_cells_))
-    {
-        // Sentinel: no real cell packs to ~0u, so every slot claims (and zeroes its light
-        // texels) on its first composition.
-        std::vector<uint32_t> attr_sentinels(size_t(segment) * global_sdf_clipmap::level_count, 0xFFFFFFFFu);
-        gfx::update(attr_cells_,
-                    0,
-                    gfx::copy(attr_sentinels.data(), uint32_t(attr_sentinels.size() * sizeof(uint32_t))));
-    }
+    // Sentinel cell ids (no real cell packs to ~0u, so every slot claims and zeroes its light
+    // texels on first use) and the zeroed cursors are seeded ON THE GPU by the compose pass:
+    // these buffers are compute-writable, and bgfx forbids - in debug - CPU updates on those.
+    needs_buffer_seed_ = true;
     if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
        !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
        !bgfx::isValid(surface_list_) || !bgfx::isValid(surface_count_) || !bgfx::isValid(attr_cells_))
@@ -110,11 +105,9 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
         shutdown();
         return false;
     }
-    // A level's cursor is only meaningful once that level has composed; zero them all so a
-    // consumer reading an as-yet-uncomposed level sees an empty list rather than allocation
-    // garbage - the claim-owns-initialising rule applied to the whole resource.
-    const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
-    gfx::update(surface_count_, 0, gfx::copy(zero_counts.data(), uint32_t(zero_counts.size() * sizeof(uint32_t))));
+    // A level's cursor is only meaningful once that level has composed; the compose pass's seed
+    // dispatch zeroes them all so a consumer reading an as-yet-uncomposed level sees an empty
+    // list rather than allocation garbage.
     // World probes (GI v2 plan 3.3): only when the shader's hardcoded axis matches this
     // resolution's derivation - the trace/convolve group layouts bake the axis in.
     if(resolution / 16u + 1u == world_probe_axis)
@@ -160,12 +153,9 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
             shutdown();
             return false;
         }
-        // Sentinel cell ids: no real cell packs to ~0u, so every slot claims (and zeroes its
-        // strata) on its first trace.
-        std::vector<uint32_t> sentinel_cells(probe_count, 0xFFFFFFFFu);
-        gfx::update(world_probe_cells_,
-                    0,
-                    gfx::copy(sentinel_cells.data(), uint32_t(sentinel_cells.size() * sizeof(uint32_t))));
+        // Sentinel cell ids (every slot claims and zeroes its strata on first trace) are seeded
+        // by the compose pass's GPU fill - see needs_buffer_seed.
+        world_probe_cell_count_ = probe_count;
     }
     else
     {
@@ -198,6 +188,8 @@ void global_sdf_clipmap_gpu::shutdown()
         gfx::destroy(world_probe_cells_);
         world_probe_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
     }
+    world_probe_cell_count_ = 0;
+    needs_buffer_seed_ = false;
     if(bgfx::isValid(attr_cells_))
     {
         gfx::destroy(attr_cells_);

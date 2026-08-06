@@ -126,6 +126,30 @@ public:
         return world_probe_cells_;
     }
 
+    /// Entries in @ref get_world_probe_cells (0 when world probes are disabled).
+    auto get_world_probe_cell_count() const -> uint32_t
+    {
+        return world_probe_cell_count_;
+    }
+
+    /**
+     * @brief True until the compose pass seeds the freshly created cell/cursor buffers.
+     *
+     * bgfx forbids CPU updates on compute-writable buffers (and compiles the check out in
+     * release, so relying on it silently diverges per config). The sentinels the claim logic
+     * needs - and the zeroed cursors an uncomposed level must present - are therefore GPU fill
+     * dispatches, run once by the compose pass, which calls @ref mark_seed_done.
+     */
+    auto needs_buffer_seed() const -> bool
+    {
+        return needs_buffer_seed_;
+    }
+
+    void mark_seed_done()
+    {
+        needs_buffer_seed_ = false;
+    }
+
     /// One packed world-cell id per ATTRIBUTE slot per level: the light-radiance survival
     /// detector (a slot whose cell changed resets its light texels; see
     /// cs_gi_clipmap_attributes.sc).
@@ -185,6 +209,8 @@ private:
     gfx::dynamic_index_buffer_handle surface_count_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
+    uint32_t world_probe_cell_count_ = 0;
+    bool needs_buffer_seed_ = false;
     std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};

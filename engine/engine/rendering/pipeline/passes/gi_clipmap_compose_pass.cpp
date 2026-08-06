@@ -4,6 +4,10 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/gi/gi_constants.h>
 
+#include <logging/logging.h>
+
+#include <cstring>
+
 #include <graphics/graphics.h>
 
 namespace unravel
@@ -26,6 +30,12 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_reset = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_surface_count_reset.sc");
     reset_program_.program = std::make_unique<gpu_program>(cs_reset);
     reset_program_.cache_uniforms();
+    auto cs_texture_mean = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_texture_mean.sc");
+    texture_mean_program_.program = std::make_unique<gpu_program>(cs_texture_mean);
+    texture_mean_program_.cache_uniforms();
+    auto cs_buffer_fill = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_buffer_fill.sc");
+    fill_program_.program = std::make_unique<gpu_program>(cs_buffer_fill);
+    fill_program_.cache_uniforms();
     return compose_program_.is_valid();
 }
 
@@ -43,10 +53,85 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     }
     auto& view_cache = *params.view_cache;
     auto& clipmap = view_cache.get_clipmap_mutable();
-    const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
+    auto& clipmap_gpu = view_cache.get_clipmap_gpu_mutable();
     if(!clipmap_gpu.is_valid())
     {
         return false;
+    }
+    // The silent failure mode worth a loud line: a helper shader that never compiled leaves
+    // the sentinels unseeded and the bounce albedo factor-only, with nothing else to notice.
+    if((!texture_mean_program_.is_valid() || !fill_program_.is_valid()) && !helper_warning_emitted_)
+    {
+        helper_warning_emitted_ = true;
+        APPLOG_WARNING("[SurfaceCache] GI helper shaders not ready (texture mean valid: {}, "
+                       "buffer fill valid: {}). If this persists, check their compile errors.",
+                       texture_mean_program_.is_valid(),
+                       fill_program_.is_valid());
+    }
+    // One-time GPU seed of the compute-writable cell/cursor buffers (CPU updates on those are
+    // forbidden): claim sentinels for the attribute and world-probe cell ids, zeroed append
+    // cursors for the never-yet-composed levels.
+    if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid())
+    {
+        gfx::render_pass seed_pass("GI/Buffer Seed");
+        const auto fill = [&](gfx::dynamic_index_buffer_handle target, uint32_t count, uint32_t value)
+        {
+            if(!bgfx::isValid(target) || count == 0)
+            {
+                return;
+            }
+            fill_program_.program->begin();
+            gfx::set_buffer(0, target, gfx::access::Write);
+            float fill_params[4] = {float(count), 0.0f, 0.0f, 0.0f};
+            std::memcpy(&fill_params[1], &value, sizeof(value));
+            gfx::set_uniform(fill_program_.u_gi_buffer_fill_params, fill_params);
+            gfx::dispatch(seed_pass.id, fill_program_.program->native_handle(), (count + 63u) / 64u, 1, 1);
+            fill_program_.program->end();
+        };
+        const uint32_t attr_resolution_seed = clipmap_gpu.get_attr_resolution();
+        const uint32_t attr_cell_count =
+            attr_resolution_seed * attr_resolution_seed * attr_resolution_seed * global_sdf_clipmap::level_count;
+        fill(clipmap_gpu.get_attr_cells(), attr_cell_count, 0xFFFFFFFFu);
+        fill(clipmap_gpu.get_world_probe_cells(), clipmap_gpu.get_world_probe_cell_count(), 0xFFFFFFFFu);
+        fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
+        clipmap_gpu.mark_seed_done();
+    }
+    // Pending texture-mean captures drain here regardless of dirty levels: each is a one-time
+    // 1x1x1 dispatch, and the fingerprint flip it causes is what marks the affected levels
+    // dirty on a LATER frame - so gating them on a dirty level would deadlock the queue.
+    if(texture_mean_program_.is_valid())
+    {
+        const auto captures = surface_cache.take_texture_mean_captures(
+            surface_cache_service::max_texture_mean_captures_per_frame);
+        if(!captures.empty())
+        {
+            if(!capture_log_emitted_)
+            {
+                capture_log_emitted_ = true;
+                APPLOG_INFO("[SurfaceCache] Texture mean captures flowing ({} this frame).",
+                            captures.size());
+            }
+            gfx::render_pass mean_pass("GI/Texture Means");
+            for(const auto& capture : captures)
+            {
+                if(!capture.texture || !capture.texture->is_valid())
+                {
+                    continue;
+                }
+                texture_mean_program_.program->begin();
+                gfx::set_texture(texture_mean_program_.s_mean_source, 0, capture.texture);
+                gfx::set_buffer(1, surface_cache.get_texture_mean_buffer(), gfx::access::ReadWrite);
+                const uint32_t max_dim = math::max(uint32_t(capture.texture->info.width),
+                                                   uint32_t(capture.texture->info.height));
+                // The lod whose mip is about the shader's 8x8 sampling grid: log2(max dim) - 3,
+                // floored at the base level. Hardware clamps to the tail for mipless textures.
+                const float lod = math::max(std::log2(float(math::max(max_dim, 1u))) - 3.0f, 0.0f);
+                const float mean_params[4] = {float(capture.slot), lod, 0.0f, 0.0f};
+                gfx::set_uniform(texture_mean_program_.u_gi_texture_mean_params, mean_params);
+                gfx::dispatch(mean_pass.id, texture_mean_program_.program->native_handle(), 1, 1, 1);
+                texture_mean_program_.program->end();
+            }
+        }
     }
     const uint32_t dirty = clipmap.get_dirty_levels();
     if(dirty == 0)
@@ -153,6 +238,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_buffer(7, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
             gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
             gfx::set_buffer(11, clipmap_gpu.get_attr_cells(), gfx::access::ReadWrite);
+            gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
             gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
             gfx::set_image(9,

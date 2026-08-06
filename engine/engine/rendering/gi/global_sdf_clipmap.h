@@ -30,9 +30,15 @@ struct global_sdf_instance
     float local_to_world_scale = 1.0f;
     ///< Surface properties for the attribute voxels (GI v2 plan 3.1): what the winning instance
     ///< at a surface voxel looks like. This is what lets a cascade hit be attributed to a
-    ///< material, which the distance field alone cannot do.
+    ///< material, which the distance field alone cannot do. Albedo is the base colour FACTOR;
+    ///< the GPU attribute composer multiplies it by the texture mean at @ref mean_slot.
     math::vec3 albedo{0.5f};
     math::vec3 emissive{0.0f};
+    ///< Slot in the texture-mean buffer; 0 is reserved white (no texture / CPU compose path).
+    uint32_t mean_slot = 0;
+    ///< Whether the mean at @ref mean_slot has been captured. Hashed into the content
+    ///< fingerprint so the level recomposes exactly once when a mean lands.
+    bool mean_captured = false;
 };
 
 /**

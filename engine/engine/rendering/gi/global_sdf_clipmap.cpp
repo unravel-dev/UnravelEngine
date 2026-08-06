@@ -145,6 +145,11 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
         };
         hash_vec3(instance.albedo);
         hash_vec3(instance.emissive);
+        // The mean slot and its captured flag stand in for the mean VALUE, which lives only on
+        // the GPU: the flag flipping once per capture is what publishes the mean into the
+        // attribute voxels via a single recompose.
+        entry = (entry ^ (uint64_t(instance.mean_slot) | (instance.mean_captured ? 0x100000000ull : 0ull))) *
+                0x100000001b3ull;
         // Summed rather than chained, so the result does not depend on iteration order -- the
         // scene traversal that produced this list has no guaranteed order and a reshuffle is
         // not a change.

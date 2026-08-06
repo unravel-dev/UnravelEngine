@@ -1,14 +1,11 @@
 #include "surface_cache_service.h"
 
-#include <engine/assets/impl/asset_reader.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
-
-#include <graphics/utils/bgfx_utils.h>
 
 #include <logging/logging.h>
 
@@ -57,6 +54,18 @@ auto surface_cache_service::init(rtti::context& ctx) -> bool
     {
         APPLOG_WARNING("[SurfaceCache] Light buffer initialisation failed. Traced hits cannot be lit.");
     }
+    // Texture means. Never seeded from the CPU (bgfx forbids CPU updates on compute-writable
+    // buffers): an instance carries slot 0 until its texture's capture has WRITTEN its slot,
+    // and the attribute composer skips the multiply for slot 0 - so an unwritten slot is
+    // never read at all.
+    texture_mean_buffer_ = gfx::create_dynamic_vertex_buffer(texture_mean_capacity,
+                                                             ANONYMOUS::get_vec4_buffer_layout(),
+                                                             BGFX_BUFFER_COMPUTE_READ_WRITE);
+    if(!bgfx::isValid(texture_mean_buffer_))
+    {
+        APPLOG_WARNING("[SurfaceCache] Texture mean buffer allocation failed. Bounce albedo "
+                       "falls back to base colour factors.");
+    }
     return true;
 }
 
@@ -71,6 +80,15 @@ auto surface_cache_service::deinit(rtti::context& ctx) -> bool
         gfx::destroy(instance_buffer_);
         instance_buffer_ = {bgfx::kInvalidHandle};
     }
+    if(bgfx::isValid(texture_mean_buffer_))
+    {
+        gfx::destroy(texture_mean_buffer_);
+        texture_mean_buffer_ = {bgfx::kInvalidHandle};
+    }
+    texture_mean_slots_.clear();
+    pending_texture_means_.clear();
+    next_texture_mean_slot_ = 1;
+    texture_mean_overflow_warned_ = false;
     instance_buffer_capacity_ = 0;
     instance_data_.clear();
     if(bgfx::isValid(grid_offset_buffer_))
@@ -177,35 +195,80 @@ auto surface_cache_service::resolve_submesh_material(const model& mdl,
     return mdl.get_material_instance(sub->data_group_id);
 }
 
-auto surface_cache_service::resolve_albedo(const pbr_material& pbr) -> math::vec3
+auto surface_cache_service::acquire_texture_mean_slot(const asset_handle<gfx::texture>& color_map,
+                                                      bool& out_captured) -> uint32_t
 {
-    const auto& base_color = pbr.get_base_color();
-    const math::vec3 factor(base_color.value.r, base_color.value.g, base_color.value.b);
-    const auto& color_map = pbr.get_color_map();
-    if(!color_map.is_valid())
+    out_captured = false;
+    if(!color_map.is_valid() || !bgfx::isValid(texture_mean_buffer_))
     {
-        return factor;
+        return 0;
     }
-    const auto uid = color_map.uid();
-    auto it = texture_mean_albedo_.find(uid);
-    if(it != texture_mean_albedo_.end())
+    auto [it, inserted] = texture_mean_slots_.try_emplace(color_map.uid());
+    auto& entry = it->second;
+    if(inserted)
     {
-        return factor * it->second;
+        if(next_texture_mean_slot_ < texture_mean_capacity)
+        {
+            entry.slot = next_texture_mean_slot_++;
+        }
+        else
+        {
+            // Slot 0 is the seeded white, so overflow degrades to factor-only albedo.
+            entry.slot = 0;
+            entry.queued = true;
+            entry.captured = true;
+            if(!texture_mean_overflow_warned_)
+            {
+                texture_mean_overflow_warned_ = true;
+                APPLOG_WARNING("[SurfaceCache] More than {} distinct colour maps; further "
+                               "textures bounce their base colour factor only.",
+                               texture_mean_capacity - 1);
+            }
+        }
     }
-    if(texture_mean_decodes_left_ == 0)
+    if(!entry.queued && color_map.is_ready())
     {
-        return factor;
+        // Queue only once the texture is actually RESIDENT. The readiness gate is load-bearing:
+        // get(false) returns a default-constructed placeholder for a still-streaming asset, not
+        // null - capturing that would write a black mean and poison the slot for the session.
+        auto texture = color_map.get(false);
+        if(texture && texture->is_valid())
+        {
+            pending_texture_means_.push_back({texture, entry.slot});
+            entry.queued = true;
+        }
     }
-    --texture_mean_decodes_left_;
-    math::vec3 mean(1.0f);
-    float rgb[3] = {1.0f, 1.0f, 1.0f};
-    const auto compiled = asset_reader::resolve_compiled_path(color_map.id());
-    if(imageMeanColorLinear(bx::FilePath(compiled.string().c_str()), rgb))
+    out_captured = entry.captured;
+    // Slot 0 (the composer's skip-the-multiply case) until the capture has written the slot:
+    // the mean buffer is compute-write-only, so there is no seeded value to read before then.
+    return entry.captured ? entry.slot : 0u;
+}
+
+auto surface_cache_service::take_texture_mean_captures(uint32_t budget)
+    -> std::vector<texture_mean_capture>
+{
+    std::vector<texture_mean_capture> captures;
+    while(!pending_texture_means_.empty() && uint32_t(captures.size()) < budget)
     {
-        mean = math::vec3(rgb[0], rgb[1], rgb[2]);
+        texture_mean_capture capture = pending_texture_means_.front();
+        pending_texture_means_.erase(pending_texture_means_.begin());
+        // Cannot fire after the is_ready gate in acquire, but a slot must NEVER be marked
+        // captured without its dispatch actually running - a marked-but-unwritten slot reads
+        // garbage into every albedo that uses it.
+        if(!capture.texture || !capture.texture->is_valid())
+        {
+            continue;
+        }
+        for(auto& [uid, entry] : texture_mean_slots_)
+        {
+            if(entry.slot == capture.slot)
+            {
+                entry.captured = true;
+            }
+        }
+        captures.push_back(std::move(capture));
     }
-    texture_mean_albedo_.emplace(uid, mean);
-    return factor * mean;
+    return captures;
 }
 
 void surface_cache_service::add_instance(uint32_t header_index,
@@ -220,7 +283,9 @@ void surface_cache_service::add_instance(uint32_t header_index,
     // strictly better than tinting the scene with a colour nothing is painted with.
     if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
     {
-        inst.albedo = resolve_albedo(*pbr);
+        const auto& base_color = pbr->get_base_color();
+        inst.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
+        inst.mean_slot = acquire_texture_mean_slot(pbr->get_color_map(), inst.mean_captured);
         // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
         // know that emission is authored as a colour and a separate scale.
         const auto& emissive_color = pbr->get_emissive_color();
@@ -265,6 +330,8 @@ void surface_cache_service::add_instance(uint32_t header_index,
     // the surface looks like.
     clipmap_instance.albedo = inst.albedo;
     clipmap_instance.emissive = inst.emissive;
+    clipmap_instance.mean_slot = inst.mean_slot;
+    clipmap_instance.mean_captured = inst.mean_captured;
     clipmap_instances_.push_back(clipmap_instance);
 }
 
@@ -357,7 +424,7 @@ void surface_cache_service::upload_instances()
         dst[32] = inst.albedo.x;
         dst[33] = inst.albedo.y;
         dst[34] = inst.albedo.z;
-        dst[35] = 0.0f;
+        dst[35] = float(inst.mean_slot);
         dst[36] = inst.emissive.x;
         dst[37] = inst.emissive.y;
         dst[38] = inst.emissive.z;
@@ -396,7 +463,6 @@ void surface_cache_service::update_world(scene& scn)
         return;
     }
     world_frame_ = frame;
-    texture_mean_decodes_left_ = max_texture_mean_decodes_per_frame;
     instances_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();

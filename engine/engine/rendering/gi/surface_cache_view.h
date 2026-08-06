@@ -65,6 +65,12 @@ public:
         return clipmap_gpu_;
     }
 
+    /// Non-const access for the compose pass, which consumes the one-time buffer-seed request.
+    auto get_clipmap_gpu_mutable() -> global_sdf_clipmap_gpu&
+    {
+        return clipmap_gpu_;
+    }
+
     /**
      * @brief Logs a line per composed level: instance counts, cull occupancy, and how many
      *        candidates survive to a field sample.

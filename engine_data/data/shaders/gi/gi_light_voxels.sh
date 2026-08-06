@@ -148,14 +148,18 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 		int z1 = (z_biased + 1) % res;
 		vec3 radiance = vec3_splat(0.0);
 		float weight_sum = 0.0;
-		for(int face = 0; face < 6; ++face)
+		// Only the sign-matching face of each axis can face the normal (its facing weight is
+		// |n[axis]|, the opposite face's is zero), so index the three candidates directly
+		// instead of testing all six.
+		for(int axis = 0; axis < 3; ++axis)
 		{
-			vec3 direction = GiLightVoxelFaceDirection(face);
-			float facing = max(dot(normal, direction), 0.0);
+			float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);
+			float facing = abs(component);
 			if(facing <= 0.0)
 			{
 				continue;
 			}
+			int face = axis * 2 + (component < 0.0 ? 1 : 0);
 			int slab = (level * 6 + face) * res;
 			vec4 s0 =
 			    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);

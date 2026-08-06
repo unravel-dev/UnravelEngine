@@ -65,10 +65,22 @@ public:
         ///< submesh is drawn with exactly one material, and one field is baked per submesh, so
         ///< the mapping is already one to one.
         ///
-        ///< Averages over the material's maps are NOT included; this is the base colour factor,
-        ///< so a texture-dominated material is approximated by its tint.
+        ///< This is the base colour FACTOR; the attribute composer multiplies it on the GPU by
+        ///< the texture mean at @ref mean_slot, so a texture-dominated material bounces its
+        ///< true average reflectance rather than its (usually white) tint.
         math::vec3 albedo{0.5f, 0.5f, 0.5f};
         math::vec3 emissive{0.0f, 0.0f, 0.0f};
+        ///< Slot of the material's colour map in the texture-mean buffer; 0 is reserved white.
+        uint32_t mean_slot = 0;
+        ///< Whether that mean has been captured (fingerprint input; see global_sdf_instance).
+        bool mean_captured = false;
+    };
+
+    /// One texture whose mean is waiting to be captured on the GPU.
+    struct texture_mean_capture
+    {
+        gfx::texture::ptr texture;
+        uint32_t slot = 0;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -117,6 +129,25 @@ public:
     /// Two of the ten carry the material; emission is HDR, so it gets its own vec4 rather than
     /// being packed into a spare component.
     static constexpr uint32_t instance_vec4_stride = 10;
+
+    /// The per-texture mean buffer the attribute composer reads (slot 0 = white).
+    auto get_texture_mean_buffer() const -> gfx::dynamic_vertex_buffer_handle
+    {
+        return texture_mean_buffer_;
+    }
+
+    /**
+     * @brief Hands up to @p budget pending mean captures to the caller for dispatch this frame.
+     *
+     * Marks them captured, which flips the content fingerprint of every instance using the slot
+     * on the NEXT world update - one frame after the capture dispatch executed, so the
+     * recompose that publishes the mean always reads a written value.
+     */
+    auto take_texture_mean_captures(uint32_t budget) -> std::vector<texture_mean_capture>;
+
+    /// Mean-capture dispatches per frame. Each is a 1x1x1 dispatch of 64 texture taps, so the
+    /// bound exists to pace the recompose wave a fresh scene triggers, not the GPU cost.
+    static constexpr uint32_t max_texture_mean_captures_per_frame = 4;
 
     /// CSR offsets of the instance cull grid, one entry per cell plus a terminator.
     auto get_grid_offset_buffer() const -> gfx::dynamic_index_buffer_handle
@@ -236,15 +267,18 @@ private:
                                          uint32_t submesh_index) -> material::sptr;
 
     /**
-     * @brief The albedo GI bounces off a material: base colour factor x its texture's mean.
+     * @brief Slot of a colour map's mean in the GPU texture-mean buffer, allocating on first sight.
      *
      * The factor alone is white on every textured material, which drives the bounce gain to the
      * GI_MAX_ALBEDO cap instead of the surface's true reflectance and over-brightens every
-     * bounce. The texture mean resolves lazily (budgeted per frame) from the compiled file's
-     * smallest mip; until it lands the factor stands in, and the clipmap content fingerprint
-     * hashes albedo, so the level recomposes when the mean arrives.
+     * bounce. The mean itself never touches the CPU: a one-time cs_gi_texture_mean dispatch
+     * (run by the compose pass via @ref take_texture_mean_captures) samples the texture's own
+     * mip tail into the buffer, and the attribute composer multiplies factor x mean. Until a
+     * texture is loaded and captured its slot reads the seeded white, and @p out_captured flips
+     * the content fingerprint once when the capture lands, recomposing the affected levels.
      */
-    auto resolve_albedo(const pbr_material& pbr) -> math::vec3;
+    auto acquire_texture_mean_slot(const asset_handle<gfx::texture>& color_map, bool& out_captured)
+        -> uint32_t;
 
     /**
      * @brief Packs the instance list into the layout SdfLoadInstance expects and uploads it.
@@ -279,14 +313,26 @@ private:
     };
 
     std::unordered_map<field_key, mesh_residency, field_key_hash> residency_;
-    /// Mean LINEAR colour of each base colour texture, keyed by asset uid. Failures cache as
-    /// white so a bad file is probed once, not every frame.
-    std::unordered_map<hpp::uuid, math::vec3> texture_mean_albedo_;
-    /// Texture-mean file decodes still allowed this frame; reset in @ref update_world.
-    uint32_t texture_mean_decodes_left_ = 0;
-    /// File reads per frame for texture means: sweeps a scene's materials within a couple of
-    /// seconds without a first-frame hitch.
-    static constexpr uint32_t max_texture_mean_decodes_per_frame = 2;
+    /// Bookkeeping for one colour map's slot in the GPU mean buffer.
+    struct texture_mean_entry
+    {
+        uint32_t slot = 0;
+        ///< Queued into @ref pending_texture_means_ (a texture still streaming waits here).
+        bool queued = false;
+        ///< Handed to the compose pass for capture; mirrored into every instance that uses the
+        ///< slot, where the fingerprint reads it.
+        bool captured = false;
+    };
+    std::unordered_map<hpp::uuid, texture_mean_entry> texture_mean_slots_;
+    std::vector<texture_mean_capture> pending_texture_means_;
+    /// vec4 per slot, seeded white; written only by cs_gi_texture_mean dispatches.
+    gfx::dynamic_vertex_buffer_handle texture_mean_buffer_{bgfx::kInvalidHandle};
+    uint32_t next_texture_mean_slot_ = 1;
+    /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
+    /// slot with a one-time warning rather than growing - a scene with a thousand distinct
+    /// colour maps has bigger problems than its bounce tint.
+    static constexpr uint32_t texture_mean_capacity = 1024;
+    bool texture_mean_overflow_warned_ = false;
     std::vector<instance> instances_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;

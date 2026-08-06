@@ -123,6 +123,56 @@ private:
         }
     } attributes_program_;
 
+    /// One-time per-texture mean capture (cs_gi_texture_mean.sc): samples a colour map's mip
+    /// tail into the service's mean buffer. Dispatched from the pending queue, a bounded few
+    /// per frame, BEFORE the attribute dispatches that read the buffer.
+    struct texture_mean_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_texture_mean_params;
+        gfx::program::uniform_ptr s_mean_source;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(),
+                          u_gi_texture_mean_params,
+                          "u_gi_texture_mean_params",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_mean_source, "s_mean_source", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } texture_mean_program_;
+
+    /// Generic uint-buffer fill (cs_gi_buffer_fill.sc): runs the one-time sentinel/cursor
+    /// seeds the compute-writable buffers need, since bgfx forbids CPU updates on those.
+    struct fill_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_buffer_fill_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(),
+                          u_gi_buffer_fill_params,
+                          "u_gi_buffer_fill_params",
+                          gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } fill_program_;
+
+    /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
+    /// to compile is the silent-failure mode worth a loud line.
+    bool capture_log_emitted_ = false;
+    bool helper_warning_emitted_ = false;
+
     struct reset_program : uniforms_cache
     {
         gpu_program::ptr program;
