@@ -198,11 +198,39 @@ public:
         /// @ref debug_ray_diagnostics forces it, because its modes read individual rays that
         /// the probe path deliberately aggregates away.
         bool use_probe_gather = true;
+        /// GI v2 gather (tasks/gi_rewrite_plan.md phase 5): the Lumen-recipe screen probes -
+        /// jittered anchors on G-buffer pixels, shortened rays reading light voxels at hits and
+        /// completing from world probes, hitT-clamped probe-space filter, plane-weighted
+        /// irradiance integration. Requires use_probe_gather; falls back to the v1 machinery
+        /// when its programs or the world structures are unavailable. The A/B seam Phase 8
+        /// collapses when the legacy paths are removed.
+        bool use_v2_gather = true;
         /// Probe tile edge in FULL-RESOLUTION pixels. 16 puts ~8k probes on a 1080p frame --
         /// about half a million rays against the per-pixel path's two million -- and the
         /// spacing halves in trace-target pixels at half resolution, so probe density in the
         /// trace target follows the trace resolution automatically.
         int probe_spacing = 16;
+        /// Range of the probe path's per-pixel CONTACT rays, in world units; 0 disables them.
+        ///
+        /// Probes are a tile-scale representation, so occlusion that varies ALONG a plane at
+        /// sub-tile scale -- a wall pixel under an awning, a reveal -- is invisible to every
+        /// probe weight. Each probe-served pixel casts a couple of rays bounded to this range;
+        /// hits splice the real nearby answer into the probe estimate per hemisphere share.
+        /// This is the scale of occluder the correction can see: an overhang further from the
+        /// receiving surface than this range casts no contact darkening. Cost grows with range,
+        /// because the rays march the per-instance near field.
+        float contact_range = 1.5f;
+        /// How much a contact hit darkens BEYOND the cache's radiance at the hit.
+        ///
+        /// 0 is energy-correct: a blocked direction contributes whatever the cache says the
+        /// occluder's surface radiates, which for an awning underside over a sunlit street is
+        /// genuinely bright-ish -- physically defensible and visually ungrounded. The cache is a
+        /// cell-scale mean that cannot represent the multi-bounce light loss inside crevices,
+        /// so strict transport reads brighter than ground truth exactly where the eye expects
+        /// contact shadow. Raising this scales down what contact hits contribute while keeping
+        /// their occlusion (the environment does not refill them): 1 makes contact hits pure
+        /// occlusion, the Lumen-style grounded look.
+        float contact_occlusion = 0.5f;
         /// Frames of per-texel history a probe accumulates; 1 or less disables probe history.
         ///
         /// This is the probe path's PRIMARY stabiliser, and it works where the screen temporal
@@ -296,6 +324,12 @@ public:
         /// Previous frame's depth, used to validate reprojected history. Null disables temporal
         /// accumulation for this frame rather than accepting history blindly.
         gfx::texture::ptr prev_depth;
+        /// The lighting pass's environment SH probe. A gather ray that escapes the scene reads
+        /// sky radiance from it and counts as RESOLVED, so sky occlusion survives into the lit
+        /// image instead of being refilled by the consumer's unoccluded environment term --
+        /// the same miss fallback the screen-space SSIL trace uses. Null (first frame, before
+        /// the irradiance pass has run once) disables the measurement for the frame.
+        gfx::texture::ptr irradiance_sh;
         const camera* cam{};
         surface_cache_service* surface_cache{};
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
@@ -328,6 +362,15 @@ public:
      * probe -- so the existing consumer needs no change and the two stay directly comparable.
      */
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
+
+    /// Whether the v2 gather programs loaded. The pipeline uses this to skip the legacy hash
+    /// cache passes when v2 will run - v2 never reads the hash, so populating and lighting it
+    /// would be pure cost (measured 1.4 ms on Bistro).
+    auto has_v2_programs() const -> bool
+    {
+        return v2_trace_program_.is_valid() && v2_filter_program_.is_valid() &&
+               v2_integrate_program_.is_valid();
+    }
 
 private:
     /// Blends this frame's gather into the reprojected history. Returns the accumulated texture.
@@ -364,6 +407,7 @@ private:
         gfx::program::uniform_ptr u_gi_resolve_trace;
         gfx::program::uniform_ptr u_gi_resolve_camera;
         gfx::program::uniform_ptr u_gi_resolve_filter;
+        gfx::program::uniform_ptr u_gi_resolve_env;
         gfx::program::uniform_ptr u_gi_resolve_debug;
         gfx::program::uniform_ptr u_gi_cache_params;
         gfx::program::uniform_ptr u_gi_cache_params2;
@@ -381,6 +425,8 @@ private:
         gfx::program::uniform_ptr s_gi_prev_moments;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
+        /// Environment SH probe, for the ray-miss sky measurement (see run_params::irradiance_sh).
+        gfx::program::uniform_ptr s_gi_env_sh;
 
         void cache_uniforms()
         {
@@ -388,6 +434,7 @@ private:
             cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_env, "u_gi_resolve_env", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_debug, "u_gi_resolve_debug", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
@@ -402,6 +449,7 @@ private:
             cache_uniform(program.get(), s_gi_prev_moments, "s_gi_prev_moments", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -432,6 +480,8 @@ private:
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_probe_history;
+        gfx::program::uniform_ptr s_gi_env_sh;
+        gfx::program::uniform_ptr u_gi_resolve_env;
 
         void cache_uniforms()
         {
@@ -439,6 +489,7 @@ private:
             cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_env, "u_gi_resolve_env", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
@@ -455,6 +506,7 @@ private:
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_probe_history, "s_probe_history", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -463,6 +515,145 @@ private:
         }
     } probe_trace_program_;
 
+    /// GI v2 gather programs (plan phase 5). Constant-driven: their only uniforms are the probe
+    /// lattice descriptors, the camera, and the world-structure bindings.
+    struct v2_trace_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_gi_world_probe_atlas;
+        gfx::program::uniform_ptr u_gi_world_probe_radiance_atlas;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr s_gi_depth;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_light_voxels;
+        gfx::program::uniform_ptr s_world_probe_irradiance;
+        gfx::program::uniform_ptr s_world_probe_depth;
+        gfx::program::uniform_ptr s_world_probe_radiance_read;
+        gfx::program::uniform_ptr s_gi_env_sh;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_world_probe_radiance_atlas,
+                          "u_gi_world_probe_radiance_atlas",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          s_world_probe_irradiance,
+                          "s_world_probe_irradiance",
+                          gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          s_world_probe_radiance_read,
+                          "s_world_probe_radiance_read",
+                          gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_trace_program_;
+
+    struct v2_filter_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr s_probe_radiance;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_filter_program_;
+
+    struct v2_integrate_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_gi_world_probe_atlas;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr s_probe_irradiance;
+        gfx::program::uniform_ptr s_gi_depth;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_world_probe_irradiance;
+        gfx::program::uniform_ptr s_world_probe_depth;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_probe_irradiance, "s_probe_irradiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          s_world_probe_irradiance,
+                          "s_world_probe_irradiance",
+                          gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_integrate_program_;
+
+    /// Whether the v2 gather ran this frame; run_temporal reads it to drop the neighbourhood
+    /// clamp, which fights the v2 placement jitter.
+    bool v2_active_ = false;
     /// False until the probe atlases and buffer hold a frame of real data; forces a full-weight
     /// write for one frame after any recreate so garbage never blends into the history.
     bool probe_history_valid_ = false;
@@ -493,27 +684,57 @@ private:
         }
     } probe_filter_program_;
 
+    /// Trace-capable: the integrate pass runs the per-pixel gather as a FALLBACK for pixels no
+    /// probe can serve, so it binds everything the tracer needs alongside the probe state.
     struct probe_integrate_program : uniforms_cache
     {
         gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_resolve_params;
+        gfx::program::uniform_ptr u_gi_resolve_trace;
+        gfx::program::uniform_ptr u_gi_resolve_camera;
+        gfx::program::uniform_ptr u_gi_resolve_filter;
+        gfx::program::uniform_ptr u_gi_cache_params;
+        gfx::program::uniform_ptr u_gi_cache_params2;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
-        gfx::program::uniform_ptr u_gi_integrate_camera;
         gfx::program::uniform_ptr s_gi_depth;
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_probe_radiance;
+        gfx::program::uniform_ptr s_probe_irradiance;
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_gi_env_sh;
+        gfx::program::uniform_ptr u_gi_resolve_env;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_gi_resolve_params, "u_gi_resolve_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_resolve_env, "u_gi_resolve_env", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_integrate_camera, "u_gi_integrate_camera",
-                          gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_probe_irradiance, "s_probe_irradiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

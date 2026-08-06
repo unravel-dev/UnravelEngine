@@ -28,6 +28,11 @@ struct global_sdf_instance
     math::bbox world_bounds{};
     ///< Smallest scale axis: converts a local-space distance to a conservative world distance.
     float local_to_world_scale = 1.0f;
+    ///< Surface properties for the attribute voxels (GI v2 plan 3.1): what the winning instance
+    ///< at a surface voxel looks like. This is what lets a cascade hit be attributed to a
+    ///< material, which the distance field alone cannot do.
+    math::vec3 albedo{0.5f};
+    math::vec3 emissive{0.0f};
 };
 
 /**
@@ -167,6 +172,17 @@ public:
         ///< re-snaps the finest level almost every frame, and a strictly finest-first policy
         ///< would then never recompose the coarse ones at all.
         uint32_t stale_updates = 0;
+        ///< Attribute voxels at half the distance resolution (GI v2 plan 3.1), recomposed with
+        ///< the level. RGBA8 packed (r,g,b = winning instance albedo, a = 255 where the voxel is
+        ///< SURFACE - within GI_SURFACE_VOXEL_BAND attribute voxels of the composed isosurface -
+        ///< and 0 everywhere else). (attr_resolution)^3, x-major like @ref voxels.
+        std::vector<uint32_t> attr_albedo;
+        ///< Winning instance emissive per attribute voxel, radiance units. Zero off-surface.
+        std::vector<math::vec3> attr_emissive;
+        ///< The surface-voxel list: packed attribute-voxel coordinates (see pack_surface_voxel)
+        ///< of every voxel whose albedo alpha is 255. CPU reference of the GPU append buffer
+        ///< that drives the light-voxel update's indirect dispatch.
+        std::vector<uint32_t> attr_surface_list;
 
         auto is_valid() const -> bool
         {
@@ -325,11 +341,48 @@ public:
     /// World-space extent covered by a level.
     auto get_level_extent(uint32_t index) const -> float;
 
+    /// Attribute voxels per axis: half the distance resolution. Halving is the memory/coverage
+    /// point the plan's section 6 budget is computed at; the light voxels this feeds live at the
+    /// same resolution.
+    static constexpr uint32_t attr_downsample = 2;
+
+    auto get_attr_resolution() const -> uint32_t
+    {
+        return settings_.resolution / attr_downsample;
+    }
+
+    /// Packs an attribute-voxel coordinate + level into one uint for the surface-voxel list.
+    /// 8 bits per axis (attribute resolutions through 256) + 2 bits of level.
+    static auto pack_surface_voxel(uint32_t x, uint32_t y, uint32_t z, uint32_t level) -> uint32_t
+    {
+        return x | (y << 8u) | (z << 16u) | (level << 24u);
+    }
+
     auto get_memory_usage() const -> size_t;
 
 private:
     /// Composes one level's voxels from the instances reaching it.
     void compose_level(uint32_t index, const std::vector<global_sdf_instance>& instances);
+
+    /**
+     * @brief Composes one level's ATTRIBUTE voxels (albedo, emissive, surface list) from the
+     *        instances, after the distance voxels are current.
+     *
+     * REFERENCE IMPLEMENTATION of cs_gi_clipmap_attributes.sc, in the same relationship as
+     * compose_level is to cs_gi_clipmap_compose.sc.
+     *
+     * A voxel is SURFACE when the composed field at its centre lies within
+     * GI_SURFACE_VOXEL_BAND attribute voxels of zero. The field is the judge - not the raw
+     * per-instance samples - because mesh fields saturate at mesh scale, so deep interiors of
+     * thick objects read as "near a surface" to them, while the composed level saturates in
+     * LEVEL voxels and excludes interiors correctly.
+     *
+     * The winner is the instance with the smallest |distance| at the voxel centre, ties broken
+     * by the smaller GLOBAL instance index. The tie-break is load bearing: the CPU and GPU walks
+     * visit candidates in different orders, and argmin without a deterministic tie rule would
+     * make the two composers disagree on exactly the voxels where two surfaces meet.
+     */
+    void compose_level_attributes(uint32_t index, const std::vector<global_sdf_instance>& instances);
 
     /// World-space region a level covers, given its origin.
     auto compute_level_bounds(uint32_t index, const math::vec3& origin) const -> math::bbox;

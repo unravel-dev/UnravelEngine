@@ -138,6 +138,15 @@ void gpu_light_buffer::update(scene& scn)
         return;
     }
     ensure_capacity(uint32_t(data_.size() / 4u));
+    // FNV-1a over the exact bytes the GPU receives: any light property change flips the hash,
+    // which is what the world probes key their fast-refresh window on.
+    uint64_t hash = 1469598103934665603ull;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data_.data());
+    for(size_t i = 0; i < data_.size() * sizeof(float); ++i)
+    {
+        hash = (hash ^ bytes[i]) * 1099511628211ull;
+    }
+    content_hash_ = hash;
     gfx::update(buffer_, 0, gfx::copy(data_.data(), uint32_t(data_.size() * sizeof(float))));
 }
 

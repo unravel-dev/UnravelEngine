@@ -45,6 +45,20 @@ uniform vec4 u_gi_resolve_filter;
 #define u_gi_near_field_fade       u_gi_resolve_filter.z
 #define u_gi_ray_start             u_gi_resolve_filter.w
 
+/// The lighting pass's environment SH probe (9 coefficients in a row of texels, the texture
+/// eval_irradiance_sh / eval_radiance_sh read), for the ray-miss environment measurement in
+/// GiGatherRay. RESERVED STAGE 14 in every shader including this header.
+SAMPLER2D(s_gi_env_sh, 14);
+/// x = 1 while the environment SH is bound and a full-range miss should measure sky radiance,
+/// 0 while the probe does not exist yet (first frame after startup).
+/// y = contact occlusion strength: how much a contact-range hit darkens BEYOND the cache's
+/// radiance there (0 = energy-correct replacement, 1 = contact hits are pure occlusion).
+/// z = contact ray range in world units, 0 disables the contact rays. w reserved.
+uniform vec4 u_gi_resolve_env;
+#define u_gi_env_intensity     u_gi_resolve_env.x
+#define u_gi_contact_occlusion u_gi_resolve_env.y
+#define u_gi_contact_range     u_gi_resolve_env.z
+
 /// Builds an arbitrary orthonormal basis around a normal without a branch on the degenerate axis.
 void GiBuildBasis(vec3 n, out vec3 t, out vec3 b)
 {
@@ -176,8 +190,12 @@ struct GiRayOutcome
 /**
  * Traces one gather ray and reads the cache at its hit: the whole per-ray pipeline in the one
  * place both gather architectures share.
+ *
+ * The Ex variant takes the trace range and near field explicitly so a consumer can cast
+ * SHORT rays -- the probe integration's contact correction -- through the identical pipeline;
+ * GiGatherRay keeps the uniform-driven behaviour every existing caller has.
  */
-GiRayOutcome GiGatherRay(GiGatherSetup s, vec3 direction)
+GiRayOutcome GiGatherRayEx(GiGatherSetup s, vec3 direction, float max_distance, float near_field)
 {
 	GiRayOutcome o;
 	o.radiance = vec3_splat(0.0);
@@ -190,7 +208,7 @@ GiRayOutcome GiGatherRay(GiGatherSetup s, vec3 direction)
 	// Start along the ray's OWN direction rather than pushing the origin further out along the
 	// normal: a normal offset moves the shading point and lets it see past nearby geometry.
 	vec3 ray_origin = s.origin + direction * (u_gi_ray_start * s.origin_voxel);
-	SdfRayHit hit = SdfTraceRay(ray_origin, direction, u_gi_max_distance, s.near_field,
+	SdfRayHit hit = SdfTraceRay(ray_origin, direction, max_distance, near_field,
 	                            u_gi_trace_max_steps, u_gi_trace_bias, u_gi_trace_relaxation,
 	                            false);
 	// Escaped the scene: contributes nothing and does NOT count, leaving the consumer's own
@@ -259,6 +277,30 @@ GiRayOutcome GiGatherRay(GiGatherSetup s, vec3 direction)
 	o.radiance = cached * u_gi_intensity;
 	o.resolved = 1.0;
 	o.found = 1.0;
+	return o;
+}
+
+GiRayOutcome GiGatherRay(GiGatherSetup s, vec3 direction)
+{
+	GiRayOutcome o = GiGatherRayEx(s, direction, u_gi_max_distance, s.near_field);
+	// A full-range ray that hit NOTHING has measured the environment, with the visibility the
+	// trace just established -- the one thing the consumer's own probe cannot know. Left
+	// unresolved, the consumer refills that share from its UNOCCLUDED environment probe, which
+	// hands sky light straight back to every direction an overhang just blocked: the gather
+	// buffer showed the darkening and the lit image did not. Counting the miss as resolved sky
+	// radiance is exactly what the screen-space SSIL trace does on miss, and it is what lets
+	// sky occlusion survive into the lit image. Deliberately NOT scaled by u_gi_intensity,
+	// which applies to the scene's own bounce only -- the same convention the consumer's
+	// fallback uses.
+	//
+	// Only here, never inside GiGatherRayEx: a SHORT ray's miss proves "no occluder within
+	// contact range", not sky visibility, and its share must keep passing through to the far
+	// gather instead.
+	if(o.hit <= 0.0 && u_gi_env_intensity > 0.0)
+	{
+		o.radiance = eval_radiance_sh(s_gi_env_sh, direction) * u_gi_env_intensity;
+		o.resolved = 1.0;
+	}
 	return o;
 }
 

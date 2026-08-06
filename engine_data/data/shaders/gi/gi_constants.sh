@@ -1,0 +1,52 @@
+#ifndef __GI_CONSTANTS_SH__
+#define __GI_CONSTANTS_SH__
+
+/*
+ * MIRROR of engine/engine/rendering/gi/gi_constants.h - the single owner of every cross-pass
+ * GI v2 constant. Do not add a constant here without adding it to the table in that header:
+ * gi_v2_tests parses this file and fails on any mismatch or orphan, in both directions.
+ *
+ * Units and justifications live with the table in the header; this file is deliberately bare.
+ */
+
+#define GI_TRACE_MAX_STEPS              64
+#define GI_MESH_SDF_TRACE_RANGE         2.0
+#define GI_EXPAND_MAX_VOXEL_DIAGONALS   0.5
+#define GI_EXPAND_RAMP_VOXEL_DIAGONALS  4.0
+
+#define GI_SURFACE_VOXEL_BAND           1.0
+#define GI_LIGHT_VOXEL_EXPOSURE_MIN     0.25
+#define GI_LIGHT_VOXEL_UPDATE_DENOM     4
+#define GI_LIGHT_VOXEL_MIN_ALPHA        0.25
+#define GI_MAX_ALBEDO                   0.9
+
+#define GI_WORLD_PROBE_DIVISOR          16
+#define GI_WORLD_PROBE_RAYS_PER_FRAME   16
+#define GI_WORLD_PROBE_OCT_RADIANCE     16
+#define GI_WORLD_PROBE_OCT_IRRADIANCE   8
+#define GI_WORLD_PROBE_OCT_DEPTH        8
+#define GI_WORLD_PROBE_DEPTH_SHARPNESS  50.0
+#define GI_PROBE_TRACE_SURFACE_BIAS     0.5
+#define GI_PROBE_TRACE_RELAXATION       0.05
+#define GI_WORLD_PROBE_DEPTH_CLAMP      1.5
+#define GI_WORLD_PROBE_WINDOW           16
+#define GI_CHEBYSHEV_WEIGHT_FLOOR       0.05
+#define GI_PERCEPTION_CRUSH_THRESHOLD   0.2
+#define GI_SELF_SHADOW_BIAS_NORMAL      0.2
+#define GI_SELF_SHADOW_BIAS_VIEW        0.8
+#define GI_SELF_SHADOW_BIAS_SCALE       0.75
+#define GI_SELF_SHADOW_BIAS_K           0.3
+
+#define GI_SCREEN_PROBE_SPACING         16
+#define GI_SCREEN_PROBE_OCT             8
+#define GI_ADAPTIVE_PROBE_FRACTION      0.5
+#define GI_MAX_RAY_RADIANCE             40.0
+#define GI_FILTER_ANGLE_LIMIT_COS       0.99802673
+
+#define GI_V2_INTERPOLATION_JITTER_TILES 1.0
+#define GI_V2_IMPORTANCE_SUPERSAMPLE_RATIO 2.0
+#define GI_TEMPORAL_MAX_FRAMES          10
+#define GI_TEMPORAL_DEPTH_TOLERANCE     0.005
+#define GI_FAST_UPDATE_MOVING_FRACTION  0.1
+
+#endif // __GI_CONSTANTS_SH__

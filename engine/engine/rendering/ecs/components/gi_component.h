@@ -135,9 +135,14 @@ public:
         result.resolve.resolution = dominant ? from.resolve.resolution : result.resolve.resolution;
         result.resolve.use_probe_gather =
             dominant ? from.resolve.use_probe_gather : result.resolve.use_probe_gather;
+        result.resolve.use_v2_gather = dominant ? from.resolve.use_v2_gather : result.resolve.use_v2_gather;
         result.resolve.probe_spacing = dominant ? from.resolve.probe_spacing : result.resolve.probe_spacing;
         result.resolve.probe_history_frames =
             std::lerp(result.resolve.probe_history_frames, from.resolve.probe_history_frames, contribution);
+        result.resolve.contact_range =
+            std::lerp(result.resolve.contact_range, from.resolve.contact_range, contribution);
+        result.resolve.contact_occlusion =
+            std::lerp(result.resolve.contact_occlusion, from.resolve.contact_occlusion, contribution);
 
         result.resolve.enable_temporal = dominant ? from.resolve.enable_temporal : result.resolve.enable_temporal;
         result.resolve.max_accum_frames =

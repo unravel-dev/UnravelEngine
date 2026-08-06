@@ -81,6 +81,63 @@ private:
             return program && program->is_valid();
         }
     } compose_program_;
+
+    /// Attribute composer (GI v2 plan 3.1): albedo/emissive voxels + the surface-voxel list,
+    /// dispatched per recomposed level after its distance voxels are written.
+    struct attributes_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
+        gfx::program::uniform_ptr u_clipmap_attr_params;
+        gfx::program::uniform_ptr u_clipmap_compose_origin;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_clipmap_attr_params, "u_clipmap_attr_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_clipmap_compose_origin,
+                          "u_clipmap_compose_origin",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_sdf_clipmap_levels,
+                          "u_sdf_clipmap_levels",
+                          gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } attributes_program_;
+
+    struct reset_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_surface_reset_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_surface_reset_params, "u_surface_reset_params", gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } reset_program_;
 };
 
 } // namespace unravel

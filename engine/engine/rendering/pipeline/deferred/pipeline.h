@@ -129,10 +129,13 @@ public:
     static constexpr int debug_pass_sdf_cache_age = 24;
     static constexpr int debug_pass_sdf_cascade_levels = 25;
     static constexpr int debug_pass_sdf_cache_albedo = 26;
+    static constexpr int debug_pass_sdf_attr_albedo = 27;
+    static constexpr int debug_pass_sdf_light_voxels = 28;
+    static constexpr int debug_pass_sdf_world_probes = 29;
     /// Probe-gather debug views. Rendered by the GI RESOLVE pass itself (they read the probe
     /// buffers, which only it owns) into the GI trace target; presenting is a stretch blit of
     /// that target rather than a run of the distance-field visualiser.
-    static constexpr int debug_pass_gi_probe_atlas = 27;
+    static constexpr int debug_pass_gi_probe_atlas = 30;
     static constexpr int debug_pass_gi_probe_health = 28;
     static constexpr int debug_pass_gi_probe_history = 29;
 
@@ -393,6 +396,8 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};
+    /// Rotation phase of the light-voxel update (GI_LIGHT_VOXEL_UPDATE_DENOM slices).
+    uint32_t light_voxel_frame_{0};
 
 };
 

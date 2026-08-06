@@ -59,6 +59,14 @@ public:
         return buffer_;
     }
 
+    /// Order-independent-enough hash of the uploaded light data (GI v2 plan section 8): the
+    /// world probes compare it frame to frame and halve their refresh window while it changes,
+    /// so a moved or toggled light propagates through the bounce chain at double speed.
+    auto get_content_hash() const -> uint64_t
+    {
+        return content_hash_;
+    }
+
     auto get_light_count() const -> uint32_t
     {
         return light_count_;
@@ -71,6 +79,7 @@ private:
     uint32_t capacity_vec4_ = 0;
     uint32_t light_count_ = 0;
     std::vector<float> data_;
+    uint64_t content_hash_ = 0;
 };
 
 } // namespace unravel

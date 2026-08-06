@@ -1,19 +1,29 @@
 $input v_texcoord0
 
 /*
- * Integrates the screen-space radiance probes into the per-pixel indirect diffuse estimate.
+ * Integrates the screen-space radiance probes into the per-pixel indirect diffuse estimate --
+ * and TRACES the pixels no probe can serve.
  *
- * Per pixel: find the four probes bracketing it, weight them by bilinear position, plane
- * agreement and facing, and evaluate each probe's SH irradiance around the PIXEL's own normal.
- * The full-sphere probes are what make that sharing work -- neighbouring pixels with different
- * normals integrate different hemispheres of the same probes.
+ * Per pixel: find the eight probes bracketing it (four tiles, two layers), weight them by
+ * bilinear position, plane agreement, facing and measurement CONFIDENCE, and evaluate each
+ * probe's SH irradiance around the PIXEL's own normal. The full-sphere probes are what make that
+ * sharing work -- neighbouring pixels with different normals integrate different hemispheres of
+ * the same probes.
  *
- * The weights are the silhouette guard. A probe anchored across a depth break fails the plane
- * test against this pixel; one on a perpendicular surface fails the facing test. When all four
- * fail -- a pixel on a sliver no probe anchored on this frame -- the output weight collapses to
- * zero and the consumer's environment probe covers it for the frame; the anchor jitter re-rolls
- * every frame, so some frames anchor ON the sliver, and the screen temporal filter averages the
- * states into a stable value. That temporal fallback is why this pass can stay this simple.
+ * The weights are the silhouette guard, and their failure mode is the pass's second job. Probes
+ * are a TILE-scale representation: pixels inside grooves, reveals and slit geometry can have no
+ * probe whose plane, facing and confidence all agree -- by construction, since anchor selection
+ * deliberately refuses to place probes in measurement-hostile spots. Those pixels fall back to
+ * the PER-PIXEL traced gather, through the identical per-ray pipeline (gi_gather_common.sh),
+ * blended in continuously as probe coverage fades out. That is the hybrid that ends the
+ * crevice ping-pong: probes serve the 95% of pixels they represent well, honest rays serve the
+ * rest, and the blend weight is a continuous function of coverage so nothing pops.
+ *
+ * The third job is the SHORT-RANGE CORRECTION, for the failure the weights cannot even see:
+ * occlusion that varies ALONG a plane at sub-tile scale -- a wall pixel under an overhang
+ * passes every gate the sunlit wall passes. Probe-served pixels cast a couple of contact-range
+ * rays and splice what those rays resolve into the probe estimate per hemisphere share; see
+ * the comment at the correction itself.
  *
  * Output convention identical to fs_gi_resolve.sc: RGB = radiance-mean units, A = the weight
  * with which it replaces the environment probe. The temporal, denoise and upsample passes
@@ -25,35 +35,30 @@ $input v_texcoord0
 #include "../lighting.sh"
 
 #define GI_CACHE_READ_ONLY
-// GiHashUint / GiHashCombine, used by the probe header's jitter helpers.
 #include "gi/radiance_cache.sh"
+#include "gi/sdf_common.sh"
+#include "gi/gi_gather_common.sh"
 #include "gi/gi_probe_common.sh"
 
-BUFFER_RO(b_gi_probes, vec4, 0);
+/// This frame's half of the probe buffer (SH + meta), read only.
+BUFFER_RO(b_gi_probes, vec4, 10);
 
-SAMPLER2D(s_gi_depth, 1);
-SAMPLER2D(s_gi_normal, 2);
+SAMPLER2D(s_gi_depth, 8);
+SAMPLER2D(s_gi_normal, 9);
 /// This frame's raw radiance atlas, read only by the debug views.
-SAMPLER2D(s_probe_radiance, 3);
+SAMPLER2D(s_probe_radiance, 5);
+/// The cosine-convolved irradiance tiles the filter pass produced: rgb = E / PI at the texel's
+/// normal direction, a = the resolved fraction around it. Sampled with octahedral-wrapped
+/// manual bilinear, at the PIXEL's own normal.
+SAMPLER2D(s_probe_irradiance, 11);
 
-/// xyz = camera position. Named separately from the gather uniforms so this pass binds only
-/// what it reads.
-uniform vec4 u_gi_integrate_camera;
-
-/// The probe debug views (u_gi_probe_debug_mode, declared with the shared probe uniforms)
-/// separate the three places instability can originate, invisible in the lit image and in each
-/// other:
-///   1 = the raw atlas IN PLACE: every tile shows its probe's 8x8 octahedral texels. A texel
-///       blinking here is trace-side variance (direction, hit, or cache read); if the atlas is
-///       still but the image dances, the fault is downstream of tracing.
-///   2 = integration health: R = pixel weight sum (dark = probe starvation, the pixel is
-///       falling back to the environment), G = resolved fraction.
-///   3 = history state: R = blend weight this frame (red = history cut / fresh), G = sample
-///       count over its cap (green = converged). Flickering red on a STATIC camera means the
-///       validity test is cutting history that should hold -- report exactly that.
+/// The probe debug views (u_gi_probe_debug_mode, declared with the shared probe uniforms):
+///   1 = the raw atlas IN PLACE: every tile shows its probe's 8x8 octahedral texels.
+///   2 = integration health: R = gated probe weight, G = resolved fraction, B = the fraction
+///       supplied by the per-pixel TRACE fallback (blue = probes could not serve this pixel).
+///   3 = history state: R = blend weight this frame (red = cut / fresh), G = count over 32.
 /// Debug output alpha is BELOW one so the presentation blit can blend the view over the lit
 /// frame, keeping the scene readable underneath the readout.
-#define u_gi_probe_debug u_gi_probe_debug_mode
 #define GI_PROBE_DEBUG_ALPHA 0.65
 
 /// How far off the pixel's plane a probe may anchor before it stops contributing, as a fraction
@@ -62,15 +67,21 @@ uniform vec4 u_gi_integrate_camera;
 /// Exponent on facing agreement. High enough that light does not turn corners, low enough that
 /// probes on a curved surface still share.
 #define GI_PROBE_INTEGRATE_NORMAL_POWER 8.0
-/// Weight budget a pixel is topped up to when the gated taps cannot fill it. Around geometric
-/// detail -- window reveals, cornices, hedges -- all four bracketing probes can anchor on OTHER
-/// surfaces and fail the plane gate; without a fallback those pixels collapse to the environment
-/// probe, and because anchors hop as the camera turns, the STARVED SET changes per frame at tile
-/// granularity: light visibly crawls. The top-up blends in the best facing-valid probe by exactly
-/// the missing weight, so it fades in as the legitimate weight fades out and nothing pops. The
-/// cost is bounded light bleed across detail smaller than a tile, which is the strictly better
-/// artefact. (The complete fix is adaptive probe placement; this is the proportionate one.)
-#define GI_PROBE_INTEGRATE_MIN_WEIGHT 0.15
+/// Coverage ramp of the trace fallback: pure per-pixel rays below START, pure probes above
+/// FULL, a continuous mix between. Below START the pixel is genuinely unservable by probes (a
+/// groove, a slit) and rays keep it dark and detailed; the FULL threshold is deliberately tight
+/// so ordinary edges and foliage stay on probes -- the first cut of this ramp traced a third of
+/// the frame and cost more than it saved.
+#define GI_PROBE_COVERAGE_START 0.10
+#define GI_PROBE_COVERAGE_FULL  0.35
+/// Rays the trace fallback spends. Two, not four: fallback pixels also get the screen temporal
+/// accumulation downstream, exactly like the per-pixel path always did.
+#define GI_PROBE_FALLBACK_RAYS 2
+/// The short-range contact correction: per-pixel rays bounded to u_gi_contact_range world
+/// units, layered over the probe estimate on every probe-served pixel. Zero rays disables it.
+/// The range is the scale of the occlusion probes cannot see -- an overhang, a reveal -- and
+/// the rays' near field is capped to it, so their cost is bounded to contact scale too.
+#define GI_PROBE_SHORT_RAYS 2
 
 void main()
 {
@@ -91,34 +102,34 @@ void main()
 		return;
 	}
 	world_normal = normalize(world_normal);
-	if(u_gi_probe_debug == 1)
+	if(u_gi_probe_debug_mode == 1)
 	{
-		// The raw atlas in place: pixel -> its tile's probe -> the texel its tile-local position
-		// maps to. Output weight 1 so the consumer shows it at full strength.
+		// The raw atlas in place: pixel -> its tile's layer-0 probe -> the texel its tile-local
+		// position maps to.
 		vec2 pixel_pos = uv * u_gi_probe_screen.xy;
 		vec2 tile = floor(pixel_pos / u_gi_probe_spacing);
-		tile.x = clamp(tile.x, 0.0, float(u_gi_probe_count_x - 1));
-		tile.y = clamp(tile.y, 0.0, float(u_gi_probe_count_y - 1));
+		int tx = int(clamp(tile.x, 0.0, float(u_gi_probe_count_x - 1)));
+		int ty = int(clamp(tile.y, 0.0, float(u_gi_probe_count_y - 1)));
 		vec2 tile_local = fract(pixel_pos / u_gi_probe_spacing);
-		ivec2 texel = ivec2(tile) * GI_PROBE_DIR_EDGE +
+		ivec2 texel = GiProbeAtlasBase(tx, ty, 0) +
 		              ivec2(clamp(tile_local * float(GI_PROBE_DIR_EDGE),
 		                          vec2_splat(0.0),
 		                          vec2_splat(float(GI_PROBE_DIR_EDGE) - 1.0)));
 		gl_FragColor = vec4(texelFetch(s_probe_radiance, texel, 0).xyz, GI_PROBE_DEBUG_ALPHA);
 		return;
 	}
-	if(u_gi_probe_debug == 3)
+	if(u_gi_probe_debug_mode == 3)
 	{
 		vec2 pixel_pos = uv * u_gi_probe_screen.xy;
 		vec2 tile = floor(pixel_pos / u_gi_probe_spacing);
-		int px = int(clamp(tile.x, 0.0, float(u_gi_probe_count_x - 1)));
-		int py = int(clamp(tile.y, 0.0, float(u_gi_probe_count_y - 1)));
+		int tx = int(clamp(tile.x, 0.0, float(u_gi_probe_count_x - 1)));
+		int ty = int(clamp(tile.y, 0.0, float(u_gi_probe_count_y - 1)));
 		vec4 history =
-		    b_gi_probes[(GiProbeIndex(px, py) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE) + 11u];
+		    b_gi_probes[(GiProbeRecord(tx, ty, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE) + 11u];
 		gl_FragColor = vec4(history.y, saturate(history.x / 32.0), 0.0, GI_PROBE_DEBUG_ALPHA);
 		return;
 	}
-	float view_distance = max(length(world_position - u_gi_integrate_camera.xyz), 1e-3);
+	float view_distance = max(length(world_position - u_gi_resolve_camera.xyz), 1e-3);
 	float plane_tolerance = GI_PROBE_INTEGRATE_PLANE_TOLERANCE * view_distance;
 	// The probe lattice sits at tile centres: probe (i, j) anchors within tile (i, j), so the
 	// continuous probe coordinate of a pixel is its position in tile units, minus the half-tile
@@ -127,103 +138,187 @@ void main()
 	vec2 grid = pixel / u_gi_probe_spacing - vec2_splat(0.5);
 	vec2 base = floor(grid);
 	vec2 frac = grid - base;
-	float basis[9];
-	GiShBasis(world_normal, basis);
-	float weights[9];
-	GiShIrradianceWeights(weights);
+	// The pixel normal in octahedral tile-texel space, shared by every probe tap.
+	vec2 oct_texel = GiOctEncode(world_normal) * float(GI_PROBE_DIR_EDGE) - vec2_splat(0.5);
+	vec2 oct_base = floor(oct_texel);
+	vec2 oct_frac = oct_texel - oct_base;
 	vec3 radiance = vec3_splat(0.0);
 	float resolved = 0.0;
 	float weight_sum = 0.0;
-	// The best facing-valid probe regardless of the plane gate, for the starvation top-up below.
-	float fallback_score = 0.0;
-	uint fallback_base = 0u;
-	bool fallback_found = false;
+	// The facing gate SOFTENS with view distance. Its job -- keeping light from turning corners
+	// -- matters at contact scale; at range a probe tile spans metres, per-pixel normals carry
+	// the raster's sub-pixel jitter, and a sharp facing power turns that jitter into per-pixel
+	// weight flicker: aliasing that shimmers. Softening the exponent with distance keeps the
+	// corner separation close up, where it is visible, and trades it for stability far away,
+	// where a tile could never resolve the corner anyway.
+	float facing_power = mix(GI_PROBE_INTEGRATE_NORMAL_POWER, 2.0, saturate(view_distance / 40.0));
 	for(int j = 0; j < 2; ++j)
 	{
 		for(int i = 0; i < 2; ++i)
 		{
 			int px = int(clamp(base.x + float(i), 0.0, float(u_gi_probe_count_x - 1)));
 			int py = int(clamp(base.y + float(j), 0.0, float(u_gi_probe_count_y - 1)));
-			uint probe_base = (GiProbeIndex(px, py) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
-			vec4 meta = b_gi_probes[probe_base + uint(GI_PROBE_META)];
-			if(meta.w < 0.5)
+			for(int layer = 0; layer < GI_PROBE_LAYERS; ++layer)
 			{
-				continue;
+				uint probe_base =
+				    (GiProbeRecord(px, py, layer) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
+				vec4 meta = b_gi_probes[probe_base + uint(GI_PROBE_META)];
+				if(meta.w < 0.5)
+				{
+					continue;
+				}
+				vec4 meta2 = b_gi_probes[probe_base + uint(GI_PROBE_META2)];
+				float bilinear = (i == 0 ? 1.0 - frac.x : frac.x) * (j == 0 ? 1.0 - frac.y : frac.y);
+				float facing_raw = dot(meta2.xyz, world_normal);
+				// The probe's irradiance at the PIXEL's normal: octahedral-wrapped manual
+				// bilinear over the convolved tile. A probe answers "how much light arrives
+				// around THIS normal", and the resolved fraction rides in alpha, so the
+				// environment share is directional too: a probe vouches exactly for the part of
+				// its sphere it measured around this normal.
+				ivec2 tile_base = GiProbeAtlasBase(px, py, layer);
+				vec4 probe_irradiance = vec4_splat(0.0);
+				for(int tap = 0; tap < 4; ++tap)
+				{
+					ivec2 offset = ivec2(tap % 2, tap / 2);
+					ivec2 wrapped = GiOctWrapTexel(ivec2(oct_base) + offset);
+					float tap_weight = (offset.x == 0 ? 1.0 - oct_frac.x : oct_frac.x) *
+					                   (offset.y == 0 ? 1.0 - oct_frac.y : oct_frac.y);
+					probe_irradiance +=
+					    texelFetch(s_probe_irradiance, tile_base + wrapped, 0) * tap_weight;
+				}
+				// Measurement CONFIDENCE is the fraction of the pixel's cosine lobe the probe
+				// actually SAMPLED -- and the unsampled region is known exactly: the trace
+				// refuses only the cap below the anchor's tangent plane, so coverage is a
+				// function of the pixel-to-anchor normal angle alone, approximated here by the
+				// half-space fraction of a clamped-cosine lobe. It must NOT be derived from the
+				// resolved fraction, as it once was: resolved counts GEOMETRY, so a fully
+				// converged probe honestly reporting "mostly sky" lost its vote, every pixel
+				// near a silhouette against sky fell below the coverage ramp, and the traced
+				// fallback re-rolled its two random rays there every frame -- the edge flicker.
+				// A ray that escapes to sky is a measurement; only the untraced cap is not, and
+				// that distinction belongs here while the resolved fraction keeps its one job:
+				// the weight with which the result replaces the environment probe.
+				float confidence = saturate(0.5 + 0.5 * facing_raw);
+				float plane = abs(dot(meta.xyz - world_position, world_normal));
+				float plane_weight = saturate(1.0 - plane / plane_tolerance);
+				float facing = pow(saturate(facing_raw), facing_power);
+				float weight = max(bilinear, 0.01) * plane_weight * facing * confidence;
+				if(weight <= 1e-4)
+				{
+					continue;
+				}
+				radiance += max(probe_irradiance.xyz, vec3_splat(0.0)) * weight;
+				resolved += saturate(probe_irradiance.w) * weight;
+				weight_sum += weight;
 			}
-			vec4 meta2 = b_gi_probes[probe_base + uint(GI_PROBE_META2)];
-			float bilinear = (i == 0 ? 1.0 - frac.x : frac.x) * (j == 0 ? 1.0 - frac.y : frac.y);
-			float facing_raw = dot(meta2.xyz, world_normal);
-			// Fallback candidate: any probe not facing away. Gated far looser than the
-			// contribution below on purpose -- it only ever fires when everything stricter
-			// has already been rejected.
-			if(facing_raw > 0.0 && bilinear > fallback_score)
-			{
-				fallback_score = bilinear;
-				fallback_base = probe_base;
-				fallback_found = true;
-			}
-			float plane = abs(dot(meta.xyz - world_position, world_normal));
-			float plane_weight = saturate(1.0 - plane / plane_tolerance);
-			float facing = pow(saturate(facing_raw), GI_PROBE_INTEGRATE_NORMAL_POWER);
-			float weight = max(bilinear, 0.01) * plane_weight * facing;
-			if(weight <= 1e-4)
-			{
-				continue;
-			}
-			// SH irradiance around the PIXEL's normal, directly in radiance-mean units; the
-			// resolved flag integrates through the same convolution so the output weight stays
-			// directional -- a probe that only measured half its sphere only vouches for half.
-			vec3 probe_radiance = vec3_splat(0.0);
-			float probe_resolved = 0.0;
-			for(int k = 0; k < 9; ++k)
-			{
-				vec4 coefficient = b_gi_probes[probe_base + uint(k)];
-				float shaped = basis[k] * weights[k];
-				probe_radiance += coefficient.xyz * shaped;
-				probe_resolved += coefficient.w * shaped;
-			}
-			radiance += max(probe_radiance, vec3_splat(0.0)) * weight;
-			resolved += saturate(probe_resolved) * weight;
-			weight_sum += weight;
 		}
 	}
-	// Starvation top-up: when the gated taps cannot fill the weight budget, the best facing-valid
-	// probe supplies exactly the missing weight. Continuous by construction -- the top-up shrinks
-	// to zero as legitimate weight appears -- so the starved-set churn that crawled across detail
-	// as tiles cannot flip pixels between probe light and the environment any more.
-	if(weight_sum < GI_PROBE_INTEGRATE_MIN_WEIGHT && fallback_found)
+	// Probe result in the output convention: RGB over the measured fraction, A the fraction.
+	vec3 probe_rgb = vec3_splat(0.0);
+	float probe_alpha = 0.0;
+	if(weight_sum > 1e-4 && resolved > 1e-4)
 	{
-		float top_up = GI_PROBE_INTEGRATE_MIN_WEIGHT - weight_sum;
-		vec3 probe_radiance = vec3_splat(0.0);
-		float probe_resolved = 0.0;
-		for(int k = 0; k < 9; ++k)
+		probe_rgb = radiance / resolved;
+		probe_alpha = saturate(resolved / weight_sum);
+	}
+	// COVERAGE: how much of this pixel the probes can honestly serve. Below full coverage the
+	// remainder is TRACED, per pixel, through the identical per-ray pipeline -- the groove that
+	// no probe represents gets its real, occluded, detailed lighting instead of a wash from the
+	// environment term or a tug-of-war between half-valid probes. These pixels are the few
+	// percent at geometric detail, they reuse the screen temporal downstream, and the blend is
+	// continuous in coverage, so the handover cannot pop.
+	float coverage = saturate((weight_sum - GI_PROBE_COVERAGE_START) /
+	                          (GI_PROBE_COVERAGE_FULL - GI_PROBE_COVERAGE_START));
+	// One launch preparation and one seed sequence, shared by the short-range correction and
+	// the starved-pixel fallback below.
+	bool needs_fallback = coverage < 1.0;
+	bool needs_short = GI_PROBE_SHORT_RAYS > 0 && coverage > 0.0 && u_gi_contact_range > 0.0;
+	GiGatherSetup setup;
+	uint seed = 0u;
+	if(needs_fallback || needs_short)
+	{
+		setup = GiPrepareGather(world_position, world_normal);
+		uint pixel_seed = GiHashCombine(GiHashUint(uint(gl_FragCoord.x)), uint(gl_FragCoord.y));
+		seed = GiHashCombine(pixel_seed, u_gi_frame_index);
+	}
+	// SHORT-RANGE CORRECTION: the per-pixel contact occlusion probes cannot represent.
+	//
+	// A probe answers at TILE scale, and its weights gate on plane, facing and position -- so a
+	// pixel just under an overhang, on the SAME plane with the SAME normal as the sunlit wall
+	// around it, passes every gate at full weight and inherits the open wall's light. The
+	// occlusion that distinguishes it is sub-tile and positional ALONG the plane, which no
+	// probe weight can see: that was the light leak under every window overhang. A few SHORT
+	// rays per pixel re-measure exactly that. Each ray that resolves within contact range
+	// REPLACES its share of the hemisphere with the real nearby answer -- through the identical
+	// per-ray pipeline, so a cache-lit underside and an occluded-dark crevice both land
+	// correctly -- and each ray that escapes the range affirms the probe's answer for its
+	// share, environment fraction included. Replacement, never modulation on top, so no energy
+	// is counted twice. Skipped once the near field has faded out: contact detail is only
+	// visible near the camera, which is the same reasoning the fade itself rests on.
+	if(needs_short && setup.near_field > 0.0)
+	{
+		vec3 short_sum = vec3_splat(0.0);
+		float short_resolved = 0.0;
+		for(int r = 0; r < GI_PROBE_SHORT_RAYS; ++r)
 		{
-			vec4 coefficient = b_gi_probes[fallback_base + uint(k)];
-			float shaped = basis[k] * weights[k];
-			probe_radiance += coefficient.xyz * shaped;
-			probe_resolved += coefficient.w * shaped;
+			seed = GiHashUint(seed);
+			float u1 = float(seed & 0xFFFFu) / 65535.0;
+			seed = GiHashUint(seed);
+			float u2 = float(seed & 0xFFFFu) / 65535.0;
+			vec3 direction = GiCosineDirection(world_normal, u1, u2);
+			GiRayOutcome outcome = GiGatherRayEx(setup, direction, u_gi_contact_range,
+			                                     min(setup.near_field, u_gi_contact_range));
+			short_sum += outcome.radiance;
+			short_resolved += outcome.resolved;
 		}
-		radiance += max(probe_radiance, vec3_splat(0.0)) * top_up;
-		resolved += saturate(probe_resolved) * top_up;
-		weight_sum = GI_PROBE_INTEGRATE_MIN_WEIGHT;
+		if(short_resolved > 0.0)
+		{
+			// Contact occlusion strength: scale down what contact hits contribute, keeping their
+			// occlusion (they stay resolved, so the environment does not refill them). At 0 the
+			// hit contributes the cache's radiance there -- energy-correct -- but the cache is a
+			// cell-scale mean that misses the multi-bounce light LOSS inside crevices, so strict
+			// transport reads brighter than ground truth exactly where the eye expects grounding.
+			// The strength dials from correct toward dark, applied only where contact occlusion
+			// was actually measured.
+			short_sum *= 1.0 - saturate(u_gi_contact_occlusion);
+			// Each ray owns 1/N of the hemisphere: resolved rays contribute their measurement,
+			// escaped rays hand their share to the probe estimate -- radiance AND alpha, so the
+			// environment fraction the probes reported survives in proportion.
+			float pass_through = (float(GI_PROBE_SHORT_RAYS) - short_resolved) * probe_alpha;
+			probe_rgb = (short_sum + probe_rgb * pass_through) /
+			            max(short_resolved + pass_through, 1e-4);
+			probe_alpha = (short_resolved + pass_through) / float(GI_PROBE_SHORT_RAYS);
+		}
 	}
-	if(u_gi_probe_debug == 2)
+	vec3 traced_rgb = vec3_splat(0.0);
+	float traced_alpha = 0.0;
+	if(needs_fallback)
 	{
-		gl_FragColor = vec4(saturate(weight_sum),
-		                    weight_sum > 1e-4 ? saturate(resolved / weight_sum) : 0.0,
-		                    0.0,
-		                    GI_PROBE_DEBUG_ALPHA);
+		vec3 traced_sum = vec3_splat(0.0);
+		float traced_resolved = 0.0;
+		for(int r = 0; r < GI_PROBE_FALLBACK_RAYS; ++r)
+		{
+			seed = GiHashUint(seed);
+			float u1 = float(seed & 0xFFFFu) / 65535.0;
+			seed = GiHashUint(seed);
+			float u2 = float(seed & 0xFFFFu) / 65535.0;
+			vec3 direction = GiCosineDirection(world_normal, u1, u2);
+			GiRayOutcome outcome = GiGatherRay(setup, direction);
+			traced_sum += outcome.radiance;
+			traced_resolved += outcome.resolved;
+		}
+		if(traced_resolved > 0.0)
+		{
+			traced_rgb = traced_sum / traced_resolved;
+			traced_alpha = traced_resolved / float(GI_PROBE_FALLBACK_RAYS);
+		}
+	}
+	if(u_gi_probe_debug_mode == 2)
+	{
+		gl_FragColor = vec4(saturate(weight_sum), probe_alpha, 1.0 - coverage, GI_PROBE_DEBUG_ALPHA);
 		return;
 	}
-	if(weight_sum <= 1e-4 || resolved <= 1e-4)
-	{
-		gl_FragColor = vec4_splat(0.0);
-		return;
-	}
-	// Same convention as the ray gather: RGB is the estimate over the MEASURED fraction of the
-	// hemisphere and A is that fraction, because the consumer computes mix(probe, rgb * PI, a).
-	// The SH irradiance already contains the dimming of unmeasured directions (their radiance
-	// projected as zero), so it is divided back out here and A re-applies it -- without this the
-	// unmeasured fraction would darken the image twice.
-	gl_FragColor = vec4(radiance / resolved, saturate(resolved / weight_sum));
+	vec3 out_rgb = mix(traced_rgb, probe_rgb, coverage);
+	float out_alpha = mix(traced_alpha, probe_alpha, coverage);
+	gl_FragColor = vec4(out_rgb, out_alpha);
 }

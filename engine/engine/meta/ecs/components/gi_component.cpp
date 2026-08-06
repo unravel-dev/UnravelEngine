@@ -289,6 +289,16 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "prefiltered cell rather than a point sample, so the variance a "
                                        "path tracer fights here has already been paid down."},
         })
+        .data<&settings::use_v2_gather>("use_v2_gather"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "use_v2_gather"},
+            entt::attribute{"pretty_name", "V2 Gather"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip", "GI v2 (tasks/gi_rewrite_plan.md): jittered screen probes with "
+                                       "shortened rays reading light voxels at hits and completing from "
+                                       "world probes. Off restores the v1 probe gather for A/B "
+                                       "comparison until Phase 8 removes it."},
+        })
         .data<&settings::use_probe_gather>("use_probe_gather"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "use_probe_gather"},
@@ -324,6 +334,34 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                                        "suppress, so each direction accumulates its own history in "
                                        "probe space instead. Cuts on disocclusion, so raising it costs "
                                        "lag only where lighting actually changes."},
+        })
+        .data<&settings::contact_range>("contact_range"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contact_range"},
+            entt::attribute{"pretty_name", "Contact Range (m)"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"tooltip", "Range of the probe path's per-pixel contact rays; 0 disables "
+                                       "them.\nProbes are tile-scale, so occlusion varying ALONG a "
+                                       "plane -- a wall under an awning -- is invisible to every probe "
+                                       "weight; these rays re-measure it per pixel. An overhang further "
+                                       "from the surface than this range casts no contact darkening. "
+                                       "Cost grows with range."},
+        })
+        .data<&settings::contact_occlusion>("contact_occlusion"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contact_occlusion"},
+            entt::attribute{"pretty_name", "Contact Occlusion"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "How much a contact hit darkens beyond the cache's radiance "
+                                       "there.\n0 is energy-correct and reads bright (the cache cannot "
+                                       "see multi-bounce loss inside crevices); 1 makes contact hits "
+                                       "pure occlusion -- the grounded, Lumen-like look. The occlusion "
+                                       "itself is kept either way: the environment never refills a "
+                                       "blocked direction."},
         })
         .data<&settings::adaptive_ray_count>("adaptive_ray_count"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -858,6 +896,9 @@ SAVE_INLINE(gi_resolve_pass::settings)
 {
     try_save(ar, ser20::make_nvp("ray_count", obj.ray_count));
     try_save(ar, ser20::make_nvp("use_probe_gather", obj.use_probe_gather));
+    try_save(ar, ser20::make_nvp("use_v2_gather", obj.use_v2_gather));
+    try_save(ar, ser20::make_nvp("contact_range", obj.contact_range));
+    try_save(ar, ser20::make_nvp("contact_occlusion", obj.contact_occlusion));
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_save(ar, ser20::make_nvp("probe_history_frames", obj.probe_history_frames));
     try_save(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));
@@ -896,6 +937,9 @@ LOAD_INLINE(gi_resolve_pass::settings)
 {
     try_load(ar, ser20::make_nvp("ray_count", obj.ray_count));
     try_load(ar, ser20::make_nvp("use_probe_gather", obj.use_probe_gather));
+    try_load(ar, ser20::make_nvp("use_v2_gather", obj.use_v2_gather));
+    try_load(ar, ser20::make_nvp("contact_range", obj.contact_range));
+    try_load(ar, ser20::make_nvp("contact_occlusion", obj.contact_occlusion));
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_load(ar, ser20::make_nvp("probe_history_frames", obj.probe_history_frames));
     try_load(ar, ser20::make_nvp("adaptive_ray_count", obj.adaptive_ray_count));

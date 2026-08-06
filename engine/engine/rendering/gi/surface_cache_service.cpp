@@ -232,6 +232,11 @@ void surface_cache_service::add_instance(uint32_t header_index,
     clipmap_instance.world_to_local = inst.world_to_local;
     clipmap_instance.world_bounds = inst.world_bounds;
     clipmap_instance.local_to_world_scale = inst.local_to_world_scale;
+    // Attribute-voxel material (GI v2 plan 3.1): the same per-submesh values the tracer's
+    // instance buffer carries, so a cascade surface voxel and a near-field hit agree on what
+    // the surface looks like.
+    clipmap_instance.albedo = inst.albedo;
+    clipmap_instance.emissive = inst.emissive;
     clipmap_instances_.push_back(clipmap_instance);
 }
 

@@ -15,6 +15,7 @@
  */
 
 #include "../bgfx_compute.sh"
+#include "gi_constants.sh"
 
 #define SDF_BRICK_SIZE   8.0
 #define SDF_BRICK_BORDER 1.0
@@ -78,6 +79,10 @@ uniform vec4 u_sdf_grid_params[2];
 /// Cells a traversal may visit before giving up. A ray crossing an n-cell grid diagonally touches
 /// about 3n, so this is generous; it exists so a denormal direction cannot spin, not as a budget.
 #define SDF_GRID_MAX_STEPS 256
+/// Steps one instance visit may spend walking OUT of the ray's own launch band before giving up
+/// and treating the instance as non-occluding for the rest of that cell segment. See the
+/// suppress_steps note in SdfTestInstance for why the walk cannot otherwise terminate.
+#define SDF_SUPPRESS_MAX_STEPS 8
 
 /// x = atlas size in bricks per axis, y = atlas size in voxels per axis, z = instance count.
 uniform vec4 u_sdf_params;
@@ -679,20 +684,20 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	// resolves nothing finer than a voxel, and a voxel's world size varies with both bake
 	// resolution and instance scale.
 	float hit_threshold = max(surface_bias * header.voxel_size * inst.local_to_world_scale, 1e-6);
-	// Ceiling on the acceptance radius: the field SATURATES at SDF_ENCODE_RANGE voxels, so a reading
-	// at that value means "at least this far" and carries no proximity information at all.
+	// Ceiling on the acceptance radius: ONE voxel of this field, mirroring the clipmap tier's cap.
 	//
-	// Without this the cone radius outgrows what the field can represent. It rises as t * relaxation,
-	// so at 20 m with relaxation 0.1 it is 2 m, while a typical instance saturates at four voxels --
-	// centimetres. Every sample inside that instance's bounds then satisfies the hit test and the
-	// whole BOUNDING BOX renders solid, as a smooth box floating where the mesh is. Because the
-	// radius grows with distance the artefact appears only far away, and because it scales with the
-	// voxel it gets WORSE as the bake resolution is raised, which points the investigation at the
-	// asset rather than at the threshold.
-	//
-	// The comparison below is strict, so capping exactly at the saturation value is enough to stop a
-	// saturated sample ever reading as a hit while leaving every in-band distance usable.
-	float saturation = SDF_ENCODE_RANGE * header.voxel_size * inst.local_to_world_scale;
+	// The correctness bound is the encode range -- the field saturates at SDF_ENCODE_RANGE voxels,
+	// so a cone grown past that makes every saturated sample read as a hit and the instance's
+	// whole bounding box renders solid. This used to cap exactly there, but the useful bound is
+	// far tighter, for the reason the clipmap tier's comment lays out: a cone radius is
+	// over-occlusion by construction, and the ray it hurts most is one grazing along the surface
+	// it STARTED on. At four voxels a grazing ray a fraction of a voxel above its own wall kept
+	// being caught however far it travelled -- over-darkening that grew with bake coarseness --
+	// and the suppression escape below, which compares against this same radius, became
+	// unreachable. One voxel bounds the damage to geometry the field genuinely cannot resolve
+	// anyway. The comparison below is strict, so the cap also keeps a saturated sample from ever
+	// reading as a hit, which is all the old looser value was for.
+	float accept_ceiling = header.voxel_size * inst.local_to_world_scale;
 	// Launch-surface suppression: a ray that STARTS inside this field's hit-acceptance band must
 	// see clear space before this instance may claim a hit.
 	//
@@ -717,6 +722,17 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	bool suppressed = false;
 	// Highest reading seen while suppressed, for the re-descent test below.
 	float suppress_best = -1e8;
+	// Steps spent walking out of the launch band this visit. The escape test compares against
+	// the CONE radius, which grows with t, so a grazing ray hugging its own launch surface holds
+	// a near-constant reading while the exit recedes from it: the walk cannot terminate, and it
+	// used to burn the entire step budget -- again in EVERY grid cell that lists the launch
+	// instance, since suppression re-arms per visit. Grazing rays are half of every hemisphere,
+	// which made this the dominant near-field cost. The budget bounds it: on exhaustion the
+	// visit gives up and treats the instance as non-occluding for the REST OF THIS CELL SEGMENT
+	// only -- the next cell re-arms and re-tests, so a genuine fold of the same instance further
+	// along is missed at most within one segment, erring bright at bounded scope where the
+	// alternative burned unbounded steps for the same answer.
+	int suppress_steps = 0;
 	if(all(greaterThanEqual(origin, inst.world_bounds_min)) &&
 	   all(lessThanEqual(origin, inst.world_bounds_max)))
 	{
@@ -737,7 +753,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 		vec3 local_position = local_origin + local_dir * t;
 		float world_distance = SdfSampleLocal(header, local_position) * inst.local_to_world_scale;
 		++result.steps;
-		float accept = min(SdfConeRadius(t, hit_threshold, relaxation), saturation);
+		float accept = min(SdfConeRadius(t, hit_threshold, relaxation), accept_ceiling);
 		if(suppressed)
 		{
 			if(world_distance >= accept)
@@ -759,6 +775,15 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 				// Still in the launch band. |distance| is the distance to the shell boundary, so
 				// stepping by it converges on the exit without ever crossing it -- the same
 				// Lipschitz argument the ordinary march rests on, pointed outward.
+				++suppress_steps;
+				if(suppress_steps > SDF_SUPPRESS_MAX_STEPS)
+				{
+					// Give up: the escape is receding faster than the walk approaches it (see the
+					// suppress_steps note above). `resolved` marks a deliberate finish, not budget
+					// exhaustion.
+					resolved = true;
+					break;
+				}
 				suppress_best = max(suppress_best, world_distance);
 				t += max(abs(world_distance), hit_threshold);
 				continue;
@@ -929,7 +954,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 }
 
 SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal)
+                          float surface_bias, float relaxation, bool want_normal, bool apply_expand)
 {
 	SdfRayHit result = SdfMakeMiss();
 	if(!u_sdf_clipmap_enabled || t_min >= t_max)
@@ -971,6 +996,34 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		float voxel;
 		float d = SdfSampleClipmapEx(p, voxel);
 		++result.steps;
+		// Surface EXPAND, ramped with travel (GI v2 plan 3.1, after Lumen [S22 p48-50]): geometry
+		// thinner than a cascade voxel never crosses zero, so without this a ray at range tunnels
+		// straight through a distant wall the cascade knows about but cannot make solid. Subtracting
+		// the expand fattens every surface by up to half a voxel diagonal - and because it subtracts
+		// from the STEP as well as the hit test, the march cannot overstep the fattened surface.
+		// The ramp starts at zero so the contact zone, where the launch lift is the defence, keeps
+		// its shadows; both constants are owned by gi_constants (cap published, ramp derived).
+		// Applies to this tier only: the mesh tier's thin geometry is guaranteed representable at
+		// bake time (unsigned shells floored at one mesh voxel), a stronger defence than runtime
+		// expand, and doubling up would only add cost.
+		// Kept STRICTLY below the saturation margin by construction: saturated samples read
+		// encode_range voxels (= 4), the expand is at most 0.87 voxel, and the acceptance below is
+		// capped at one voxel, so a saturated sample can never read as a hit (the A1f rule).
+		// GATED BY THE CALLER: gather and probe rays want the fattening (a distant thin wall
+		// must occlude their radiance estimate), but SHADOW rays must not - at coarse levels
+		// the expand approaches a voxel diagonal (metres), so a sun ray grazing a street canyon
+		// would read occluded almost everywhere and the whole light-voxel field converges dark.
+		// Shadow leak defence stays where it always was: the bake-time shell floor. Measured on
+		// Bistro: raising the shadow step budget (which converts exhaustion-hits back into
+		// resolved rays) restored the bounce, which is what identified the expand as the term
+		// starving them.
+		if(apply_expand)
+		{
+			float diagonal = voxel * 1.7320508;
+			float expand = GI_EXPAND_MAX_VOXEL_DIAGONALS * diagonal *
+			               saturate(t / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
+			d -= expand;
+		}
 		float base_threshold = max(surface_bias * voxel, 1e-6);
 		// Capped at ONE voxel, not at the encode range.
 		//
@@ -1039,7 +1092,29 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		}
 		t += max(d, base_threshold);
 	}
+	// Budget exhausted: report a HIT at the current position, not a miss (GI v2 plan 3.1, after
+	// Lumen's forced 64th-iteration hit [S22 p36]). Exhaustion happens on grazing rays hugging
+	// geometry; laundering it into "clear" over-lights exactly the surfaces that are hardest to
+	// trace (the A1c lesson). Over-occlusion is the direction that degrades gracefully. The flag
+	// stays set so the step-count debug view can still show where budgets die.
+	result.hit = true;
+	result.t = t;
 	result.exhausted = true;
+	if(want_normal)
+	{
+		vec3 p_exhausted = origin + direction * t;
+		float e_voxel;
+		SdfSampleClipmapEx(p_exhausted, e_voxel);
+		float e = max(e_voxel, 1e-3);
+		vec3 k0 = vec3(1.0, -1.0, -1.0);
+		vec3 k1 = vec3(-1.0, -1.0, 1.0);
+		vec3 k2 = vec3(-1.0, 1.0, -1.0);
+		vec3 k3 = vec3(1.0, 1.0, 1.0);
+		vec3 n = k0 * SdfSampleClipmap(p_exhausted + k0 * e) + k1 * SdfSampleClipmap(p_exhausted + k1 * e) +
+		         k2 * SdfSampleClipmap(p_exhausted + k2 * e) + k3 * SdfSampleClipmap(p_exhausted + k3 * e);
+		float len = length(n);
+		result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
+	}
 	return result;
 }
 
@@ -1056,8 +1131,16 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
  * depth buffer resolves the first metre or so exactly and in a few steps, which is also where
  * sphere tracing is at its worst.
  */
-SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field_distance,
-                      int max_steps, float surface_bias, float relaxation, bool want_normal)
+/**
+ * The Ex variant exposes @p apply_expand: the thin-surface fattening of the cascade tier.
+ * Radiance rays (gather, probe, bounce) pass true - a distant sub-voxel wall must occlude
+ * their estimate. Occlusion-only rays toward a LIGHT pass false - for them the expand
+ * over-darkens by up to a coarse voxel diagonal around every surface, and their leak defence
+ * is the bake-time shell floor.
+ */
+SdfRayHit SdfTraceRayEx(vec3 origin, vec3 direction, float t_max, float near_field_distance,
+                        int max_steps, float surface_bias, float relaxation, bool want_normal,
+                        bool apply_expand)
 {
 	// Relaxation applies to the near field too, and used to be forced to zero here on the grounds
 	// that "stepping past a wall would leak light through it". That reasoning does not hold: the
@@ -1084,23 +1167,35 @@ SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field
 	// return a hit at t = 0. A tier switched off by setting its range to zero would still stamp a
 	// zero-distance hit on every ray that begins within surface_bias mesh-voxels of a surface --
 	// which for a gather or shadow ray is every ray, since they begin on one by construction.
+	// The per-instance tier is capped at GI_MESH_SDF_TRACE_RANGE regardless of the caller's
+	// setting (GI v2 plan 3.1, Lumen's 2 m detail-trace bound [S22 p44]): mesh-exact contact
+	// detail is invisible past a couple of metres of any launch point, while the tier's cost is
+	// the dominant term of the whole GI frame. The cascade takes over beyond.
+	float near_field = min(near_field_distance, GI_MESH_SDF_TRACE_RANGE);
 	SdfRayHit near_hit = SdfMakeMiss();
-	if(near_field_distance > 0.0)
+	if(near_field > 0.0)
 	{
-		near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field_distance, t_max),
+		near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field, t_max),
 		                             max_steps, surface_bias, relaxation, want_normal);
 		if(near_hit.hit)
 		{
 			return near_hit;
 		}
 	}
-	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field_distance, t_max, max_steps,
-	                                    surface_bias, relaxation, want_normal);
+	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field, t_max, max_steps,
+	                                    surface_bias, relaxation, want_normal, apply_expand);
 	// Carry the near-field cost and exhaustion forward, so the caller sees the whole ray's
 	// expense rather than only the tier that happened to answer.
 	far_hit.steps += near_hit.steps;
 	far_hit.exhausted = far_hit.exhausted || near_hit.exhausted;
 	return far_hit;
+}
+
+SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field_distance,
+                      int max_steps, float surface_bias, float relaxation, bool want_normal)
+{
+	return SdfTraceRayEx(origin, direction, t_max, near_field_distance, max_steps, surface_bias,
+	                     relaxation, want_normal, true);
 }
 
 #endif // __GI_SDF_COMMON_SH__

@@ -4,6 +4,10 @@
 
 #include <logging/logging.h>
 
+#include <bx/math.h>
+
+#include <vector>
+
 namespace unravel
 {
 
@@ -44,16 +48,167 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
         resolution_ = 0;
         return false;
     }
-    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 ({} KB).",
+    // Attribute voxels (GI v2 plan 3.1): albedo + emissive at half resolution, and the
+    // surface-voxel list segments + cursors the light-voxel update consumes. Created alongside
+    // the distance volume because they recompose with it and share its lifetime.
+    const uint32_t attr_resolution = get_attr_resolution();
+    const uint32_t attr_depth = attr_resolution * global_sdf_clipmap::level_count;
+    attr_albedo_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
+                                                          static_cast<uint16_t>(attr_resolution),
+                                                          static_cast<uint16_t>(attr_depth),
+                                                          false,
+                                                          gfx::texture_format::RGBA8,
+                                                          flags);
+    attr_emissive_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
+                                                            static_cast<uint16_t>(attr_resolution),
+                                                            static_cast<uint16_t>(attr_depth),
+                                                            false,
+                                                            gfx::texture_format::RGBA16F,
+                                                            flags);
+    // Six face slabs per level (gi_light_voxels.sh layout). At the runtime default this is
+    // 64 * 4 * 6 = 1536 deep - inside the 2048 texture limit the distance volume already guards.
+    const uint32_t light_depth = attr_resolution * global_sdf_clipmap::level_count * 6u;
+    if(light_depth > 2048u)
+    {
+        APPLOG_ERROR("[SurfaceCache] Light voxel volume needs a {}-deep texture, over the 2048 limit.",
+                     light_depth);
+        shutdown();
+        return false;
+    }
+    light_voxel_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
+                                                          static_cast<uint16_t>(attr_resolution),
+                                                          static_cast<uint16_t>(light_depth),
+                                                          false,
+                                                          gfx::texture_format::RGBA16F,
+                                                          flags);
+    const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
+    surface_list_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
+                                                     BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    surface_count_ = gfx::create_dynamic_index_buffer(global_sdf_clipmap::level_count,
+                                                      BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    attr_cells_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
+                                                   BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    if(bgfx::isValid(attr_cells_))
+    {
+        // Sentinel: no real cell packs to ~0u, so every slot claims (and zeroes its light
+        // texels) on its first composition.
+        std::vector<uint32_t> attr_sentinels(size_t(segment) * global_sdf_clipmap::level_count, 0xFFFFFFFFu);
+        gfx::update(attr_cells_,
+                    0,
+                    gfx::copy(attr_sentinels.data(), uint32_t(attr_sentinels.size() * sizeof(uint32_t))));
+    }
+    if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
+       !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
+       !bgfx::isValid(surface_list_) || !bgfx::isValid(surface_count_) || !bgfx::isValid(attr_cells_))
+    {
+        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap attribute resources.");
+        shutdown();
+        return false;
+    }
+    // A level's cursor is only meaningful once that level has composed; zero them all so a
+    // consumer reading an as-yet-uncomposed level sees an empty list rather than allocation
+    // garbage - the claim-owns-initialising rule applied to the whole resource.
+    const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
+    gfx::update(surface_count_, 0, gfx::copy(zero_counts.data(), uint32_t(zero_counts.size() * sizeof(uint32_t))));
+    // World probes (GI v2 plan 3.3): only when the shader's hardcoded axis matches this
+    // resolution's derivation - the trace/convolve group layouts bake the axis in.
+    if(resolution / 16u + 1u == world_probe_axis)
+    {
+        const uint32_t tile_grid_x = world_probe_axis * world_probe_axis;
+        const uint32_t tile_grid_y = world_probe_axis * global_sdf_clipmap::level_count;
+        const uint32_t radiance_w = tile_grid_x * 16u;
+        const uint32_t radiance_h = tile_grid_y * 16u;
+        const uint32_t gutter_w = tile_grid_x * 10u;
+        const uint32_t gutter_h = tile_grid_y * 10u;
+        world_probe_radiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(radiance_w),
+                                                               static_cast<uint16_t>(radiance_h),
+                                                               false,
+                                                               1,
+                                                               gfx::texture_format::RGBA16F,
+                                                               flags);
+        world_probe_irradiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
+                                                                 static_cast<uint16_t>(gutter_h),
+                                                                 false,
+                                                                 1,
+                                                                 gfx::texture_format::RGBA16F,
+                                                                 flags);
+        world_probe_depth_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
+                                                            static_cast<uint16_t>(gutter_h),
+                                                            false,
+                                                            1,
+                                                            gfx::texture_format::RG16F,
+                                                            flags);
+        const uint32_t probe_count =
+            world_probe_axis * world_probe_axis * world_probe_axis * global_sdf_clipmap::level_count;
+        world_probe_cells_ = gfx::create_dynamic_index_buffer(probe_count,
+                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                  BGFX_BUFFER_INDEX32);
+        world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
+        world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
+        world_probe_atlas_params_[2] = float(gutter_w);
+        world_probe_atlas_params_[3] = float(gutter_h);
+        if(!world_probe_radiance_ || !world_probe_radiance_->is_valid() || !world_probe_irradiance_ ||
+           !world_probe_irradiance_->is_valid() || !world_probe_depth_ || !world_probe_depth_->is_valid() ||
+           !bgfx::isValid(world_probe_cells_))
+        {
+            APPLOG_ERROR("[SurfaceCache] Failed to create the world probe resources.");
+            shutdown();
+            return false;
+        }
+        // Sentinel cell ids: no real cell packs to ~0u, so every slot claims (and zeroes its
+        // strata) on its first trace.
+        std::vector<uint32_t> sentinel_cells(probe_count, 0xFFFFFFFFu);
+        gfx::update(world_probe_cells_,
+                    0,
+                    gfx::copy(sentinel_cells.data(), uint32_t(sentinel_cells.size() * sizeof(uint32_t))));
+    }
+    else
+    {
+        APPLOG_WARNING("[SurfaceCache] World probes disabled: resolution {} does not derive the"
+                       " compiled probe axis {}.",
+                       resolution,
+                       world_probe_axis);
+    }
+    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 + {}^3 attributes ({} KB).",
                 global_sdf_clipmap::level_count,
                 resolution,
-                (size_t(resolution) * resolution * depth) / 1024);
+                attr_resolution,
+                (size_t(resolution) * resolution * depth +
+                 size_t(attr_resolution) * attr_resolution * attr_depth * 12u) /
+                    1024);
     return true;
 }
 
 void global_sdf_clipmap_gpu::shutdown()
 {
     texture_.reset();
+    attr_albedo_texture_.reset();
+    attr_emissive_texture_.reset();
+    light_voxel_texture_.reset();
+    world_probe_radiance_.reset();
+    world_probe_irradiance_.reset();
+    world_probe_depth_.reset();
+    if(bgfx::isValid(world_probe_cells_))
+    {
+        gfx::destroy(world_probe_cells_);
+        world_probe_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(attr_cells_))
+    {
+        gfx::destroy(attr_cells_);
+        attr_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    world_probe_atlas_params_.fill(0.0f);
+    if(bgfx::isValid(surface_list_))
+    {
+        gfx::destroy(surface_list_);
+        surface_list_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(surface_count_))
+    {
+        gfx::destroy(surface_count_);
+        surface_count_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
     resolution_ = 0;
     level_params_.fill(0.0f);
     // Zeroing this clears the "cascade is resident" flag in w, which is what stops a consumer
@@ -124,6 +279,47 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
                                static_cast<uint16_t>(resolution_),
                                static_cast<uint16_t>(resolution_),
                                gfx::copy(lvl.voxels.data(), uint32_t(lvl.voxels.size())));
+        // Attributes ride along: the CPU composer produced them with the distance voxels, and a
+        // consumer cannot tell which composer wrote what it samples, so the two paths must ship
+        // the same set of resources.
+        const uint32_t attr_resolution = get_attr_resolution();
+        const size_t attr_count = size_t(attr_resolution) * attr_resolution * attr_resolution;
+        if(lvl.attr_albedo.size() == attr_count && lvl.attr_emissive.size() == attr_count)
+        {
+            gfx::update_texture_3d(attr_albedo_texture_->native_handle(),
+                                   0,
+                                   0,
+                                   0,
+                                   static_cast<uint16_t>(i * attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   gfx::copy(lvl.attr_albedo.data(), uint32_t(attr_count * sizeof(uint32_t))));
+            std::vector<uint16_t> half_emissive(attr_count * 4u, 0u);
+            for(size_t v = 0; v < attr_count; ++v)
+            {
+                half_emissive[v * 4u + 0u] = bx::halfFromFloat(lvl.attr_emissive[v].x);
+                half_emissive[v * 4u + 1u] = bx::halfFromFloat(lvl.attr_emissive[v].y);
+                half_emissive[v * 4u + 2u] = bx::halfFromFloat(lvl.attr_emissive[v].z);
+            }
+            gfx::update_texture_3d(attr_emissive_texture_->native_handle(),
+                                   0,
+                                   0,
+                                   0,
+                                   static_cast<uint16_t>(i * attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   static_cast<uint16_t>(attr_resolution),
+                                   gfx::copy(half_emissive.data(), uint32_t(half_emissive.size() * sizeof(uint16_t))));
+            const uint32_t count = uint32_t(lvl.attr_surface_list.size());
+            gfx::update(surface_count_, i, gfx::copy(&count, sizeof(count)));
+            if(count > 0u)
+            {
+                gfx::update(surface_list_,
+                            i * uint32_t(attr_count),
+                            gfx::copy(lvl.attr_surface_list.data(), count * uint32_t(sizeof(uint32_t))));
+            }
+        }
     }
     clipmap.clear_dirty_levels();
 }

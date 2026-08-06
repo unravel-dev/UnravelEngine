@@ -81,18 +81,17 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// a normal offset moves the shaded point and lets it see past nearby occluders, which reads as
 	// a surface that is simply too bright with nothing to say why.
 	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
-	SdfRayHit hit = SdfTraceRay(origin, to_light, max_distance, near_field,
-	                            u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
-	                            u_gi_shadow_relaxation, false);
-	// A ray that ran out of budget without resolving is treated as LIT. The alternative, treating
-	// it as occluded, turns every exhausted ray into a black patch; over-lighting a region degrades
-	// far more gracefully than stamping shadow onto it.
-	//
-	// That choice is why the relaxation above matters so much here. Exhaustion does not present as
-	// a missing shadow -- it presents as a surface that is simply too bright, with nothing to say
-	// the ray gave up. Widening the acceptance lets a grazing ray terminate at a bounded step count
-	// instead, and it can only ever stop a ray EARLY, so it errs toward finding the occluder rather
-	// than missing it. Cheaper and darker, both in the safe direction for this particular ray.
+	// Expand OFF: an occlusion-only ray toward a light must not see surfaces fattened by up to
+	// a coarse voxel diagonal, or a grazing sun darkens the whole field (see SdfTraceRayEx).
+	SdfRayHit hit = SdfTraceRayEx(origin, to_light, max_distance, near_field,
+	                              u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
+	                              u_gi_shadow_relaxation, false, false);
+	// Exhaustion now REPORTS A HIT inside the trace itself (GI v2 trace rework - a ray that ran
+	// out of budget occludes at its final position), so a grazing shadow ray that gives up reads
+	// as shadowed rather than as a surface that is inexplicably too bright. Over-occlusion is the
+	// direction that degrades gracefully, and it is the same contract every tracing consumer now
+	// shares; the relaxation above still matters because it lets most grazing rays terminate
+	// properly before the budget is ever reached.
 	return hit.hit ? 0.0 : 1.0;
 }
 

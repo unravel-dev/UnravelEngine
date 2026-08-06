@@ -12,12 +12,14 @@
  *
  * Layout, shared by all three probe passes and mirrored by gi_resolve_pass.cpp:
  *  - Radiance atlas: a 2D RGBA16F image, one GI_PROBE_DIR_EDGE^2 octahedral tile per probe,
- *    tiles packed in probe-grid order. rgb = radiance (intensity applied), a = resolved flag.
+ *    tiles packed in probe-grid order. rgb = radiance (intensity applied), a = the cone's
+ *    encoded PROXIMITY (see GI_PROBE_PROXIMITY_SKY): what the cone saw and roughly how far
+ *    away, 0 where the texel measured nothing.
  *  - Probe buffer: GI_PROBE_STRIDE vec4s per probe, probe-major:
- *      [0..8]  SH2 projection: xyz = radiance coefficient i, w = resolved-flag coefficient i
  *      [9]     xyz = anchor world position, w = 1 when the probe anchors on geometry
  *      [10]    xyz = anchor world normal, w = anchor view distance
- *      [11]    reserved
+ *      [11]    x = accumulated history count, y = this frame's blend weight
+ *    (slots [0..8] held an SH2 projection in an earlier design and are currently unused.)
  */
 
 #define GI_PROBE_DIR_EDGE   8
@@ -25,6 +27,24 @@
 #define GI_PROBE_STRIDE     12
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
+/// Atlas alpha: encoded proximity of what a cone saw, 1 / (1 + hit distance), floored at this
+/// value for a ray that escaped to the sky. 0 means the texel measured NOTHING (untraced cap,
+/// self-read, unaddressable hit) -- distinct from sky, which IS a measurement. The encoding
+/// exists for the probe-space filter: a cone that hit an occluder half a metre away must not
+/// average with a neighbour's cone that saw open sky, even though both probes sit on the same
+/// wall plane -- that averaging is what erased contact occlusion under overhangs. The floor
+/// doubles as the far-hit limit: a hit fifty metres out is proximity-indistinguishable from sky,
+/// which is exactly how the filter should treat it.
+#define GI_PROBE_PROXIMITY_SKY 0.02
+/// Probe LAYERS per tile -- fixed-budget adaptive placement. Layer 0 anchors on the tile's
+/// MAJORITY surface (median depth); layer 1 anchors on the surface most rejected by layer 0's
+/// plane, and only exists where the tile actually spans two surfaces -- a planar tile marks it
+/// invalid and traces nothing. One probe per tile cannot represent a tile containing a window
+/// reveal AND its wall, and whichever surface lost the anchor flipped to the integration
+/// fallback; at distance, where a tile covers metres of facade, that flipping is most of the
+/// aliasing. Two layers cover the dominant two-surface case with deterministic indexing and no
+/// lists; the full Lumen scheme (variable count, hierarchical) remains the eventual extension.
+#define GI_PROBE_LAYERS     2
 
 /// x = probe count x, y = probe count y, z = probe spacing in TRACE-RESOLUTION pixels,
 /// w = frame index.
@@ -66,6 +86,48 @@ vec3 GiOctDecode(vec2 tile_uv)
 	return normalize(n);
 }
 
+/// Octahedral encode: inverse of GiOctDecode, mapping a unit direction to [0,1]^2 tile space.
+vec2 GiOctEncode(vec3 d)
+{
+	d /= (abs(d.x) + abs(d.y) + abs(d.z));
+	vec2 e = d.xy;
+	if(d.z < 0.0)
+	{
+		vec2 sign_not_zero = vec2(d.x >= 0.0 ? 1.0 : -1.0, d.y >= 0.0 ? 1.0 : -1.0);
+		e = (vec2_splat(1.0) - abs(d.yx)) * sign_not_zero;
+	}
+	return e * 0.5 + 0.5;
+}
+
+/// Wraps a texel coordinate outside an octahedral tile back inside it. Crossing an octahedral
+/// edge lands on the opposite half of the sphere with the transverse axis mirrored -- this is
+/// what makes bilinear taps near tile edges sample the CORRECT neighbouring direction instead
+/// of an adjacent probe's tile.
+ivec2 GiOctWrapTexel(ivec2 texel)
+{
+	if(texel.x < 0)
+	{
+		texel.x = -1 - texel.x;
+		texel.y = GI_PROBE_DIR_EDGE - 1 - texel.y;
+	}
+	if(texel.x >= GI_PROBE_DIR_EDGE)
+	{
+		texel.x = 2 * GI_PROBE_DIR_EDGE - 1 - texel.x;
+		texel.y = GI_PROBE_DIR_EDGE - 1 - texel.y;
+	}
+	if(texel.y < 0)
+	{
+		texel.y = -1 - texel.y;
+		texel.x = GI_PROBE_DIR_EDGE - 1 - texel.x;
+	}
+	if(texel.y >= GI_PROBE_DIR_EDGE)
+	{
+		texel.y = 2 * GI_PROBE_DIR_EDGE - 1 - texel.y;
+		texel.x = GI_PROBE_DIR_EDGE - 1 - texel.x;
+	}
+	return texel;
+}
+
 /// The nine SH2 basis functions at a direction, in the order the probe buffer stores them.
 void GiShBasis(vec3 d, out float basis[9])
 {
@@ -99,6 +161,20 @@ void GiShIrradianceWeights(out float weights[9])
 uint GiProbeIndex(int px, int py)
 {
 	return uint(py) * uint(u_gi_probe_count_x) + uint(px);
+}
+
+/// Record index of a probe within one buffer half: layers are stored as consecutive full
+/// lattices, so layer L of tile (x, y) sits at L * lattice + index.
+uint GiProbeRecord(int px, int py, int layer)
+{
+	return uint(layer) * uint(u_gi_probe_count_x * u_gi_probe_count_y) + GiProbeIndex(px, py);
+}
+
+/// Top-left texel of a probe's octahedral tile in the radiance atlas: layers stack VERTICALLY,
+/// each occupying a full lattice of tiles.
+ivec2 GiProbeAtlasBase(int px, int py, int layer)
+{
+	return ivec2(px, py + layer * u_gi_probe_count_y) * GI_PROBE_DIR_EDGE;
 }
 
 #endif // __GI_PROBE_COMMON_SH__

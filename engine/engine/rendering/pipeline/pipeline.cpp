@@ -74,6 +74,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
     hiz_pass_.init(ctx);
     ssil_pass_.init(ctx);
     gi_clipmap_compose_pass_.init(ctx);
+    gi_light_voxel_pass_.init(ctx);
+    gi_world_probe_pass_.init(ctx);
     gi_cache_pass_.init(ctx);
     gi_resolve_pass_.init(ctx);
     sdf_debug_pass_.init(ctx);

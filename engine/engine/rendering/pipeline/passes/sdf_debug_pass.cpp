@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/gi_constants.h>
 
 #include <graphics/graphics.h>
 
@@ -58,6 +59,26 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     const auto& clipmap = params.view_cache->get_clipmap();
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const bool clipmap_ready = clipmap_gpu.is_valid();
+    if(clipmap_gpu.get_attr_albedo_texture())
+    {
+        gfx::set_texture(debug_program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
+    }
+    if(clipmap_gpu.get_light_voxel_texture())
+    {
+        gfx::set_texture(debug_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+        const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
+        gfx::set_uniform(debug_program_.u_gi_light_voxel_params, light_voxel_params);
+    }
+    if(clipmap_gpu.has_world_probes())
+    {
+        gfx::set_texture(debug_program_.s_world_probe_irradiance, 11, clipmap_gpu.get_world_probe_irradiance());
+        gfx::set_texture(debug_program_.s_world_probe_depth, 15, clipmap_gpu.get_world_probe_depth());
+        const float base_spacing = params.view_cache->get_clipmap().get_level(0).voxel_size *
+                                   float(gi::GI_WORLD_PROBE_DIVISOR);
+        const float probe_params[4] = {base_spacing, 0.0f, 1.0f, 0.0f};
+        gfx::set_uniform(debug_program_.u_gi_world_probe_params, probe_params);
+        gfx::set_uniform(debug_program_.u_gi_world_probe_atlas, clipmap_gpu.get_world_probe_atlas_params());
+    }
     gfx::set_texture(debug_program_.s_sdf_clipmap,
                      4,
                      clipmap_ready ? clipmap_gpu.get_texture() : atlas.get_atlas_texture());

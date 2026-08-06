@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/gi_constants.h>
 
 #include <graphics/graphics.h>
 
@@ -19,6 +20,12 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_compose = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_compose.sc");
     compose_program_.program = std::make_unique<gpu_program>(cs_compose);
     compose_program_.cache_uniforms();
+    auto cs_attributes = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_attributes.sc");
+    attributes_program_.program = std::make_unique<gpu_program>(cs_attributes);
+    attributes_program_.cache_uniforms();
+    auto cs_reset = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_surface_count_reset.sc");
+    reset_program_.program = std::make_unique<gpu_program>(cs_reset);
+    reset_program_.cache_uniforms();
     return compose_program_.is_valid();
 }
 
@@ -99,6 +106,91 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         gfx::dispatch(pass.id, compose_program_.program->native_handle(), groups, groups, groups);
         compose_program_.program->end();
         ++composed;
+    }
+    // Attributes compose AFTER every distance level is written: the attribute shader samples the
+    // composed field (band + gradient gates), so its input must be this frame's voxels. Separate
+    // dispatches also give the backend its transition point from image-write to sampled-read.
+    if(attributes_program_.is_valid() && reset_program_.is_valid())
+    {
+        const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
+        const uint32_t attr_groups = (attr_resolution + compose_group_size - 1u) / compose_group_size;
+        for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+        {
+            if((dirty & (1u << level)) == 0u)
+            {
+                continue;
+            }
+            const auto& lvl = clipmap.get_level(level);
+            if(!(lvl.voxel_size > 0.0f))
+            {
+                continue;
+            }
+            gfx::render_pass pass("GI/Clipmap Attributes");
+            // The level's append cursor resets in the same view, immediately before the append
+            // dispatch: submission order is the only ordering guarantee needed.
+            reset_program_.program->begin();
+            const float reset_params[4] = {float(level), 0.0f, 0.0f, 0.0f};
+            gfx::set_uniform(reset_program_.u_surface_reset_params, reset_params);
+            gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
+            gfx::dispatch(pass.id, reset_program_.program->native_handle(), 1, 1, 1);
+            reset_program_.program->end();
+            attributes_program_.program->begin();
+            gfx::set_texture(attributes_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+            gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+            gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+            gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+            gfx::set_texture(attributes_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+            gfx::set_image(5,
+                           clipmap_gpu.get_attr_albedo_texture()->native_handle(),
+                           0,
+                           gfx::access::Write,
+                           gfx::texture_format::RGBA8);
+            gfx::set_image(6,
+                           clipmap_gpu.get_attr_emissive_texture()->native_handle(),
+                           0,
+                           gfx::access::Write,
+                           gfx::texture_format::RGBA16F);
+            gfx::set_buffer(7, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
+            gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
+            gfx::set_buffer(11, clipmap_gpu.get_attr_cells(), gfx::access::ReadWrite);
+            const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
+            gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
+            gfx::set_image(9,
+                           clipmap_gpu.get_light_voxel_texture()->native_handle(),
+                           0,
+                           gfx::access::Write,
+                           gfx::texture_format::RGBA16F);
+            gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+            gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+            const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
+                                         float(atlas.get_atlas_voxel_dim()),
+                                         float(instances.size()),
+                                         0.0f};
+            gfx::set_uniform(attributes_program_.u_sdf_params, sdf_params);
+            gfx::set_uniform(attributes_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+            gfx::set_uniform(attributes_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+            gfx::set_uniform(attributes_program_.u_sdf_clipmap_levels,
+                             clipmap_gpu.get_level_params(),
+                             global_sdf_clipmap::level_count);
+            const float attr_voxel_size = lvl.voxel_size * float(global_sdf_clipmap::attr_downsample);
+            // Reach mirrors the CPU reference: the surface band plus one attribute voxel of
+            // margin between the field's zero crossing and the voxel centre.
+            const float attr_reach =
+                (float(gi::GI_SURFACE_VOXEL_BAND) + 1.0f) * attr_voxel_size;
+            const float attr_params[4] = {float(level),
+                                          float(attr_resolution),
+                                          attr_voxel_size,
+                                          attr_reach};
+            gfx::set_uniform(attributes_program_.u_clipmap_attr_params, attr_params);
+            const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
+            gfx::set_uniform(attributes_program_.u_clipmap_compose_origin, compose_origin);
+            gfx::dispatch(pass.id,
+                          attributes_program_.program->native_handle(),
+                          attr_groups,
+                          attr_groups,
+                          attr_groups);
+            attributes_program_.program->end();
+        }
     }
     // Consumed here rather than by the uploader: in GPU mode the uploader has no voxels to send, so
     // it would clear the mask before this pass ever saw it.

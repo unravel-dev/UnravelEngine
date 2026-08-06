@@ -1,0 +1,134 @@
+#include "gi_light_voxel_pass.h"
+
+#include <engine/assets/asset_manager.h>
+#include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/gi_constants.h>
+
+#include <graphics/graphics.h>
+
+namespace unravel
+{
+namespace
+{
+/// Must match NUM_THREADS in cs_gi_light_voxels.sc.
+constexpr uint32_t light_voxel_group_size = 64u;
+} // namespace
+
+auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels.sc");
+    program_.program = std::make_unique<gpu_program>(cs);
+    program_.cache_uniforms();
+    return program_.is_valid();
+}
+
+auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params) -> bool
+{
+    APP_SCOPE_PERF("Rendering/GI/Light Voxels");
+    if(!program_.is_valid() || !params.surface_cache || !params.view_cache)
+    {
+        return false;
+    }
+    auto& surface_cache = *params.surface_cache;
+    if(!surface_cache.is_enabled())
+    {
+        return false;
+    }
+    auto& view_cache = *params.view_cache;
+    const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
+    const auto& light_buffer = surface_cache.get_light_buffer();
+    if(!clipmap_gpu.is_valid() || !clipmap_gpu.get_light_voxel_texture())
+    {
+        return false;
+    }
+    auto& atlas = surface_cache.get_atlas();
+    const auto& instances = surface_cache.get_instances();
+    const auto& s = params.config;
+    gfx::render_pass pass("GI/Light Voxels");
+    program_.program->begin();
+    gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+    gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+    if(light_buffer.is_valid())
+    {
+        gfx::set_buffer(5, light_buffer.get_buffer(), gfx::access::Read);
+    }
+    gfx::set_buffer(6, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
+    gfx::set_buffer(7, clipmap_gpu.get_surface_count_buffer(), gfx::access::Read);
+    gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
+    gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
+    gfx::set_image(10,
+                   clipmap_gpu.get_light_voxel_texture()->native_handle(),
+                   0,
+                   gfx::access::Write,
+                   gfx::texture_format::RGBA16F);
+    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+    const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
+                                 float(atlas.get_atlas_voxel_dim()),
+                                 float(instances.size()),
+                                 0.0f};
+    gfx::set_uniform(program_.u_sdf_params, sdf_params);
+    gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+    gfx::set_uniform(program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+    gfx::set_uniform(program_.u_sdf_clipmap_levels,
+                     clipmap_gpu.get_level_params(),
+                     global_sdf_clipmap::level_count);
+    const float light_params[4] = {light_buffer.is_valid() ? float(light_buffer.get_light_count()) : 0.0f,
+                                   0.0f,
+                                   0.0f,
+                                   0.0f};
+    gfx::set_uniform(program_.u_gpu_light_params, light_params);
+    const float shadow_params[4] = {s.shadow_distance,
+                                    s.shadow_normal_bias_voxels,
+                                    s.shadow_near_field,
+                                    s.shadow_max_steps};
+    gfx::set_uniform(program_.u_gi_shadow_params, shadow_params);
+    const float shadow_params2[4] = {s.shadow_surface_bias,
+                                     s.shadow_step_relaxation,
+                                     0.0f,
+                                     s.shadow_ray_start_voxels};
+    gfx::set_uniform(program_.u_gi_shadow_params2, shadow_params2);
+    const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
+    const float voxel_params[4] = {float(attr_resolution),
+                                   0.0f,
+                                   float(params.frame),
+                                   1.0f};
+    gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
+    const float camera[4] = {params.camera_position.x,
+                             params.camera_position.y,
+                             params.camera_position.z,
+                             0.0f};
+    gfx::set_uniform(program_.u_gi_light_voxel_camera, camera);
+    // Bounce inputs: LAST frame's world probes. Absent (wrong resolution, first frames), the
+    // ready flag stays zero and the shader takes direct light alone.
+    const auto& view_clipmap = view_cache.get_clipmap();
+    const bool probes_ready = clipmap_gpu.has_world_probes();
+    const float base_spacing =
+        view_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float probe_params[4] = {base_spacing, float(params.frame), probes_ready ? 1.0f : 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_gi_world_probe_params, probe_params);
+    if(probes_ready)
+    {
+        gfx::set_texture(program_.s_world_probe_irradiance, 11, clipmap_gpu.get_world_probe_irradiance());
+        gfx::set_texture(program_.s_world_probe_depth, 15, clipmap_gpu.get_world_probe_depth());
+        gfx::set_uniform(program_.u_gi_world_probe_atlas, clipmap_gpu.get_world_probe_atlas_params());
+    }
+    // Every level's full segment, early-out beyond the per-level count. The counts live on the
+    // GPU (the attribute dispatch appends them), so a tighter launch needs indirect args - a
+    // measured optimisation, not a correctness matter.
+    const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
+    const uint32_t total = capacity * global_sdf_clipmap::level_count;
+    gfx::dispatch(pass.id,
+                  program_.program->native_handle(),
+                  (total + light_voxel_group_size - 1u) / light_voxel_group_size,
+                  1,
+                  1);
+    program_.program->end();
+    return true;
+}
+
+} // namespace unravel

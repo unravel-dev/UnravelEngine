@@ -65,6 +65,17 @@ public:
         ///< carries geometry only -- so a missing material shows here as a flat marker rather
         ///< than as a slightly wrong shade in the radiance view.
         cache_albedo = 11,
+        ///< GI v2: the ATTRIBUTE voxel albedo at the traced hit - what the compose pass
+        ///< attributed to the winning instance. Yellow marks a hit whose voxel is not SURFACE,
+        ///< magenta a hit outside every cascade.
+        attr_albedo = 12,
+        ///< GI v2: the LIGHT VOXELS at the traced hit - the three face slabs facing the hit
+        ///< normal, exposure-weighted. This is exactly what a gather ray will read at a cascade
+        ///< hit, shown before any gather exists.
+        light_voxels = 13,
+        ///< GI v2: world probe irradiance interpolated at the traced hit through the DDGI
+        ///< weight chain - the bounce/completion signal, shown standalone.
+        world_probes = 14,
     };
 
     struct settings
@@ -154,6 +165,13 @@ private:
         gfx::program::uniform_ptr u_sdf_debug_params2;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_attr_albedo;
+        gfx::program::uniform_ptr s_light_voxels;
+        gfx::program::uniform_ptr s_world_probe_irradiance;
+        gfx::program::uniform_ptr s_world_probe_depth;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_gi_world_probe_atlas;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr u_gpu_light_params;
@@ -170,6 +188,16 @@ private:
             cache_uniform(program.get(), u_sdf_debug_params2, "u_sdf_debug_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_attr_albedo, "s_attr_albedo", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          s_world_probe_irradiance,
+                          "s_world_probe_irradiance",
+                          gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
                           global_sdf_clipmap::level_count);
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);

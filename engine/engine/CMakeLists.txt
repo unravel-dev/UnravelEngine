@@ -98,4 +98,14 @@ if(gi_tests_src)
     )
 
     target_link_libraries(${target_name} PRIVATE engine)
+
+    # The GI v2 constants parity test parses the shader mirror from the source tree, so the
+    # suite fails when gi_constants.h and gi_constants.sh drift (tasks/gi_rewrite_plan.md, R9),
+    # and the shader-compile test runs shaderc from the build's binary directory over every GI
+    # shader - a shader that fails to compile in the editor silently keeps its stale binary,
+    # which presents as wrong rendering rather than as an error.
+    target_compile_definitions(${target_name} PRIVATE
+        GI_TESTS_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../engine_data/data/shaders"
+        GI_TESTS_SHADERC="$<TARGET_FILE_DIR:${target_name}>/shaderc.exe"
+    )
 endif()

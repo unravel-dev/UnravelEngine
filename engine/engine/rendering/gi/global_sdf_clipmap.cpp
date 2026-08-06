@@ -3,6 +3,7 @@
 #include "global_sdf_clipmap.h"
 
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 
@@ -184,11 +185,17 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         {
             continue;
         }
-        // Snap the centre to this level's voxel grid, then place the origin a half extent away.
-        // Snapping is what makes the result a function of which voxel the camera is in rather
-        // than of its exact position, which is the whole basis of world stability.
+        // Snap the centre to this level's ATTRIBUTE-voxel grid (attr_downsample fine voxels),
+        // then place the origin a half extent away. Snapping is what makes the result a function
+        // of which voxel the camera is in rather than of its exact position - the basis of world
+        // stability - and snapping at attribute granularity additionally makes the origin an
+        // exact multiple of the attribute voxel, which is what lets the attribute and light
+        // volumes address a world-anchored toroidal grid whose cells keep their identity across
+        // re-snaps. (The resolution is even, so a half extent is a whole number of attribute
+        // voxels and the origin inherits the alignment.)
         const float extent = get_level_extent(i);
-        const math::vec3 snapped_center = math::floor(camera_position / lvl.voxel_size) * lvl.voxel_size;
+        const float snap_size = lvl.voxel_size * float(attr_downsample);
+        const math::vec3 snapped_center = math::floor(camera_position / snap_size) * snap_size;
         target_origin[i] = snapped_center - math::vec3(extent * 0.5f);
         target_fingerprint[i] = compute_level_fingerprint(compute_level_bounds(i, target_origin[i]),
                                                           compute_level_reach(i),
@@ -418,6 +425,111 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
                   });
     last_compose_stats_.candidate_tests = candidate_tests.load();
     last_compose_stats_.field_samples = field_samples.load();
+    compose_level_attributes(index, instances);
+}
+
+void global_sdf_clipmap::compose_level_attributes(uint32_t index,
+                                                  const std::vector<global_sdf_instance>& instances)
+{
+    APP_SCOPE_PERF("GI/Clipmap/Compose Attributes");
+    auto& lvl = levels_[index];
+    const uint32_t attr_resolution = get_attr_resolution();
+    const float attr_voxel_size = lvl.voxel_size * float(attr_downsample);
+    const size_t attr_count = size_t(attr_resolution) * attr_resolution * attr_resolution;
+    lvl.attr_albedo.assign(attr_count, 0u);
+    lvl.attr_emissive.assign(attr_count, math::vec3(0.0f));
+    lvl.attr_surface_list.clear();
+    // Candidates only matter within the surface band plus one attribute voxel of margin: the
+    // field's zero crossing and the voxel centre can sit up to a voxel apart, and an instance
+    // further out than that cannot be the nearest surface to a voxel the field calls surface.
+    const float band = float(gi::GI_SURFACE_VOXEL_BAND) * attr_voxel_size;
+    const float attr_reach = band + attr_voxel_size;
+    // TOROIDAL addressing (mirrors cs_gi_clipmap_attributes.sc): storage index is the world
+    // cell wrapped by the resolution, so a cell keeps its slot - and its accumulated light
+    // radiance on the GPU - across level re-snaps. The origin is attr-voxel aligned by the
+    // snap, so the window base is exact integer cells.
+    const int res = int(attr_resolution);
+    const auto wrap = [res](int v) -> int { return ((v % res) + res) % res; };
+    const math::ivec3 window_base(int(std::floor(lvl.origin.x / attr_voxel_size + 0.5f)),
+                                  int(std::floor(lvl.origin.y / attr_voxel_size + 0.5f)),
+                                  int(std::floor(lvl.origin.z / attr_voxel_size + 0.5f)));
+    const math::ivec3 base_slot(wrap(window_base.x), wrap(window_base.y), wrap(window_base.z));
+    for(uint32_t z = 0; z < attr_resolution; ++z)
+    {
+        for(uint32_t y = 0; y < attr_resolution; ++y)
+        {
+            for(uint32_t x = 0; x < attr_resolution; ++x)
+            {
+                const math::ivec3 slot_offset(wrap(int(x) - base_slot.x),
+                                              wrap(int(y) - base_slot.y),
+                                              wrap(int(z) - base_slot.z));
+                const math::ivec3 cell = window_base + slot_offset;
+                const math::vec3 center =
+                    (math::vec3(cell) + math::vec3(0.5f)) * attr_voxel_size;
+                // The COMPOSED field's band judges surfaceness, alone. Deep interiors are
+                // excluded by it already - they read the bake's conservative empty-inside
+                // distances, well outside the band (measured on the thick-box fixture with no
+                // other gate). A gradient gate briefly existed here to trim the saturated ring
+                // just inside surface bricks, and was REMOVED for cause: a thin wall's field is
+                // a VALLEY - it rises on both sides, the central difference along the wall
+                // normal cancels to ~0 - so the gate's plateau signature matched every wall
+                // thinner than two attribute voxels, which in built content is most of them at
+                // every cascade. That presented as unattributed (yellow) surfaces everywhere
+                // and starved the whole bounce loop through the "honest darkness" reads. The
+                // ring it protected against costs a few over-lit sub-surface voxels; the walls
+                // it rejected cost the system its energy.
+                const float field_distance = sample_level(index, center);
+                if(field_distance >= outside_distance || std::fabs(field_distance) > band)
+                {
+                    continue;
+                }
+                // Winner: smallest |distance| at the centre, ties to the smaller GLOBAL index so
+                // both composers agree regardless of candidate visit order.
+                float best_magnitude = attr_reach;
+                size_t best_index = instances.size();
+                for(size_t candidate = 0; candidate < instances.size(); ++candidate)
+                {
+                    const auto& instance = instances[candidate];
+                    if(instance.sdf == nullptr || !instance.sdf->is_sampleable())
+                    {
+                        continue;
+                    }
+                    const math::vec3 clamped =
+                        math::clamp(center, instance.world_bounds.min, instance.world_bounds.max);
+                    if(math::length(center - clamped) >= best_magnitude)
+                    {
+                        continue;
+                    }
+                    const math::vec4 local = instance.world_to_local * math::vec4(center, 1.0f);
+                    const float magnitude =
+                        std::fabs(sample_mesh_sdf(*instance.sdf, math::vec3(local)) *
+                                  instance.local_to_world_scale);
+                    if(magnitude < best_magnitude ||
+                       (magnitude == best_magnitude && candidate < best_index))
+                    {
+                        best_magnitude = magnitude;
+                        best_index = candidate;
+                    }
+                }
+                if(best_index >= instances.size())
+                {
+                    // The field says surface but no instance is attributable within reach. Leave
+                    // the voxel dark: energy loss, never a fabricated material - the same
+                    // asymmetry Lumen chooses for missing card coverage.
+                    continue;
+                }
+                const auto& winner = instances[best_index];
+                const auto quantize = [](float v) -> uint32_t
+                { return uint32_t(math::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+                const size_t offset =
+                    size_t(x) + size_t(y) * attr_resolution + size_t(z) * attr_resolution * attr_resolution;
+                lvl.attr_albedo[offset] = quantize(winner.albedo.x) | (quantize(winner.albedo.y) << 8u) |
+                                          (quantize(winner.albedo.z) << 16u) | (255u << 24u);
+                lvl.attr_emissive[offset] = winner.emissive;
+                lvl.attr_surface_list.push_back(pack_surface_voxel(x, y, z, index));
+            }
+        }
+    }
 }
 
 auto global_sdf_clipmap::sample_level(uint32_t index, const math::vec3& world_position) const -> float

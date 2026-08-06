@@ -1,0 +1,137 @@
+/*
+ * Lights the surface voxels (GI v2 plan 3.2): one thread per surface-list entry, direct
+ * lighting with traced shadows per EXPOSED FACE, written straight into the light volume.
+ *
+ * BUDGETED BY CONSTRUCTION: only listed surface voxels are processed, and each is re-lit every
+ * GI_LIGHT_VOXEL_UPDATE_DENOM frames (entry index + frame phase), so the per-frame cost is a
+ * quarter of the resident surface set regardless of scene size - the property the old 524k-slot
+ * cache sweep lacked.
+ *
+ * NO temporal accumulation here, deliberately. Direct lighting with traced shadows is
+ * deterministic - there is no variance to average - so the volume just holds the latest answer
+ * and a light change propagates in at most one full rotation (4 frames). The stochastic
+ * machinery lives where the stochastic rays are: the world probes (Phase 3). When the bounce
+ * term arrives (Phase 4) it reads the probes' FILTERED irradiance, which is equally
+ * deterministic per frame, so this stays a plain write.
+ *
+ * The dispatch covers every level's full segment and early-outs beyond each level's count; the
+ * counts live on the GPU, so a tighter launch needs indirect dispatch args - a measured
+ * optimisation for later, not a correctness matter (an early-out thread costs one buffer read).
+ */
+
+#include "bgfx_compute.sh"
+#include "gi/sdf_common.sh"
+#include "gi/gpu_lights.sh"
+#include "gi/gi_lighting.sh"
+#include "gi/gi_light_voxels.sh"
+// The bounce term (GI v2 plan Phase 4): last frame's world-probe irradiance closes the
+// infinite-bounce loop - probes read voxels, voxels read probes, gain bounded by GI_MAX_ALBEDO.
+#define GI_WORLD_PROBE_READ
+#include "gi/gi_world_probes.sh"
+
+/// Surface-voxel list + per-level counts, written by cs_gi_clipmap_attributes.
+BUFFER_RO(b_surface_list, uint, 6);
+BUFFER_RO(b_surface_count, uint, 7);
+/// Attribute volumes: what the surface looks like.
+SAMPLER3D(s_attr_albedo, 8);
+SAMPLER3D(s_attr_emissive, 9);
+/// The light volume this pass owns.
+IMAGE3D_WO(s_light_voxels_out, rgba16f, 10);
+
+/// Defined locally rather than taken from lighting.sh, which this shader does not include. The
+/// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
+#define GI_PI 3.1415926535897932
+
+/// xyz = camera position - the world-probe windows are centred on it, and the cascade chooser
+/// needs the same centre the trace pass used.
+uniform vec4 u_gi_light_voxel_camera;
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	uint capacity = uint(u_light_voxel_resolution * u_light_voxel_resolution * u_light_voxel_resolution);
+	uint id = gl_GlobalInvocationID.x;
+	uint level = id / capacity;
+	uint entry = id % capacity;
+	if(level >= uint(SDF_CLIPMAP_LEVEL_COUNT))
+	{
+		return;
+	}
+	if(entry >= b_surface_count[level])
+	{
+		return;
+	}
+	// Interleaved update, keyed by entry + frame so the work spreads evenly across the rotation
+	// instead of pulsing.
+	if(((entry + u_light_voxel_frame) % uint(GI_LIGHT_VOXEL_UPDATE_DENOM)) != 0u)
+	{
+		return;
+	}
+	uint packed = b_surface_list[level * capacity + entry];
+	ivec3 slot = ivec3(int(packed & 0xFFu), int((packed >> 8u) & 0xFFu), int((packed >> 16u) & 0xFFu));
+	vec4 level_data = u_sdf_clipmap_levels[level];
+	float attr_voxel = level_data.w * 2.0;
+	// Toroidal reconstruction: the slot's world cell under the current window (the same math the
+	// attribute composer used to place it - the origin is attr-voxel aligned by the snap).
+	int attr_res = u_light_voxel_resolution;
+	ivec3 window_base = ivec3(floor(level_data.xyz / attr_voxel + vec3_splat(0.5)));
+	ivec3 base_slot = GiLightVoxelSlot(window_base);
+	ivec3 offset = ivec3((slot.x - base_slot.x + attr_res) % attr_res,
+	                     (slot.y - base_slot.y + attr_res) % attr_res,
+	                     (slot.z - base_slot.z + attr_res) % attr_res);
+	ivec3 cell = window_base + offset;
+	vec3 center = (vec3(cell) + vec3_splat(0.5)) * attr_voxel;
+	ivec3 attr_texel = ivec3(slot.x, slot.y, slot.z + int(level) * attr_res);
+	vec4 albedo = texelFetch(s_attr_albedo, attr_texel, 0);
+	vec3 emissive = texelFetch(s_attr_emissive, attr_texel, 0).xyz;
+	if(albedo.a <= 0.0)
+	{
+		// De-listed between compose and this slice's turn: nothing to light.
+		return;
+	}
+	// The gain clamp that closes the (future) bounce recursion below 1 lives at the one place
+	// radiance is produced, exactly as the old cache update kept it.
+	vec3 bounded_albedo = min(albedo.xyz, vec3_splat(GI_MAX_ALBEDO));
+	float d_center = SdfSampleClipmapLevel(int(level), center);
+	// Mesh-exact shadow detail fades with level, like every near-field consumer: level 0 sees
+	// full contact shadowing, level 1 half range, beyond that the cascade alone answers.
+	float near_scale = level == 0u ? 1.0 : (level == 1u ? 0.5 : 0.0);
+	for(int face = 0; face < 6; ++face)
+	{
+		vec3 direction = GiLightVoxelFaceDirection(face);
+		ivec3 texel = GiLightVoxelTexel(slot, int(level), face);
+		// A face is EXPOSED when the field rises along it - open space that way. Plateaus and
+		// directions running parallel to the surface stay dark; both sides of a thin wall are
+		// exposed on their own faces, which is what keeps them in separate slabs.
+		float d_out = SdfSampleClipmapLevel(int(level), center + direction * attr_voxel);
+		bool valid = d_out < 0.5 * SDF_CLIPMAP_OUTSIDE;
+		if(!valid || (d_out - d_center) < GI_LIGHT_VOXEL_EXPOSURE_MIN * attr_voxel)
+		{
+			imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
+			continue;
+		}
+		// Launch point clear of the surface: out by however deep the centre sits, plus half an
+		// attribute voxel - in the units of the thing being cleared.
+		float lift = max(0.0, -d_center) + 0.5 * attr_voxel;
+		vec3 position = center + direction * lift;
+		vec3 irradiance = GiEvalDirectLighting(position,
+		                                       direction,
+		                                       max(level_data.w, 0.01),
+		                                       u_gi_shadow_near_field * near_scale);
+		// Bounce: LAST frame's world-probe irradiance around this face (the probes traced after
+		// this pass last frame, so the loop advances one bounce per frame). The probes' E/pi
+		// convention converts back with pi so one albedo/pi below serves the whole sum. The
+		// "view" direction of the self-shadow bias is the face itself - a voxel has no camera,
+		// and biasing purely along the face normal is the direction that clears its own surface.
+		vec3 probe_value;
+		float sky_fraction;
+		if(u_world_probe_ready &&
+		   GiWorldProbeIrradianceCascade(position, direction, direction,
+		                                 u_gi_light_voxel_camera.xyz, probe_value, sky_fraction))
+		{
+			irradiance += probe_value * GI_PI;
+		}
+		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;
+		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));
+	}
+}

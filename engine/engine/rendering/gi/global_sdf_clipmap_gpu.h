@@ -62,6 +62,97 @@ public:
         return resolution_;
     }
 
+    /// Attribute voxels per axis (half the distance resolution; see
+    /// global_sdf_clipmap::attr_downsample).
+    auto get_attr_resolution() const -> uint32_t
+    {
+        return resolution_ / global_sdf_clipmap::attr_downsample;
+    }
+
+    /// rgb = winning albedo, a = 1 where surface. Levels stacked along Z, like the distance
+    /// volume, at attribute resolution.
+    auto get_attr_albedo_texture() const -> const gfx::texture::ptr&
+    {
+        return attr_albedo_texture_;
+    }
+
+    /// rgb = winning emissive in radiance units.
+    auto get_attr_emissive_texture() const -> const gfx::texture::ptr&
+    {
+        return attr_emissive_texture_;
+    }
+
+    /// The light volume (GI v2 plan 3.2): outgoing radiance per exposed face per surface voxel,
+    /// Z-stacked as (level * 6 + face) slabs of attribute resolution. Written by
+    /// cs_gi_light_voxels, zeroed per recomposed level by cs_gi_clipmap_attributes.
+    auto get_light_voxel_texture() const -> const gfx::texture::ptr&
+    {
+        return light_voxel_texture_;
+    }
+
+    /// World probes per cascade axis. MUST equal GI_WORLD_PROBE_AXIS in gi_world_probes.sh;
+    /// derived as resolution / GI_WORLD_PROBE_DIVISOR + 1 at the runtime resolution of 128, and
+    /// the probe resources are only created when that derivation holds, because the shader
+    /// hardcodes the axis for its group-shared layout.
+    static constexpr uint32_t world_probe_axis = 9;
+
+    auto has_world_probes() const -> bool
+    {
+        return static_cast<bool>(world_probe_radiance_);
+    }
+
+    /// 16x16 octahedral radiance tiles (rgb radiance, a hitT; a < 0 = sky), tile grid
+    /// (axis * axis) wide by (axis * levels) tall - see gi_world_probes.sh.
+    auto get_world_probe_radiance() const -> const gfx::texture::ptr&
+    {
+        return world_probe_radiance_;
+    }
+
+    /// 8x8 (+1 gutter) octahedral irradiance tiles: rgb = E/pi, a = sky fraction.
+    auto get_world_probe_irradiance() const -> const gfx::texture::ptr&
+    {
+        return world_probe_irradiance_;
+    }
+
+    /// 8x8 (+1 gutter) depth moments (mean, mean^2) for the Chebyshev visibility test.
+    auto get_world_probe_depth() const -> const gfx::texture::ptr&
+    {
+        return world_probe_depth_;
+    }
+
+    /// One packed world-cell id per probe slot (scroll detection).
+    auto get_world_probe_cells() const -> gfx::dynamic_index_buffer_handle
+    {
+        return world_probe_cells_;
+    }
+
+    /// One packed world-cell id per ATTRIBUTE slot per level: the light-radiance survival
+    /// detector (a slot whose cell changed resets its light texels; see
+    /// cs_gi_clipmap_attributes.sc).
+    auto get_attr_cells() const -> gfx::dynamic_index_buffer_handle
+    {
+        return attr_cells_;
+    }
+
+    /// xy = 1 / irradiance-depth atlas size (they share a layout), zw = atlas size.
+    auto get_world_probe_atlas_params() const -> const float*
+    {
+        return world_probe_atlas_params_.data();
+    }
+
+    /// Packed surface-voxel entries, one attr_resolution^3 segment per level
+    /// (global_sdf_clipmap::pack_surface_voxel layout).
+    auto get_surface_list_buffer() const -> gfx::dynamic_index_buffer_handle
+    {
+        return surface_list_;
+    }
+
+    /// One append cursor per level, index = level.
+    auto get_surface_count_buffer() const -> gfx::dynamic_index_buffer_handle
+    {
+        return surface_count_;
+    }
+
     /**
      * @brief The vec4 every clipmap consumer binds as `u_sdf_clipmap_params`.
      *
@@ -84,6 +175,17 @@ public:
 
 private:
     gfx::texture::ptr texture_;
+    gfx::texture::ptr attr_albedo_texture_;
+    gfx::texture::ptr attr_emissive_texture_;
+    gfx::texture::ptr light_voxel_texture_;
+    gfx::texture::ptr world_probe_radiance_;
+    gfx::texture::ptr world_probe_irradiance_;
+    gfx::texture::ptr world_probe_depth_;
+    gfx::dynamic_index_buffer_handle surface_list_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle surface_count_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
+    std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};
     std::array<float, 4> sampling_params_{};

@@ -48,6 +48,18 @@ uniform vec4 u_gi_debug_camera;
 #define SDF_DEBUG_CACHE_AGE   9
 #define SDF_DEBUG_CASCADE_LEVELS 10
 #define SDF_DEBUG_CACHE_ALBEDO 11
+#define SDF_DEBUG_ATTR_ALBEDO 12
+#define SDF_DEBUG_LIGHT_VOXELS 13
+#define SDF_DEBUG_WORLD_PROBES 14
+
+#define GI_WORLD_PROBE_READ
+#include "gi/gi_world_probes.sh"
+
+/// Attribute albedo volume (toroidal slots, levels stacked along Z at attribute resolution).
+/// The light volume and its slot math come from gi_light_voxels.sh (stage 10).
+SAMPLER3D(s_attr_albedo, 8);
+#define GI_LIGHT_VOXEL_READ
+#include "gi/gi_light_voxels.sh"
 
 /// Shades a traced hit by its normal, with a headlight so shape reads clearly.
 vec4 ShadeNormal(vec3 normal)
@@ -202,7 +214,7 @@ void main()
 		// GI passes all re-derive the facing from SdfResolveSurfacePoint instead and never read
 		// this field, so they ask the tracer to skip the gradient entirely.
 		hit = SdfTraceClipmap(ray_origin, ray_dir, 0.0, u_max_distance, u_max_steps, u_surface_bias,
-		                      u_step_relaxation, true);
+		                      u_step_relaxation, true, true);
 	}
 	else
 	{
@@ -353,6 +365,88 @@ void main()
 		float samples = b_gi_cache_data[GiCacheDataIndex(slot, GI_CACHE_DATA_RADIANCE)].w;
 		float converged = saturate(samples / max(u_gi_debug_max_samples, 1.0));
 		gl_FragColor = vec4(1.0 - converged, converged, 0.0, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO || u_debug_mode == SDF_DEBUG_LIGHT_VOXELS)
+	{
+		// GI v2 scene representation, read exactly as a gather ray will read it: the traced hit
+		// mapped to its attribute voxel in the finest covering cascade.
+		//
+		//   MAGENTA -> hit outside every cascade level (per-instance tier answered alone).
+		//   YELLOW  -> the voxel is not marked SURFACE (attribution missed the hit - a band or
+		//              gradient-gate failure worth investigating if widespread).
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		float attr_blend;
+		float attr_answered_voxel;
+		int attr_level = SdfFindClipmapLevel(hit_position, attr_blend, attr_answered_voxel);
+		if(attr_level >= SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		// Level fallback, exactly as GiLightVoxelRead performs it: the blended isosurface can sit
+		// a coarse voxel off the finest level's own, so a reader steps down until a level's
+		// surface band covers the hit. Yellow now means NO level attributed it.
+		int attr_res = u_light_voxel_resolution;
+		vec4 albedo = vec4_splat(0.0);
+		for(int probe_level = attr_level; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
+		{
+			vec4 level_data = u_sdf_clipmap_levels[probe_level];
+			if(!(level_data.w > 0.0))
+			{
+				continue;
+			}
+			float attr_voxel_size = level_data.w * 2.0;
+			ivec3 slot = GiLightVoxelSlot(GiLightVoxelCell(hit_position, attr_voxel_size));
+			vec4 candidate = texelFetch(s_attr_albedo, ivec3(slot.x, slot.y, slot.z + probe_level * attr_res), 0);
+			if(candidate.a > 0.0)
+			{
+				albedo = candidate;
+				break;
+			}
+		}
+		if(albedo.a <= 0.0)
+		{
+			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
+			return;
+		}
+		if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO)
+		{
+			gl_FragColor = vec4(albedo.xyz, 1.0);
+			return;
+		}
+		// Light voxels: exactly what a gather ray reads, through the shared reader.
+		vec3 radiance;
+		if(!GiLightVoxelRead(hit_position, hit.normal, radiance))
+		{
+			radiance = vec3_splat(0.0);
+		}
+		gl_FragColor = vec4(radiance, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_WORLD_PROBES)
+	{
+		// World probe irradiance interpolated AT THE TRACED HIT through the full DDGI weight
+		// chain - exactly what the light voxels' bounce term and a shortened gather ray's
+		// completion will read.
+		//
+		//   MAGENTA -> no cascade's probe window covers the hit, or every cage weight died.
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		vec3 probe_irradiance;
+		float sky_fraction;
+		if(!GiWorldProbeIrradianceCascade(hit_position,
+		                                  hit.normal,
+		                                  -ray_dir,
+		                                  u_gi_debug_camera.xyz,
+		                                  probe_irradiance,
+		                                  sky_fraction))
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		gl_FragColor = vec4(probe_irradiance, 1.0);
 		return;
 	}
 

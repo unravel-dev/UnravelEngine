@@ -11,6 +11,8 @@
  * puts a discontinuity in the field at every brick boundary). Both caught real bugs.
  */
 
+#include "gi_v2_tests.h"
+
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
@@ -4598,6 +4600,7 @@ int main()
     test_cache_accumulation_converges_and_stays_responsive();
     test_cache_shader_transcription_matches_cpu();
     test_degenerate_inputs();
+    gi_v2_tests::run(g_checks, g_failures);
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
