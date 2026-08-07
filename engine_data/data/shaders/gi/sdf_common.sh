@@ -491,6 +491,12 @@ struct SdfRayHit
 	/// True when a march ran out of budget instead of resolving. Distinguishes "found nothing"
 	/// from "gave up", which are otherwise indistinguishable in the output.
 	bool exhausted;
+	/// Minimum UNEXPANDED field reading seen along the ray outside the launch slab, in world
+	/// units; 0 on a hit, huge when nothing was sampled. This is the ray's closest approach to
+	/// real geometry, which is what turns a binary occlusion ray into a BEAM test: a receiver
+	/// with spatial extent (a light voxel) is partially occluded whenever the clearance is
+	/// smaller than its half-width. Costs one min per march step.
+	float clearance;
 	/// Instance that produced the hit, or SDF_NO_INSTANCE when the global cascade answered.
 	///
 	/// Carries the MATERIAL to the caller. A distance field stores geometry only, so a bounce ray
@@ -536,6 +542,7 @@ SdfRayHit SdfMakeMiss()
 	result.steps = 0;
 	result.exhausted = false;
 	result.instance_index = SDF_NO_INSTANCE;
+	result.clearance = 1e8;
 	return result;
 }
 
@@ -704,6 +711,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 			if(t < result.t || !result.hit)
 			{
 				result.hit = true;
+				result.clearance = 0.0;
 				result.t = t;
 				if(want_normal)
 				{
@@ -723,6 +731,8 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 			resolved = true;
 			break;
 		}
+		// Closest approach to real geometry, for beam-visibility consumers (see SdfRayHit).
+		result.clearance = min(result.clearance, world_distance);
 		// Step by the true distance, never more: overstepping would pass through the
 		// surface. Floored only by the base threshold so a zero reading cannot stall.
 		// Termination comes from the widening acceptance above, not from a forced step.
@@ -862,7 +872,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 }
 
 SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal, bool apply_expand)
+                          float surface_bias, float relaxation, bool want_normal, float expand_start)
 {
 	SdfRayHit result = SdfMakeMiss();
 	if(!u_sdf_clipmap_enabled || t_min >= t_max)
@@ -903,6 +913,9 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		// traced surface into bands.
 		float voxel;
 		float d = SdfSampleClipmapEx(p, voxel);
+		// Clearance uses the REAL field: the expand below is a hit-test artifice, and beam
+		// visibility must measure geometry, not the fattening.
+		float d_raw = d;
 		++result.steps;
 		// Surface EXPAND, ramped with travel (GI v2 plan 3.1, after Lumen [S22 p48-50]): geometry
 		// thinner than a cascade voxel never crosses zero, so without this a ray at range tunnels
@@ -925,11 +938,17 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		// Bistro: raising the shadow step budget (which converts exhaustion-hits back into
 		// resolved rays) restored the bounce, which is what identified the expand as the term
 		// starving them.
-		if(apply_expand)
+		if(expand_start >= 0.0 && t > expand_start)
 		{
+			// The ramp measures travel PAST expand_start: radiance rays pass 0 (expand from
+			// launch, as always), occlusion rays pass their mesh-exact range - within it the
+			// per-instance fields and the bake shell floor ARE the thin-geometry defence, and
+			// beyond it only this voxel-resolution field answers, where a sub-voxel wall reads
+			// as a dip the acceptance can step across (measured: sun shafts through thin test-
+			// room walls beyond 2 m, amplified into a lit room by a white-walled enclosure).
 			float diagonal = voxel * 1.7320508;
 			float expand = GI_EXPAND_MAX_VOXEL_DIAGONALS * diagonal *
-			               saturate(t / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
+			               saturate((t - expand_start) / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
 			d -= expand;
 		}
 		float base_threshold = max(surface_bias * voxel, 1e-6);
@@ -978,6 +997,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		if(d < accept)
 		{
 			result.hit = true;
+			result.clearance = 0.0;
 			result.t = t;
 			if(want_normal)
 			{
@@ -998,6 +1018,8 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 			}
 			return result;
 		}
+		// Closest approach to real geometry, for beam-visibility consumers (see SdfRayHit).
+		result.clearance = min(result.clearance, d_raw);
 		t += max(d, base_threshold);
 	}
 	// Budget exhausted: report a HIT at the current position, not a miss (GI v2 plan 3.1, after
@@ -1006,6 +1028,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 	// trace (the A1c lesson). Over-occlusion is the direction that degrades gracefully. The flag
 	// stays set so the step-count debug view can still show where budgets die.
 	result.hit = true;
+	result.clearance = 0.0;
 	result.t = t;
 	result.exhausted = true;
 	if(want_normal)
@@ -1040,15 +1063,16 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
  * sphere tracing is at its worst.
  */
 /**
- * The Ex variant exposes @p apply_expand: the thin-surface fattening of the cascade tier.
- * Radiance rays (gather, probe, bounce) pass true - a distant sub-voxel wall must occlude
- * their estimate. Occlusion-only rays toward a LIGHT pass false - for them the expand
- * over-darkens by up to a coarse voxel diagonal around every surface, and their leak defence
- * is the bake-time shell floor.
+ * The Ex variant exposes @p expand_start: where the cascade tier's thin-surface fattening
+ * begins along the ray. Radiance rays (gather, probe, bounce) pass 0 - a distant sub-voxel
+ * wall must occlude their estimate from the launch on. Occlusion rays toward a LIGHT pass
+ * their mesh-exact range: within it the per-instance fields and the bake shell floor handle
+ * thin geometry exactly and the expand would only over-darken contacts, beyond it the expand
+ * is the only thin-wall defence the voxel field has. Negative disables entirely.
  */
 SdfRayHit SdfTraceRayEx(vec3 origin, vec3 direction, float t_max, float near_field_distance,
                         int max_steps, float surface_bias, float relaxation, bool want_normal,
-                        bool apply_expand)
+                        float expand_start)
 {
 	// Relaxation applies to the near field too, and used to be forced to zero here on the grounds
 	// that "stepping past a wall would leak light through it". That reasoning does not hold: the
@@ -1091,11 +1115,13 @@ SdfRayHit SdfTraceRayEx(vec3 origin, vec3 direction, float t_max, float near_fie
 		}
 	}
 	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field, t_max, max_steps,
-	                                    surface_bias, relaxation, want_normal, apply_expand);
-	// Carry the near-field cost and exhaustion forward, so the caller sees the whole ray's
-	// expense rather than only the tier that happened to answer.
+	                                    surface_bias, relaxation, want_normal, expand_start);
+	// Carry the near-field cost, exhaustion, and clearance forward, so the caller sees the
+	// whole ray's expense and its closest approach across BOTH tiers, not only the one that
+	// happened to answer.
 	far_hit.steps += near_hit.steps;
 	far_hit.exhausted = far_hit.exhausted || near_hit.exhausted;
+	far_hit.clearance = min(far_hit.clearance, near_hit.clearance);
 	return far_hit;
 }
 
@@ -1103,7 +1129,7 @@ SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field
                       int max_steps, float surface_bias, float relaxation, bool want_normal)
 {
 	return SdfTraceRayEx(origin, direction, t_max, near_field_distance, max_steps, surface_bias,
-	                     relaxation, want_normal, true);
+	                     relaxation, want_normal, 0.0);
 }
 
 #endif // __GI_SDF_COMMON_SH__

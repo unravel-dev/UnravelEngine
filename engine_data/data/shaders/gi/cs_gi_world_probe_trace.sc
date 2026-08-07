@@ -73,6 +73,17 @@ void main()
 	// so the race between thread 0's write and other groups' reads next frame is harmless.
 	uint packed_cell = GiWorldProbePackCell(cell, level);
 	int slot_index = GiWorldProbeSlotIndex(slot, level);
+	// DEAD PROBE gate (the problem RTXGI answers with relocation/classification, answered here
+	// by the field itself): a lattice point inside geometry is poison. The trace's launch-slab
+	// walk lets its rays exit on EITHER side of the wall it is buried in, so its atlas mixes
+	// both sides' light - including sky through the miss fallback - while its depth moments in
+	// room-facing directions measure the open ROOM; Chebyshev then trusts it at FULL weight.
+	// Visibility-true, content-false: one embedded junction probe floods a sealed interior
+	// with the sunlit exterior (measured - no weight floor or bias tuning can reject it,
+	// because the visibility math is being told the truth about the wrong point). Writing
+	// zero radiance with ZERO-DISTANCE hits collapses its convolved depth, and the visibility
+	// test itself then kills it at every read. Cost: one field sample per probe slice.
+	bool buried = SdfSampleClipmap(origin) < 0.0;
 	bool fresh = b_world_probe_cells[slot_index] != packed_cell;
 	if(fresh)
 	{
@@ -89,7 +100,8 @@ void main()
 			int clear_index = thread * GI_WORLD_PROBE_WINDOW + s;
 			ivec2 clear_texel = tile + ivec2(clear_index % GI_WORLD_PROBE_OCT_RADIANCE,
 			                                 clear_index / GI_WORLD_PROBE_OCT_RADIANCE);
-			imageStore(s_world_probe_radiance_out, clear_texel, vec4(0.0, 0.0, 0.0, -1.0));
+			imageStore(s_world_probe_radiance_out, clear_texel,
+			           vec4(0.0, 0.0, 0.0, buried ? 0.0 : -1.0));
 		}
 	}
 	float t_max = u_gi_world_probe_window[level].w;
@@ -98,6 +110,11 @@ void main()
 		int texel_index = thread * GI_WORLD_PROBE_WINDOW + int(stratum_base) + si;
 		ivec2 texel = tile + ivec2(texel_index % GI_WORLD_PROBE_OCT_RADIANCE,
 		                           texel_index / GI_WORLD_PROBE_OCT_RADIANCE);
+		if(buried)
+		{
+			imageStore(s_world_probe_radiance_out, texel, vec4_splat(0.0));
+			continue;
+		}
 		vec2 tile_uv = (vec2(texel - tile) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_RADIANCE);
 		vec3 direction = GiOctDecode(tile_uv);
 		// Coarse world structure: cascade tier only (near_field 0), the shared trace defaults

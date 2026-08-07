@@ -109,6 +109,7 @@ private:
     /// Light-change reactivity state: while frames remain, the trace covers two strata per
     /// frame (window halves to 8), then settles back to one.
     uint64_t last_light_hash_ = 0;
+    uint64_t last_content_epoch_ = 0;
     uint32_t fast_frames_ = 0;
 };
 

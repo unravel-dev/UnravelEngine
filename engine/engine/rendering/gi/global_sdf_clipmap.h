@@ -161,6 +161,19 @@ public:
         return last_compose_stats_;
     }
 
+    /**
+     * @brief Counter that advances once per actual CONTENT change of any level - an instance
+     *        moved, appeared, vanished, or changed material - and never from camera scroll.
+     *
+     * Reactivity consumers key their fast paths on it: the world-probe pass doubles its trace
+     * strata for one window when it moves, so a door closing propagates into the bounce at the
+     * fast cadence, the same way a light change does through the light-buffer hash.
+     */
+    auto get_content_epoch() const -> uint64_t
+    {
+        return content_epoch_;
+    }
+
     struct level
     {
         ///< World-space minimum corner, snapped to a whole multiple of @ref voxel_size.
@@ -367,6 +380,11 @@ private:
     settings settings_{};
     compose_stats last_compose_stats_{};
     std::array<level, level_count> levels_{};
+    /// Last fingerprint SEEN per level (independent of what was composed), driving
+    /// @ref get_content_epoch - the compose-time content_fingerprint lags until the budget
+    /// reaches the level, which would re-fire the epoch every frame while a level waits.
+    std::array<uint64_t, level_count> seen_fingerprints_{};
+    uint64_t content_epoch_ = 0;
     /// One bit per level, set when that level's voxels were rewritten and the GPU mirror is
     /// therefore stale. Cleared by the owner once it has uploaded.
     uint32_t dirty_levels_ = 0;

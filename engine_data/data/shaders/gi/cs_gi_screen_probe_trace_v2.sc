@@ -298,7 +298,7 @@ void main()
 		{
 			SdfRayHit hit = SdfTraceRayEx(s_origin, sample_dir, s_short_range, GI_MESH_SDF_TRACE_RANGE,
 			                              GI_TRACE_MAX_STEPS, GI_PROBE_TRACE_SURFACE_BIAS,
-			                              GI_PROBE_TRACE_RELAXATION, true, true);
+			                              GI_PROBE_TRACE_RELAXATION, true, 0.0);
 			if(hit.hit)
 			{
 				answered_tier = 2;

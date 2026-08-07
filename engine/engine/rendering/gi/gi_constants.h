@@ -48,11 +48,14 @@
     X(GI_LIGHT_VOXEL_UPDATE_DENOM, 4,                                                              \
       "frames", "published: [SDFGI] frames_to_update_light default - dynamic light re-injection"   \
       " amortised over 4 frames")                                                                  \
-    X(GI_LIGHT_VOXEL_EXPOSURE_MIN, 0.25f,                                                          \
-      "field rise per attribute voxel", "derived: a face is exposed when the field RISES along"    \
-      " it; 1-Lipschitz bounds the rise over one voxel at 1.0 and plateaus/parallel surfaces"      \
-      " show ~0, so a quarter voxel separates the two with margin for trilinear smoothing and"     \
-      " R8 quantisation")                                                                          \
+    X(GI_LIGHT_VOXEL_VISIBILITY_MIN, 0.25f,                                                        \
+      "of the face's cavity cone", "derived: a face is measurable when at least a quarter of"      \
+      " its sub-probe-spacing cone escapes (GiBounceCavityVisibility, the same value the"          \
+      " ambient is weighted by). Replaced a single-step field-rise gate, which cannot see past"    \
+      " a coarse level's blob plateau - small geometry merged into blobs read unexposed on"        \
+      " every face and went black wherever only coarse levels covered them; a quarter still"       \
+      " separates a blob-buried outward shell (partial escape at 2-4 voxels) from a genuine"       \
+      " interior face (closed at every scale)")                                                    \
     X(GI_MAX_ALBEDO, 0.9f,                                                                         \
       "unitless", "derived: bounce feedback has per-channel gain exactly equal to albedo; 1.0 is"  \
       " the neutral-stability point of L = a*L + c, so the gain is held strictly below it")        \
@@ -122,6 +125,14 @@
       "of min probe spacing", "published: [DDGI21 Eq.2] bias magnitude factor")                    \
     X(GI_SELF_SHADOW_BIAS_K, 0.3f,                                                                 \
       "unitless", "published: [DDGI21 Eq.2] user scalar default")                                  \
+    X(GI_SELF_SHADOW_BIAS_MAX_VOXELS, 2.0f,                                                        \
+      "SDF voxels of the level", "derived: the bias exists to climb out of the query surface's"    \
+      " own field shadow, a VOXEL-scale feature - but DDGI's spacing-proportional magnitude"       \
+      " (0.225 x spacing = 0.45 m at the 2 m lattice) tunnels through any wall thinner than"       \
+      " it: the biased point lands outside, Chebyshev sees the exterior probe unoccluded, and"     \
+      " a sunlit exterior floods a closed room (measured, thick-walled test room - the"            \
+      " documented DDGI thin-wall failure). Two voxels clears the trace acceptance with margin"    \
+      " and stays below any wall the field itself resolves")                                       \
     /* --- screen probe gather (plan 3.4) --- */                                                   \
     X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
       "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \

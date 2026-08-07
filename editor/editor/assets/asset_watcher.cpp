@@ -122,7 +122,24 @@ auto has_depencency(const fs::path& file, const fs::path& dep_to_check) -> bool
 {
     std::vector<fs::path> dependecies;
     asset_compiler::resolve_dependencies<T>(file, dependecies);
-    return std::find(dependecies.begin(), dependecies.end(), dep_to_check) != dependecies.end();
+    for(const auto& dep : dependecies)
+    {
+        // Filesystem IDENTITY, not lexical equality. Recorded dependencies keep the include's
+        // spelling - embedded "..", mixed separators, source casing - while the watcher event
+        // carries the OS-native path of the same file. A lexical find silently misses those
+        // pairs, and a missed dependency is not an error, it is a STALE BINARY: touching a
+        // shared header (lighting.sh, fs_pbr_lighting.sh) recompiled nothing that included it.
+        fs::error_code err;
+        if(fs::equivalent(dep, dep_to_check, err) && !err)
+        {
+            return true;
+        }
+        if(dep.lexically_normal() == dep_to_check.lexically_normal())
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 auto remove_meta_tag(const fs::path& synced_path) -> fs::path

@@ -65,12 +65,19 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     }
     const float base_spacing =
         clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
-    // Light-change fast window (plan section 8): a changed light set doubles the strata per
-    // frame for one full window, so the bounce chain reacts at twice the speed exactly while
-    // something is changing and costs nothing while the scene is still.
+    // Change fast window (plan section 8): a changed light set OR changed scene content
+    // doubles the strata per frame for one full window, so the bounce chain reacts at twice
+    // the speed exactly while something is changing and costs nothing while the scene is
+    // still. The content epoch fires on geometry/material changes (a door closing) and is
+    // scroll-suppressed, so camera motion alone never pins the fast path.
     if(params.light_hash != last_light_hash_)
     {
         last_light_hash_ = params.light_hash;
+        fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
+    }
+    if(clipmap.get_content_epoch() != last_content_epoch_)
+    {
+        last_content_epoch_ = clipmap.get_content_epoch();
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
     const uint32_t strata_per_frame = fast_frames_ > 0 ? 2u : 1u;

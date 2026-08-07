@@ -81,18 +81,29 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// a normal offset moves the shaded point and lets it see past nearby occluders, which reads as
 	// a surface that is simply too bright with nothing to say why.
 	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
-	// Expand OFF: an occlusion-only ray toward a light must not see surfaces fattened by up to
-	// a coarse voxel diagonal, or a grazing sun darkens the whole field (see SdfTraceRayEx).
+	// Expand OFF (-1): an occlusion-only ray toward a light must not see surfaces fattened by
+	// up to a coarse voxel diagonal. Both directions of this trade were MEASURED: expand from
+	// the mesh-tier boundary onward visibly darkened sunlit Bistro (grazing rays along real
+	// geometry, audit A1c's failure), while the leak it chased turned out to be the world-probe
+	// self-shadow bias tunnelling through walls, not shadow rays at all. Thin-geometry defence
+	// for these rays stays the bake-time shell floor within the mesh tier.
 	SdfRayHit hit = SdfTraceRayEx(origin, to_light, max_distance, near_field,
 	                              u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
-	                              u_gi_shadow_relaxation, false, false);
+	                              u_gi_shadow_relaxation, false, -1.0);
 	// Exhaustion now REPORTS A HIT inside the trace itself (GI v2 trace rework - a ray that ran
 	// out of budget occludes at its final position), so a grazing shadow ray that gives up reads
 	// as shadowed rather than as a surface that is inexplicably too bright. Over-occlusion is the
 	// direction that degrades gracefully, and it is the same contract every tracing consumer now
 	// shares; the relaxation above still matters because it lets most grazing rays terminate
 	// properly before the budget is ever reached.
-	return hit.hit ? 0.0 : 1.0;
+	//
+	// BEAM visibility, not a binary ray: the receiver is a VOXEL, so what reaches it is a
+	// parallel beam half a receiving voxel wide (= voxel_size, the level voxel: the attribute
+	// voxel spans two of them). Clearance smaller than the half-width partially occludes the
+	// beam - a continuous penumbra where the binary answer flipped per voxel, whose quantised
+	// lit/unlit patchwork read as blotches through the trilinear read and the gather (measured:
+	// the test room's walls near the door's light path). One min per march step pays for it.
+	return hit.hit ? 0.0 : saturate(hit.clearance / max(voxel_size, 1e-4));
 }
 
 /**

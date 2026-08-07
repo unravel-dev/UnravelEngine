@@ -114,9 +114,17 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 	out_sky_fraction = 0.0;
 	float spacing = GiWorldProbeSpacing(level);
 	// Self-shadow bias [DDGI21 Eq.2]: move the query toward the surface's clear side before any
-	// visibility test.
+	// visibility test. CAPPED at field-voxel scale: the spacing-proportional magnitude DDGI
+	// publishes (0.225 x spacing = 0.45 m at the 2 m lattice) TUNNELS THROUGH any wall thinner
+	// than it - the biased point lands outside, Chebyshev sees the exterior probe unoccluded,
+	// and a sunlit exterior floods a closed room (measured on the thick-walled test room; the
+	// documented DDGI thin-wall failure). Clearing the query surface's own field shadow is a
+	// VOXEL-scale need, so two voxels of the level's field is enough - and stays below any
+	// wall the field itself can resolve.
+	float bias_magnitude = min(GI_SELF_SHADOW_BIAS_SCALE * GI_SELF_SHADOW_BIAS_K * spacing,
+	                           GI_SELF_SHADOW_BIAS_MAX_VOXELS * spacing / float(GI_WORLD_PROBE_DIVISOR));
 	vec3 biased = position + (normal * GI_SELF_SHADOW_BIAS_NORMAL + view_direction * GI_SELF_SHADOW_BIAS_VIEW) *
-	                             (GI_SELF_SHADOW_BIAS_SCALE * spacing * GI_SELF_SHADOW_BIAS_K);
+	                             bias_magnitude;
 	vec3 grid = biased / spacing;
 	ivec3 base_cell = ivec3(floor(grid));
 	vec3 frac = grid - vec3(base_cell);

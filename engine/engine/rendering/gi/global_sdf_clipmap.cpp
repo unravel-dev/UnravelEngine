@@ -229,6 +229,16 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         {
             lvl.stale_updates = 0;
         }
+        // CONTENT epoch, for reactivity consumers (the world-probe fast window): fires once
+        // per actual scene change - an instance moved, appeared, changed material - and is
+        // deliberately suppressed while the origin moves, because a scrolling window changes
+        // which instances the fingerprint sees every re-snap and camera motion would pin the
+        // fast path permanently.
+        if(!origin_moved && target_fingerprint[i] != seen_fingerprints_[i])
+        {
+            ++content_epoch_;
+        }
+        seen_fingerprints_[i] = target_fingerprint[i];
     }
     // Pass two: spend the budget on the levels that have waited longest, finest first on a tie.
     //

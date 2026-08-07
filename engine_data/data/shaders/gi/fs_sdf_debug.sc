@@ -179,7 +179,7 @@ void main()
 		// GI passes all re-derive the facing from SdfResolveSurfacePoint instead and never read
 		// this field, so they ask the tracer to skip the gradient entirely.
 		hit = SdfTraceClipmap(ray_origin, ray_dir, 0.0, u_max_distance, u_max_steps, u_surface_bias,
-		                      u_step_relaxation, true, true);
+		                      u_step_relaxation, true, 0.0);
 	}
 	else
 	{

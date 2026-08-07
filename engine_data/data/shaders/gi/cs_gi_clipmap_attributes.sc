@@ -100,6 +100,15 @@ void main()
 	{
 		imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
 		imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
+		// A voxel that STOPPED being surface leaves the list and is never re-lit, so its
+		// radiance must die here or it survives as a ghost: geometry that moved away kept
+		// glowing at its old cells (a closed door's old radiance held the room lit through
+		// the trilinear neighbourhood). Surface voxels keep their radiance - zeroing THOSE
+		// is the recompose flicker this pass's claim logic exists to prevent.
+		for(int face = 0; face < 6; ++face)
+		{
+			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
+		}
 		return;
 	}
 	// Winner: smallest |distance| at the centre over the tracer grid's candidates within
@@ -160,9 +169,14 @@ void main()
 	if(best_index < 0)
 	{
 		// The field says surface but nothing is attributable within reach: stay dark - energy
-		// loss, never a fabricated material.
+		// loss, never a fabricated material. Unattributed voxels also leave the list, so any
+		// radiance they held dies with the attribution (same ghost rule as the branch above).
 		imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
 		imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
+		for(int face = 0; face < 6; ++face)
+		{
+			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
+		}
 		return;
 	}
 	SdfInstance winner = SdfLoadInstance(best_index);

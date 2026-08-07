@@ -131,20 +131,25 @@ void main()
 	{
 		vec3 direction = GiLightVoxelFaceDirection(face);
 		ivec3 texel = GiLightVoxelTexel(slot, int(level), face);
-		// A face is EXPOSED when the field rises along it - open space that way. Plateaus and
-		// directions running parallel to the surface stay dark; both sides of a thin wall are
-		// exposed on their own faces, which is what keeps them in separate slabs.
-		float d_out = SdfSampleClipmapLevel(int(level), center + direction * attr_voxel);
-		bool valid = d_out < 0.5 * SDF_CLIPMAP_OUTSIDE;
-		if(!valid || (d_out - d_center) < GI_LIGHT_VOXEL_EXPOSURE_MIN * attr_voxel)
-		{
-			imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
-			continue;
-		}
 		// Launch point clear of the surface: out by however deep the centre sits, plus half an
 		// attribute voxel - in the units of the thing being cleared.
 		float lift = max(0.0, -d_center) + 0.5 * attr_voxel;
 		vec3 position = center + direction * lift;
+		// A face is MEASURABLE when enough of its cavity cone escapes - the same multi-scale
+		// visibility the ambient below is weighted by, computed once and shared. This replaced
+		// a single-step field-rise test, which cannot see past a coarse level's blob plateau:
+		// small geometry merges into blobs whose shell voxels sit a voxel or more deep, the
+		// one-voxel step stays inside, and every face read as unexposed - whole objects went
+		// black wherever only coarse levels covered them (the far-distance failure). The march
+		// at 1/2/4 voxels from the LIFTED point sees past the plateau; a face pointing into
+		// real interior still reads closed at every scale and stays dark, both sides of a thin
+		// wall still measure open through their own slabs.
+		float visibility = GiBounceCavityVisibility(position, direction, attr_voxel);
+		if(visibility < GI_LIGHT_VOXEL_VISIBILITY_MIN)
+		{
+			imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
+			continue;
+		}
 		vec3 irradiance = GiEvalDirectLighting(position,
 		                                       direction,
 		                                       max(level_data.w, 0.01),
@@ -161,9 +166,9 @@ void main()
 		                                 u_gi_light_voxel_camera.xyz, probe_value, sky_fraction))
 		{
 			// Attenuated by the face's own sub-probe-spacing visibility: the probes' ambient
-			// is measured on a lattice that cannot see this cavity (see
-			// GiBounceCavityVisibility).
-			irradiance += probe_value * GI_PI * GiBounceCavityVisibility(position, direction, attr_voxel);
+			// is measured on a lattice that cannot see this cavity. The SAME value gated the
+			// face above, so the gate costs nothing extra.
+			irradiance += probe_value * GI_PI * visibility;
 		}
 		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;
 		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));

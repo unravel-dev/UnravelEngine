@@ -15,7 +15,7 @@
 #define GI_EXPAND_RAMP_VOXEL_DIAGONALS  4.0
 
 #define GI_SURFACE_VOXEL_BAND           1.0
-#define GI_LIGHT_VOXEL_EXPOSURE_MIN     0.25
+#define GI_LIGHT_VOXEL_VISIBILITY_MIN   0.25
 #define GI_LIGHT_VOXEL_UPDATE_DENOM     4
 #define GI_MAX_ALBEDO                   0.9
 
@@ -40,6 +40,7 @@
 #define GI_SELF_SHADOW_BIAS_VIEW        0.8
 #define GI_SELF_SHADOW_BIAS_SCALE       0.75
 #define GI_SELF_SHADOW_BIAS_K           0.3
+#define GI_SELF_SHADOW_BIAS_MAX_VOXELS  2.0
 
 #define GI_SCREEN_PROBE_SPACING         16
 #define GI_MAX_RAY_RADIANCE             40.0
