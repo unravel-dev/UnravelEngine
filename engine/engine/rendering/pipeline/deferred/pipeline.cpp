@@ -2121,6 +2121,8 @@ auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview
         // Last frame's environment SH (the irradiance pass runs later in the frame), for the
         // ray-miss sky measurement -- same sourcing as the SSIL pass. Null on the first frame.
         params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+        // This frame's Hi-Z pyramid (built earlier in the frame) for the screen-trace tier.
+        params.hiz = rview.tex_safe_get("HIZBUFFER");
         params.cam = &camera;
         params.surface_cache = &ctx.get<surface_cache_service>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
@@ -2266,8 +2268,16 @@ auto deferred::run_hiz_pass(const camera& camera,
                               delta_t dt) -> bool
 {
     (void)dt;
+    // The GI gather's screen-trace tier marches this same pyramid, so GI being enabled is a
+    // producer condition of its own - without it the tier silently degrades to pure SDF
+    // tracing whenever the reflection stack happens to be off.
+    gi_settings gi_probe;
+    const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera &&
+                              resolve_gi_settings(params, gi_probe) &&
+                              gi_probe.resolve.enable_screen_trace;
     const bool want_hiz =
-        reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params);
+        (reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params)) ||
+        gi_wants_hiz;
 
     if(!want_hiz)
     {

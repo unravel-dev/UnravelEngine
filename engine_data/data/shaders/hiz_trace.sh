@@ -187,7 +187,10 @@ float HizValidateHit(sampler2D hiz_sampler,
 
     vec3 vs_ray_dir = vs_hit_pos - vs_ray_origin;
 
-    GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(ss_hit_pos.xy, normal_sampler);
+    // Explicit LOD: the normal buffer has no mips, so this is identical for the fragment-shader
+    // consumers (SSR/SSIL) - and an implicit-LOD sample is a gradient operation, which compute
+    // consumers (the GI gather's screen tier) cannot legally issue on divergent paths.
+    GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughnessLod(ss_hit_pos.xy, normal_sampler, 0.0);
     vec3 vs_normal = mul(u_view, vec4(normal_data.world_normal, 0.0)).xyz;
 
     if(dot(vs_ray_dir, vs_normal) > 0.0)

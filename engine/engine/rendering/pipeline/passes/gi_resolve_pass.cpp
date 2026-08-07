@@ -315,7 +315,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                  6,
                                  clipmap_gpu.get_world_probe_radiance());
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                gfx::set_texture(v2_trace_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
+                // Hi-Z when present (mip 0 is the device depth, so the anchor reads it the
+                // same); raw depth otherwise, with the screen tier switched off below.
+                const bool screen_trace = params.hiz && params.hiz->is_valid() && s.enable_screen_trace;
+                gfx::set_texture(v2_trace_program_.s_hiz,
+                                 8,
+                                 screen_trace ? params.hiz : params.g_buffer->get_texture(4));
                 gfx::set_texture(v2_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_texture(v2_trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
                 gfx::set_texture(v2_trace_program_.s_world_probe_irradiance,
@@ -337,6 +342,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(v2_trace_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(v2_trace_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(v2_trace_program_.u_gi_v2_camera, v2_camera);
+                const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
+                                                      float(s.debug_view),
+                                                      0.0f,
+                                                      0.0f};
+                gfx::set_uniform(v2_trace_program_.u_gi_screen_trace, screen_trace_params);
                 const auto v2_prev_view_proj = params.cam->get_prev_view_projection();
                 gfx::set_uniform(v2_trace_program_.u_gi_prev_view_proj, v2_prev_view_proj.get_matrix());
                 gfx::set_uniform(v2_trace_program_.u_gi_light_voxel_params, light_voxel_params);
@@ -384,7 +394,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(v2_integrate_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(v2_integrate_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(v2_integrate_program_.u_gi_v2_camera, v2_camera);
-                const float v2_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
+                const float v2_intensity[4] = {math::max(s.intensity, 0.0f),
+                                               s.enable_contact_ao ? 1.0f : 0.0f,
+                                               s.debug_view == 2 ? 1.0f : 0.0f,
+                                               0.0f};
                 gfx::set_uniform(v2_integrate_program_.u_gi_v2_intensity, v2_intensity);
                 gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_params, wp_params);
                 gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_atlas,

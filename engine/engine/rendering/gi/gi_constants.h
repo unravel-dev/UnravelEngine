@@ -129,6 +129,39 @@
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
       "pre-exposed radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly"   \
       " clamp at trace time")                                                                      \
+    /* --- screen-trace-first (Lumen: HZB traces resolve the near field at pixel precision      \
+       [S21 s66-68]; the SDF answers only where the screen cannot) --- */                          \
+    X(GI_SCREEN_TRACE_MAX_STEPS, 64,                                                               \
+      "Hi-Z iterations", "published-from-SSIL-measurement: the iteration budget the screen"        \
+      " stack ships with (ssil_pass max_steps default); the hierarchical march resolves or"        \
+      " leaves the screen well inside it at gather ray lengths")                                   \
+    X(GI_SCREEN_TRACE_DEPTH_TOLERANCE, 0.15f,                                                      \
+      "view-space m at zero distance", "published-from-SSIL-measurement: hit acceptance band"      \
+      " against the mip-0 depth (ssil_pass depth_tolerance default)")                              \
+    X(GI_SCREEN_TRACE_THICKNESS, 0.5f,                                                             \
+      "view-space m at full ray range", "published-from-SSIL-measurement: distance-scaled"         \
+      " widening of the acceptance band (ssil_pass thickness default) - far hits validate"         \
+      " against coarser reconstruction and a fixed band over-rejects them")                        \
+    X(GI_SCREEN_TRACE_CONFIDENCE_MIN, 0.5f,                                                        \
+      "confidence", "derived: commit-or-fall-through, never blend - below half confidence the"     \
+      " watertight SDF answer replaces the screen answer outright, because blending two"           \
+      " radiance estimates of the same ray double-counts whichever is wrong")                      \
+    /* --- short-range contact AO (the Lumen ShortRangeAO role: pixel-rate occlusion of the     \
+       indirect below the gather's resolving power) --- */                                         \
+    X(GI_CONTACT_AO_RADIUS, 0.5f,                                                                  \
+      "m", "derived: two finest attribute voxels at the reference 128 cascade - the band where"    \
+      " occlusion exists but neither the probe lattice nor the voxel radiance can express it;"     \
+      " beyond it the gather's own rays already measure visibility")                               \
+    X(GI_CONTACT_AO_SAMPLES, 8,                                                                    \
+      "spiral taps", "derived: the per-pixel budget whose residual variance the existing"          \
+      " temporal (10 frames) + a-trous + bilateral chain visibly absorbs - the estimator runs"     \
+      " BEFORE that chain precisely so these taps can stay this few")                              \
+    X(GI_CONTACT_AO_BIAS, 0.05f,                                                                   \
+      "of the AO radius", "published: [Alchemy11] self-occlusion bias, expressed against the"      \
+      " radius (2.5 cm here) - it only exists to reject depth-reconstruction jitter on flat"       \
+      " surfaces, which is centimetre-scale; scaling it with DISTANCE instead was measured to"     \
+      " swallow every occluder shallower than the bias by ~10 m out (railings at 3 m, awnings"     \
+      " at 20 m), leaving AO visible only in close-ups")                                           \
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
       "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour hit whose"     \
       " reprojected direction deviates by more than pi/50")                                        \

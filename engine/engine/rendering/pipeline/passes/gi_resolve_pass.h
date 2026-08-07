@@ -42,6 +42,21 @@ public:
         /// spacing halves in trace-target pixels at half resolution, so probe density follows
         /// the trace resolution automatically.
         int probe_spacing = gi::GI_SCREEN_PROBE_SPACING;
+        /// Hi-Z screen tier of the gather: rays march the depth pyramid first and commit
+        /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
+        /// GI or the reflection stack is on); off degrades to pure SDF tracing.
+        bool enable_screen_trace = true;
+        /// Short-range contact occlusion on the gathered indirect (the Lumen ShortRangeAO
+        /// role): pixel-rate darkening below the probe lattice's resolving power - under
+        /// awnings, at railing bases - computed in the integrate pass and denoised by the
+        /// existing temporal chain. Direct lighting is untouched.
+        bool enable_contact_ao = true;
+        /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
+        /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
+        /// completion - and the mix survives the whole chain, so the lit image shows the
+        /// screen tier's actual coverage. 2 = CONTACT AO only, grayscale. Session-only,
+        /// deliberately not serialized.
+        int debug_view = 0;
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
         /// Accumulated-frame cap: the steady-state blend is 1/this.
@@ -67,6 +82,10 @@ public:
         /// Previous frame's depth, used to validate reprojected history. Null disables temporal
         /// accumulation for this frame rather than accepting history blindly.
         gfx::texture::ptr prev_depth;
+        /// The frame's Hi-Z depth pyramid (shared with SSR/SSIL). When present the gather's
+        /// screen-trace tier runs; null falls back to pure SDF tracing with the raw G-buffer
+        /// depth bound in its place.
+        gfx::texture::ptr hiz;
         /// The lighting pass's environment SH probe. A gather ray that escapes the scene reads
         /// sky radiance from it and counts as RESOLVED, so sky occlusion survives into the lit
         /// image instead of being refilled by the consumer's unoccluded environment term --
@@ -137,6 +156,7 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
@@ -149,7 +169,9 @@ private:
         gfx::program::uniform_ptr u_sdf_grid_params;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
-        gfx::program::uniform_ptr s_gi_depth;
+        /// The Hi-Z pyramid when the screen tier runs, else the raw G-buffer depth (mip 0 of
+        /// the pyramid is the device depth verbatim, so the anchor reads either).
+        gfx::program::uniform_ptr s_hiz;
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
@@ -162,6 +184,7 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
@@ -178,7 +201,7 @@ private:
             cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
                           global_sdf_clipmap::level_count);
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);

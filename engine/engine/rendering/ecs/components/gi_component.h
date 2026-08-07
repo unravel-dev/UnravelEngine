@@ -50,6 +50,9 @@ public:
         r.intensity = std::lerp(r.intensity, f.intensity, contribution);
         r.resolution = dominant ? f.resolution : r.resolution;
         r.probe_spacing = dominant ? f.probe_spacing : r.probe_spacing;
+        r.enable_screen_trace = dominant ? f.enable_screen_trace : r.enable_screen_trace;
+        r.enable_contact_ao = dominant ? f.enable_contact_ao : r.enable_contact_ao;
+        r.debug_view = dominant ? f.debug_view : r.debug_view;
         r.enable_temporal = dominant ? f.enable_temporal : r.enable_temporal;
         r.max_accum_frames = std::lerp(r.max_accum_frames, f.max_accum_frames, contribution);
         r.reprojection_tolerance =

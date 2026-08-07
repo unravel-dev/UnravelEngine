@@ -48,6 +48,35 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"max", 32.0f},
             entt::attribute{"tooltip", "Probe tile edge in full-resolution pixels."},
         })
+        .data<&settings::enable_screen_trace>("enable_screen_trace"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_screen_trace"},
+            entt::attribute{"pretty_name", "Screen Trace"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Hi-Z screen tier: gather rays march the depth pyramid first and commit "
+                            "pixel-precise on-screen hits before the SDF answers."},
+        })
+        .data<&settings::enable_contact_ao>("enable_contact_ao"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_contact_ao"},
+            entt::attribute{"pretty_name", "Contact AO"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Short-range contact occlusion on the indirect: pixel-rate darkening "
+                            "under overhangs and at object bases, below what the probes resolve."},
+        })
+        .data<&settings::debug_view>("debug_view"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "debug_view"},
+            entt::attribute{"pretty_name", "Debug View"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"tooltip",
+                            "1 = ray tiers (green = screen commit, red = SDF, blue = completion). "
+                            "2 = contact AO only. Session-only, not saved."},
+        })
         .data<&settings::enable_temporal>("enable_temporal"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal"},
@@ -280,6 +309,9 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
+    // debug_view is deliberately NOT saved: a scene must never load with a diagnostic view on.
+    try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_save(ar, ser20::make_nvp("enable_contact_ao", obj.enable_contact_ao));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_save(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));
@@ -301,6 +333,8 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
+    try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_load(ar, ser20::make_nvp("enable_contact_ao", obj.enable_contact_ao));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_load(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));

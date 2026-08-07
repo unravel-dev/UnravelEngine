@@ -14,6 +14,14 @@
  * directly past the outermost cascade. Every ray therefore measures something: the gather owes
  * nothing to a screen-space history or an environment fallback.
  *
+ * SCREEN TRACE FIRST [S21 s66-68]: each ray first marches the Hi-Z depth pyramid - the same
+ * machinery SSR/SSIL use - which resolves near-field occluders at PIXEL precision (an awning
+ * half a metre above a wall occludes exactly the pixels in its shadow, which voxel-resolution
+ * tracing cannot express). A confident on-screen hit commits: the ray reads the light voxels
+ * at the reconstructed world hit, so radiance stays in the SDF path's units and the two tiers
+ * never disagree on energy - the screen buys geometry, not a second lighting source. Anything
+ * else - miss, left the screen, low confidence - falls through to the SDF trace unchanged.
+ *
  * Everything here is owned by gi_constants - the pass has no tuning surface.
  */
 
@@ -21,6 +29,7 @@
 #include "../common.sh"
 // DecodeGBufferNormalMetalRoughnessLod and eval_radiance_sh live here.
 #include "../lighting.sh"
+#include "../hiz_trace.sh"
 
 #include "gi/sdf_common.sh"
 #define GI_LIGHT_VOXEL_READ
@@ -34,12 +43,19 @@ IMAGE2D_WO(s_probe_radiance_out, rgba16f, 5);
 /// Probe records: reuses the existing layout (gi_probe_common.sh) so downstream plumbing holds.
 BUFFER_RW(b_gi_probes, vec4, 7);
 
-SAMPLER2D(s_gi_depth, 8);
+/// The Hi-Z depth pyramid when the screen trace is enabled, else the raw G-buffer depth.
+/// Mip 0 is the device depth either way (cs_hiz_generate copies it verbatim), so the anchor
+/// reconstruction below reads the same values from both.
+SAMPLER2D(s_hiz, 8);
 SAMPLER2D(s_gi_normal, 9);
 SAMPLER2D(s_gi_env_sh, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
 uniform vec4 u_gi_v2_camera;
+/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs.
+/// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
+/// (green = screen commit, red = SDF hit, blue = world-probe/sky completion). zw unused.
+uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
 /// importance mip the filter stored in that probe's record slots.
 uniform mat4 u_gi_prev_view_proj;
@@ -49,6 +65,11 @@ SHARED vec3 s_anchor_normal;
 SHARED vec3 s_origin;
 SHARED float s_short_range;
 SHARED float s_valid;
+/// Anchor in the screen tier's spaces, shared by every ray's Hi-Z march: full-res uv (self-hit
+/// rejection), (uv, device z) screen-space origin, and the view-space origin.
+SHARED vec2 s_anchor_uv;
+SHARED vec3 s_ss_origin;
+SHARED vec3 s_vs_origin;
 /// Base record index of the reprojected PREVIOUS probe, or -1 when reprojection failed.
 SHARED int s_history_record;
 SHARED float s_importance_mean;
@@ -98,7 +119,7 @@ void main()
 		vec2 pixel = (vec2(probe.xy) + jitter) * u_gi_probe_spacing;
 		pixel = min(pixel, u_gi_probe_screen.xy - vec2_splat(1.0));
 		vec2 uv = (floor(pixel) + vec2_splat(0.5)) * u_gi_probe_screen.zw;
-		float depth = texture2DLod(s_gi_depth, uv, 0.0).x;
+		float depth = texture2DLod(s_hiz, uv, 0.0).x;
 		if(depth < 1.0)
 		{
 			vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
@@ -123,6 +144,9 @@ void main()
 				int level = SdfFindClipmapLevel(world_position, blend, answered_voxel);
 				int clamped = level >= SDF_CLIPMAP_LEVEL_COUNT ? SDF_CLIPMAP_LEVEL_COUNT - 1 : level;
 				s_short_range = 2.0 * GiWorldProbeSpacing(clamped);
+				s_anchor_uv = uv;
+				s_ss_origin = vec3(uv, depth);
+				s_vs_origin = HizComputeViewspacePosition(uv, depth);
 				s_valid = 1.0;
 				b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
 				b_gi_probes[record + uint(GI_PROBE_META2)] =
@@ -211,34 +235,103 @@ void main()
 	{
 		vec2 sample_uv = (vec2(local.xy) + sub_positions[s]) / float(GI_PROBE_DIR_EDGE);
 		vec3 sample_dir = GiOctDecode(sample_uv);
-		SdfRayHit hit = SdfTraceRayEx(s_origin, sample_dir, s_short_range, GI_MESH_SDF_TRACE_RANGE,
-		                              GI_TRACE_MAX_STEPS, GI_PROBE_TRACE_SURFACE_BIAS,
-		                              GI_PROBE_TRACE_RELAXATION, true, true);
-		vec3 radiance;
-		if(hit.hit)
+		vec3 radiance = vec3_splat(0.0);
+		bool committed = false;
+		// 1 = screen commit, 2 = SDF hit, 3 = completion; consumed by the tier debug view.
+		int answered_tier = 3;
+		// SCREEN TIER: Hi-Z march from the anchor pixel. A confident on-screen hit inside the
+		// ray's own range commits at PIXEL precision; everything else falls through to the SDF.
+		BRANCH
+		if(u_gi_screen_trace.x > 0.0)
 		{
-			hit_t = max(hit_t, hit.t);
-			vec3 hit_position = s_origin + sample_dir * hit.t;
-			vec3 hit_normal = hit.normal;
-			if(dot(hit_normal, sample_dir) > 0.0)
+			vec3 vs_dir = mul(u_view, vec4(sample_dir, 0.0)).xyz;
+			vec3 ss_dir = HizProjectVsDirToSsDir(s_vs_origin, vs_dir, s_ss_origin);
+			BRANCH
+			if(dot(ss_dir.xy, ss_dir.xy) >= 1e-12)
 			{
-				hit_normal = -hit_normal;
-			}
-			if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
-			{
-				// Occluded but unmeasured: honest darkness (the sealed-room branch).
-				radiance = vec3_splat(0.0);
+				vec2 screen_size = HizGetDepthMipResolution(s_hiz, 0);
+				vec3 ss_hit = vec3_splat(0.0);
+				bool marched = HizHierarchicalRaymarch(s_hiz, s_ss_origin, ss_dir, screen_size, 0,
+				                                       GI_SCREEN_TRACE_MAX_STEPS, ss_hit);
+				BRANCH
+				if(marched)
+				{
+					vec3 vs_hit = HizComputeViewspacePosition(ss_hit.xy, ss_hit.z);
+					float hit_dist = length(vs_hit - s_vs_origin);
+					// Beyond the short range the world probes own the answer, exactly as they
+					// do for an SDF miss - a far screen hit must not override that contract.
+					BRANCH
+					if(hit_dist < s_short_range)
+					{
+						float tolerance = GI_SCREEN_TRACE_DEPTH_TOLERANCE +
+						                  GI_SCREEN_TRACE_THICKNESS * (hit_dist / s_short_range);
+						float confidence = HizValidateHit(s_hiz, s_gi_normal, ss_hit, s_anchor_uv,
+						                                  s_vs_origin, vs_hit, tolerance);
+						BRANCH
+						if(confidence >= GI_SCREEN_TRACE_CONFIDENCE_MIN)
+						{
+							vec3 hit_position = mul(u_invView, vec4(vs_hit, 1.0)).xyz;
+							GBufferDataNormalMetalRoughness hd =
+							    DecodeGBufferNormalMetalRoughnessLod(ss_hit.xy, s_gi_normal, 0.0);
+							vec3 hit_normal = normalize(hd.world_normal);
+							if(dot(hit_normal, sample_dir) > 0.0)
+							{
+								hit_normal = -hit_normal;
+							}
+							if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+							{
+								// Occluded but unmeasured: honest darkness. For sub-voxel
+								// detail (railings, awning cloth) this IS the contact
+								// occlusion the voxel tier cannot express.
+								radiance = vec3_splat(0.0);
+							}
+							hit_t = max(hit_t, hit_dist);
+							committed = true;
+							answered_tier = 1;
+						}
+					}
+				}
 			}
 		}
-		else
+		BRANCH
+		if(!committed)
 		{
-			// Completion: the world probes carry everything beyond the short range - scene AND
-			// sky.
-			if(!GiWorldProbeRadiance(s_origin + sample_dir * s_short_range, sample_dir,
-			                         u_gi_v2_camera.xyz, radiance))
+			SdfRayHit hit = SdfTraceRayEx(s_origin, sample_dir, s_short_range, GI_MESH_SDF_TRACE_RANGE,
+			                              GI_TRACE_MAX_STEPS, GI_PROBE_TRACE_SURFACE_BIAS,
+			                              GI_PROBE_TRACE_RELAXATION, true, true);
+			if(hit.hit)
 			{
-				radiance = eval_radiance_sh(s_gi_env_sh, sample_dir);
+				answered_tier = 2;
+				hit_t = max(hit_t, hit.t);
+				vec3 hit_position = s_origin + sample_dir * hit.t;
+				vec3 hit_normal = hit.normal;
+				if(dot(hit_normal, sample_dir) > 0.0)
+				{
+					hit_normal = -hit_normal;
+				}
+				if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+				{
+					// Occluded but unmeasured: honest darkness (the sealed-room branch).
+					radiance = vec3_splat(0.0);
+				}
 			}
+			else
+			{
+				// Completion: the world probes carry everything beyond the short range - scene
+				// AND sky.
+				if(!GiWorldProbeRadiance(s_origin + sample_dir * s_short_range, sample_dir,
+				                         u_gi_v2_camera.xyz, radiance))
+				{
+					radiance = eval_radiance_sh(s_gi_env_sh, sample_dir);
+				}
+			}
+		}
+		BRANCH
+		if(u_gi_screen_trace.y > 0.5)
+		{
+			radiance = answered_tier == 1 ? vec3(0.0, 1.0, 0.0)
+			                              : (answered_tier == 2 ? vec3(1.0, 0.0, 0.0)
+			                                                    : vec3(0.0, 0.0, 1.0));
 		}
 		radiance_sum += radiance;
 	}
