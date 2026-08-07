@@ -46,16 +46,15 @@ public:
         /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
         /// GI or the reflection stack is on); off degrades to pure SDF tracing.
         bool enable_screen_trace = true;
-        /// Short-range contact occlusion on the gathered indirect (the Lumen ShortRangeAO
-        /// role): pixel-rate darkening below the probe lattice's resolving power - under
-        /// awnings, at railing bases - computed in the integrate pass and denoised by the
-        /// existing temporal chain. Direct lighting is untouched.
-        bool enable_contact_ao = true;
         /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
         /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
         /// completion - and the mix survives the whole chain, so the lit image shows the
-        /// screen tier's actual coverage. 2 = CONTACT AO only, grayscale. Session-only,
-        /// deliberately not serialized.
+        /// screen tier's actual coverage. Session-only, deliberately not serialized.
+        ///
+        /// A screen-space contact AO stage was tried here and REMOVED: it duplicated ASSAO's
+        /// role at best. The under-overhang darkness it chased is a RADIANCE property - the
+        /// bounce term's cavity occlusion (GiBounceCavityVisibility in cs_gi_light_voxels) -
+        /// not a post-multiply. Screen-space AO stays ASSAO's job.
         int debug_view = 0;
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;

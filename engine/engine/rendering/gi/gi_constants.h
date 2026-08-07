@@ -146,25 +146,20 @@
       "confidence", "derived: commit-or-fall-through, never blend - below half confidence the"     \
       " watertight SDF answer replaces the screen answer outright, because blending two"           \
       " radiance estimates of the same ray double-counts whichever is wrong")                      \
-    /* --- short-range contact AO (the Lumen ShortRangeAO role: pixel-rate occlusion of the     \
-       indirect below the gather's resolving power) --- */                                         \
-    X(GI_CONTACT_AO_RADIUS, 0.5f,                                                                  \
-      "m", "derived: two finest attribute voxels at the reference 128 cascade - the band where"    \
-      " occlusion exists but neither the probe lattice nor the voxel radiance can express it;"     \
-      " beyond it the gather's own rays already measure visibility")                               \
-    X(GI_CONTACT_AO_SAMPLES, 8,                                                                    \
-      "spiral taps", "derived: the per-pixel budget whose residual variance the existing"          \
-      " temporal (10 frames) + a-trous + bilateral chain visibly absorbs - the estimator runs"     \
-      " BEFORE that chain precisely so these taps can stay this few")                              \
-    X(GI_CONTACT_AO_BIAS, 0.05f,                                                                   \
-      "of the AO radius", "published: [Alchemy11] self-occlusion bias, expressed against the"      \
-      " radius (2.5 cm here) - it only exists to reject depth-reconstruction jitter on flat"       \
-      " surfaces, which is centimetre-scale; scaling it with DISTANCE instead was measured to"     \
-      " swallow every occluder shallower than the bias by ~10 m out (railings at 3 m, awnings"     \
-      " at 20 m), leaving AO visible only in close-ups")                                           \
+    /* --- bounce cavity occlusion (the [DFAO] role: sub-probe-spacing visibility for              \
+       the ambient the world probes inject) --- */                                                 \
+    X(GI_BOUNCE_AO_STEPS, 3,                                                                       \
+      "field samples along the face", "derived: doubling distances from one attribute"             \
+      " voxel reach 1 + 2 + 4 = 7 voxels, about the world-probe spacing (16 SDF = 8"               \
+      " attribute voxels) - EXACTLY the band the probes cannot see: below it the"                  \
+      " voxel's own surface dominates the field, above it the probes' Chebyshev"                   \
+      " visibility already measures occlusion. Without this term a voxel inside a"                 \
+      " sub-spacing cavity (an awning's underside, a window reveal) receives the OPEN"             \
+      " ambient of the probe cage around it and glows in exactly the places that"                  \
+      " should be darkest")                                                                        \
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
-      "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour hit whose"     \
-      " reprojected direction deviates by more than pi/50")                                        \
+      "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour"               \
+      " hit whose reprojected direction deviates by more than pi/50")                              \
     /* --- temporal (plan 3.5) --- */                                                              \
     X(GI_V2_INTERPOLATION_JITTER_TILES, 1.0f,                                                      \
       "probe tiles", "published: [CVar] ScreenProbeGather.FullResolutionJitterWidth = 1 - the"     \

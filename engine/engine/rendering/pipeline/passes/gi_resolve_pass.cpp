@@ -394,10 +394,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(v2_integrate_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(v2_integrate_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(v2_integrate_program_.u_gi_v2_camera, v2_camera);
-                const float v2_intensity[4] = {math::max(s.intensity, 0.0f),
-                                               s.enable_contact_ao ? 1.0f : 0.0f,
-                                               s.debug_view == 2 ? 1.0f : 0.0f,
-                                               0.0f};
+                const float v2_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
                 gfx::set_uniform(v2_integrate_program_.u_gi_v2_intensity, v2_intensity);
                 gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_params, wp_params);
                 gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_atlas,

@@ -7,9 +7,9 @@ $input v_texcoord0
  * ray marching, then samples radiance at hit points. Rays that escape on-screen
  * geometry fall back to the environment SH radiance in their direction, so the
  * cosine-weighted mean estimates the full (screen-occluded) hemispherical
- * irradiance rather than only the on-screen bounce. RGB is left in radiance-mean
- * units; the consumer applies the PI factor that converts it to irradiance units
- * (matching eval_irradiance_sh) at blend time. Alpha carries the screen-hit
+ * irradiance rather than only the on-screen bounce. RGB stays in radiance-mean
+ * units (E/pi) - exactly the indirect-diffuse contract the lighting composite
+ * multiplies by albedo (see fs_pbr_lighting.sh). Alpha carries the screen-hit
  * coverage/replacement weight so SSIL degrades gracefully to the SH probe where
  * the trace is mostly environment fallback.
  * Supports multi-bounce by feeding back the previous frame's denoised SSIL
@@ -140,10 +140,12 @@ vec3 SampleRadiance(vec2 hit_uv)
     if(u_multi_bounce > 0.0)
     {
         // Weight the fed-back indirect by its final blend weight, matching how the
-        // lighting pass blends SSIL against the SH probe. SSIL history stores a radiance
-        // mean; multiply by PI to convert it to irradiance before Lambertian bounce.
+        // lighting pass blends SSIL against the SH probe. The feedback reconstructs the hit
+        // pixel's DISPLAYED indirect: the composite shows albedo * E/pi (the energy-audit
+        // contract), and prev.rgb IS E/pi, so hit_diffuse * prev.rgb * alpha is that value
+        // - no pi anywhere, same as the composite itself.
         vec4 prev = texture2DLod(s_prev_ssil, hit_uv, 0.0);
-        vec3 prev_indirect = prev.rgb * PI * prev.a;
+        vec3 prev_indirect = prev.rgb * prev.a;
 
         radiance += hit_diffuse * prev_indirect * u_multi_bounce;
     }
@@ -332,13 +334,13 @@ void main()
     }
 
     vec3 result = accumulated / float(ray_count);
-    // result stays in radiance-mean units (NOT * PI). The PI factor that puts it in
-    // irradiance units (matching eval_irradiance_sh) is applied by the consumer at blend time.
+    // result stays in radiance-mean units (E/pi) - the indirect-diffuse contract; the
+    // consumer feeds it to the composite unscaled (see fs_pbr_lighting.sh energy audit).
     //
     // Alpha = signal validity, not screen-hit coverage. Each ray's contribution to RGB is
     // already valid -- a hit produces an on-screen bounce, a miss produces SH radiance --
     // so the cosine-importance average IS the full hemispherical irradiance estimate.
-    // Returning anything < 1 would make the consumer's mix(SH, SSIL*PI, alpha) re-add SH
+    // Returning anything < 1 would make the consumer's mix(SH/pi, SSIL, alpha) re-add SH
     // on top of an SSIL.rgb that already contains an equivalent env contribution from the
     // missed rays, biasing indirect bright. Sky pixels return 0 in the early-out above.
     gl_FragColor = vec4(result, 1.0);

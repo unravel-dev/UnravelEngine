@@ -46,6 +46,37 @@ IMAGE3D_WO(s_light_voxels_out, rgba16f, 10);
 /// needs the same centre the trace pass used.
 uniform vec4 u_gi_light_voxel_camera;
 
+/*
+ * CAVITY visibility for the bounce term - distance-field cone occlusion, the [DFAO] role:
+ * sample the composed field at doubling distances along the face; wherever the field reads
+ * less than the distance travelled, geometry encroaches on the face's hemisphere. This
+ * measures EXACTLY the band the world probes cannot: from one attribute voxel (below which
+ * the voxel's own surface dominates the field) out to about the probe spacing (beyond which
+ * the probes' own Chebyshev visibility already handles occlusion). Without it, a voxel inside
+ * a sub-spacing cavity - an awning's underside, a window reveal, a doorway - receives the
+ * OPEN ambient of the probe cage around it and glows in exactly the places that should be
+ * darkest; every gather ray that hits the cavity then reads that false brightness back.
+ */
+float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
+{
+	float occlusion = 0.0;
+	float weight = 1.0;
+	float weight_sum = 0.0;
+	float t = attr_voxel;
+	LOOP for(int i = 0; i < GI_BOUNCE_AO_STEPS; ++i)
+	{
+		// Field >= travel distance: the cone is clear at this scale, no contribution. Field
+		// negative (inside geometry): fully occluded. The weights halve so near encroachment
+		// - the strongest visibility signal - dominates.
+		float d = SdfSampleClipmap(position + direction * t);
+		occlusion += weight * saturate(1.0 - d / t);
+		weight_sum += weight;
+		weight *= 0.5;
+		t *= 2.0;
+	}
+	return saturate(1.0 - occlusion / weight_sum);
+}
+
 NUM_THREADS(64, 1, 1)
 void main()
 {
@@ -129,7 +160,10 @@ void main()
 		   GiWorldProbeIrradianceCascade(position, direction, direction,
 		                                 u_gi_light_voxel_camera.xyz, probe_value, sky_fraction))
 		{
-			irradiance += probe_value * GI_PI;
+			// Attenuated by the face's own sub-probe-spacing visibility: the probes' ambient
+			// is measured on a lattice that cannot see this cavity (see
+			// GiBounceCavityVisibility).
+			irradiance += probe_value * GI_PI * GiBounceCavityVisibility(position, direction, attr_voxel);
 		}
 		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;
 		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));

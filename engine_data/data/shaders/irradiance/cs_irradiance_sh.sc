@@ -155,12 +155,15 @@ void accumulate_sh_sample(vec3 dir, vec3 L, float d_omega, inout vec3 sh_coeff[9
 // Mode 0: uniform - write L0 only from ambient color * intensity.
 void process_uniform_mode(float sun_weight)
 {
-    // E(N) = indirect_tint * intensity * sun_weight * exposition. SH has only L0.
+    // ARTIST calibration: "intensity" is the diffuse level a white wall should DISPLAY. The
+    // composite applies albedo * E/pi (the energy-audit contract in fs_pbr_lighting.sh), so
+    // the bake targets eval = E = pi * intensity - the pi here and the 1/pi there cancel and
+    // a uniform-ambient scene renders the number the author typed. The physically-sourced
+    // modes (Perez, env) project raw radiance instead and stay radiometric.
     // exposition scales raw luminance to display range (matches atmospheric sky)
     vec3 color = u_irradiance_tint_intensity.xyz;
     float intensity = u_irradiance_tint_intensity.w * sun_weight * u_exposition.x;
-    const float PI = 3.14159265;
-    float l0 = intensity / (PI * 0.282095);
+    float l0 = intensity / 0.282095;
     imageStore(i_output, ivec2(0, 0), vec4(l0 * color, 0.0));
     for(int i = 1; i < 9; i++)
         imageStore(i_output, ivec2(i, 0), vec4(0.0, 0.0, 0.0, 0.0));
@@ -258,10 +261,12 @@ void process_tint_gradient_mode(float sun_weight)
     vec3 top = color * intensity;       // target irradiance at zenith (N.y = +1)
     const float ground_darken = 0.5;    // nadir is half as bright as zenith
     vec3 bottom = top * ground_darken;  // target irradiance at nadir (N.y = -1)
-    // eval_irradiance_sh lobes: L0 = PI*0.282095, vertical L1 = (2*PI/3)*0.488603*N.y.
-    // Solve coeffs so E(+1)=top and E(-1)=bottom (only the constant + vertical bands are non-zero).
-    const float LOBE0 = PI * 0.282095;
-    const float LOBE1 = (2.0 * PI / 3.0) * 0.488603;
+    // ARTIST calibration, same contract as the uniform mode: the composite divides by pi
+    // (fs_pbr_lighting.sh energy audit), so the bake targets eval = pi * displayed level -
+    // the lobes below are eval_irradiance_sh's constants (L0 = PI*0.282095, vertical
+    // L1 = (2*PI/3)*0.488603*N.y) with that pi folded in, and a white wall shows `top`.
+    const float LOBE0 = 0.282095;
+    const float LOBE1 = (2.0 / 3.0) * 0.488603;
     vec3 c0 = (top + bottom) / (2.0 * LOBE0);
     vec3 c1 = (top - bottom) / (2.0 * LOBE1);
     imageStore(i_output, ivec2(0, 0), vec4(c0, 0.0));

@@ -520,16 +520,22 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
-    // SSIL is a full (screen-occluded) hemispherical irradiance estimate: its rays
-    // integrate the on-screen bounce where they hit and the environment SH where they miss.
-    // The trace stores it in radiance-mean units; multiply by PI here to put it in the SAME
-    // irradiance units as the SH probe (cosine-importance MC of radiance estimates E/PI).
-    // It REPLACES the SH probe by its alpha rather than adding to it -- adding would
-    // double-count the environment. Alpha is the SSIL blend weight: per-frame trace
-    // coverage when temporal is off, accumulated screen-hit evidence when temporal is on.
-    // When SSIL is disabled the bound fallback has alpha 0 -> pure SH.
+    // THE INDIRECT DIFFUSE CONTRACT (energy audit): this slot carries E/pi - the
+    // cosine-weighted MEAN incoming radiance - because StandardShadingIndirect multiplies it
+    // by plain DiffuseColor. Lambert's BRDF is albedo/pi and the direct path pays its pi in
+    // Diffuse_Lambert; folding the other pi here keeps ONE convention on both paths:
+    // outgoing = albedo * E/pi. SSIL and the GI resolve already PRODUCE E/pi natively (a
+    // cosine-importance mean of radiance IS E/pi), so they feed the slot unscaled - the old
+    // "* PI" here was the single factor that made every indirect bounce pi times hotter than
+    // the same light arriving directly. eval_irradiance_sh returns TRUE irradiance E (raw
+    // cosine-convolution constants), so the SH branch divides here.
+    //
+    // SSIL/GI REPLACES the SH probe by its alpha rather than adding to it -- adding would
+    // double-count the environment. Alpha is the blend weight: per-frame trace coverage when
+    // temporal is off, accumulated screen-hit evidence when temporal is on. When both are
+    // disabled the bound fallback has alpha 0 -> pure SH.
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
-    vec3 indirect_diffuse = mix(irradiance, ssil_sample.rgb * PI, ssil_sample.a);
+    vec3 indirect_diffuse = mix(irradiance * RECIP_PI, ssil_sample.rgb, ssil_sample.a);
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
