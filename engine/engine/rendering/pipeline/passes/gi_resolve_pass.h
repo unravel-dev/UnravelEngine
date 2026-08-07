@@ -64,7 +64,7 @@ public:
         float reprojection_tolerance = gi::GI_TEMPORAL_DEPTH_TOLERANCE;
         /// A-trous spatial denoise over the accumulated result.
         bool enable_spatial_denoise = true;
-        int denoise_passes = 4;
+        int denoise_passes = 3;
         float denoise_normal_power = 32.0f;
         float denoise_luma_phi = 32.0f;
         float denoise_plane_tolerance = 0.02f;

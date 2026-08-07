@@ -512,10 +512,19 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                 {
                     continue;
                 }
-                // Winner: smallest |distance| at the centre, ties to the smaller GLOBAL index so
-                // both composers agree regardless of candidate visit order.
-                float best_magnitude = attr_reach;
-                size_t best_index = instances.size();
+                // TOP-2 attribution, blended by proximity - not winner-take-all. A coarse voxel
+                // genuinely CONTAINS a mixture of the surfaces inside it, and linear albedo
+                // mixing is the correct prefilter for diffuse; the argmin this replaced painted
+                // whole coarse voxels one instance's colour (measured: red halos around distant
+                // awnings once coarse faces became measurable). Both slots are tracked
+                // min-style with index tie-breaks, so the update is IDEMPOTENT under repeated
+                // candidate visits - the property that keeps this loop and the shader's
+                // duplicate-visiting grid walk in exact agreement, which is what argmin was
+                // originally chosen for.
+                float m1 = attr_reach;
+                float m2 = attr_reach;
+                size_t i1 = instances.size();
+                size_t i2 = instances.size();
                 for(size_t candidate = 0; candidate < instances.size(); ++candidate)
                 {
                     const auto& instance = instances[candidate];
@@ -523,9 +532,13 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                     {
                         continue;
                     }
+                    if(candidate == i1 || candidate == i2)
+                    {
+                        continue;
+                    }
                     const math::vec3 clamped =
                         math::clamp(center, instance.world_bounds.min, instance.world_bounds.max);
-                    if(math::length(center - clamped) >= best_magnitude)
+                    if(math::length(center - clamped) >= m2)
                     {
                         continue;
                     }
@@ -533,28 +546,49 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                     const float magnitude =
                         std::fabs(sample_mesh_sdf(*instance.sdf, math::vec3(local)) *
                                   instance.local_to_world_scale);
-                    if(magnitude < best_magnitude ||
-                       (magnitude == best_magnitude && candidate < best_index))
+                    if(magnitude < m1 || (magnitude == m1 && (i1 >= instances.size() || candidate < i1)))
                     {
-                        best_magnitude = magnitude;
-                        best_index = candidate;
+                        m2 = m1;
+                        i2 = i1;
+                        m1 = magnitude;
+                        i1 = candidate;
+                    }
+                    else if(magnitude < m2 ||
+                            (magnitude == m2 && (i2 >= instances.size() || candidate < i2)))
+                    {
+                        m2 = magnitude;
+                        i2 = candidate;
                     }
                 }
-                if(best_index >= instances.size())
+                if(i1 >= instances.size())
                 {
                     // The field says surface but no instance is attributable within reach. Leave
                     // the voxel dark: energy loss, never a fabricated material - the same
                     // asymmetry Lumen chooses for missing card coverage.
                     continue;
                 }
-                const auto& winner = instances[best_index];
+                // Single-source voxels copy EXACTLY: (a * w) / w is not an identity in
+                // float, and a one-ULP wobble flips quantisation on boundary values (0.8
+                // lands precisely on the 204.5 rounding edge - measured as 48 wrong-material
+                // voxels on a one-box fixture).
+                const auto& first = instances[i1];
+                math::vec3 blended_albedo = first.albedo;
+                math::vec3 blended_emissive = first.emissive;
+                if(i2 < instances.size())
+                {
+                    const float w1 = attr_reach - m1;
+                    const float w2 = attr_reach - m2;
+                    const float w_sum = math::max(w1 + w2, 1e-6f);
+                    blended_albedo = (first.albedo * w1 + instances[i2].albedo * w2) / w_sum;
+                    blended_emissive = (first.emissive * w1 + instances[i2].emissive * w2) / w_sum;
+                }
                 const auto quantize = [](float v) -> uint32_t
                 { return uint32_t(math::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
                 const size_t offset =
                     size_t(x) + size_t(y) * attr_resolution + size_t(z) * attr_resolution * attr_resolution;
-                lvl.attr_albedo[offset] = quantize(winner.albedo.x) | (quantize(winner.albedo.y) << 8u) |
-                                          (quantize(winner.albedo.z) << 16u) | (255u << 24u);
-                lvl.attr_emissive[offset] = winner.emissive;
+                lvl.attr_albedo[offset] = quantize(blended_albedo.x) | (quantize(blended_albedo.y) << 8u) |
+                                          (quantize(blended_albedo.z) << 16u) | (255u << 24u);
+                lvl.attr_emissive[offset] = blended_emissive;
                 lvl.attr_surface_list.push_back(pack_surface_voxel(x, y, z, index));
             }
         }

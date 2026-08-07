@@ -183,9 +183,13 @@
       " smaller than the cone (the failure mode: one centre ray either skewers it or misses it"    \
       " entirely), and gating at twice the mean keeps the extra budget bounded by the bright"      \
       " fraction of the sphere")                                                                   \
-    X(GI_TEMPORAL_MAX_FRAMES, 10,                                                                  \
-      "frames", "published: [CVar] Temporal.MaxFramesAccumulated = 10; depth rejection only, no"   \
-      " neighbourhood clamp [S21 s98]; the gi_resolve_pass::settings::max_accum_frames default")   \
+    X(GI_TEMPORAL_MAX_FRAMES, 24,                                                                  \
+      "frames", "measured: with per-frame cone-direction jitter the window must integrate"         \
+      " enough of each cone's R2 sequence that residual sample motion falls below visibility -"    \
+      " Lumen's 10 (their budget has far more effective rays) still crawled, 25 measured"          \
+      " stable; 24 keeps the window commensurate with the 8-frame anchor-placement cycle"          \
+      " (three full cycles). Depth rejection only, no neighbourhood clamp [S21 s98]; the"          \
+      " gi_resolve_pass::settings::max_accum_frames default")                                      \
     X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.25f,                                                          \
       "relative depth per unit view distance", "measured: Lumen's Temporal.DistanceThreshold"      \
       " = 0.005 assumes motion-vector reprojection; ours reconstructs the previous position"       \

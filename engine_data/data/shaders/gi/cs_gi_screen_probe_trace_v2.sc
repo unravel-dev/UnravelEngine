@@ -198,8 +198,9 @@ void main()
 		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
 	}
-	// Fixed, world-anchored directions: texel centres of the shared octahedral parameterisation.
-	// Deterministic per frame; the direction jitter arrives with importance sampling (Phase 6).
+	// World-anchored direction CONES: each thread owns one texel of the shared octahedral
+	// parameterisation; the cone centre is used for the below-tangent cull and the importance
+	// lookup, while the traced sample directions jitter WITHIN the cone (see the sample loop).
 	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	vec3 direction = GiOctDecode(tile_uv);
 	// The hemisphere cap below the anchor's tangent plane cannot carry irradiance; skipped with
@@ -226,9 +227,21 @@ void main()
 			sample_count = 2;
 		}
 	}
+	// Sub-texel DIRECTION jitter. Fixed centre rays ALIAS small bright sources: a source
+	// smaller than one cone is either skewered or missed by the grid, and which probes catch
+	// it varies smoothly with anchor position - printing stationary whitish blobs across
+	// walls that NO downstream filter can remove, because the per-probe estimates are BIASED,
+	// not noisy (measured: blobs immune to temporal off, denoise off, spacing, and every
+	// writer-side fix). Jittering the sample within its cone per frame turns that bias into
+	// per-frame variance the temporal chain integrates - each cone measures its whole solid
+	// angle over the accumulation window. R2 low-discrepancy across frames, IGN-decorrelated
+	// across texels; the supersample takes the antithetic offset.
+	vec2 r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_v2_camera.w);
+	float texel_ign =
+	    fract(52.9829189 * fract(0.06711056 * float(local.x) + 0.00583715 * float(local.y)));
 	vec2 sub_positions[2];
-	sub_positions[0] = vec2(0.5, 0.5);
-	sub_positions[1] = vec2(0.25, 0.25);
+	sub_positions[0] = fract(r2 + vec2(texel_ign, fract(texel_ign * 1.618033989)));
+	sub_positions[1] = fract(sub_positions[0] + vec2_splat(0.5));
 	vec3 radiance_sum = vec3_splat(0.0);
 	float hit_t = -1.0;
 	for(int s = 0; s < sample_count; ++s)

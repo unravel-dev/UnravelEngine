@@ -135,6 +135,21 @@ void main()
 		// attribute voxel - in the units of the thing being cleared.
 		float lift = max(0.0, -d_center) + 0.5 * attr_voxel;
 		vec3 position = center + direction * lift;
+		// TUNNEL GUARD: walking out of your OWN surface along the face rises monotonically
+		// (1-Lipschitz from inside the band); a lift whose midpoint reads DEEPER than the
+		// centre crossed the slab core - it exited through the FAR side, and everything
+		// measured from there (direct sun, exterior ambient) belongs to the wrong side of the
+		// wall. Un-guarded, buried faces near walls were lit by the sunlit exterior and
+		// stamped white into enclosed rooms. One field sample, only for deep lifts.
+		if(lift > attr_voxel)
+		{
+			float d_mid = SdfSampleClipmap(center + direction * (0.5 * lift));
+			if(d_mid < d_center - 0.25 * attr_voxel)
+			{
+				imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
+				continue;
+			}
+		}
 		// A face is MEASURABLE when enough of its cavity cone escapes - the same multi-scale
 		// visibility the ambient below is weighted by, computed once and shared. This replaced
 		// a single-step field-rise test, which cannot see past a coarse level's blob plateau:

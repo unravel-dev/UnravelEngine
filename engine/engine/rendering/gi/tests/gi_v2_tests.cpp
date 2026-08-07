@@ -681,9 +681,12 @@ void test_clipmap_attribute_transcription_matches_cpu()
                         field < global_sdf_clipmap::outside_distance && std::fabs(field) <= band;
                     if(is_surface)
                     {
-                        // The shader's cell-range argmin walk, transcribed.
+                        // The shader's cell-range TOP-2 walk, transcribed (idempotent under
+                        // the grid's repeated candidate visits, blended by proximity).
                         float best_magnitude = attr_reach;
+                        float second_magnitude = attr_reach;
                         int best_index = -1;
+                        int second_index = -1;
                         const auto to_cell = [&](const math::vec3& p) -> math::ivec3
                         {
                             const math::vec3 f = math::floor((p - grid_origin) / cell_size);
@@ -704,11 +707,15 @@ void test_clipmap_attribute_transcription_matches_cpu()
                                     for(size_t c = offsets[cell]; c < offsets[cell + 1]; ++c)
                                     {
                                         const int index = int(cell_instances[c]);
+                                        if(index == best_index || index == second_index)
+                                        {
+                                            continue;
+                                        }
                                         const auto& inst = instances[size_t(index)];
                                         const math::vec3 clamped = math::clamp(center,
                                                                                inst.world_bounds.min,
                                                                                inst.world_bounds.max);
-                                        if(math::length(center - clamped) >= best_magnitude)
+                                        if(math::length(center - clamped) >= second_magnitude)
                                         {
                                             continue;
                                         }
@@ -721,8 +728,17 @@ void test_clipmap_attribute_transcription_matches_cpu()
                                            (magnitude == best_magnitude &&
                                             (best_index < 0 || index < best_index)))
                                         {
+                                            second_magnitude = best_magnitude;
+                                            second_index = best_index;
                                             best_magnitude = magnitude;
                                             best_index = index;
+                                        }
+                                        else if(magnitude < second_magnitude ||
+                                                (magnitude == second_magnitude &&
+                                                 (second_index < 0 || index < second_index)))
+                                        {
+                                            second_magnitude = magnitude;
+                                            second_index = index;
                                         }
                                     }
                                 }
@@ -730,13 +746,27 @@ void test_clipmap_attribute_transcription_matches_cpu()
                         }
                         if(best_index >= 0)
                         {
-                            const auto& winner = instances[size_t(best_index)];
+                            const auto& first = instances[size_t(best_index)];
+                            math::vec3 blended_albedo = first.albedo;
+                            math::vec3 blended_emissive = first.emissive;
+                            if(second_index >= 0)
+                            {
+                                const float w1 = attr_reach - best_magnitude;
+                                const float w2 = attr_reach - second_magnitude;
+                                const float w_sum = std::max(w1 + w2, 1e-6f);
+                                blended_albedo = (first.albedo * w1 +
+                                                  instances[size_t(second_index)].albedo * w2) /
+                                                 w_sum;
+                                blended_emissive = (first.emissive * w1 +
+                                                    instances[size_t(second_index)].emissive * w2) /
+                                                   w_sum;
+                            }
                             const auto quantize = [](float v) -> uint32_t
                             { return uint32_t(math::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-                            expected_albedo = quantize(winner.albedo.x) |
-                                              (quantize(winner.albedo.y) << 8u) |
-                                              (quantize(winner.albedo.z) << 16u) | (255u << 24u);
-                            expected_emissive = winner.emissive;
+                            expected_albedo = quantize(blended_albedo.x) |
+                                              (quantize(blended_albedo.y) << 8u) |
+                                              (quantize(blended_albedo.z) << 16u) | (255u << 24u);
+                            expected_emissive = blended_emissive;
                             transcription_list.push_back(
                                 global_sdf_clipmap::pack_surface_voxel(x, y, z, level));
                         }

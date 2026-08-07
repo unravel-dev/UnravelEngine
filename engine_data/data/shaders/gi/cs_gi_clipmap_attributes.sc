@@ -115,8 +115,16 @@ void main()
 	// reach, ties to the smaller GLOBAL instance index. The same cell-range walk as
 	// cs_gi_clipmap_compose, for the same reason: an instance within reach of this voxel
 	// without containing it must still be found.
+	// TOP-2 attribution, blended by proximity (see the CPU reference for the full argument):
+	// a coarse voxel CONTAINS a mixture of the surfaces inside it, and winner-take-all painted
+	// whole voxels one instance's colour (red halos around distant awnings). Both slots update
+	// min-style with index tie-breaks and skip already-tracked indices, so repeated candidate
+	// visits from overlapping grid cells stay no-ops - the idempotence that keeps this walk
+	// and the CPU composer's full loop in exact agreement.
 	float best_magnitude = u_attr_reach;
+	float second_magnitude = u_attr_reach;
 	int best_index = -1;
+	int second_index = -1;
 	if(u_sdf_grid_enabled)
 	{
 		vec3 grid_min = u_sdf_grid_origin;
@@ -144,10 +152,14 @@ void main()
 					for(uint candidate = candidate_begin; candidate < candidate_end; ++candidate)
 					{
 						int index = int(b_sdf_grid_instances[candidate]);
+						if(index == best_index || index == second_index)
+						{
+							continue;
+						}
 						SdfInstance inst = SdfLoadInstance(index);
 						vec3 clamped_to_bounds =
 						    clamp(center, inst.world_bounds_min, inst.world_bounds_max);
-						if(length(center - clamped_to_bounds) >= best_magnitude)
+						if(length(center - clamped_to_bounds) >= second_magnitude)
 						{
 							continue;
 						}
@@ -158,8 +170,17 @@ void main()
 						if(magnitude < best_magnitude ||
 						   (magnitude == best_magnitude && (best_index < 0 || index < best_index)))
 						{
+							second_magnitude = best_magnitude;
+							second_index = best_index;
 							best_magnitude = magnitude;
 							best_index = index;
+						}
+						else if(magnitude < second_magnitude ||
+						        (magnitude == second_magnitude &&
+						         (second_index < 0 || index < second_index)))
+						{
+							second_magnitude = magnitude;
+							second_index = index;
 						}
 					}
 				}
@@ -179,14 +200,32 @@ void main()
 		}
 		return;
 	}
-	SdfInstance winner = SdfLoadInstance(best_index);
-	vec3 winner_albedo = winner.albedo;
-	if(winner.mean_slot != 0u)
+	SdfInstance first = SdfLoadInstance(best_index);
+	vec3 first_albedo = first.albedo;
+	if(first.mean_slot != 0u)
 	{
-		winner_albedo *= b_gi_texture_means[winner.mean_slot].xyz;
+		first_albedo *= b_gi_texture_means[first.mean_slot].xyz;
 	}
-	imageStore(s_attr_albedo_out, texel, vec4(winner_albedo, 1.0));
-	imageStore(s_attr_emissive_out, texel, vec4(winner.emissive, 0.0));
+	// Single-source voxels copy EXACTLY: (a * w) / w is not an identity in float, and a
+	// one-ULP wobble flips quantisation on boundary values (see the CPU reference).
+	vec3 blended_albedo = first_albedo;
+	vec3 blended_emissive = first.emissive;
+	if(second_index >= 0)
+	{
+		SdfInstance second = SdfLoadInstance(second_index);
+		vec3 second_albedo = second.albedo;
+		if(second.mean_slot != 0u)
+		{
+			second_albedo *= b_gi_texture_means[second.mean_slot].xyz;
+		}
+		float w1 = u_attr_reach - best_magnitude;
+		float w2 = u_attr_reach - second_magnitude;
+		float w_sum = max(w1 + w2, 1e-6);
+		blended_albedo = (first_albedo * w1 + second_albedo * w2) / w_sum;
+		blended_emissive = (first.emissive * w1 + second.emissive * w2) / w_sum;
+	}
+	imageStore(s_attr_albedo_out, texel, vec4(blended_albedo, 1.0));
+	imageStore(s_attr_emissive_out, texel, vec4(blended_emissive, 0.0));
 	uint cursor;
 	atomicFetchAndAdd(b_surface_count[uint(u_attr_level)], 1u, cursor);
 	uint capacity = uint(resolution * resolution * resolution);
