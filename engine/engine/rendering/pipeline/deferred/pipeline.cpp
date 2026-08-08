@@ -781,6 +781,32 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
+    // GI reflections layer UNDER SSR: the world-space specular tier draws over the authored
+    // probes in RBUFFER, then SSR composites the sharp on-screen result on top - screen space
+    // belongs to SSR alone. Runs after Hi-Z (positions reconstruct from the pyramid).
+    if(is_camera_run)
+    {
+        gi_settings gi_reflection_settings;
+        if(resolve_gi_settings(params, gi_reflection_settings) &&
+           gi_reflection_settings.resolve.enable_reflections && engine::context().has<surface_cache_service>())
+        {
+            gi_reflection_pass::run_params grp;
+            grp.g_buffer = rview.fbo_safe_get("GBUFFER");
+            grp.output = rview.fbo_safe_get("RBUFFER");
+            grp.hiz = rview.tex_safe_get("HIZBUFFER");
+            grp.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+            // This pass runs before the frame's GI resolve, so the stored texture still holds
+            // LAST frame's denoised result - the rough-specular source (one frame of lag, the
+            // same convention as prev_color).
+            grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
+            grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
+            grp.cam = &camera;
+            grp.surface_cache = &engine::context().get<surface_cache_service>();
+            grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+            gi_reflection_pass_.run(rview, grp);
+        }
+    }
+
     // SSR samples the previous visible output before this frame overwrites it, so traced
     // reflections use the same resolved scene color that was presented last frame.
     run_ssr_pass(camera, rview, output, params);

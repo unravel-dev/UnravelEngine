@@ -46,6 +46,14 @@ public:
         /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
         /// GI or the reflection stack is on); off degrades to pure SDF tracing.
         bool enable_screen_trace = true;
+        /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
+        /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
+        /// beyond) - contributing the off-screen reflections SSR cannot have.
+        bool enable_reflections = true;
+        /// Temporal window (frames) for the stochastic reflection ray - steady-state blend
+        /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
+        /// A/B knob for verifying the accumulation is alive.
+        int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
         /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
         /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
         /// completion - and the mix survives the whole chain, so the lit image shows the

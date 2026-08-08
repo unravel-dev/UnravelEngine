@@ -57,6 +57,15 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "Hi-Z screen tier: gather rays march the depth pyramid first and commit "
                             "pixel-precise on-screen hits before the SDF answers."},
         })
+        .data<&settings::enable_reflections>("enable_reflections"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_reflections"},
+            entt::attribute{"pretty_name", "Reflections"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "World-space specular tier under SSR: rough lobes from the world "
+                            "probes, sharp ones traced - off-screen reflections SSR cannot see."},
+        })
         .data<&settings::debug_view>("debug_view"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "debug_view"},
@@ -74,6 +83,17 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Temporal"},
             entt::attribute{"group", "Filtering"},
             entt::attribute{"tooltip", "Full-resolution temporal accumulation (depth-rejection only)."},
+        })
+        .data<&settings::reflection_temporal_frames>("reflection_temporal_frames"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_temporal_frames"},
+            entt::attribute{"pretty_name", "Reflection Temporal Frames"},
+            entt::attribute{"group", "Filtering"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 64.0f},
+            entt::attribute{"tooltip",
+                            "Stochastic reflection accumulation window; 0/1 turns the "
+                            "reflection temporal off."},
         })
         .data<&settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -302,6 +322,8 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     // debug_view is deliberately NOT saved: a scene must never load with a diagnostic view on.
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
+    try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_save(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));
@@ -324,6 +346,8 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
+    try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_load(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));

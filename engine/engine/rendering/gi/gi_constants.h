@@ -171,6 +171,38 @@
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
       "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour"               \
       " hit whose reprojected direction deviates by more than pi/50")                              \
+    /* --- reflections (plan phase 9) --- */                                                       \
+    X(GI_REFLECTION_ROUGH_CUTOFF, 0.4f,                                                            \
+      "GGX roughness", "derived: the world-probe radiance atlas texel (16x16 octahedral,"          \
+      " about a 13-degree half-angle) subtends the same solid angle as a GGX lobe of"              \
+      " roughness ~0.4. A rougher lobe is already prefiltered by the atlas - those pixels"         \
+      " read the probe cage along the reflection and pay no ray; sharper lobes trace")             \
+    X(GI_REFLECTION_TEMPORAL_FRAMES, 8,                                                            \
+      "frames", "derived: the stochastic GGX reflection ray (VNDF, R2 sequence per frame)"         \
+      " integrates its lobe over this many frames of history. One 8-frame R2 cycle matches"        \
+      " the gather's anchor cycle (GI_TEMPORAL_MAX_FRAMES is three of them) - reflections"        \
+      " must track moving content faster than irradiance, so one cycle, ~130 ms at 60 Hz."         \
+      " The temporal pass clamps history to the 3x3 neighbourhood of the current frame's"         \
+      " samples, so stale content cannot outlive a frame regardless of this length")               \
+    X(GI_REFLECTION_MESH_SDF_RANGE, 16.0f,                                                         \
+      "meters", "derived: the mesh-SDF detail tier for REFLECTION rays runs to the finest"         \
+      " cascade's full extent (128 voxels x 0.125 m = 16 m). The gather caps its detail tier"     \
+      " at 2 m (GI_MESH_SDF_TRACE_RANGE) because 64 cones amortize the cost and irradiance"        \
+      " hides silhouette error - a reflection is ONE ray per pixel presenting an IMAGE, where"     \
+      " clipmap-tier inflation is directly visible at any distance (measured: fattened box"        \
+      " reflections + silhouette halos on a mirror floor, round 5). Past level 0's extent any"    \
+      " lobe wide enough to carry confidence has a cone footprint spanning multiple voxels,"       \
+      " so the clipmap legitimately answers. The instance grid walk is the cost knob: only"        \
+      " sharp-tier pixels whose screen trace missed pay it")                                       \
+    X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
+      "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
+      " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
+      " the 13-degree prefiltered probe radiance by the lobe/texel angle ratio), so the fade"      \
+      " toward the gather-based rough value has one job left: C0 continuity into the rough"        \
+      " tier at the cutoff. It starts where the lobe/texel blend has already replaced the"         \
+      " majority of the sharp trace ((0.75)^2 = 56 percent), reconciling only the residual -"      \
+      " a wide fade from the mirror end read as content dissolving instead of blurring"            \
+      " (measured, round 3)")                                                                      \
     /* --- temporal (plan 3.5) --- */                                                              \
     X(GI_V2_INTERPOLATION_JITTER_TILES, 1.0f,                                                      \
       "probe tiles", "published: [CVar] ScreenProbeGather.FullResolutionJitterWidth = 1 - the"     \

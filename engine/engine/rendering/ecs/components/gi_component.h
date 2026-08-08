@@ -51,6 +51,7 @@ public:
         r.resolution = dominant ? f.resolution : r.resolution;
         r.probe_spacing = dominant ? f.probe_spacing : r.probe_spacing;
         r.enable_screen_trace = dominant ? f.enable_screen_trace : r.enable_screen_trace;
+        r.enable_reflections = dominant ? f.enable_reflections : r.enable_reflections;
         r.debug_view = dominant ? f.debug_view : r.debug_view;
         r.enable_temporal = dominant ? f.enable_temporal : r.enable_temporal;
         r.max_accum_frames = std::lerp(r.max_accum_frames, f.max_accum_frames, contribution);
