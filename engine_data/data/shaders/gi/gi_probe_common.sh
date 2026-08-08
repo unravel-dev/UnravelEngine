@@ -10,21 +10,27 @@
  * radiance is filtered IN PROBE SPACE before any pixel sees it -- the three structural
  * advantages a per-pixel gather cannot have at any tuning.
  *
- * Layout, shared by all three probe passes and mirrored by gi_resolve_pass.cpp:
+ * Layout, shared by the probe passes and mirrored by gi_resolve_pass.cpp:
  *  - Radiance atlas: a 2D RGBA16F image, one GI_PROBE_DIR_EDGE^2 octahedral tile per probe,
  *    tiles packed in probe-grid order. rgb = radiance (intensity applied), a = the cone's
  *    encoded PROXIMITY (see GI_PROBE_PROXIMITY_SKY): what the cone saw and roughly how far
  *    away, 0 where the texel measured nothing.
  *  - Probe buffer: GI_PROBE_STRIDE vec4s per probe, probe-major:
- *      [9]     xyz = anchor world position, w = 1 when the probe anchors on geometry
+ *      [0..3]  the 4x4 importance mip the filter writes for next frame's ray allocation
+ *      [4]     xyz = lifted trace origin, w = shortened-ray range (placement pass)
+ *      [5]     xy = anchor uv, z = anchor device depth, w unused (placement pass)
+ *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
+ *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
+ *              that only care about validity keep testing w > 0.5.
  *      [10]    xyz = anchor world normal, w = anchor view distance
  *      [11]    x = accumulated history count, y = this frame's blend weight
- *    (slots [0..8] held an SH2 projection in an earlier design and are currently unused.)
  */
 
 #define GI_PROBE_DIR_EDGE   8
 #define GI_PROBE_DIR_COUNT  64
 #define GI_PROBE_STRIDE     12
+#define GI_PROBE_ORIGIN     4
+#define GI_PROBE_ANCHOR     5
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
 /// Single layer: the v2 gather anchors one probe per tile (Phase 8 removed the v1
@@ -141,6 +147,58 @@ void GiShIrradianceWeights(out float weights[9])
 	weights[6] = 0.25;
 	weights[7] = 0.25;
 	weights[8] = 0.25;
+}
+
+/// 2,3-Halton point of an 8-cycle, the placement jitter within the probe tile. A short cycle on
+/// purpose: the temporal filter accumulates a bounded window, so the cycle must fit inside it.
+vec2 GiHalton8(uint frame)
+{
+	uint index = frame % 8u;
+	float h2 = 0.0;
+	float f2 = 0.5;
+	uint n2 = index + 1u;
+	for(int i = 0; i < 4 && n2 > 0u; ++i)
+	{
+		h2 += f2 * float(n2 % 2u);
+		n2 /= 2u;
+		f2 *= 0.5;
+	}
+	float h3 = 0.0;
+	float f3 = 1.0 / 3.0;
+	uint n3 = index + 1u;
+	for(int i = 0; i < 3 && n3 > 0u; ++i)
+	{
+		h3 += f3 * float(n3 % 3u);
+		n3 /= 3u;
+		f3 /= 3.0;
+	}
+	return vec2(h2, h3);
+}
+
+/// The even-lattice PARENTS of a probe for the adaptive gather: the up-to-four probes at even
+/// coordinates bracketing it along each odd axis. A non-straddled (even) axis and a lattice
+/// edge both DUPLICATE a parent rather than shrink the set, so four uniform 0.25 taps always
+/// normalise correctly - and the clamp falls BACK to the low parent, never onto an odd
+/// coordinate, because odd probes may themselves be interpolated and must never be read as a
+/// source (the interp pass relies on parents being trace-written this same frame).
+void GiProbeParents(ivec2 probe, out ivec2 parents[4])
+{
+	int x0 = probe.x & (~1);
+	int y0 = probe.y & (~1);
+	int x1 = (probe.x & 1) != 0 ? x0 + 2 : x0;
+	int y1 = (probe.y & 1) != 0 ? y0 + 2 : y0;
+	if(x1 >= u_gi_probe_count_x)
+	{
+		x1 = x0;
+	}
+	if(y1 >= u_gi_probe_count_y)
+	{
+		y1 = y0;
+	}
+	parents[0] = ivec2(x0, y0);
+	parents[1] = ivec2(x1, y0);
+	parents[2] = ivec2(x0, y1);
+	parents[3] = ivec2(x1, y1);
 }
 
 uint GiProbeIndex(int px, int py)

@@ -54,7 +54,9 @@ SAMPLER2D(s_gi_env_sh, 14);
 uniform vec4 u_gi_v2_camera;
 /// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs.
 /// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
-/// (green = screen commit, red = SDF hit, blue = world-probe/sky completion). zw unused.
+/// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
+/// paints interpolated tiles magenta under the same flag).
+/// z > 0 = ADAPTIVE gather: odd-lattice probes on their parents' plane skip tracing. w unused.
 uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
 /// importance mip the filter stored in that probe's record slots.
@@ -74,32 +76,6 @@ SHARED vec3 s_vs_origin;
 SHARED int s_history_record;
 SHARED float s_importance_mean;
 
-/// 2,3-Halton point of an 8-cycle, the placement jitter within the probe tile. A short cycle on
-/// purpose: the temporal filter accumulates 10 frames, so the cycle must fit inside it.
-vec2 GiHalton8(uint frame)
-{
-	uint index = frame % 8u;
-	float h2 = 0.0;
-	float f2 = 0.5;
-	uint n2 = index + 1u;
-	for(int i = 0; i < 4 && n2 > 0u; ++i)
-	{
-		h2 += f2 * float(n2 % 2u);
-		n2 /= 2u;
-		f2 *= 0.5;
-	}
-	float h3 = 0.0;
-	float f3 = 1.0 / 3.0;
-	uint n3 = index + 1u;
-	for(int i = 0; i < 3 && n3 > 0u; ++i)
-	{
-		h3 += f3 * float(n3 % 3u);
-		n3 /= 3u;
-		f3 /= 3.0;
-	}
-	return vec2(h2, h3);
-}
-
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -115,42 +91,64 @@ void main()
 		s_valid = 0.0;
 		s_history_record = -1;
 		s_importance_mean = 0.0;
-		vec2 jitter = GiHalton8(uint(u_gi_v2_camera.w));
-		vec2 pixel = (vec2(probe.xy) + jitter) * u_gi_probe_spacing;
-		pixel = min(pixel, u_gi_probe_screen.xy - vec2_splat(1.0));
-		vec2 uv = (floor(pixel) + vec2_splat(0.5)) * u_gi_probe_screen.zw;
-		float depth = texture2DLod(s_hiz, uv, 0.0).x;
-		if(depth < 1.0)
+		// Placement (cs_gi_screen_probe_place_v2) already computed EVERY probe's anchor into
+		// the records this frame; reading them back is what makes the adaptive decision below
+		// possible at all - parent anchors exist before any group runs.
+		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
+		if(meta.w > 0.5)
 		{
-			vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
-			vec3 world_position = clipToWorld(u_invViewProj, clip);
-			GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_gi_normal, 0.0);
-			if(dot(nd.world_normal, nd.world_normal) >= 0.5)
+			vec3 world_position = meta.xyz;
+			vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
+			vec3 world_normal = meta2.xyz;
+			// ADAPTIVE GATHER: even-lattice probes are the coarse base and always trace. An
+			// odd-lattice probe whose anchor lies ON the plane its even-lattice parents span -
+			// and faces the same way to within one octahedral texel's cone - would trace a
+			// tile the parents' blend already predicts (exactly the interpolation the
+			// integrate pass performs per pixel, materialised per tile). It is marked
+			// INTERPOLATED (meta mode 2) and skips the 64-ray march;
+			// cs_gi_screen_probe_interp_v2 reconstructs its tile before the filter. Geometry
+			// breaks - depth discontinuities, curvature past the cone, an invalid parent -
+			// fail the test and keep tracing, so detail keeps full probe density.
+			bool interpolated = false;
+			BRANCH
+			if(u_gi_screen_trace.z > 0.0 && ((probe.x | probe.y) & 1) != 0)
 			{
-				vec3 world_normal = normalize(nd.world_normal);
-				// Lift off the composed isosurface by what THIS point needs: its own burial
-				// depth plus the trace's acceptance, in the answering level's voxels.
-				float voxel;
-				float d = SdfSampleClipmapEx(world_position, voxel);
-				voxel = max(voxel, 0.01);
-				float lift = max(0.0, -d) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
+				interpolated = true;
+				ivec2 parents[4];
+				GiProbeParents(probe, parents);
+				float plane_tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
+				LOOP for(int p = 0; p < 4; ++p)
+				{
+					uint parent_record =
+					    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_write_offset) *
+					    uint(GI_PROBE_STRIDE);
+					vec4 parent_meta = b_gi_probes[parent_record + uint(GI_PROBE_META)];
+					vec4 parent_meta2 = b_gi_probes[parent_record + uint(GI_PROBE_META2)];
+					if(parent_meta.w < 0.5 ||
+					   abs(dot(parent_meta.xyz - world_position, world_normal)) > plane_tolerance ||
+					   dot(parent_meta2.xyz, world_normal) < GI_ADAPTIVE_NORMAL_COS)
+					{
+						interpolated = false;
+					}
+				}
+			}
+			if(interpolated)
+			{
+				b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 2.0);
+				s_valid = 2.0;
+			}
+			else
+			{
+				vec4 origin_range = b_gi_probes[record + uint(GI_PROBE_ORIGIN)];
+				vec4 anchor = b_gi_probes[record + uint(GI_PROBE_ANCHOR)];
 				s_anchor_position = world_position;
 				s_anchor_normal = world_normal;
-				s_origin = world_position + world_normal * lift;
-				// Shortened-ray range: twice the local world-probe spacing covers the probe
-				// cage's footprint plus the completion skip [S21 s71-72].
-				float blend;
-				float answered_voxel;
-				int level = SdfFindClipmapLevel(world_position, blend, answered_voxel);
-				int clamped = level >= SDF_CLIPMAP_LEVEL_COUNT ? SDF_CLIPMAP_LEVEL_COUNT - 1 : level;
-				s_short_range = 2.0 * GiWorldProbeSpacing(clamped);
-				s_anchor_uv = uv;
-				s_ss_origin = vec3(uv, depth);
-				s_vs_origin = HizComputeViewspacePosition(uv, depth);
+				s_origin = origin_range.xyz;
+				s_short_range = origin_range.w;
+				s_anchor_uv = anchor.xy;
+				s_ss_origin = vec3(anchor.xy, anchor.z);
+				s_vs_origin = HizComputeViewspacePosition(anchor.xy, anchor.z);
 				s_valid = 1.0;
-				b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
-				b_gi_probes[record + uint(GI_PROBE_META2)] =
-				    vec4(world_normal, length(world_position - u_gi_v2_camera.xyz));
 				// Reproject the anchor into LAST frame's lattice for the importance mip. A
 				// failed or plane-rejected reprojection just means uniform allocation this
 				// frame - importance is an optimisation, never a correctness dependency.
@@ -185,14 +183,14 @@ void main()
 				}
 			}
 		}
-		if(s_valid < 0.5)
-		{
-			b_gi_probes[record + uint(GI_PROBE_META)] = vec4_splat(0.0);
-			b_gi_probes[record + uint(GI_PROBE_META2)] = vec4_splat(0.0);
-		}
 	}
 	barrier();
 	ivec2 texel = GiProbeAtlasBase(probe.x, probe.y, 0) + local;
+	// Interpolated: the interp pass owns this tile - nothing to trace, nothing to write.
+	if(s_valid > 1.5)
+	{
+		return;
+	}
 	if(s_valid < 0.5)
 	{
 		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
@@ -264,7 +262,12 @@ void main()
 			{
 				vec2 screen_size = HizGetDepthMipResolution(s_hiz, 0);
 				vec3 ss_hit = vec3_splat(0.0);
-				bool marched = HizHierarchicalRaymarch(s_hiz, s_ss_origin, ss_dir, screen_size, 0,
+				// Mip-1 floor (GI_SCREEN_TRACE_MIN_MIP): these rays are cone-amortized over a
+				// probe tile, so a mip-0 walk buys sub-pixel precision below the cone footprint
+				// at twice the traversal cost. Validation still reads mip-0 depth; a lost
+				// commit falls through to the SDF, which is the watertight answer anyway.
+				bool marched = HizHierarchicalRaymarch(s_hiz, s_ss_origin, ss_dir, screen_size,
+				                                       GI_SCREEN_TRACE_MIN_MIP,
 				                                       GI_SCREEN_TRACE_MAX_STEPS, ss_hit);
 				BRANCH
 				if(marched)

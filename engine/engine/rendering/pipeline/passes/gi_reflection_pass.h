@@ -10,6 +10,8 @@
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 
+#include "trace_resolution.h"
+
 namespace unravel
 {
 
@@ -45,6 +47,13 @@ public:
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// Trace + accumulation resolution, the SAME knob the whole gather runs at
+        /// (gi_resolve_pass::settings::resolution, default half): the composite's edge-stopped
+        /// 3x3 kernel reconstructs full resolution as a joint bilateral upsample, so below-full
+        /// divisors quarter (or better) the cost of the two expensive stages. Pixel-exact
+        /// on-screen mirrors stay SSR's job, layered on top; what this tier uniquely
+        /// contributes (off-screen content) is voxel-resolution anyway.
+        trace_resolution resolution = trace_resolution::half;
         const camera* cam{};
         surface_cache_service* surface_cache{};
         surface_cache_view* view_cache{};

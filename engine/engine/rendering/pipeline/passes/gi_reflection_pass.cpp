@@ -14,14 +14,13 @@ namespace unravel
 
 namespace
 {
-/// RGBA16F full-res target + wrapping fbo, persisted in the render view by name.
+/// RGBA16F target + wrapping fbo at an explicit size, persisted in the render view by name.
 auto create_or_update_target(gfx::render_view& rview,
                              const std::string& name,
-                             const gfx::frame_buffer::ptr& ref,
+                             const usize32_t& size,
                              gfx::texture::ptr& out_tex,
                              bool& out_created) -> gfx::frame_buffer::ptr
 {
-    const auto size = ref->get_size();
     auto& tex = rview.tex_get_or_emplace(name);
     out_created = false;
     if(gfx::needs_recreate(tex, size))
@@ -92,17 +91,23 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     bool raw_created = false;
     bool read_created = false;
     bool write_created = false;
-    auto raw_fbo = create_or_update_target(rview, "GI_REFL_RAW", params.output, raw_tex, raw_created);
+    // Trace + accumulation targets at the gather's shared trace resolution: the two expensive
+    // stages shrink by the divisor squared, and the composite's edge-stopped kernel below
+    // reconstructs full resolution as a joint bilateral upsample. Normalised uvs make the
+    // shaders resolution-agnostic.
+    const auto full_size = params.output->get_size();
+    const usize32_t trace_size = compute_trace_size(full_size, params.resolution);
+    auto raw_fbo = create_or_update_target(rview, "GI_REFL_RAW", trace_size, raw_tex, raw_created);
     const bool odd_frame = (gfx::get_render_frame() & 1u) != 0u;
     auto read_fbo = create_or_update_target(rview,
                                             odd_frame ? "GI_REFL_ACC_A" : "GI_REFL_ACC_B",
-                                            params.output,
+                                            trace_size,
                                             read_tex,
                                             read_created);
     (void)read_fbo;
     auto write_fbo = create_or_update_target(rview,
                                              odd_frame ? "GI_REFL_ACC_B" : "GI_REFL_ACC_A",
-                                             params.output,
+                                             trace_size,
                                              write_tex,
                                              write_created);
     // Only the READ texture's content matters for validity - RAW and WRITE are fully
@@ -174,10 +179,9 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(temporal_program_.s_refl_depth, 2, params.hiz);
         auto prev_view_proj = params.cam->get_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
-        const auto size = params.output->get_size();
         const float temporal_params[4] = {history_valid ? 1.0f : 0.0f,
-                                          1.0f / float(size.width),
-                                          1.0f / float(size.height),
+                                          1.0f / float(trace_size.width),
+                                          1.0f / float(trace_size.height),
                                           float(params.temporal_frames)};
         gfx::set_uniform(temporal_program_.u_gi_refl_temporal, temporal_params);
         // clip_quad() stages a transient vertex buffer consumed by ONE submit - every draw
@@ -196,8 +200,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(composite_program_.s_refl_acc, 0, write_tex);
         gfx::set_texture(composite_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
         gfx::set_texture(composite_program_.s_hiz, 2, params.hiz);
-        const auto csize = params.output->get_size();
-        const float composite_params[4] = {1.0f / float(csize.width), 1.0f / float(csize.height), 0.0f, 0.0f};
+        // Offsets measure ACCUMULATION texels (equal to output texels at full res): at half
+        // res the composite's edge-stopped 3x3 becomes a joint bilateral upsample for free.
+        const float composite_params[4] = {1.0f / float(trace_size.width),
+                                           1.0f / float(trace_size.height),
+                                           0.0f,
+                                           0.0f};
         gfx::set_uniform(composite_program_.u_gi_refl_composite, composite_params);
         gfx::set_state(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));

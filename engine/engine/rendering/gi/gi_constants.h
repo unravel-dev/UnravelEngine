@@ -139,6 +139,19 @@
     X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
       "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \
       " the gi_resolve_pass::settings::probe_spacing default")                                     \
+    X(GI_ADAPTIVE_PLANE_TOLERANCE, 0.05f,                                                          \
+      "fraction of view distance", "derived: the adaptive gather may substitute a probe's tile"    \
+      " with its even-lattice parents' blend only where the integrate pass would have blended"     \
+      " those parents at full weight anyway - so the classification reuses the SAME"               \
+      " spatial-error rule the integrate bracket and the probe-space filter apply (their local"    \
+      " 0.05 plane tolerances). An anchor further off the parents' plane than integration"        \
+      " tolerates is genuine geometric detail and keeps its traced probe")                         \
+    X(GI_ADAPTIVE_NORMAL_COS, 0.96875f,                                                            \
+      "cosine", "derived: 1 - 2 / GI_PROBE_DIR_COUNT - the cosine of the cone holding ONE"         \
+      " octahedral texel's solid angle (4pi/64). Parents facing within one texel of the probe"     \
+      " produce tiles identical up to the atlas's own angular resolution, so substituting their"   \
+      " blend loses nothing the atlas could have kept; curved geometry fails the test and keeps"   \
+      " full probe density, which is the correct direction - its radiance genuinely varies")       \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
       "pre-exposed radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly"   \
       " clamp at trace time")                                                                      \
@@ -148,6 +161,14 @@
       "Hi-Z iterations", "published-from-SSIL-measurement: the iteration budget the screen"        \
       " stack ships with (ssil_pass max_steps default); the hierarchical march resolves or"        \
       " leaves the screen well inside it at gather ray lengths")                                   \
+    X(GI_SCREEN_TRACE_MIN_MIP, 1,                                                                  \
+      "Hi-Z mip", "derived: the gather's screen tier serves cone-amortized probe rays (64 per"     \
+      " 16-pixel tile), so mip-0 sub-pixel precision is below the cone's own footprint; walking"   \
+      " the pyramid no finer than mip 1 halves per-ray traversal in the dominant pass. Hit"        \
+      " validation still reads mip-0 depth, and a low-confidence coarse hit falls through to"      \
+      " the watertight SDF answer - the failure direction is the pre-screen-tier image, which"     \
+      " was measured visually near-identical. SSR/SSIL keep mip 0: they present pixel-exact"       \
+      " images, the gather presents filtered irradiance")                                          \
     X(GI_SCREEN_TRACE_DEPTH_TOLERANCE, 0.15f,                                                      \
       "view-space m at zero distance", "published-from-SSIL-measurement: hit acceptance band"      \
       " against the mip-0 depth (ssil_pass depth_tolerance default)")                              \

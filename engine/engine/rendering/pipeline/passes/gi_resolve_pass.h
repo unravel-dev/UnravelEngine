@@ -46,6 +46,13 @@ public:
         /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
         /// GI or the reflection stack is on); off degrades to pure SDF tracing.
         bool enable_screen_trace = true;
+        /// Adaptive gather: odd-lattice probes whose anchor lies on their even-lattice
+        /// parents' plane (and faces within one octahedral texel of them) skip the 64-ray
+        /// trace and reconstruct from the parents in probe space - flat regions run on a
+        /// quarter of the ray budget while geometry breaks keep full probe density. The
+        /// classification is exactly the interpolation test the integrate pass applies per
+        /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
+        bool adaptive_probes = true;
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
@@ -123,10 +130,12 @@ public:
 
     /// Whether the gather programs loaded. The legacy hash-cache paths are gone (Phase 8);
     /// without these programs the pass clears its output and the environment term covers.
+    /// Placement joined the required set with the adaptive gather: the trace reads the
+    /// records placement writes and cannot anchor without them.
     auto has_v2_programs() const -> bool
     {
-        return v2_trace_program_.is_valid() && v2_filter_program_.is_valid() &&
-               v2_integrate_program_.is_valid();
+        return v2_place_program_.is_valid() && v2_trace_program_.is_valid() &&
+               v2_filter_program_.is_valid() && v2_integrate_program_.is_valid();
     }
 
 private:
@@ -252,6 +261,65 @@ private:
             return program && program->is_valid();
         }
     } v2_filter_program_;
+
+    /// Placement (adaptive gather): computes every probe's anchor into the records before the
+    /// trace, which is what lets the trace classify a probe against its parents' anchors.
+    struct v2_place_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr s_hiz;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_place_program_;
+
+    /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
+    /// between the trace and the filter, so downstream passes see a complete atlas.
+    struct v2_interp_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_screen_trace;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_interp_program_;
 
     struct v2_integrate_program : uniforms_cache
     {

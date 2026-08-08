@@ -800,6 +800,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             // same convention as prev_color).
             grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
             grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
+            grp.resolution = gi_reflection_settings.resolve.resolution;
             grp.cam = &camera;
             grp.surface_cache = &engine::context().get<surface_cache_service>();
             grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);

@@ -57,6 +57,16 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "Hi-Z screen tier: gather rays march the depth pyramid first and commit "
                             "pixel-precise on-screen hits before the SDF answers."},
         })
+        .data<&settings::adaptive_probes>("adaptive_probes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "adaptive_probes"},
+            entt::attribute{"pretty_name", "Adaptive Probes"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Probes on flat regions skip tracing and reconstruct from their "
+                            "neighbours; geometry breaks keep full probe density. Flat scenes "
+                            "trace a fraction of the rays for the same image."},
+        })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_reflections"},
@@ -322,6 +332,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     // debug_view is deliberately NOT saved: a scene must never load with a diagnostic view on.
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
@@ -346,6 +357,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));

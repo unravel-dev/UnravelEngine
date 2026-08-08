@@ -107,9 +107,20 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     // GI v2 gather programs (plan phase 5). Their absence falls back to the v1 probe path.
+    auto cs_v2_place = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_place_v2.sc");
+    v2_place_program_.program = std::make_unique<gpu_program>(cs_v2_place);
+    v2_place_program_.cache_uniforms();
     auto cs_v2_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_v2.sc");
     v2_trace_program_.program = std::make_unique<gpu_program>(cs_v2_trace);
     v2_trace_program_.cache_uniforms();
+    auto cs_v2_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp_v2.sc");
+    v2_interp_program_.program = std::make_unique<gpu_program>(cs_v2_interp);
+    v2_interp_program_.cache_uniforms();
+    if(!v2_interp_program_.is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI probe interp program failed to load. Adaptive probes "
+                       "are disabled for this run.");
+    }
     auto cs_v2_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_filter_v2.sc");
     v2_filter_program_.program = std::make_unique<gpu_program>(cs_v2_filter);
     v2_filter_program_.cache_uniforms();
@@ -301,6 +312,42 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                                 0.0f,
                                                 0.0f};
             const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
+            // Hoisted out of the trace: placement and reconstruction share them.
+            const bool screen_trace = params.hiz && params.hiz->is_valid() && s.enable_screen_trace;
+            const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
+            const bool adaptive = s.adaptive_probes && v2_interp_program_.is_valid();
+            const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
+                                                  float(s.debug_view),
+                                                  adaptive ? 1.0f : 0.0f,
+                                                  0.0f};
+            {
+                // PLACEMENT (adaptive gather): every probe's anchor lands in the records
+                // before the trace runs - the only ordering under which a probe can test
+                // itself against its parents' anchors. One thread per probe; noise next to
+                // the trace it gates.
+                gfx::render_pass pass("GI/Probe Place");
+                pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+                v2_place_program_.program->begin();
+                gfx::set_texture(v2_place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                gfx::set_texture(v2_place_program_.s_hiz, 8, hiz_or_depth);
+                gfx::set_texture(v2_place_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                gfx::set_uniform(v2_place_program_.u_sdf_clipmap_levels,
+                                 clipmap_gpu.get_level_params(),
+                                 global_sdf_clipmap::level_count);
+                gfx::set_uniform(v2_place_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+                gfx::set_uniform(v2_place_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(v2_place_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(v2_place_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(v2_place_program_.u_gi_v2_camera, v2_camera);
+                gfx::set_uniform(v2_place_program_.u_gi_world_probe_params, wp_params);
+                gfx::dispatch(pass.id,
+                              v2_place_program_.program->native_handle(),
+                              (probes_x + 7u) / 8u,
+                              (probes_y + 7u) / 8u,
+                              1);
+                v2_place_program_.program->end();
+            }
             {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
@@ -317,10 +364,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 // Hi-Z when present (mip 0 is the device depth, so the anchor reads it the
                 // same); raw depth otherwise, with the screen tier switched off below.
-                const bool screen_trace = params.hiz && params.hiz->is_valid() && s.enable_screen_trace;
-                gfx::set_texture(v2_trace_program_.s_hiz,
-                                 8,
-                                 screen_trace ? params.hiz : params.g_buffer->get_texture(4));
+                gfx::set_texture(v2_trace_program_.s_hiz, 8, hiz_or_depth);
                 gfx::set_texture(v2_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_texture(v2_trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
                 gfx::set_texture(v2_trace_program_.s_world_probe_irradiance,
@@ -342,10 +386,6 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(v2_trace_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(v2_trace_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(v2_trace_program_.u_gi_v2_camera, v2_camera);
-                const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
-                                                      float(s.debug_view),
-                                                      0.0f,
-                                                      0.0f};
                 gfx::set_uniform(v2_trace_program_.u_gi_screen_trace, screen_trace_params);
                 const auto v2_prev_view_proj = params.cam->get_prev_view_projection();
                 gfx::set_uniform(v2_trace_program_.u_gi_prev_view_proj, v2_prev_view_proj.get_matrix());
@@ -357,6 +397,25 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::dispatch(pass.id, v2_trace_program_.program->native_handle(), probes_x, probes_y, 1);
                 v2_trace_program_.program->end();
                 records_trusted_ = true;
+            }
+            if(adaptive)
+            {
+                // RECONSTRUCTION: interpolated probes' tiles rebuilt from their parents before
+                // the filter reads the atlas. Parents are always trace-written (evens never
+                // interpolate), so one read-write image binding carries no intra-pass hazard.
+                gfx::render_pass pass("GI/Probe Interp");
+                v2_interp_program_.program->begin();
+                gfx::set_image(5,
+                               write_atlas->native_handle(),
+                               0,
+                               gfx::access::ReadWrite,
+                               gfx::texture_format::RGBA16F);
+                gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
+                gfx::set_uniform(v2_interp_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(v2_interp_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(v2_interp_program_.u_gi_screen_trace, screen_trace_params);
+                gfx::dispatch(pass.id, v2_interp_program_.program->native_handle(), probes_x, probes_y, 1);
+                v2_interp_program_.program->end();
             }
             {
                 gfx::render_pass pass("GI/Probe Filter");
