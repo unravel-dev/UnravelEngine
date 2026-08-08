@@ -193,10 +193,16 @@ void main()
 		{
 			hit_normal = -hit_normal;
 		}
-		if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+		if(hit.exhausted || !GiLightVoxelRead(hit_position, hit_normal, radiance))
 		{
-			// Occluded but unmeasured: honest darkness, the shared contract.
-			radiance = vec3_splat(0.0);
+			// A gave-up march ("hits" mid-air when a grazing far ray exhausts its budget) or
+			// an unmeasured coarse face must NOT answer with black. The gather's
+			// honest-darkness contract exists to stop light leaking INTO the scene; a
+			// reflection fallback cannot leak light anywhere - black here only punches holes
+			// in the image, which grew with camera distance as rays grazed ever-coarser
+			// cascades (measured, round 14). The receiver's own gather value is the smoothest
+			// energy-plausible stand-in; faces MEASURED dark stay honestly dark.
+			radiance = rough_value;
 		}
 		// NO cage blend for gloss: the light-voxel read above is already the world tier's
 		// prefilter (25 cm blocks, naturally soft), and per-pixel cage reads stamp the 2 m

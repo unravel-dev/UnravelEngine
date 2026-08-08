@@ -815,6 +815,359 @@ void test_clipmap_attribute_transcription_matches_cpu()
     check(list_mismatches == 0, "the shader walk produces the identical surface list");
 }
 
+// ---------------------------------------------------------------------------------------
+// Shadow-ray blob diagnostic (round 15)
+// ---------------------------------------------------------------------------------------
+
+/// One recorded sample of the shadow march, for post-mortem printing.
+struct shadow_march_step
+{
+    float t;
+    float d;
+    float voxel;
+    float accept;
+    bool suppressed;
+};
+
+enum class shadow_end
+{
+    miss,
+    resolved_hit,
+    redescent_hit,
+    exhausted
+};
+
+struct shadow_trace_result
+{
+    bool hit = false;
+    bool exhausted = false;
+    float t = 0.0f;
+    float clearance = 1e8f;
+    int steps = 0;
+    shadow_end end = shadow_end::miss;
+};
+
+/// Faithful CPU transcription of the shader's SdfTraceClipmap for SHADOW rays (expand off,
+/// t_min 0, want_normal off), including the exhaustion contract and the saturation step boost.
+/// Exists to make the GPU-only round-15 black-blob failure reproducible and classifiable on the
+/// CPU; keep in step with sdf_common.sh by hand.
+///
+/// @param legacy_contract true reproduces the PRE-FIX shader - no saturation step boost, and
+///        the exhaustion tail zeroes the accumulated clearance - so the test can still print
+///        the blob it guards against; false matches the current sdf_common.sh.
+auto trace_clipmap_shadow(const global_sdf_clipmap& clipmap,
+                          const math::vec3& origin,
+                          const math::vec3& direction,
+                          float t_max,
+                          bool legacy_contract,
+                          std::vector<shadow_march_step>* log) -> shadow_trace_result
+{
+    shadow_trace_result result;
+    const float surface_bias = float(gi::GI_SHADOW_SURFACE_BIAS);
+    const float relaxation = float(gi::GI_SHADOW_RELAXATION);
+    const int max_steps = int(gi::GI_TRACE_MAX_STEPS);
+    float t = 0.0f;
+    bool suppressed = false;
+    float suppress_best = -1e8f;
+    bool first_sample = true;
+    for(int step = 0; step < max_steps; ++step)
+    {
+        if(t > t_max)
+        {
+            return result;
+        }
+        const math::vec3 p = origin + direction * t;
+        float voxel = 0.0f;
+        const float d = clipmap.sample_ex(p, voxel);
+        const float d_raw = d;
+        ++result.steps;
+        const float base_threshold = std::max(surface_bias * voxel, 1e-6f);
+        const float accept = std::min(std::max(base_threshold, t * relaxation), voxel);
+        if(log != nullptr)
+        {
+            log->push_back({t, d, voxel, accept, suppressed});
+        }
+        if(first_sample)
+        {
+            first_sample = false;
+            suppressed = d < accept;
+        }
+        bool redescent = false;
+        if(suppressed)
+        {
+            if(d >= accept)
+            {
+                suppressed = false;
+            }
+            else if(d < suppress_best - voxel)
+            {
+                suppressed = false;
+                redescent = true;
+            }
+            else
+            {
+                suppress_best = std::max(suppress_best, d);
+                t += std::max(std::fabs(d), base_threshold);
+                continue;
+            }
+        }
+        if(d < accept)
+        {
+            result.hit = true;
+            result.clearance = 0.0f;
+            result.t = t;
+            result.end = redescent ? shadow_end::redescent_hit : shadow_end::resolved_hit;
+            return result;
+        }
+        result.clearance = std::min(result.clearance, d_raw);
+        float step_distance = d;
+        if(!legacy_contract && d_raw >= (float(mesh_sdf::encode_range) - 0.5f) * voxel)
+        {
+            for(int coarse = int(global_sdf_clipmap::level_count) - 1; coarse >= 0; --coarse)
+            {
+                const float coarse_distance = clipmap.sample_level(uint32_t(coarse), p);
+                if(coarse_distance < global_sdf_clipmap::outside_distance)
+                {
+                    step_distance = std::max(step_distance, coarse_distance);
+                    break;
+                }
+            }
+        }
+        t += std::max(step_distance, base_threshold);
+    }
+    result.hit = true;
+    result.exhausted = true;
+    result.t = t;
+    result.end = shadow_end::exhausted;
+    if(legacy_contract || result.clearance > 1e7f)
+    {
+        result.clearance = 0.0f;
+    }
+    return result;
+}
+
+/// Transcription of GiTraceShadow (gi_lighting.sh) over the clipmap tier alone - the blob
+/// region sits beyond the mesh-exact near field, so this is the path that produces it.
+auto trace_shadow_visibility(const global_sdf_clipmap& clipmap,
+                             const math::vec3& world_position,
+                             const math::vec3& world_normal,
+                             const math::vec3& to_light,
+                             float voxel_size,
+                             bool legacy_contract,
+                             shadow_trace_result* out_trace,
+                             std::vector<shadow_march_step>* log) -> float
+{
+    const float offset = float(gi::GI_SHADOW_NORMAL_BIAS_VOXELS) * voxel_size;
+    math::vec3 origin = world_position + world_normal * offset;
+    float max_distance = float(gi::GI_SHADOW_DISTANCE);
+    if(max_distance <= offset)
+    {
+        return 1.0f;
+    }
+    origin += to_light * (float(gi::GI_SHADOW_RAY_START_VOXELS) * voxel_size);
+    const auto hit =
+        trace_clipmap_shadow(clipmap, origin, to_light, max_distance, legacy_contract, log);
+    if(out_trace != nullptr)
+    {
+        *out_trace = hit;
+    }
+    if(hit.hit && !hit.exhausted)
+    {
+        return 0.0f;
+    }
+    return math::clamp(hit.clearance / std::max(voxel_size, 1e-4f), 0.0f, 1.0f);
+}
+
+/// Analytic ray-box slab test: does the sun ray from @p origin genuinely hit the building?
+auto ray_hits_box(const math::vec3& origin,
+                  const math::vec3& direction,
+                  const math::vec3& center,
+                  const math::vec3& half) -> bool
+{
+    float t_near = 0.0f;
+    float t_far = 1e9f;
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        const float o = origin[axis] - center[axis];
+        const float dir = direction[axis];
+        if(std::fabs(dir) < 1e-8f)
+        {
+            if(std::fabs(o) > half[axis])
+            {
+                return false;
+            }
+            continue;
+        }
+        float t0 = (-half[axis] - o) / dir;
+        float t1 = (half[axis] - o) / dir;
+        if(t0 > t1)
+        {
+            std::swap(t0, t1);
+        }
+        t_near = std::max(t_near, t0);
+        t_far = std::min(t_far, t1);
+    }
+    return t_near <= t_far;
+}
+
+/// Round-15 regression: a big thin floor with one building under a low sun, shadow-traced
+/// exactly as the DirectLight debug view does it, against the analytic box shadow.
+///
+/// The legacy contract (no saturation step boost + clearance zeroed on exhaustion) painted the
+/// camera's fine cascade windows' PROJECTED SHADOW onto the floor along the sun azimuth: a 100 m
+/// sun ray crossing level 0's window paid 32 of its 64 steps at saturated 4-fine-voxel readings
+/// and exhausted mid-air, and exhaustion read as full occlusion. The mode is kept and printed so
+/// the failure stays visible; the current contract must produce ZERO wrongly-dark texels, while
+/// the building's true shadow stays dark at every distance (no leak traded in).
+void test_shadow_blob_floor_building()
+{
+    std::printf("test_shadow_blob_floor_building\n");
+    mesh_sdf floor_sdf;
+    mesh_sdf building_sdf;
+    check(bake_slab({30.0f, 0.2f, 30.0f}, floor_sdf), "floor bakes");
+    check(bake_slab({4.0f, 6.0f, 4.0f}, building_sdf), "building bakes");
+    const math::vec3 building_center(-14.0f, 5.8f, 0.0f);
+    const math::vec3 building_half(4.0f, 6.0f, 4.0f);
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(make_clipmap_instance(floor_sdf, {0.0f, -0.2f, 0.0f}, math::vec3(0.7f), math::vec3(0.0f)));
+    instances.push_back(make_clipmap_instance(building_sdf, building_center, math::vec3(0.7f), math::vec3(0.0f)));
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 128;
+    settings.base_extent = 16.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(12.0f, 3.0f, 0.0f));
+    const float elevations[] = {30.0f, 20.0f, 12.0f};
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    for(const float elevation : elevations)
+    {
+        const float rad = elevation * math::pi<float>() / 180.0f;
+        const math::vec3 to_light(-std::cos(rad), std::sin(rad), 0.0f);
+        for(const bool legacy : {true, false})
+        {
+            int wrong_dark = 0;
+            int shadow_leaks = 0;
+            int shadow_ok = 0;
+            int lit_ok = 0;
+            std::string map;
+            math::vec3 sample_point{};
+            shadow_end sample_kind = shadow_end::miss;
+            for(int z = -14; z <= 14; z += 2)
+            {
+                for(int x = -28; x <= 40; ++x)
+                {
+                    // Launch points inside the building's footprint have no meaningful
+                    // up-facing floor surface; skip them rather than classify nonsense.
+                    if(std::fabs(float(x) - building_center.x) <= building_half.x + 0.5f &&
+                       std::fabs(float(z) - building_center.z) <= building_half.z + 0.5f)
+                    {
+                        map += ' ';
+                        continue;
+                    }
+                    const math::vec3 p(float(x), 0.0f, float(z));
+                    float voxel = 0.0f;
+                    clipmap.sample_ex(p, voxel);
+                    shadow_trace_result trace;
+                    const float visibility =
+                        trace_shadow_visibility(clipmap, p, up, to_light, voxel, legacy, &trace, nullptr);
+                    const bool expected_shadow = ray_hits_box(p, to_light, building_center, building_half);
+                    // Cells bordering the analytic shadow edge are penumbra: the cone acceptance
+                    // legitimately fattens the coarse building by about a voxel there, so they
+                    // are mapped but not counted either way.
+                    const bool boundary =
+                        ray_hits_box({float(x) - 1.0f, 0.0f, float(z)}, to_light, building_center, building_half) !=
+                            expected_shadow ||
+                        ray_hits_box({float(x) + 1.0f, 0.0f, float(z)}, to_light, building_center, building_half) !=
+                            expected_shadow;
+                    const bool dark = visibility < 0.5f;
+                    char cell = '.';
+                    if(boundary)
+                    {
+                        cell = 'b';
+                    }
+                    else if(expected_shadow)
+                    {
+                        cell = dark ? 's' : 'L';
+                        dark ? ++shadow_ok : ++shadow_leaks;
+                    }
+                    else if(dark)
+                    {
+                        switch(trace.end)
+                        {
+                            case shadow_end::resolved_hit:
+                                cell = 'R';
+                                break;
+                            case shadow_end::redescent_hit:
+                                cell = 'D';
+                                break;
+                            case shadow_end::exhausted:
+                                cell = 'X';
+                                break;
+                            case shadow_end::miss:
+                                cell = 'M';
+                                break;
+                        }
+                        ++wrong_dark;
+                        if(sample_kind == shadow_end::miss)
+                        {
+                            sample_point = p;
+                            sample_kind = trace.end;
+                        }
+                    }
+                    else
+                    {
+                        ++lit_ok;
+                    }
+                    map += cell;
+                }
+                map += '\n';
+            }
+            std::printf("  elevation %.0f deg, %s: wrong dark %d, shadow leaks %d (lit ok %d, shadow ok %d)\n",
+                        elevation,
+                        legacy ? "LEGACY contract" : "current",
+                        wrong_dark,
+                        shadow_leaks,
+                        lit_ok,
+                        shadow_ok);
+            if(legacy)
+            {
+                // The blob on record: what the fix removed. Not asserted - it documents.
+                std::printf("%s", map.c_str());
+                continue;
+            }
+            check(wrong_dark == 0,
+                  "no wrongly-dark floor texels at elevation " + std::to_string(int(elevation)) +
+                      " (got " + std::to_string(wrong_dark) + ")");
+            check(shadow_leaks == 0,
+                  "building shadow stays dark at elevation " + std::to_string(int(elevation)) +
+                      " (leaked " + std::to_string(shadow_leaks) + ")");
+            check(shadow_ok > 0, "the analytic shadow region is sampled at all");
+            if(wrong_dark > 0 && sample_kind != shadow_end::miss)
+            {
+                std::printf("%s", map.c_str());
+                std::vector<shadow_march_step> log;
+                float voxel = 0.0f;
+                clipmap.sample_ex(sample_point, voxel);
+                trace_shadow_visibility(clipmap, sample_point, up, to_light, voxel, false, nullptr, &log);
+                std::printf("  march at (%.0f, 0, %.0f), launch voxel %.3f:\n",
+                            sample_point.x,
+                            sample_point.z,
+                            voxel);
+                for(const auto& s : log)
+                {
+                    std::printf("    t=%7.3f d=%7.3f voxel=%.3f accept=%.3f%s\n",
+                                s.t,
+                                s.d,
+                                s.voxel,
+                                s.accept,
+                                s.suppressed ? " [suppressed]" : "");
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 void run(int& checks, int& failures)
@@ -830,6 +1183,7 @@ void run(int& checks, int& failures)
     test_reference_sealed_room_is_black();
     test_reference_thin_wall_blocks_light();
     test_reference_cornell_bleeds_colour();
+    test_shadow_blob_floor_building();
 }
 
 } // namespace unravel::gi_v2_tests

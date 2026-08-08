@@ -80,6 +80,14 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// Along the ray rather than further along the normal, for the reason the gather ray gives:
 	// a normal offset moves the shaded point and lets it see past nearby occluders, which reads as
 	// a surface that is simply too bright with nothing to say why.
+	//
+	// A FIXED count, deliberately - do not scale this by incidence. A slope-aware start
+	// (start / dot(ray, normal), tried in round 15c against what turned out to be the trace's
+	// exhaustion blob) teleports the origin THROUGH any sun-facing wall closer than the scaled
+	// skip, and the launch suppression then walks out the far side: measured as lit strips at
+	// wall bases on the shadow side (test_shadow_blob_floor_building). Walking out of the launch
+	// band at grazing incidence is the suppression walk's job, and budget death on long grazing
+	// marches is answered by the trace's saturation step boost + the clearance fallback below.
 	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
 	// Expand OFF (-1): an occlusion-only ray toward a light must not see surfaces fattened by
 	// up to a coarse voxel diagonal. Both directions of this trade were MEASURED: expand from
@@ -103,7 +111,18 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// beam - a continuous penumbra where the binary answer flipped per voxel, whose quantised
 	// lit/unlit patchwork read as blotches through the trilinear read and the gather (measured:
 	// the test room's walls near the door's light path). One min per march step pays for it.
-	return hit.hit ? 0.0 : saturate(hit.clearance / max(voxel_size, 1e-4));
+	// EXHAUSTION IS NOT OCCLUSION for a sun ray: a march that ran out of budget while
+	// GRAZING open space (long floor-parallel paths at low sun angles) reported as a hit and
+	// stamped a deterministic black shadow blob onto every voxel whose ray grazed longest -
+	// anchored to the cascade layout (camera position) and swinging with the light (measured,
+	// round 15; same failure Bistro exposed in the bounce). The ray never FOUND a surface, so
+	// its beam clearance is the honest answer: a corridor at least a voxel wide stays lit, a
+	// hug-the-floor graze keeps a proportional penumbra. Resolved hits stay fully dark.
+	if(hit.hit && !hit.exhausted)
+	{
+		return 0.0;
+	}
+	return saturate(hit.clearance / max(voxel_size, 1e-4));
 }
 
 /**

@@ -1020,17 +1020,61 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		}
 		// Closest approach to real geometry, for beam-visibility consumers (see SdfRayHit).
 		result.clearance = min(result.clearance, d_raw);
-		t += max(d, base_threshold);
+		// SATURATION STEP BOOST (round 15 root fix): a saturated reading means "no geometry within
+		// the encode range OF THE ANSWERING LEVEL" - but the sampler answers with the FINEST
+		// covering level, so inside the fine windows the step is capped at 4 fine voxels however
+		// empty the space actually is. A 100 m sun ray crossing level 0's 16 m window paid 32 of
+		// its 64 steps just to traverse it and died mid-air; the exhaustion contract then read
+		// that as full occlusion, painting the fine windows' PROJECTED SHADOW along the sun
+		// azimuth onto every surface down-sun of the camera (the round-15 black blob: anchored to
+		// camera position, swinging with the light, invisible in every geometry view). Every
+		// level is composed conservatively (test_clipmap_is_conservative), so the max of any
+		// levels' readings is still an under-estimate of the true distance - a legal sphere-trace
+		// step. The coarsest covering level has the largest saturation cap, so one extra sample
+		// buys up to an 8x longer step exactly where steps were being wasted. Near-saturation
+		// gates the cost: near geometry (small readings) nothing changes, including the expand
+		// path's careful never-overstep-the-fattening behaviour - the boost cannot engage within
+		// the answering level's encode range of anything it represents, and no level's reading
+		// can step OVER geometry any level knows about.
+		float step_distance = d;
+		if(d_raw >= (u_sdf_clipmap_encode_range - 0.5) * voxel)
+		{
+			for(int coarse_index = SDF_CLIPMAP_LEVEL_COUNT - 1; coarse_index >= 0; --coarse_index)
+			{
+				float coarse_distance = SdfSampleClipmapLevel(coarse_index, p);
+				if(coarse_distance < SDF_CLIPMAP_OUTSIDE)
+				{
+					step_distance = max(step_distance, coarse_distance);
+					break;
+				}
+			}
+		}
+		t += max(step_distance, base_threshold);
 	}
 	// Budget exhausted: report a HIT at the current position, not a miss (GI v2 plan 3.1, after
 	// Lumen's forced 64th-iteration hit [S22 p36]). Exhaustion happens on grazing rays hugging
 	// geometry; laundering it into "clear" over-lights exactly the surfaces that are hardest to
 	// trace (the A1c lesson). Over-occlusion is the direction that degrades gracefully. The flag
 	// stays set so the step-count debug view can still show where budgets die.
+	//
+	// The accumulated CLEARANCE survives, deliberately. It used to be zeroed here, which silently
+	// disabled GiTraceShadow's exhaustion fallback (clearance / voxel of an always-zero clearance
+	// is always full shadow) - the round-15 blob persisted through that "fix" precisely because of
+	// this line. Clearance is the honest record of how close the marched prefix ever came to
+	// geometry: consumers that treat exhaustion as occlusion read .hit/.exhausted and are
+	// unchanged; the beam-visibility consumer gets to distinguish "gave up grazing a wall"
+	// (small clearance, dark) from "gave up crossing open space" (large clearance, lit).
+	//
+	// EXCEPT a ray that never left its launch slab: suppressed samples do not accumulate
+	// clearance, so a march that burned its whole budget still buried reports the untouched
+	// sentinel - and "never saw clear space" must stay dark, not launder into fully lit.
 	result.hit = true;
-	result.clearance = 0.0;
 	result.t = t;
 	result.exhausted = true;
+	if(result.clearance > 1e7)
+	{
+		result.clearance = 0.0;
+	}
 	if(want_normal)
 	{
 		vec3 p_exhausted = origin + direction * t;

@@ -74,7 +74,9 @@
       " (audit A1c - at zero they exhausted and read as washed-out ground)")                       \
     X(GI_SHADOW_RAY_START_VOXELS, 1.0f,                                                            \
       "voxels of the answering level", "published-from-v1-measurement: skip along the ray's own"   \
-      " direction rather than lifting the point (see the gather's identical rule)")                \
+      " direction rather than lifting the point (see the gather's identical rule). NEVER scale"    \
+      " this by incidence: a slope-aware skip teleports through sun-facing walls at contact"       \
+      " range (measured, test_shadow_blob_floor_building)")                                        \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \
