@@ -58,9 +58,21 @@ private:
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_light_voxels;
         gfx::program::uniform_ptr s_gi_env_sh;
+        /// Parent-cascade irradiance for scroll-in seeding (a different texture from the
+        /// radiance atlas the dispatch writes, so the sampler binding is legal).
+        gfx::program::uniform_ptr s_world_probe_irradiance_seed;
+        gfx::program::uniform_ptr u_gi_world_probe_seed_atlas;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(),
+                          s_world_probe_irradiance_seed,
+                          "s_world_probe_irradiance_seed",
+                          gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          u_gi_world_probe_seed_atlas,
+                          "u_gi_world_probe_seed_atlas",
+                          gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_gi_world_probe_window,

@@ -103,6 +103,11 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                        gfx::texture_format::RGBA16F);
         gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
         gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+        gfx::set_texture(trace_program_.s_world_probe_irradiance_seed,
+                         11,
+                         clipmap_gpu.get_world_probe_irradiance());
+        gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas,
+                         clipmap_gpu.get_world_probe_atlas_params());
         gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
         gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);

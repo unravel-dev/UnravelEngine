@@ -28,6 +28,11 @@ IMAGE2D_WO(s_world_probe_radiance_out, rgba16f, 5);
 BUFFER_RW(b_world_probe_cells, uint, 6);
 /// The lighting pass's environment SH probe, for the sky at ray miss.
 SAMPLER2D(s_gi_env_sh, 14);
+/// The PARENT cascade's convolved irradiance, for scroll-in seeding. Read-only and a
+/// DIFFERENT texture from the radiance atlas being written, so sampling it here is legal.
+SAMPLER2D(s_world_probe_irradiance_seed, 11);
+/// xy = 1 / irradiance-depth atlas size (the seeding read shares the irradiance tile layout).
+uniform vec4 u_gi_world_probe_seed_atlas;
 
 /// x = window centre CELL of level 0 (int as float) per axis... levels each get a vec4:
 /// xyz = centre cell, w = ray max distance for that level's probes.
@@ -91,6 +96,32 @@ void main()
 		{
 			b_world_probe_cells[slot_index] = packed_cell;
 		}
+		// SCROLL-IN SEEDING (the SDFGI cascade trick): a freshly claimed slot starts from the
+		// PARENT cascade's view of the same position instead of black. The parent scrolls at
+		// half the rate, so its data is valid here; the seed is its convolved IRRADIANCE at
+		// each texel's direction - the cosine-weighted mean of what the parent sees that way,
+		// in exactly the E/pi = mean-radiance units a radiance texel holds on average - soft,
+		// energy-consistent, refined stratum by stratum over the window. Without it every
+		// window edge dragged a dark frontier that took a full window (a quarter second) to
+		// converge. The outermost level has no parent and keeps the dark clear (energy loss,
+		// never invention); buried probes stay dead; the seeded hitT stays the sky marker the
+		// clear always wrote, so the depth moments behave exactly as before.
+		int parent_level = level + 1;
+		bool parent_valid = false;
+		ivec2 parent_tile = ivec2(0, 0);
+		if(!buried && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			float parent_spacing = GiWorldProbeSpacing(parent_level);
+			ivec3 parent_cell = ivec3(floor(origin / parent_spacing + vec3_splat(0.5)));
+			ivec3 parent_slot = GiWorldProbeSlot(parent_cell);
+			// The parent slot must still HOLD that cell - it is toroidal too, and a slot
+			// serving a different region would seed someone else's lighting.
+			parent_valid =
+			    b_world_probe_cells[GiWorldProbeSlotIndex(parent_slot, parent_level)] ==
+			    GiWorldProbePackCell(parent_cell, parent_level);
+			parent_tile =
+			    GiWorldProbeTileBase(parent_slot, parent_level, GI_WORLD_PROBE_OCT_IRRADIANCE + 2);
+		}
 		for(int s = 0; s < GI_WORLD_PROBE_WINDOW; ++s)
 		{
 			if(uint(s) >= stratum_base && uint(s) < stratum_base + uint(stratum_count))
@@ -100,8 +131,20 @@ void main()
 			int clear_index = thread * GI_WORLD_PROBE_WINDOW + s;
 			ivec2 clear_texel = tile + ivec2(clear_index % GI_WORLD_PROBE_OCT_RADIANCE,
 			                                 clear_index / GI_WORLD_PROBE_OCT_RADIANCE);
-			imageStore(s_world_probe_radiance_out, clear_texel,
-			           vec4(0.0, 0.0, 0.0, buried ? 0.0 : -1.0));
+			vec4 clear_value = vec4(0.0, 0.0, 0.0, buried ? 0.0 : -1.0);
+			if(parent_valid)
+			{
+				vec2 clear_uv = (vec2(clear_texel - tile) + vec2_splat(0.5)) /
+				                float(GI_WORLD_PROBE_OCT_RADIANCE);
+				vec3 clear_direction = GiOctDecode(clear_uv);
+				vec2 seed_uv = (vec2(parent_tile) + vec2_splat(1.0) +
+				                GiOctEncode(clear_direction) * float(GI_WORLD_PROBE_OCT_IRRADIANCE)) *
+				               u_gi_world_probe_seed_atlas.xy;
+				clear_value.xyz =
+				    max(texture2DLod(s_world_probe_irradiance_seed, seed_uv, 0.0).xyz,
+				        vec3_splat(0.0));
+			}
+			imageStore(s_world_probe_radiance_out, clear_texel, clear_value);
 		}
 	}
 	float t_max = u_gi_world_probe_window[level].w;
