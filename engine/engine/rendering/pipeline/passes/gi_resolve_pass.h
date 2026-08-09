@@ -106,6 +106,10 @@ public:
         /// the same miss fallback the screen-space SSIL trace uses. Null (first frame, before
         /// the irradiance pass has run once) disables the measurement for the frame.
         gfx::texture::ptr irradiance_sh;
+        /// LAST frame's composited output (the SSR convention, same source): far-field
+        /// radiance for hits beyond the cascades, where the light voxels hold nothing.
+        /// Null (first frame, probe captures) falls back to the sky SH for those hits.
+        gfx::texture::ptr prev_color;
         const camera* cam{};
         surface_cache_service* surface_cache{};
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
@@ -195,10 +199,10 @@ private:
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_light_voxels;
-        gfx::program::uniform_ptr s_world_probe_irradiance;
         gfx::program::uniform_ptr s_world_probe_depth;
         gfx::program::uniform_ptr s_world_probe_radiance_read;
         gfx::program::uniform_ptr s_gi_env_sh;
+        gfx::program::uniform_ptr s_gi_prev_color;
 
         void cache_uniforms()
         {
@@ -225,16 +229,13 @@ private:
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(),
-                          s_world_probe_irradiance,
-                          "s_world_probe_irradiance",
-                          gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(),
                           s_world_probe_radiance_read,
                           "s_world_probe_radiance_read",
                           gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_prev_color, "s_gi_prev_color", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

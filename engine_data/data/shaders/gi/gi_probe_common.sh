@@ -201,6 +201,19 @@ void GiProbeParents(ivec2 probe, out ivec2 parents[4])
 	parents[3] = ivec2(x1, y1);
 }
 
+/// First vec4 of the traced-list region in the probe buffer: past both record halves. The
+/// compacted probe coordinates live THERE - one per vec4, bit-cast into .x - because the
+/// trace has no spare binding stage for a second buffer (all sixteen carry world structures)
+/// while stage 7 is already bound everywhere. Float buffers pass raw bits through exactly,
+/// so the cast is lossless; one WHOLE vec4 per coordinate because the D3D path binds this as
+/// a typed UAV, and typed UAV stores must write every component - four-to-a-vec4 component
+/// stores do not compile there.
+uint GiProbeTracedListBase()
+{
+	return 2u * uint(GI_PROBE_LAYERS) * uint(u_gi_probe_count_x * u_gi_probe_count_y) *
+	       uint(GI_PROBE_STRIDE);
+}
+
 uint GiProbeIndex(int px, int py)
 {
 	return uint(py) * uint(u_gi_probe_count_x) + uint(px);

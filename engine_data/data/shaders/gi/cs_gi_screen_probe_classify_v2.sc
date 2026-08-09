@@ -21,8 +21,8 @@
 #include "gi/gi_constants.sh"
 #include "gi/gi_probe_common.sh"
 
-/// [0] = traced count (zeroed by the placement pass this frame), [1..] = packed traced
-/// probe coordinates (x | y << 16), appended atomically, consumed by the trace at stage 11.
+/// [0] = the traced COUNT alone (zeroed by the placement pass this frame, consumed by the
+/// indirect-args pass); the coordinates themselves go into the probe buffer's list region.
 BUFFER_RW(b_gi_probe_traced, uint, 6);
 BUFFER_RW(b_gi_probes, vec4, 7);
 
@@ -150,5 +150,9 @@ void main()
 	}
 	uint slot;
 	atomicFetchAndAdd(b_gi_probe_traced[0], 1u, slot);
-	b_gi_probe_traced[1u + slot] = uint(probe.x) | (uint(probe.y) << 16u);
+	// The coordinate lands in the probe buffer's list region (see GiProbeTracedListBase);
+	// this buffer keeps only the counter. One whole vec4 per coordinate - typed UAV stores
+	// must write every component, and each slot is atomically unique, so no race.
+	float encoded = uintBitsToFloat(uint(probe.x) | (uint(probe.y) << 16u));
+	b_gi_probes[GiProbeTracedListBase() + slot] = vec4(encoded, 0.0, 0.0, 0.0);
 }

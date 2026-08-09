@@ -260,7 +260,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         // full lattice.
         const uint32_t probe_count = probes_x * probes_y;
         const uint32_t records_per_half = probe_count * probe_layers;
-        const uint32_t required_probe_vec4 = 2u * records_per_half * probe_vec4_stride;
+        // Both record halves plus the traced-LIST region (one bit-cast coordinate per vec4 -
+        // see GiProbeTracedListBase): the trace has no spare binding stage for a dedicated
+        // list buffer, so the list rides in this one.
+        const uint32_t required_probe_vec4 =
+            2u * records_per_half * probe_vec4_stride + probe_count;
         if(!bgfx::isValid(probe_buffer_) || required_probe_vec4 > probe_buffer_capacity_)
         {
             if(bgfx::isValid(probe_buffer_))
@@ -283,16 +287,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             probe_grid_y_ = probes_y;
             records_trusted_ = false;
         }
-        // Compaction storage: the traced list ([0] = count) and the indirect args the trace
-        // launches from. List capacity = every lattice probe, the worst case (adaptive off).
-        const uint32_t required_traced = 1u + probe_count;
-        if(!bgfx::isValid(probe_traced_) || required_traced > probe_traced_capacity_)
+        // Compaction bookkeeping: the counter buffer ([0] alone - the coordinates live in
+        // the probe buffer's list region) and the indirect args the trace launches from.
+        if(!bgfx::isValid(probe_traced_))
         {
-            if(bgfx::isValid(probe_traced_))
-            {
-                gfx::destroy(probe_traced_);
-            }
-            probe_traced_capacity_ = required_traced + required_traced / 2u;
+            probe_traced_capacity_ = 4u;
             probe_traced_ = gfx::create_dynamic_index_buffer(probe_traced_capacity_,
                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                  BGFX_BUFFER_INDEX32);
@@ -345,10 +344,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const bool screen_trace = params.hiz && params.hiz->is_valid() && s.enable_screen_trace;
             const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
             const bool adaptive = s.adaptive_probes;
+            const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
-                                                  0.0f};
+                                                  has_prev_color ? 1.0f : 0.0f};
             {
                 // PLACEMENT (adaptive gather): every probe's anchor lands in the records
                 // before the trace runs - the only ordering under which a probe can test
@@ -422,10 +422,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_texture(v2_trace_program_.s_hiz, 8, hiz_or_depth);
                 gfx::set_texture(v2_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_texture(v2_trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-                // Stage 11 carries the compacted traced list - the trace completes rays from
-                // the RADIANCE atlas (6) + depth (15) and never reads the irradiance cage
-                // (GI_WORLD_PROBE_SKIP_IRRADIANCE frees the stage).
-                gfx::set_buffer(11, probe_traced_, gfx::access::Read);
+                // Stage 11 carries LAST frame's composited output (far-field radiance beyond
+                // the cascades) - freed from the irradiance cage the trace never read
+                // (GI_WORLD_PROBE_SKIP_IRRADIANCE); the traced list rides in the probe
+                // buffer's list region at stage 7.
+                gfx::set_texture(v2_trace_program_.s_gi_prev_color,
+                                 11,
+                                 has_prev_color ? params.prev_color
+                                                : default_textures::get().black_texture());
                 gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
                 gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
                 gfx::set_texture(v2_trace_program_.s_gi_env_sh, 14, env_sh_tex);

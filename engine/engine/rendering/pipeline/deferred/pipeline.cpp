@@ -821,7 +821,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     bool gi_resolve_active = false;
     if(is_camera_run)
     {
-        gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
+        // `output` still holds LAST frame's composited image here (this frame overwrites it
+        // at the TAA/composite stage further down) - the same history SSR consumed above.
+        gi_resolve_active = run_gi_resolve_pass(camera, rview, output, params);
     }
 
     // SSIL pass
@@ -2129,8 +2131,10 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
     return true;
 }
 
-auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
-    -> bool
+auto deferred::run_gi_resolve_pass(const camera& camera,
+                                   gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& previous_frame_source,
+                                   const run_params& rparams) -> bool
 {
     auto& ctx = engine::context();
     gfx::texture::ptr result;
@@ -2150,6 +2154,9 @@ auto deferred::run_gi_resolve_pass(const camera& camera, gfx::render_view& rview
         params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
         // This frame's Hi-Z pyramid (built earlier in the frame) for the screen-trace tier.
         params.hiz = rview.tex_safe_get("HIZBUFFER");
+        // Last frame's composited output for the far-field fallback; null (first frame,
+        // probe captures) degrades those hits to the sky SH.
+        params.prev_color = previous_frame_source ? previous_frame_source->get_texture() : nullptr;
         params.cam = &camera;
         params.surface_cache = &ctx.get<surface_cache_service>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);

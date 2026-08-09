@@ -139,8 +139,12 @@ public:
     /// See gi_resolve_pass.
     /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
-    auto run_gi_resolve_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
-        -> bool;
+    /// @param previous_frame_source Last frame's composited output (the SSR convention, same
+    ///        source): the gather's far-field radiance for hits beyond the cascades.
+    auto run_gi_resolve_pass(const camera& camera,
+                             gfx::render_view& rview,
+                             const gfx::frame_buffer::ptr& previous_frame_source,
+                             const run_params& rparams) -> bool;
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 

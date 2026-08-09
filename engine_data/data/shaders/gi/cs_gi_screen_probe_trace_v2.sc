@@ -41,9 +41,11 @@
 #define GI_WORLD_PROBE_SKIP_IRRADIANCE
 #include "gi/gi_world_probes.sh"
 
-/// The classify pass's compacted output: [0] = traced count (consumed by the indirect args),
-/// [1..] = packed traced probe coordinates (x | y << 16), one group each.
-BUFFER_RO(b_gi_probe_traced, uint, 11);
+/// LAST frame's composited output (the SSR convention, same source): the far-field radiance
+/// for hits BEYOND the cascades, where the light voxels have nothing. Bound in place of the
+/// world-probe irradiance cage the trace never read; the compacted probe list lives in the
+/// probe buffer's list region (GiProbeTracedListBase), not in a stage of its own.
+SAMPLER2D(s_gi_prev_color, 11);
 
 /// rgb = radiance, a = hitT (negative = completed/sky). One 8x8 tile per probe.
 IMAGE2D_WO(s_probe_radiance_out, rgba16f, 5);
@@ -64,7 +66,7 @@ uniform vec4 u_gi_v2_camera;
 /// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
 /// paints interpolated tiles magenta under the same flag).
 /// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
-/// w unused.
+/// w > 0 when s_gi_prev_color holds last frame's composited output.
 uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
 /// importance mip the filter stored in that probe's record slots.
@@ -83,14 +85,50 @@ SHARED vec3 s_vs_origin;
 SHARED int s_history_record;
 SHARED float s_importance_mean;
 
+/*
+ * Radiance for a hit whose light-voxel read failed. WITHIN the cascades that is honest
+ * darkness - sub-voxel contact occlusion, sealed rooms - and must stay black. BEYOND the
+ * outermost window "no data" must not mean "no light" (the black wall at the end of the
+ * street): the Lumen far-field recipe applies - reproject the hit into LAST frame's
+ * composited output, which already carries that geometry's shadow-mapped lighting (the SSR
+ * scene-colour convention; the temporal mean and the radiance clamp bound the feedback);
+ * off-screen or history-less, the sky SH along the ray, the miss contract.
+ */
+vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
+{
+	float blend;
+	float voxel;
+	if(SdfFindClipmapLevel(hit_position, blend, voxel) < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return vec3_splat(0.0);
+	}
+	BRANCH
+	if(u_gi_screen_trace.w > 0.0)
+	{
+		vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
+		if(prev_clip.w > 0.0)
+		{
+			vec3 ndc = clipTransform(prev_clip.xyz / prev_clip.w);
+			vec2 prev_uv = ndc.xy * 0.5 + 0.5;
+			if(all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
+			   all(lessThanEqual(prev_uv, vec2_splat(1.0))))
+			{
+				return texture2DLod(s_gi_prev_color, prev_uv, 0.0).xyz;
+			}
+		}
+	}
+	return eval_radiance_sh(s_gi_env_sh, sample_dir);
+}
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
 	// COMPACTED dispatch: exactly the traced count of groups launches (indirect args from the
 	// classify pass), each reading its probe coordinate from the dense list - interpolated,
 	// dead and sky probes never occupy a wavefront here. Their tiles are the interp pass's
-	// job (parent blend or black clear).
-	uint packed_probe = b_gi_probe_traced[1u + gl_WorkGroupID.x];
+	// job (parent blend or black clear). The list lives in the probe buffer's list region,
+	// one bit-cast coordinate per vec4 (GiProbeTracedListBase).
+	uint packed_probe = floatBitsToUint(b_gi_probes[GiProbeTracedListBase() + gl_WorkGroupID.x].x);
 	ivec2 probe = ivec2(int(packed_probe & 0xFFFFu), int(packed_probe >> 16u));
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
@@ -249,10 +287,11 @@ void main()
 							}
 							if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
 							{
-								// Occluded but unmeasured: honest darkness. For sub-voxel
-								// detail (railings, awning cloth) this IS the contact
-								// occlusion the voxel tier cannot express.
-								radiance = vec3_splat(0.0);
+								// Occluded but unmeasured: honest darkness within the
+								// cascades - for sub-voxel detail (railings, awning cloth)
+								// this IS the contact occlusion the voxel tier cannot
+								// express; past them, the far-field fallback.
+								radiance = GiFarFieldFallback(hit_position, sample_dir);
 							}
 							hit_t = max(hit_t, hit_dist);
 							committed = true;
@@ -280,8 +319,10 @@ void main()
 				}
 				if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
 				{
-					// Occluded but unmeasured: honest darkness (the sealed-room branch).
-					radiance = vec3_splat(0.0);
+					// Occluded but unmeasured: honest darkness within the cascades (the
+					// sealed-room branch); past them - exhaustion at the boundary, coarse
+					// fringe hits - the far-field fallback.
+					radiance = GiFarFieldFallback(hit_position, sample_dir);
 				}
 			}
 			else
