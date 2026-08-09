@@ -130,12 +130,15 @@ public:
 
     /// Whether the gather programs loaded. The legacy hash-cache paths are gone (Phase 8);
     /// without these programs the pass clears its output and the environment term covers.
-    /// Placement joined the required set with the adaptive gather: the trace reads the
-    /// records placement writes and cannot anchor without them.
+    /// Placement, classification, the indirect-args writer and the interp/clear pass are all
+    /// REQUIRED with the compacted gather: the trace launches from the classify pass's list
+    /// and no longer writes non-traced tiles itself.
     auto has_v2_programs() const -> bool
     {
-        return v2_place_program_.is_valid() && v2_trace_program_.is_valid() &&
-               v2_filter_program_.is_valid() && v2_integrate_program_.is_valid();
+        return v2_place_program_.is_valid() && v2_classify_program_.is_valid() &&
+               v2_args_program_.is_valid() && v2_trace_program_.is_valid() &&
+               v2_interp_program_.is_valid() && v2_filter_program_.is_valid() &&
+               v2_integrate_program_.is_valid();
     }
 
 private:
@@ -299,8 +302,46 @@ private:
         }
     } v2_place_program_;
 
+    /// Classification + compaction: decides traced/interpolated per probe and appends the
+    /// traced coordinates to the dense list the trace launches from.
+    struct v2_classify_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_screen_trace;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_classify_program_;
+
+    /// One-thread bridge: traced count -> the trace's indirect dispatch args.
+    struct v2_args_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+
+        void cache_uniforms()
+        {
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } v2_args_program_;
+
     /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
-    /// between the trace and the filter, so downstream passes see a complete atlas.
+    /// between the trace and the filter - and clears dead probes' tiles, which the compacted
+    /// trace no longer visits.
     struct v2_interp_program : uniforms_cache
     {
         gpu_program::ptr program;
@@ -460,6 +501,12 @@ private:
     /// buffer, and its capacity only ever grows.
     gfx::dynamic_vertex_buffer_handle probe_buffer_{bgfx::kInvalidHandle};
     uint32_t probe_buffer_capacity_ = 0;
+    /// The compacted traced-probe list: [0] = count, [1..] = packed coordinates. Written by
+    /// classify, sized to the lattice, consumed by the indirect-args pass and the trace.
+    gfx::dynamic_index_buffer_handle probe_traced_{bgfx::kInvalidHandle};
+    uint32_t probe_traced_capacity_ = 0;
+    /// The trace's indirect dispatch args, written on the GPU from the traced count.
+    gfx::indirect_buffer_handle probe_args_{bgfx::kInvalidHandle};
 
     struct temporal_program : uniforms_cache
     {

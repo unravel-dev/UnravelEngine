@@ -23,6 +23,9 @@
 // Only the unguarded helpers: u_gi_world_probe_params + GiWorldProbeSpacing (+ probe common).
 #include "gi/gi_world_probes.sh"
 
+/// The traced-probe list ([0] = count) the classify pass appends to next; this pass only
+/// zeroes the cursor, which is safe cross-dispatch and saves a dedicated clear.
+BUFFER_RW(b_gi_probe_traced, uint, 6);
 BUFFER_RW(b_gi_probes, vec4, 7);
 SAMPLER2D(s_hiz, 8);
 SAMPLER2D(s_gi_normal, 9);
@@ -37,6 +40,10 @@ void main()
 	if(probe.x >= u_gi_probe_count_x || probe.y >= u_gi_probe_count_y)
 	{
 		return;
+	}
+	if(probe.x == 0 && probe.y == 0)
+	{
+		b_gi_probe_traced[0] = 0u;
 	}
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	vec2 jitter = GiHalton8(uint(u_gi_v2_camera.w));

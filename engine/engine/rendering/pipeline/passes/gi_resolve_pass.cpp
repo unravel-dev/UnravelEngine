@@ -100,6 +100,16 @@ gi_resolve_pass::~gi_resolve_pass()
         gfx::destroy(probe_buffer_);
         probe_buffer_ = {bgfx::kInvalidHandle};
     }
+    if(bgfx::isValid(probe_traced_))
+    {
+        gfx::destroy(probe_traced_);
+        probe_traced_ = {bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(probe_args_))
+    {
+        gfx::destroy(probe_args_);
+        probe_args_ = {bgfx::kInvalidHandle};
+    }
 }
 
 auto gi_resolve_pass::init(rtti::context& ctx) -> bool
@@ -110,17 +120,18 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto cs_v2_place = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_place_v2.sc");
     v2_place_program_.program = std::make_unique<gpu_program>(cs_v2_place);
     v2_place_program_.cache_uniforms();
+    auto cs_v2_classify = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_classify_v2.sc");
+    v2_classify_program_.program = std::make_unique<gpu_program>(cs_v2_classify);
+    v2_classify_program_.cache_uniforms();
+    auto cs_v2_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_args_v2.sc");
+    v2_args_program_.program = std::make_unique<gpu_program>(cs_v2_args);
+    v2_args_program_.cache_uniforms();
     auto cs_v2_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_v2.sc");
     v2_trace_program_.program = std::make_unique<gpu_program>(cs_v2_trace);
     v2_trace_program_.cache_uniforms();
     auto cs_v2_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp_v2.sc");
     v2_interp_program_.program = std::make_unique<gpu_program>(cs_v2_interp);
     v2_interp_program_.cache_uniforms();
-    if(!v2_interp_program_.is_valid())
-    {
-        APPLOG_WARNING("[SurfaceCache] GI probe interp program failed to load. Adaptive probes "
-                       "are disabled for this run.");
-    }
     auto cs_v2_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_filter_v2.sc");
     v2_filter_program_.program = std::make_unique<gpu_program>(cs_v2_filter);
     v2_filter_program_.cache_uniforms();
@@ -272,6 +283,24 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             probe_grid_y_ = probes_y;
             records_trusted_ = false;
         }
+        // Compaction storage: the traced list ([0] = count) and the indirect args the trace
+        // launches from. List capacity = every lattice probe, the worst case (adaptive off).
+        const uint32_t required_traced = 1u + probe_count;
+        if(!bgfx::isValid(probe_traced_) || required_traced > probe_traced_capacity_)
+        {
+            if(bgfx::isValid(probe_traced_))
+            {
+                gfx::destroy(probe_traced_);
+            }
+            probe_traced_capacity_ = required_traced + required_traced / 2u;
+            probe_traced_ = gfx::create_dynamic_index_buffer(probe_traced_capacity_,
+                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                 BGFX_BUFFER_INDEX32);
+        }
+        if(!bgfx::isValid(probe_args_))
+        {
+            probe_args_ = gfx::create_indirect_buffer(1);
+        }
         const uint32_t write_probe_offset = even_probe_frame ? 0u : records_per_half;
         const uint32_t read_probe_offset = even_probe_frame ? records_per_half : 0u;
         // x = the history CAP (the shader grows a per-probe count toward it and blends at
@@ -315,7 +344,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // Hoisted out of the trace: placement and reconstruction share them.
             const bool screen_trace = params.hiz && params.hiz->is_valid() && s.enable_screen_trace;
             const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
-            const bool adaptive = s.adaptive_probes && v2_interp_program_.is_valid();
+            const bool adaptive = s.adaptive_probes;
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
@@ -329,6 +358,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
                 v2_place_program_.program->begin();
                 gfx::set_texture(v2_place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                gfx::set_buffer(6, probe_traced_, gfx::access::Write);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 gfx::set_texture(v2_place_program_.s_hiz, 8, hiz_or_depth);
                 gfx::set_texture(v2_place_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
@@ -349,6 +379,31 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 v2_place_program_.program->end();
             }
             {
+                // CLASSIFY + COMPACT: traced/interpolated per probe, traced coordinates
+                // appended densely. The trace launches exactly that count via the args pass.
+                gfx::render_pass pass("GI/Probe Classify");
+                v2_classify_program_.program->begin();
+                gfx::set_buffer(6, probe_traced_, gfx::access::ReadWrite);
+                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                gfx::set_uniform(v2_classify_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(v2_classify_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(v2_classify_program_.u_gi_screen_trace, screen_trace_params);
+                gfx::dispatch(pass.id,
+                              v2_classify_program_.program->native_handle(),
+                              (probes_x + 7u) / 8u,
+                              (probes_y + 7u) / 8u,
+                              1);
+                v2_classify_program_.program->end();
+            }
+            {
+                gfx::render_pass pass("GI/Probe Args");
+                v2_args_program_.program->begin();
+                gfx::set_buffer(5, probe_args_, gfx::access::Write);
+                gfx::set_buffer(6, probe_traced_, gfx::access::Read);
+                gfx::dispatch(pass.id, v2_args_program_.program->native_handle(), 1, 1, 1);
+                v2_args_program_.program->end();
+            }
+            {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
                 v2_trace_program_.program->begin();
@@ -367,9 +422,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_texture(v2_trace_program_.s_hiz, 8, hiz_or_depth);
                 gfx::set_texture(v2_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_texture(v2_trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-                gfx::set_texture(v2_trace_program_.s_world_probe_irradiance,
-                                 11,
-                                 clipmap_gpu.get_world_probe_irradiance());
+                // Stage 11 carries the compacted traced list - the trace completes rays from
+                // the RADIANCE atlas (6) + depth (15) and never reads the irradiance cage
+                // (GI_WORLD_PROBE_SKIP_IRRADIANCE frees the stage).
+                gfx::set_buffer(11, probe_traced_, gfx::access::Read);
                 gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
                 gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
                 gfx::set_texture(v2_trace_program_.s_gi_env_sh, 14, env_sh_tex);
@@ -394,14 +450,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(v2_trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 gfx::set_uniform(v2_trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch(pass.id, v2_trace_program_.program->native_handle(), probes_x, probes_y, 1);
+                gfx::dispatch_indirect(pass.id, v2_trace_program_.program->native_handle(), probe_args_, 0, 1);
                 v2_trace_program_.program->end();
                 records_trusted_ = true;
             }
-            if(adaptive)
             {
-                // RECONSTRUCTION: interpolated probes' tiles rebuilt from their parents before
-                // the filter reads the atlas. Parents are always trace-written (evens never
+                // RECONSTRUCTION + CLEAR: interpolated probes' tiles rebuilt from their
+                // parents, dead probes' tiles cleared to black - everything the compacted
+                // trace no longer visits. Parents are always trace-written (evens never
                 // interpolate), so one read-write image binding carries no intra-pass hazard.
                 gfx::render_pass pass("GI/Probe Interp");
                 v2_interp_program_.program->begin();

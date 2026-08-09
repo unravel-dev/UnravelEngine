@@ -1145,11 +1145,11 @@ void dispatch(view_id _id, program_handle _handle, uint32_t _numX, uint32_t _num
     bgfx::dispatch(_id, _handle, _numX, _numY, _numZ);
 }
 
-void dispatch(view_id _id,
-              program_handle _handle,
-              indirect_buffer_handle _indirectHandle,
-              uint16_t _start,
-              uint16_t _num)
+void dispatch_indirect(view_id _id,
+                       program_handle _handle,
+                       indirect_buffer_handle _indirectHandle,
+                       uint16_t _start,
+                       uint16_t _num)
 {
     bgfx::dispatch(_id, _handle, _indirectHandle, _start, _num);
 }

@@ -40,9 +40,17 @@ void main()
 	}
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
+	if(meta.w < 0.5)
+	{
+		// Dead anchor: the compacted trace never launches a group for it, so the black tile
+		// the trace used to write moves here - this pass owns every non-traced tile.
+		imageStore(s_probe_radiance_rw, GiProbeAtlasBase(probe.x, probe.y, 0) + local,
+		           vec4(0.0, 0.0, 0.0, -1.0));
+		return;
+	}
 	if(meta.w < 1.5)
 	{
-		// Traced or invalid: the trace wrote this tile.
+		// Traced: the trace wrote this tile.
 		return;
 	}
 	ivec2 parents[4];

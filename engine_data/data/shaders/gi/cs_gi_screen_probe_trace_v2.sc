@@ -36,7 +36,14 @@
 #include "gi/gi_light_voxels.sh"
 #define GI_WORLD_PROBE_READ
 #define GI_WORLD_PROBE_READ_RADIANCE
+// Completion reads radiance + depth, never the irradiance cage - skipping it frees stage 11
+// for the compacted probe list below.
+#define GI_WORLD_PROBE_SKIP_IRRADIANCE
 #include "gi/gi_world_probes.sh"
+
+/// The classify pass's compacted output: [0] = traced count (consumed by the indirect args),
+/// [1..] = packed traced probe coordinates (x | y << 16), one group each.
+BUFFER_RO(b_gi_probe_traced, uint, 11);
 
 /// rgb = radiance, a = hitT (negative = completed/sky). One 8x8 tile per probe.
 IMAGE2D_WO(s_probe_radiance_out, rgba16f, 5);
@@ -56,7 +63,8 @@ uniform vec4 u_gi_v2_camera;
 /// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
 /// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
 /// paints interpolated tiles magenta under the same flag).
-/// z > 0 = ADAPTIVE gather: odd-lattice probes on their parents' plane skip tracing. w unused.
+/// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
+/// w unused.
 uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
 /// importance mip the filter stored in that probe's record slots.
@@ -66,7 +74,6 @@ SHARED vec3 s_anchor_position;
 SHARED vec3 s_anchor_normal;
 SHARED vec3 s_origin;
 SHARED float s_short_range;
-SHARED float s_valid;
 /// Anchor in the screen tier's spaces, shared by every ray's Hi-Z march: full-res uv (self-hit
 /// rejection), (uv, device z) screen-space origin, and the view-space origin.
 SHARED vec2 s_anchor_uv;
@@ -79,225 +86,69 @@ SHARED float s_importance_mean;
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 probe = ivec2(gl_WorkGroupID.xy);
+	// COMPACTED dispatch: exactly the traced count of groups launches (indirect args from the
+	// classify pass), each reading its probe coordinate from the dense list - interpolated,
+	// dead and sky probes never occupy a wavefront here. Their tiles are the interp pass's
+	// job (parent blend or black clear).
+	uint packed_probe = b_gi_probe_traced[1u + gl_WorkGroupID.x];
+	ivec2 probe = ivec2(int(packed_probe & 0xFFFFu), int(packed_probe >> 16u));
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
-	if(probe.x >= u_gi_probe_count_x || probe.y >= u_gi_probe_count_y)
-	{
-		return;
-	}
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	if(local.x == 0 && local.y == 0)
 	{
-		s_valid = 0.0;
 		s_history_record = -1;
 		s_importance_mean = 0.0;
-		// Placement (cs_gi_screen_probe_place_v2) already computed EVERY probe's anchor into
-		// the records this frame; reading them back is what makes the adaptive decision below
-		// possible at all - parent anchors exist before any group runs.
+		// Placement computed the anchor, classification put this probe on the traced list -
+		// the records are valid by construction; this thread only unpacks them and
+		// reprojects the anchor for the importance mip.
 		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
-		if(meta.w > 0.5)
+		vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
+		vec3 world_position = meta.xyz;
+		vec3 world_normal = meta2.xyz;
+		vec4 origin_range = b_gi_probes[record + uint(GI_PROBE_ORIGIN)];
+		vec4 anchor = b_gi_probes[record + uint(GI_PROBE_ANCHOR)];
+		s_anchor_position = world_position;
+		s_anchor_normal = world_normal;
+		s_origin = origin_range.xyz;
+		s_short_range = origin_range.w;
+		s_anchor_uv = anchor.xy;
+		s_ss_origin = vec3(anchor.xy, anchor.z);
+		s_vs_origin = HizComputeViewspacePosition(anchor.xy, anchor.z);
+		// Reproject the anchor into LAST frame's lattice for the importance mip. A failed or
+		// plane-rejected reprojection just means uniform allocation this frame - importance
+		// is an optimisation, never a correctness dependency.
+		vec4 prev_clip4 = mul(u_gi_prev_view_proj, vec4(world_position, 1.0));
+		if(prev_clip4.w > 0.0)
 		{
-			vec3 world_position = meta.xyz;
-			vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
-			vec3 world_normal = meta2.xyz;
-			// ADAPTIVE GATHER: even-lattice probes are the coarse base and always trace. An
-			// odd-lattice probe whose anchor lies ON the plane its even-lattice parents span -
-			// and faces the same way to within one octahedral texel's cone - would trace a
-			// tile the parents' blend already predicts (exactly the interpolation the
-			// integrate pass performs per pixel, materialised per tile). It is marked
-			// INTERPOLATED (meta mode 2) and skips the 64-ray march;
-			// cs_gi_screen_probe_interp_v2 reconstructs its tile before the filter. Geometry
-			// breaks - depth discontinuities, curvature past the cone, an invalid parent -
-			// fail the test and keep tracing, so detail keeps full probe density.
-			bool interpolated = false;
-			// REVALIDATION cadence: an interpolated probe's own history is derived from its
-			// parents, so no test below can see structure the first substitution erased -
-			// every skipped probe must periodically MEASURE again. The phase hash spreads
-			// the revalidations across frames and neighbours.
-			bool revalidate =
-			    ((uint(probe.x) * 3u + uint(probe.y) * 5u + u_gi_probe_frame) %
-			     uint(GI_ADAPTIVE_REVALIDATE_FRAMES)) == 0u;
-			BRANCH
-			if(u_gi_screen_trace.z > 0.0 && !revalidate && ((probe.x | probe.y) & 1) != 0)
+			vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
+			vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
+			if(all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
+			   all(lessThanEqual(prev_uv, vec2_splat(1.0))))
 			{
-				// SAMENESS = COPLANARITY OF THE PARENT SET, at parent scale, no normals
-				// anywhere. Both normal sources failed this test on real content: G-buffer
-				// normals carry normal MAPS (bump detail on flat Bistro walls read as
-				// curvature and rejected nearly everything), and a pixel-scale depth
-				// derivative measures the cobble, not the street. The parents' own anchor
-				// positions span the surface at EXACTLY the scale being interpolated across:
-				// three corners of the lattice cell define the plane, and the fourth corner
-				// plus this probe's anchor must lie on it. Exact for planes at any viewing
-				// angle, low-passes geometric relief by construction, and curvature fails it
-				// at the scale that matters. Straddling a single axis degenerates the cell to
-				// a LINE, where the same idea holds: one pixel row's anchors on a plane are
-				// the row plane's intersection with it - collinear exactly.
-				ivec2 parents[4];
-				GiProbeParents(probe, parents);
-				vec3 positions[4];
-				bool parents_valid = true;
-				LOOP for(int p = 0; p < 4; ++p)
+				vec2 prev_probe = floor(prev_uv * u_gi_probe_screen.xy / u_gi_probe_spacing);
+				int hx = int(clamp(prev_probe.x, 0.0, float(u_gi_probe_count_x - 1)));
+				int hy = int(clamp(prev_probe.y, 0.0, float(u_gi_probe_count_y - 1)));
+				uint history_base =
+				    (GiProbeRecord(hx, hy, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
+				vec4 history_meta = b_gi_probes[history_base + uint(GI_PROBE_META)];
+				float plane = abs(dot(history_meta.xyz - world_position, world_normal));
+				if(history_meta.w > 0.5 &&
+				   plane < 0.05 * max(length(world_position - u_gi_v2_camera.xyz), 0.1))
 				{
-					uint parent_record =
-					    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_write_offset) *
-					    uint(GI_PROBE_STRIDE);
-					vec4 parent_meta = b_gi_probes[parent_record + uint(GI_PROBE_META)];
-					positions[p] = parent_meta.xyz;
-					if(parent_meta.w < 0.5)
+					s_history_record = int(history_base);
+					float total = 0.0;
+					for(int m = 0; m < 4; ++m)
 					{
-						parents_valid = false;
+						vec4 mip = b_gi_probes[history_base + uint(m)];
+						total += mip.x + mip.y + mip.z + mip.w;
 					}
-				}
-				if(parents_valid)
-				{
-					float tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
-					// Duplicated parents (non-straddled axis, lattice edge) zero their edge.
-					vec3 edge_x = positions[1] - positions[0];
-					vec3 edge_y = positions[2] - positions[0];
-					vec3 cell_normal = cross(edge_x, edge_y);
-					float cell_len = length(cell_normal);
-					if(cell_len > 1e-6)
-					{
-						vec3 plane_normal = cell_normal / cell_len;
-						interpolated =
-						    abs(dot(world_position - positions[0], plane_normal)) <= tolerance &&
-						    abs(dot(positions[3] - positions[0], plane_normal)) <= tolerance;
-					}
-					else
-					{
-						// One distinct edge (or none): the collinearity test. The duplicate
-						// edge is zero, so the sum IS the live axis; both zero fails closed.
-						vec3 axis = edge_x + edge_y;
-						float axis_len2 = dot(axis, axis);
-						if(axis_len2 > 1e-8)
-						{
-							vec3 delta = world_position - positions[0];
-							vec3 off_axis = delta - axis * (dot(delta, axis) / axis_len2);
-							interpolated = dot(off_axis, off_axis) <= tolerance * tolerance;
-						}
-					}
-				}
-				// RADIANCE agreement: geometric sameness is necessary, not sufficient - a
-				// shadow edge, a lamp falloff, an occlusion gradient live on perfectly flat
-				// walls, and substituting the parents' average there washes lighting
-				// structure out of the probe field (measured: wall shading visibly smoothed).
-				// The parents' 4x4 importance mips - filtered probe-space luminance the
-				// filter already writes into the records - must agree per directional block.
-				// Read from LAST frame's half, exactly like the importance reprojection (the
-				// filter has not run yet this frame); first frames without trusted history
-				// fall back to the geometric answer alone. Vectorised per record slot (four
-				// blocks at a time) so thread 0 stays register-light.
-				BRANCH
-				if(interpolated && u_gi_probe_history_cap > 1.5)
-				{
-					// Two disagreements end the substitution: the parents among THEMSELVES
-					// (structure crossing the cell), and this probe's OWN last-frame mip
-					// against the parents' predicted blend (sub-cell structure only the probe
-					// itself ever measured - a lamp pool or shadow tongue smaller than the
-					// cell leaves the bracketing parents agreeing while the middle differs).
-					// The own test goes blind one revalidation period after a substitution
-					// starts (the own mip becomes the blend); the revalidation cadence above
-					// is what refreshes its evidence.
-					uint own_history =
-					    (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) *
-					    uint(GI_PROBE_STRIDE);
-					float luminance_sum = 0.0;
-					vec4 spread = vec4_splat(0.0);
-					vec4 deviation = vec4_splat(0.0);
-					LOOP for(int m = 0; m < 4; ++m)
-					{
-						vec4 lo = vec4_splat(1e9);
-						vec4 hi = vec4_splat(-1e9);
-						vec4 parent_sum = vec4_splat(0.0);
-						LOOP for(int p = 0; p < 4; ++p)
-						{
-							uint history_record =
-							    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_read_offset) *
-							    uint(GI_PROBE_STRIDE);
-							vec4 mip = b_gi_probes[history_record + uint(m)];
-							lo = min(lo, mip);
-							hi = max(hi, mip);
-							parent_sum += mip;
-							luminance_sum += mip.x + mip.y + mip.z + mip.w;
-						}
-						spread = max(spread, hi - lo);
-						vec4 own_mip = b_gi_probes[own_history + uint(m)];
-						deviation = max(deviation, abs(own_mip - parent_sum * 0.25));
-					}
-					float mean = luminance_sum / 64.0;
-					float limit = GI_ADAPTIVE_RADIANCE_TOLERANCE * max(mean, 1e-3);
-					float worst = max(max(max(spread.x, spread.y), max(spread.z, spread.w)),
-					                  max(max(deviation.x, deviation.y), max(deviation.z, deviation.w)));
-					if(worst > limit)
-					{
-						interpolated = false;
-					}
-				}
-			}
-			if(interpolated)
-			{
-				b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 2.0);
-				s_valid = 2.0;
-			}
-			else
-			{
-				vec4 origin_range = b_gi_probes[record + uint(GI_PROBE_ORIGIN)];
-				vec4 anchor = b_gi_probes[record + uint(GI_PROBE_ANCHOR)];
-				s_anchor_position = world_position;
-				s_anchor_normal = world_normal;
-				s_origin = origin_range.xyz;
-				s_short_range = origin_range.w;
-				s_anchor_uv = anchor.xy;
-				s_ss_origin = vec3(anchor.xy, anchor.z);
-				s_vs_origin = HizComputeViewspacePosition(anchor.xy, anchor.z);
-				s_valid = 1.0;
-				// Reproject the anchor into LAST frame's lattice for the importance mip. A
-				// failed or plane-rejected reprojection just means uniform allocation this
-				// frame - importance is an optimisation, never a correctness dependency.
-				vec4 prev_clip4 = mul(u_gi_prev_view_proj, vec4(world_position, 1.0));
-				if(prev_clip4.w > 0.0)
-				{
-					vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
-					vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
-					if(all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
-					   all(lessThanEqual(prev_uv, vec2_splat(1.0))))
-					{
-						vec2 prev_probe = floor(prev_uv * u_gi_probe_screen.xy / u_gi_probe_spacing);
-						int hx = int(clamp(prev_probe.x, 0.0, float(u_gi_probe_count_x - 1)));
-						int hy = int(clamp(prev_probe.y, 0.0, float(u_gi_probe_count_y - 1)));
-						uint history_base =
-						    (GiProbeRecord(hx, hy, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
-						vec4 history_meta = b_gi_probes[history_base + uint(GI_PROBE_META)];
-						float plane = abs(dot(history_meta.xyz - world_position, world_normal));
-						if(history_meta.w > 0.5 &&
-						   plane < 0.05 * max(length(world_position - u_gi_v2_camera.xyz), 0.1))
-						{
-							s_history_record = int(history_base);
-							float total = 0.0;
-							for(int m = 0; m < 4; ++m)
-							{
-								vec4 mip = b_gi_probes[history_base + uint(m)];
-								total += mip.x + mip.y + mip.z + mip.w;
-							}
-							s_importance_mean = total / 16.0;
-						}
-					}
+					s_importance_mean = total / 16.0;
 				}
 			}
 		}
 	}
 	barrier();
 	ivec2 texel = GiProbeAtlasBase(probe.x, probe.y, 0) + local;
-	// Interpolated: the interp pass owns this tile - nothing to trace, nothing to write.
-	if(s_valid > 1.5)
-	{
-		return;
-	}
-	if(s_valid < 0.5)
-	{
-		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
-		return;
-	}
 	// World-anchored direction CONES: each thread owns one texel of the shared octahedral
 	// parameterisation; the cone centre is used for the below-tangent cull and the importance
 	// lookup, while the traced sample directions jitter WITHIN the cone (see the sample loop).

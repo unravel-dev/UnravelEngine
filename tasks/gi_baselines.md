@@ -128,3 +128,38 @@ screen-trace commit rate (ray-tier debug view measures it), a mip-1 Hi-Z march s
 adaptive probe placement / reduced-rate adaptive probes (backlog). Running the gather at
 half resolution already halves this scaling once; quarter-res tracing with the bilateral
 upsample is the built-in lever for 4K-class targets.
+
+## Optimization arc close-out (2026-08-09, Bistro, user-recorded, reflections enabled)
+
+Everything in one arc: the trace's saturation step boost, Hi-Z mip-1 gather march,
+reflections at the shared trace resolution (joint-bilateral composite upsample), ADAPTIVE
+PROBES (even-lattice base + coplanarity/radiance/own-history classification + 8-frame
+revalidation + probe-space reconstruction), and traced-probe COMPACTION (classify pass ->
+dense list -> indirect trace dispatch; dead/interpolated probes never launch a wavefront).
+Quality A/B user-verified identical with adaptive on.
+
+| Pass | 4K GPU ms | FHD GPU ms |
+|---|---|---|
+| Light Voxels | 0.492 | 0.490 |
+| World Probe Trace | 0.079 | 0.079 |
+| World Probe Convolve | 0.144 | 0.150 |
+| ReflectionsTrace | 1.060 | 0.529 |
+| ReflectionsTemporal + Composite | 0.251 | 0.104 |
+| Probe Place + Classify + Args | 0.029 | 0.019 |
+| Probe Trace (v2) | 2.033 | 0.733 |
+| Probe Interp | 0.021 | 0.016 |
+| Probe Filter + Integrate | 0.193 | 0.074 |
+| Temporal | 0.120 | 0.028 |
+| Denoise x3 | 1.206 | 0.312 |
+| Upsample | 0.158 | 0.037 |
+| **Total** | **5.786** | **2.570** |
+
+Versus the start of the arc (10.103 ms 4K / 4.161 ms FHD, same content, reflections
+included): 43% / 38% off the whole GI frame. The dominant pass fell 5.667 -> 2.033 ms at 4K
+(adaptive off -> on + compaction, measured stepwise: coplanarity classifier 2.37, radiance +
+revalidation quality gates included, compaction -0.34). Adaptive savings are content-scaled:
+flat-heavy views interpolate more; lit-structure regions re-trace by design (the radiance
+gate) - that is the quality contract, not a regression. Remaining no-quality-loss levers:
+light-voxel ambiguous-face trim (~0.15-0.2 ms, flat), denoise variance early-out. Quality
+trades if 4K budgets ever demand them: probe_spacing, quarter-res gather, second adaptive
+hierarchy level (evens vs stride-4 grandparents).

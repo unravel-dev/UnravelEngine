@@ -91,13 +91,18 @@ uint GiWorldProbePackCell(ivec3 cell, int level)
 #if defined(GI_WORLD_PROBE_READ)
 
 /// Irradiance + depth atlases for consumers. RESERVED STAGES 14 is the env SH; these use 11/15
-/// unless the includer overrides beforehand.
+/// unless the includer overrides beforehand. A consumer that only COMPLETES rays (radiance +
+/// depth, never the irradiance cage) defines GI_WORLD_PROBE_SKIP_IRRADIANCE to leave stage 11
+/// free - the screen probe trace hands that stage to its compacted probe list.
+#ifndef GI_WORLD_PROBE_SKIP_IRRADIANCE
 SAMPLER2D(s_world_probe_irradiance, 11);
+#endif // GI_WORLD_PROBE_SKIP_IRRADIANCE
 SAMPLER2D(s_world_probe_depth, 15);
 
 /// xy = 1 / atlas size of the irradiance+depth atlases (they share a layout).
 uniform vec4 u_gi_world_probe_atlas;
 
+#ifndef GI_WORLD_PROBE_SKIP_IRRADIANCE
 /**
  * Irradiance around @p normal at @p position from the 8-probe cage of @p level, with the full
  * DDGI weight chain: trilinear x wrap-shading backface x Chebyshev visibility (cubed, floored)
@@ -238,6 +243,7 @@ bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_directi
 	out_sky_fraction = 0.0;
 	return false;
 }
+#endif // GI_WORLD_PROBE_SKIP_IRRADIANCE
 
 #ifdef GI_WORLD_PROBE_READ_RADIANCE
 
