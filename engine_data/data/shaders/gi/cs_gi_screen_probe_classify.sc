@@ -1,7 +1,7 @@
 /*
- * GI v2 probe CLASSIFICATION + COMPACTION: one thread per probe decides traced or
+ * GI probe CLASSIFICATION + COMPACTION: one thread per probe decides traced or
  * interpolated, and appends the traced probes' coordinates to a dense list. The trace then
- * launches EXACTLY the traced count through indirect args (cs_gi_screen_probe_args_v2)
+ * launches EXACTLY the traced count through indirect args (cs_gi_screen_probe_args)
  * instead of the full lattice with early-outs: with half the lattice interpolated and the
  * sky dead, the sparse surviving tracers were paying an occupancy tax the skips could not
  * recover (measured: pass savings trailing the ray-count reduction).

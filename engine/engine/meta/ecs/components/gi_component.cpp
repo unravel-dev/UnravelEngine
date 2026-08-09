@@ -30,14 +30,20 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Energy"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 4.0f},
-            entt::attribute{"tooltip", "Artistic multiplier on the scene bounce; the environment fallback keeps probe intensity."},
+            entt::attribute{"tooltip",
+                            "Scales the gathered bounce light. Applies to the scene's own indirect "
+                            "only; the sky/environment fallback keeps its calibrated brightness."},
         })
         .data<&settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolution"},
             entt::attribute{"pretty_name", "Trace Resolution"},
             entt::attribute{"group", "Gather"},
-            entt::attribute{"tooltip", "Indirect diffuse is low frequency; half resolution costs little."},
+            entt::attribute{"tooltip",
+                            "Internal resolution of the gather and its filter chain, as a fraction "
+                            "of the frame; reflections trace at the same resolution. Indirect light "
+                            "is low frequency, so Half loses little - the bilateral upsample "
+                            "reconstructs full resolution."},
         })
         .data<&settings::probe_spacing>("probe_spacing"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -46,7 +52,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Gather"},
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 32.0f},
-            entt::attribute{"tooltip", "Probe tile edge in full-resolution pixels."},
+            entt::attribute{"tooltip",
+                            "Distance between screen probes, in full-resolution pixels. Lower means "
+                            "denser probes and finer indirect detail; ray cost grows with the "
+                            "inverse square."},
         })
         .data<&settings::enable_screen_trace>("enable_screen_trace"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -84,8 +93,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip",
-                            "1 = ray tiers (green = screen commit, red = SDF, blue = completion). "
-                            "Session-only, not saved."},
+                            "1 = ray tiers (green = screen commit, red = SDF hit, blue = "
+                            "world-probe/sky completion, magenta = probe reconstructed from "
+                            "neighbours). Session-only, not saved."},
         })
         .data<&settings::enable_temporal>("enable_temporal"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -112,7 +122,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 4.0f},
             entt::attribute{"max", 96.0f},
-            entt::attribute{"tooltip", "Steady-state blend weight is one over this."},
+            entt::attribute{"tooltip",
+                            "Temporal history length in frames; the steady-state blend weight is "
+                            "one over this. Higher is smoother but reacts slower to lighting "
+                            "changes."},
         })
         .data<&settings::reprojection_tolerance>("reprojection_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -137,6 +150,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 6.0f},
+            entt::attribute{"tooltip",
+                            "A-trous filter passes; each doubles the filter's reach. More passes "
+                            "smooth broader noise at some cost in fine lighting detail."},
         })
         .data<&settings::denoise_normal_power>("denoise_normal_power"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -145,6 +161,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
+            entt::attribute{"tooltip",
+                            "How strictly the filter stops at normal differences. Higher keeps "
+                            "corners and curvature crisp; lower blurs across them."},
         })
         .data<&settings::denoise_luma_phi>("denoise_luma_phi"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -153,6 +172,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
+            entt::attribute{"tooltip",
+                            "Brightness tolerance of the filter, scaled by the local variance "
+                            "estimate. Higher smooths more aggressively across lighting contrast; "
+                            "lower preserves shadow edges and highlights."},
         })
         .data<&settings::denoise_plane_tolerance>("denoise_plane_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -161,6 +184,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
+            entt::attribute{"tooltip",
+                            "Depth tolerance as a fraction of view distance: filter taps lying off "
+                            "the pixel's surface plane by more than this are rejected, keeping "
+                            "light from bleeding across depth breaks."},
         })
         .data<&settings::denoise_low_count_boost>("denoise_low_count_boost"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -169,6 +196,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 64.0f},
+            entt::attribute{"tooltip",
+                            "Extra smoothing for pixels with little temporal history "
+                            "(disocclusions, fresh camera cuts); fades out as history accumulates."},
         })
         .data<&settings::enable_bilateral_upsample>("enable_bilateral_upsample"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -184,6 +214,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
+            entt::attribute{"tooltip",
+                            "How strictly upsample taps must agree with the pixel's normal. Higher "
+                            "keeps indirect light from bleeding across edges during the low-res to "
+                            "full-res reconstruction."},
         })
         .data<&settings::upsample_plane_tolerance>("upsample_plane_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -192,6 +226,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
+            entt::attribute{"tooltip",
+                            "Depth tolerance for upsample taps as a fraction of view distance; "
+                            "taps off the pixel's surface plane beyond this are rejected."},
         });
 }
 
@@ -212,12 +249,8 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"group", "Composition"},
             entt::attribute{"tooltip",
                             "Build the cascade voxels in a compute dispatch instead of on the CPU. "
-                            "The CPU composer blocks the main thread for milliseconds whenever the "
-                            "camera moves far enough to re-snap a level, which lands as a stutter; "
-                            "measured at 4.20 ms wall against 0.42 ms plus ~0.5 ms of GPU. Output is "
-                            "identical -- pinned byte for byte by a parity test -- so this is a cost "
-                            "switch, not a quality one. Turn it off to compare, or if a backend "
-                            "misbehaves."},
+                            "Output is identical; the CPU path stalls the main thread whenever a "
+                            "level rebuilds and exists as a diagnostic fallback."},
         })
         .data<&settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -227,11 +260,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"max", 128},
             entt::attribute{"group", "Composition"},
             entt::attribute{"tooltip",
-                            "Voxels per axis in every cascade level. Memory and composition work are "
-                            "both CUBIC in this: 128 is four times the spatial detail and eight times "
-                            "the cost of 64. It was held at 64 because the CPU composer could not "
-                            "afford more; on the GPU 128 is reachable. Changing it rebuilds the "
-                            "cascade, so it flickers for a few frames."},
+                            "Voxels per axis in every cascade level; memory and composition cost "
+                            "scale with the cube. 128 is required for the world probes - other "
+                            "values disable them and with them the whole gather. Changing it "
+                            "rebuilds the cascade, which flickers for a few frames."},
         })
         .data<&settings::base_extent>("base_extent"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -282,11 +314,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"max", global_sdf_clipmap::level_count},
             entt::attribute{"group", "Budget"},
             entt::attribute{"tooltip",
-                            "Cascade levels recomposed per frame at most. Composing touches every "
-                            "voxel of a level, so rebuilding all four in the frame something moved is "
-                            "a visible hitch. The cost of budgeting is that a moved object keeps "
-                            "occluding from its old position for a few frames. Raise it now that "
-                            "composition is on the GPU and cheaper."},
+                            "Cascade levels recomposed per frame at most - the budget that spreads "
+                            "geometry changes over frames. Low values smooth the cost but let a "
+                            "moved object keep occluding from its old position for a few frames; "
+                            "high values react in fewer frames at a higher per-frame peak."},
         })
         .data<&settings::cull_composition>("cull_composition"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -294,10 +325,9 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"pretty_name", "Cull Composition"},
             entt::attribute{"group", "Budget"},
             entt::attribute{"tooltip",
-                            "Bin instances so a voxel tests only the ones that can reach it, instead "
-                            "of every instance the level overlaps. Pure acceleration -- composing with "
-                            "it off produces byte-identical voxels, which a test asserts. Present so "
-                            "that comparison can be made; leave it on."},
+                            "Bin instances into a grid so each voxel tests only the ones within "
+                            "reach, instead of every instance in the level. Output is identical "
+                            "either way; disabling is only useful to diagnose composition issues."},
         });
 }
 
@@ -313,8 +343,8 @@ REFLECT_INLINE(gi_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolve"},
             entt::attribute{"pretty_name", "Gather"},
-            entt::attribute{"tooltip", "The screen probe gather and its filter chain. Everything "
-                                       "else is constant-driven (gi_constants)."},
+            entt::attribute{"tooltip", "The screen probe gather and its filter chain - resolution, "
+                                       "probe density, temporal and denoise quality."},
         })
         .data<&gi_settings::clipmap>("clipmap"_hs)
         .custom<entt::attributes>(entt::attributes{

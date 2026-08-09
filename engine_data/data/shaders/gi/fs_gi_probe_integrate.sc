@@ -1,7 +1,7 @@
 $input v_texcoord0
 
 /*
- * GI v2 integration (plan 3.4): per pixel, the four probes bracketing it, weighted by bilinear
+ * GI integration (plan 3.4): per pixel, the four probes bracketing it, weighted by bilinear
  * position and plane agreement, each evaluated at the PIXEL's own normal from its convolved
  * octahedral irradiance tile. No layers, no traced fallback, no contact rays - pixels no probe
  * serves fall back to the WORLD probes (positional and stable), then to the environment SH.
@@ -22,11 +22,11 @@ $input v_texcoord0
 BUFFER_RO(b_gi_probes, vec4, 7);
 SAMPLER2D(s_gi_depth, 8);
 SAMPLER2D(s_gi_normal, 9);
-/// The convolved irradiance tiles from cs_gi_screen_probe_filter_v2.
+/// The convolved irradiance tiles from cs_gi_screen_probe_filter.
 SAMPLER2D(s_probe_irradiance, 2);
 
 /// xyz = camera position, w = frame index.
-uniform vec4 u_gi_v2_camera;
+uniform vec4 u_gi_camera;
 
 /// x = settings.intensity, the artistic multiplier on the gathered bounce. Applied to the
 /// output rgb only: alpha keeps the measured weight that replaces the environment term
@@ -34,14 +34,14 @@ uniform vec4 u_gi_v2_camera;
 /// yzw unused. (Contact AO deliberately does NOT live here: within-plane AO structure is
 /// exactly what the plane-guided denoise chain dilutes - it applies at FULL resolution after
 /// the chain, in fs_gi_upsample.)
-uniform vec4 u_gi_v2_intensity;
+uniform vec4 u_gi_intensity;
 
-#define GI_V2_INTEGRATE_PLANE_TOLERANCE 0.05
+#define GI_INTEGRATE_PLANE_TOLERANCE 0.05
 
 /// Accumulates the 2x2 probe bracket at @p base: bilinear x plane weights, irradiance sampled
 /// at the pixel normal via octahedral-wrapped manual bilinear. One function so the jittered and
 /// the fallback unjittered brackets run identical code.
-void GiV2GatherBracket(vec2 base, vec2 frac, vec3 world_position, vec3 world_normal,
+void GiGatherBracket(vec2 base, vec2 frac, vec3 world_position, vec3 world_normal,
                        float plane_tolerance, vec2 oct_base, vec2 oct_frac,
                        inout vec3 radiance, inout float measured, inout float weight_sum)
 {
@@ -102,8 +102,8 @@ void main()
 		return;
 	}
 	vec3 world_normal = normalize(nd.world_normal);
-	float view_distance = max(length(world_position - u_gi_v2_camera.xyz), 1e-3);
-	float plane_tolerance = GI_V2_INTEGRATE_PLANE_TOLERANCE * view_distance;
+	float view_distance = max(length(world_position - u_gi_camera.xyz), 1e-3);
+	float plane_tolerance = GI_INTEGRATE_PLANE_TOLERANCE * view_distance;
 	vec2 pixel = uv * u_gi_probe_screen.xy;
 	vec2 grid = pixel / u_gi_probe_spacing - vec2_splat(0.5);
 	// Interpolation JITTER [S21 s39]: offsetting which bracket a pixel reads spatially
@@ -111,12 +111,12 @@ void main()
 	// without it the probe lattice prints through as tile-sized plateaus. Interleaved
 	// gradient noise, animated by frame: spatially low-discrepancy, deterministic.
 	float ign = fract(52.9829189 *
-	                  fract(0.06711056 * (gl_FragCoord.x + 5.588238 * u_gi_v2_camera.w) +
+	                  fract(0.06711056 * (gl_FragCoord.x + 5.588238 * u_gi_camera.w) +
 	                        0.00583715 * gl_FragCoord.y));
 	float ign2 = fract(52.9829189 *
-	                   fract(0.06711056 * (gl_FragCoord.y + 5.588238 * u_gi_v2_camera.w) +
+	                   fract(0.06711056 * (gl_FragCoord.y + 5.588238 * u_gi_camera.w) +
 	                         0.00583715 * gl_FragCoord.x));
-	vec2 jitter = (vec2(ign, ign2) - vec2_splat(0.5)) * GI_V2_INTERPOLATION_JITTER_TILES;
+	vec2 jitter = (vec2(ign, ign2) - vec2_splat(0.5)) * GI_INTERPOLATION_JITTER_TILES;
 	vec2 jittered_grid = grid + jitter;
 	vec2 base = floor(jittered_grid);
 	vec2 frac = jittered_grid - base;
@@ -127,7 +127,7 @@ void main()
 	vec3 irradiance = vec3_splat(0.0);
 	float measured = 0.0;
 	float weight_sum = 0.0;
-	GiV2GatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
+	GiGatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
 	                  irradiance, measured, weight_sum);
 	// The PLANE CONSTRAINT on the jitter: a jittered bracket whose probes all fail the plane
 	// test would fall through to the world probes and flicker at silhouettes; the unjittered
@@ -137,13 +137,13 @@ void main()
 	{
 		base = floor(grid);
 		frac = grid - base;
-		GiV2GatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
+		GiGatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
 		                  irradiance, measured, weight_sum);
 	}
 	if(weight_sum > 1e-4 && measured > 1e-4)
 	{
 		// Normalised over the measured fraction, weighted out over what the probes vouch for.
-		gl_FragColor = vec4(irradiance / measured * u_gi_v2_intensity.x, saturate(measured / weight_sum));
+		gl_FragColor = vec4(irradiance / measured * u_gi_intensity.x, saturate(measured / weight_sum));
 		return;
 	}
 	// No screen probe serves this pixel: the world probes answer - positional, stable, leak
@@ -152,12 +152,12 @@ void main()
 	float sky_fraction;
 	if(GiWorldProbeIrradianceCascade(world_position,
 	                                 world_normal,
-	                                 normalize(u_gi_v2_camera.xyz - world_position),
-	                                 u_gi_v2_camera.xyz,
+	                                 normalize(u_gi_camera.xyz - world_position),
+	                                 u_gi_camera.xyz,
 	                                 world_irradiance,
 	                                 sky_fraction))
 	{
-		gl_FragColor = vec4(world_irradiance * u_gi_v2_intensity.x, 1.0);
+		gl_FragColor = vec4(world_irradiance * u_gi_intensity.x, 1.0);
 		return;
 	}
 	gl_FragColor = vec4_splat(0.0);

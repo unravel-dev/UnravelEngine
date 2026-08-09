@@ -116,15 +116,15 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
-        wireframe_program_.program = std::make_unique<gpu_program>(vs, fs);
         wireframe_program_.cache_uniforms();
+        wireframe_program_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe_skinned.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
-        wireframe_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
         wireframe_program_skinned_.cache_uniforms();
+        wireframe_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
@@ -136,22 +136,22 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_outline_mask.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_mask.sc");
-        outline_mask_program_.program = std::make_unique<gpu_program>(vs, fs);
         outline_mask_program_.cache_uniforms();
+        outline_mask_program_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_outline_mask_skinned.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_mask.sc");
-        outline_mask_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
         outline_mask_program_skinned_.cache_uniforms();
+        outline_mask_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_clip_quad.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_detect.sc");
-        outline_program_.program = std::make_unique<gpu_program>(vs, fs);
         outline_program_.cache_uniforms();
+        outline_program_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     return true;

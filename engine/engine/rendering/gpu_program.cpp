@@ -137,6 +137,7 @@ auto gpu_program::begin() -> bool
         }
     }
 
+
     if(repopulate)
     {
         populate();

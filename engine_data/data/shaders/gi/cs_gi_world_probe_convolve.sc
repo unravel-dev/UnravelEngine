@@ -25,11 +25,16 @@ IMAGE2D_WO(s_world_probe_irradiance_out, rgba16f, 5);
 IMAGE2D_WO(s_world_probe_depth_out, rg16f, 6);
 
 #define GUTTER_EDGE (GI_WORLD_PROBE_OCT_IRRADIANCE + 2)
+#if (GI_WORLD_PROBE_OCT_IRRADIANCE + 2) != 10
+#error NUM_THREADS below hardcodes GUTTER_EDGE = 10; keep them in step.
+#endif
 
 SHARED vec4 s_irradiance[GI_WORLD_PROBE_OCT_IRRADIANCE * GI_WORLD_PROBE_OCT_IRRADIANCE];
 SHARED vec2 s_depth[GI_WORLD_PROBE_OCT_IRRADIANCE * GI_WORLD_PROBE_OCT_IRRADIANCE];
 
-NUM_THREADS(GUTTER_EDGE, GUTTER_EDGE, 1)
+// Literal 10 = GUTTER_EDGE (GI_WORLD_PROBE_OCT_IRRADIANCE + 2): the OpenGL backend's layout
+// parser rejects expressions in local_size values, so the macro cannot appear here.
+NUM_THREADS(10, 10, 1)
 void main()
 {
 	int slot_linear = int(gl_WorkGroupID.x);

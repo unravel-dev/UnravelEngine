@@ -17,6 +17,7 @@
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -979,6 +980,9 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     object.emplace<taa_component>();
     object.emplace<ssr_component>();
     object.emplace<ssil_component>().enabled = false;
+    // Present-but-disabled, like SSIL: discoverable in the inspector on every volume, and the
+    // quality presets flip it on from `high` up.
+    object.emplace<gi_component>().enabled = false;
     return object;
 }
 
@@ -1109,10 +1113,9 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         }
         else if(preset == scene_preset::high)
         {
-            skylight.set_cloud_mode(skylight_component::cloud_mode::flat);
+            skylight.set_cloud_mode(skylight_component::cloud_mode::volumetric);
             light.shadow_params.type = sm_impl::pcf;
             light.contact_shadow.enabled = true;
-
         }
         else if(preset == scene_preset::showcase)
         {
@@ -1160,14 +1163,17 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
         }
         else if(preset == scene_preset::medium)
         {
+            // The middle tier keeps the screen-space stack lean: SSR + TAA, ambient from the
+            // environment term alone - no SSIL, no world GI. (SSIL stays a manual opt-in; it
+            // must never run TOGETHER with the GI - screen-space indirect re-samples the
+            // GI-lit frame and double-counts it.)
             if(auto* comp = volume.try_get<ssr_component>())
             {
                 comp->settings.fidelityfx.max_rays = 4;
                 comp->settings.fidelityfx.resolution = trace_resolution::half;
             }
-            if(auto* comp = volume.try_get<ssil_component>())
-                comp->enabled = false;
-
+            if(auto* comp = volume.try_get<taa_component>())
+                comp->enabled = true;
         }
         else if(preset == scene_preset::high)
         {
@@ -1175,16 +1181,15 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
-            if(auto* comp = volume.try_get<ssil_component>())
+            // World GI owns indirect diffuse and the world-reflection tier under SSR; SSIL
+            // stays off with it (see the medium preset note).
+            if(auto* comp = volume.try_get<gi_component>())
             {
                 comp->enabled = true;
-                comp->settings.resolution = trace_resolution::half;
+                comp->settings.resolve.resolution = trace_resolution::half;
             }
-            if(auto* comp = volume.try_get<ssil_component>())
-            {
-                comp->enabled = true;
-                comp->settings.resolution = trace_resolution::half;
-            }
+            if(auto* comp = volume.try_get<ssr_component>())
+                comp->settings.fidelityfx.resolution = trace_resolution::half;
             if(auto* comp = volume.try_get<taa_component>())
                 comp->enabled = true;
         }
@@ -1194,8 +1199,16 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
-            if(auto* comp = volume.try_get<ssil_component>())
+            // As `high`, with the screen-space budget uncapped: SSR at full resolution over
+            // the same half-res GI (the gather is filtered irradiance - full-res tracing buys
+            // sharpness it cannot show; SSR is the pass that presents a pixel-exact image).
+            if(auto* comp = volume.try_get<gi_component>())
+            {
                 comp->enabled = true;
+                comp->settings.resolve.resolution = trace_resolution::half;
+            }
+            if(auto* comp = volume.try_get<ssr_component>())
+                comp->settings.fidelityfx.resolution = trace_resolution::full;
             if(auto* comp = volume.try_get<taa_component>())
                 comp->enabled = true;
         }

@@ -20,7 +20,7 @@ $input v_texcoord0
  * single deterministic ray can never reproduce SSR's filtered result - so this pass never
  * traces the screen at all.
  *
- * STOCHASTIC GGX (v2): each frame the ray direction is importance-sampled from the visible
+ * STOCHASTIC GGX: each frame the ray direction is importance-sampled from the visible
  * normal distribution (Heitz VNDF) with an R2 sequence per frame + IGN per pixel - the
  * gather's proven jitter recipe - and the temporal pass integrates the lobe over
  * GI_REFLECTION_TEMPORAL_FRAMES of reprojected history. Roughness therefore SPREADS the

@@ -20,11 +20,11 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
         return false;
     }
 
-    histogram_program_.program = std::make_shared<gpu_program>(cs_histogram);
     histogram_program_.cache_uniforms();
+    histogram_program_.program = std::make_shared<gpu_program>(cs_histogram);
 
-    average_program_.program = std::make_shared<gpu_program>(cs_average);
     average_program_.cache_uniforms();
+    average_program_.program = std::make_shared<gpu_program>(cs_average);
 
     histogram_buffer_ = bgfx::createDynamicIndexBuffer(histogram_bins,
                                                        BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);

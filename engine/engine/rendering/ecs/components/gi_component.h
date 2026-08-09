@@ -10,7 +10,7 @@ namespace unravel
 {
 
 /**
- * @brief The GI v2 settings surface (tasks/gi_rewrite_plan.md, section 5).
+ * @brief The GI settings surface (tasks/gi_rewrite_plan.md, section 5).
  *
  * Deliberately small: the gather is constant-driven (gi_constants.{h,sh} owns every
  * cross-pass value with its unit and derivation), so what remains is what a person looking

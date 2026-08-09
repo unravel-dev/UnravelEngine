@@ -216,11 +216,11 @@ auto atmospheric_pass_perez::init(rtti::context& ctx) -> bool
     auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_sky.sc");
     auto fs_cloud = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud.sc");
 
-    atmospheric_program_.program = std::make_unique<gpu_program>(vs_sky, fs_sky);
     atmospheric_program_.cache_uniforms();
+    atmospheric_program_.program = std::make_unique<gpu_program>(vs_sky, fs_sky);
 
-    cloud_program_.program = std::make_unique<gpu_program>(vs_sky, fs_cloud);
     cloud_program_.cache_uniforms();
+    cloud_program_.program = std::make_unique<gpu_program>(vs_sky, fs_cloud);
 
     int vertical_count = 32;
     int horizontal_count = 32;

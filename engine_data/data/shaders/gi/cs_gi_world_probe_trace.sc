@@ -1,5 +1,5 @@
 /*
- * Traces every world probe's per-frame direction stratum (GI v2 plan 3.3, revised design - see
+ * Traces every world probe's per-frame direction stratum (gi_rewrite_plan.md 3.3, revised design - see
  * gi_world_probes.sh). One thread group per probe SLOT, one thread per ray:
  * thread t traces octahedral texel t * WINDOW + (frame mod WINDOW), so over one window every
  * texel of the 16x16 radiance atlas refreshes exactly once - the atlas IS the windowed mean,
@@ -64,7 +64,7 @@ void main()
 	ivec3 cell = window_base + offset;
 	vec3 origin = GiWorldProbeCellPosition(cell, level);
 	int thread = int(gl_LocalInvocationID.x);
-	// FAST-REFRESH WINDOW (GI v2 plan section 8, the DDGI event pattern adapted): while the
+	// FAST-REFRESH WINDOW (gi_rewrite_plan.md section 8, the DDGI event pattern adapted): while the
 	// light set is changing, each frame covers TWO strata instead of one, halving the window to
 	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
 	// stratum formula stays exhaustive either way: count consecutive strata per frame cover

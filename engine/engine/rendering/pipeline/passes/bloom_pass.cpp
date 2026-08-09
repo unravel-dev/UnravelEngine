@@ -18,14 +18,14 @@ auto bloom_pass::init(rtti::context& ctx) -> bool
     auto fs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_upsample.sc");
     auto fs_combine = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_combine.sc");
 
-    downsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_downsample);
     downsample_program_.cache_uniforms();
+    downsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_downsample);
 
-    upsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_upsample);
     upsample_program_.cache_uniforms();
+    upsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_upsample);
 
-    combine_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_combine);
     combine_program_.cache_uniforms();
+    combine_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_combine);
 
     return downsample_program_.program->is_valid() && upsample_program_.program->is_valid() &&
            combine_program_.program->is_valid();

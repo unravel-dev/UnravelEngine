@@ -16,7 +16,7 @@ namespace
 constexpr uint32_t probe_dir_edge = 8;
 constexpr uint32_t probe_vec4_stride = 12;
 /// Mirror of GI_PROBE_LAYERS: majority-surface probe plus the adaptive minority-surface one.
-/// Single layer (Phase 8): the v2 gather anchors one probe per tile. Must match
+/// Single layer (Phase 8): the gather anchors one probe per tile. Must match
 /// GI_PROBE_LAYERS in gi_probe_common.sh.
 constexpr uint32_t probe_layers = 1;
 
@@ -116,47 +116,47 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    // GI v2 gather programs (plan phase 5). Their absence falls back to the v1 probe path.
-    auto cs_v2_place = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_place_v2.sc");
-    v2_place_program_.program = std::make_unique<gpu_program>(cs_v2_place);
-    v2_place_program_.cache_uniforms();
-    auto cs_v2_classify = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_classify_v2.sc");
-    v2_classify_program_.program = std::make_unique<gpu_program>(cs_v2_classify);
-    v2_classify_program_.cache_uniforms();
-    auto cs_v2_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_args_v2.sc");
-    v2_args_program_.program = std::make_unique<gpu_program>(cs_v2_args);
-    v2_args_program_.cache_uniforms();
-    auto cs_v2_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_v2.sc");
-    v2_trace_program_.program = std::make_unique<gpu_program>(cs_v2_trace);
-    v2_trace_program_.cache_uniforms();
-    auto cs_v2_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp_v2.sc");
-    v2_interp_program_.program = std::make_unique<gpu_program>(cs_v2_interp);
-    v2_interp_program_.cache_uniforms();
-    auto cs_v2_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_filter_v2.sc");
-    v2_filter_program_.program = std::make_unique<gpu_program>(cs_v2_filter);
-    v2_filter_program_.cache_uniforms();
-    auto fs_v2_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_probe_integrate_v2.sc");
-    v2_integrate_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_v2_integrate);
-    v2_integrate_program_.cache_uniforms();
-    if(!has_v2_programs())
+    // GI gather programs (plan phase 5). Their absence falls back to the v1 probe path.
+    auto cs_place = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_place.sc");
+    place_program_.cache_uniforms();
+    place_program_.program = std::make_unique<gpu_program>(cs_place);
+    auto cs_classify = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_classify.sc");
+    classify_program_.cache_uniforms();
+    classify_program_.program = std::make_unique<gpu_program>(cs_classify);
+    auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_args.sc");
+    args_program_.cache_uniforms();
+    args_program_.program = std::make_unique<gpu_program>(cs_args);
+    auto cs_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace.sc");
+    trace_program_.cache_uniforms();
+    trace_program_.program = std::make_unique<gpu_program>(cs_trace);
+    auto cs_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp.sc");
+    interp_program_.cache_uniforms();
+    interp_program_.program = std::make_unique<gpu_program>(cs_interp);
+    auto cs_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_filter.sc");
+    filter_program_.cache_uniforms();
+    filter_program_.program = std::make_unique<gpu_program>(cs_filter);
+    auto fs_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_probe_integrate.sc");
+    integrate_program_.cache_uniforms();
+    integrate_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_integrate);
+    if(!has_gather_programs())
     {
         APPLOG_WARNING("[SurfaceCache] GI gather programs failed to load. GI is disabled for "
                        "this run.");
     }
     auto fs_gi_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_temporal.sc");
-    temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_temporal);
     temporal_program_.cache_uniforms();
+    temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_temporal);
     auto fs_gi_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_upsample.sc");
-    upsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_upsample);
     upsample_program_.cache_uniforms();
+    upsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_upsample);
     if(!upsample_program_.is_valid())
     {
         APPLOG_WARNING("[SurfaceCache] GI upsample program failed to load. The gather will be "
                        "reconstructed bilinearly and will fringe at silhouettes.");
     }
     auto fs_gi_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_denoise.sc");
-    denoise_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_denoise);
     denoise_program_.cache_uniforms();
+    denoise_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_denoise);
     if(!denoise_program_.is_valid())
     {
         APPLOG_WARNING("[SurfaceCache] GI denoise program failed to load. The gather will run "
@@ -169,13 +169,13 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
         APPLOG_WARNING("[SurfaceCache] GI temporal program failed to load. The gather will run "
                        "without temporal accumulation and will be noisy.");
     }
-    return has_v2_programs() && temporal_program_.is_valid();
+    return has_gather_programs() && temporal_program_.is_valid();
 }
 
 auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/GI/Resolve Pass");
-    if(!has_v2_programs() || !params.g_buffer || !params.cam || !params.surface_cache ||
+    if(!has_gather_programs() || !params.g_buffer || !params.cam || !params.surface_cache ||
        !params.view_cache)
     {
         return {};
@@ -247,7 +247,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             }
             return tex;
         };
-        // ONE radiance atlas: v2 rewrites every texel each frame and its history (the
+        // ONE radiance atlas: the gather rewrites every texel each frame and its history (the
         // importance mip) lives in the record buffer, so the v1 ping-pong pair collapsed.
         auto write_atlas = ensure_atlas("GI_PROBE_ATLAS");
         // Derived data, fully rewritten by the filter each frame: no ping-pong needed.
@@ -315,9 +315,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         // The one gather (plan phase 8: the v1 paths and the radiance hash are gone). Without
         // the world structures there is nothing correct to gather from, so the output clears
         // to zero weight and the consumer's environment term covers the frame.
-        const bool v2_ready = clipmap_ready && clipmap_gpu.has_world_probes() &&
+        const bool gather_ready = clipmap_ready && clipmap_gpu.has_world_probes() &&
                               static_cast<bool>(clipmap_gpu.get_light_voxel_texture());
-        if(!v2_ready)
+        if(!gather_ready)
         {
             gfx::render_pass pass("GI/Probe Trace");
             pass.bind(trace_fbo.get());
@@ -326,7 +326,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             return trace_tex;
         }
         {
-            const float v2_camera[4] = {camera_position.x,
+            const float gi_camera[4] = {camera_position.x,
                                         camera_position.y,
                                         camera_position.z,
                                         float(gfx::get_render_frame())};
@@ -356,106 +356,106 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // the trace it gates.
                 gfx::render_pass pass("GI/Probe Place");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-                v2_place_program_.program->begin();
-                gfx::set_texture(v2_place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                place_program_.program->begin();
+                gfx::set_texture(place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
                 gfx::set_buffer(6, probe_traced_, gfx::access::Write);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                gfx::set_texture(v2_place_program_.s_hiz, 8, hiz_or_depth);
-                gfx::set_texture(v2_place_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
-                gfx::set_uniform(v2_place_program_.u_sdf_clipmap_levels,
+                gfx::set_texture(place_program_.s_hiz, 8, hiz_or_depth);
+                gfx::set_texture(place_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                gfx::set_uniform(place_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);
-                gfx::set_uniform(v2_place_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-                gfx::set_uniform(v2_place_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_place_program_.u_gi_probe_screen, probe_screen);
-                gfx::set_uniform(v2_place_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(v2_place_program_.u_gi_v2_camera, v2_camera);
-                gfx::set_uniform(v2_place_program_.u_gi_world_probe_params, wp_params);
+                gfx::set_uniform(place_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+                gfx::set_uniform(place_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(place_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(place_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(place_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(place_program_.u_gi_world_probe_params, wp_params);
                 gfx::dispatch(pass.id,
-                              v2_place_program_.program->native_handle(),
+                              place_program_.program->native_handle(),
                               (probes_x + 7u) / 8u,
                               (probes_y + 7u) / 8u,
                               1);
-                v2_place_program_.program->end();
+                place_program_.program->end();
             }
             {
                 // CLASSIFY + COMPACT: traced/interpolated per probe, traced coordinates
                 // appended densely. The trace launches exactly that count via the args pass.
                 gfx::render_pass pass("GI/Probe Classify");
-                v2_classify_program_.program->begin();
+                classify_program_.program->begin();
                 gfx::set_buffer(6, probe_traced_, gfx::access::ReadWrite);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                gfx::set_uniform(v2_classify_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_classify_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(v2_classify_program_.u_gi_screen_trace, screen_trace_params);
+                gfx::set_uniform(classify_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(classify_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(classify_program_.u_gi_screen_trace, screen_trace_params);
                 gfx::dispatch(pass.id,
-                              v2_classify_program_.program->native_handle(),
+                              classify_program_.program->native_handle(),
                               (probes_x + 7u) / 8u,
                               (probes_y + 7u) / 8u,
                               1);
-                v2_classify_program_.program->end();
+                classify_program_.program->end();
             }
             {
                 gfx::render_pass pass("GI/Probe Args");
-                v2_args_program_.program->begin();
+                args_program_.program->begin();
                 gfx::set_buffer(5, probe_args_, gfx::access::Write);
                 gfx::set_buffer(6, probe_traced_, gfx::access::Read);
-                gfx::dispatch(pass.id, v2_args_program_.program->native_handle(), 1, 1, 1);
-                v2_args_program_.program->end();
+                gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+                args_program_.program->end();
             }
             {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-                v2_trace_program_.program->begin();
-                gfx::set_texture(v2_trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+                trace_program_.program->begin();
+                gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
                 gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
                 gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
                 gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-                gfx::set_texture(v2_trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
                 gfx::set_image(5, write_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-                gfx::set_texture(v2_trace_program_.s_world_probe_radiance_read,
+                gfx::set_texture(trace_program_.s_world_probe_radiance_read,
                                  6,
                                  clipmap_gpu.get_world_probe_radiance());
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 // Hi-Z when present (mip 0 is the device depth, so the anchor reads it the
                 // same); raw depth otherwise, with the screen tier switched off below.
-                gfx::set_texture(v2_trace_program_.s_hiz, 8, hiz_or_depth);
-                gfx::set_texture(v2_trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
-                gfx::set_texture(v2_trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+                gfx::set_texture(trace_program_.s_hiz, 8, hiz_or_depth);
+                gfx::set_texture(trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
                 // Stage 11 carries LAST frame's composited output (far-field radiance beyond
                 // the cascades) - freed from the irradiance cage the trace never read
                 // (GI_WORLD_PROBE_SKIP_IRRADIANCE); the traced list rides in the probe
                 // buffer's list region at stage 7.
-                gfx::set_texture(v2_trace_program_.s_gi_prev_color,
+                gfx::set_texture(trace_program_.s_gi_prev_color,
                                  11,
                                  has_prev_color ? params.prev_color
                                                 : default_textures::get().black_texture());
                 gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
                 gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-                gfx::set_texture(v2_trace_program_.s_gi_env_sh, 14, env_sh_tex);
-                gfx::set_texture(v2_trace_program_.s_world_probe_depth,
+                gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);
+                gfx::set_texture(trace_program_.s_world_probe_depth,
                                  15,
                                  clipmap_gpu.get_world_probe_depth());
-                gfx::set_uniform(v2_trace_program_.u_sdf_params, sdf_params);
-                gfx::set_uniform(v2_trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
-                gfx::set_uniform(v2_trace_program_.u_sdf_clipmap_levels,
+                gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
+                gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+                gfx::set_uniform(trace_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);
-                gfx::set_uniform(v2_trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-                gfx::set_uniform(v2_trace_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_trace_program_.u_gi_probe_screen, probe_screen);
-                gfx::set_uniform(v2_trace_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(v2_trace_program_.u_gi_v2_camera, v2_camera);
-                gfx::set_uniform(v2_trace_program_.u_gi_screen_trace, screen_trace_params);
-                const auto v2_prev_view_proj = params.cam->get_prev_view_projection();
-                gfx::set_uniform(v2_trace_program_.u_gi_prev_view_proj, v2_prev_view_proj.get_matrix());
-                gfx::set_uniform(v2_trace_program_.u_gi_light_voxel_params, light_voxel_params);
-                gfx::set_uniform(v2_trace_program_.u_gi_world_probe_params, wp_params);
-                gfx::set_uniform(v2_trace_program_.u_gi_world_probe_atlas,
+                gfx::set_uniform(trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+                gfx::set_uniform(trace_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(trace_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(trace_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(trace_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(trace_program_.u_gi_screen_trace, screen_trace_params);
+                const auto gather_prev_view_proj = params.cam->get_prev_view_projection();
+                gfx::set_uniform(trace_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
+                gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
+                gfx::set_uniform(trace_program_.u_gi_world_probe_params, wp_params);
+                gfx::set_uniform(trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
-                gfx::set_uniform(v2_trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch_indirect(pass.id, v2_trace_program_.program->native_handle(), probe_args_, 0, 1);
-                v2_trace_program_.program->end();
+                gfx::set_uniform(trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
+                gfx::dispatch_indirect(pass.id, trace_program_.program->native_handle(), probe_args_, 0, 1);
+                trace_program_.program->end();
                 records_trusted_ = true;
             }
             {
@@ -464,66 +464,69 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // trace no longer visits. Parents are always trace-written (evens never
                 // interpolate), so one read-write image binding carries no intra-pass hazard.
                 gfx::render_pass pass("GI/Probe Interp");
-                v2_interp_program_.program->begin();
+                interp_program_.program->begin();
                 gfx::set_image(5,
                                write_atlas->native_handle(),
                                0,
                                gfx::access::ReadWrite,
                                gfx::texture_format::RGBA16F);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
-                gfx::set_uniform(v2_interp_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_interp_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(v2_interp_program_.u_gi_screen_trace, screen_trace_params);
-                gfx::dispatch(pass.id, v2_interp_program_.program->native_handle(), probes_x, probes_y, 1);
-                v2_interp_program_.program->end();
+                gfx::set_uniform(interp_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(interp_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(interp_program_.u_gi_screen_trace, screen_trace_params);
+                gfx::dispatch(pass.id, interp_program_.program->native_handle(), probes_x, probes_y, 1);
+                interp_program_.program->end();
             }
             {
                 gfx::render_pass pass("GI/Probe Filter");
-                v2_filter_program_.program->begin();
-                gfx::set_texture(v2_filter_program_.s_probe_radiance, 0, write_atlas);
+                filter_program_.program->begin();
+                gfx::set_texture(filter_program_.s_probe_radiance, 0, write_atlas);
                 gfx::set_image(2, irradiance_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
                 // ReadWrite: the filter writes the importance mip into the record slots.
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                gfx::set_uniform(v2_filter_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_filter_program_.u_gi_probe_screen, probe_screen);
-                gfx::set_uniform(v2_filter_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::dispatch(pass.id, v2_filter_program_.program->native_handle(), probes_x, probes_y, 1);
-                v2_filter_program_.program->end();
+                gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
+                filter_program_.program->end();
             }
             {
                 gfx::render_pass pass("GI/Probe Integrate");
                 pass.bind(trace_fbo.get());
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-                v2_integrate_program_.program->begin();
-                gfx::set_texture(v2_integrate_program_.s_probe_irradiance, 2, irradiance_atlas);
+                integrate_program_.program->begin();
+                // Never sampled here, bound for OpenGL's benefit (see the struct note).
+                gfx::set_texture(integrate_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+                gfx::set_texture(integrate_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                gfx::set_texture(integrate_program_.s_probe_irradiance, 2, irradiance_atlas);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
-                gfx::set_texture(v2_integrate_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
-                gfx::set_texture(v2_integrate_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
-                gfx::set_texture(v2_integrate_program_.s_world_probe_irradiance,
+                gfx::set_texture(integrate_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
+                gfx::set_texture(integrate_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                gfx::set_texture(integrate_program_.s_world_probe_irradiance,
                                  11,
                                  clipmap_gpu.get_world_probe_irradiance());
-                gfx::set_texture(v2_integrate_program_.s_world_probe_depth,
+                gfx::set_texture(integrate_program_.s_world_probe_depth,
                                  15,
                                  clipmap_gpu.get_world_probe_depth());
-                gfx::set_uniform(v2_integrate_program_.u_sdf_clipmap_levels,
+                gfx::set_uniform(integrate_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);
-                gfx::set_uniform(v2_integrate_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-                gfx::set_uniform(v2_integrate_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(v2_integrate_program_.u_gi_probe_screen, probe_screen);
-                gfx::set_uniform(v2_integrate_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(v2_integrate_program_.u_gi_v2_camera, v2_camera);
-                const float v2_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
-                gfx::set_uniform(v2_integrate_program_.u_gi_v2_intensity, v2_intensity);
-                gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_params, wp_params);
-                gfx::set_uniform(v2_integrate_program_.u_gi_world_probe_atlas,
+                gfx::set_uniform(integrate_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+                gfx::set_uniform(integrate_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(integrate_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(integrate_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(integrate_program_.u_gi_camera, gi_camera);
+                const float gi_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
+                gfx::set_uniform(integrate_program_.u_gi_intensity, gi_intensity);
+                gfx::set_uniform(integrate_program_.u_gi_world_probe_params, wp_params);
+                gfx::set_uniform(integrate_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 auto topology = gfx::clip_quad(1.0f);
                 gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
                                BGFX_STATE_WRITE_A);
-                gfx::submit(pass.id, v2_integrate_program_.program->native_handle());
+                gfx::submit(pass.id, integrate_program_.program->native_handle());
                 gfx::set_state(BGFX_STATE_DEFAULT);
-                v2_integrate_program_.program->end();
+                integrate_program_.program->end();
             }
             gfx::discard();
         }
@@ -721,7 +724,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
                                       s.max_accum_frames,
                                       has_history ? 1.0f : 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_params, temporal_params);
-    // No neighbourhood clamp: it fights the v2 placement jitter and eats history under
+    // No neighbourhood clamp: it fights the placement jitter and eats history under
     // motion; depth rejection is the whole gate [S21 s98].
     const float temporal_clamp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_clamp, temporal_clamp);

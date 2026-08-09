@@ -28,15 +28,17 @@
 IMAGE3D_WO(s_attr_albedo_out, rgba8, 5);
 /// rgb = winning emissive (radiance units), a unused.
 IMAGE3D_WO(s_attr_emissive_out, rgba16f, 6);
-/// Packed surface-voxel coordinates, one segment of attr_resolution^3 entries per level.
-BUFFER_RW(b_surface_list, uint, 7);
+/// Packed surface-voxel coordinates, one segment of attr_resolution^3 entries per level. At a
+/// high stage ON PURPOSE: OpenGL guarantees only eight image units (bindings 0-7), so the
+/// light-volume IMAGE below takes the low slot while buffers tolerate the high ones.
+BUFFER_RW(b_surface_list, uint, 9);
 /// One append cursor per level, reset by cs_gi_surface_count_reset before this dispatch.
 BUFFER_RW(b_surface_count, uint, 8);
 /// The light volume (gi_light_voxels.sh layout). Addressing is TOROIDAL: this pass zeroes a
 /// slot's six face slabs only when the slot's world CELL changed hands (detected through
 /// b_attr_cells) - a surviving cell keeps the radiance it accumulated across any number of
 /// level re-snaps, which is what stops camera motion from pulsing the bounce light dark.
-IMAGE3D_WO(s_light_voxels_out, rgba16f, 9);
+IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
 /// One packed cell id per attribute slot per level (GiLightVoxelPackCell).
 BUFFER_RW(b_attr_cells, uint, 11);
 /// Per-texture mean colours (cs_gi_texture_mean.sc); an instance's albedo is its base colour
@@ -233,8 +235,10 @@ void main()
 	// appends at most once - so this clamp is a guard against a mis-sized buffer, not policy.
 	if(cursor < capacity)
 	{
-		uint packed = uint(slot.x) | (uint(slot.y) << 8u) | (uint(slot.z) << 16u) |
-		              (uint(u_attr_level) << 24u);
-		b_surface_list[uint(u_attr_level) * capacity + cursor] = packed;
+		// packed_slot, not `packed`: a GLSL layout-qualifier keyword, illegal as a variable
+		// name on the OpenGL backend.
+		uint packed_slot = uint(slot.x) | (uint(slot.y) << 8u) | (uint(slot.z) << 16u) |
+		                   (uint(u_attr_level) << 24u);
+		b_surface_list[uint(u_attr_level) * capacity + cursor] = packed_slot;
 	}
 }

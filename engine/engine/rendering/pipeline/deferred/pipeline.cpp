@@ -2365,35 +2365,52 @@ auto deferred::init(rtti::context& ctx) -> bool
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
 
-    geom_program_.program = load_program("deferred_geom/vs_deferred_geom", "deferred_geom/fs_deferred_geom");
     geom_program_.cache_uniforms();
+    geom_program_.program = load_program("deferred_geom/vs_deferred_geom", "deferred_geom/fs_deferred_geom");
 
-    geom_program_skinned_.program = load_program("deferred_geom/vs_deferred_geom_skinned", "deferred_geom/fs_deferred_geom");
     geom_program_skinned_.cache_uniforms();
+    geom_program_skinned_.program = load_program("deferred_geom/vs_deferred_geom_skinned", "deferred_geom/fs_deferred_geom");
 
-    geom_program_instanced_.program = load_program("deferred_geom/vs_deferred_geom_instanced", "deferred_geom/fs_deferred_geom");
     geom_program_instanced_.cache_uniforms();
+    geom_program_instanced_.program = load_program("deferred_geom/vs_deferred_geom_instanced", "deferred_geom/fs_deferred_geom");
 
-    sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
     sphere_ref_probe_program_.cache_uniforms();
+    sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
 
-    box_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_box_reflection_probe");
     box_ref_probe_program_.cache_uniforms();
+    box_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_box_reflection_probe");
 
-    indirect_lighting_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light");
     indirect_lighting_program_.cache_uniforms();
+    indirect_lighting_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light");
 
     auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
     if(cs_irradiance)
     {
-        irradiance_compute_program_.program = std::make_unique<gpu_program>(cs_irradiance);
         irradiance_compute_program_.cache_uniforms();
+        irradiance_compute_program_.program = std::make_unique<gpu_program>(cs_irradiance);
     }
 
-    debug_visualization_program_.program = load_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
     debug_visualization_program_.cache_uniforms();
+    debug_visualization_program_.program = load_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
 
     // Color lighting.
+
+    // Uniforms before programs (the cache_uniform order contract): every slot shares the
+    // same uniform set, so registering one of each array is enough for all of them.
+    for(auto& byLightType : color_lighting_no_shadow_)
+    {
+        byLightType.cache_uniforms();
+    }
+    for(auto& byLightType : color_lighting_)
+    {
+        for(auto& byDepthType : byLightType)
+        {
+            for(auto& bySmImpl : byDepthType)
+            {
+                bySmImpl.cache_uniforms();
+            }
+        }
+    }
 
     // clang-format off
     color_lighting_no_shadow_[uint8_t(light_type::spot)].program = load_program("vs_clip_quad", "fs_deferred_spot_light");
@@ -2435,27 +2452,6 @@ auto deferred::init(rtti::context& ctx) -> bool
     color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_vsm_linear");
     color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_esm_linear");
     // clang-format on
-
-    for(auto& byLightType : color_lighting_no_shadow_)
-    {
-        if(byLightType.program)
-        {
-            byLightType.cache_uniforms();
-        }
-    }
-    for(auto& byLightType : color_lighting_)
-    {
-        for(auto& byDepthType : byLightType)
-        {
-            for(auto& bySmImpl : byDepthType)
-            {
-                if(bySmImpl.program)
-                {
-                    bySmImpl.cache_uniforms();
-                }
-            }
-        }
-    }
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");
 

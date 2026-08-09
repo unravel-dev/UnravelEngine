@@ -98,7 +98,7 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	SdfRayHit hit = SdfTraceRayEx(origin, to_light, max_distance, near_field,
 	                              u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
 	                              u_gi_shadow_relaxation, false, -1.0);
-	// Exhaustion now REPORTS A HIT inside the trace itself (GI v2 trace rework - a ray that ran
+	// Exhaustion now REPORTS A HIT inside the trace itself (GI trace rework - a ray that ran
 	// out of budget occludes at its final position), so a grazing shadow ray that gives up reads
 	// as shadowed rather than as a surface that is inexplicably too bright. Over-occlusion is the
 	// direction that degrades gracefully, and it is the same contract every tracing consumer now

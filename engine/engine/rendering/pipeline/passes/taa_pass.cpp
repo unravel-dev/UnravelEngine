@@ -21,8 +21,8 @@ auto taa_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/taa/fs_taa.sc");
-    program_.program = std::make_unique<gpu_program>(vs, fs);
     program_.cache_uniforms();
+    program_.program = std::make_unique<gpu_program>(vs, fs);
     return program_.program->is_valid();
 }
 

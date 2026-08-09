@@ -1,5 +1,5 @@
 /*
- * GI v2 probe-space filter + irradiance convolution (plan 3.4) - one thread group per probe.
+ * GI probe-space filter + irradiance convolution (plan 3.4) - one thread group per probe.
  *
  * Filters each direction across the 3x3 probe neighbourhood - a 3-probe kernel in probe space
  * is a ~48-pixel kernel in screen space [S21 s57] - with the two guards that matter:
@@ -27,7 +27,7 @@ IMAGE2D_WO(s_probe_irradiance_out, rgba16f, 2);
 
 /// Plane tolerance as a fraction of view distance - the adaptive spatial-error rule every
 /// screen-space consumer shares (GI-1.0's cell_size heuristic, here in its simplest form).
-#define GI_V2_FILTER_PLANE_TOLERANCE 0.05
+#define GI_FILTER_PLANE_TOLERANCE 0.05
 
 SHARED vec4 s_filtered[GI_PROBE_DIR_COUNT];
 
@@ -53,7 +53,7 @@ void main()
 		vec4 center_texel =
 		    texelFetch(s_probe_radiance, GiProbeAtlasBase(probe.x, probe.y, 0) + local, 0);
 		float own_hit_t = center_texel.w;
-		float plane_tolerance = GI_V2_FILTER_PLANE_TOLERANCE * max(center_meta2.w, 0.1);
+		float plane_tolerance = GI_FILTER_PLANE_TOLERANCE * max(center_meta2.w, 0.1);
 		float weight_sum = 0.0;
 		for(int oy = -1; oy <= 1; ++oy)
 		{

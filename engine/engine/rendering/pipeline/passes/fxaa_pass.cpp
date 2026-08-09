@@ -18,11 +18,11 @@ auto fxaa_pass::init(rtti::context& ctx) -> bool
     auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs_fxaa = am.get_asset<gfx::shader>("engine:/data/shaders/fxaa/fs_fxaa.sc");
 
-    // Create the GPU program
-    fxaa_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_fxaa);
-
     // Cache the uniforms (only "s_input" for FXAA).
     fxaa_program_.cache_uniforms();
+
+    // Create the GPU program
+    fxaa_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_fxaa);
 
     // Return true if all is valid.
     return fxaa_program_.program->is_valid();

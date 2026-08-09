@@ -183,17 +183,25 @@ struct uniforms_cache
      * @param name The name of the uniform.
      */
 
+    /**
+     * Creates the uniform directly instead of looking it up in the program: bgfx dedupes
+     * uniforms by name, so this yields the same handle the program's own reflection would,
+     * on every backend.
+     *
+     * ORDER CONTRACT: call cache_uniforms() BEFORE constructing the gpu_program. GLSL
+     * shaders compiled at profile >= 400 carry no uniform metadata, so the OpenGL renderer
+     * can only wire a program's uniforms from ones registered BEFORE the program links --
+     * and relinking later cannot repair it, because bgfx dedupes programs by shader pair
+     * and returns the already-linked object. A program created before its uniforms leaves
+     * every sampler on texture unit 0 under GL: silently sampling the wrong texture, or
+     * invalidating the whole draw when unit 0 already serves a different sampler type
+     * (GL_INVALID_OPERATION "program texture usage"). The bgfx warning "User defined
+     * uniform '...' is not found" in the log means this contract was broken.
+     */
     void cache_uniform(gpu_program* program, gfx::program::uniform_ptr& uniform, const hpp::string_view& name, gfx::uniform_type type, uint16_t num = 1)
     {
-        program->begin();
-        uniform = program->get_uniform(name);
-
-        if(uniform == nullptr)
-        {
-            uniform = std::make_shared<gfx::uniform>(std::string(name), type, num);
-        }
-        
-        program->end();
+        (void)program;
+        uniform = std::make_shared<gfx::uniform>(std::string(name), type, num);
     }
 };
 

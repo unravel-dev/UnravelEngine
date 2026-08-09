@@ -58,13 +58,18 @@ uniform vec4 u_gi_temporal_camera;
 
 /// Replaces any non-finite component. A single NaN in the history is otherwise permanent: it
 /// propagates through every subsequent blend and spreads outward through the spatial filter.
+/// Do not call isnan()/isinf() here: shaderc lowers them to equal/notEqual(float, float),
+/// which OpenGL GLSL rejects (those builtins are vector-only). x != x detects NaN, and a
+/// finite threshold above RGBA16F range stands in for the Inf test - the SSIL temporal's
+/// convention.
 vec4 GiSanitize(vec4 v)
 {
+	const float inf_threshold = 1e30;
 	return mix(v, vec4_splat(0.0), vec4(
-		isnan(v.x) || isinf(v.x) ? 1.0 : 0.0,
-		isnan(v.y) || isinf(v.y) ? 1.0 : 0.0,
-		isnan(v.z) || isinf(v.z) ? 1.0 : 0.0,
-		isnan(v.w) || isinf(v.w) ? 1.0 : 0.0));
+		v.x != v.x || abs(v.x) > inf_threshold ? 1.0 : 0.0,
+		v.y != v.y || abs(v.y) > inf_threshold ? 1.0 : 0.0,
+		v.z != v.z || abs(v.z) > inf_threshold ? 1.0 : 0.0,
+		v.w != v.w || abs(v.w) > inf_threshold ? 1.0 : 0.0));
 }
 
 /**

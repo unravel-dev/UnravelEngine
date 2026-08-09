@@ -21,13 +21,13 @@ auto hiz_pass::init(rtti::context& ctx) -> bool
         return false;
     }
 
-    // Create compute programs using gpu_program for compute shaders
-    hiz_generate_.program = std::make_shared<gpu_program>(cs_hiz_generate);
-    hiz_downsample_.program = std::make_shared<gpu_program>(cs_hiz_downsample);
-
     // Cache uniforms using the uniforms_cache pattern
     hiz_generate_.cache_uniforms();
     hiz_downsample_.cache_uniforms();
+
+    // Create compute programs using gpu_program for compute shaders
+    hiz_generate_.program = std::make_shared<gpu_program>(cs_hiz_generate);
+    hiz_downsample_.program = std::make_shared<gpu_program>(cs_hiz_downsample);
 
     return hiz_generate_.program->is_valid() && hiz_downsample_.program->is_valid();
 }

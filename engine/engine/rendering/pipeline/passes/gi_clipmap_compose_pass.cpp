@@ -22,20 +22,20 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs_compose = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_compose.sc");
-    compose_program_.program = std::make_unique<gpu_program>(cs_compose);
     compose_program_.cache_uniforms();
+    compose_program_.program = std::make_unique<gpu_program>(cs_compose);
     auto cs_attributes = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_attributes.sc");
-    attributes_program_.program = std::make_unique<gpu_program>(cs_attributes);
     attributes_program_.cache_uniforms();
+    attributes_program_.program = std::make_unique<gpu_program>(cs_attributes);
     auto cs_reset = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_surface_count_reset.sc");
-    reset_program_.program = std::make_unique<gpu_program>(cs_reset);
     reset_program_.cache_uniforms();
+    reset_program_.program = std::make_unique<gpu_program>(cs_reset);
     auto cs_texture_mean = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_texture_mean.sc");
-    texture_mean_program_.program = std::make_unique<gpu_program>(cs_texture_mean);
     texture_mean_program_.cache_uniforms();
+    texture_mean_program_.program = std::make_unique<gpu_program>(cs_texture_mean);
     auto cs_buffer_fill = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_buffer_fill.sc");
-    fill_program_.program = std::make_unique<gpu_program>(cs_buffer_fill);
     fill_program_.cache_uniforms();
+    fill_program_.program = std::make_unique<gpu_program>(cs_buffer_fill);
     return compose_program_.is_valid();
 }
 
@@ -235,13 +235,15 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                            0,
                            gfx::access::Write,
                            gfx::texture_format::RGBA16F);
-            gfx::set_buffer(7, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
+            // The surface list sits at stage 9 so the light-volume IMAGE can take stage 7:
+            // OpenGL guarantees only eight image units (bindings 0-7).
+            gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
             gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
             gfx::set_buffer(11, clipmap_gpu.get_attr_cells(), gfx::access::ReadWrite);
             gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
             gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
-            gfx::set_image(9,
+            gfx::set_image(7,
                            clipmap_gpu.get_light_voxel_texture()->native_handle(),
                            0,
                            gfx::access::Write,

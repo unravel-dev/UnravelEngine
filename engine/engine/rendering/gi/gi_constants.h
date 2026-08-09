@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * Single owner of every cross-pass GI v2 constant (plan: tasks/gi_rewrite_plan.md, section 4).
+ * Single owner of every cross-pass GI constant (plan: tasks/gi_rewrite_plan.md, section 4).
  *
  * Every entry carries its UNIT and its JUSTIFICATION - one of:
  *   - derived:   follows arithmetically from another value here or from a documented argument;
@@ -11,7 +11,7 @@
  *
  * The shader mirror is engine_data/data/shaders/gi/gi_constants.sh. shaderc cannot consume this
  * header, so the mirror is plain #defines - and the pair is kept honest by a TEST, not a comment:
- * gi_v2_tests parses the .sh for `#define GI_*` and asserts every table entry matches and no
+ * gi_tests parses the .sh for `#define GI_*` and asserts every table entry matches and no
  * shader-side constant is missing from this table. Editing one side alone fails the suite.
  *
  * Source abbreviations:
@@ -246,12 +246,12 @@
       " a wide fade from the mirror end read as content dissolving instead of blurring"            \
       " (measured, round 3)")                                                                      \
     /* --- temporal (plan 3.5) --- */                                                              \
-    X(GI_V2_INTERPOLATION_JITTER_TILES, 1.0f,                                                      \
+    X(GI_INTERPOLATION_JITTER_TILES, 1.0f,                                                      \
       "probe tiles", "published: [CVar] ScreenProbeGather.FullResolutionJitterWidth = 1 - the"     \
       " integration offset jitters within one tile, spatially distributing probe differences so"   \
       " the temporal chain integrates them [S21 s39]; plane weights gate the jittered taps and"    \
       " an all-rejected bracket falls back to the unjittered one")                                 \
-    X(GI_V2_IMPORTANCE_SUPERSAMPLE_RATIO, 2.0f,                                                    \
+    X(GI_IMPORTANCE_SUPERSAMPLE_RATIO, 2.0f,                                                    \
       "x mean texel importance", "derived: a cone holding a concentrated emitter reads brighter"   \
       " than the probe mean; doubling its samples is the smallest step that resolves a bulb"       \
       " smaller than the cone (the failure mode: one centre ray either skewers it or misses it"    \

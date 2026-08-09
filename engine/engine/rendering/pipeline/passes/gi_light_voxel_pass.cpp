@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_constants.h>
 
 #include <graphics/graphics.h>
@@ -18,8 +19,8 @@ auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels.sc");
-    program_.program = std::make_unique<gpu_program>(cs);
     program_.cache_uniforms();
+    program_.program = std::make_unique<gpu_program>(cs);
     return program_.is_valid();
 }
 
@@ -56,10 +57,12 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_buffer(5, light_buffer.get_buffer(), gfx::access::Read);
     }
     gfx::set_buffer(6, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
-    gfx::set_buffer(7, clipmap_gpu.get_surface_count_buffer(), gfx::access::Read);
+    // The count sits at stage 10 so the light-volume IMAGE can take stage 7: OpenGL
+    // guarantees only eight image units (bindings 0-7).
+    gfx::set_buffer(10, clipmap_gpu.get_surface_count_buffer(), gfx::access::Read);
     gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
     gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
-    gfx::set_image(10,
+    gfx::set_image(7,
                    clipmap_gpu.get_light_voxel_texture()->native_handle(),
                    0,
                    gfx::access::Write,
@@ -116,6 +119,17 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(program_.s_world_probe_irradiance, 11, clipmap_gpu.get_world_probe_irradiance());
         gfx::set_texture(program_.s_world_probe_depth, 15, clipmap_gpu.get_world_probe_depth());
         gfx::set_uniform(program_.u_gi_world_probe_atlas, clipmap_gpu.get_world_probe_atlas_params());
+    }
+    else
+    {
+        // The probe samplers are ACTIVE regardless of the ready flag (a uniform branch
+        // eliminates nothing), and OpenGL fails the whole dispatch when an unbound sampler's
+        // unit-0 default collides with the 3D atlas bound there - which blacked out the light
+        // voxels and with them the entire GI chain on that backend. The ready flag in
+        // u_gi_world_probe_params gates what is actually read.
+        const auto black = default_textures::get().black_texture();
+        gfx::set_texture(program_.s_world_probe_irradiance, 11, black);
+        gfx::set_texture(program_.s_world_probe_depth, 15, black);
     }
     // Every level's full segment, early-out beyond the per-level count. The counts live on the
     // GPU (the attribute dispatch appends them), so a tighter launch needs indirect args - a

@@ -1,5 +1,5 @@
 /*
- * GI v2 screen probe trace (plan 3.4) - the Lumen recipe, one thread group per probe, one
+ * GI screen probe trace (plan 3.4) - the Lumen recipe, one thread group per probe, one
  * thread per octahedral direction.
  *
  * Probes ARE pixels: the anchor is a Halton-jittered G-buffer pixel of the probe's tile, its
@@ -60,7 +60,7 @@ SAMPLER2D(s_gi_normal, 9);
 SAMPLER2D(s_gi_env_sh, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
-uniform vec4 u_gi_v2_camera;
+uniform vec4 u_gi_camera;
 /// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs.
 /// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
 /// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
@@ -171,7 +171,7 @@ void main()
 				vec4 history_meta = b_gi_probes[history_base + uint(GI_PROBE_META)];
 				float plane = abs(dot(history_meta.xyz - world_position, world_normal));
 				if(history_meta.w > 0.5 &&
-				   plane < 0.05 * max(length(world_position - u_gi_v2_camera.xyz), 0.1))
+				   plane < 0.05 * max(length(world_position - u_gi_camera.xyz), 0.1))
 				{
 					s_history_record = int(history_base);
 					float total = 0.0;
@@ -200,7 +200,7 @@ void main()
 		return;
 	}
 	// IMPORTANCE-DRIVEN SUPERSAMPLING: a cone whose reprojected history reads brighter than
-	// GI_V2_IMPORTANCE_SUPERSAMPLE_RATIO x the probe mean gets a second sub-cone sample - the
+	// GI_IMPORTANCE_SUPERSAMPLE_RATIO x the probe mean gets a second sub-cone sample - the
 	// smallest step that resolves an emitter smaller than the cone, funded only where the
 	// history says energy is concentrated. Deterministic sub-positions, so a static scene still
 	// produces identical probe input every frame.
@@ -211,7 +211,7 @@ void main()
 		vec4 mip = b_gi_probes[uint(s_history_record) + uint(block / 4)];
 		int lane = block % 4;
 		float importance = lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
-		if(importance > GI_V2_IMPORTANCE_SUPERSAMPLE_RATIO * s_importance_mean)
+		if(importance > GI_IMPORTANCE_SUPERSAMPLE_RATIO * s_importance_mean)
 		{
 			sample_count = 2;
 		}
@@ -225,7 +225,7 @@ void main()
 	// per-frame variance the temporal chain integrates - each cone measures its whole solid
 	// angle over the accumulation window. R2 low-discrepancy across frames, IGN-decorrelated
 	// across texels; the supersample takes the antithetic offset.
-	vec2 r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_v2_camera.w);
+	vec2 r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_camera.w);
 	float texel_ign =
 	    fract(52.9829189 * fract(0.06711056 * float(local.x) + 0.00583715 * float(local.y)));
 	vec2 sub_positions[2];
@@ -330,7 +330,7 @@ void main()
 				// Completion: the world probes carry everything beyond the short range - scene
 				// AND sky.
 				if(!GiWorldProbeRadiance(s_origin + sample_dir * s_short_range, sample_dir,
-				                         u_gi_v2_camera.xyz, radiance))
+				                         u_gi_camera.xyz, radiance))
 				{
 					radiance = eval_radiance_sh(s_gi_env_sh, sample_dir);
 				}

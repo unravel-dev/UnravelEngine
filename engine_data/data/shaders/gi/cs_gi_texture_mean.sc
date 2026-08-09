@@ -1,6 +1,6 @@
 /*
  * One-time GPU capture of a material texture's MEAN colour into the texture-mean buffer
- * (GI v2 plan 3.1). The attribute composer multiplies an instance's base colour factor by
+ * (gi_rewrite_plan.md 3.1). The attribute composer multiplies an instance's base colour factor by
  * this mean, so bounce light carries the surface's true average reflectance instead of the
  * factor alone (white on every textured material - the over-bright-GI failure mode).
  *

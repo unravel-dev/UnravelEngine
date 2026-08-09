@@ -13,16 +13,18 @@ SAMPLER2D(s_normal, 2);
 SAMPLER2D(s_depth, 3);
 
 #define MAX_ROUGHNESS 0.6
-
-float GetRoughnessFade(float roughness)
-{
-    return MAX_ROUGHNESS - min(roughness, MAX_ROUGHNESS);
-}
+#define ROUGHNESS_FADE_START 0.3
 
 float GetRoughnessVisibility(float roughness)
 {
-    //return 1.0 - smoothstep(0.35, 0.8, roughness);
-    return GetRoughnessFade(roughness);
+    // FLAT-TOP fade: full strength wherever SSR is confident, handing off to the layer
+    // beneath (the GI world-reflection tier) only as the lobe grows too wide for
+    // screen-space tracing. The old form returned the UNNORMALIZED leftover
+    // (MAX_ROUGHNESS - roughness), so even a perfect mirror composited at 0.6 alpha and a
+    // 0.2-rough surface at 0.4 - confident screen hits could never win over the fallback,
+    // which read as the GI layer "overpowering" SSR and as SSR-only reflections at 40
+    // percent of their true brightness.
+    return 1.0 - smoothstep(ROUGHNESS_FADE_START, MAX_ROUGHNESS, roughness);
 }
 
 

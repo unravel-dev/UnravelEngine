@@ -137,12 +137,12 @@ public:
     /// Placement, classification, the indirect-args writer and the interp/clear pass are all
     /// REQUIRED with the compacted gather: the trace launches from the classify pass's list
     /// and no longer writes non-traced tiles itself.
-    auto has_v2_programs() const -> bool
+    auto has_gather_programs() const -> bool
     {
-        return v2_place_program_.is_valid() && v2_classify_program_.is_valid() &&
-               v2_args_program_.is_valid() && v2_trace_program_.is_valid() &&
-               v2_interp_program_.is_valid() && v2_filter_program_.is_valid() &&
-               v2_integrate_program_.is_valid();
+        return place_program_.is_valid() && classify_program_.is_valid() &&
+               args_program_.is_valid() && trace_program_.is_valid() &&
+               interp_program_.is_valid() && filter_program_.is_valid() &&
+               integrate_program_.is_valid();
     }
 
 private:
@@ -173,12 +173,12 @@ private:
                       const gfx::texture::ptr& input,
                       const usize32_t& source_size) -> gfx::texture::ptr;
 
-    /// GI v2 gather programs (plan phase 5). Constant-driven: their only uniforms are the probe
+    /// GI gather programs (plan phase 5). Constant-driven: their only uniforms are the probe
     /// lattice descriptors, the camera, and the world-structure bindings.
-    struct v2_trace_program : uniforms_cache
+    struct trace_program : uniforms_cache
     {
         gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -206,7 +206,7 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
@@ -242,9 +242,9 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_trace_program_;
+    } trace_program_;
 
-    struct v2_filter_program : uniforms_cache
+    struct filter_program : uniforms_cache
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -264,14 +264,14 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_filter_program_;
+    } filter_program_;
 
     /// Placement (adaptive gather): computes every probe's anchor into the records before the
     /// trace, which is what lets the trace classify a probe against its parents' anchors.
-    struct v2_place_program : uniforms_cache
+    struct place_program : uniforms_cache
     {
         gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_v2_camera;
+        gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
@@ -284,7 +284,7 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
@@ -301,11 +301,11 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_place_program_;
+    } place_program_;
 
     /// Classification + compaction: decides traced/interpolated per probe and appends the
     /// traced coordinates to the dense list the trace launches from.
-    struct v2_classify_program : uniforms_cache
+    struct classify_program : uniforms_cache
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -323,10 +323,10 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_classify_program_;
+    } classify_program_;
 
     /// One-thread bridge: traced count -> the trace's indirect dispatch args.
-    struct v2_args_program : uniforms_cache
+    struct args_program : uniforms_cache
     {
         gpu_program::ptr program;
 
@@ -338,12 +338,12 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_args_program_;
+    } args_program_;
 
     /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
     /// between the trace and the filter - and clears dead probes' tiles, which the compacted
     /// trace no longer visits.
-    struct v2_interp_program : uniforms_cache
+    struct interp_program : uniforms_cache
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -361,13 +361,13 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_interp_program_;
+    } interp_program_;
 
-    struct v2_integrate_program : uniforms_cache
+    struct integrate_program : uniforms_cache
     {
         gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_v2_camera;
-        gfx::program::uniform_ptr u_gi_v2_intensity;
+        gfx::program::uniform_ptr u_gi_camera;
+        gfx::program::uniform_ptr u_gi_intensity;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
@@ -380,11 +380,18 @@ private:
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_world_probe_irradiance;
         gfx::program::uniform_ptr s_world_probe_depth;
+        /// Declared by sdf_common.sh but never sampled here. Bound anyway: on OpenGL the
+        /// driver decides what stays active (profile 430 ships raw source), and an active
+        /// sampler with no texture at its default unit 0 fails the whole draw.
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_v2_camera, "u_gi_v2_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_v2_intensity, "u_gi_v2_intensity", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_intensity, "u_gi_intensity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
@@ -407,7 +414,7 @@ private:
         {
             return program && program->is_valid();
         }
-    } v2_integrate_program_;
+    } integrate_program_;
 
     /// False until both record halves hold real data; gates the trace's importance
     /// reprojection so freshly allocated garbage is never read as history.
@@ -416,87 +423,6 @@ private:
     /// layout, so a lattice change makes the whole history unaddressable and must reset it.
     uint32_t probe_grid_x_ = 0;
     uint32_t probe_grid_y_ = 0;
-
-    struct probe_filter_program : uniforms_cache
-    {
-        gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_probe_params;
-        gfx::program::uniform_ptr u_gi_probe_screen;
-        gfx::program::uniform_ptr u_gi_probe_temporal;
-        gfx::program::uniform_ptr s_probe_radiance;
-
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
-        }
-
-        auto is_valid() const -> bool
-        {
-            return program && program->is_valid();
-        }
-    } probe_filter_program_;
-
-    /// Trace-capable: the integrate pass runs the per-pixel gather as a FALLBACK for pixels no
-    /// probe can serve, so it binds everything the tracer needs alongside the probe state.
-    struct probe_integrate_program : uniforms_cache
-    {
-        gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_resolve_params;
-        gfx::program::uniform_ptr u_gi_resolve_trace;
-        gfx::program::uniform_ptr u_gi_resolve_camera;
-        gfx::program::uniform_ptr u_gi_resolve_filter;
-        gfx::program::uniform_ptr u_gi_cache_params;
-        gfx::program::uniform_ptr u_gi_cache_params2;
-        gfx::program::uniform_ptr u_sdf_params;
-        gfx::program::uniform_ptr u_sdf_grid_params;
-        gfx::program::uniform_ptr u_sdf_clipmap_levels;
-        gfx::program::uniform_ptr u_sdf_clipmap_params;
-        gfx::program::uniform_ptr u_gi_probe_params;
-        gfx::program::uniform_ptr u_gi_probe_screen;
-        gfx::program::uniform_ptr u_gi_probe_temporal;
-        gfx::program::uniform_ptr s_gi_depth;
-        gfx::program::uniform_ptr s_gi_normal;
-        gfx::program::uniform_ptr s_probe_radiance;
-        gfx::program::uniform_ptr s_probe_irradiance;
-        gfx::program::uniform_ptr s_sdf_atlas;
-        gfx::program::uniform_ptr s_sdf_clipmap;
-        gfx::program::uniform_ptr s_gi_env_sh;
-        gfx::program::uniform_ptr u_gi_resolve_env;
-
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_gi_resolve_params, "u_gi_resolve_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_resolve_trace, "u_gi_resolve_trace", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_resolve_camera, "u_gi_resolve_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_resolve_filter, "u_gi_resolve_filter", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_resolve_env, "u_gi_resolve_env", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_cache_params, "u_gi_cache_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_cache_params2, "u_gi_cache_params2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
-            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
-                          global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_probe_irradiance, "s_probe_irradiance", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
-        }
-
-        auto is_valid() const -> bool
-        {
-            return program && program->is_valid();
-        }
-    } probe_integrate_program_;
 
     /// Probe SH + meta storage. A member rather than a render-view resource because it is a
     /// buffer, and its capacity only ever grows.

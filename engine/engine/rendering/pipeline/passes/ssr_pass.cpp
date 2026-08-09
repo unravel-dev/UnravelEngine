@@ -32,24 +32,24 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.sc");
 
     // Create FidelityFX SSR programs
-    fidelityfx_pixel_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_fidelityfx);
     fidelityfx_pixel_program_.cache_uniforms();
+    fidelityfx_pixel_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_fidelityfx);
 
     // Create temporal resolve program
-    temporal_resolve_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_temporal_resolve);
     temporal_resolve_program_.cache_uniforms();
+    temporal_resolve_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_temporal_resolve);
 
     // Create composite program
-    composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_composite);
     composite_program_.cache_uniforms();
+    composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_composite);
 
     // Create unified blur compute program for cone tracing
-    blur_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_blur);
     blur_compute_program_.cache_uniforms();
+    blur_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_blur);
 
     // Create spatial denoise compute program
-    spatial_denoise_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_spatial_denoise);
     spatial_denoise_compute_program_.cache_uniforms();
+    spatial_denoise_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_spatial_denoise);
 
     // Validate all programs
     bool all_valid = fidelityfx_pixel_program_.is_valid() && temporal_resolve_program_.is_valid() &&

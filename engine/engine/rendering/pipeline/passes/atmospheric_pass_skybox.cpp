@@ -13,6 +13,7 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
     // 2) Load skybox shaders
     auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_skybox.sc");
     auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_skybox.sc");
+    program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(vs_sky, fs_sky);
 
     if(!program_.program->is_valid())
@@ -20,8 +21,6 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
         APPLOG_ERROR("Failed to load skybox program.");
         return false;
     }
-
-    program_.cache_uniforms();
 
     struct pos_vertex
     {

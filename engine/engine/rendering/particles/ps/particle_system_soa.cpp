@@ -1664,6 +1664,20 @@ struct particle_system_soa
             g_gpu_sim_available = false;
             return;
         }
+        // Uniforms before programs: the GL renderer wires program uniforms from the registry
+        // at link time (GLSL >= 400 blobs carry no reflection), so these must exist before
+        // any program below is created. See uniforms_cache::cache_uniform for the contract.
+        g_u_pack0 = bgfx::createUniform("u_pack0", bgfx::UniformType::Vec4);
+        g_u_pack1 = bgfx::createUniform("u_pack1", bgfx::UniformType::Vec4);
+        g_u_pack2 = bgfx::createUniform("u_pack2", bgfx::UniformType::Vec4);
+        g_u_pack3 = bgfx::createUniform("u_pack3", bgfx::UniformType::Vec4);
+        g_u_pack4 = bgfx::createUniform("u_pack4", bgfx::UniformType::Vec4);
+        g_u_pack5 = bgfx::createUniform("u_pack5", bgfx::UniformType::Vec4);
+        g_u_local_to_world = bgfx::createUniform("u_localToWorld", bgfx::UniformType::Mat4);
+        g_u_emitter_quat = bgfx::createUniform("u_emitterQuat", bgfx::UniformType::Vec4);
+        g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
+        g_u_sort0 = bgfx::createUniform("u_sort0", bgfx::UniformType::Vec4);
+        g_u_sort1 = bgfx::createUniform("u_sort1", bgfx::UniformType::Vec4);
         g_compact_pack_program = std::make_shared<gpu_program>(cs_compact);
         if(!g_compact_pack_program || !g_compact_pack_program->is_valid())
         {
@@ -1706,17 +1720,6 @@ struct particle_system_soa
             g_sort_gather_program.reset();
             APPLOG_WARNING("Particles: GPU depth-sort program set incomplete; Normal blend unsorted on GPU path");
         }
-        g_u_pack0 = bgfx::createUniform("u_pack0", bgfx::UniformType::Vec4);
-        g_u_pack1 = bgfx::createUniform("u_pack1", bgfx::UniformType::Vec4);
-        g_u_pack2 = bgfx::createUniform("u_pack2", bgfx::UniformType::Vec4);
-        g_u_pack3 = bgfx::createUniform("u_pack3", bgfx::UniformType::Vec4);
-        g_u_pack4 = bgfx::createUniform("u_pack4", bgfx::UniformType::Vec4);
-        g_u_pack5 = bgfx::createUniform("u_pack5", bgfx::UniformType::Vec4);
-        g_u_local_to_world = bgfx::createUniform("u_localToWorld", bgfx::UniformType::Mat4);
-        g_u_emitter_quat = bgfx::createUniform("u_emitterQuat", bgfx::UniformType::Vec4);
-        g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
-        g_u_sort0 = bgfx::createUniform("u_sort0", bgfx::UniformType::Vec4);
-        g_u_sort1 = bgfx::createUniform("u_sort1", bgfx::UniformType::Vec4);
         ensure_gpu_layouts();
         g_gpu_sim_available = true;
         APPLOG_INFO("Particles: GPU resident sim available (per-emitter Simulation Backend)");

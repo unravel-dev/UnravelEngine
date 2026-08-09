@@ -16,11 +16,11 @@ auto gi_world_probe_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_trace.sc");
-    trace_program_.program = std::make_unique<gpu_program>(cs_trace);
     trace_program_.cache_uniforms();
+    trace_program_.program = std::make_unique<gpu_program>(cs_trace);
     auto cs_convolve = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_convolve.sc");
-    convolve_program_.program = std::make_unique<gpu_program>(cs_convolve);
     convolve_program_.cache_uniforms();
+    convolve_program_.program = std::make_unique<gpu_program>(cs_convolve);
     return is_valid();
 }
 

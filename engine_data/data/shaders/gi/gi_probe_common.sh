@@ -33,7 +33,7 @@
 #define GI_PROBE_ANCHOR     5
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
-/// Single layer: the v2 gather anchors one probe per tile (Phase 8 removed the v1
+/// Single layer: the gather anchors one probe per tile (Phase 8 removed the v1
 /// two-layer machinery); the record indexing keeps the parameter for layout stability.
 #define GI_PROBE_LAYERS     1
 

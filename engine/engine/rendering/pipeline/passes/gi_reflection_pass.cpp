@@ -51,14 +51,14 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs_reflection = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection.sc");
-    program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_reflection);
     program_.cache_uniforms();
+    program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_reflection);
     auto fs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection_temporal.sc");
-    temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_temporal);
     temporal_program_.cache_uniforms();
+    temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_temporal);
     auto fs_composite = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection_composite.sc");
-    composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_composite);
     composite_program_.cache_uniforms();
+    composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_composite);
     return true;
 }
 

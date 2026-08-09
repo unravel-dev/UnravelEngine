@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_constants.h>
 
 #include <graphics/graphics.h>
@@ -18,8 +19,8 @@ auto sdf_debug_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs_sdf_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_sdf_debug.sc");
-    debug_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_sdf_debug);
     debug_program_.cache_uniforms();
+    debug_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_sdf_debug);
     return debug_program_.is_valid();
 }
 
@@ -59,14 +60,25 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     const auto& clipmap = params.view_cache->get_clipmap();
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const bool clipmap_ready = clipmap_gpu.is_valid();
-    if(clipmap_gpu.get_attr_albedo_texture())
-    {
-        gfx::set_texture(debug_program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
-    }
+    // EVERY sampler below is ACTIVE in every mode (the debug mode is a uniform branch, which
+    // eliminates nothing), and OpenGL hard-fails the draw when an unbound sampler's unit 0
+    // default collides with the 3D atlas at unit 0 ("program texture usage" -
+    // GL_INVALID_OPERATION, the view renders black). So each stage always gets a texture of
+    // the right dimensionality; the ready flags in the uniforms gate what is actually read.
+    gfx::set_texture(debug_program_.s_attr_albedo,
+                     8,
+                     clipmap_gpu.get_attr_albedo_texture() ? clipmap_gpu.get_attr_albedo_texture()
+                                                           : atlas.get_atlas_texture());
     if(clipmap_gpu.get_light_voxel_texture())
     {
         gfx::set_texture(debug_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
         const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
+        gfx::set_uniform(debug_program_.u_gi_light_voxel_params, light_voxel_params);
+    }
+    else
+    {
+        gfx::set_texture(debug_program_.s_light_voxels, 10, atlas.get_atlas_texture());
+        const float light_voxel_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(debug_program_.u_gi_light_voxel_params, light_voxel_params);
     }
     if(clipmap_gpu.has_world_probes())
@@ -78,6 +90,14 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
         const float probe_params[4] = {base_spacing, 0.0f, 1.0f, 0.0f};
         gfx::set_uniform(debug_program_.u_gi_world_probe_params, probe_params);
         gfx::set_uniform(debug_program_.u_gi_world_probe_atlas, clipmap_gpu.get_world_probe_atlas_params());
+    }
+    else
+    {
+        const auto black = default_textures::get().black_texture();
+        gfx::set_texture(debug_program_.s_world_probe_irradiance, 11, black);
+        gfx::set_texture(debug_program_.s_world_probe_depth, 15, black);
+        const float probe_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(debug_program_.u_gi_world_probe_params, probe_params);
     }
     gfx::set_texture(debug_program_.s_sdf_clipmap,
                      4,

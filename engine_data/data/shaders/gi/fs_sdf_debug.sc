@@ -249,7 +249,7 @@ void main()
 
 	if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO || u_debug_mode == SDF_DEBUG_LIGHT_VOXELS)
 	{
-		// GI v2 scene representation, read exactly as a gather ray will read it: the traced hit
+		// GI scene representation, read exactly as a gather ray will read it: the traced hit
 		// mapped to its attribute voxel in the finest covering cascade.
 		//
 		//   MAGENTA -> hit outside every cascade level (per-instance tier answered alone).

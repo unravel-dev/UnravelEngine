@@ -11,8 +11,8 @@ auto prefilter_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/prefilter/cs_prefilter.sc");
-    cs_.program = std::make_unique<gpu_program>(cs);
     cs_.cache_uniforms();
+    cs_.program = std::make_unique<gpu_program>(cs);
     return cs_.program->is_valid();
 }
 

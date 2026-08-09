@@ -1,5 +1,5 @@
 /*
- * Lights the surface voxels (GI v2 plan 3.2): one thread per surface-list entry, direct
+ * Lights the surface voxels (gi_rewrite_plan.md 3.2): one thread per surface-list entry, direct
  * lighting with traced shadows per EXPOSED FACE, written straight into the light volume.
  *
  * BUDGETED BY CONSTRUCTION: only listed surface voxels are processed, and each is re-lit every
@@ -24,19 +24,22 @@
 #include "gi/gpu_lights.sh"
 #include "gi/gi_lighting.sh"
 #include "gi/gi_light_voxels.sh"
-// The bounce term (GI v2 plan Phase 4): last frame's world-probe irradiance closes the
+// The bounce term (gi_rewrite_plan.md Phase 4): last frame's world-probe irradiance closes the
 // infinite-bounce loop - probes read voxels, voxels read probes, gain bounded by GI_MAX_ALBEDO.
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
 
-/// Surface-voxel list + per-level counts, written by cs_gi_clipmap_attributes.
+/// Surface-voxel list + per-level counts, written by cs_gi_clipmap_attributes. The count sits
+/// at a high stage ON PURPOSE: OpenGL guarantees only eight image units (bindings 0-7), so the
+/// light-volume IMAGE below must live in that range while buffers and samplers tolerate the
+/// high stages.
 BUFFER_RO(b_surface_list, uint, 6);
-BUFFER_RO(b_surface_count, uint, 7);
+BUFFER_RO(b_surface_count, uint, 10);
 /// Attribute volumes: what the surface looks like.
 SAMPLER3D(s_attr_albedo, 8);
 SAMPLER3D(s_attr_emissive, 9);
 /// The light volume this pass owns.
-IMAGE3D_WO(s_light_voxels_out, rgba16f, 10);
+IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
 
 /// Defined locally rather than taken from lighting.sh, which this shader does not include. The
 /// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
@@ -98,8 +101,12 @@ void main()
 	{
 		return;
 	}
-	uint packed = b_surface_list[level * capacity + entry];
-	ivec3 slot = ivec3(int(packed & 0xFFu), int((packed >> 8u) & 0xFFu), int((packed >> 16u) & 0xFFu));
+	// packed_slot, not `packed`: that word is a GLSL layout-qualifier keyword and a variable
+	// named after it fails the OpenGL backend outright.
+	uint packed_slot = b_surface_list[level * capacity + entry];
+	ivec3 slot = ivec3(int(packed_slot & 0xFFu),
+	                   int((packed_slot >> 8u) & 0xFFu),
+	                   int((packed_slot >> 16u) & 0xFFu));
 	vec4 level_data = u_sdf_clipmap_levels[level];
 	float attr_voxel = level_data.w * 2.0;
 	// Toroidal reconstruction: the slot's world cell under the current window (the same math the

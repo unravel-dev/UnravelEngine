@@ -2,7 +2,7 @@
 #define __GI_LIGHT_VOXELS_SH__
 
 /*
- * Light voxels (GI v2 plan 3.2): outgoing radiance per EXPOSED FACE of every surface voxel of
+ * Light voxels (gi_rewrite_plan.md 3.2): outgoing radiance per EXPOSED FACE of every surface voxel of
  * the SDF cascade, at attribute resolution. This is what a traced ray reads at a cascade hit -
  * the positional replacement for the surface-addressed radiance hash, with no writer/reader
  * agreement problem: the address is the voxel.
@@ -18,6 +18,12 @@
  */
 
 #include "gi_constants.sh"
+
+// See sdf_common.sh: modern GLSL removed the legacy entry point and bgfx never mapped the 3D
+// variant; guarded here too so this header stands alone.
+#if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)
+#	define texture3DLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
+#endif // BGFX_SHADER_LANGUAGE_GLSL >= 130
 
 /// x = attribute resolution (voxels per axis), y = attribute voxel size of level 0 (doubles per
 /// level), z = frame index, w = non-zero when the light volume is resident.

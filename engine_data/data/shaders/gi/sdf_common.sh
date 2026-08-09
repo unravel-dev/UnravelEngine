@@ -17,6 +17,14 @@
 #include "../bgfx_compute.sh"
 #include "gi_constants.sh"
 
+// The stock bgfx shader library maps texture2DLod to textureLod for modern GLSL but never
+// added the 3D variant, and GLSL removed the legacy entry point after version 140 - every
+// clipmap sampler below would fail the OpenGL backend without this. Lives HERE rather than in
+// bgfx_shader.sh because that file is re-copied from bgfx on every build.
+#if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)
+#	define texture3DLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
+#endif // BGFX_SHADER_LANGUAGE_GLSL >= 130
+
 #define SDF_BRICK_SIZE   8.0
 #define SDF_BRICK_BORDER 1.0
 #define SDF_BRICK_STRIDE 10.0
@@ -917,7 +925,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		// visibility must measure geometry, not the fattening.
 		float d_raw = d;
 		++result.steps;
-		// Surface EXPAND, ramped with travel (GI v2 plan 3.1, after Lumen [S22 p48-50]): geometry
+		// Surface EXPAND, ramped with travel (gi_rewrite_plan.md 3.1, after Lumen [S22 p48-50]): geometry
 		// thinner than a cascade voxel never crosses zero, so without this a ray at range tunnels
 		// straight through a distant wall the cascade knows about but cannot make solid. Subtracting
 		// the expand fattens every surface by up to half a voxel diagonal - and because it subtracts
@@ -1051,7 +1059,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		}
 		t += max(step_distance, base_threshold);
 	}
-	// Budget exhausted: report a HIT at the current position, not a miss (GI v2 plan 3.1, after
+	// Budget exhausted: report a HIT at the current position, not a miss (gi_rewrite_plan.md 3.1, after
 	// Lumen's forced 64th-iteration hit [S22 p36]). Exhaustion happens on grazing rays hugging
 	// geometry; laundering it into "clear" over-lights exactly the surfaces that are hardest to
 	// trace (the A1c lesson). Over-occlusion is the direction that degrades gracefully. The flag
@@ -1144,7 +1152,7 @@ SdfRayHit SdfTraceRayEx(vec3 origin, vec3 direction, float t_max, float near_fie
 	// zero-distance hit on every ray that begins within surface_bias mesh-voxels of a surface --
 	// which for a gather or shadow ray is every ray, since they begin on one by construction.
 	// The per-instance tier is capped at GI_MESH_SDF_TRACE_RANGE regardless of the caller's
-	// setting (GI v2 plan 3.1, Lumen's 2 m detail-trace bound [S22 p44]): mesh-exact contact
+	// setting (gi_rewrite_plan.md 3.1, Lumen's 2 m detail-trace bound [S22 p44]): mesh-exact contact
 	// detail is invisible past a couple of metres of any launch point, while the tier's cost is
 	// the dominant term of the whole GI frame. The cascade takes over beyond.
 	float near_field = min(near_field_distance, GI_MESH_SDF_TRACE_RANGE);

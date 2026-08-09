@@ -1,5 +1,5 @@
 /*
- * GI v2 probe PLACEMENT (adaptive gather): one thread per probe, computing the anchor the
+ * GI probe PLACEMENT (adaptive gather): one thread per probe, computing the anchor the
  * trace used to derive in its first thread - the Halton-jittered G-buffer pixel, its world
  * position and normal, the lifted trace origin and the shortened-ray range - into the record
  * buffer, BEFORE the trace dispatch runs.
@@ -8,7 +8,7 @@
  * can only judge whether its parents' plane predicts its own anchor after every anchor exists,
  * and groups of a single dispatch have no ordering. The trace now reads records instead of
  * recomputing, classifies odd-lattice probes against their even-lattice parents, and skips the
- * 64-ray march wherever a parent blend answers (cs_gi_screen_probe_interp_v2 reconstructs
+ * 64-ray march wherever a parent blend answers (cs_gi_screen_probe_interp reconstructs
  * those tiles).
  *
  * Cost: one dispatch of probe-count threads doing a couple of texture reads and one clipmap
@@ -31,7 +31,7 @@ SAMPLER2D(s_hiz, 8);
 SAMPLER2D(s_gi_normal, 9);
 
 /// xyz = camera position, w = frame index.
-uniform vec4 u_gi_v2_camera;
+uniform vec4 u_gi_camera;
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -46,7 +46,7 @@ void main()
 		b_gi_probe_traced[0] = 0u;
 	}
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
-	vec2 jitter = GiHalton8(uint(u_gi_v2_camera.w));
+	vec2 jitter = GiHalton8(uint(u_gi_camera.w));
 	vec2 pixel = (vec2(probe.xy) + jitter) * u_gi_probe_spacing;
 	pixel = min(pixel, u_gi_probe_screen.xy - vec2_splat(1.0));
 	vec2 uv = (floor(pixel) + vec2_splat(0.5)) * u_gi_probe_screen.zw;
@@ -73,7 +73,7 @@ void main()
 			int clamped = level >= SDF_CLIPMAP_LEVEL_COUNT ? SDF_CLIPMAP_LEVEL_COUNT - 1 : level;
 			b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
 			b_gi_probes[record + uint(GI_PROBE_META2)] =
-			    vec4(world_normal, length(world_position - u_gi_v2_camera.xyz));
+			    vec4(world_normal, length(world_position - u_gi_camera.xyz));
 			b_gi_probes[record + uint(GI_PROBE_ORIGIN)] =
 			    vec4(world_position + world_normal * lift, 2.0 * GiWorldProbeSpacing(clamped));
 			b_gi_probes[record + uint(GI_PROBE_ANCHOR)] = vec4(uv, depth, 0.0);

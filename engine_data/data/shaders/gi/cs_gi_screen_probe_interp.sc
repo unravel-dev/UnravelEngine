@@ -1,5 +1,5 @@
 /*
- * GI v2 adaptive-gather reconstruction: probes the trace marked INTERPOLATED (meta mode 2)
+ * GI adaptive-gather reconstruction: probes the trace marked INTERPOLATED (meta mode 2)
  * get their radiance tile rebuilt from their even-lattice parents, texel by texel - the same
  * bilinear blend the integrate pass performs per pixel, materialised once per tile instead of
  * traced 64 times. Runs between the trace and the probe-space filter, so the filter and

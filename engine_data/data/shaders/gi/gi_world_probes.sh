@@ -2,7 +2,7 @@
 #define __GI_WORLD_PROBES_SH__
 
 /*
- * World probe cascades (GI v2 plan 3.3, revised): octahedral radiance/irradiance probes on a
+ * World probe cascades (gi_rewrite_plan.md 3.3, revised): octahedral radiance/irradiance probes on a
  * TOROIDAL world-anchored lattice per SDF cascade. They carry offscreen and distant energy,
  * complete shortened gather rays, and feed the light voxels' bounce term.
  *

@@ -3,8 +3,8 @@
 
 /*
  * MIRROR of engine/engine/rendering/gi/gi_constants.h - the single owner of every cross-pass
- * GI v2 constant. Do not add a constant here without adding it to the table in that header:
- * gi_v2_tests parses this file and fails on any mismatch or orphan, in both directions.
+ * GI constant. Do not add a constant here without adding it to the table in that header:
+ * gi_tests parses this file and fails on any mismatch or orphan, in both directions.
  *
  * Units and justifications live with the table in the header; this file is deliberately bare.
  */
@@ -59,8 +59,8 @@
 #define GI_REFLECTION_MESH_SDF_RANGE    16.0
 #define GI_REFLECTION_TEMPORAL_FRAMES   8
 
-#define GI_V2_INTERPOLATION_JITTER_TILES 1.0
-#define GI_V2_IMPORTANCE_SUPERSAMPLE_RATIO 2.0
+#define GI_INTERPOLATION_JITTER_TILES 1.0
+#define GI_IMPORTANCE_SUPERSAMPLE_RATIO 2.0
 #define GI_TEMPORAL_MAX_FRAMES          24
 #define GI_TEMPORAL_DEPTH_TOLERANCE     0.25
 

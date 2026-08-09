@@ -1,5 +1,5 @@
 /*
- * GI v2 Phase 0: the validation harness itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
+ * GI Phase 0: the validation harness itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
  *
  * Two halves:
  *  - The constants contract: gi_constants.h is the single owner of every cross-pass constant,
@@ -12,7 +12,7 @@
  *    with the oracle itself above suspicion.
  */
 
-#include "gi_v2_tests.h"
+#include "gi_tests.h"
 #include "gi_reference_tracer.h"
 
 #include <engine/rendering/gi/gi_constants.h>
@@ -31,7 +31,7 @@
 #include <string>
 #include <vector>
 
-namespace unravel::gi_v2_tests
+namespace unravel::gi_tests
 {
 
 namespace
@@ -171,31 +171,48 @@ void test_gi_shaders_compile_sm50()
         {
             continue;
         }
-        const fs::path out_bin = out_dir / (name + ".bin");
-        const fs::path out_log = out_dir / (name + ".log");
-        std::string command = "\"\"" + shaderc.string() + "\" -f \"" + entry.path().string() +
-                              "\" -o \"" + out_bin.string() + "\" -i \"" + include_dir.string() +
-                              "\" --varyingdef \"" + varying.string() +
-                              "\" --type " + (compute ? "compute" : "fragment") +
-                              " --define BGFX_CONFIG_MAX_BONES=64 --platform windows -p s_5_0 > \"" +
-                              out_log.string() + "\" 2>&1\"";
-        const int exit_code = std::system(command.c_str());
-        std::string log;
+        // BOTH the D3D floor and the OpenGL profile: the backends disagree on real things -
+        // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
+        // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
+        // as a D3D-only-tested regression before this second profile existed.
+        struct profile_case
         {
-            std::ifstream log_file(out_log);
-            std::stringstream buffer;
-            buffer << log_file.rdbuf();
-            log = buffer.str();
-        }
-        // shaderc is quiet on success; any output or a non-zero exit is a failure worth the
-        // full log, because the editor would have swallowed it.
-        const bool ok = exit_code == 0 && log.find("Error") == std::string::npos &&
-                        log.find("error") == std::string::npos;
-        if(!ok)
+            const char* platform;
+            const char* profile;
+            const char* label;
+        };
+        const profile_case profiles[] = {
+            {"windows", "s_5_0", "SM 5.0"},
+            {"linux", "440", "GLSL 440"},
+        };
+        for(const auto& profile : profiles)
         {
-            std::printf("--- %s ---\n%.2000s\n", name.c_str(), log.c_str());
+            const fs::path out_bin = out_dir / (name + "." + profile.profile + ".bin");
+            const fs::path out_log = out_dir / (name + "." + profile.profile + ".log");
+            std::string command = "\"\"" + shaderc.string() + "\" -f \"" + entry.path().string() +
+                                  "\" -o \"" + out_bin.string() + "\" -i \"" + include_dir.string() +
+                                  "\" --varyingdef \"" + varying.string() +
+                                  "\" --type " + (compute ? "compute" : "fragment") +
+                                  " --define BGFX_CONFIG_MAX_BONES=64 --platform " + profile.platform +
+                                  " -p " + profile.profile + " > \"" + out_log.string() + "\" 2>&1\"";
+            const int exit_code = std::system(command.c_str());
+            std::string log;
+            {
+                std::ifstream log_file(out_log);
+                std::stringstream buffer;
+                buffer << log_file.rdbuf();
+                log = buffer.str();
+            }
+            // shaderc is quiet on success; any output or a non-zero exit is a failure worth
+            // the full log, because the editor would have swallowed it.
+            const bool ok = exit_code == 0 && log.find("Error") == std::string::npos &&
+                            log.find("error") == std::string::npos;
+            if(!ok)
+            {
+                std::printf("--- %s (%s) ---\n%.2000s\n", name.c_str(), profile.label, log.c_str());
+            }
+            check(ok, name + " compiles for " + profile.label);
         }
-        check(ok, name + " compiles for SM 5.0");
         ++compiled;
     }
     std::printf("  %zu shaders compiled\n", compiled);
@@ -438,7 +455,7 @@ void test_reference_cornell_bleeds_colour()
     check(with_red.y < all_white.y, "green channel loses energy to the absorbing red wall");
 }
 
-/// Places a baked field into a clipmap-instance slot at a translation, with GI v2 materials.
+/// Places a baked field into a clipmap-instance slot at a translation, with GI materials.
 auto make_clipmap_instance(const mesh_sdf& sdf,
                            const math::vec3& position,
                            const math::vec3& albedo,
@@ -1186,4 +1203,4 @@ void run(int& checks, int& failures)
     test_shadow_blob_floor_building();
 }
 
-} // namespace unravel::gi_v2_tests
+} // namespace unravel::gi_tests
