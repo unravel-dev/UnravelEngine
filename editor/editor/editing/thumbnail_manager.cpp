@@ -62,7 +62,7 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
                                                  false,
                                                  1,
                                                  gfx::texture_format::RGBA8,
-                                                 BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+                                                 BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT| BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
     if(!snapshot->is_valid())
     {
