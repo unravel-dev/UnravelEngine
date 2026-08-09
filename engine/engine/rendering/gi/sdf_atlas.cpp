@@ -7,6 +7,7 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <cstring>
 
 namespace unravel
 {
@@ -77,6 +78,8 @@ auto sdf_atlas::init(const settings& settings) -> bool
     // resident. ensure_buffer_capacity grows them from here.
     header_data_.assign(4u * header_vec4_count, 0.0f);
     indirection_data_.assign(1, 0u);
+    indirection_dirty_min_ = 0;
+    indirection_dirty_max_ = 1;
     ensure_buffer_capacity();
     APPLOG_INFO("[SurfaceCache] SDF brick atlas ready: {}^3 bricks ({}^3 voxels, {} MB).",
                 brick_dim,
@@ -108,7 +111,10 @@ void sdf_atlas::shutdown()
     header_capacity_vec4_ = 0;
     indirection_capacity_ = 0;
     headers_dirty_ = false;
-    indirection_dirty_ = false;
+    indirection_dirty_min_ = 0;
+    indirection_dirty_max_ = 0;
+    pending_bricks_.clear();
+    pending_brick_voxels_.clear();
 }
 
 auto sdf_atlas::allocate_brick() -> uint32_t
@@ -126,22 +132,116 @@ auto sdf_atlas::allocate_brick() -> uint32_t
     return next_brick_slot_++;
 }
 
-void sdf_atlas::upload_brick(uint32_t slot, const uint8_t* voxels)
+void sdf_atlas::queue_bricks(const std::vector<uint32_t>& slots, const mesh_sdf& sdf)
 {
+    const uint32_t count = uint32_t(slots.size());
+    pending_bricks_.reserve(pending_bricks_.size() + count);
+    pending_brick_voxels_.reserve(pending_brick_voxels_.size() +
+                                  size_t(count) * mesh_sdf::brick_voxel_count);
+    for(uint32_t i = 0; i < count; ++i)
+    {
+        pending_bricks_.push_back({slots[i], uint32_t(pending_brick_voxels_.size())});
+        const uint8_t* src = sdf.brick_voxels.data() + size_t(i) * mesh_sdf::brick_voxel_count;
+        pending_brick_voxels_.insert(pending_brick_voxels_.end(), src, src + mesh_sdf::brick_voxel_count);
+    }
+}
+
+void sdf_atlas::flush_pending_bricks()
+{
+    if(pending_bricks_.empty())
+    {
+        return;
+    }
+    // Sorted so contiguous slots sit together. Duplicate slots cannot occur within one frame:
+    // a field acquired this frame is never swept this frame, so its slots cannot be freed and
+    // re-allocated before this flush runs.
+    std::sort(pending_bricks_.begin(),
+              pending_bricks_.end(),
+              [](const pending_brick& a, const pending_brick& b) { return a.slot < b.slot; });
     const uint32_t brick_dim = settings_.atlas_brick_dim;
-    const uint32_t bx = slot % brick_dim;
-    const uint32_t by = (slot / brick_dim) % brick_dim;
-    const uint32_t bz = slot / (brick_dim * brick_dim);
-    const uint16_t stride = static_cast<uint16_t>(mesh_sdf::brick_stride);
-    gfx::update_texture_3d(atlas_texture_->native_handle(),
-                           0,
-                           static_cast<uint16_t>(bx * mesh_sdf::brick_stride),
-                           static_cast<uint16_t>(by * mesh_sdf::brick_stride),
-                           static_cast<uint16_t>(bz * mesh_sdf::brick_stride),
-                           stride,
-                           stride,
-                           stride,
-                           gfx::copy(voxels, mesh_sdf::brick_voxel_count));
+    constexpr uint32_t stride = mesh_sdf::brick_stride;
+    const uint32_t total = uint32_t(pending_bricks_.size());
+    uint32_t begin = 0;
+    while(begin < total)
+    {
+        // Extend the run while slots stay consecutive: consecutive slots advance x fastest,
+        // then y, then z - exactly a box's row-major order, which is what lets a run upload
+        // as full slabs / full rows / a partial row without reordering the bricks.
+        uint32_t run = 1;
+        while(begin + run < total &&
+              pending_bricks_[begin + run].slot == pending_bricks_[begin].slot + run)
+        {
+            ++run;
+        }
+        uint32_t emitted = 0;
+        while(emitted < run)
+        {
+            const uint32_t slot = pending_bricks_[begin + emitted].slot;
+            const uint32_t sx = slot % brick_dim;
+            const uint32_t sy = (slot / brick_dim) % brick_dim;
+            const uint32_t sz = slot / (brick_dim * brick_dim);
+            const uint32_t remaining = run - emitted;
+            // Largest box shape the run supports from this position, coarsest first.
+            uint32_t box_w = 1;
+            uint32_t box_h = 1;
+            uint32_t box_d = 1;
+            if(sx == 0 && sy == 0 && remaining >= brick_dim * brick_dim)
+            {
+                box_w = brick_dim;
+                box_h = brick_dim;
+                box_d = std::min(remaining / (brick_dim * brick_dim), brick_dim - sz);
+            }
+            else if(sx == 0 && remaining >= brick_dim)
+            {
+                box_w = brick_dim;
+                box_h = std::min(remaining / brick_dim, brick_dim - sy);
+            }
+            else
+            {
+                box_w = std::min(remaining, brick_dim - sx);
+            }
+            const uint32_t box_bricks = box_w * box_h * box_d;
+            // Repack brick-major voxels into the box's row-major layout: every destination row
+            // interleaves one row from each brick along x.
+            const uint32_t width_v = box_w * stride;
+            const uint32_t height_v = box_h * stride;
+            const uint32_t depth_v = box_d * stride;
+            const auto* mem = gfx::alloc(box_bricks * mesh_sdf::brick_voxel_count);
+            for(uint32_t z = 0; z < depth_v; ++z)
+            {
+                const uint32_t bz = z / stride;
+                const uint32_t lz = z % stride;
+                for(uint32_t y = 0; y < height_v; ++y)
+                {
+                    const uint32_t by = y / stride;
+                    const uint32_t ly = y % stride;
+                    uint8_t* dst_row = mem->data + (size_t(z) * height_v + y) * width_v;
+                    for(uint32_t bx = 0; bx < box_w; ++bx)
+                    {
+                        const uint32_t brick = (bz * box_h + by) * box_w + bx;
+                        const uint8_t* src =
+                            pending_brick_voxels_.data() +
+                            pending_bricks_[begin + emitted + brick].data_offset +
+                            (size_t(lz) * stride + ly) * stride;
+                        std::memcpy(dst_row + size_t(bx) * stride, src, stride);
+                    }
+                }
+            }
+            gfx::update_texture_3d(atlas_texture_->native_handle(),
+                                   0,
+                                   static_cast<uint16_t>(sx * stride),
+                                   static_cast<uint16_t>(sy * stride),
+                                   static_cast<uint16_t>(sz * stride),
+                                   static_cast<uint16_t>(width_v),
+                                   static_cast<uint16_t>(height_v),
+                                   static_cast<uint16_t>(depth_v),
+                                   mem);
+            emitted += box_bricks;
+        }
+        begin += run;
+    }
+    pending_bricks_.clear();
+    pending_brick_voxels_.clear();
 }
 
 auto sdf_atlas::allocate_indirection(uint32_t count) -> uint32_t
@@ -172,11 +272,40 @@ auto sdf_atlas::allocate_indirection(uint32_t count) -> uint32_t
         std::fill(indirection_data_.begin() + std::ptrdiff_t(offset),
                   indirection_data_.begin() + std::ptrdiff_t(offset + count),
                   0u);
+        mark_indirection_dirty(offset, count);
         return offset;
     }
     const uint32_t offset = uint32_t(indirection_data_.size());
     indirection_data_.resize(size_t(offset) + count, 0u);
+    mark_indirection_dirty(offset, count);
     return offset;
+}
+
+void sdf_atlas::mark_indirection_dirty(uint32_t offset, uint32_t count)
+{
+    if(count == 0)
+    {
+        return;
+    }
+    if(indirection_dirty_min_ >= indirection_dirty_max_)
+    {
+        indirection_dirty_min_ = offset;
+        indirection_dirty_max_ = offset + count;
+        return;
+    }
+    indirection_dirty_min_ = std::min(indirection_dirty_min_, offset);
+    indirection_dirty_max_ = std::max(indirection_dirty_max_, offset + count);
+}
+
+auto sdf_atlas::has_upload_budget(const mesh_sdf& sdf) const -> bool
+{
+    // The frame's first field always fits, or a field bigger than the whole budget never loads.
+    if(frame_upload_bytes_ == 0)
+    {
+        return true;
+    }
+    const uint64_t bytes = uint64_t(sdf.get_surface_brick_count()) * mesh_sdf::brick_voxel_count;
+    return uint64_t(frame_upload_bytes_) + bytes <= settings_.max_upload_bytes_per_frame;
 }
 
 auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
@@ -244,10 +373,8 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
         }
         indirection_data_[size_t(indirection_offset) + i] = make_sdf_surface_entry(slots[entry]);
     }
-    for(uint32_t i = 0; i < surface_bricks; ++i)
-    {
-        upload_brick(slots[i], sdf.brick_voxels.data() + size_t(i) * mesh_sdf::brick_voxel_count);
-    }
+    queue_bricks(slots, sdf);
+    frame_upload_bytes_ += surface_bricks * mesh_sdf::brick_voxel_count;
     uint32_t header_index = 0;
     if(!free_field_indices_.empty())
     {
@@ -284,7 +411,8 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
     header[10] = float(sdf.grid_dim.y);
     header[11] = float(sdf.grid_dim.z);
     headers_dirty_ = true;
-    indirection_dirty_ = true;
+    // The indirection span was marked dirty by allocate_indirection; the writes above landed
+    // inside that same span.
     return header_index;
 }
 
@@ -355,16 +483,25 @@ void sdf_atlas::ensure_buffer_capacity()
         indirection_buffer_ = gfx::create_dynamic_index_buffer(indirection_capacity_,
                                                                BGFX_BUFFER_COMPUTE_READ |
                                                                    BGFX_BUFFER_INDEX32);
-        indirection_dirty_ = true;
+        // A fresh buffer holds nothing: the whole master copy must go up, not just this
+        // frame's span.
+        indirection_dirty_min_ = 0;
+        indirection_dirty_max_ = required_indirection;
     }
 }
 
 void sdf_atlas::flush()
 {
+    // Flush runs once per frame (end of surface_cache_service::update_world), which makes it
+    // the upload budget's frame boundary.
+    frame_upload_bytes_ = 0;
     if(!is_valid())
     {
+        pending_bricks_.clear();
+        pending_brick_voxels_.clear();
         return;
     }
+    flush_pending_bricks();
     ensure_buffer_capacity();
     if(headers_dirty_ && !header_data_.empty())
     {
@@ -373,12 +510,18 @@ void sdf_atlas::flush()
                     gfx::copy(header_data_.data(), uint32_t(header_data_.size() * sizeof(float))));
         headers_dirty_ = false;
     }
-    if(indirection_dirty_ && !indirection_data_.empty())
+    if(indirection_dirty_min_ < indirection_dirty_max_ && !indirection_data_.empty())
     {
+        // Only the touched span: the full table reaches millions of entries on a big scene,
+        // and re-uploading all of it once per frame while fields stream in outweighed the
+        // bricks themselves.
+        const uint32_t begin = indirection_dirty_min_;
+        const uint32_t count = indirection_dirty_max_ - begin;
         gfx::update(indirection_buffer_,
-                    0,
-                    gfx::copy(indirection_data_.data(), uint32_t(indirection_data_.size() * sizeof(uint32_t))));
-        indirection_dirty_ = false;
+                    begin,
+                    gfx::copy(indirection_data_.data() + begin, count * uint32_t(sizeof(uint32_t))));
+        indirection_dirty_min_ = 0;
+        indirection_dirty_max_ = 0;
     }
 }
 

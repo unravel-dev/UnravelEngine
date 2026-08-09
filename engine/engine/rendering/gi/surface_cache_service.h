@@ -343,17 +343,24 @@ private:
     /**
      * @brief Rebuilds the instance cull grid and uploads it.
      *
-     * Rebuilt in full every frame because the instance list is. The grid holds no state worth
-     * carrying forward, so there is nothing to invalidate and no staleness to reason about.
+     * Rebuilt in full whenever the instance fingerprint changes. The grid holds no state worth
+     * carrying forward, so there is nothing to invalidate: an identical instance set means an
+     * identical grid, and anything else rebuilds from scratch.
      */
     void upload_instance_grid();
 
-    /// Packed instance data and its GPU mirror, rebuilt each frame.
+    /// Packed instance data and its GPU mirror, rebuilt each frame. Uploaded only when the
+    /// fingerprint over the packed bytes changes: a static scene keeps it byte-identical, and
+    /// re-staging megabytes per frame anyway kept the Vulkan backend allocating continuously.
     gfx::dynamic_vertex_buffer_handle instance_buffer_{bgfx::kInvalidHandle};
     uint32_t instance_buffer_capacity_ = 0;
     std::vector<float> instance_data_;
+    /// FNV-1a over @ref instance_data_ as last packed (the light buffer's convention).
+    uint64_t instance_fingerprint_ = 0;
+    /// The instance fingerprint the grid was last built and uploaded for.
+    uint64_t grid_uploaded_fingerprint_ = 0;
     /// Broad-phase over @ref instances_, so a ray tests the instances near it rather than all of
-    /// them. Rebuilt with the instance list each frame.
+    /// them. Rebuilt whenever the instance fingerprint changes.
     sdf_instance_grid grid_;
     std::vector<math::bbox> grid_bounds_;
     gfx::dynamic_index_buffer_handle grid_offset_buffer_{bgfx::kInvalidHandle};

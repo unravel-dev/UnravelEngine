@@ -47,6 +47,15 @@ public:
         /// submesh, and running out is silent in the image -- the geometry simply stops
         /// contributing to global illumination -- so it is worth leaving headroom.
         uint32_t atlas_brick_dim = 72;
+        /// Brick bytes @ref upload may push in one frame before @ref has_upload_budget starts
+        /// deferring whole fields to later frames. A large scene enabling GI otherwise uploads
+        /// every field at once - hundreds of megabytes of per-brick texture updates in a single
+        /// frame, which overruns the renderer's per-frame staging scratch (32 MB on the Vulkan
+        /// backend) and degrades every further update to its own device allocation: the render
+        /// thread stalls in allocateMemory while the main thread blocks on frame sync. Spreading
+        /// the warmup over frames keeps each frame inside the scratch. Fields appear in GI over
+        /// a short ramp instead of one monster frame.
+        uint32_t max_upload_bytes_per_frame = 8u << 20u;
     };
 
     struct stats
@@ -72,6 +81,16 @@ public:
      *         the field is unusable or the atlas has no room for it.
      */
     auto upload(const mesh_sdf& sdf) -> uint32_t;
+
+    /**
+     * @brief True while this frame's brick-upload budget still takes @p sdf whole.
+     *
+     * Fields upload all-or-nothing (see @ref upload), so the budget defers WHOLE fields to a
+     * later frame. A deferral is NOT a refusal: the caller must simply retry next frame, and
+     * must not cache it against @ref get_release_generation. The first field of a frame is
+     * always allowed, so a field larger than the whole budget still loads.
+     */
+    auto has_upload_budget(const mesh_sdf& sdf) const -> bool;
 
     /**
      * @brief Releases a resident field, returning its bricks to the free list.
@@ -138,8 +157,22 @@ private:
     };
 
     auto allocate_brick() -> uint32_t;
-    void upload_brick(uint32_t slot, const uint8_t* voxels);
+    /// Queues a field's bricks for @ref flush_pending_bricks. The voxels are COPIED: the
+    /// pending queue must not reference the mesh asset, whose lifetime this class does not
+    /// own, and the copy is bounded by settings::max_upload_bytes_per_frame.
+    void queue_bricks(const std::vector<uint32_t>& slots, const mesh_sdf& sdf);
+    /// Pushes the frame's queued bricks with as FEW texture updates as possible: contiguous
+    /// slot runs become boxed region updates (partial row, then whole rows, then whole
+    /// slabs). One update per BRICK melted the render thread on every backend that allocates
+    /// staging per call - D3D12 creates a committed resource for EACH texture update, so a
+    /// large scene's warmup (tens of thousands of bricks per frame) turned into seconds of
+    /// driver allocation per frame. Boxing collapses that to a handful of calls per frame.
+    /// Slots allocate mostly ascending on a fresh atlas, so the runs are long; a fragmented
+    /// free list degrades gracefully toward smaller boxes.
+    void flush_pending_bricks();
     auto allocate_indirection(uint32_t count) -> uint32_t;
+    /// Widens the dirty indirection span to cover [offset, offset + count).
+    void mark_indirection_dirty(uint32_t offset, uint32_t count);
     /// Recreates a buffer when the master copy has outgrown it. Dynamic buffers cannot be
     /// grown by update() alone -- a write past the allocated size is silently dropped, which
     /// leaves the shader reading zeros and is invisible until the traced result is wrong.
@@ -169,10 +202,26 @@ private:
     uint64_t next_rejection_report_ = 1;
     /// Incremented by @ref release. See @ref get_release_generation.
     uint32_t release_generation_ = 0;
+    /// Brick bytes uploaded this frame; reset by @ref flush. See settings::max_upload_bytes_per_frame.
+    uint32_t frame_upload_bytes_ = 0;
+    /// A brick queued for upload: its atlas slot and its voxels' offset in @ref pending_brick_voxels_.
+    struct pending_brick
+    {
+        uint32_t slot = 0;
+        uint32_t data_offset = 0;
+    };
+    /// The frame's queued bricks and their copied voxels, drained by @ref flush_pending_bricks.
+    std::vector<pending_brick> pending_bricks_;
+    std::vector<uint8_t> pending_brick_voxels_;
     uint32_t header_capacity_vec4_ = 0;
     uint32_t indirection_capacity_ = 0;
     bool headers_dirty_ = false;
-    bool indirection_dirty_ = false;
+    /// Dirty SPAN of @ref indirection_data_ (entries, [min, max)), empty when min >= max.
+    /// A range rather than a flag because the table reaches millions of entries on a big
+    /// scene, and re-uploading all of it once per frame while fields stream in made the
+    /// warmup's frames tens of megabytes heavier than the bricks they carried.
+    uint32_t indirection_dirty_min_ = 0;
+    uint32_t indirection_dirty_max_ = 0;
 
     /// A released field's indirection region, available for reuse.
     struct indirection_range

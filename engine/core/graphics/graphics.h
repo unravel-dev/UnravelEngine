@@ -163,6 +163,14 @@ const memory_view* make_ref(const void* _data,
                             release_fn _releaseFn = nullptr,
                             void* _userData = nullptr);
 
+/**
+ * Directory for the renderer's binary cache (driver-compiled pipeline state, Vulkan pipeline
+ * cache). Set BEFORE init. Empty (the default) disables caching. Without it, backends that
+ * compile pipelines at first use (D3D12 especially) re-pay the full driver compilation of
+ * every heavy shader on every launch - seconds of a single frame for a large compute chain.
+ */
+void set_cache_directory(const std::string& directory);
+
 /**/
 void set_debug(uint32_t _debug);
 

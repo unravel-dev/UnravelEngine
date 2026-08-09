@@ -139,6 +139,14 @@ auto surface_cache_service::acquire_field(const hpp::uuid& mesh_uid, const mesh&
         record.has_no_field = true;
         return sdf_atlas::invalid_index;
     }
+    // Budget deferral BEFORE the refusal cache: a field deferred to keep this frame's uploads
+    // inside the renderer's staging scratch is not refused - it must retry next frame, so it
+    // must NOT consume the generation stamp below (that stamp would silence the retry until
+    // something unrelated released bricks).
+    if(!atlas_.has_upload_budget(sdf))
+    {
+        return sdf_atlas::invalid_index;
+    }
     // Reached on first use, or after a previous attempt was refused for want of atlas room. A
     // refusal describes the atlas at a moment rather than the mesh, so it must be retried once the
     // sweep frees the previous scene's fields -- but ONLY then. Nothing else can change the answer,
@@ -338,6 +346,17 @@ void surface_cache_service::add_instance(uint32_t header_index,
 void surface_cache_service::upload_instance_grid()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instance Grid");
+    // The grid is a pure function of the instance set (bounds are part of the packed data the
+    // fingerprint covers), so an unchanged fingerprint means an identical grid: skip the CPU
+    // rebuild and the multi-megabyte re-upload. Without this a static scene re-staged the whole
+    // structure every frame - at Bistro scale that alone kept the Vulkan backend allocating
+    // staging memory continuously.
+    if(grid_uploaded_fingerprint_ == instance_fingerprint_ && grid_.is_valid() &&
+       bgfx::isValid(grid_offset_buffer_) && bgfx::isValid(grid_instance_buffer_))
+    {
+        return;
+    }
+    grid_uploaded_fingerprint_ = instance_fingerprint_;
     grid_bounds_.clear();
     grid_bounds_.reserve(instances_.size());
     for(const auto& inst : instances_)
@@ -430,7 +449,16 @@ void surface_cache_service::upload_instances()
         dst[38] = inst.emissive.z;
         dst[39] = 0.0f;
     }
+    // FNV-1a over the exact bytes the GPU receives, the light buffer's convention: any change
+    // to a transform, material colour, bounds, or field index flips it.
+    uint64_t fingerprint = 1469598103934665603ull;
+    const auto* bytes = reinterpret_cast<const uint8_t*>(instance_data_.data());
+    for(size_t i = 0; i < instance_data_.size() * sizeof(float); ++i)
+    {
+        fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ull;
+    }
     const uint32_t required_vec4 = math::max(uint32_t(instances_.size()) * instance_vec4_stride, 1u);
+    bool recreated = false;
     if(!bgfx::isValid(instance_buffer_) || required_vec4 > instance_buffer_capacity_)
     {
         if(bgfx::isValid(instance_buffer_))
@@ -443,13 +471,17 @@ void surface_cache_service::upload_instances()
         instance_buffer_ = gfx::create_dynamic_vertex_buffer(instance_buffer_capacity_,
                                                              ANONYMOUS::get_vec4_buffer_layout(),
                                                              BGFX_BUFFER_COMPUTE_READ);
+        recreated = true;
     }
-    if(!instance_data_.empty())
+    // Re-upload only what changed: a static scene keeps its instance set byte-identical frame
+    // to frame, and re-staging it anyway is pure allocator pressure (see upload_instance_grid).
+    if(!instance_data_.empty() && (recreated || fingerprint != instance_fingerprint_))
     {
         gfx::update(instance_buffer_,
                     0,
                     gfx::copy(instance_data_.data(), uint32_t(instance_data_.size() * sizeof(float))));
     }
+    instance_fingerprint_ = fingerprint;
 }
 
 void surface_cache_service::update_world(scene& scn)

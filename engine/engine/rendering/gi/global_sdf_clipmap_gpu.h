@@ -30,8 +30,24 @@ public:
     /// vec4 of level parameters uploaded per cascade: xyz = world origin, w = voxel size.
     static constexpr uint32_t level_param_count = global_sdf_clipmap::level_count;
 
-    auto init(uint32_t resolution) -> bool;
+    /**
+     * @brief (Re)creates the GPU mirror for @p resolution.
+     *
+     * @param compose_on_gpu The EFFECTIVE composer for this mirror's lifetime. It decides the
+     * surface list/count buffer flags: the GPU composer writes them from compute, so they must
+     * be BGFX_BUFFER_COMPUTE_WRITE - which bgfx forbids updating from the CPU; the CPU composer
+     * uploads them with gfx::update, which requires that flag absent. One set of flags cannot
+     * serve both, so a composer change re-creates the mirror (see surface_cache_view::update).
+     */
+    auto init(uint32_t resolution, bool compose_on_gpu) -> bool;
     void shutdown();
+
+    /// The composer this mirror was created for. True = the compose pass writes the surface
+    /// list/count buffers on the GPU; false = upload() writes them from the CPU.
+    auto is_composed_on_gpu() const -> bool
+    {
+        return compose_on_gpu_;
+    }
 
     auto is_valid() const -> bool
     {
@@ -211,6 +227,7 @@ private:
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
     bool needs_buffer_seed_ = false;
+    bool compose_on_gpu_ = true;
     std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};

@@ -11,10 +11,11 @@
 namespace unravel
 {
 
-auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
+auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> bool
 {
     shutdown();
     resolution_ = resolution;
+    compose_on_gpu_ = compose_on_gpu;
     const uint32_t depth = resolution * global_sdf_clipmap::level_count;
     if(depth > 2048u)
     {
@@ -87,16 +88,32 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
                                                           gfx::texture_format::RGBA16F,
                                                           light_flags);
     const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
+    // The surface list/count flags follow the COMPOSER: the GPU compose pass writes them from
+    // compute (needs COMPUTE_WRITE, and bgfx forbids CPU updates on such buffers), while the
+    // CPU composer uploads them with gfx::update (which requires COMPUTE_WRITE absent). The
+    // consumers only ever read them from compute, which both flag sets allow.
+    const uint64_t surface_flags =
+        (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) |
+        BGFX_BUFFER_INDEX32;
     surface_list_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
-                                                     BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
-    surface_count_ = gfx::create_dynamic_index_buffer(global_sdf_clipmap::level_count,
-                                                      BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+                                                     surface_flags);
+    surface_count_ = gfx::create_dynamic_index_buffer(global_sdf_clipmap::level_count, surface_flags);
     attr_cells_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
                                                    BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     // Sentinel cell ids (no real cell packs to ~0u, so every slot claims and zeroes its light
     // texels on first use) and the zeroed cursors are seeded ON THE GPU by the compose pass:
     // these buffers are compute-writable, and bgfx forbids - in debug - CPU updates on those.
+    // The seed runs regardless of the composer - the light/world-probe passes write the cell
+    // buffers in both modes.
     needs_buffer_seed_ = true;
+    // A CPU-composed count buffer cannot be seeded by that dispatch (no COMPUTE_WRITE), and it
+    // does not need to be: it is CPU-writable, so the zeroes upload right here. Uncomposed
+    // levels then read an empty list rather than allocation garbage.
+    if(!compose_on_gpu_ && bgfx::isValid(surface_count_))
+    {
+        const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
+        gfx::update(surface_count_, 0, gfx::copy(zero_counts.data(), sizeof(zero_counts)));
+    }
     if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
        !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
        !bgfx::isValid(surface_list_) || !bgfx::isValid(surface_count_) || !bgfx::isValid(attr_cells_))

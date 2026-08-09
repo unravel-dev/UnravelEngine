@@ -9,6 +9,7 @@
 #include <engine/settings/settings.h>
 
 #include <base/assert.hpp>
+#include <filesystem/filesystem.h>
 #include <graphics/debugdraw.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
@@ -302,6 +303,39 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         return false;
     }
     APPLOG_TRACE("Using {0} rendering backend.", gfx::get_renderer_name(gfx::get_renderer_type()));
+
+    // Driver-compiled pipeline binaries persist here across runs. Without them, D3D12
+    // recompiles every pipeline at first use each launch - the GI compute chain alone was a
+    // single ~30 s frame the moment GI came on. Stale entries are verified and rebuilt by the
+    // backend. One subdirectory per backend: the cache ids are 32-bit hashes of backend-
+    // specific inputs, so a shared directory allows (rare) cross-backend id collisions where
+    // two backends keep overwriting each other's entry - and a per-backend split also makes
+    // invalidation after a driver update a matter of deleting one folder. Set AFTER init, so
+    // the auto-detected backend names the folder; no backend touches the cache before its
+    // first pipeline/program creation, which happens well after this point.
+    const auto renderer_slug = [](gfx::renderer_type type) -> const char*
+    {
+        switch(type)
+        {
+            case gfx::renderer_type::Direct3D11:
+                return "d3d11";
+            case gfx::renderer_type::Direct3D12:
+                return "d3d12";
+            case gfx::renderer_type::Vulkan:
+                return "vulkan";
+            case gfx::renderer_type::OpenGL:
+                return "opengl";
+            case gfx::renderer_type::OpenGLES:
+                return "opengles";
+            case gfx::renderer_type::Metal:
+                return "metal";
+            default:
+                return "other";
+        }
+    };
+    const auto cache_dir =
+        fs::resolve_protocol("binary:/cache/gfx") / renderer_slug(gfx::get_renderer_type());
+    gfx::set_cache_directory(cache_dir.string());
 
     APPLOG_TRACE("DebugDraw Init.");
     ddInit();

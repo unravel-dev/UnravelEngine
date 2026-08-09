@@ -93,7 +93,12 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             attr_resolution_seed * attr_resolution_seed * attr_resolution_seed * global_sdf_clipmap::level_count;
         fill(clipmap_gpu.get_attr_cells(), attr_cell_count, 0xFFFFFFFFu);
         fill(clipmap_gpu.get_world_probe_cells(), clipmap_gpu.get_world_probe_cell_count(), 0xFFFFFFFFu);
-        fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
+        // Only when the GPU owns the counts: the CPU-composed variant carries no COMPUTE_WRITE
+        // (a compute fill would be invalid on it) and was zero-seeded from the CPU at creation.
+        if(clipmap_gpu.is_composed_on_gpu())
+        {
+            fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
+        }
         clipmap_gpu.mark_seed_done();
     }
     // Pending texture-mean captures drain here regardless of dirty levels: each is a one-time

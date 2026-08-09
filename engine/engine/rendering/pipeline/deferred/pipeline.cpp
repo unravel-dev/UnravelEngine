@@ -724,7 +724,12 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             clipmap_settings.compose_on_gpu =
                 clipmap_settings.compose_on_gpu && gi_clipmap_compose_pass_.is_valid();
             view_cache.update(surface_cache.get_clipmap_instances(), camera.get_position(), clipmap_settings);
-            if(clipmap_settings.compose_on_gpu)
+            // Runs whenever the programs exist, not only when the GPU composes: the pass also
+            // seeds the compute-writable cell buffers and drains the texture-mean captures, and
+            // the CPU composer needs both. The dirty-mask handoff keeps the composers exclusive
+            // -- on the CPU path the upload above already consumed and cleared the dirty levels,
+            // so the pass finds nothing to compose and does only that upkeep.
+            if(gi_clipmap_compose_pass_.is_valid())
             {
                 gi_clipmap_compose_pass::run_params compose_params;
                 compose_params.surface_cache = &surface_cache;

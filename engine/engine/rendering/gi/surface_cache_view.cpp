@@ -15,7 +15,7 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
     if(!initialized_)
     {
         clipmap_.init(clipmap_settings);
-        if(!clipmap_gpu_.init(clipmap_settings.resolution))
+        if(!clipmap_gpu_.init(clipmap_settings.resolution, clipmap_settings.compose_on_gpu))
         {
             APPLOG_WARNING("[SurfaceCache] Clipmap initialisation failed for this view. Only "
                            "per-instance field tracing will be available, so distant and offscreen "
@@ -26,13 +26,28 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
     // Re-applied every update so an inspector change takes effect immediately. The GPU mirror has to
     // follow a layout change, since its texture is sized to the resolution -- and it is re-created
     // BEFORE the cascade is used, so a frame never samples a texture sized for the old one.
-    else if(clipmap_.apply_settings(clipmap_settings))
+    else
     {
-        if(!clipmap_gpu_.init(clipmap_settings.resolution))
+        // A composer change rebuilds BOTH halves, not just the mirror. The mirror's surface
+        // buffer flags encode who writes them (see global_sdf_clipmap_gpu::init), and the CPU
+        // cascade's staleness bookkeeping survives a settings assignment - so a flip to the CPU
+        // composer with fingerprints intact would compose nothing into the empty CPU voxel
+        // arrays and upload nothing: a cascade frozen at creation, with nothing to say why.
+        const bool composer_changed =
+            clipmap_.get_settings().compose_on_gpu != clipmap_settings.compose_on_gpu;
+        const bool layout_changed = clipmap_.apply_settings(clipmap_settings);
+        if(composer_changed && !layout_changed)
         {
-            APPLOG_WARNING("[SurfaceCache] Clipmap resize to {} failed; the cascade is now unavailable "
-                           "for this view.",
-                           clipmap_settings.resolution);
+            clipmap_.init(clipmap_settings);
+        }
+        if(layout_changed || composer_changed)
+        {
+            if(!clipmap_gpu_.init(clipmap_settings.resolution, clipmap_settings.compose_on_gpu))
+            {
+                APPLOG_WARNING("[SurfaceCache] Clipmap resize to {} failed; the cascade is now "
+                               "unavailable for this view.",
+                               clipmap_settings.resolution);
+            }
         }
     }
     // The cascade decides for itself which levels a change reached. A single global "something
