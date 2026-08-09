@@ -19,6 +19,20 @@
 
 #include "gi_constants.sh"
 
+#ifndef GI_FINITE_OR_ZERO_DEFINED
+#define GI_FINITE_OR_ZERO_DEFINED
+/// Zero when non-finite (or absurdly large): the probe<->voxel feedback loop has no decay for
+/// a NaN - each side re-ingests the other every cycle, so one poisoned texel converges the
+/// whole field to NaN within a window (measured on Linux/Vulkan, where never-written texels
+/// read as garbage: a white flash, then GI collapsing to black). An ordered comparison is
+/// used rather than isnan(), which relaxed-math shader compilation may fold away; NaN fails
+/// every ordered comparison, so it cannot pass this one.
+vec3 GiFiniteOrZero(vec3 v)
+{
+	return all(lessThan(abs(v), vec3_splat(1e30))) ? v : vec3_splat(0.0);
+}
+#endif // GI_FINITE_OR_ZERO_DEFINED
+
 // See sdf_common.sh: modern GLSL removed the legacy entry point and bgfx never mapped the 3D
 // variant; guarded here too so this header stands alone.
 #if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)
@@ -177,7 +191,7 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 		}
 		if(weight_sum > 1e-4)
 		{
-			out_radiance = radiance / weight_sum;
+			out_radiance = GiFiniteOrZero(radiance / weight_sum);
 			return true;
 		}
 	}

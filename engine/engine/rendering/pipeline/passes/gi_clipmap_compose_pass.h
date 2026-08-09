@@ -168,6 +168,48 @@ private:
         }
     } fill_program_;
 
+    /// One-time zero of the light-voxel volume (cs_gi_volume_clear.sc), dispatched with the
+    /// buffer seed: never-claimed texels are read (filtered neighbourhoods, level fallback)
+    /// and fresh allocations are only zero where the driver zeroes them.
+    struct volume_clear_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_volume_clear_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(),
+                          u_gi_volume_clear_params,
+                          "u_gi_volume_clear_params",
+                          gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } volume_clear_program_;
+
+    /// One-time zero of the world-probe atlases (cs_gi_atlas_clear.sc), same reasoning.
+    struct atlas_clear_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_atlas_clear_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(),
+                          u_gi_atlas_clear_params,
+                          "u_gi_atlas_clear_params",
+                          gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } atlas_clear_program_;
+
     /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
     /// to compile is the silent-failure mode worth a loud line.
     bool capture_log_emitted_ = false;

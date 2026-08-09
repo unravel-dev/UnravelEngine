@@ -32,6 +32,20 @@
 #include "gi_constants.sh"
 #include "gi_probe_common.sh"
 
+#ifndef GI_FINITE_OR_ZERO_DEFINED
+#define GI_FINITE_OR_ZERO_DEFINED
+/// Zero when non-finite (or absurdly large): the probe<->voxel feedback loop has no decay for
+/// a NaN - each side re-ingests the other every cycle, so one poisoned texel converges the
+/// whole field to NaN within a window (measured on Linux/Vulkan, where never-written texels
+/// read as garbage: a white flash, then GI collapsing to black). An ordered comparison is
+/// used rather than isnan(), which relaxed-math shader compilation may fold away; NaN fails
+/// every ordered comparison, so it cannot pass this one.
+vec3 GiFiniteOrZero(vec3 v)
+{
+	return all(lessThan(abs(v), vec3_splat(1e30))) ? v : vec3_splat(0.0);
+}
+#endif // GI_FINITE_OR_ZERO_DEFINED
+
 /// Probes per axis of one cascade's window: cascade resolution / divisor + 1 (lattice includes
 /// both endpoints). Runtime resolution 128 => 9.
 #define GI_WORLD_PROBE_AXIS 9
@@ -235,7 +249,7 @@ bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_directi
 				near_sky = mix(near_sky, far_sky, blend);
 			}
 		}
-		out_irradiance = near_irradiance;
+		out_irradiance = GiFiniteOrZero(near_irradiance);
 		out_sky_fraction = near_sky;
 		return true;
 	}
@@ -335,7 +349,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		{
 			return false;
 		}
-		out_radiance = sum / weight_sum;
+		out_radiance = GiFiniteOrZero(sum / weight_sum);
 		return true;
 	}
 	return false;

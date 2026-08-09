@@ -36,6 +36,12 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_buffer_fill = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_buffer_fill.sc");
     fill_program_.cache_uniforms();
     fill_program_.program = std::make_unique<gpu_program>(cs_buffer_fill);
+    auto cs_volume_clear = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_volume_clear.sc");
+    volume_clear_program_.cache_uniforms();
+    volume_clear_program_.program = std::make_unique<gpu_program>(cs_volume_clear);
+    auto cs_atlas_clear = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_atlas_clear.sc");
+    atlas_clear_program_.cache_uniforms();
+    atlas_clear_program_.program = std::make_unique<gpu_program>(cs_atlas_clear);
     return compose_program_.is_valid();
 }
 
@@ -60,18 +66,26 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     }
     // The silent failure mode worth a loud line: a helper shader that never compiled leaves
     // the sentinels unseeded and the bounce albedo factor-only, with nothing else to notice.
-    if((!texture_mean_program_.is_valid() || !fill_program_.is_valid()) && !helper_warning_emitted_)
+    if((!texture_mean_program_.is_valid() || !fill_program_.is_valid() ||
+        !volume_clear_program_.is_valid() || !atlas_clear_program_.is_valid()) &&
+       !helper_warning_emitted_)
     {
         helper_warning_emitted_ = true;
         APPLOG_WARNING("[SurfaceCache] GI helper shaders not ready (texture mean valid: {}, "
-                       "buffer fill valid: {}). If this persists, check their compile errors.",
+                       "buffer fill valid: {}, volume clear valid: {}, atlas clear valid: {}). "
+                       "If this persists, check their compile errors.",
                        texture_mean_program_.is_valid(),
-                       fill_program_.is_valid());
+                       fill_program_.is_valid(),
+                       volume_clear_program_.is_valid(),
+                       atlas_clear_program_.is_valid());
     }
     // One-time GPU seed of the compute-writable cell/cursor buffers (CPU updates on those are
     // forbidden): claim sentinels for the attribute and world-probe cell ids, zeroed append
-    // cursors for the never-yet-composed levels.
-    if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid())
+    // cursors for the never-yet-composed levels. The clear programs are part of the gate: the
+    // seed must run as one unit, or the volumes keep their allocation garbage on drivers that
+    // do not zero fresh memory while the sentinels are already consumed.
+    if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid() &&
+       volume_clear_program_.is_valid() && atlas_clear_program_.is_valid())
     {
         gfx::render_pass seed_pass("GI/Buffer Seed");
         const auto fill = [&](gfx::dynamic_index_buffer_handle target, uint32_t count, uint32_t value)
@@ -98,6 +112,53 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         if(clipmap_gpu.is_composed_on_gpu())
         {
             fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
+        }
+        // Zero every texel the lazy claim-and-zero scheme never touches (see the clear
+        // shaders): never-claimed light-voxel slots and never-traced probe tiles are still
+        // read through the filtered paths, and fresh GPU memory is only zero where the driver
+        // zeroes it - on Linux/Vulkan it is garbage that detonates the probe<->voxel loop.
+        if(const auto& light_volume = clipmap_gpu.get_light_voxel_texture())
+        {
+            volume_clear_program_.program->begin();
+            gfx::set_image(0,
+                           light_volume->native_handle(),
+                           0,
+                           gfx::access::Write,
+                           gfx::texture_format::RGBA16F);
+            const float volume_params[4] = {float(light_volume->info.width),
+                                            float(light_volume->info.height),
+                                            float(light_volume->info.depth),
+                                            0.0f};
+            gfx::set_uniform(volume_clear_program_.u_gi_volume_clear_params, volume_params);
+            gfx::dispatch(seed_pass.id,
+                          volume_clear_program_.program->native_handle(),
+                          (light_volume->info.width + 3u) / 4u,
+                          (light_volume->info.height + 3u) / 4u,
+                          (light_volume->info.depth + 3u) / 4u);
+            volume_clear_program_.program->end();
+        }
+        if(clipmap_gpu.has_world_probes())
+        {
+            const auto& radiance = clipmap_gpu.get_world_probe_radiance();
+            const auto& irradiance = clipmap_gpu.get_world_probe_irradiance();
+            const auto& depth = clipmap_gpu.get_world_probe_depth();
+            atlas_clear_program_.program->begin();
+            gfx::set_image(0, radiance->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            gfx::set_image(1, irradiance->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            gfx::set_image(2, depth->native_handle(), 0, gfx::access::Write, gfx::texture_format::RG16F);
+            const float atlas_params[4] = {float(radiance->info.width),
+                                           float(radiance->info.height),
+                                           float(irradiance->info.width),
+                                           float(irradiance->info.height)};
+            gfx::set_uniform(atlas_clear_program_.u_gi_atlas_clear_params, atlas_params);
+            const uint32_t clear_w = std::max(radiance->info.width, irradiance->info.width);
+            const uint32_t clear_h = std::max(radiance->info.height, irradiance->info.height);
+            gfx::dispatch(seed_pass.id,
+                          atlas_clear_program_.program->native_handle(),
+                          (clear_w + 7u) / 8u,
+                          (clear_h + 7u) / 8u,
+                          1);
+            atlas_clear_program_.program->end();
         }
         clipmap_gpu.mark_seed_done();
     }
