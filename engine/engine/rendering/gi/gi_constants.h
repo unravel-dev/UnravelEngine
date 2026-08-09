@@ -144,14 +144,33 @@
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \
       " those parents at full weight anyway - so the classification reuses the SAME"               \
       " spatial-error rule the integrate bracket and the probe-space filter apply (their local"    \
-      " 0.05 plane tolerances). An anchor further off the parents' plane than integration"        \
-      " tolerates is genuine geometric detail and keeps its traced probe")                         \
-    X(GI_ADAPTIVE_NORMAL_COS, 0.96875f,                                                            \
-      "cosine", "derived: 1 - 2 / GI_PROBE_DIR_COUNT - the cosine of the cone holding ONE"         \
-      " octahedral texel's solid angle (4pi/64). Parents facing within one texel of the probe"     \
-      " produce tiles identical up to the atlas's own angular resolution, so substituting their"   \
-      " blend loses nothing the atlas could have kept; curved geometry fails the test and keeps"   \
-      " full probe density, which is the correct direction - its radiance genuinely varies")       \
+      " 0.05 plane tolerances). Applied to the COPLANARITY of the parent anchors themselves"       \
+      " (cell plane from three corners; the fourth corner and the probe's own anchor must sit"     \
+      " within tolerance of it; collinearity in the single-axis case) - never to any normal:"      \
+      " G-buffer normals carry normal maps, a pixel-scale depth derivative measures the cobble"    \
+      " rather than the street, and both rejected nearly every flat Bistro surface (measured,"     \
+      " twice). The parent positions ARE the surface sampled at exactly the scale being"           \
+      " interpolated across; an anchor further off their plane than integration tolerates is"      \
+      " genuine geometric detail and keeps its traced probe")                                      \
+    X(GI_ADAPTIVE_RADIANCE_TOLERANCE, 0.35f,                                                       \
+      "fraction of the parents' mean luminance", "derived: geometric sameness is necessary but"    \
+      " NOT sufficient - a shadow edge, a lamp falloff, an occlusion gradient live on perfectly"   \
+      " flat walls, and substituting the parents' average there washes radiance structure out"     \
+      " of the probe field (measured on Bistro: visible smoothing of wall shading). The parents'"  \
+      " 4x4 importance mips - filtered probe-space luminance the records already carry - must"     \
+      " agree per directional block before the blend may stand in for a measurement. Filtered"     \
+      " radiance between neighbouring probes on uniformly lit surfaces varies well under a"        \
+      " quarter of the mean (the 3x3 probe filter guarantees smoothness); lighting structure at"   \
+      " cell scale moves whole blocks by the mean or more. A third of the mean separates the"      \
+      " regimes with the margin on the quality side")                                              \
+    X(GI_ADAPTIVE_REVALIDATE_FRAMES, 8,                                                            \
+      "frames", "derived: an interpolated probe's own history mip is DERIVED from its parents,"    \
+      " so no history test can see structure the first substitution erased - the evidence loop"    \
+      " is broken by MEASUREMENT: every skipped probe re-traces on a phase-hashed cadence of"      \
+      " this many frames. One third of GI_TEMPORAL_MAX_FRAMES bounds how long sub-cell lighting"   \
+      " structure can stay hidden to less than the accumulation window absorbs, for an eighth"     \
+      " of the skipped rays; the phase hash keeps neighbouring probes from revalidating in the"    \
+      " same frame, so the cost is spread, never pulsed")                                          \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
       "pre-exposed radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly"   \
       " clamp at trace time")                                                                      \

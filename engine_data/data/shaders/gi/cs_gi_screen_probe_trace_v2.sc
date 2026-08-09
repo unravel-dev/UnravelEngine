@@ -110,23 +110,125 @@ void main()
 			// breaks - depth discontinuities, curvature past the cone, an invalid parent -
 			// fail the test and keep tracing, so detail keeps full probe density.
 			bool interpolated = false;
+			// REVALIDATION cadence: an interpolated probe's own history is derived from its
+			// parents, so no test below can see structure the first substitution erased -
+			// every skipped probe must periodically MEASURE again. The phase hash spreads
+			// the revalidations across frames and neighbours.
+			bool revalidate =
+			    ((uint(probe.x) * 3u + uint(probe.y) * 5u + u_gi_probe_frame) %
+			     uint(GI_ADAPTIVE_REVALIDATE_FRAMES)) == 0u;
 			BRANCH
-			if(u_gi_screen_trace.z > 0.0 && ((probe.x | probe.y) & 1) != 0)
+			if(u_gi_screen_trace.z > 0.0 && !revalidate && ((probe.x | probe.y) & 1) != 0)
 			{
-				interpolated = true;
+				// SAMENESS = COPLANARITY OF THE PARENT SET, at parent scale, no normals
+				// anywhere. Both normal sources failed this test on real content: G-buffer
+				// normals carry normal MAPS (bump detail on flat Bistro walls read as
+				// curvature and rejected nearly everything), and a pixel-scale depth
+				// derivative measures the cobble, not the street. The parents' own anchor
+				// positions span the surface at EXACTLY the scale being interpolated across:
+				// three corners of the lattice cell define the plane, and the fourth corner
+				// plus this probe's anchor must lie on it. Exact for planes at any viewing
+				// angle, low-passes geometric relief by construction, and curvature fails it
+				// at the scale that matters. Straddling a single axis degenerates the cell to
+				// a LINE, where the same idea holds: one pixel row's anchors on a plane are
+				// the row plane's intersection with it - collinear exactly.
 				ivec2 parents[4];
 				GiProbeParents(probe, parents);
-				float plane_tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
+				vec3 positions[4];
+				bool parents_valid = true;
 				LOOP for(int p = 0; p < 4; ++p)
 				{
 					uint parent_record =
 					    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_write_offset) *
 					    uint(GI_PROBE_STRIDE);
 					vec4 parent_meta = b_gi_probes[parent_record + uint(GI_PROBE_META)];
-					vec4 parent_meta2 = b_gi_probes[parent_record + uint(GI_PROBE_META2)];
-					if(parent_meta.w < 0.5 ||
-					   abs(dot(parent_meta.xyz - world_position, world_normal)) > plane_tolerance ||
-					   dot(parent_meta2.xyz, world_normal) < GI_ADAPTIVE_NORMAL_COS)
+					positions[p] = parent_meta.xyz;
+					if(parent_meta.w < 0.5)
+					{
+						parents_valid = false;
+					}
+				}
+				if(parents_valid)
+				{
+					float tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
+					// Duplicated parents (non-straddled axis, lattice edge) zero their edge.
+					vec3 edge_x = positions[1] - positions[0];
+					vec3 edge_y = positions[2] - positions[0];
+					vec3 cell_normal = cross(edge_x, edge_y);
+					float cell_len = length(cell_normal);
+					if(cell_len > 1e-6)
+					{
+						vec3 plane_normal = cell_normal / cell_len;
+						interpolated =
+						    abs(dot(world_position - positions[0], plane_normal)) <= tolerance &&
+						    abs(dot(positions[3] - positions[0], plane_normal)) <= tolerance;
+					}
+					else
+					{
+						// One distinct edge (or none): the collinearity test. The duplicate
+						// edge is zero, so the sum IS the live axis; both zero fails closed.
+						vec3 axis = edge_x + edge_y;
+						float axis_len2 = dot(axis, axis);
+						if(axis_len2 > 1e-8)
+						{
+							vec3 delta = world_position - positions[0];
+							vec3 off_axis = delta - axis * (dot(delta, axis) / axis_len2);
+							interpolated = dot(off_axis, off_axis) <= tolerance * tolerance;
+						}
+					}
+				}
+				// RADIANCE agreement: geometric sameness is necessary, not sufficient - a
+				// shadow edge, a lamp falloff, an occlusion gradient live on perfectly flat
+				// walls, and substituting the parents' average there washes lighting
+				// structure out of the probe field (measured: wall shading visibly smoothed).
+				// The parents' 4x4 importance mips - filtered probe-space luminance the
+				// filter already writes into the records - must agree per directional block.
+				// Read from LAST frame's half, exactly like the importance reprojection (the
+				// filter has not run yet this frame); first frames without trusted history
+				// fall back to the geometric answer alone. Vectorised per record slot (four
+				// blocks at a time) so thread 0 stays register-light.
+				BRANCH
+				if(interpolated && u_gi_probe_history_cap > 1.5)
+				{
+					// Two disagreements end the substitution: the parents among THEMSELVES
+					// (structure crossing the cell), and this probe's OWN last-frame mip
+					// against the parents' predicted blend (sub-cell structure only the probe
+					// itself ever measured - a lamp pool or shadow tongue smaller than the
+					// cell leaves the bracketing parents agreeing while the middle differs).
+					// The own test goes blind one revalidation period after a substitution
+					// starts (the own mip becomes the blend); the revalidation cadence above
+					// is what refreshes its evidence.
+					uint own_history =
+					    (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) *
+					    uint(GI_PROBE_STRIDE);
+					float luminance_sum = 0.0;
+					vec4 spread = vec4_splat(0.0);
+					vec4 deviation = vec4_splat(0.0);
+					LOOP for(int m = 0; m < 4; ++m)
+					{
+						vec4 lo = vec4_splat(1e9);
+						vec4 hi = vec4_splat(-1e9);
+						vec4 parent_sum = vec4_splat(0.0);
+						LOOP for(int p = 0; p < 4; ++p)
+						{
+							uint history_record =
+							    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_read_offset) *
+							    uint(GI_PROBE_STRIDE);
+							vec4 mip = b_gi_probes[history_record + uint(m)];
+							lo = min(lo, mip);
+							hi = max(hi, mip);
+							parent_sum += mip;
+							luminance_sum += mip.x + mip.y + mip.z + mip.w;
+						}
+						spread = max(spread, hi - lo);
+						vec4 own_mip = b_gi_probes[own_history + uint(m)];
+						deviation = max(deviation, abs(own_mip - parent_sum * 0.25));
+					}
+					float mean = luminance_sum / 64.0;
+					float limit = GI_ADAPTIVE_RADIANCE_TOLERANCE * max(mean, 1e-3);
+					float worst = max(max(max(spread.x, spread.y), max(spread.z, spread.w)),
+					                  max(max(deviation.x, deviation.y), max(deviation.z, deviation.w)));
+					if(worst > limit)
 					{
 						interpolated = false;
 					}
