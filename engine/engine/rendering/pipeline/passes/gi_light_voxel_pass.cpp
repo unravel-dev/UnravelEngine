@@ -28,7 +28,20 @@ auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
 auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
     APP_SCOPE_PERF("Rendering/GI/Light Voxels");
-    if(!program_.is_valid() || !params.surface_cache || !params.view_cache)
+    if(!program_.is_valid())
+    {
+        // Loudly, once: a program that failed to create leaves the light volume unwritten -
+        // every downstream view then paints allocation garbage with a perfectly clean log,
+        // which is how a whole backend's GI stayed silently broken (measured: Linux GL).
+        if(!invalid_warning_emitted_)
+        {
+            invalid_warning_emitted_ = true;
+            APPLOG_WARNING("[SurfaceCache] Light voxel compute program is not valid on this "
+                           "backend; the light volume will never be written.");
+        }
+        return false;
+    }
+    if(!params.surface_cache || !params.view_cache)
     {
         return false;
     }

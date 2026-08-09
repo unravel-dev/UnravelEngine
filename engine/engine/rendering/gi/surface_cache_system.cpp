@@ -42,6 +42,21 @@ namespace unravel
 
 auto surface_cache_system::init(rtti::context& ctx) -> bool
 {
+    // The whole feature is compute-shaped: compose, attributes, light voxels and probes are
+    // dispatches, and even the debug views read SSBOs. A backend without compute (measured:
+    // Mesa handing bgfx a GL 3.1 compatibility context) cannot run ANY of it - the dispatches
+    // are silently dropped, every volume keeps its allocation garbage, and the views paint
+    // that garbage with nothing in the log to say why. Refusing loudly here is the honest
+    // degradation: no GI, no debug views, one line naming the reason.
+    const auto* caps = bgfx::getCaps();
+    supported_ = caps != nullptr && 0 != (caps->supported & BGFX_CAPS_COMPUTE);
+    if(!supported_)
+    {
+        APPLOG_WARNING("[SurfaceCache] GI disabled: this renderer backend reports no compute "
+                       "shader support. The surface cache, its debug views and every GI pass "
+                       "stay off; use the Vulkan backend for GI on this machine.");
+        return true;
+    }
     sdf_atlas::settings atlas_settings;
     if(!atlas_.init(atlas_settings))
     {
@@ -487,6 +502,12 @@ void surface_cache_system::upload_instances()
 void surface_cache_system::update_world(scene& scn)
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Update World");
+    // The debug views keep this alive even with GI off, but an unsupported backend has nothing
+    // to keep alive: no dispatch downstream can consume what this uploads.
+    if(!supported_)
+    {
+        return;
+    }
     // Once per frame, however many cameras ask. All of this is a function of the scene, so a second
     // camera would rebuild an identical instance list and re-upload an identical grid.
     const uint64_t frame = uint64_t(gfx::get_render_frame());

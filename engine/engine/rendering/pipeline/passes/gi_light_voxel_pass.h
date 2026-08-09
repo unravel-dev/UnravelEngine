@@ -56,6 +56,10 @@ public:
     }
 
 private:
+    /// One-time "the program never became valid" diagnostic; see run().
+    bool invalid_warning_emitted_ = false;
+
+private:
     struct light_voxel_program : uniforms_cache
     {
         gpu_program::ptr program;

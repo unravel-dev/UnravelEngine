@@ -187,7 +187,14 @@ public:
 
     auto is_enabled() const -> bool
     {
-        return enabled_ && atlas_.is_valid();
+        return supported_ && enabled_ && atlas_.is_valid();
+    }
+
+    /// Whether the renderer backend can run GI at all (compute support, checked at init).
+    /// Distinct from @ref is_enabled: a user toggle cannot switch an unsupported backend on.
+    auto is_supported() const -> bool
+    {
+        return supported_;
     }
 
     void set_enabled(bool enabled)
@@ -369,6 +376,8 @@ private:
     uint32_t grid_instance_capacity_ = 0;
     std::array<float, 8> grid_params_{};
     bool enabled_ = true;
+    /// Backend capability, decided once at init: without compute shaders nothing here can run.
+    bool supported_ = false;
     /// Frame the world state was last rebuilt in, so several cameras in one frame share one
     /// rebuild. Starts at a value no frame counter produces, so the first call always runs.
     uint64_t world_frame_ = std::numeric_limits<uint64_t>::max();

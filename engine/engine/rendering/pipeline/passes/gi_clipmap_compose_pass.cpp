@@ -48,7 +48,22 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
 auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
     APP_SCOPE_PERF("Rendering/GI/Clipmap Compose");
-    if(!compose_program_.is_valid() || !params.surface_cache || !params.view_cache)
+    if(!compose_program_.is_valid())
+    {
+        // Loudly, once: this early-out used to be silent, and it sits BEFORE the helper
+        // warning below - a backend where the main compose program fails to create fell
+        // back to the CPU composer with a perfectly clean log (measured: Linux GL, where
+        // the whole GI stack ran half-broken and nothing said why).
+        if(!helper_warning_emitted_)
+        {
+            helper_warning_emitted_ = true;
+            APPLOG_WARNING("[SurfaceCache] Clipmap compose compute program is not valid on "
+                           "this backend; composing on the CPU, and the seed/clear dispatches "
+                           "this pass owns cannot run.");
+        }
+        return false;
+    }
+    if(!params.surface_cache || !params.view_cache)
     {
         return false;
     }
