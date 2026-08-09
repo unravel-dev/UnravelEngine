@@ -81,11 +81,8 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     }
     // One-time GPU seed of the compute-writable cell/cursor buffers (CPU updates on those are
     // forbidden): claim sentinels for the attribute and world-probe cell ids, zeroed append
-    // cursors for the never-yet-composed levels. The clear programs are part of the gate: the
-    // seed must run as one unit, or the volumes keep their allocation garbage on drivers that
-    // do not zero fresh memory while the sentinels are already consumed.
-    if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid() &&
-       volume_clear_program_.is_valid() && atlas_clear_program_.is_valid())
+    // cursors for the never-yet-composed levels.
+    if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid())
     {
         gfx::render_pass seed_pass("GI/Buffer Seed");
         const auto fill = [&](gfx::dynamic_index_buffer_handle target, uint32_t count, uint32_t value)
@@ -113,10 +110,18 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         {
             fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
         }
-        // Zero every texel the lazy claim-and-zero scheme never touches (see the clear
-        // shaders): never-claimed light-voxel slots and never-traced probe tiles are still
-        // read through the filtered paths, and fresh GPU memory is only zero where the driver
-        // zeroes it - on Linux/Vulkan it is garbage that detonates the probe<->voxel loop.
+        clipmap_gpu.mark_seed_done();
+    }
+    // One-time zero of every texel the lazy claim-and-zero scheme never touches (see the clear
+    // shaders): never-claimed light-voxel slots and never-traced probe tiles are still read
+    // through the filtered paths, and fresh GPU memory is only zero where the driver zeroes
+    // it - on Linux/Vulkan it is garbage that detonates the probe<->voxel loop. A separate
+    // one-time job from the buffer seed, so one helper failing to compile cannot hold the
+    // other's work hostage.
+    if(clipmap_gpu.needs_texture_clear() && volume_clear_program_.is_valid() &&
+       atlas_clear_program_.is_valid())
+    {
+        gfx::render_pass clear_pass("GI/Texture Clear");
         if(const auto& light_volume = clipmap_gpu.get_light_voxel_texture())
         {
             volume_clear_program_.program->begin();
@@ -130,7 +135,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                                             float(light_volume->info.depth),
                                             0.0f};
             gfx::set_uniform(volume_clear_program_.u_gi_volume_clear_params, volume_params);
-            gfx::dispatch(seed_pass.id,
+            gfx::dispatch(clear_pass.id,
                           volume_clear_program_.program->native_handle(),
                           (light_volume->info.width + 3u) / 4u,
                           (light_volume->info.height + 3u) / 4u,
@@ -153,14 +158,14 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_uniform(atlas_clear_program_.u_gi_atlas_clear_params, atlas_params);
             const uint32_t clear_w = std::max(radiance->info.width, irradiance->info.width);
             const uint32_t clear_h = std::max(radiance->info.height, irradiance->info.height);
-            gfx::dispatch(seed_pass.id,
+            gfx::dispatch(clear_pass.id,
                           atlas_clear_program_.program->native_handle(),
                           (clear_w + 7u) / 8u,
                           (clear_h + 7u) / 8u,
                           1);
             atlas_clear_program_.program->end();
         }
-        clipmap_gpu.mark_seed_done();
+        clipmap_gpu.mark_texture_clear_done();
     }
     // Pending texture-mean captures drain here regardless of dirty levels: each is a one-time
     // 1x1x1 dispatch, and the fingerprint flip it causes is what marks the affected levels

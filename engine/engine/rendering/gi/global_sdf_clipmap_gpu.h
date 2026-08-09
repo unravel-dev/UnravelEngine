@@ -166,6 +166,23 @@ public:
         needs_buffer_seed_ = false;
     }
 
+    /**
+     * @brief Whether the light volume and probe atlases still hold allocation garbage.
+     *
+     * A SEPARATE flag from the buffer seed, deliberately: the clears run through their own
+     * compute programs, and a machine where those fail to compile must still get its cell
+     * sentinels seeded - one late helper must not hold the other's one-time work hostage.
+     */
+    auto needs_texture_clear() const -> bool
+    {
+        return needs_texture_clear_;
+    }
+
+    void mark_texture_clear_done()
+    {
+        needs_texture_clear_ = false;
+    }
+
     /// One packed world-cell id per ATTRIBUTE slot per level: the light-radiance survival
     /// detector (a slot whose cell changed resets its light texels; see
     /// cs_gi_clipmap_attributes.sc).
@@ -227,6 +244,7 @@ private:
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
     bool needs_buffer_seed_ = false;
+    bool needs_texture_clear_ = false;
     bool compose_on_gpu_ = true;
     std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;

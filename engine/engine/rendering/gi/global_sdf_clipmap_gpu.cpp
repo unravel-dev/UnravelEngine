@@ -106,6 +106,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // The seed runs regardless of the composer - the light/world-probe passes write the cell
     // buffers in both modes.
     needs_buffer_seed_ = true;
+    needs_texture_clear_ = true;
     // A CPU-composed count buffer cannot be seeded by that dispatch (no COMPUTE_WRITE), and it
     // does not need to be: it is CPU-writable, so the zeroes upload right here. Uncomposed
     // levels then read an empty list rather than allocation garbage.
