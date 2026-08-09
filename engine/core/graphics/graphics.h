@@ -597,6 +597,22 @@ void set_image(uint8_t _stage,
                access _access,
                texture_format _format = texture_format::Count);
 
+/**
+ * Image binding for 3D textures. The plain overload leaves the layer range at "all"
+ * (UINT16_MAX), which bgfx's OpenGL backend turns into a NON-layered glBindImageTexture -
+ * for a 3D texture that binds a single 2D slice "treated as a different texture target"
+ * (GL 4.6 8.26), so every image3D store beyond it is undefined. NVIDIA/AMD bind the whole
+ * level anyway and hide it; Mesa follows the spec and drops the stores, which left every
+ * GI volume unwritten on Linux/GL. An explicit (0, 1) range flips bgfx to a layered
+ * binding of the whole level; on D3D12/Vulkan a 3D texture has exactly one layer, so the
+ * same range resolves to the full default view and nothing changes.
+ */
+void set_image_3d(uint8_t _stage,
+                  texture_handle _handle,
+                  uint8_t _mip,
+                  access _access,
+                  texture_format _format = texture_format::Count);
+
 /**/
 void set_buffer(uint8_t _stage, index_buffer_handle _handle, access _access);
 

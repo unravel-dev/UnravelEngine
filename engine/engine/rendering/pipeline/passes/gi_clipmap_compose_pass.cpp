@@ -140,11 +140,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         if(const auto& light_volume = clipmap_gpu.get_light_voxel_texture())
         {
             volume_clear_program_.program->begin();
-            gfx::set_image(0,
-                           light_volume->native_handle(),
-                           0,
-                           gfx::access::Write,
-                           gfx::texture_format::RGBA16F);
+            gfx::set_image_3d(0,
+                              light_volume->native_handle(),
+                              0,
+                              gfx::access::Write,
+                              gfx::texture_format::RGBA16F);
             const float volume_params[4] = {float(light_volume->info.width),
                                             float(light_volume->info.height),
                                             float(light_volume->info.depth),
@@ -257,7 +257,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
         // stage 4. Writing the level in place is what avoids a staging copy and the per-level
         // update_texture_3d the CPU path pays.
-        gfx::set_image(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
+        gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
 
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
@@ -311,16 +311,16 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
             gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
             gfx::set_texture(attributes_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-            gfx::set_image(5,
-                           clipmap_gpu.get_attr_albedo_texture()->native_handle(),
-                           0,
-                           gfx::access::Write,
-                           gfx::texture_format::RGBA8);
-            gfx::set_image(6,
-                           clipmap_gpu.get_attr_emissive_texture()->native_handle(),
-                           0,
-                           gfx::access::Write,
-                           gfx::texture_format::RGBA16F);
+            gfx::set_image_3d(5,
+                              clipmap_gpu.get_attr_albedo_texture()->native_handle(),
+                              0,
+                              gfx::access::Write,
+                              gfx::texture_format::RGBA8);
+            gfx::set_image_3d(6,
+                              clipmap_gpu.get_attr_emissive_texture()->native_handle(),
+                              0,
+                              gfx::access::Write,
+                              gfx::texture_format::RGBA16F);
             // The surface list sits at stage 9 so the light-volume IMAGE can take stage 7:
             // OpenGL guarantees only eight image units (bindings 0-7).
             gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
@@ -329,11 +329,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
             gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
-            gfx::set_image(7,
-                           clipmap_gpu.get_light_voxel_texture()->native_handle(),
-                           0,
-                           gfx::access::Write,
-                           gfx::texture_format::RGBA16F);
+            gfx::set_image_3d(7,
+                              clipmap_gpu.get_light_voxel_texture()->native_handle(),
+                              0,
+                              gfx::access::Write,
+                              gfx::texture_format::RGBA16F);
             gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
             gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
             const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),

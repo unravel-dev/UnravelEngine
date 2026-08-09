@@ -1188,6 +1188,13 @@ void set_image(uint8_t _stage, texture_handle _handle, uint8_t _mip, access _acc
     bgfx::setImage(_stage, _handle, _mip, _access, _format);
 }
 
+void set_image_3d(uint8_t _stage, texture_handle _handle, uint8_t _mip, access _access, texture_format _format)
+{
+    // The explicit layer range is the whole point: see the header note. (0, 1) is the full
+    // range of a 3D texture on every backend, and its presence makes the GL binding layered.
+    bgfx::setImage(_stage, _handle, 0, 1, _mip, _access, _format);
+}
+
 void set_buffer(uint8_t _stage, index_buffer_handle _handle, access _access)
 {
     bgfx::setBuffer(_stage, _handle, _access);

@@ -76,11 +76,11 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     gfx::set_buffer(10, clipmap_gpu.get_surface_count_buffer(), gfx::access::Read);
     gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
     gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
-    gfx::set_image(7,
-                   clipmap_gpu.get_light_voxel_texture()->native_handle(),
-                   0,
-                   gfx::access::Write,
-                   gfx::texture_format::RGBA16F);
+    gfx::set_image_3d(7,
+                      clipmap_gpu.get_light_voxel_texture()->native_handle(),
+                      0,
+                      gfx::access::Write,
+                      gfx::texture_format::RGBA16F);
     gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
     gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
