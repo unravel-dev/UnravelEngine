@@ -4,6 +4,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/shadow.h>
 
 #include <graphics/graphics.h>
 
@@ -95,6 +96,35 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                      0.0f,
                                      float(gi::GI_SHADOW_RAY_START_VOXELS)};
     gfx::set_uniform(program_.u_gi_shadow_params2, shadow_params2);
+    // Sun shadow-map tier (see gi_lighting.sh): cascade 0 of the sun's CSM answers sun
+    // visibility for the voxels it covers; the traced field remains the answer beyond it.
+    // VSM packs moment pairs rather than RGBA depth, so it falls back to tracing entirely.
+    float sun_params[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
+    gfx::texture_handle sun_map = {bgfx::kInvalidHandle};
+    if(params.sun_shadows != nullptr && params.sun_light_index >= 0 &&
+       params.sun_shadows->get_depth_type() == shadow::PackDepth::RGBA)
+    {
+        sun_map = params.sun_shadows->get_rt_texture(0);
+    }
+    if(bgfx::isValid(sun_map))
+    {
+        gfx::set_uniform(program_.u_gi_sun_shadowmap_mtx, params.sun_shadows->get_shadow_map_matrix(0));
+        sun_params[0] = float(params.sun_light_index);
+        sun_params[1] = params.sun_shadows->get_shadow_map_bias();
+        // One filter footprint inside the edge, mirroring the lighting shader's cascade
+        // selection bounds, so a clamped tap never answers for a position outside the crop.
+        sun_params[2] = 0.01f;
+        gfx::set_texture(14, program_.s_gi_sun_shadowmap->native_handle(), sun_map);
+    }
+    else
+    {
+        // The stage must hold SOMETHING valid on backends that validate bindings; the tier is
+        // disabled by the negative index, so the content is never read.
+        gfx::set_texture(14,
+                         program_.s_gi_sun_shadowmap->native_handle(),
+                         default_textures::get().black_texture()->native_handle());
+    }
+    gfx::set_uniform(program_.u_gi_sun_shadowmap_params, sun_params);
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
     const float voxel_params[4] = {float(attr_resolution),
                                    0.0f,

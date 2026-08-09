@@ -38,7 +38,7 @@ class model_component;
  *   - make a mesh's baked field resident on first use, keyed by asset uid;
  *   - rebuild the per-frame instance list the tracer transforms rays through.
  */
-class surface_cache_service
+class surface_cache_system
 {
 public:
     /// One resident field placed in the world. Mirrors the GPU instance layout.

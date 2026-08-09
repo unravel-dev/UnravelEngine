@@ -671,6 +671,14 @@ public:
     auto get_depth_render_program(PackDepth::Enum depth) const -> gpu_program::ptr;
     void submit_uniforms(uint8_t stage) const;
 
+    /// World -> shadow-texcoord matrix (lViewProjCropBias) of one split, exactly as the
+    /// lighting shaders receive it via u_shadowMapMtx*. For consumers that sample a single
+    /// split directly (the GI light-voxel pass) instead of taking the full CSM uniform set.
+    auto get_shadow_map_matrix(uint8_t split) const -> const float*;
+
+    /// The receiver depth bias the lighting shaders receive via u_params1.x.
+    auto get_shadow_map_bias() const -> float;
+
     // Configuration methods for improved shadow mapping
     void set_frustum_calculation_method(frustum_calculation_method::Enum method) { frustum_method_ = method; }
     auto get_frustum_calculation_method() const -> frustum_calculation_method::Enum { return frustum_method_; }

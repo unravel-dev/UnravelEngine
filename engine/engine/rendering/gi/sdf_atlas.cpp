@@ -492,7 +492,7 @@ void sdf_atlas::ensure_buffer_capacity()
 
 void sdf_atlas::flush()
 {
-    // Flush runs once per frame (end of surface_cache_service::update_world), which makes it
+    // Flush runs once per frame (end of surface_cache_system::update_world), which makes it
     // the upload budget's frame boundary.
     frame_upload_bytes_ = 0;
     if(!is_valid())

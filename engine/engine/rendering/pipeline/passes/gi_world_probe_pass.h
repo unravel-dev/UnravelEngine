@@ -1,6 +1,6 @@
 #pragma once
 
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
@@ -23,7 +23,7 @@ class gi_world_probe_pass
 public:
     struct run_params
     {
-        surface_cache_service* surface_cache = nullptr;
+        surface_cache_system* surface_cache = nullptr;
         surface_cache_view* view_cache = nullptr;
         math::vec3 camera_position{0.0f};
         /// The lighting pass's environment SH probe (sky at ray miss); black when absent.

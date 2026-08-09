@@ -22,6 +22,10 @@
 #include "bgfx_compute.sh"
 #include "gi/sdf_common.sh"
 #include "gi/gpu_lights.sh"
+// Sun visibility from the sun's own cascade 0 where it covers, traced field beyond - see the
+// tier note in gi_lighting.sh. Only this pass defines it: the debug direct view deliberately
+// keeps showing the pure traced tier.
+#define GI_SUN_SHADOWMAP_TIER
 #include "gi/gi_lighting.sh"
 #include "gi/gi_light_voxels.sh"
 // The bounce term (gi_rewrite_plan.md Phase 4): last frame's world-probe irradiance closes the

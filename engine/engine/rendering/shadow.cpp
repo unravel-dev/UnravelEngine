@@ -1137,6 +1137,16 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
     }
 }
 
+auto shadowmap_generator::get_shadow_map_matrix(uint8_t split) const -> const float*
+{
+    return shadow_map_mtx_[split];
+}
+
+auto shadowmap_generator::get_shadow_map_bias() const -> float
+{
+    return uniforms_.m_shadowMapBias;
+}
+
 auto shadowmap_generator::already_updated() const -> bool
 {
     return last_update_ == gfx::get_render_frame();

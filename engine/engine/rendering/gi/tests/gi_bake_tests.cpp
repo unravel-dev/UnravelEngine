@@ -1725,7 +1725,7 @@ void test_clipmap_compose_shader_transcription_matches_cpu()
     clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
     clipmap.init(clipmap_settings);
     clipmap.update(instances, math::vec3(0.0f));
-    // The tracer's grid, built exactly as surface_cache_service::upload_instance_grid builds it:
+    // The tracer's grid, built exactly as surface_cache_system::upload_instance_grid builds it:
     // from RAW world bounds, over the instances' own extent. Reproducing that is the whole point --
     // the dispatch reads this grid, not one sized for composition.
     std::vector<math::bbox> raw_bounds;

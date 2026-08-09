@@ -1185,6 +1185,320 @@ void test_shadow_blob_floor_building()
     }
 }
 
+/// Sponza-arcade regression: a corridor floor behind a row of columns, sun shining through the
+/// gaps. The measured failure was the light volume converging BLACK corridor-wide - every sun
+/// ray threading a real opening resolved as occluded - so this pins the opposite: floor texels
+/// in line with a gap must read lit, texels behind a column must stay dark, at a straight and
+/// an oblique sun azimuth, on the shipping cascade scale (base extent 16, resolution 64:
+/// 0.25 m level-0 voxels against 1.0 m gaps).
+void test_shadow_through_colonnade()
+{
+    std::printf("test_shadow_through_colonnade\n");
+    mesh_sdf floor_sdf;
+    mesh_sdf column_sdf;
+    mesh_sdf roof_sdf;
+    check(bake_slab({20.0f, 0.2f, 20.0f}, floor_sdf), "floor bakes");
+    check(bake_slab({0.4f, 2.0f, 0.4f}, column_sdf), "column bakes");
+    check(bake_slab({2.0f, 0.2f, 20.0f}, roof_sdf), "roof bakes");
+    const math::vec3 column_half(0.4f, 2.0f, 0.4f);
+    const math::vec3 roof_center(-2.0f, 4.2f, 0.0f);
+    const math::vec3 roof_half(2.0f, 0.2f, 20.0f);
+    std::vector<math::vec3> column_centers;
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(make_clipmap_instance(floor_sdf, {0.0f, -0.2f, 0.0f}, math::vec3(0.7f), math::vec3(0.0f)));
+    instances.push_back(make_clipmap_instance(roof_sdf, roof_center, math::vec3(0.7f), math::vec3(0.0f)));
+    for(float z = -12.0f; z <= 12.0f; z += 2.0f)
+    {
+        column_centers.push_back({0.0f, 2.0f, z});
+        instances.push_back(
+            make_clipmap_instance(column_sdf, column_centers.back(), math::vec3(0.7f), math::vec3(0.0f)));
+    }
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings settings;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(-2.0f, 1.0f, 0.0f));
+    const float elevation_rad = 30.0f * math::pi<float>() / 180.0f;
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    const float azimuths[] = {0.0f, 25.0f};
+    for(const float azimuth : azimuths)
+    {
+        const float azimuth_rad = azimuth * math::pi<float>() / 180.0f;
+        const math::vec3 to_light(std::cos(elevation_rad) * std::cos(azimuth_rad),
+                                  std::sin(elevation_rad),
+                                  std::cos(elevation_rad) * std::sin(azimuth_rad));
+        const auto blocked = [&](const math::vec3& p) -> bool
+        {
+            if(ray_hits_box(p, to_light, roof_center, roof_half))
+            {
+                return true;
+            }
+            for(const auto& center : column_centers)
+            {
+                if(ray_hits_box(p, to_light, center, column_half))
+                {
+                    return true;
+                }
+            }
+            return false;
+        };
+        int wrong_dark = 0;
+        int leaks = 0;
+        int lit_ok = 0;
+        int shadow_ok = 0;
+        std::string map;
+        math::vec3 wrong_dark_point{};
+        bool have_wrong_dark = false;
+        for(float x = -1.0f; x >= -5.5f; x -= 0.5f)
+        {
+            for(float z = -8.0f; z <= 8.0f; z += 0.25f)
+            {
+                const math::vec3 p(x, 0.0f, z);
+                const bool expected_shadow = blocked(p);
+                // The composed field legitimately fattens a column by about a voxel, so texels
+                // whose analytic answer flips within 0.3 m of z are penumbra: mapped, not counted.
+                const bool boundary = blocked({x, 0.0f, z - 0.3f}) != expected_shadow ||
+                                      blocked({x, 0.0f, z + 0.3f}) != expected_shadow;
+                float voxel = 0.0f;
+                clipmap.sample_ex(p, voxel);
+                const float visibility =
+                    trace_shadow_visibility(clipmap, p, up, to_light, voxel, false, nullptr, nullptr);
+                const bool dark = visibility < 0.5f;
+                char cell = '.';
+                if(boundary)
+                {
+                    cell = 'b';
+                }
+                else if(expected_shadow)
+                {
+                    cell = dark ? 's' : 'L';
+                    dark ? ++shadow_ok : ++leaks;
+                }
+                else if(dark)
+                {
+                    cell = 'X';
+                    ++wrong_dark;
+                    if(!have_wrong_dark)
+                    {
+                        wrong_dark_point = p;
+                        have_wrong_dark = true;
+                    }
+                }
+                else
+                {
+                    ++lit_ok;
+                }
+                map += cell;
+            }
+            map += '\n';
+        }
+        std::printf("  azimuth %.0f deg: wrong dark %d, leaks %d (lit ok %d, shadow ok %d)\n",
+                    azimuth,
+                    wrong_dark,
+                    leaks,
+                    lit_ok,
+                    shadow_ok);
+        if(wrong_dark > 0 || leaks > 0)
+        {
+            std::printf("%s", map.c_str());
+        }
+        if(have_wrong_dark)
+        {
+            std::vector<shadow_march_step> log;
+            float voxel = 0.0f;
+            clipmap.sample_ex(wrong_dark_point, voxel);
+            trace_shadow_visibility(clipmap, wrong_dark_point, up, to_light, voxel, false, nullptr, &log);
+            std::printf("  march at (%.2f, 0, %.2f), launch voxel %.3f:\n",
+                        wrong_dark_point.x,
+                        wrong_dark_point.z,
+                        voxel);
+            for(const auto& s : log)
+            {
+                std::printf("    t=%7.3f d=%7.3f voxel=%.3f accept=%.3f%s\n",
+                            s.t,
+                            s.d,
+                            s.voxel,
+                            s.accept,
+                            s.suppressed ? " [suppressed]" : "");
+            }
+        }
+        check(wrong_dark == 0,
+              "sun passes the colonnade gaps at azimuth " + std::to_string(int(azimuth)) + " (wrongly dark " +
+                  std::to_string(wrong_dark) + ")");
+        check(leaks == 0,
+              "column shadows hold at azimuth " + std::to_string(int(azimuth)) + " (leaked " +
+                  std::to_string(leaks) + ")");
+        check(shadow_ok > 0, "the column shadow region is sampled at all");
+        check(lit_ok > 0, "the gap region is sampled at all");
+    }
+}
+
+/// Appends @p box-shaped geometry at @p center to @p g, for building multi-part single meshes.
+void append_box(sdf_source_geometry& g, const math::vec3& center, const math::vec3& half)
+{
+    const sdf_source_geometry box = make_box_geometry(half);
+    const uint32_t base = uint32_t(g.positions.size());
+    for(const auto& p : box.positions)
+    {
+        g.positions.push_back(p + center);
+        g.bounds.add_point(p + center);
+    }
+    for(const uint32_t index : box.indices)
+    {
+        g.indices.push_back(base + index);
+    }
+}
+
+/// The SAME colonnade as test_shadow_through_colonnade, but as ONE submesh baked at the asset
+/// compiler's production defaults - which is what a material-grouped arcade (Sponza: every
+/// column, arch and rail of one stone material in one submesh spanning the building) actually
+/// gets. The bounds then dictate the voxel size, and the question this pins is whether the
+/// baked field and the cascade composed FROM it keep the real openings open.
+void test_shadow_through_coarse_baked_colonnade()
+{
+    std::printf("test_shadow_through_coarse_baked_colonnade\n");
+    const math::vec3 column_half(0.3f, 2.0f, 0.3f);
+    sdf_source_geometry merged;
+    merged.bounds.reset();
+    std::vector<math::vec3> column_centers;
+    for(float z = -12.0f; z <= 12.0f; z += 2.0f)
+    {
+        column_centers.push_back({0.0f, 2.0f, z});
+        append_box(merged, column_centers.back(), column_half);
+    }
+    mesh_sdf colonnade_sdf;
+    mesh_sdf_bake_settings production;
+    check(bake_mesh_sdf(merged, production, colonnade_sdf), "merged colonnade bakes");
+    std::printf("  merged bounds span %.1f m, production bake voxel %.3f m\n",
+                merged.bounds.max.z - merged.bounds.min.z,
+                colonnade_sdf.voxel_size);
+    // Field openness at the gap centres: the smallest reading along a vertical line mid-gap on
+    // the colonnade plane. Analytically that line is 0.7 m from the nearest column face; a
+    // reading at or below the mesh-tier acceptance (0.35 voxel) means a sun ray through the
+    // MIDDLE of a real gap terminates on geometry that is not there.
+    const float accept = 0.35f * colonnade_sdf.voxel_size;
+    float worst_gap_reading = 1e8f;
+    for(size_t gap = 0; gap + 1 < column_centers.size(); ++gap)
+    {
+        const float gap_z = (column_centers[gap].z + column_centers[gap + 1].z) * 0.5f;
+        for(float y = 0.3f; y <= 1.7f; y += 0.2f)
+        {
+            worst_gap_reading = std::min(worst_gap_reading, sample_mesh_sdf(colonnade_sdf, {0.0f, y, gap_z}));
+        }
+    }
+    std::printf("  worst mid-gap field reading %.3f m (analytic 0.700, mesh-tier accept %.3f)\n",
+                worst_gap_reading,
+                accept);
+    check(worst_gap_reading > accept, "the baked field keeps the gap centres open");
+    // The cascade composed from that field, traced exactly as the light-voxel pass does.
+    mesh_sdf floor_sdf;
+    check(bake_slab({20.0f, 0.2f, 20.0f}, floor_sdf), "floor bakes");
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(make_clipmap_instance(floor_sdf, {0.0f, -0.2f, 0.0f}, math::vec3(0.7f), math::vec3(0.0f)));
+    instances.push_back(make_clipmap_instance(colonnade_sdf, {0.0f, 0.0f, 0.0f}, math::vec3(0.7f), math::vec3(0.0f)));
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings settings;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(-2.0f, 1.0f, 0.0f));
+    const float elevation_rad = 30.0f * math::pi<float>() / 180.0f;
+    const math::vec3 to_light(std::cos(elevation_rad), std::sin(elevation_rad), 0.0f);
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    const auto blocked = [&](const math::vec3& p) -> bool
+    {
+        for(const auto& center : column_centers)
+        {
+            if(ray_hits_box(p, to_light, center, column_half))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    int wrong_dark = 0;
+    int leaks = 0;
+    int lit_ok = 0;
+    int shadow_ok = 0;
+    std::string map;
+    math::vec3 wrong_dark_point{};
+    bool have_wrong_dark = false;
+    for(float x = -1.0f; x >= -5.5f; x -= 0.5f)
+    {
+        for(float z = -8.0f; z <= 8.0f; z += 0.25f)
+        {
+            const math::vec3 p(x, 0.0f, z);
+            const bool expected_shadow = blocked(p);
+            const bool boundary = blocked({x, 0.0f, z - 0.3f}) != expected_shadow ||
+                                  blocked({x, 0.0f, z + 0.3f}) != expected_shadow;
+            float voxel = 0.0f;
+            clipmap.sample_ex(p, voxel);
+            const float visibility =
+                trace_shadow_visibility(clipmap, p, up, to_light, voxel, false, nullptr, nullptr);
+            const bool dark = visibility < 0.5f;
+            char cell = '.';
+            if(boundary)
+            {
+                cell = 'b';
+            }
+            else if(expected_shadow)
+            {
+                cell = dark ? 's' : 'L';
+                dark ? ++shadow_ok : ++leaks;
+            }
+            else if(dark)
+            {
+                cell = 'X';
+                ++wrong_dark;
+                if(!have_wrong_dark)
+                {
+                    wrong_dark_point = p;
+                    have_wrong_dark = true;
+                }
+            }
+            else
+            {
+                ++lit_ok;
+            }
+            map += cell;
+        }
+        map += '\n';
+    }
+    std::printf("  composed cascade: wrong dark %d, leaks %d (lit ok %d, shadow ok %d)\n",
+                wrong_dark,
+                leaks,
+                lit_ok,
+                shadow_ok);
+    if(wrong_dark > 0 || leaks > 0)
+    {
+        std::printf("%s", map.c_str());
+    }
+    if(have_wrong_dark)
+    {
+        std::vector<shadow_march_step> log;
+        float voxel = 0.0f;
+        clipmap.sample_ex(wrong_dark_point, voxel);
+        trace_shadow_visibility(clipmap, wrong_dark_point, up, to_light, voxel, false, nullptr, &log);
+        std::printf("  march at (%.2f, 0, %.2f), launch voxel %.3f:\n",
+                    wrong_dark_point.x,
+                    wrong_dark_point.z,
+                    voxel);
+        for(const auto& s : log)
+        {
+            std::printf("    t=%7.3f d=%7.3f voxel=%.3f accept=%.3f%s\n",
+                        s.t,
+                        s.d,
+                        s.voxel,
+                        s.accept,
+                        s.suppressed ? " [suppressed]" : "");
+        }
+    }
+    check(wrong_dark == 0,
+          "sun passes the coarse-baked colonnade gaps (wrongly dark " + std::to_string(wrong_dark) + ")");
+    check(leaks == 0, "coarse-baked column shadows hold (leaked " + std::to_string(leaks) + ")");
+    check(shadow_ok > 0, "the coarse column shadow region is sampled at all");
+    check(lit_ok > 0, "the coarse gap region is sampled at all");
+}
+
 } // namespace
 
 void run(int& checks, int& failures)
@@ -1201,6 +1515,8 @@ void run(int& checks, int& failures)
     test_reference_thin_wall_blocks_light();
     test_reference_cornell_bleeds_colour();
     test_shadow_blob_floor_building();
+    test_shadow_through_colonnade();
+    test_shadow_through_coarse_baked_colonnade();
 }
 
 } // namespace unravel::gi_tests

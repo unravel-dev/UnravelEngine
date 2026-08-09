@@ -15,7 +15,7 @@
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/material.h>
@@ -701,9 +701,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     if(is_camera_run && (params.fill_gi_params || wants_sdf_debug))
     {
         auto& ctx = engine::context();
-        if(ctx.has<surface_cache_service>())
         {
-            auto& surface_cache = ctx.get<surface_cache_service>();
+            auto& surface_cache = ctx.get_cached<surface_cache_system>();
             // World half: identical for every camera, so it self-limits to once per frame.
             surface_cache.update_world(scn);
             // Camera half: the cascade is snapped around THIS viewer, so it belongs to the render
@@ -746,6 +745,29 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                 light_params.view_cache = &view_cache;
                 light_params.frame = light_voxel_frame_;
                 light_params.camera_position = camera.get_position();
+                // The sun's CSM was rendered above (build_shadows), so its cascade 0 can answer
+                // sun visibility for the voxels it covers - the raster's own mesh-exact shadows,
+                // which the traced field cannot reproduce through openings the bake fattened.
+                // The index walks the SAME view in the SAME order the GPU light buffer was
+                // filled from (surface_cache.update_world, this frame), so the shader can match
+                // the map to exactly the light it was rendered for.
+                int light_index = 0;
+                scn.registry->view<transform_component, light_component, active_component>().each(
+                    [&](auto light_entity, auto&& light_transform, auto&& light_comp, auto&& active)
+                    {
+                        const auto& l = light_comp.get_light();
+                        if(light_params.sun_light_index < 0 && l.type == light_type::directional &&
+                           l.casts_shadows)
+                        {
+                            const auto& generator = light_comp.get_shadowmap_generator();
+                            if(bgfx::isValid(generator.get_rt_texture(0)))
+                            {
+                                light_params.sun_shadows = &generator;
+                                light_params.sun_light_index = light_index;
+                            }
+                        }
+                        ++light_index;
+                    });
                 gi_light_voxel_pass_.run(rview, light_params);
                 // World probes trace against the freshly lit voxels (GI v2 plan 3.3). Same
                 // frame counter: each consumer keys its own rotation off it.
@@ -793,7 +815,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         gi_settings gi_reflection_settings;
         if(resolve_gi_settings(params, gi_reflection_settings) &&
-           gi_reflection_settings.resolve.enable_reflections && engine::context().has<surface_cache_service>())
+           gi_reflection_settings.resolve.enable_reflections)
         {
             gi_reflection_pass::run_params grp;
             grp.g_buffer = rview.fbo_safe_get("GBUFFER");
@@ -807,7 +829,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
             grp.resolution = gi_reflection_settings.resolve.resolution;
             grp.cam = &camera;
-            grp.surface_cache = &engine::context().get<surface_cache_service>();
+            grp.surface_cache = &engine::context().get_cached<surface_cache_system>();
             grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
             gi_reflection_pass_.run(rview, grp);
         }
@@ -2146,7 +2168,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
     gi_settings gi;
     const bool enabled = resolve_gi_settings(rparams, gi);
     const auto& resolve_settings = gi.resolve;
-    if(enabled && ctx.has<surface_cache_service>())
+    if(enabled)
     {
         gi_resolve_pass::run_params params;
         params.settings = resolve_settings;
@@ -2163,7 +2185,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         // probe captures) degrades those hits to the sky SH.
         params.prev_color = previous_frame_source ? previous_frame_source->get_texture() : nullptr;
         params.cam = &camera;
-        params.surface_cache = &ctx.get<surface_cache_service>();
+        params.surface_cache = &ctx.get_cached<surface_cache_system>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
         result = gi_resolve_pass_.run(rview, params);
     }
@@ -2189,11 +2211,8 @@ void deferred::run_sdf_debug_pass(const camera& camera,
                                   const gfx::frame_buffer::ptr& output)
 {
     auto& ctx = engine::context();
-    if(!ctx.has<surface_cache_service>())
-    {
-        return;
-    }
-    auto& surface_cache = ctx.get<surface_cache_service>();
+
+    auto& surface_cache = ctx.get_cached<surface_cache_system>();
     sdf_debug_pass::run_params params;
     params.output = output;
     params.cam = &camera;

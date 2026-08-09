@@ -22,7 +22,7 @@
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <ospp/event.h>
@@ -177,7 +177,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<asset_manager>(ctx);
     ctx.add<ecs>();
     ctx.add<rendering_system>();
-    ctx.add<surface_cache_service>();
+    ctx.add<surface_cache_system>();
     ctx.add<transform_system>();
     ctx.add<camera_system>();
     ctx.add<reflection_probe_system>();
@@ -247,7 +247,7 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
     ls.begin_module("Surface Cache GI");
     // A failed init is not fatal: the atlas is unavailable, is_enabled() reports false, and
     // the renderer simply runs without surface cache GI.
-    ctx.get_cached<surface_cache_service>().init(ctx);
+    ctx.get_cached<surface_cache_system>().init(ctx);
 
     ls.begin_module("Transforms");
     if(!ls.check(ctx.get_cached<transform_system>().init(ctx)))
@@ -396,7 +396,7 @@ auto engine::deinit() -> bool
         return false;
     }
 
-    if(!ctx.get_cached<surface_cache_service>().deinit(ctx))
+    if(!ctx.get_cached<surface_cache_system>().deinit(ctx))
     {
         return false;
     }
@@ -455,7 +455,7 @@ auto engine::destroy() -> bool
     ctx.remove<reflection_probe_system>();
     ctx.remove<camera_system>();
     ctx.remove<transform_system>();
-    ctx.remove<surface_cache_service>();
+    ctx.remove<surface_cache_system>();
     ctx.remove<rendering_system>();
     ctx.remove<ecs>();
 

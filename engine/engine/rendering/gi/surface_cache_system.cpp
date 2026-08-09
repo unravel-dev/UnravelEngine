@@ -1,4 +1,4 @@
-#include "surface_cache_service.h"
+#include "surface_cache_system.h"
 
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -40,7 +40,7 @@ void write_affine_row(float* dst, const ::math::mat4& m, int row)
 namespace unravel
 {
 
-auto surface_cache_service::init(rtti::context& ctx) -> bool
+auto surface_cache_system::init(rtti::context& ctx) -> bool
 {
     sdf_atlas::settings atlas_settings;
     if(!atlas_.init(atlas_settings))
@@ -69,7 +69,7 @@ auto surface_cache_service::init(rtti::context& ctx) -> bool
     return true;
 }
 
-auto surface_cache_service::deinit(rtti::context& ctx) -> bool
+auto surface_cache_system::deinit(rtti::context& ctx) -> bool
 {
     instances_.clear();
     clipmap_instances_.clear();
@@ -110,7 +110,7 @@ auto surface_cache_service::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-auto surface_cache_service::acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index)
+auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index)
     -> uint32_t
 {
     // Keyed by submesh as well as mesh: each submesh has its own field, and they are uploaded to
@@ -162,7 +162,7 @@ auto surface_cache_service::acquire_field(const hpp::uuid& mesh_uid, const mesh&
     return record.header_index;
 }
 
-void surface_cache_service::release_unused_fields()
+void surface_cache_system::release_unused_fields()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Release Unused Fields");
     for(auto it = residency_.begin(); it != residency_.end();)
@@ -181,7 +181,7 @@ void surface_cache_service::release_unused_fields()
 }
 
 
-auto surface_cache_service::resolve_submesh_material(const model& mdl,
+auto surface_cache_system::resolve_submesh_material(const model& mdl,
                                                      const model_component& model_comp,
                                                      const mesh& m,
                                                      uint32_t submesh_index) -> material::sptr
@@ -203,7 +203,7 @@ auto surface_cache_service::resolve_submesh_material(const model& mdl,
     return mdl.get_material_instance(sub->data_group_id);
 }
 
-auto surface_cache_service::acquire_texture_mean_slot(const asset_handle<gfx::texture>& color_map,
+auto surface_cache_system::acquire_texture_mean_slot(const asset_handle<gfx::texture>& color_map,
                                                       bool& out_captured) -> uint32_t
 {
     out_captured = false;
@@ -252,7 +252,7 @@ auto surface_cache_service::acquire_texture_mean_slot(const asset_handle<gfx::te
     return entry.captured ? entry.slot : 0u;
 }
 
-auto surface_cache_service::take_texture_mean_captures(uint32_t budget)
+auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
     -> std::vector<texture_mean_capture>
 {
     std::vector<texture_mean_capture> captures;
@@ -279,7 +279,7 @@ auto surface_cache_service::take_texture_mean_captures(uint32_t budget)
     return captures;
 }
 
-void surface_cache_service::add_instance(uint32_t header_index,
+void surface_cache_system::add_instance(uint32_t header_index,
                                          const mesh_sdf& sdf,
                                          const math::mat4& local_to_world,
                                          const std::shared_ptr<mesh>& owner,
@@ -343,7 +343,7 @@ void surface_cache_service::add_instance(uint32_t header_index,
     clipmap_instances_.push_back(clipmap_instance);
 }
 
-void surface_cache_service::upload_instance_grid()
+void surface_cache_system::upload_instance_grid()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instance Grid");
     // The grid is a pure function of the instance set (bounds are part of the packed data the
@@ -418,7 +418,7 @@ void surface_cache_service::upload_instance_grid()
     grid_params_[7] = 1.0f;
 }
 
-void surface_cache_service::upload_instances()
+void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
     instance_data_.assign(size_t(instances_.size()) * instance_vec4_stride * 4u, 0.0f);
@@ -484,7 +484,7 @@ void surface_cache_service::upload_instances()
     instance_fingerprint_ = fingerprint;
 }
 
-void surface_cache_service::update_world(scene& scn)
+void surface_cache_system::update_world(scene& scn)
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Update World");
     // Once per frame, however many cameras ask. All of this is a function of the scene, so a second

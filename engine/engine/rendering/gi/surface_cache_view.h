@@ -14,7 +14,7 @@ namespace unravel
 /**
  * @brief The per-CAMERA half of the surface cache.
  *
- * Everything in @ref surface_cache_service is a function of the WORLD -- which meshes are resident,
+ * Everything in @ref surface_cache_system is a function of the WORLD -- which meshes are resident,
  * where their instances are, which lights exist -- so one copy serves every camera. The cascade is
  * not: it is four levels snapped around a viewer, so it is a function of the camera as much as of
  * the scene.

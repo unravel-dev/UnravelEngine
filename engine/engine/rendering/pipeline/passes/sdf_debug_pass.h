@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/camera.h>
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
@@ -104,7 +104,7 @@ public:
     {
         gfx::frame_buffer::ptr output;
         const camera* cam{};
-        surface_cache_service* surface_cache{};
+        surface_cache_system* surface_cache{};
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
         /// the service without two cameras fighting over one set of levels.
         surface_cache_view* view_cache{};

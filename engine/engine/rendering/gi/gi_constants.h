@@ -69,9 +69,15 @@
     X(GI_SHADOW_SURFACE_BIAS, 0.35f,                                                               \
       "voxels of the answering field", "published-from-v1-measurement: the acceptance that"        \
       " removed shadow acne once the relaxation stopped grazing exhaustion (audit A1c)")           \
-    X(GI_SHADOW_RELAXATION, 0.1f,                                                                  \
-      "acceptance growth per unit t", "published-from-v1-measurement: bounds grazing sun rays"     \
-      " (audit A1c - at zero they exhausted and read as washed-out ground)")                       \
+    X(GI_SHADOW_RELAXATION, 0.0f,                                                                  \
+      "acceptance growth per unit t", "derived: zero - a shadow ray accepts CONTACT only. The"     \
+      " cone acceptance turns a near-miss within the answering level's voxel (metres at coarse"    \
+      " levels) into full occlusion, and a sun ray threading real openings then resolves dark:"    \
+      " measured on Sponza, the arcade's light voxels converged black corridor-wide because"       \
+      " every ray past t = 10 voxels needed a FULL voxel of clearance through the colonnade and"   \
+      " over the far roofline. The grazing-cost role the cone served (audit A1c, when exhaustion"  \
+      " still read as LIT) is owned by the exhaustion contract now: budget death answers with"     \
+      " clearance / receiver voxel, which reads a graze honestly as penumbra, not washout")        \
     X(GI_SHADOW_RAY_START_VOXELS, 1.0f,                                                            \
       "voxels of the answering level", "published-from-v1-measurement: skip along the ray's own"   \
       " direction rather than lifting the point (see the gather's identical rule). NEVER scale"    \

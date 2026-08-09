@@ -1,6 +1,6 @@
 #pragma once
 
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
@@ -9,6 +9,11 @@
 
 namespace unravel
 {
+
+namespace shadow
+{
+class shadowmap_generator;
+}
 
 /**
  * @brief Lights the cascade's surface voxels with direct lighting and traced shadows
@@ -26,11 +31,19 @@ class gi_light_voxel_pass
 public:
     struct run_params
     {
-        surface_cache_service* surface_cache = nullptr;
+        surface_cache_system* surface_cache = nullptr;
         surface_cache_view* view_cache = nullptr;
         uint32_t frame = 0;
         /// The world-probe windows are centred here; the bounce term must agree with the trace.
         math::vec3 camera_position{0.0f};
+        /// The sun's CSM generator, when the scene has a shadow-casting directional light with
+        /// maps rendered this frame. Cascade 0 then answers sun visibility for voxels it
+        /// covers - the traced field cannot thread openings the bake fattened shut, and the
+        /// map is the raster's own mesh-exact answer. Null keeps sun shadows fully traced.
+        const shadow::shadowmap_generator* sun_shadows = nullptr;
+        /// The sun's slot in the GPU light buffer, so the shader applies the map to exactly
+        /// the light it was rendered for. Negative disables the tier.
+        int sun_light_index = -1;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -63,9 +76,18 @@ private:
         gfx::program::uniform_ptr s_attr_emissive;
         gfx::program::uniform_ptr s_world_probe_irradiance;
         gfx::program::uniform_ptr s_world_probe_depth;
+        gfx::program::uniform_ptr u_gi_sun_shadowmap_mtx;
+        gfx::program::uniform_ptr u_gi_sun_shadowmap_params;
+        gfx::program::uniform_ptr s_gi_sun_shadowmap;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_gi_sun_shadowmap_mtx, "u_gi_sun_shadowmap_mtx", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(),
+                          u_gi_sun_shadowmap_params,
+                          "u_gi_sun_shadowmap_params",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gi_sun_shadowmap, "s_gi_sun_shadowmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_light_voxel_camera, "u_gi_light_voxel_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);

@@ -36,7 +36,7 @@
 
 /// vec4 elements per field header, per sdf_atlas::header_vec4_count.
 #define SDF_HEADER_STRIDE 3
-/// vec4 elements per instance, per surface_cache_service::instance_vec4_stride.
+/// vec4 elements per instance, per surface_cache_system::instance_vec4_stride.
 #define SDF_INSTANCE_STRIDE 10
 /// No instance produced this hit: either nothing was hit, or the global cascade answered, which
 /// is composed from many fields and cannot attribute a sample to one.
@@ -76,7 +76,7 @@ uniform vec4 u_sdf_clipmap_params;
 #define u_sdf_clipmap_depth        (u_sdf_clipmap_resolution * float(SDF_CLIPMAP_LEVEL_COUNT))
 
 /// [0] = grid origin xyz, cell size w. [1] = cell counts xyz, non-zero w when the grid is usable.
-/// Filled by surface_cache_service::get_grid_params, the single owner: every pass that traces
+/// Filled by surface_cache_system::get_grid_params, the single owner: every pass that traces
 /// must walk the same cells, and a pass that derived different ones would simply find different
 /// instances -- geometry that occludes in one pass and not another, with no error anywhere.
 uniform vec4 u_sdf_grid_params[2];

@@ -107,7 +107,7 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
         // is_sampleable, not is_valid: the thorough check walks every indirection entry, and this
         // loop runs for EVERY level on EVERY frame, whether or not anything ends up composing.
         // The field was already validated in full when it became resident
-        // (surface_cache_service::acquire_field), so re-proving it per frame buys nothing and
+        // (surface_cache_system::acquire_field), so re-proving it per frame buys nothing and
         // costs the brick count times four times the instance count, every frame.
         if(instance.sdf == nullptr || !instance.sdf->is_sampleable())
         {
@@ -133,7 +133,7 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
         entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
         // Material too: albedo and emissive are BAKED into the attribute voxels at composition,
         // so a change nothing rehashes would keep bouncing the old colour forever. This is also
-        // what publishes a lazily resolved texture-mean albedo (surface_cache_service) and any
+        // what publishes a lazily resolved texture-mean albedo (surface_cache_system) and any
         // material edit into the volume: the fingerprint moves, the level recomposes.
         const auto hash_vec3 = [&entry](const math::vec3& v)
         {

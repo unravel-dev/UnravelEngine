@@ -15,7 +15,7 @@ namespace unravel
 /**
  * @brief One placement of a baked field in the world, as the clipmap composer consumes it.
  *
- * Deliberately a plain struct rather than surface_cache_service::instance so the composer can
+ * Deliberately a plain struct rather than surface_cache_system::instance so the composer can
  * be built and validated without the ECS, the asset layer, or a GPU.
  */
 struct global_sdf_instance

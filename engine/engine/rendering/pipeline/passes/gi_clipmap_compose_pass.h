@@ -1,6 +1,6 @@
 #pragma once
 
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
@@ -31,7 +31,7 @@ class gi_clipmap_compose_pass
 public:
     struct run_params
     {
-        surface_cache_service* surface_cache = nullptr;
+        surface_cache_system* surface_cache = nullptr;
         surface_cache_view* view_cache = nullptr;
     };
 

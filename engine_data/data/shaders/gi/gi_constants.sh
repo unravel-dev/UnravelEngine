@@ -22,7 +22,7 @@
 #define GI_SHADOW_DISTANCE              100.0
 #define GI_SHADOW_NORMAL_BIAS_VOXELS    1.0
 #define GI_SHADOW_SURFACE_BIAS          0.35
-#define GI_SHADOW_RELAXATION            0.1
+#define GI_SHADOW_RELAXATION            0.0
 #define GI_SHADOW_RAY_START_VOXELS      1.0
 #define GI_WORLD_PROBE_DIVISOR          16
 #define GI_WORLD_PROBE_RAYS_PER_FRAME   16

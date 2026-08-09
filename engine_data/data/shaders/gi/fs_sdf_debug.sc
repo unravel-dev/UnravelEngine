@@ -296,10 +296,17 @@ void main()
 			return;
 		}
 		// Light voxels: exactly what a gather ray reads, through the shared reader.
+		//
+		//   DARK BLUE -> attributed but UNMEASURED: every candidate face was zeroed by the
+		//                lighting pass's gates (cavity visibility, tunnel guard) or has not had
+		//                a rotation slot yet. Distinct from measured darkness (true black),
+		//                because the two implicate different stages: a gate refusing the face
+		//                versus a shadow ray measuring no light.
 		vec3 radiance;
 		if(!GiLightVoxelRead(hit_position, hit.normal, radiance))
 		{
-			radiance = vec3_splat(0.0);
+			gl_FragColor = vec4(0.0, 0.05, 0.35, 1.0);
+			return;
 		}
 		gl_FragColor = vec4(radiance, 1.0);
 		return;

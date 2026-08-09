@@ -107,7 +107,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     if(texture_mean_program_.is_valid())
     {
         const auto captures = surface_cache.take_texture_mean_captures(
-            surface_cache_service::max_texture_mean_captures_per_frame);
+            surface_cache_system::max_texture_mean_captures_per_frame);
         if(!captures.empty())
         {
             if(!capture_log_emitted_)

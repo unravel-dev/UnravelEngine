@@ -21,6 +21,46 @@
 #include "gi/sdf_common.sh"
 #include "gi/gpu_lights.sh"
 
+#if defined(GI_SUN_SHADOWMAP_TIER)
+/*
+ * SUN SHADOW-MAP TIER: cascade 0 of the sun's own CSM, sampled instead of traced wherever a
+ * position lands inside it.
+ *
+ * The traced field CANNOT answer the sun through real openings the bake fattened shut:
+ * material-grouped architecture bakes whole arcades as one submesh, mostly non-manifold, so
+ * every member becomes a two-sided shell floored at one mesh voxel - metres-scale slabs at
+ * production resolutions - and the composed cascade inherits the fat. Measured on Sponza:
+ * the corridor's light voxels converged black while the raster's shadow-mapped sun pools lit
+ * the same floor on screen. The shadow map IS the raster's answer, so sampling it makes the
+ * GI's notion of "where the sun lands" agree with the image by construction, and one tap is
+ * far cheaper than the sphere trace it replaces.
+ *
+ * ONE split only, deliberately: the includer (cs_gi_light_voxels) has exactly one free
+ * resource stage, and split 0 is the sharpest and covers the camera's neighbourhood - which
+ * is where level-0/1 voxels live, the only cells fine enough to hold a sun pool anyway.
+ * Outside its texcoord bounds, and for every other light, the traced field remains the
+ * answer. Gated by a define so the debug direct view keeps showing the PURE traced tier -
+ * the diagnostic contrast that found this bug.
+ */
+SAMPLER2D(s_gi_sun_shadowmap, 14);
+uniform mat4 u_gi_sun_shadowmap_mtx;
+/// x = light-buffer index of the sun the bound map belongs to (< 0 disables the tier),
+/// y = receiver depth bias (the generator's u_params1.x), z = texcoord border.
+uniform vec4 u_gi_sun_shadowmap_params;
+#define u_gi_sun_index  u_gi_sun_shadowmap_params.x
+#define u_gi_sun_bias   u_gi_sun_shadowmap_params.y
+#define u_gi_sun_border u_gi_sun_shadowmap_params.z
+
+/// shaderlib.sh unpackRgbaToFloat, restated: the compute include chain does not carry
+/// shaderlib, and the depth maps pack RGBA (every technique except VSM, which the caller
+/// gates out).
+float GiUnpackShadowDepth(vec4 rgba)
+{
+	const vec4 shift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
+	return dot(rgba, shift);
+}
+#endif // GI_SUN_SHADOWMAP_TIER
+
 /// x = shadow ray max distance, y = normal offset in VOXELS of the answering level,
 /// z = near-field handover, w = max steps per shadow ray.
 uniform vec4 u_gi_shadow_params;
@@ -31,12 +71,13 @@ uniform vec4 u_gi_shadow_params;
 
 /// x = hit acceptance in voxels, y = cone relaxation.
 ///
-/// Both were hardcoded (0.5 and 0.0) until the relaxation turned out to matter more here than
-/// anywhere else. A shadow ray toward a low sun runs nearly parallel to the ground, and a grazing
-/// sphere trace advances by a distance that stays small for its whole length -- so it burns its
-/// whole step budget without resolving. An exhausted ray is counted as LIT (see below), so the
-/// failure does not read as a missing shadow, it reads as a surface that is too bright, and it
-/// gets worse the further the origin is pushed out to escape self-intersection.
+/// The relaxation ships as ZERO for shadow rays: a shadow ray accepts CONTACT only. With a cone,
+/// a near-miss within the answering level's voxel -- metres, at coarse levels -- resolved as a
+/// hit, and a resolved hit is FULL occlusion below, so every sun ray threading a real opening
+/// (a colonnade, a window, clearance over a roofline) went black (measured: Sponza's arcade
+/// light voxels converged black corridor-wide). The grazing-cost problem the cone once solved
+/// belongs to the exhaustion contract now: a budget-dead ray answers with its accumulated
+/// clearance (see below), which reads a graze as penumbra rather than as washout or blackness.
 uniform vec4 u_gi_shadow_params2;
 #define u_gi_shadow_surface_bias u_gi_shadow_params2.x
 #define u_gi_shadow_relaxation   u_gi_shadow_params2.y
@@ -102,8 +143,8 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// out of budget occludes at its final position), so a grazing shadow ray that gives up reads
 	// as shadowed rather than as a surface that is inexplicably too bright. Over-occlusion is the
 	// direction that degrades gracefully, and it is the same contract every tracing consumer now
-	// shares; the relaxation above still matters because it lets most grazing rays terminate
-	// properly before the budget is ever reached.
+	// shares; with the relaxation at zero, grazing rays reach that contract instead of being
+	// cone-caught early, and its clearance fallback is what grades them.
 	//
 	// BEAM visibility, not a binary ray: the receiver is a VOXEL, so what reaches it is a
 	// parallel beam half a receiving voxel wide (= voxel_size, the level voxel: the attribute
@@ -128,9 +169,11 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 /**
  * Irradiance arriving at a world point from one light, with traced visibility.
  * Lambertian: multiply by albedo / PI for outgoing radiance.
+ * @param light_index The light's slot in the GPU light buffer, so the sun shadow-map tier can
+ *        recognise the one light its bound map belongs to.
  */
-vec3 GiEvalLight(GpuLight light, vec3 world_position, vec3 world_normal, float voxel_size,
-                 float near_field)
+vec3 GiEvalLight(GpuLight light, int light_index, vec3 world_position, vec3 world_normal,
+                 float voxel_size, float near_field)
 {
 	vec3 unshadowed = GpuEvalLightUnshadowed(light, world_position, world_normal);
 	// Nothing to occlude, so skip the ray entirely. This is the common case for a point far
@@ -145,6 +188,50 @@ vec3 GiEvalLight(GpuLight light, vec3 world_position, vec3 world_normal, float v
 	{
 		to_light = -light.direction;
 		light_distance = u_gi_shadow_distance;
+#if defined(GI_SUN_SHADOWMAP_TIER)
+		// The sun's own map answers inside cascade 0 (see the tier note above); four taps
+		// replace the whole sphere trace. Out of bounds falls through to the trace.
+		//
+		// AREA average, not a point sample: the receiver is a whole attribute-voxel FACE
+		// (up to metres at coarse levels), and sun pools at that scale are cell-sized - a
+		// single centre tap answers "is this exact point lit" and quantises a 40%-sunlit
+		// cell to all-or-nothing, which erased every pool beyond the finest window
+		// (measured: the injected pools stopped at level 0's edge). A 2x2 quadrature over
+		// the face integrates fractional coverage, which is exactly the energy the cell
+		// re-emits. The face is axis-aligned, so its tangents are axis permutations, and
+		// the projection is affine, so the four coords are two vector adds each.
+		if(u_gi_sun_index >= 0.0 && float(light_index) == u_gi_sun_index)
+		{
+			vec4 shadow_coord = mul(u_gi_sun_shadowmap_mtx, vec4(world_position, 1.0));
+			if(shadow_coord.w > 1e-6)
+			{
+				vec2 texcoord = shadow_coord.xy / shadow_coord.w;
+				if(all(greaterThan(texcoord, vec2_splat(u_gi_sun_border))) &&
+				   all(lessThan(texcoord, vec2_splat(1.0 - u_gi_sun_border))))
+				{
+					// Quadrature points at the quarter-marks of the face: half-extent is one
+					// LEVEL voxel (the attribute voxel spans two), taps at half that.
+					float h = 0.5 * voxel_size;
+					vec3 tangent = world_normal.yzx * h;
+					vec3 bitangent = world_normal.zxy * h;
+					vec4 delta_t = mul(u_gi_sun_shadowmap_mtx, vec4(tangent, 0.0));
+					vec4 delta_b = mul(u_gi_sun_shadowmap_mtx, vec4(bitangent, 0.0));
+					float lit = 0.0;
+					for(int tap = 0; tap < 4; ++tap)
+					{
+						vec4 tap_coord = shadow_coord +
+						                 (tap < 2 ? delta_t : -delta_t) +
+						                 ((tap & 1) != 0 ? delta_b : -delta_b);
+						float receiver = (tap_coord.z - u_gi_sun_bias) / tap_coord.w;
+						float occluder = GiUnpackShadowDepth(
+						    texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0));
+						lit += step(receiver, occluder);
+					}
+					return unshadowed * (lit * 0.25);
+				}
+			}
+		}
+#endif // GI_SUN_SHADOWMAP_TIER
 	}
 	else
 	{
@@ -165,7 +252,7 @@ vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_si
 	vec3 total = vec3_splat(0.0);
 	for(int i = 0; i < u_gpu_light_count; ++i)
 	{
-		total += GiEvalLight(GpuLoadLight(i), world_position, world_normal, voxel_size, near_field);
+		total += GiEvalLight(GpuLoadLight(i), i, world_position, world_normal, voxel_size, near_field);
 	}
 	return total;
 }

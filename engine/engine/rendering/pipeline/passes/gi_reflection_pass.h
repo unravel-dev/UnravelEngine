@@ -2,7 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gi/gi_constants.h>
-#include <engine/rendering/gi/surface_cache_service.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 
@@ -55,7 +55,7 @@ public:
         /// contributes (off-screen content) is voxel-resolution anyway.
         trace_resolution resolution = trace_resolution::half;
         const camera* cam{};
-        surface_cache_service* surface_cache{};
+        surface_cache_system* surface_cache{};
         surface_cache_view* view_cache{};
     };
 
