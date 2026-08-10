@@ -239,11 +239,15 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     sign floating-point noise, and the field baked as random brick-quantised walls and
     //     stairs. Such geometry now takes the unsigned-shell path. UV-sphere pole slivers also
     //     stop poisoning the pole pseudonormals.
+    // 21: skinned submeshes are refused a field. The bake reads bind-pose vertices and skinning
+    //     rewrites the surface every frame, so the field could only ever occlude as a rigid
+    //     bind-pose statue pinned to the entity's root transform. The runtime walk also refuses
+    //     stale fields, so this bump is what reclaims the disk and atlas space they held.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code.
-    return 20;
+    return 21;
 }
 
 template<>

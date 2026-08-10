@@ -80,7 +80,7 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                   view.end(),
                   [&](entt::entity entity)
                   {
-                      APP_SCOPE_PERF_THREAD("Model/Skinning/Update Armature","Pool Thread");
+                      APP_SCOPE_PERF_THREAD("Model/Skinning/Update Armature & World Bounds","Pool Thread");
                       // This is needed as we call .get on the model inside the update_armature
                       tpp::this_thread::register_this_thread(thread_name, true);
 

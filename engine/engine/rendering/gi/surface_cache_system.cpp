@@ -590,6 +590,20 @@ void surface_cache_system::update_world(scene& scn)
             const uint32_t sdf_count = mesh_ptr->get_sdf_count();
             for(uint32_t submesh_index = 0; submesh_index < sdf_count; ++submesh_index)
             {
+                // Skinned submeshes never place a field, even when the compiled asset carries one
+                // (assets baked before the compiler learned to refuse them still do). The field
+                // is bind-pose geometry and this walk would pin it to the entity's root
+                // transform: a rigid statue dragged through the clipmap by an animating
+                // character, occluding in a pose the character is not in. Deforming geometry
+                // receives GI through the screen-space resolve without contributing; rigid
+                // movable meshes keep contributing, because a rigid transform keeps a baked
+                // field valid -- the split that matters is deforming vs rigid, not dynamic vs
+                // static.
+                const auto* submesh = mesh_ptr->get_submesh(submesh_index);
+                if(submesh != nullptr && submesh->skinned)
+                {
+                    continue;
+                }
                 const uint32_t header_index = acquire_field(mesh_handle.uid(), *mesh_ptr, submesh_index);
                 if(header_index == sdf_atlas::invalid_index)
                 {

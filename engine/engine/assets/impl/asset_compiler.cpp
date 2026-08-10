@@ -1190,6 +1190,14 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         // renders nothing and now bakes nothing, so without this it would simply be absent from GI
         // with no trace of why.
         std::atomic<uint64_t> discarded_triangles{0};
+        // Counted up front rather than inside the loop: the flag is static data, and the summary
+        // below needs the number whether or not anything else baked.
+        const size_t skinned_submesh_count = size_t(std::count_if(data.submeshes.begin(),
+                                                                  data.submeshes.end(),
+                                                                  [](const mesh::submesh& sub)
+                                                                  {
+                                                                      return sub.skinned;
+                                                                  }));
         // One slot per submesh, each written by exactly one task, so this needs no synchronisation.
         std::vector<sdf_component_summary> component_summaries(data.submeshes.size());
         std::for_each(poolstl::par.par_if(parallel_submeshes),
@@ -1197,6 +1205,18 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                       submesh_indices.end(),
                       [&](size_t i)
                       {
+                          // Skinned submeshes are refused a field. The bake reads bind-pose
+                          // vertices and skinning rewrites the surface every frame, so the field
+                          // could only ever occlude as a rigid bind-pose statue pinned to the
+                          // entity's root transform -- wrong shape, wrong place. Deforming
+                          // geometry still receives GI through the screen-space resolve; it just
+                          // does not contribute occlusion or bounce, the same contract every
+                          // SDF/voxel GI ships with. Mirrored at runtime in
+                          // surface_cache_system::update_world for assets compiled before this.
+                          if(data.submeshes[i].skinned)
+                          {
+                              return;
+                          }
                           sdf_source_geometry sdf_geometry;
                           const bool extracted = extract_sdf_source_geometry(data, lod_index, i, sdf_geometry);
                           discarded_triangles += sdf_geometry.discarded_triangles;
@@ -1360,6 +1380,18 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                                entry.extent,
                                entry.sparsity);
             }
+        }
+        // Logged outside the baked_count gate: a character whose submeshes are ALL skinned bakes
+        // nothing at all, and that asset is exactly the one whose absence from GI needs a reason
+        // on record -- it renders perfectly normally, so nothing else will ever say why.
+        if(skinned_submesh_count > 0)
+        {
+            APPLOG_INFO("  {0}: {1} skinned submeshes were not given a distance field. A field "
+                        "bakes the bind pose and animation rewrites the surface every frame, so "
+                        "it could only occlude as a rigid bind-pose statue. Skinned geometry "
+                        "still receives GI; it does not occlude or bounce it.",
+                        str_input,
+                        skinned_submesh_count);
         }
         if(baked_count > 0)
         {
