@@ -106,9 +106,11 @@ private:
     {
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_combine_params, "u_combineParams", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_scene, "s_scene", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_bloom, "s_bloom", gfx::uniform_type::Sampler);
         }
+        gfx::program::uniform_ptr u_combine_params;
         gfx::program::uniform_ptr s_scene;
         gfx::program::uniform_ptr s_bloom;
         std::unique_ptr<gpu_program> program;

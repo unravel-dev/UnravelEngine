@@ -28,9 +28,14 @@ public:
             return;
         }
         result.exposure = std::lerp(result.exposure, from.exposure, contribution);
+        result.temperature = std::lerp(result.temperature, from.temperature, contribution);
+        result.tint = std::lerp(result.tint, from.tint, contribution);
+        result.contrast = std::lerp(result.contrast, from.contrast, contribution);
+        result.saturation = std::lerp(result.saturation, from.saturation, contribution);
         if(contribution >= 0.5f)
         {
             result.method = from.method;
+            result.dithering = from.dithering;
         }
     }
 };

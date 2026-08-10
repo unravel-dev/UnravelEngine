@@ -43,10 +43,11 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"min", -10.0f},
             entt::attribute{"max", 20.0f},
             entt::attribute{"step", 0.5f},
-            entt::attribute{"tooltip", "Lower clamp for metered scene brightness (relative EV). "
+            entt::attribute{"tooltip", "Lower clamp for metered scene brightness (EV100). "
                 "Controls how much the system can BRIGHTEN dark scenes: a LOWER value allows "
                 "more brightening (more upward adaptation headroom when moving into shadow/interiors). "
-                "Default -1 keeps it subtle (~1 stop). Only engages when the scene meters below this value."},
+                "Default -6 gives interiors/night scenes real headroom. Only engages when the "
+                "scene meters below this value."},
         })
         .data<&auto_exposure_pass::settings::max_ev>("max_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -55,11 +56,11 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"min", -10.0f},
             entt::attribute{"max", 24.0f},
             entt::attribute{"step", 0.5f},
-            entt::attribute{"tooltip", "Upper clamp for metered scene brightness (relative EV). "
+            entt::attribute{"tooltip", "Upper clamp for metered scene brightness (EV100). "
                 "Controls how much the system can DARKEN bright scenes: a HIGHER value allows "
-                "more darkening. Lighting here is authored at a fixed reference exposure (not "
-                "physical cd/m2), so the default 0 pins the bright end at the authored daylight "
-                "level. Raise it only if very bright scenes should tone down below that. "
+                "more darkening. Default 16 covers physical daylight and effectively lets the "
+                "meter float freely, so exposure anchors the image to mid-gray on its own. "
+                "Lower it only to pin very bright scenes at an authored level. "
                 "Use Compensation to shift overall brightness."},
         })
         .data<&auto_exposure_pass::settings::compensation>("compensation"_hs)
@@ -69,9 +70,11 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"min", -10.0f},
             entt::attribute{"max", 10.0f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Global exposure bias in EV stops, applied on top of the auto-exposure result."
-                "Use this to make the scene uniformly brighter or darker."
-                "+1 = twice as bright, -1 = half as bright."
+            entt::attribute{"tooltip", "Global exposure bias in EV stops, applied on top of the auto-exposure result. "
+                "Use this to make the scene uniformly brighter or darker: "
+                "+1 = twice as bright, -1 = half as bright. "
+                "The default +1 anchors the metered average at ~18% mid-gray (the tone curves' "
+                "linear section); 0 would land it at ~10%. "
                 "This is the main knob for adjusting overall scene brightness."},
         })
         .data<&auto_exposure_pass::settings::adaptation_speed_up>("adaptation_speed_up"_hs)
@@ -101,11 +104,11 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.95f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Fraction of darkest pixels to exclude from the exposure calculation."
-                "Higher values ignore more shadows, keeping them dark and natural."
-                "At 0.50 the darkest half of all pixels are excluded."
-                "Unreal uses ~0.80, Unity uses ~0.40."
-                "Increase this if auto-exposure is washing out shadows."},
+            entt::attribute{"tooltip", "Fraction of darkest pixels to exclude from the exposure calculation. "
+                "Higher values ignore more shadows, keeping them dark and natural. "
+                "Default 0.80 meters only the brightest quintile (highlight-protecting, like Unreal): "
+                "shadows cannot drag the exposure up and wash out lit areas. "
+                "Lower it toward 0.4-0.5 if dark scenes should adapt brighter."},
         })
         .data<&auto_exposure_pass::settings::high_percentile>("high_percentile"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -114,9 +117,10 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Fraction of pixels to include before cutting off the brightest."
-                "Pixels above this percentile (sky, sun, specular highlights) are excluded."
-                "At 0.95 the brightest 5% of pixels are ignored."
+            entt::attribute{"tooltip", "Fraction of pixels to include before cutting off the brightest. "
+                "Pixels above this percentile (sun disc, specular pinpoints) are excluded. "
+                "Default 0.98 keeps sky IN the metering (so it exposes saturated instead of washed) "
+                "while rejecting true peaks. "
                 "Lower this if bright sky or highlights are driving the exposure too low."},
         })
         .data<&auto_exposure_pass::settings::metering_mode>("metering_mode"_hs)

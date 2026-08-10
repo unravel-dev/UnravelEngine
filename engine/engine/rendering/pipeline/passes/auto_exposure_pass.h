@@ -31,26 +31,36 @@ public:
     {
         /// Lower clamp for metered scene brightness in EV100. A LOWER value lets the
         /// system BRIGHTEN dark scenes more (eye adaptation walking into shadow).
-        /// -1 keeps brightening subtle (~1 stop), which matches this engine's authored look.
-        float min_ev = -4.0f;
+        /// -6 gives interiors/night scenes real adaptation headroom (~2^6 gain over
+        /// the mid anchor) without amplifying pitch black into visible noise.
+        float min_ev = -6.0f;
         /// Upper clamp for metered scene brightness in EV100. A HIGHER value lets the
-        /// system DARKEN bright scenes more. This engine's lighting is authored at a
-        /// fixed reference exposure rather than calibrated to physical cd/m2, so the
-        /// default pins the bright end at the authored peak (exposure ~= 1/1.2) to keep
-        /// daylight looking like daylight. Raise it only if you want bright scenes
-        /// (e.g. staring at the sky) to tone down below the authored level.
-        float max_ev = 0.0f;
+        /// system DARKEN bright scenes more. Since the linear-color pipeline landed,
+        /// the meter is trusted to float freely: 16 covers physical daylight (EV100
+        /// 14-16) and is effectively "no clamp" for current scene luminances, so the
+        /// exposure anchors the image instead of a hand-pinned reference level.
+        float max_ev = 16.0f;
         /// Exposure bias in EV stops applied on top of the metered result (+1 = 2x brighter).
-        float compensation = 0.0f;
+        /// With this pass's K=12.5 / exp2(-EV)/1.2 formulation, an unclamped meter pins
+        /// the metered band at ~10.4% post-exposure; +1 EV anchors it at ~21%. Combined
+        /// with the bright-band percentiles below, this exposes FOR the highlights: lit
+        /// surfaces land near mid-gray and shadows fall naturally dark, instead of the
+        /// meter lifting shadows until the whole image washes out.
+        float compensation = 1.0f;
         /// Time constant in seconds for the exposure to INCREASE (scene getting darker).
         /// Larger = slower adaptation. Adaptation is performed in log2/EV space.
         float adaptation_speed_up = 3.0f;
         /// Time constant in seconds for the exposure to DECREASE (scene getting brighter).
         float adaptation_speed_down = 1.0f;
         /// Fraction of the darkest (weighted) pixels excluded from the average.
-        float low_percentile = 0.50f;
+        /// 0.80 meters only the brightest quintile (classic highlight-protecting
+        /// metering, as in UE's histogram defaults): shadows can no longer drag the
+        /// exposure up and blow out lit areas in high-contrast scenes.
+        float low_percentile = 0.80f;
         /// Upper fraction kept before excluding the brightest (weighted) pixels.
-        float high_percentile = 0.95f;
+        /// 0.98 lets sky participate in metering (so it exposes saturated, not washed)
+        /// while still rejecting sun disc / specular pinpoints.
+        float high_percentile = 0.98f;
         /// How pixels are spatially weighted when metering scene luminance.
         exposure_metering_mode metering_mode = exposure_metering_mode::center_weighted;
         /// Relative radius (in normalized device coords) of the metering region.

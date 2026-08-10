@@ -6,6 +6,9 @@
 #include "../asset_extensions.h"
 #include "../asset_writer.h"
 
+#include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/assets/asset_importer_meta.hpp>
+
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <math/math.h>
@@ -2805,6 +2808,69 @@ auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& r
     return key.generic_string();
 }
 
+// Writes/updates the texture's .meta so the asset compiler knows the authored
+// color space of the texels bound to this material slot (base color/emissive are
+// sRGB-encoded; normal/metal/rough/AO are linear data). An explicit user setting
+// wins: only a meta still at `automatic` is tagged, and the file is rewritten
+// only when something actually changed.
+void tag_texture_colorspace(asset_manager& am,
+                            const fs::path& output_dir,
+                            const std::string& relative,
+                            texture_importer_meta::color_space colorspace)
+{
+    const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(relative));
+    if(!absolute)
+    {
+        return;
+    }
+    fs::path meta_path = fs::convert_to_protocol(*absolute);
+    meta_path = fs::resolve_protocol(fs::replace(meta_path, ex::get_data_directory(), ex::get_meta_directory()));
+    meta_path += ".meta";
+
+    asset_meta meta;
+    load_from_file(meta_path.string(), meta);
+
+    const bool had_importer = meta.importer != nullptr;
+    auto importer = std::dynamic_pointer_cast<texture_importer_meta>(meta.importer);
+    if(!had_importer)
+    {
+        importer = std::make_shared<texture_importer_meta>();
+        meta.importer = importer;
+    }
+    if(!importer)
+    {
+        // Meta exists but with a non-texture importer; nothing sane to tag.
+        return;
+    }
+    bool changed = !had_importer;
+    if(importer->colorspace == texture_importer_meta::color_space::automatic &&
+       importer->colorspace != colorspace)
+    {
+        importer->colorspace = colorspace;
+        changed = true;
+    }
+    if(meta.uid.is_nil())
+    {
+        meta.uid = am.add_asset_info_for_path(*absolute, meta, true);
+        changed = true;
+    }
+    if(!changed)
+    {
+        return;
+    }
+    fs::error_code err;
+    asset_writer::atomic_write_file(meta_path,
+                                    [&](const fs::path& temp)
+                                    {
+                                        save_to_file(temp.string(), meta);
+                                    },
+                                    err);
+    if(err)
+    {
+        APPLOG_WARNING("Mesh Importer: Failed to write color-space meta for '{}': {}", relative, err.message());
+    }
+}
+
 auto find_spec_gloss_mr_relative(const texture_catalog* catalog,
                                  const fs::path& output_dir,
                                  const imported_texture& specular_tex,
@@ -4141,6 +4207,7 @@ void process_material(asset_manager& am,
             {
                 if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                 {
+                    tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::srgb);
                     mat.set_color_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                 }
                 else
@@ -4200,6 +4267,7 @@ void process_material(asset_manager& am,
         {
             if(const auto key = try_make_texture_asset_key(output_dir, combined_mr_relative))
             {
+                tag_texture_colorspace(am, output_dir, combined_mr_relative, texture_importer_meta::color_space::linear);
                 auto texture_asset = am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred);
 
                 mat.set_metalness_map(texture_asset);
@@ -4227,6 +4295,7 @@ void process_material(asset_manager& am,
             {
                 if(const auto key = try_make_texture_asset_key(output_dir, combined_texture.name))
                 {
+                    tag_texture_colorspace(am, output_dir, combined_texture.name, texture_importer_meta::color_space::linear);
                     auto texture_asset = am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred);
 
                     mat.set_metalness_map(texture_asset);
@@ -4257,6 +4326,7 @@ void process_material(asset_manager& am,
                 {
                     if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                     {
+                        tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::linear);
                         mat.set_metalness_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                         has_metallic_tex = true;
                     }
@@ -4278,6 +4348,7 @@ void process_material(asset_manager& am,
                 {
                     if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                     {
+                        tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::linear);
                         mat.set_roughness_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                         has_roughness_tex = true;
 
@@ -4336,6 +4407,7 @@ void process_material(asset_manager& am,
             {
                 if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                 {
+                    tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::linear);
                     mat.set_normal_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                 }
                 else
@@ -4406,6 +4478,7 @@ void process_material(asset_manager& am,
             {
                 if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                 {
+                    tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::linear);
                     mat.set_ao_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                 }
                 else
@@ -4456,6 +4529,7 @@ void process_material(asset_manager& am,
             {
                 if(const auto key = try_make_texture_asset_key(output_dir, texture.name))
                 {
+                    tag_texture_colorspace(am, output_dir, texture.name, texture_importer_meta::color_space::srgb);
                     mat.set_emissive_map(am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred));
                 }
                 else

@@ -328,12 +328,13 @@ void surface_cache_system::add_instance(uint32_t header_index,
     // strictly better than tinting the scene with a colour nothing is painted with.
     if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
     {
-        const auto& base_color = pbr->get_base_color();
+        // Linear decode matches the G-buffer path (picker colors are sRGB-encoded).
+        const auto base_color = pbr->get_base_color().to_linear();
         inst.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
         inst.mean_slot = acquire_texture_mean_slot(pbr->get_color_map(), inst.mean_captured);
         // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
         // know that emission is authored as a colour and a separate scale.
-        const auto& emissive_color = pbr->get_emissive_color();
+        const auto emissive_color = pbr->get_emissive_color().to_linear();
         inst.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
                         pbr->get_emissive_intensity();
     }

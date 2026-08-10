@@ -3,9 +3,41 @@
 #include <engine/rendering/default_textures.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <math/math.h>
 
 namespace unravel
 {
+
+namespace
+{
+
+// CIE xy chromaticity to CAT02 LMS cone response (Y = 1).
+auto cie_xy_to_lms(float x, float y) -> math::vec3
+{
+    const float Y = 1.0f;
+    const float X = Y * x / y;
+    const float Z = Y * (1.0f - x - y) / y;
+    return {0.7328f * X + 0.4296f * Y - 0.1624f * Z,
+            -0.7036f * X + 1.6975f * Y + 0.0061f * Z,
+            0.0030f * X + 0.0136f * Y + 0.9834f * Z};
+}
+
+// Von Kries white balance: temperature/tint in [-1, 1] move the assumed white
+// point along the Planckian locus (and orthogonally for tint); the returned LMS
+// scale re-adapts to D65. Same construction as Unity's ColorBalanceToLMSCoeffs.
+auto compute_white_balance_lms(float temperature, float tint) -> math::vec3
+{
+    const float t1 = temperature * 10.0f / 6.0f;
+    const float t2 = tint * 10.0f / 6.0f;
+    const float x = 0.31271f - t1 * (t1 < 0.0f ? 0.1f : 0.05f);
+    const float standard_y = 2.87f * x - 3.0f * x * x - 0.27509507f;
+    const float y = standard_y + t2 * 0.05f;
+    const math::vec3 w1 = cie_xy_to_lms(0.31271f, 0.32902f); // D65
+    const math::vec3 w2 = cie_xy_to_lms(x, y);
+    return {w1.x / w2.x, w1.y / w2.y, w1.z / w2.z};
+}
+
+} // namespace
 
 auto tonemapping_pass::init(rtti::context& ctx) -> bool
 {
@@ -119,8 +151,18 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     tonemapping_program_.program->begin();
 
-    float tonemap[4] = {params.config.exposure, static_cast<float>(params.config.method), 0.0, 0.0f};
+    float tonemap[4] = {params.config.exposure,
+                        static_cast<float>(params.config.method),
+                        params.config.dithering ? 1.0f : 0.0f,
+                        0.0f};
     gfx::set_uniform(tonemapping_program_.u_tonemapping, tonemap);
+
+    float grading[4] = {params.config.contrast, params.config.saturation, 0.0f, 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_grading, grading);
+
+    const auto wb_lms = compute_white_balance_lms(params.config.temperature, params.config.tint);
+    float wb[4] = {wb_lms.x, wb_lms.y, wb_lms.z, 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_wb_lms, wb);
 
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
     gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());

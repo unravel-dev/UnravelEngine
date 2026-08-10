@@ -113,6 +113,52 @@ REFLECT_INLINE(tonemapping_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "method"},
             entt::attribute{"pretty_name", "Method"},
+        })
+        .data<&tonemapping_pass::settings::temperature>("temperature"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temperature"},
+            entt::attribute{"pretty_name", "Temperature"},
+            entt::attribute{"min", -1.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "White balance temperature shift: positive = warmer (orange), "
+                "negative = cooler (blue). Applied in linear space before the tone curve."},
+        })
+        .data<&tonemapping_pass::settings::tint>("tint"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tint"},
+            entt::attribute{"pretty_name", "Tint"},
+            entt::attribute{"min", -1.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "White balance tint shift: positive = magenta, negative = green. "
+                "Applied in linear space before the tone curve."},
+        })
+        .data<&tonemapping_pass::settings::contrast>("contrast"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contrast"},
+            entt::attribute{"pretty_name", "Contrast"},
+            entt::attribute{"min", 0.3f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Log-space contrast around 18% mid-gray: mids keep their exposure "
+                "while stops above/below expand (>1) or compress (<1). 1 = neutral."},
+        })
+        .data<&tonemapping_pass::settings::saturation>("saturation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "saturation"},
+            entt::attribute{"pretty_name", "Saturation"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Color saturation around Rec.709 luma. 0 = grayscale, 1 = neutral."},
+        })
+        .data<&tonemapping_pass::settings::dithering>("dithering"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "dithering"},
+            entt::attribute{"pretty_name", "Dithering"},
+            entt::attribute{"tooltip", "Triangular-PDF dither before 8-bit quantization. Removes banding "
+                "in smooth gradients (skies, walls) at zero visible cost. Leave on."},
         });
 }
 
@@ -120,6 +166,11 @@ SAVE_INLINE(tonemapping_pass::settings)
 {
     try_save(ar, ser20::make_nvp("exposure", obj.exposure));
     try_save(ar, ser20::make_nvp("method", obj.method));
+    try_save(ar, ser20::make_nvp("temperature", obj.temperature));
+    try_save(ar, ser20::make_nvp("tint", obj.tint));
+    try_save(ar, ser20::make_nvp("contrast", obj.contrast));
+    try_save(ar, ser20::make_nvp("saturation", obj.saturation));
+    try_save(ar, ser20::make_nvp("dithering", obj.dithering));
 }
 SAVE_INSTANTIATE(tonemapping_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(tonemapping_pass::settings, ser20::oarchive_binary_t);
@@ -128,6 +179,11 @@ LOAD_INLINE(tonemapping_pass::settings)
 {
     try_load(ar, ser20::make_nvp("exposure", obj.exposure));
     try_load(ar, ser20::make_nvp("method", obj.method));
+    try_load(ar, ser20::make_nvp("temperature", obj.temperature));
+    try_load(ar, ser20::make_nvp("tint", obj.tint));
+    try_load(ar, ser20::make_nvp("contrast", obj.contrast));
+    try_load(ar, ser20::make_nvp("saturation", obj.saturation));
+    try_load(ar, ser20::make_nvp("dithering", obj.dithering));
 }
 LOAD_INSTANTIATE(tonemapping_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(tonemapping_pass::settings, ser20::iarchive_binary_t);

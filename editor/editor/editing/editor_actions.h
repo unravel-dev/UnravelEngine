@@ -113,6 +113,11 @@ struct editor_actions
 
     static void recompile_shaders(const std::string& group = "");
     static void recompile_textures(const std::string& group = "");
+    /// One-time migration: tags textures referenced by material slots with their
+    /// authored color space (base color/emissive = sRGB, data maps = linear) and
+    /// recompiles the changed ones. Metas with an explicit (non-automatic) color
+    /// space are left untouched. Returns the number of textures tagged.
+    static auto migrate_texture_color_spaces(const std::string& group = "") -> size_t;
     static void recompile_ui(const std::string& group = "");
     static void recompile_scripts(const std::string& group = "");
     static void recompile_meshes(const std::string& group = "");

@@ -107,6 +107,14 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         color = vec3_splat(occlusion);
     }
 
+    // The decode helpers now return LINEAR base color (and colors derived from
+    // it); this pass writes straight to the display-encoded output, so encode
+    // the color-space views back for correct on-screen reading.
+    if(u_mode == BASE_COLOR || u_mode == DIFFUSE_COLOR || u_mode == SPECULAR_COLOR || u_mode == SUBSURFACE_COLOR)
+    {
+        color = linear_to_srgb(saturate(color));
+    }
+
     return vec4(color, 1.0f);
 }
 

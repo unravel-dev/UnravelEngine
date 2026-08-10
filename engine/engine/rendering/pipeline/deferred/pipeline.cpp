@@ -56,8 +56,17 @@ auto get_default_depth_format() -> gfx::texture_format
     return gfx::texture_format::D32F;
 }
 
-// Cubemap face captures keep HDR buffer setup from create_run_params, but write the
-// linear lighting result directly to the cubemap face before post-processing.
+// Returns whether the intermediate G/L/R buffers should be RGBA16F. Tonemapping
+// implies HDR, and probe captures force it explicitly (they strip the post stack
+// but still light in HDR for the cubemap).
+auto wants_hdr_buffers(const pipeline::run_params& params) -> bool
+{
+    return static_cast<bool>(params.fill_hdr_params) || params.force_hdr_buffers;
+}
+
+// Cubemap face captures strip post-processing and write the linear HDR lighting
+// result directly to the cubemap face. Clearing fill_hdr_params also used to drop
+// the G/L buffers to RGBA8 (LDR-clamped IBL); force_hdr_buffers keeps them float.
 void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& params)
 {
     params.fill_assao_params = {};
@@ -68,6 +77,7 @@ void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& param
     params.fill_ssr_params = {};
     params.fill_ssil_params = {};
     params.fill_hdr_params = {};
+    params.force_hdr_buffers = true;
 }
 
 void clear_reflection_probe_face(const gfx::frame_buffer::ptr& fbo)
@@ -152,7 +162,7 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
     auto& fbo = rview.fbo_get_or_emplace("GBUFFER");
     if(gfx::needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
+        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
 
         auto tex0 = std::make_shared<gfx::texture>(viewport_size.width,
                                                    viewport_size.height,
@@ -199,7 +209,7 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     auto& fbo = rview.fbo_get_or_emplace("LBUFFER");
     if(gfx::needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
+        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
 
         auto tex = std::make_shared<gfx::texture>(viewport_size.width,
                                                   viewport_size.height,
@@ -234,7 +244,7 @@ auto create_or_resize_r_buffer(gfx::render_view& rview,
     auto& fbo = rview.fbo_get_or_emplace("RBUFFER");
     if(gfx::needs_recreate(fbo, viewport_size))
     {
-        auto format = params.fill_hdr_params ? get_default_hdr_format() : get_default_format();
+        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
 
         auto tex = std::make_shared<gfx::texture>(viewport_size.width,
                                                   viewport_size.height,
@@ -388,9 +398,11 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto ao_tex = ao.get();
     const auto emissive_tex = emissive.get();
 
-    const auto& base_color = mat.get_base_color();
-    const auto& subsurface_color = mat.get_subsurface_color();
-    const auto& emissive_color = mat.get_emissive_color();
+    // Picker colors are authored sRGB-encoded; lighting math runs in linear, so
+    // decode at upload (textures get the same treatment via BGFX_TEXTURE_SRGB).
+    const auto base_color = mat.get_base_color().to_linear();
+    const auto subsurface_color = mat.get_subsurface_color().to_linear();
+    const auto emissive_color = mat.get_emissive_color().to_linear();
     const float emissive_intensity = mat.get_emissive_intensity();
     const auto& surface_data = mat.get_surface_data();
     const auto& tiling = mat.get_tiling();
@@ -1350,7 +1362,8 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                 float sky_brightness = skylight.get_sky_brightness();
                 exposition *= sky_brightness;
 
-                const auto& tint = skylight.get_irradiance_tint();
+                // Tint is a picker (sRGB) color; the Perez luminances it scales are linear.
+                const auto tint = skylight.get_irradiance_tint().to_linear();
                 math::vec3 tint_vec = {tint.value.r, tint.value.g, tint.value.b};
                 irradiance_color.x *= tint_vec.x;
                 irradiance_color.y *= tint_vec.y;
@@ -1475,7 +1488,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight);
                     irradiance_intensity *= sun_weight;
                 }
-                const auto& tint = skylight.get_irradiance_tint();
+                const auto tint = skylight.get_irradiance_tint().to_linear();
                 irradiance_color.x *= tint.value.r;
                 irradiance_color.y *= tint.value.g;
                 irradiance_color.z *= tint.value.b;
@@ -1594,9 +1607,11 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);
 
-            float light_color_intensity[4] = {light.color.value.r,
-                                              light.color.value.g,
-                                              light.color.value.b,
+            // Light colors are picker (sRGB) values; shading needs linear.
+            const auto light_color_linear = light.color.to_linear();
+            float light_color_intensity[4] = {light_color_linear.value.r,
+                                              light_color_linear.value.g,
+                                              light_color_linear.value.b,
                                               light.intensity};
 
             gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);

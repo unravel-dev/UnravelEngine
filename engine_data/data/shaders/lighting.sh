@@ -3,6 +3,39 @@
 
 #include <bgfx_shader.sh>
 
+// Shared sRGB <-> linear conversion (exact piecewise curve). Guarded so files
+// that also include tonemapping.sh get exactly one definition.
+#ifndef SRGB_CONVERSION_SH_GUARD
+#define SRGB_CONVERSION_SH_GUARD
+
+vec3 linear_to_srgb(vec3 color)
+{
+    vec3 x = color * 12.92f;
+    vec3 y = 1.055f * pow(saturate(color), vec3_splat(1.0f / 2.4f)) - 0.055f;
+
+    vec3 clr = color;
+    clr.r = color.r < 0.0031308f ? x.r : y.r;
+    clr.g = color.g < 0.0031308f ? x.g : y.g;
+    clr.b = color.b < 0.0031308f ? x.b : y.b;
+
+    return clr;
+}
+
+vec3 srgb_to_linear(vec3 color)
+{
+    vec3 lo = color / 12.92f;
+    vec3 hi = pow((color + 0.055f) / 1.055f, vec3_splat(2.4f));
+
+    vec3 result;
+    result.r = color.r <= 0.04045f ? lo.r : hi.r;
+    result.g = color.g <= 0.04045f ? lo.g : hi.g;
+    result.b = color.b <= 0.04045f ? lo.b : hi.b;
+
+    return result;
+}
+
+#endif // SRGB_CONVERSION_SH_GUARD
+
 
 struct GBufferDataColorAndAO
 {
@@ -164,9 +197,13 @@ float F0RGBToMetallic(vec3 F0)
     return F0ToMetallic(F0RGBToF0(F0));
 }
 
+// base_color enters LINEAR (materials sample sRGB-flagged textures, hardware
+// decodes) and is stored sRGB-ENCODED in the UNORM8 target: 8-bit linear would
+// band visibly in the darks. Every decoder below undoes this; raw passthroughs
+// (ASSAO's AO merge) are unaffected because they do not interpret rgb.
 void EncodeGBuffer(in GBufferData data, inout vec4 result[4])
 {
-    result[0] = vec4(data.base_color, data.ambient_occlusion);
+    result[0] = vec4(linear_to_srgb(saturate(data.base_color)), data.ambient_occlusion);
     result[1] = vec4(encodeNormalOctahedron(data.world_normal), data.metalness, data.roughness);
     result[2] = vec4(data.emissive_color, 0.0f);
     result[3] = vec4(data.subsurface_color, data.subsurface_opacity);
@@ -178,9 +215,9 @@ GBufferDataColorAndAO DecodeGBufferColorAndAO(
     sampler2D colorTex)
 {
     GBufferDataColorAndAO data;
-    vec4 data0 = texture2D(colorTex, texcoord);   // base_color, ao
+    vec4 data0 = texture2D(colorTex, texcoord);   // base_color (sRGB-encoded), ao
 
-    data.base_color = data0.xyz;
+    data.base_color = srgb_to_linear(data0.xyz);
     data.ambient_occlusion = data0.w;
 
     return data;
@@ -192,9 +229,9 @@ GBufferDataColorAndAO DecodeGBufferColorAndAOLod(
     float lod)
 {
     GBufferDataColorAndAO data;
-    vec4 data0 = texture2DLod(colorTex, texcoord, lod);   // base_color, ao
+    vec4 data0 = texture2DLod(colorTex, texcoord, lod);   // base_color (sRGB-encoded), ao
 
-    data.base_color = data0.xyz;
+    data.base_color = srgb_to_linear(data0.xyz);
     data.ambient_occlusion = data0.w;
 
     return data;
@@ -346,7 +383,7 @@ GBufferData DecodeGBufferTexel(
     vec4 d3 = texelFetch(tex3, texel, 0);
     float deviceDepth = texelFetch(tex4, texel, 0).x;
 
-    data.base_color = d0.xyz;
+    data.base_color = srgb_to_linear(d0.xyz);
     data.ambient_occlusion = d0.w;
     data.world_normal = decodeNormalOctahedron(d1.xy);
     data.metalness = d1.z;
@@ -1365,7 +1402,9 @@ FBxDFEnergyTerms ComputeGGXSpecEnergyTerms(float Roughness, float NoV, vec3 F0)
 
 float Luminance( vec3 LinearColor )
 {
-    return dot( LinearColor, vec3( 0.3, 0.59, 0.11 ) );
+    // Rec.709 luminance weights, consistent with the tonemapper, bloom, and
+    // exposure histogram (previously NTSC 0.3/0.59/0.11).
+    return dot( LinearColor, vec3( 0.2126, 0.7152, 0.0722 ) );
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

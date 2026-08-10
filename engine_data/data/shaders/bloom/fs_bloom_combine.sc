@@ -11,12 +11,17 @@ $input v_texcoord0
 SAMPLER2D(s_scene, 0);
 SAMPLER2D(s_bloom, 1);
 
+uniform vec4 u_combineParams;
+#define u_bloom_intensity u_combineParams.x
+
 void main()
 {
     vec3 scene_color = texture2D(s_scene, v_texcoord0).rgb;
     vec3 bloom_color = texture2D(s_bloom, v_texcoord0).rgb;
 
-    vec3 hdr_color = scene_color + bloom_color;
+    // Global bloom intensity applied exactly once, here; the upsample cascade
+    // only applies per-mip weights.
+    vec3 hdr_color = scene_color + bloom_color * u_bloom_intensity;
     hdr_color = min(max(hdr_color, vec3_splat(0.0)), vec3_splat(65504.0));
 
     gl_FragColor = vec4(hdr_color, 1.0);

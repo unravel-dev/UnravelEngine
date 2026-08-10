@@ -138,6 +138,12 @@ public:
         /// Deferred pipeline only: bitmask of enabled passes (@c deferred::pipeline_steps).
         pipeline_flags pflags = 0xFFFFFFFFu;
 
+        /// Forces RGBA16F G/L/R buffers even when @c fill_hdr_params is unset.
+        /// Reflection probe captures strip the post stack (including tonemapping)
+        /// but must still light in HDR: their result feeds an RGBA16F cubemap and
+        /// ultimately IBL, so an LDR-clamped capture is silently wrong.
+        bool force_hdr_buffers = false;
+
         std::function<void(assao_pass::run_params& params)> fill_assao_params;
         std::function<void(auto_exposure_pass::run_params& params)> fill_auto_exposure_params;
         std::function<void(bloom_pass::run_params& params)> fill_bloom_params;

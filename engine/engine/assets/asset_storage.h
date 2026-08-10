@@ -31,6 +31,20 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
         equirect,
     };
 
+    /// Color space the texels are authored in. Drives both the compiled container's
+    /// sRGB tag (KTX2) and the runtime BGFX_TEXTURE_SRGB sampling flag.
+    /// - automatic: raw/linear sampling (legacy behavior). Data maps, UI textures and
+    ///   anything untagged keep working exactly as before.
+    /// - srgb: display-encoded color data (albedo, emissive). Hardware decodes to
+    ///   linear at sample time so lighting math runs in linear space.
+    /// - linear: explicitly linear data; also makes texturec filter mips linearly.
+    enum class color_space
+    {
+        automatic,
+        srgb,
+        linear,
+    };
+
     enum class compression_quality
     {
         project_default,
@@ -57,6 +71,7 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
     };
 
     texture_type type{texture_type::automatic};
+    color_space colorspace{color_space::automatic};
     bool generate_mipmaps{true};
     /// Bake OpenGL/DirectX normal Y difference into texels at compile (normal_map type only).
     bool invert_normal_y{false};

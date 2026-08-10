@@ -121,9 +121,12 @@ void gpu_light_buffer::update(scene& scn)
             dst[5] = direction.y;
             dst[6] = direction.z;
             dst[7] = range;
-            dst[8] = light.color.value.r;
-            dst[9] = light.color.value.g;
-            dst[10] = light.color.value.b;
+            // Same linear decode as the deferred direct-lighting pass: GI-lit voxels
+            // and directly-lit pixels must agree on the light's color.
+            const auto light_color_linear = light.color.to_linear();
+            dst[8] = light_color_linear.value.r;
+            dst[9] = light_color_linear.value.g;
+            dst[10] = light_color_linear.value.b;
             dst[11] = light.intensity;
             dst[12] = cos_inner;
             dst[13] = cos_outer;

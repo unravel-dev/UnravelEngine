@@ -296,6 +296,13 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                             editor_actions::recompile_textures("app:/");
                         }
 
+                        ImGui::Separator();
+
+                        if(ImGui::MenuItem("Migrate Color Spaces (Project)"))
+                        {
+                            editor_actions::migrate_texture_color_spaces("app:/");
+                        }
+
                         ImGui::EndMenu();
                     }
 

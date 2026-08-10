@@ -517,12 +517,27 @@ auto compile_texture_to_file(const fs::path& input_path,
     const auto input_info = get_input_texture_info(compile_input, quality.max_size);
     auto format = select_compressed_format(input_info.format, compile_input.extension(), quality.compression);
 
+    // Resolve the effective color space. Data-typed imports are always linear no
+    // matter the tag: normal maps are vectors, and float sources (.hdr/.exr) have
+    // no display encoding to begin with. Everything else honors the meta, with
+    // `automatic` meaning raw/linear (legacy behavior -- UI textures, icons and
+    // untagged content keep sampling exactly as before).
+    const auto source_ext = string_utils::to_lower(compile_input.extension().string());
+    const bool source_is_float = source_ext == ".hdr" || source_ext == ".exr";
+    const bool is_normal_map = importer.type == texture_importer_meta::texture_type::normal_map;
+    const bool resolved_srgb = importer.colorspace == texture_importer_meta::color_space::srgb &&
+                               !is_normal_map && !source_is_float;
+
     const bool needs_format_conversion = input_info.format != format;
     const bool needs_downscale = !input_info.fits_max_size;
     // Equirect must always run through texturec; a raw copy cannot produce a cubemap.
     const bool needs_equirect_projection = importer.type == texture_importer_meta::texture_type::equirect;
+    // sRGB-tagged textures must run through texturec even when a raw copy would do:
+    // only the compiled KTX2 container carries the sRGB tag the runtime loader
+    // turns into BGFX_TEXTURE_SRGB. A raw-copied PNG cannot express it.
+    const bool needs_srgb_container = resolved_srgb;
 
-    if(needs_format_conversion || needs_downscale || needs_equirect_projection)
+    if(needs_format_conversion || needs_downscale || needs_equirect_projection || needs_srgb_container)
     {
         if(needs_downscale && !needs_format_conversion)
         {
@@ -533,15 +548,24 @@ auto compile_texture_to_file(const fs::path& input_path,
                         texture_size_to_pixel_limit(quality.max_size));
         }
 
+        // KTX2 container: unlike legacy DDS fourcc, its data format descriptor
+        // carries the sRGB/linear transfer tag, which the runtime loader maps to
+        // BGFX_TEXTURE_SRGB (see loadTexture). texturec tags the container sRGB
+        // unless --linear is passed, so the flag below must mirror resolved_srgb.
         std::vector<std::string> args_array = {
             "-f",
             str_input,
             "-o",
             str_output,
             "--as",
-            "dds",
+            "ktx2",
         };
-        
+
+        if(!resolved_srgb)
+        {
+            args_array.emplace_back("--linear");
+        }
+
         if(try_compress)
         {
             args_array.emplace_back("-t");

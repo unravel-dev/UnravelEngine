@@ -148,6 +148,47 @@ struct color
         return out;
     }
 
+    /**
+     * @brief Decodes one sRGB-encoded channel to linear (exact piecewise curve,
+     * matching srgb_to_linear in the shader library).
+     */
+    static float srgb_channel_to_linear(float c)
+    {
+        return c <= 0.04045f ? c / 12.92f : glm::pow((c + 0.055f) / 1.055f, 2.4f);
+    }
+
+    /**
+     * @brief Encodes one linear channel to sRGB (exact piecewise curve,
+     * matching linear_to_srgb in the shader library).
+     */
+    static float linear_channel_to_srgb(float c)
+    {
+        return c < 0.0031308f ? c * 12.92f : 1.055f * glm::pow(glm::clamp(c, 0.0f, 1.0f), 1.0f / 2.4f) - 0.055f;
+    }
+
+    /**
+     * @brief Returns this color decoded from sRGB to linear. Alpha is untouched.
+     * Authored/picker colors are sRGB-encoded; shaders expect linear.
+     */
+    color to_linear() const
+    {
+        return {srgb_channel_to_linear(value.x),
+                srgb_channel_to_linear(value.y),
+                srgb_channel_to_linear(value.z),
+                value.w};
+    }
+
+    /**
+     * @brief Returns this color encoded from linear to sRGB. Alpha is untouched.
+     */
+    color to_srgb() const
+    {
+        return {linear_channel_to_srgb(value.x),
+                linear_channel_to_srgb(value.y),
+                linear_channel_to_srgb(value.z),
+                value.w};
+    }
+
     // Convert rgb floats ([0-1],[0-1],[0-1]) to hsv floats ([0-1],[0-1],[0-1]),
     // from Foley & van Dam p592
     // Optimized http://lolengine.net/blog/2013/01/13/fast-rgb-to-hsv

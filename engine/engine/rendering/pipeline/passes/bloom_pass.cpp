@@ -230,9 +230,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         float pixel_size[4] = {1.0f / float(out_w), 1.0f / float(out_h), 0.0f, 0.0f};
         gfx::set_uniform(upsample_program_.u_pixel_size, pixel_size);
 
+        // Per-mip weight only. The global intensity is applied ONCE in the combine
+        // pass: applying it here would compound it at every cascade hop, scaling
+        // mip k's contribution by intensity^k instead of linearly.
         const auto& mip_tint = config.get_mip_tint(src_idx);
-        float effective_weight = config.intensity * mip_tint.value.w;
-        float tint[4] = {mip_tint.value.x, mip_tint.value.y, mip_tint.value.z, effective_weight};
+        float tint[4] = {mip_tint.value.x, mip_tint.value.y, mip_tint.value.z, mip_tint.value.w};
         gfx::set_uniform(upsample_program_.u_tint, tint);
 
         gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(src_idx)));
@@ -255,6 +257,9 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
     pass.set_view_proj({}, {});
 
     combine_program_.program->begin();
+
+    float combine_params[4] = {config.intensity, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(combine_program_.u_combine_params, combine_params);
 
     gfx::set_texture(combine_program_.s_scene, 0, input->get_texture());
     gfx::set_texture(combine_program_.s_bloom, 1, rview.tex_get("BLOOM_MIP_0"));

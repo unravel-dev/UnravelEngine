@@ -44,6 +44,11 @@
 #define mtxFromCols4(_0, _1, _2, _3) transpose(mat4(_0, _1, _2, _3) )
 #endif
 
+// Shared sRGB <-> linear conversion (exact piecewise curve). Guarded so files
+// that also include lighting.sh get exactly one definition.
+#ifndef SRGB_CONVERSION_SH_GUARD
+#define SRGB_CONVERSION_SH_GUARD
+
 vec3 linear_to_srgb(vec3 color)
 {
     vec3 x = color * 12.92f;
@@ -61,14 +66,16 @@ vec3 srgb_to_linear(vec3 color)
 {
     vec3 lo = color / 12.92f;
     vec3 hi = pow((color + 0.055f) / 1.055f, vec3_splat(2.4f));
-    
+
     vec3 result;
     result.r = color.r <= 0.04045f ? lo.r : hi.r;
     result.g = color.g <= 0.04045f ? lo.g : hi.g;
     result.b = color.b <= 0.04045f ? lo.b : hi.b;
-    
+
     return result;
 }
+
+#endif // SRGB_CONVERSION_SH_GUARD
 
 // relative luminance of linear RGB(!)
 // BT.709 primaries
@@ -104,7 +111,8 @@ vec3 tonemap_reinhard_luminance(vec3 color)
 {
     float lum = luminance(color);
     float nLum =  lum / (lum + 1.0);
-    return color * (nLum / lum);
+    // max() guards the 0/0 at pure black (lum == 0 -> NaN written to the target).
+    return color * (nLum / max(lum, 1e-5));
 }
 
 // Uncharted 2 filmic operator
@@ -127,21 +135,23 @@ vec3 hable_map(vec3 x)
 
 vec3 tonemap_hable(vec3 color)
 {
-    //const float W = 11.2; // linear white point
-    //vec3 whiteScale = hable_map(vec3_splat(W));
-    const float whiteScale = 0.72513;
+    // whiteScale = hable_map(W) with W = 11.2 evaluated with the constants
+    // used in hable_map above (A=0.22, B=0.30, E=0.01). The website variant
+    // (A=0.15, B=0.50, E=0.02) yields 0.72513 -- using that value with these
+    // constants over-brightens by x1.196 and clips whites early.
+    const float whiteScale = 0.86730;
     const float ExposureBias = 2.0;
     return hable_map(ExposureBias * color) / whiteScale;
 }
 
 // Filmic / Hejl-Burgess-Dawson
 // Mimics response curve of Kodak film, Haarm-Pieter Duiker
-// approximation by Hejl/Burgess-Dawson (pow 1/2.2 baked in)
+// approximation by Hejl/Burgess-Dawson (pow 1/2.2 baked in).
+// The output is display-encoded; do NOT linearize or re-apply linear_to_srgb.
 vec3 tonemap_filmic(vec3 color)
 {
     vec3 x = max(color - 0.004, 0.0);
-    vec3 result = (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
-    return pow(result, vec3_splat(2.2));
+    return (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
 }
 
 // Polynomial fit of ACES
@@ -165,8 +175,11 @@ vec3 tonemap_aces(vec3 color)
         vec3(-0.07367, -0.00605, 1.07602)
     );
 
-    // colors in this code are premultiplied by 1.8
-    // https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ToneMapping.hlsl
+    // The reference (BakingLab/ToneMapping.hlsl) pre-scales input by 1.8 so the
+    // fit matches full ACES brightness. Deliberately left OFF here to preserve the
+    // engine's current calibration; revisit together with mid-gray anchoring when
+    // the grading/tonemap unification lands (see tasks/hdr_tonemapping_plan.md,
+    // Phase 3) rather than as an isolated brightness change.
     //color *= 1.8;
     vec3 result = mul(ACESInputMat, color);
 
@@ -310,8 +323,10 @@ vec3 agx_core(vec3 val, vec3 slope, vec3 offset, vec3 power, float saturation)
     // Inverse input transform (outset)
     val = mul(agx_mat_inv, val);
 
-    // sRGB EOTF (output linear for display)
-    val = pow(max(val, vec3_splat(0.0)), vec3_splat(2.2));
+    // The sigmoid output is sRGB-display-encoded; return linear so the caller's
+    // linear_to_srgb is an exact inverse. Using pow(2.2) here while the caller
+    // encodes with the piecewise sRGB curve shifts the darks.
+    val = srgb_to_linear(saturate(val));
     return saturate(val);
 }
 
@@ -363,7 +378,9 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
 	BRANCH
     if(method == TONEMAP_NONE)
     {
-        tonemapped_color = saturate(color);
+        // "None" skips the tone curve, not the display encode: the target is
+        // UNORM8 read as sRGB by the display, so linear values still need encoding.
+        tonemapped_color = linear_to_srgb(saturate(color));
     }
     else if(method == TONEMAP_EXPONENTIAL)
     {

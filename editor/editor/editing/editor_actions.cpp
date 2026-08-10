@@ -21,7 +21,9 @@
 #include <engine/events.h>
 #include <engine/play_mode.h>
 #include <engine/meta/assets/asset_database.hpp>
+#include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/rendering/material.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -1786,6 +1788,79 @@ void editor_actions::recompile_textures(const std::string& group)
                 fs::watcher::touch(path, false);
             }
         });
+}
+
+auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> size_t
+{
+    auto& ctx = engine::context();
+    auto& am = ctx.get_cached<asset_manager>();
+
+    auto tag = [&](const asset_handle<gfx::texture>& tex, texture_importer_meta::color_space colorspace) -> bool
+    {
+        if(!tex)
+        {
+            return false;
+        }
+        const auto meta_path = asset_writer::resolve_meta_file(tex);
+        asset_meta meta;
+        if(!load_from_file(meta_path.string(), meta))
+        {
+            // No meta yet (texture not scanned): the watcher will create a default
+            // one; re-running the migration afterwards will pick it up.
+            return false;
+        }
+        auto importer = std::dynamic_pointer_cast<texture_importer_meta>(meta.importer);
+        if(!importer)
+        {
+            return false;
+        }
+        if(importer->colorspace != texture_importer_meta::color_space::automatic)
+        {
+            // Explicit user choice wins over the migration.
+            return false;
+        }
+        importer->colorspace = colorspace;
+        fs::error_code err;
+        asset_writer::atomic_write_file(meta_path,
+                                        [&](const fs::path& temp)
+                                        {
+                                            save_to_file(temp.string(), meta);
+                                        },
+                                        err);
+        if(err)
+        {
+            APPLOG_WARNING("Color space migration: failed to write meta for {}: {}", tex.id(), err.message());
+            return false;
+        }
+        // Touch the source so the watcher recompiles it into a tagged container.
+        fs::error_code ec;
+        auto source = fs::absolute(fs::resolve_protocol(tex.id()).string(), ec);
+        if(!ec)
+        {
+            fs::watcher::touch(source, false);
+        }
+        return true;
+    };
+
+    size_t tagged = 0;
+    auto materials = am.get_assets<material>(group);
+    for(const auto& asset : materials)
+    {
+        auto mat = asset.get();
+        if(!mat || !mat->is<pbr_material>())
+        {
+            continue;
+        }
+        const auto& pbr = static_cast<const pbr_material&>(*mat);
+        tagged += size_t(tag(pbr.get_color_map(), texture_importer_meta::color_space::srgb));
+        tagged += size_t(tag(pbr.get_emissive_map(), texture_importer_meta::color_space::srgb));
+        tagged += size_t(tag(pbr.get_normal_map(), texture_importer_meta::color_space::linear));
+        tagged += size_t(tag(pbr.get_roughness_map(), texture_importer_meta::color_space::linear));
+        tagged += size_t(tag(pbr.get_metalness_map(), texture_importer_meta::color_space::linear));
+        tagged += size_t(tag(pbr.get_ao_map(), texture_importer_meta::color_space::linear));
+    }
+    APPLOG_INFO("Color space migration: tagged {} texture(s) from {} material(s).", tagged, materials.size());
+    return tagged;
 }
 
 void editor_actions::recompile_meshes(const std::string& group)

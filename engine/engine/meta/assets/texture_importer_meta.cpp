@@ -106,6 +106,29 @@ REFLECT(texture_importer_meta)
             entt::attribute{"pretty_name", "Equirect. Proj."},
         });
 
+    // Register texture_importer_meta::color_space enum with entt
+    entt::meta_factory<texture_importer_meta::color_space>{}
+        .type("color_space"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "color_space"},
+            entt::attribute{"pretty_name", "Color Space"},
+        })
+        .data<texture_importer_meta::color_space::automatic>("automatic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "automatic"},
+            entt::attribute{"pretty_name", "Auto (Raw)"},
+        })
+        .data<texture_importer_meta::color_space::srgb>("srgb"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "srgb"},
+            entt::attribute{"pretty_name", "sRGB (Color)"},
+        })
+        .data<texture_importer_meta::color_space::linear>("linear"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "linear"},
+            entt::attribute{"pretty_name", "Linear (Data)"},
+        });
+
     // Register texture_importer_meta::compression_quality enum with entt
     entt::meta_factory<texture_importer_meta::compression_quality>{}
         .type("compression_quality"_hs)
@@ -169,6 +192,11 @@ REFLECT(texture_importer_meta)
             entt::attribute{"name", "type"},
             entt::attribute{"pretty_name", "Type"},
         })
+        .data<&texture_importer_meta::colorspace>("colorspace"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "colorspace"},
+            entt::attribute{"pretty_name", "Color Space"},
+        })
         .data<&texture_importer_meta::generate_mipmaps>("generate_mipmaps"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "generate_mipmaps"},
@@ -206,6 +234,7 @@ SAVE(texture_importer_meta)
 {
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("type", obj.type));
+    try_save(ar, ser20::make_nvp("colorspace", obj.colorspace));
     try_save(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
     try_save(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_save(ar, ser20::make_nvp("quality", obj.quality));
@@ -217,6 +246,7 @@ LOAD(texture_importer_meta)
 {
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("type", obj.type));
+    try_load(ar, ser20::make_nvp("colorspace", obj.colorspace));
     try_load(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
     try_load(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_load(ar, ser20::make_nvp("quality", obj.quality));
