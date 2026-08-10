@@ -543,8 +543,17 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                         continue;
                     }
                     const math::vec4 local = instance.world_to_local * math::vec4(center, 1.0f);
+                    // Compete at TRUE surface distance (mirrors cs_gi_clipmap_attributes.sc): a
+                    // two-sided shell reads |distance to sheet| - half_thickness, so raw |d| put
+                    // its zero isosurface - a phantom skin half a metre off the cloth at
+                    // production bake scales - ahead of honest signed fields wherever the skin
+                    // crossed them, painting curtain and rope albedo onto Sponza's stone. Adding
+                    // back the applied half-thickness (zero for signed fields) restores the
+                    // unsigned sheet distance.
+                    const float shell_bias =
+                        instance.sdf->is_two_sided ? instance.sdf->two_sided_thickness : 0.0f;
                     const float magnitude =
-                        std::fabs(sample_mesh_sdf(*instance.sdf, math::vec3(local)) *
+                        std::fabs((sample_mesh_sdf(*instance.sdf, math::vec3(local)) + shell_bias) *
                                   instance.local_to_world_scale);
                     if(magnitude < m1 || (magnitude == m1 && (i1 >= instances.size() || candidate < i1)))
                     {
@@ -576,8 +585,23 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                 math::vec3 blended_emissive = first.emissive;
                 if(i2 < instances.size())
                 {
-                    const float w1 = attr_reach - m1;
-                    const float w2 = attr_reach - m2;
+                    // COVERAGE-scaled proximity (mirrors cs_gi_clipmap_attributes.sc): a thin
+                    // shell's volume fraction inside the cell is bounded by its thickness over
+                    // the cell size - a rope equidistant with the floor is a sliver of the
+                    // cell, not half of it. Solids keep weight 1.
+                    const auto shell_coverage = [&](const global_sdf_instance& inst) -> float
+                    {
+                        if(!inst.sdf->is_two_sided)
+                        {
+                            return 1.0f;
+                        }
+                        return math::clamp(2.0f * inst.sdf->two_sided_thickness *
+                                               inst.local_to_world_scale / attr_voxel_size,
+                                           0.0f,
+                                           1.0f);
+                    };
+                    const float w1 = (attr_reach - m1) * shell_coverage(first);
+                    const float w2 = (attr_reach - m2) * shell_coverage(instances[i2]);
                     const float w_sum = math::max(w1 + w2, 1e-6f);
                     blended_albedo = (first.albedo * w1 + instances[i2].albedo * w2) / w_sum;
                     blended_emissive = (first.emissive * w1 + instances[i2].emissive * w2) / w_sum;

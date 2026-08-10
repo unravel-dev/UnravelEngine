@@ -58,6 +58,17 @@ uniform vec4 u_clipmap_attr_params;
 /// xyz = this level's world-space origin (snapped minimum corner).
 uniform vec4 u_clipmap_compose_origin;
 
+/// Fraction of an attribute cell a candidate can actually occupy: 1 for solids, the shell
+/// thickness fraction for two-sided fields. See the blend note at the use site.
+float GiAttrShellCoverage(SdfHeader header, float scale)
+{
+	if(header.two_sided_thickness <= 0.0)
+	{
+		return 1.0;
+	}
+	return saturate(2.0 * header.two_sided_thickness * scale / u_attr_voxel_size);
+}
+
 NUM_THREADS(4, 4, 4)
 void main()
 {
@@ -167,8 +178,17 @@ void main()
 						}
 						SdfHeader header = SdfLoadHeader(inst.header_index);
 						vec3 local_position = SdfTransformPoint(inst.world_to_local_rows, center);
+						// Candidates compete at TRUE surface distance. A two-sided shell reads
+						// |distance to sheet| - half_thickness, so its zero isosurface is a
+						// phantom skin floating half a metre from the cloth at production bake
+						// scales - and raw |d| let that skin beat honest signed fields wherever
+						// it crossed them (measured: curtain and rope albedo painted onto
+						// Sponza's stone, ring-shaped where the skin crossed columns). Adding
+						// back the applied half-thickness (zero for signed fields, so no branch)
+						// restores the unsigned sheet distance the contest should judge on.
 						float magnitude =
-						    abs(SdfSampleLocal(header, local_position) * inst.local_to_world_scale);
+						    abs((SdfSampleLocal(header, local_position) + header.two_sided_thickness) *
+						        inst.local_to_world_scale);
 						if(magnitude < best_magnitude ||
 						   (magnitude == best_magnitude && (best_index < 0 || index < best_index)))
 						{
@@ -220,8 +240,17 @@ void main()
 		{
 			second_albedo *= b_gi_texture_means[second.mean_slot].xyz;
 		}
-		float w1 = u_attr_reach - best_magnitude;
-		float w2 = u_attr_reach - second_magnitude;
+		// COVERAGE-scaled proximity, not proximity alone: the blend approximates the mixture
+		// of surfaces INSIDE the cell, and a thin shell's volume fraction is bounded by its
+		// thickness over the cell size - a 3 cm rope equidistant with the floor is 2% of the
+		// cell, not half of it (measured: rope-red floors wherever ropes ran along a parapet).
+		// Solids keep weight 1; shells fade from coarse cells exactly as their footprint does.
+		float first_coverage =
+		    GiAttrShellCoverage(SdfLoadHeader(first.header_index), first.local_to_world_scale);
+		float second_coverage =
+		    GiAttrShellCoverage(SdfLoadHeader(second.header_index), second.local_to_world_scale);
+		float w1 = (u_attr_reach - best_magnitude) * first_coverage;
+		float w2 = (u_attr_reach - second_magnitude) * second_coverage;
 		float w_sum = max(w1 + w2, 1e-6);
 		blended_albedo = (first_albedo * w1 + second_albedo * w2) / w_sum;
 		blended_emissive = (first.emissive * w1 + second.emissive * w2) / w_sum;

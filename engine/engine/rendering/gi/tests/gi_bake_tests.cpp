@@ -478,17 +478,16 @@ void test_conservative_empty_bricks_in_a_shell()
  * @brief Pins which bake setting actually controls the shell thickness on a large open submesh.
  *
  * An unsigned shell is floored at one voxel because a thinner one cannot be represented, so the
- * shell's WORLD thickness is set by the voxel size. The voxel is Resolution divisions of the
- * submesh's own longest axis, which means a large submesh gets a coarse voxel and therefore a
- * shell metres thick -- and everything within it reads solid, so the submesh traces as a block.
- *
- * The trap this guards is that the two caps below Resolution only ever make the voxel COARSER.
- * Raising Max Total Voxels alone looks like the obvious fix and cannot work, which is exactly the
- * experiment that made a phantom block look like a tracing bug rather than a sizing one.
+ * shell's WORLD thickness is set by the voxel size. The thin-geometry escalation REQUESTS a
+ * voxel the authored thickness can justify whenever the derived one is coarser, and the caps
+ * then arbitrate - which makes Max Total Voxels the governing lever for thin shells. Before the
+ * escalation, Resolution pinned the voxel and raising the budget alone could not reach anything
+ * finer: that trap made a phantom block look like a tracing bug rather than a sizing one, and
+ * this test pinned it; it now pins the escalation's contract instead.
  */
-void test_large_open_submesh_shell_is_governed_by_resolution()
+void test_large_open_submesh_shell_is_governed_by_budget()
 {
-    std::printf("test_large_open_submesh_shell_is_governed_by_resolution\n");
+    std::printf("test_large_open_submesh_shell_is_governed_by_budget\n");
     // Building-sized, and open so the bake takes the unsigned path on its own.
     const auto geometry = make_open_box(math::vec3(15.0f));
     constexpr float authored_thickness = 0.05f;
@@ -518,16 +517,21 @@ void test_large_open_submesh_shell_is_governed_by_resolution()
                 both.voxel_size,
                 both.two_sided_thickness);
     check(base.is_two_sided, "an open submesh bakes as a shell without being asked");
+    // A volume-filling mesh at the default budget lands where it always did: the escalation
+    // requests finer, the budget takes it straight back. The phantom remains bounded only by
+    // what the budget can afford - which is why the runtime warns about the fat leftovers.
     check(base.two_sided_thickness > authored_thickness * 5.0f,
-          "at the defaults a building-sized shell is floored far above the authored thickness");
-    // The point of the test. A raised budget cannot reach a finer voxel than Resolution asked for,
-    // so the shell stays thick enough to swallow any detail finer than it.
-    check(budget_only.voxel_size > base.voxel_size * 0.6f,
-          "raising Max Total Voxels alone barely moves the voxel size");
-    check(budget_only.two_sided_thickness > authored_thickness * 5.0f,
-          "raising Max Total Voxels alone leaves the shell far above the authored thickness");
-    check(both.voxel_size < budget_only.voxel_size * 0.7f,
-          "raising Resolution together with the budget is what makes the voxel finer");
+          "at the default budget a building-sized shell stays floored above the authored thickness");
+    // The point of the test, inverted from the pre-escalation contract: the budget alone now
+    // reaches a finer voxel, because the escalation's request is no longer pinned by Resolution.
+    check(budget_only.voxel_size < base.voxel_size * 0.6f,
+          "raising Max Total Voxels alone now reaches a finer voxel");
+    check(budget_only.two_sided_thickness < base.two_sided_thickness * 0.6f,
+          "raising Max Total Voxels alone now thins the shell with it");
+    // Resolution no longer adds anything for thin shells once the budget binds: both requests
+    // collapse onto the same budget-limited voxel.
+    check(both.voxel_size < budget_only.voxel_size * 1.05f,
+          "raising Resolution on top of the budget changes nothing the budget did not already set");
 }
 
 void test_conservative_empty_bricks()
@@ -3840,7 +3844,7 @@ int main()
     test_sign_correctness();
     test_conservative_empty_bricks();
     test_conservative_empty_bricks_in_a_shell();
-    test_large_open_submesh_shell_is_governed_by_resolution();
+    test_large_open_submesh_shell_is_governed_by_budget();
     test_brick_seam_continuity();
     test_two_sided_shell();
     test_thin_wall();

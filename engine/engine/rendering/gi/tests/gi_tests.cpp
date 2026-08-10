@@ -738,8 +738,13 @@ void test_clipmap_attribute_transcription_matches_cpu()
                                         }
                                         const math::vec4 local =
                                             inst.world_to_local * math::vec4(center, 1.0f);
+                                        // Shell de-bias, exactly as both composers apply it.
+                                        const float shell_bias = inst.sdf->is_two_sided
+                                                                     ? inst.sdf->two_sided_thickness
+                                                                     : 0.0f;
                                         const float magnitude =
-                                            std::fabs(sample_mesh_sdf(*inst.sdf, math::vec3(local)) *
+                                            std::fabs((sample_mesh_sdf(*inst.sdf, math::vec3(local)) +
+                                                       shell_bias) *
                                                       inst.local_to_world_scale);
                                         if(magnitude < best_magnitude ||
                                            (magnitude == best_magnitude &&
@@ -768,8 +773,22 @@ void test_clipmap_attribute_transcription_matches_cpu()
                             math::vec3 blended_emissive = first.emissive;
                             if(second_index >= 0)
                             {
-                                const float w1 = attr_reach - best_magnitude;
-                                const float w2 = attr_reach - second_magnitude;
+                                // Shell coverage scaling, exactly as both composers apply it.
+                                const auto shell_coverage = [&](const global_sdf_instance& inst) -> float
+                                {
+                                    if(!inst.sdf->is_two_sided)
+                                    {
+                                        return 1.0f;
+                                    }
+                                    return math::clamp(2.0f * inst.sdf->two_sided_thickness *
+                                                           inst.local_to_world_scale / attr_voxel,
+                                                       0.0f,
+                                                       1.0f);
+                                };
+                                const float w1 = (attr_reach - best_magnitude) *
+                                                 shell_coverage(instances[size_t(best_index)]);
+                                const float w2 = (attr_reach - second_magnitude) *
+                                                 shell_coverage(instances[size_t(second_index)]);
                                 const float w_sum = std::max(w1 + w2, 1e-6f);
                                 blended_albedo = (first.albedo * w1 +
                                                   instances[size_t(second_index)].albedo * w2) /
@@ -1499,6 +1518,110 @@ void test_shadow_through_coarse_baked_colonnade()
     check(lit_ok > 0, "the coarse gap region is sampled at all");
 }
 
+/// Sponza-curtain regression: a RED solid box with a GREEN two-sided sheet hanging nearby, the
+/// sheet baked coarse so its shell floor is a huge half-metre-plus slab - the production
+/// situation for fabric in material-merged submeshes. Attribution used to judge candidates by
+/// raw |field distance|, and a shell's zero isosurface is a phantom skin half a thickness away
+/// from the cloth - so cells whose true nearest surface is the box wore the sheet's albedo
+/// (measured: curtain and rope colours painted onto Sponza's stone). With the shell de-bias,
+/// every cell nearer the box than the CLOTH must blend box-dominant.
+void test_attribution_prefers_true_surface_over_shell()
+{
+    std::printf("test_attribution_prefers_true_surface_over_shell\n");
+    mesh_sdf box_sdf;
+    check(bake_slab({1.0f, 1.0f, 1.0f}, box_sdf), "box bakes");
+    // The sheet sits so a cell CENTRE (attr voxel 0.625, centres at 0.9375 and 1.5625) lands in
+    // the flip zone: at x = 1.5625 the box face is 0.5625 away and the cloth 0.8375 - the box is
+    // the true nearest - while the shell's phantom skin (cloth - 0.7) passes only 0.14 away,
+    // which the old raw-|d| contest preferred.
+    sdf_source_geometry sheet;
+    add_quad(sheet,
+             {2.4f, -1.0f, -1.0f},
+             {2.4f, 1.0f, -1.0f},
+             {2.4f, 1.0f, 1.0f},
+             {2.4f, -1.0f, 1.0f});
+    sheet.bounds.reset();
+    for(const auto& p : sheet.positions)
+    {
+        sheet.bounds.add_point(p);
+    }
+    mesh_sdf sheet_sdf;
+    mesh_sdf_bake_settings sheet_settings;
+    // A fat shell AUTHORED on purpose (the baker's thin-geometry escalation would otherwise
+    // spend resolution to thin a floored one): 0.7 m half-thickness reproduces what a
+    // material-merged curtain used to get from the one-voxel floor at production scales.
+    sheet_settings.resolution = 3;
+    sheet_settings.two_sided = true;
+    sheet_settings.two_sided_thickness = 0.7f;
+    check(bake_mesh_sdf(sheet, sheet_settings, sheet_sdf), "sheet bakes");
+    check(sheet_sdf.is_two_sided, "sheet baked as a two-sided shell");
+    std::printf("  sheet shell half-thickness %.3f m\n", sheet_sdf.two_sided_thickness);
+    check(sheet_sdf.two_sided_thickness > 0.5f, "the shell floor is production-fat");
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(
+        make_clipmap_instance(box_sdf, {0.0f, 0.0f, 0.0f}, math::vec3(0.9f, 0.1f, 0.1f), math::vec3(0.0f)));
+    instances.push_back(
+        make_clipmap_instance(sheet_sdf, {0.0f, 0.0f, 0.0f}, math::vec3(0.1f, 0.9f, 0.1f), math::vec3(0.0f)));
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 32;
+    settings.base_extent = 10.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(0.0f));
+    const auto& lvl = clipmap.get_level(0);
+    check(lvl.is_valid(), "level 0 composed");
+    const uint32_t attr_res = clipmap.get_attr_resolution();
+    const float attr_voxel = lvl.voxel_size * global_sdf_clipmap::attr_downsample;
+    const int res = int(attr_res);
+    const auto wrap = [res](int v) -> int { return ((v % res) + res) % res; };
+    const math::ivec3 window_base(int(std::floor(lvl.origin.x / attr_voxel + 0.5f)),
+                                  int(std::floor(lvl.origin.y / attr_voxel + 0.5f)),
+                                  int(std::floor(lvl.origin.z / attr_voxel + 0.5f)));
+    const math::ivec3 base_slot(wrap(window_base.x), wrap(window_base.y), wrap(window_base.z));
+    // Cells whose true nearest surface is unambiguously the BOX: everything up to x = 1.6 is
+    // nearer the box face (x = 1) than the cloth (x = 2.4, midpoint 1.7). The old |d| contest
+    // handed these to the sheet wherever its phantom skin dipped closer.
+    size_t probed = 0;
+    size_t sheet_dominated = 0;
+    for(uint32_t z = 0; z < attr_res; ++z)
+    {
+        for(uint32_t y = 0; y < attr_res; ++y)
+        {
+            for(uint32_t x = 0; x < attr_res; ++x)
+            {
+                const math::ivec3 cell = window_base + math::ivec3(wrap(int(x) - base_slot.x),
+                                                                   wrap(int(y) - base_slot.y),
+                                                                   wrap(int(z) - base_slot.z));
+                const math::vec3 center = (math::vec3(cell) + math::vec3(0.5f)) * attr_voxel;
+                if(center.x < 0.55f || center.x > 1.6f || std::fabs(center.y) > 0.6f ||
+                   std::fabs(center.z) > 0.6f)
+                {
+                    continue;
+                }
+                const size_t offset =
+                    size_t(x) + size_t(y) * attr_res + size_t(z) * attr_res * attr_res;
+                const uint32_t packed = lvl.attr_albedo[offset];
+                if((packed >> 24u) == 0u)
+                {
+                    continue;
+                }
+                ++probed;
+                const uint32_t r = packed & 0xFFu;
+                const uint32_t g = (packed >> 8u) & 0xFFu;
+                if(g > r)
+                {
+                    ++sheet_dominated;
+                }
+            }
+        }
+    }
+    std::printf("  probed %zu box-adjacent cells, %zu sheet-dominated\n", probed, sheet_dominated);
+    check(probed > 0, "the box-adjacent region contains attributed surface cells");
+    check(sheet_dominated == 0,
+          "no box cell wears the sheet's albedo (got " + std::to_string(sheet_dominated) + ")");
+}
+
 } // namespace
 
 void run(int& checks, int& failures)
@@ -1517,6 +1640,7 @@ void run(int& checks, int& failures)
     test_shadow_blob_floor_building();
     test_shadow_through_colonnade();
     test_shadow_through_coarse_baked_colonnade();
+    test_attribution_prefers_true_surface_over_shell();
 }
 
 } // namespace unravel::gi_tests

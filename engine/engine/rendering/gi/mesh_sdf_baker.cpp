@@ -22,6 +22,12 @@ namespace
 /// query's inner loop short; the traversal overhead of going smaller stops paying off.
 constexpr uint32_t bvh_max_leaf_triangles = 4;
 
+/// How far the one-voxel shell floor may exceed the authored two-sided thickness before the
+/// bake spends resolution to close the gap (see the thin-geometry escalation in bake_mesh_sdf).
+/// Four keeps mildly-coarse shells - awnings, banners - baking exactly as they always have,
+/// while catching the order-of-magnitude phantoms (a rope shelled to 10-20x its diameter).
+constexpr float k_max_shell_floor_ratio = 4.0f;
+
 /// Which feature of a triangle the closest point landed on. Selects the pseudonormal used
 /// for the inside/outside test.
 enum class triangle_feature : uint8_t
@@ -694,6 +700,26 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     float voxel_size = math::clamp(longest_axis / float(target_resolution),
                                    settings.min_voxel_size,
                                    settings.max_voxel_size);
+    // Thin-geometry escalation: the shell floor is one voxel, so a voxel derived from LARGE
+    // bounds wraps thin geometry in a shell many times fatter than the author intended - at
+    // material-merged scales (a 3 cm parapet rope spanning 30 m bakes metre voxels) the result
+    // is not a coarse field but a PHANTOM: a metre-thick blob that occludes rays and steals GI
+    // attribution over a whole neighbourhood (measured: Sponza's gallery floor attributed
+    // rope-red). REQUEST a voxel the authored thickness can justify and let the existing caps
+    // arbitrate: the grow loop below reclaims whatever the per-axis and total budgets cannot
+    // afford, so volume-filling meshes end up exactly where they always did, while long-thin
+    // bounds - the pathological case - fit easily and bake representable shells. This is also
+    // what makes Max Total Voxels an effective lever for thin shells: before it, Resolution
+    // pinned the voxel and a raised budget could not reach anything finer.
+    if(use_unsigned)
+    {
+        const float shell_target = k_max_shell_floor_ratio *
+                                   math::max(settings.two_sided_thickness, settings.min_voxel_size);
+        if(voxel_size > shell_target)
+        {
+            voxel_size = math::max(shell_target, settings.min_voxel_size);
+        }
+    }
     // Pad by the encode range so the field carries useful distances just outside the surface,
     // which is where sphere tracing spends most of its steps.
     //

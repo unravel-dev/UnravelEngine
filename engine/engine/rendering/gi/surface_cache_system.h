@@ -220,6 +220,8 @@ private:
         ///< World frame this was last asked for. Anything not asked for in the current frame is
         ///< released, which is the only thing that ever returns bricks to the atlas.
         uint64_t last_used_frame = 0;
+        ///< One-time "this field is a phantom" diagnostic fired; see acquire_field.
+        bool thickness_warned = false;
         ///< Atlas release generation at the last upload attempt, or @ref never_attempted.
         ///
         ///< A refusal for want of room is retried only once the atlas has actually freed something,

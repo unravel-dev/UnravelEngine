@@ -154,6 +154,28 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
         record.has_no_field = true;
         return sdf_atlas::invalid_index;
     }
+    // Name the phantom fields, once each: a shell floored this fat means the geometry is far
+    // below its own field's resolution (a rope or curtain submesh whose bounds span a building
+    // bakes metre voxels), and the result is not a bad field but a PHANTOM - a metre-thick blob
+    // that occludes rays and steals attribution over a whole neighbourhood (measured: Sponza's
+    // parapet ropes painting the gallery floor red in the albedo view). The bake cannot do
+    // better at that voxel size; the mesh needs a finer SDF resolution in its import settings,
+    // or to opt out of GI entirely.
+    if(sdf.is_two_sided && sdf.two_sided_thickness > 0.25f && !record.thickness_warned)
+    {
+        record.thickness_warned = true;
+        APPLOG_WARNING("[SurfaceCache] Mesh {} submesh {} bakes a {:.2f} m thick shell "
+                       "({}x{}x{} voxels of {:.2f} m): thin geometry this far below its field's "
+                       "resolution becomes a phantom occluder and steals GI attribution nearby. "
+                       "Raise its SDF resolution or exclude it from GI in the import settings.",
+                       hpp::to_string(mesh_uid),
+                       submesh_index,
+                       sdf.two_sided_thickness,
+                       sdf.grid_dim.x,
+                       sdf.grid_dim.y,
+                       sdf.grid_dim.z,
+                       sdf.voxel_size);
+    }
     // Budget deferral BEFORE the refusal cache: a field deferred to keep this frame's uploads
     // inside the renderer's staging scratch is not refused - it must retry next frame, so it
     // must NOT consume the generation stamp below (that stamp would silence the retry until
